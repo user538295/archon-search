@@ -287,6 +287,16 @@
 - Observation: In `test_e2e_graph_mode_noop_empty_graph`, the initial version asserted `data.get("graph_expansion_applied") is False` before asserting `"graph_expansion_applied" in data`. If the field is absent, `.get()` returns `None`, `None is False` is `False`, and the first assertion fails with a confusing type mismatch message. The presence check is then unreachable dead code.
 - Action: In any test checking both presence and value of a response field, always assert presence first (`assert "field" in data`), then use direct indexing (`data["field"]`) for the value check. The ordering matters for diagnostic clarity.
 
+**[2026-07-03] — BE-10: wildcard scope filter semantics — 'user:*' matches ALL scopes starting with 'user:', including 'user:bob'**
+- Observation: `_apply_scope_wildcard_filter` with filter `"user:*"` (prefix `"user:"`) includes `"user:bob"`, `"user:alice"`, `"user:alice:thread"` — all start with `"user:"`. Three test bugs were written assuming "user:bob" would be excluded by "user:*". The wildcard pattern is a prefix match, not a glob exclusion for sibling prefixes.
+- Action: When writing wildcard scope filter tests that must exclude a specific sub-scope (e.g., "user:bob"), use a more specific wildcard like `"user:alice*"` (prefix `"user:alice"`) which excludes "user:bob" (doesn't start with "user:alice"). Never write test assertions expecting `"user:*"` to exclude `"user:bob"`.
+- Confidence: high
+
+**[2026-07-03] — BE-10: new keyword arg on store/pipeline method signature requires updating ALL test stubs — use grep before running suite**
+- Observation: Adding `scope_filter=None` to `hybrid_search_with_trace` call sites caused 49 test failures. All failures were test stubs with signatures like `async def _hybrid(col, vec, q, depth, filters=None)` that didn't accept the new kwarg. `replace_all` in Edit only caught exact-match patterns — stubs with different type annotations (`list[float]` vs `Any`) required separate fixes.
+- Action: When adding a new keyword argument to any widely-stubbed method, run `grep -rn "def.*<method_name>" tests/` before running the suite. Fix all stubs before the first `uv run pytest` to avoid a large red run. Watch for type annotation variations that prevent `replace_all` from catching all instances.
+- Confidence: high
+
 **[2026-07-02] — E2a iterative-review (plan doc, 12 cycles): phantom function/class names recur across every cycle**
 - Observation: Across 12 review cycles, phantom references recurred constantly: `format_utc_timestamp` (doesn't exist; real fn is `normalize_iso_utc` in `_types.py`), `CollectionUpdateRequest` (real name is `PatchCollectionBody` in `schemas.py`), `_run_migrations()` (real method is `_run_startup_migrations()` or `apply_in_place_migrations()`), `_build_status_response` (doesn't exist; logic is inline in `async def status()` at routes_status.py line 45). All required DA reviewers to grep the codebase to resolve.
 - Action: When writing any plan that references existing functions, classes, or route handlers by name, grep the codebase first to verify the exact name. Never write a plan referencing a symbol you haven't verified.
@@ -320,6 +330,16 @@
 **[2026-06-29] — E1a T-3: MCP test xdist_group("mcp") must be on ALL files with MCP tests — even when mixed with non-MCP tests**
 - Observation: test_e1a_t3 had two REST-only tests and two MCP tests, all under `pytestmark = pytest.mark.integration`. Missing `xdist_group("mcp")` means the MCP tests could run in parallel with other MCP tests across files, causing session/port conflicts. The convention across 17+ MCP integration test files is to always include `xdist_group("mcp")`.
 - Action: Any test file that contains even one MCP test must include `xdist_group("mcp")` in its `pytestmark`. Applies at module level even if only some tests in the file use MCP.
+- Confidence: high
+
+**[2026-07-03] — E2a BE-9: stale mock assertion breaks on new kwargs — always include all default kwargs**
+- Observation: `test_lance_store_hybrid_search_with_trace_delegates_to_module_function` in `test_store_trace.py` had `mock_fn.assert_awaited_once_with(..., filters=None)`. After BE-9 added `scope_filter=None` to the forwarded call, the assertion failed because the actual call included `scope_filter=None` but the expected call did not. The test was asserting exact kwargs.
+- Action: When a delegate method (thin instance-method wrapper) gains a new parameter with a default value, update its corresponding mock assertion to include that parameter. Grep for `assert_awaited_once_with` and `assert_called_once_with` whenever a method signature changes.
+- Confidence: high
+
+**[2026-07-03] — E2a BE-9: defensive empty-string guard in predicate builders prevents nonsensical SQL**
+- Observation: `build_where(filters, scope_filter="")` with only the `is not None` check would produce `list_has(scopes, '')` — a valid SQL expression but semantically meaningless. Upstream validation (BE-11) rejects empty strings, but the store layer should not depend on caller discipline for SQL safety.
+- Action: In any predicate builder that accepts user-supplied string values, add a truthiness guard (`and value` or `if value:`) in addition to `is not None`. An empty string is not None but produces a nonsensical predicate for all list-search operations.
 - Confidence: high
 
 **[2026-06-29] — E1a T-3: positive-path MCP graph_mode test must assert graph_expansion_applied=True, not just isinstance(bool)**

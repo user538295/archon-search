@@ -204,9 +204,9 @@ async def test_explain_uses_amplified_retrieval_pool(connected_store, col_name):
     captured_depths: list[int] = []
     original = pipeline.store.hybrid_search_with_trace
 
-    async def _spy(collection, query_vector, query_text, candidate_depth):
+    async def _spy(collection, query_vector, query_text, candidate_depth, **kwargs):
         captured_depths.append(candidate_depth)
-        return await original(collection, query_vector, query_text, candidate_depth=candidate_depth)
+        return await original(collection, query_vector, query_text, candidate_depth=candidate_depth, **kwargs)
 
     pipeline.store.hybrid_search_with_trace = _spy  # type: ignore[method-assign]
 
@@ -243,9 +243,9 @@ async def test_explain_accepts_precomputed_query_vector_and_skips_embedding(
     captured_vectors: list[list[float]] = []
     original = pipeline.store.hybrid_search_with_trace
 
-    async def _spy(collection, query_vector, query_text, candidate_depth):
+    async def _spy(collection, query_vector, query_text, candidate_depth, **kwargs):
         captured_vectors.append(query_vector)
-        return await original(collection, query_vector, query_text, candidate_depth=candidate_depth)
+        return await original(collection, query_vector, query_text, candidate_depth=candidate_depth, **kwargs)
 
     pipeline.store.hybrid_search_with_trace = _spy  # type: ignore[method-assign]
 
@@ -507,7 +507,7 @@ def _explain_multi_pipeline(
     store = MagicMock()
     leg_map = leg_map or {}
 
-    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None):
+    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None, scope_filter=None):
         return list(leg_map.get(collection, []))
 
     store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid)

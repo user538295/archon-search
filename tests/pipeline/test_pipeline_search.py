@@ -147,7 +147,7 @@ async def test_search_with_context_records_context_stage(tmp_path):
     )
 
     class StubStore:
-        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
+        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None, scope_filter: Any = None) -> list[ScoredSearchCandidate]:
             return [search_candidate]
 
         async def fetch_adjacent_chunks(self, *a: Any, **kw: Any) -> list[ChunkRecord]:
@@ -196,7 +196,7 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
     )
 
     class MockStore:
-        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
+        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None, scope_filter: Any = None) -> list[ScoredSearchCandidate]:
             return [malformed_candidate]
 
         async def fetch_adjacent_chunks(self, *a: Any, **kw: Any) -> list[ChunkRecord]:
@@ -243,7 +243,7 @@ async def test_search_uses_provided_query_vector() -> None:
     captured_vector: list[list[float]] = []
 
     class StubStore:
-        async def hybrid_search_with_trace(self, collection: str, vector: list[float], query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
+        async def hybrid_search_with_trace(self, collection: str, vector: list[float], query: str, *, candidate_depth: int, filters: Any = None, scope_filter: Any = None) -> list[ScoredSearchCandidate]:
             captured_vector.append(list(vector))
             return []
 
@@ -357,7 +357,7 @@ async def test_pipeline_search_with_context_fetch_exception_propagates(tmp_path)
     )
 
     class FailingFetchStore:
-        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
+        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None, scope_filter: Any = None) -> list[ScoredSearchCandidate]:
             return [hit]
 
         async def fetch_adjacent_chunks(self, *a: Any, **kw: Any) -> list[Any]:
@@ -780,7 +780,7 @@ async def test_search_acl_filtered_true_when_chunks_filtered(tmp_path) -> None:
     )
 
     class AclFilterStore:
-        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
+        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None, scope_filter: Any = None) -> list[ScoredSearchCandidate]:
             return [restricted_candidate]
 
     pipeline = SearchPipeline(
@@ -825,7 +825,7 @@ async def test_search_acl_filtered_false_when_all_pass(tmp_path) -> None:
     )
 
     class OpenAclStore:
-        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
+        async def hybrid_search_with_trace(self, collection: str, vector: Any, query: str, *, candidate_depth: int, filters: Any = None, scope_filter: Any = None) -> list[ScoredSearchCandidate]:
             return [open_candidate]
 
     pipeline = SearchPipeline(
@@ -1569,7 +1569,7 @@ async def test_search_with_context_forwards_query_vector() -> None:
     captured_vector: list[list[float]] = []
 
     class StubStore:
-        async def hybrid_search_with_trace(self, collection: str, vector: list[float], query: str, *, candidate_depth: int, filters: Any = None) -> list[ScoredSearchCandidate]:
+        async def hybrid_search_with_trace(self, collection: str, vector: list[float], query: str, *, candidate_depth: int, filters: Any = None, scope_filter: Any = None) -> list[ScoredSearchCandidate]:
             captured_vector.append(list(vector))
             return []
 

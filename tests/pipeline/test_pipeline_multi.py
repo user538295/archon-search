@@ -70,7 +70,7 @@ def _search_many_pipeline(
     store = MagicMock()
     leg_map = leg_map or {}
 
-    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None):
+    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None, scope_filter=None):
         return list(leg_map.get(collection, []))
 
     store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid)
@@ -215,7 +215,7 @@ async def test_search_many_model_mismatch_excludes_and_reports() -> None:
 async def test_search_many_leg_failure_cancels_siblings_and_raises() -> None:
     cancelled = asyncio.Event()
 
-    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None):
+    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None, scope_filter=None):
         if collection == "A":
             raise RuntimeError("leg failed")
         try:
@@ -255,7 +255,7 @@ async def test_search_many_timeout_raises_fanout_timeout_error() -> None:
 
     from archon_search.pipeline import FanoutTimeoutError
 
-    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None):
+    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None, scope_filter=None):
         await asyncio.sleep(999)
         return []
 
@@ -466,7 +466,7 @@ async def test_explain_multi_collection_no_embedding_model_attribute_error() -> 
         meta_list=[_meta(c) for c in cols],
     )
 
-    async def _hybrid_explain(collection, vector, query_text, candidate_depth, filters=None):
+    async def _hybrid_explain(collection, vector, query_text, candidate_depth, filters=None, scope_filter=None):
         return list(leg_map.get(collection, []))
 
     store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid_explain)
@@ -1159,7 +1159,7 @@ async def test_search_rag_fusion_partial_search_failure() -> None:
 
     call_count = 0
 
-    async def _mock_search_with_trace(collection, query_vector, query_text, candidate_depth, filters=None):
+    async def _mock_search_with_trace(collection, query_vector, query_text, candidate_depth, filters=None, scope_filter=None):
         nonlocal call_count
         call_count += 1
         if call_count == 2:  # variant 1 fails
@@ -1407,7 +1407,7 @@ def _make_rag_fusion_search_many_pipeline(
     leg_map = leg_map or {}
     has_vector_index_map = has_vector_index_map or {}
 
-    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None):
+    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None, scope_filter=None):
         return list(leg_map.get(collection, []))
 
     async def _has_vector_index(collection):
@@ -1631,7 +1631,7 @@ async def test_search_many_rag_fusion_partial_collection_search_failure() -> Non
     # Simulate: variant 1 search fails, variant 2 succeeds, original succeeds.
     call_count = 0
 
-    async def _failing_hybrid(collection, vector, query_text, candidate_depth, filters=None):
+    async def _failing_hybrid(collection, vector, query_text, candidate_depth, filters=None, scope_filter=None):
         nonlocal call_count
         call_count += 1
         if call_count == 2:  # 2nd call = variant 1 search
@@ -1724,7 +1724,7 @@ async def test_explain_rag_fusion_sub_query_results_populated() -> None:
     # Return different candidates for original and each variant search
     call_count = [0]
 
-    async def _trace(coll, vector, query_text, candidate_depth, filters=None):
+    async def _trace(coll, vector, query_text, candidate_depth, filters=None, scope_filter=None):
         call_count[0] += 1
         return [_cand(f"chunk-{call_count[0]:03d}", f"doc-{call_count[0]:03d}")]
 
@@ -1938,7 +1938,7 @@ async def test_explain_rag_fusion_partial_search_failure() -> None:
 
     call_num = [0]
 
-    async def _failing_trace(coll, vector, query_text, candidate_depth, filters=None):
+    async def _failing_trace(coll, vector, query_text, candidate_depth, filters=None, scope_filter=None):
         call_num[0] += 1
         if call_num[0] == 2:  # 2nd call (variant 1) fails
             raise RuntimeError("transient error")

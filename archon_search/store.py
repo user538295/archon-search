@@ -2852,6 +2852,8 @@ async def _hybrid_search_with_trace(
 
             raw_acl = row.get("acl")
             row_acl: list[str] | None = list(raw_acl) if isinstance(raw_acl, list) else None
+            raw_scopes = row.get("scopes")
+            row_scopes: list[str] | None = list(raw_scopes) if isinstance(raw_scopes, list) else None
             indexed_at = row.get("indexed_at") or ""
 
             candidates.append(
@@ -2878,6 +2880,7 @@ async def _hybrid_search_with_trace(
                     ingested_by=normalize_ingested_by(row.get("ingested_by")),  # type: ignore[arg-type]
                     language=row.get("language") or "",
                     metadata=parse_metadata(row.get("metadata") or "{}"),
+                    scopes=row_scopes,
                 )
             )
 

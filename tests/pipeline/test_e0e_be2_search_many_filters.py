@@ -75,7 +75,7 @@ def _make_pipeline(
     leg_map = leg_map or {}
     has_vector_index_map = has_vector_index_map or {}
 
-    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None):
+    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None, scope_filter=None):
         return list(leg_map.get(collection, []))
 
     store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid)

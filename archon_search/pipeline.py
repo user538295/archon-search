@@ -231,6 +231,32 @@ def _fuse_rag_fusion_results(
     return sorted(best_candidate.values(), key=lambda c: scores[c.chunk_id], reverse=True)
 
 
+def _apply_scope_wildcard_filter(
+    candidates: "list[ScoredSearchCandidate]",
+    scope_filter: str,
+) -> "list[ScoredSearchCandidate]":
+    """Python-side wildcard post-filter for scope_filter ending with '*'.
+
+    Unscoped chunks (scopes is None or scopes == []) are shared/global and
+    always pass through, regardless of the wildcard prefix.
+
+    Example: scope_filter='user:*' → prefix='user:'
+    - scopes=['user:alice']       → passes (starts with 'user:')
+    - scopes=['user:alice:thread']→ passes (starts with 'user:')
+    - scopes=['admin:root']       → excluded
+    - scopes=None                 → passes (unscoped/shared)
+    - scopes=[]                   → passes (unscoped/shared)
+    """
+    prefix = scope_filter[:-1]  # strip trailing '*'
+    result = []
+    for c in candidates:
+        if not c.scopes:  # None or []
+            result.append(c)
+        elif any(s.startswith(prefix) for s in c.scopes):
+            result.append(c)
+    return result
+
+
 def _extract_front_matter(text: str) -> tuple[dict, str]:
     """Detect and strip YAML front matter from the top of a text document.
 
@@ -780,6 +806,7 @@ class SearchPipeline:
         rag_fusion_generator: "RAGFusionGenerator | None" = None,
         rag_fusion_config: "RAGFusionConfig | None" = None,
         graph_mode: str | None = None,
+        scope_filter: str | None = None,
     ) -> SearchPipelineResult:
         # --- Graph expansion (naive mode) — applied to original query before all other paths ---
         # Expansion is applied to the original query only.  RAG Fusion variants are generated
@@ -791,9 +818,10 @@ class SearchPipeline:
             return await self._search_graph_mode(  # type: ignore[return-value]
                 graph_mode, collection, query, namespace,
                 filters=filters,
+                scope_filter=scope_filter,
             )
         if graph_mode == "naive" and self._graph_expander is not None:
-            expanded_text = await self._search_graph_mode("naive", collection, query, namespace)
+            expanded_text = await self._search_graph_mode("naive", collection, query, namespace, scope_filter=scope_filter)
             if isinstance(expanded_text, str) and expanded_text != query:
                 graph_expansion_applied = True
                 effective_query = expanded_text
@@ -819,7 +847,7 @@ class SearchPipeline:
             if not await self.store.has_vector_index(collection):
                 result = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
-                    filters=filters, query_vector=None,
+                    filters=filters, query_vector=None, scope_filter=scope_filter,
                 )
                 result.graph_expansion_applied = graph_expansion_applied
                 return result
@@ -837,7 +865,7 @@ class SearchPipeline:
                 fallback = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True,
+                    rag_fusion_attempted=True, scope_filter=scope_filter,
                 )
                 fallback.rag_fusion_warning = "RAG Fusion timed out"
                 fallback.graph_expansion_applied = graph_expansion_applied
@@ -850,7 +878,7 @@ class SearchPipeline:
                 fallback = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True,
+                    rag_fusion_attempted=True, scope_filter=scope_filter,
                 )
                 fallback.rag_fusion_warning = "RAG Fusion expansion failed"
                 fallback.graph_expansion_applied = graph_expansion_applied
@@ -870,17 +898,20 @@ class SearchPipeline:
                 fallback = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True,
+                    rag_fusion_attempted=True, scope_filter=scope_filter,
                 )
                 fallback.rag_fusion_warning = "RAG Fusion expansion failed"
                 fallback.graph_expansion_applied = graph_expansion_applied
                 return fallback
 
             # 5. Parallel variant searches using hybrid_search_with_trace.
+            # Exact scope_filter is pushed to the store; wildcard is applied Python-side after fusion.
+            _rag_scope = scope_filter if scope_filter and not scope_filter.endswith("*") else None
             _rag_candidate_depth = max(self._top_k_retrieve * 3, 20)
             search_calls = [
                 self.store.hybrid_search_with_trace(
-                    collection, v, query, candidate_depth=_rag_candidate_depth, filters=filters
+                    collection, v, query, candidate_depth=_rag_candidate_depth,
+                    filters=filters, scope_filter=_rag_scope,
                 )
                 for v in vectors
             ]
@@ -902,7 +933,7 @@ class SearchPipeline:
                 result = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True,
+                    rag_fusion_attempted=True, scope_filter=scope_filter,
                 )
                 result.graph_expansion_applied = graph_expansion_applied
                 return result
@@ -921,6 +952,10 @@ class SearchPipeline:
             if filters and filters.source_path_glob:
                 _glob = filters.source_path_glob
                 fused = [c for c in fused if fnmatch.fnmatchcase(c.source_path, _glob)]
+
+            # 7c. Apply wildcard scope post-filter (exact scope was handled in store call above).
+            if scope_filter and scope_filter.endswith("*"):
+                fused = _apply_scope_wildcard_filter(fused, scope_filter)
 
             # 8. ACL filter on fused set.
             fused, acl_filtered = apply_acl_filter(fused, lambda c: c.acl, namespace)
@@ -953,6 +988,7 @@ class SearchPipeline:
         result = await self._search_standard(
             effective_query, collection, namespace, embedder=embedder,
             filters=filters, query_vector=effective_query_vector,
+            scope_filter=scope_filter,
         )
         result.graph_expansion_applied = graph_expansion_applied
         return result
@@ -965,6 +1001,7 @@ class SearchPipeline:
         namespace: str = DEFAULT_NAMESPACE,
         *,
         filters: "SearchFilters | None" = None,
+        scope_filter: str | None = None,
     ) -> "SearchPipelineResult | str":
         """Dispatch for graph retrieval modes.
 
@@ -972,6 +1009,9 @@ class SearchPipeline:
         - ``SearchPipelineResult`` for 'local' and 'global' modes.
         - ``str`` (expanded query text) for 'naive' mode.
         """
+        assert scope_filter is None, (
+            "scope_filter must be None in graph-mode paths — check the 422 guard"
+        )
         if graph_mode == "naive":
             if self._graph_expander is None:
                 return query
@@ -1278,15 +1318,23 @@ class SearchPipeline:
         filters: SearchFilters | None = None,
         query_vector: list[float] | None = None,
         rag_fusion_attempted: bool = False,
+        scope_filter: str | None = None,
     ) -> SearchPipelineResult:
         """Standard single-query search path (no RAG Fusion)."""
         vector = list(query_vector) if query_vector is not None else await embedder.embed_one(query)
+        # Exact scope_filter is pushed to the store as a SQL predicate via build_where.
+        # Wildcard (ending '*') is skipped at the SQL level and applied Python-side below.
+        store_scope = scope_filter if scope_filter and not scope_filter.endswith("*") else None
         candidates = await self.store.hybrid_search_with_trace(
-            collection, vector, query, candidate_depth=max(self._top_k_retrieve * 3, 20), filters=filters
+            collection, vector, query, candidate_depth=max(self._top_k_retrieve * 3, 20),
+            filters=filters, scope_filter=store_scope,
         )
         if filters and filters.source_path_glob:
             glob_pattern = filters.source_path_glob
             candidates = [c for c in candidates if fnmatch.fnmatchcase(c.source_path, glob_pattern)]
+        # Wildcard scope post-filter: applied before ACL and reranking.
+        if scope_filter and scope_filter.endswith("*"):
+            candidates = _apply_scope_wildcard_filter(candidates, scope_filter)
         candidates_before_acl = len(candidates)
         candidates, acl_filtered = apply_acl_filter(candidates, lambda r: r.acl, namespace)
         acl_denied = candidates_before_acl - len(candidates)
@@ -1332,6 +1380,7 @@ class SearchPipeline:
         rag_fusion_generator: "RAGFusionGenerator | None" = None,
         rag_fusion_config: "RAGFusionConfig | None" = None,
         graph_mode: Literal["naive", "local", "global"] | None = None,
+        scope_filter: str | None = None,
     ) -> ExplainPipelineResult:
         """Fetch an amplified pool (``max(top_k_retrieve*3, 20)`` candidates) and, when
         ``rerank=True``, rerank the entire ACL-filtered pool so near-misses carry real
@@ -1406,7 +1455,8 @@ class SearchPipeline:
 
             candidate_depth = max(self._top_k_retrieve * 3, 20)
             merged, acl_filtered, _leg_times = await self._fanout_merge_acl(
-                query, vector, collections_in_scope, namespace, candidate_depth
+                query, vector, collections_in_scope, namespace, candidate_depth,
+                scope_filter=scope_filter,
             )
 
             if rerank and self._reranker is not None:
@@ -1433,6 +1483,7 @@ class SearchPipeline:
                 # E1a wiring (BE-7): graph retrieval + standard hybrid merge.
                 graph_candidates = await self._explain_naive_graph_candidates(
                     query, collection, namespace=namespace, embedder=_single_embedder,
+                    scope_filter=scope_filter,
                 )
 
                 if not graph_candidates:
@@ -1441,6 +1492,7 @@ class SearchPipeline:
                     result = await self._explain_standard(
                         query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
                         query_vector=query_vector, embedder=_single_embedder,
+                        scope_filter=scope_filter,
                     )
                     result.graph_mode_applied = "naive"
                     result.rag_fusion_applied = False
@@ -1453,11 +1505,13 @@ class SearchPipeline:
                     top_k=top_k, rerank=rerank, namespace=namespace,
                     query_vector=query_vector, embedder=_single_embedder,
                     graph_mode="naive",
+                    scope_filter=scope_filter,
                 )
 
             # local/global: E1b community traversal wiring (BE-8).
             community_candidates = await self._explain_community_candidates(
                 query, collection, graph_mode,
+                scope_filter=scope_filter,
             )
 
             if not community_candidates:
@@ -1466,6 +1520,7 @@ class SearchPipeline:
                 result = await self._explain_standard(
                     query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
                     query_vector=query_vector, embedder=_single_embedder,
+                    scope_filter=scope_filter,
                 )
                 result.graph_mode_applied = graph_mode
                 result.rag_fusion_applied = False
@@ -1478,6 +1533,7 @@ class SearchPipeline:
                 top_k=top_k, rerank=rerank, namespace=namespace,
                 query_vector=query_vector, embedder=_single_embedder,
                 graph_mode=graph_mode,
+                scope_filter=scope_filter,
             )
 
         # --- Single-collection RAG Fusion path ---
@@ -1497,6 +1553,7 @@ class SearchPipeline:
                 return await self._explain_standard(
                     query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
                     query_vector=query_vector, embedder=_single_embedder,
+                    scope_filter=scope_filter,
                 )
 
             # Generate variants.
@@ -1514,6 +1571,7 @@ class SearchPipeline:
                     query_vector=None, embedder=_single_embedder,
                     rag_fusion_attempted=True,
                     rag_fusion_failure_reason=type(exc).__name__,
+                    scope_filter=scope_filter,
                 )
 
             # All queries = original + variants.
@@ -1532,12 +1590,16 @@ class SearchPipeline:
                     query_vector=None, embedder=_single_embedder,
                     rag_fusion_attempted=True,
                     rag_fusion_failure_reason=type(exc).__name__,
+                    scope_filter=scope_filter,
                 )
 
             # Parallel variant searches using hybrid_search_with_trace.
+            # Exact scope_filter is pushed to the store; wildcard is applied Python-side after fusion.
+            _expl_rf_scope = scope_filter if scope_filter and not scope_filter.endswith("*") else None
             search_calls = [
                 self.store.hybrid_search_with_trace(
-                    collection, v, query, candidate_depth=candidate_depth
+                    collection, v, query, candidate_depth=candidate_depth,
+                    scope_filter=_expl_rf_scope,
                 )
                 for v in vectors
             ]
@@ -1562,6 +1624,7 @@ class SearchPipeline:
                     query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
                     query_vector=None, embedder=_single_embedder,
                     rag_fusion_attempted=True,
+                    scope_filter=scope_filter,
                 )
 
             # rag_fusion_queries_used = successful variant searches (not counting original).
@@ -1569,6 +1632,10 @@ class SearchPipeline:
 
             # Fuse results via second-pass RRF.
             fused = _fuse_rag_fusion_results(successful_results)
+
+            # Wildcard scope post-filter (exact scope was handled in store calls above).
+            if scope_filter and scope_filter.endswith("*"):
+                fused = _apply_scope_wildcard_filter(fused, scope_filter)
 
             # ACL filter on fused set.
             fused, acl_filtered = apply_acl_filter(fused, lambda c: c.acl, namespace)
@@ -1612,6 +1679,7 @@ class SearchPipeline:
         return await self._explain_standard(
             query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
             query_vector=query_vector, embedder=_single_embedder,
+            scope_filter=scope_filter,
         )
 
     async def _explain_naive_graph_candidates(
@@ -1621,6 +1689,7 @@ class SearchPipeline:
         namespace: str = DEFAULT_NAMESPACE,
         *,
         embedder: "Embedder",
+        scope_filter: str | None = None,
     ) -> list[ScoredSearchCandidate]:
         """Graph retrieval for naive-mode explain — E1a wiring (BE-7).
 
@@ -1637,6 +1706,9 @@ class SearchPipeline:
         Does NOT apply ACL filtering — the caller merges the graph candidates with
         the hybrid baseline and applies ACL once on the merged pool.
         """
+        assert scope_filter is None, (
+            "scope_filter must be None in graph-mode paths — check the 422 guard"
+        )
         if self._graph_store is None:
             return []
 
@@ -1756,8 +1828,10 @@ class SearchPipeline:
         query_vector: list[float] | None,
         embedder: "Embedder",
         graph_mode: Literal["naive", "local", "global"],
+        scope_filter: str | None = None,
     ) -> ExplainPipelineResult:
         """Merge winning graph candidates with hybrid baseline, ACL filter, rerank, and return ExplainPipelineResult."""
+        assert scope_filter is None, "scope_filter must be None in graph-mode paths — check the 422 guard"
 
         def _final_score(c: ScoredSearchCandidate) -> float:
             rs = c.score_breakdown.reranker_score
@@ -1812,6 +1886,8 @@ class SearchPipeline:
         query: str,
         collection: str,
         graph_mode: Literal["local", "global"],
+        *,
+        scope_filter: str | None = None,
     ) -> list[ScoredSearchCandidate]:
         """Community-mode graph retrieval for explain — E1b wiring (BE-8).
 
@@ -1833,6 +1909,9 @@ class SearchPipeline:
             ``GraphCommunitiesNotBuiltError``: when ``graph_mode='global'`` and no
                 communities have been built for the collection (matches search behaviour).
         """
+        assert scope_filter is None, (
+            "scope_filter must be None in graph-mode paths — check the 422 guard"
+        )
         if self._graph_store is None:
             return []
 
@@ -1999,6 +2078,7 @@ class SearchPipeline:
         embedder: Embedder,
         rag_fusion_attempted: bool = False,
         rag_fusion_failure_reason: str | None = None,
+        scope_filter: str | None = None,
     ) -> ExplainPipelineResult:
         """Standard single-collection explain path (no RAG Fusion)."""
 
@@ -2008,12 +2088,19 @@ class SearchPipeline:
 
         vector = query_vector if query_vector is not None else await embedder.embed_one(query)
         candidate_depth = max(self._top_k_retrieve * 3, 20)
+        # Exact scope_filter is pushed to the store as a SQL predicate; wildcard is Python-side.
+        store_scope = scope_filter if scope_filter and not scope_filter.endswith("*") else None
         try:
             candidates = await self.store.hybrid_search_with_trace(
-                collection, vector, query, candidate_depth=candidate_depth
+                collection, vector, query, candidate_depth=candidate_depth,
+                scope_filter=store_scope,
             )
         except Exception as exc:
             raise ExplainStageError("store", exc) from exc
+
+        # Wildcard scope post-filter: applied before ACL and reranking.
+        if scope_filter and scope_filter.endswith("*"):
+            candidates = _apply_scope_wildcard_filter(candidates, scope_filter)
 
         candidates, acl_filtered = apply_acl_filter(candidates, lambda c: c.acl, namespace)
 
@@ -2049,6 +2136,7 @@ class SearchPipeline:
         rag_fusion_config: "RAGFusionConfig | None" = None,
         filters: SearchFilters | None = None,
         graph_mode: str | None = None,
+        scope_filter: str | None = None,
     ) -> SearchPipelineResult:
         """Embed the query once, fan out hybrid retrieval across ``collections`` in
         parallel, merge with provenance, run a single global rerank pass, and return a
@@ -2132,7 +2220,8 @@ class SearchPipeline:
                 # Explicit fallback: run standard fan-out with rag_fusion_attempted preserved.
                 std_vector = await self._global_embedder.embed_one(query)
                 std_merged, std_acl_filtered, std_leg_times = await self._fanout_merge_acl(
-                    query, std_vector, collections_in_scope, namespace, candidate_depth, filters=filters
+                    query, std_vector, collections_in_scope, namespace, candidate_depth, filters=filters,
+                    scope_filter=scope_filter,
                 )
                 if self._reranker is not None:
                     t0 = monotonic()
@@ -2159,6 +2248,8 @@ class SearchPipeline:
             # Track successful variant searches across all collections (variant idx > 0).
             # A variant is "successful" if its search succeeded for at least one collection.
             successful_variant_indices: set[int] = set()
+            # Exact scope goes to the store; wildcard is handled as a Python-side post-filter.
+            store_scope = scope_filter if scope_filter and not scope_filter.endswith("*") else None
 
             for coll in sorted(collections_in_scope):
                 has_vi = await self.store.has_vector_index(coll)
@@ -2167,7 +2258,8 @@ class SearchPipeline:
                     coll_raw = await asyncio.gather(
                         *[
                             self.store.hybrid_search_with_trace(
-                                coll, v, query, candidate_depth=candidate_depth, filters=filters
+                                coll, v, query, candidate_depth=candidate_depth, filters=filters,
+                                scope_filter=store_scope,
                             )
                             for v in all_vectors
                         ],
@@ -2186,7 +2278,8 @@ class SearchPipeline:
                 else:
                     # FTS-only collection: single search with original query only.
                     fts_result = await self.store.hybrid_search_with_trace(
-                        coll, all_vectors[0], query, candidate_depth=candidate_depth, filters=filters
+                        coll, all_vectors[0], query, candidate_depth=candidate_depth, filters=filters,
+                        scope_filter=store_scope,
                     )
                     fused_coll = list(fts_result)
 
@@ -2194,6 +2287,10 @@ class SearchPipeline:
                 if filters and filters.source_path_glob:
                     _glob = filters.source_path_glob
                     fused_coll = [c for c in fused_coll if fnmatch.fnmatchcase(c.source_path, _glob)]
+
+                # Apply wildcard scope post-filter (exact scope was handled in store calls above).
+                if scope_filter and scope_filter.endswith("*"):
+                    fused_coll = _apply_scope_wildcard_filter(fused_coll, scope_filter)
 
                 fused_sorted = sorted(
                     fused_coll, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
@@ -2237,7 +2334,12 @@ class SearchPipeline:
             )
 
         # --- Standard path with graph expansion (per-leg) ---
+        # Graph-mode branches are protected by the 422 guard at the route layer; scope_filter
+        # must be None here. The assertion is a belt-and-suspenders defensive check.
         if graph_mode == "naive" and self._graph_expander is not None:
+            assert scope_filter is None, (
+                "scope_filter must be None in graph-mode paths — check the 422 guard"
+            )
             # Step 1: Expand query per collection in parallel.
             expansions: list["ExpandedQuery"] = list(await asyncio.gather(*[
                 self._graph_expander.expand(query, coll)
@@ -2321,6 +2423,9 @@ class SearchPipeline:
 
         # --- Global graph mode ---
         if graph_mode == "global" and self._graph_store is not None:
+            assert scope_filter is None, (
+                "scope_filter must be None in graph-mode paths — check the 422 guard"
+            )
             acl_filtered: bool = False
             all_candidates: list[ScoredSearchCandidate] = []
             for coll in collections_in_scope:
@@ -2361,6 +2466,9 @@ class SearchPipeline:
 
         # --- Local graph mode fanout ---
         if graph_mode == "local" and self._graph_store is not None:
+            assert scope_filter is None, (
+                "scope_filter must be None in graph-mode paths — check the 422 guard"
+            )
             # Embed the query once so all per-collection hybrid legs share the same vector.
             local_vector = list(query_vector) if query_vector is not None else await self._global_embedder.embed_one(query)
             local_candidate_depth = max(self._top_k_retrieve * 3, 20)
@@ -2566,7 +2674,8 @@ class SearchPipeline:
         if filters and filters.source_path_glob:
             candidate_depth = max(candidate_depth * GLOB_OVERFETCH_FACTOR, 60)
         merged, acl_filtered, leg_times = await self._fanout_merge_acl(
-            query, vector, collections_in_scope, namespace, candidate_depth, filters=filters
+            query, vector, collections_in_scope, namespace, candidate_depth, filters=filters,
+            scope_filter=scope_filter,
         )
 
         # Step 7: single global rerank pass.
@@ -2598,11 +2707,16 @@ class SearchPipeline:
         namespace: str,
         candidate_depth: int,
         filters: SearchFilters | None = None,
+        scope_filter: str | None = None,
     ) -> tuple[list[ScoredSearchCandidate], bool, dict[str, float]]:
+        # Exact scope_filter → push to store; wildcard → store gets None, applied Python-side.
+        store_scope = scope_filter if scope_filter and not scope_filter.endswith("*") else None
+
         async def _leg(coll: str):  # type: ignore[no-untyped-def]
             t0 = monotonic()
             cands = await self.store.hybrid_search_with_trace(
-                coll, vector, query, candidate_depth=candidate_depth, filters=filters
+                coll, vector, query, candidate_depth=candidate_depth, filters=filters,
+                scope_filter=store_scope,
             )
             return coll, cands, (monotonic() - t0) * 1000.0
 
@@ -2632,6 +2746,9 @@ class SearchPipeline:
             if filters and filters.source_path_glob:
                 _glob = filters.source_path_glob
                 cands = [c for c in cands if fnmatch.fnmatchcase(c.source_path, _glob)]
+            # Apply wildcard scope post-filter per-leg before trim.
+            if scope_filter and scope_filter.endswith("*"):
+                cands = _apply_scope_wildcard_filter(cands, scope_filter)
             cands_sorted = sorted(
                 cands, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
             )
@@ -2678,6 +2795,7 @@ class SearchPipeline:
         rag_fusion: bool = False,
         rag_fusion_generator: "RAGFusionGenerator | None" = None,
         rag_fusion_config: "RAGFusionConfig | None" = None,
+        scope_filter: str | None = None,
     ) -> SearchWithContextResult:
         """Search with surrounding context chunks.
 
@@ -2693,6 +2811,7 @@ class SearchPipeline:
             filters=filters, query_vector=query_vector,
             rag_fusion=rag_fusion, rag_fusion_generator=rag_fusion_generator,
             rag_fusion_config=rag_fusion_config,
+            scope_filter=scope_filter,
         )
         output: list[dict[str, Any]] = []
 

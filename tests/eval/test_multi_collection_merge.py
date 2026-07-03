@@ -76,7 +76,7 @@ def _build_pipeline(leg_map: dict, meta_list: list, *, top_k_return: int = 10):
 
     store = MagicMock()
 
-    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None):
+    async def _hybrid(collection, vector, query_text, candidate_depth, filters=None, scope_filter=None):
         return list(leg_map.get(collection, []))
 
     store.hybrid_search_with_trace = AsyncMock(side_effect=_hybrid)

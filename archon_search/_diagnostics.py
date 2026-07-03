@@ -128,3 +128,4 @@ class ScoredSearchCandidate:
     language: str = ""
     metadata: dict[str, str] = field(default_factory=dict)
     graph_provenance: GraphProvenance | None = None
+    scopes: list[str] | None = None
