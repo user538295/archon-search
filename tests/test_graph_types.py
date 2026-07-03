@@ -17,6 +17,7 @@ from archon_search.graph_types import (
     EntityType,
     GraphEdge,
     GraphExtractionResult,
+    GraphMention,
     GraphNode,
     RelationshipType,
     make_stable_edge_id,
@@ -296,13 +297,91 @@ def test_graph_edge_relationship_type_is_enum() -> None:
 
 
 # ---------------------------------------------------------------------------
+# GraphMention dataclass
+# ---------------------------------------------------------------------------
+
+
+def test_graph_mention_dataclass_fields() -> None:
+    """GraphMention carries entity_id, chunk_id, doc_id fields."""
+    mention = GraphMention(
+        entity_id="entity-abc123",
+        chunk_id="chunk-001",
+        doc_id="doc-001",
+    )
+    assert mention.entity_id == "entity-abc123"
+    assert mention.chunk_id == "chunk-001"
+    assert mention.doc_id == "doc-001"
+
+
+def test_graph_mention_dataclass_equality() -> None:
+    """Two GraphMention instances with identical fields are equal."""
+    mention1 = GraphMention(
+        entity_id="entity-abc123",
+        chunk_id="chunk-001",
+        doc_id="doc-001",
+    )
+    mention2 = GraphMention(
+        entity_id="entity-abc123",
+        chunk_id="chunk-001",
+        doc_id="doc-001",
+    )
+    assert mention1 == mention2
+
+
+def test_graph_mention_dataclass_inequality_entity_id() -> None:
+    """Two GraphMention instances with different entity_id are not equal."""
+    mention1 = GraphMention(
+        entity_id="entity-abc123",
+        chunk_id="chunk-001",
+        doc_id="doc-001",
+    )
+    mention2 = GraphMention(
+        entity_id="entity-different",
+        chunk_id="chunk-001",
+        doc_id="doc-001",
+    )
+    assert mention1 != mention2
+
+
+def test_graph_mention_dataclass_inequality_chunk_id() -> None:
+    """Two GraphMention instances with different chunk_id are not equal."""
+    mention1 = GraphMention(
+        entity_id="entity-abc123",
+        chunk_id="chunk-001",
+        doc_id="doc-001",
+    )
+    mention2 = GraphMention(
+        entity_id="entity-abc123",
+        chunk_id="chunk-002",
+        doc_id="doc-001",
+    )
+    assert mention1 != mention2
+
+
+def test_graph_mention_dataclass_inequality_doc_id() -> None:
+    """Two GraphMention instances with different doc_id are not equal."""
+    mention1 = GraphMention(
+        entity_id="entity-abc123",
+        chunk_id="chunk-001",
+        doc_id="doc-001",
+    )
+    mention2 = GraphMention(
+        entity_id="entity-abc123",
+        chunk_id="chunk-001",
+        doc_id="doc-002",
+    )
+    assert mention1 != mention2
+
+
+# ---------------------------------------------------------------------------
 # GraphExtractionResult dataclass
 # ---------------------------------------------------------------------------
 
 
 def test_graph_extraction_result_defaults() -> None:
-    """`warnings=[]` and `llm_fallback_used=False` by default; nodes and edges can be empty."""
+    """`warnings=[]`, `mentions=[]`, and `llm_fallback_used=False` by default; nodes and edges can be empty."""
     result = GraphExtractionResult(nodes=[], edges=[])
+    assert result.mentions == []
     assert result.warnings == []
     assert result.llm_fallback_used is False
 
@@ -336,3 +415,35 @@ def test_graph_extraction_result_warnings_are_independent_instances() -> None:
     r2 = GraphExtractionResult(nodes=[], edges=[])
     r1.warnings.append("warning")
     assert r2.warnings == []
+
+
+def test_extraction_result_mentions_defaults_to_empty() -> None:
+    """GraphExtractionResult.mentions defaults to empty list."""
+    result = GraphExtractionResult(nodes=[], edges=[])
+    assert result.mentions == []
+
+
+def test_extraction_result_mentions_are_independent_instances() -> None:
+    """Two separate GraphExtractionResult instances have independent mention lists.
+
+    Ensures `field(default_factory=list)` is used — not a mutable default argument.
+    """
+    r1 = GraphExtractionResult(nodes=[], edges=[])
+    r2 = GraphExtractionResult(nodes=[], edges=[])
+    mention = GraphMention(entity_id="e1", chunk_id="c1", doc_id="d1")
+    r1.mentions.append(mention)
+    assert r2.mentions == []
+
+
+def test_extraction_result_mentions_can_be_set() -> None:
+    """GraphExtractionResult can be constructed with mentions list."""
+    mention1 = GraphMention(entity_id="e1", chunk_id="c1", doc_id="d1")
+    mention2 = GraphMention(entity_id="e2", chunk_id="c2", doc_id="d2")
+    result = GraphExtractionResult(
+        nodes=[],
+        edges=[],
+        mentions=[mention1, mention2],
+    )
+    assert len(result.mentions) == 2
+    assert result.mentions[0] == mention1
+    assert result.mentions[1] == mention2

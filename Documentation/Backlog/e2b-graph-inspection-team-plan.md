@@ -367,7 +367,7 @@ flowchart LR
 
 ### Slice 1 · Single-collection JSON inspection *(walking skeleton: mentions table → extractor change → pipeline hook → inspection use case → GET /graph/{collection})*
 
-- [ ] **BE-1** — Add `GraphMention` dataclass and `GraphExtractionResult.mentions` field to `graph_types.py` #backend-role
+- [x] **BE-1** — Add `GraphMention` dataclass and `GraphExtractionResult.mentions` field to `graph_types.py` #backend-role
     - Entities · 1.0h
     - needs K1 · completes C2
     - Tests

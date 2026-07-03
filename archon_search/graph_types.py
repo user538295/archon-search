@@ -140,6 +140,26 @@ class GraphEdge:
 
 
 @dataclass
+class GraphMention:
+    """An incidence record linking an entity to a chunk where it was mentioned — E2b.
+
+    Stored in ``_archon_graph_{col}_mentions`` per collection. Each mention
+    records that a specific entity was extracted from a specific chunk within
+    a specific document, enabling derivation of chunk frequency (salience) and
+    co-occurrence metrics at inspection time.
+    """
+
+    entity_id: str
+    """ID of the ``GraphNode`` mentioned (from ``make_stable_entity_id``)."""
+    chunk_id: str
+    """Chunk ID where this entity mention occurred (e.g., ``{doc_id}-{idx:06d}``)."""
+    doc_id: str
+    """Document ID containing this chunk; used for idempotent delete-then-add
+    on re-ingest of the same document.
+    """
+
+
+@dataclass
 class GraphExtractionResult:
     """Output of ``GraphExtractor.extract()``.
 
@@ -151,6 +171,12 @@ class GraphExtractionResult:
     """Extracted entity nodes."""
     edges: list[GraphEdge]
     """Extracted relationship edges."""
+    mentions: list[GraphMention] = field(default_factory=list)
+    """Per-chunk entity incidence records for salience and co-occurrence derivation (E2b).
+    Each mention records that a specific entity was mentioned in a specific chunk within
+    a specific document. Empty by default; populated by ``GraphExtractor.extract()`` when
+    graph extraction is enabled.
+    """
     llm_fallback_used: bool = False
     """True when ``extraction_model`` is configured but LLM extraction is deferred to
     post-E1a (it is not implemented yet); spaCy-only result is used instead.
