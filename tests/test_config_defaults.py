@@ -209,6 +209,8 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "max_community_size": 10,
             "community_summary_chunks": 3,
             "max_global_candidates": 100,
+            "max_inspection_nodes": 5000,
+            "max_inspection_edges": 25000,
         },
     }
 

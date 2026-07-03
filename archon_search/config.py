@@ -121,6 +121,13 @@ class GraphConfig:
     max_global_candidates: int = _GRAPH_MAX_GLOBAL_CANDIDATES_DEFAULT
     """Operator cap on community representative chunks fed to the reranker in
     global mode. Prevents reranker overload on large corpora."""
+    # E2b graph inspection fields
+    max_inspection_nodes: int = 5000
+    """Maximum number of nodes to return in GET /graph/{collection} responses.
+    Nodes are truncated deterministically by highest salience-first sort."""
+    max_inspection_edges: int = 25000
+    """Maximum number of edges to return in GET /graph/{collection} responses.
+    Edges are truncated deterministically by highest weight-first sort."""
 
 
 @dataclass
@@ -729,6 +736,14 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
     if "max_global_candidates" in graph_cfg:
         graph.max_global_candidates = _coerce_bounded_int(
             graph_cfg["max_global_candidates"], "[graph].max_global_candidates", minimum=1
+        )
+    if "max_inspection_nodes" in graph_cfg:
+        graph.max_inspection_nodes = _coerce_bounded_int(
+            graph_cfg["max_inspection_nodes"], "[graph].max_inspection_nodes", minimum=1
+        )
+    if "max_inspection_edges" in graph_cfg:
+        graph.max_inspection_edges = _coerce_bounded_int(
+            graph_cfg["max_inspection_edges"], "[graph].max_inspection_edges", minimum=1
         )
     config.graph = graph
 

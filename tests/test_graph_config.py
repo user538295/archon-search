@@ -97,6 +97,8 @@ def test_graph_config_snapshot(tmp_path: Path) -> None:
         "max_community_size": 10,
         "community_summary_chunks": 3,
         "max_global_candidates": 100,
+        "max_inspection_nodes": 5000,
+        "max_inspection_edges": 25000,
     }
 
 
@@ -180,4 +182,57 @@ def test_graph_enabled_rejects_non_bool(tmp_path: Path) -> None:
         """,
     )
     with pytest.raises(ConfigError, match="enabled"):
+        load_config(path=toml)
+
+
+# ---------------------------------------------------------------------------
+# E2b inspection fields: max_inspection_nodes and max_inspection_edges
+# ---------------------------------------------------------------------------
+
+
+def test_graph_config_inspection_defaults() -> None:
+    """GraphConfig inspection defaults: max_inspection_nodes=5000, max_inspection_edges=25000."""
+    cfg = GraphConfig()
+    assert cfg.max_inspection_nodes == 5000
+    assert cfg.max_inspection_edges == 25000
+
+
+def test_graph_config_toml_inspection_fields(tmp_path: Path) -> None:
+    """TOML [graph] max_inspection_nodes and max_inspection_edges parsed correctly."""
+    toml = _write_toml(
+        tmp_path,
+        """\
+        [graph]
+        enabled = true
+        max_inspection_nodes = 100
+        max_inspection_edges = 500
+        """,
+    )
+    config = load_config(path=toml)
+    assert config.graph.max_inspection_nodes == 100
+    assert config.graph.max_inspection_edges == 500
+
+
+def test_graph_config_inspection_rejects_zero(tmp_path: Path) -> None:
+    """max_inspection_nodes=0 and max_inspection_edges=0 raise ConfigError."""
+    # Test zero on max_inspection_nodes
+    toml = _write_toml(
+        tmp_path,
+        """\
+        [graph]
+        max_inspection_nodes = 0
+        """,
+    )
+    with pytest.raises(ConfigError, match="max_inspection_nodes"):
+        load_config(path=toml)
+
+    # Test negative on max_inspection_edges
+    toml = _write_toml(
+        tmp_path,
+        """\
+        [graph]
+        max_inspection_edges = -1
+        """,
+    )
+    with pytest.raises(ConfigError, match="max_inspection_edges"):
         load_config(path=toml)

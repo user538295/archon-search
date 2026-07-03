@@ -374,7 +374,7 @@ flowchart LR
         - #unit_test — `test_graph_mention_dataclass_fields` — entity_id, chunk_id, doc_id present; dataclass equality
         - #unit_test — `test_extraction_result_mentions_defaults_to_empty` — `GraphExtractionResult().mentions == []`
 
-- [ ] **BE-2** — Add `max_inspection_nodes` and `max_inspection_edges` to `GraphConfig`; extend TOML parser in `_apply_toml()` (`config.py`) #backend-role
+- [x] **BE-2** — Add `max_inspection_nodes` and `max_inspection_edges` to `GraphConfig`; extend TOML parser in `_apply_toml()` (`config.py`) #backend-role
     - Entities · 1.0h
     - needs K1 · completes C3
     - Tests
