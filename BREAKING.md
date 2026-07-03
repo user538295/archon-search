@@ -8,6 +8,34 @@
 
 ## Changelog
 
+### [next release] — E2a: TTL and scoping — additive chunk columns, new endpoints, scope_filter, maintenance fields
+
+**Surface**: `POST /ingest` and `POST /ingest/directory` request bodies; `PATCH /collections/{name}` request body; new `GET /collections/{name}/expiring` endpoint; `POST /search` and `POST /explain` request bodies; `GET /status` maintenance sub-object; `GET /collections/{name}/documents` response items; MCP tools `ingest_file`, `ingest_directory`, `search`, `search_with_context`, `explain`; LanceDB chunk-table and meta-table schemas; `STORE_SCHEMA_VERSION`.
+
+**Additive changes** (non-breaking for tolerant JSON consumers; breaking for strict-schema validators with `extra="forbid"`):
+
+1. **`STORE_SCHEMA_VERSION` bumped `0` → `1`** — two new in-place migrations registered with `introduced_at=1`: `migrate_expires_at_and_scopes` (adds `expires_at: utf8 | null` and `scopes: list<utf8> | null` to every collection's chunk table) and `migrate_default_ttl_seconds` (adds `default_ttl_seconds: int64 | null` to `_archon_collection_meta`). These migrations are NOT triggered at server startup — operators must run `POST /collections/{name}/migrate` for each collection after upgrading to E2a before using TTL or scopes features. Until migrated, TTL and scope data is silently omitted (the store detects un-migrated columns and omits the keys from ingest rows entirely; the columns are absent, not stored as null). `GET /collections/{name}/migrations/pending` returns both specs for un-migrated collections; `GET /status` `collections_schema_behind` reflects the count.
+
+2. **`POST /ingest` and `POST /ingest/directory` gain `chunk_ttl_seconds?: int | null` and `chunk_scopes?: list[str] | null`** — additive optional fields. `chunk_ttl_seconds` ∈ [1, 2^31-1]; `chunk_scopes` 0–100 items × 1–255 chars. Validation: `chunk_ttl_seconds=0` or negative → 422; scope string > 255 chars or > 100 items → 422. `chunk_scopes=[]` (explicit empty list) is normalized to `null` by the pipeline (no storage difference). Existing calls without these fields are completely unaffected.
+
+3. **`PATCH /collections/{name}` gains `default_ttl_seconds?: int | null`** — additive optional field. Sets the collection-level TTL default; `null` clears it. When set, newly ingested chunks without a per-request `chunk_ttl_seconds` inherit `expires_at = ingest_time + default_ttl_seconds`. Forward-only: PATCH does NOT retroactively update existing chunks. Strict-validating clients on `PatchCollectionBody` must add this nullable field.
+
+4. **New `GET /collections/{name}/expiring?within_hours={n}` endpoint** — cursor-paginated list of chunks expiring in the next `within_hours` hours (`within_hours` ∈ [1, 8760]); returns `ExpiringChunksResponse`. Additive — no existing endpoints modified.
+
+5. **`POST /search` and `POST /explain` gain `scope_filter?: str | null`** — additive optional field. `null` (default) = no scope filtering; exact value = only chunks with that exact tag in `scopes`; trailing `*` = prefix wildcard match. Unscoped chunks (`scopes = null`) always match any `scope_filter`. Invalid patterns (bare `*`, leading `*`, mid-string `*`, multiple `*`) → 400. 400 body: `{"detail": {"code": "invalid_scope_filter", "message": "..."}}` (wrapped in a `detail` envelope, same pattern as `graph_communities_not_built`). `scope_filter` + any `graph_mode` value → 422. Strict-validating clients on `SearchRequest` and `ExplainRequest` must add this nullable field.
+
+6. **`GET /status` maintenance sub-object gains `expired_chunk_count: int` and `last_expired_pruned_at: str | null`** — `expired_chunk_count` is always an integer (never null); reflects the live point-in-time count of chunks with `expires_at < now_utc` in the caller-visible collection tables (note: counts span all namespaces sharing a collection table — the namespace parameter is accepted for API symmetry only; all tenants in a shared-table collection contribute to the count). `last_expired_pruned_at` is null until the first prune pass. Strict-validating clients on `MaintenanceStatusDetail` must add both fields.
+
+7. **`GET /collections/{name}/documents` items gain `scopes: list[str]`** — present after E2a migration (empty list when the document has no scoped chunks; absent on un-migrated collections where the `scopes` column has not been added yet). Strict-validating clients on `DocumentInfoItem` must add this field.
+
+8. **MCP tools updated** — `ingest_file` and `ingest_directory` gain `chunk_ttl_seconds: int | null` and `chunk_scopes: list[str] | null`; `search`, `search_with_context`, and `explain` gain `scope_filter: str | null`. MCP tool-level validation mirrors the REST rules. All changes are additive — callers that do not pass these parameters are unaffected.
+
+**Operator runbook for migration**: after upgrading to E2a, run `POST /collections/{name}/migrate` (or `archon-search collection migrate <name>`) for each collection before using TTL or scopes features. All five existing v0 startup migrations are unaffected. The schema bump adds two migration specs at `introduced_at=1`; these are NOT applied at server startup (unlike the five v0 migrations) — explicit per-collection migration is required.
+
+**Migration**: no action required for existing callers that do not use TTL or scopes. Run `POST /collections/{name}/migrate` for each collection when you are ready to use E2a features. Strict-schema validators should add the new optional fields to their type stubs; regenerate from `GET /openapi.json`.
+
+---
+
 ### [next release] — E2a BE-4: `PATCH /collections/{name}` `embedding_model` field is now optional
 
 **Surface**: `PATCH /collections/{name}` request body (`PatchCollectionBody`).

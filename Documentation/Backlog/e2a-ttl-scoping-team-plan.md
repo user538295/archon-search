@@ -627,7 +627,7 @@ Add test: `test_graph_mode_defensive_assertion_fires` — call any of the four m
 
 ### Phase N · Close-out
 
-- [ ] **T-5** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-5** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs T-1, T-2, T-4
     - Tests

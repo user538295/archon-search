@@ -286,6 +286,10 @@ num_queries = 2
 # Enable automatic re-enqueue of failed IngestJobs within the retry age and attempt limits.
 # failed_ingest_retry = true
 #
+# Enable automatic pruning of expired chunks (chunks whose expires_at < now_utc).
+# Requires E2a schema migration (POST /collections/{name}/migrate) before chunks with TTL are stored.
+# prune_expired_chunks = true
+#
 # Maximum number of retry attempts per source file per collection before giving up.
 # retry_max_attempts = 3
 #

@@ -118,6 +118,8 @@ LanceDB lives in `~/.archon-search/search/` (configurable via `[database].db_pat
 | `ingested_by` | `utf8` | call-site identity: one of `cli` / `http` / `watcher` / `reindex` (defined by `_types.IngestedBy`; legacy `archon-search-cli` is normalized at boundaries) |
 | `updated_at` | `utf8` | ISO 8601 |
 | `acl` | `list<utf8>` (nullable) | `None`=open, `[]`=deny-all, `[ns…]`=allowed namespaces |
+| `expires_at` | `utf8` (nullable) | ISO 8601 UTC fixed-width timestamp (`YYYY-MM-DDTHH:MM:SS.ffffffZ`); `null` = never expires. Computed at ingest time from `chunk_ttl_seconds` (request-level) → `default_ttl_seconds` (collection meta) → `null`. **E2a** — added by `migrate_expires_at_and_scopes` (in-place migration at `introduced_at=1`; run `POST /collections/{name}/migrate` to apply). |
+| `scopes` | `list<utf8>` (nullable) | List of scope tags (e.g. `["user:alice"]`); `null` = unscoped (matches any `scope_filter`). Assigned at ingest time from `chunk_scopes` in the ingest request. `chunk_scopes=[]` is normalized to `null`. **E2a** — added by `migrate_expires_at_and_scopes`. |
 
 Metadata bounds enforced by `store.py::validate_metadata`: max 50 fields, key ≤ 256 chars, value ≤ 4096 chars.
 
@@ -144,6 +146,7 @@ The per-field partition map (**system** / **filterable** / **ranking** / **audit
 | `mutations_since_recompute` | `int64` | Counter incremented on every ingest batch and every delete operation; reset to `0` after a full `recompute_collection_meta`. Used to detect high-churn collections that need a periodic drift-reset recompute. `-1` sentinel = pre-B5 row (treated as 0 at read time). |
 | `needs_recompute` | `bool` | Set `True` when incremental maintenance cannot proceed (model mismatch detected, NaN/Inf in a vector batch, or centroid sum absent from a pre-B5 store). The pipeline calls `recompute_collection_meta` automatically when this flag is `True` before the next search or routing query against the collection. Cleared to `False` on successful full recompute. |
 | `schema_version` | `int64` | **D3** — tracks which structural migrations (to the shared chunk-table schema or the collection-metadata schema) have been applied to this collection. Added by `_run_startup_migrations()` idempotently; defaults to `0` for all rows (including pre-D3 collections read before the migration runs). Compared against `STORE_SCHEMA_VERSION` by `pending_migrations()` to determine which migrations need to be applied. Updated to `STORE_SCHEMA_VERSION` by `apply_in_place_migrations()` on success; left unchanged if a rewrite migration is cancelled or fails mid-way. |
+| `default_ttl_seconds` | `int64` (nullable) | Collection-level TTL default in seconds; `null` = no default. When set, newly ingested chunks without per-request `chunk_ttl_seconds` inherit `expires_at = ingest_time + default_ttl_seconds`. Forward-only — PATCH does NOT retroactively update existing chunks. **E2a** — added by `migrate_default_ttl_seconds` (in-place migration at `introduced_at=1`). |
 
 The three B5 columns are additive and populated lazily: rows written by an older binary that lacks B5 will have `None` for all three fields, which the store treats identically to the `needs_recompute = True` state and triggers a full recompute on next access. See also `BREAKING.md` for mixed-version deployment caveats.
 
@@ -195,16 +198,18 @@ FTS is built per chunk table on the `text` column via `store.py::rebuild_fts_ind
 
 A2 adds query-side filtering (`archon_search/filters.py`, `archon_search/store_filters.py`). Filter execution splits into two phases:
 
-1. **SQL WHERE clause** (LanceDB-side, `store_filters.build_where`): handles `file_type`, `source_path_prefix`, `indexed_after`, `indexed_before`. These are expressed as SQL predicates pushed into the LanceDB query.
-2. **Python post-filter** (in-memory, `store.py`): handles `source_path_glob` via `fnmatch.fnmatchcase`. **No path semantics**: `*` matches `/`, and `**` is identical to `*` — there is no shell-style directory-boundary awareness.
+1. **SQL WHERE clause** (LanceDB-side, `store_filters.build_where`): handles `file_type`, `source_path_prefix`, `indexed_after`, `indexed_before`. **E2a**: also handles exact `scope_filter` values via `(scopes IS NULL OR list_has(scopes, '<value>'))` — the `scopes IS NULL` arm ensures unscoped chunks always pass through. These are expressed as SQL predicates pushed into the LanceDB query.
+2. **Python post-filter** (in-memory, `store.py`): handles `source_path_glob` via `fnmatch.fnmatchcase`. **No path semantics**: `*` matches `/`, and `**` is identical to `*` — there is no shell-style directory-boundary awareness. **E2a**: also handles `scope_filter` with a trailing `*` (wildcard prefix match). Wildcard scope matching is Python-side on the top-k candidate set after LanceDB retrieval; unscoped chunks (`scopes is None`) always pass through the wildcard filter.
 
 Because glob and ACL filtering happen after retrieval, the store over-fetches candidates before post-processing. The `_compute_fetch` helper (`store_filters.py`) controls this:
 - No glob: `max(top_k * 3, 20)` — standard RRF over-fetch.
 - With glob: `max(top_k * GLOB_OVERFETCH_FACTOR, 60)` where `GLOB_OVERFETCH_FACTOR = 5` — extra headroom to absorb glob × ACL attrition.
 
+**Known limitation (E2a):** `_compute_fetch` does not account for wildcard `scope_filter`. When both `source_path_glob` and a wildcard `scope_filter` (trailing `*`) are active simultaneously, two independent Python-side post-filters apply — the 5x glob over-fetch factor may not compensate for the compounded attrition, and the caller may receive fewer than `top_k` results. No additional over-fetch multiplier is applied for `scope_filter`.
+
 ### Migrations (idempotent, run at startup)
 
-**D3: `STORE_SCHEMA_VERSION`** — a module-level integer constant in `store.py` (currently `0`). Every structural change to `_schema()` or `_meta_schema()` that requires existing rows to be migrated must increment this constant and register a `MigrationSpec` in `SearchStore._all_migrations()`. `GET /collections/{name}/migrations/pending` compares each collection's `schema_version` against this constant and returns the list of unapplied specs. `GET /status` reports `store_schema_version` (the constant) and `collections_schema_behind` (count of collections below it).
+**D3: `STORE_SCHEMA_VERSION`** — a module-level integer constant in `store.py` (currently `1`). Every structural change to `_schema()` or `_meta_schema()` that requires existing rows to be migrated must increment this constant and register a `MigrationSpec` in `SearchStore._all_migrations()`. `GET /collections/{name}/migrations/pending` compares each collection's `schema_version` against this constant and returns the list of unapplied specs. `GET /status` reports `store_schema_version` (the constant) and `collections_schema_behind` (count of collections below it).
 
 The five startup migrations below are formalised as `MigrationSpec` entries with `kind=in_place` and `introduced_at=0`. They run via `SearchStore._run_startup_migrations()` on every server startup (alongside a sixth infrastructure step, `_migrate_schema_version()`, which idempotently adds the `schema_version` column to `_archon_collection_meta` and is not a `MigrationSpec`).
 
@@ -213,6 +218,11 @@ The five startup migrations below are formalised as `MigrationSpec` entries with
 - `migrate_acl` — adds nullable `acl` column to each chunk table that lacks it.
 - `migrate_centroid_sum` — adds `centroid_sum_json`, `mutations_since_recompute`, and `needs_recompute` columns to `_archon_collection_meta` if absent (B5).
 - `migrate_per_collection_model` — adds `active_embedding_model`, `pending_embedding_model`, `needs_reindex`, and `reindex_job_id` columns to `_archon_collection_meta` if absent, backfilling `active_embedding_model` from the pre-C1 `embedding_model` column. Idempotent: a second run is a no-op. The old `embedding_model` column is dropped after backfill.
+
+**E2a migrations (`introduced_at=1`)**: unlike the five startup migrations above, these are NOT applied automatically at server startup. Operators must run `POST /collections/{name}/migrate` for each collection after upgrading to E2a:
+
+- `migrate_expires_at_and_scopes` — adds `expires_at` (`utf8`, nullable) and `scopes` (`list<utf8>`, nullable) columns to every collection's chunk table. Idempotent: running it twice produces no error and no data change (column-existence guard). Until migrated, TTL/scope data is silently omitted from ingest rows.
+- `migrate_default_ttl_seconds` — adds `default_ttl_seconds` (`int64`, nullable) column to `_archon_collection_meta`. Idempotent.
 
 **D3 migration-kind taxonomy:**
 - `in_place` — idempotent `add_columns()` call; completes in under a second; no data rewrite required. Applied synchronously by `POST /collections/{name}/migrate` (returns `200`) or automatically at startup.
@@ -321,6 +331,7 @@ Schema (C3 contract):
 {
   "last_run_at": "<ISO-8601> | null",
   "next_run_at": "<ISO-8601> | null",
+  "last_expired_pruned_at": "<ISO-8601> | null",
   "collection_health": {
     "{namespace}/{collection}": {
       "fts_optimized_at":           "<ISO-8601> | null",
@@ -328,6 +339,7 @@ Schema (C3 contract):
       "last_retry_at":              "<ISO-8601> | null",
       "last_error":                 "<string> | null",
       "meta_chunk_count":           <int>,
+      "expired_chunks_removed_last_run": <int>,
       "mutations_since_recompute":  <int>
     }
   },

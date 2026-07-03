@@ -1135,3 +1135,8 @@
 - Observation: The UserManual `05_searching.md` error table had `graph_mode on POST /explain → 422 (extra field rejected)` (pre-E1c state) and `MCP search_with_context + graph_mode → Error dict (deferred to E1c)`. Both needed updating: the first because E1c now accepts graph_mode on /explain; the second because "deferred to E1c" is no longer accurate now that E1c has shipped.
 - Action: At close-out, grep the UserManual for the feature tag (e.g., `grep "E1c\|deferred"`) and also explicitly check error tables for entries that describe the state BEFORE the feature was built. Update both the placeholder text and the now-shipped feature entries.
 - Confidence: high
+
+**[2026-07-03] — E2a T-5 close-out: all documentation was pre-updated by prior tasks**
+- Observation: Every documentation target listed for T-5 (130, 160, 600 architecture docs; CLAUDE.md; BREAKING.md; toml.example; UserManual/12_ttl_and_scoping.md) was already fully updated by the prior T-1–T-4 implementation tasks. T-5 fact-checked all acceptance criteria (STORE_SCHEMA_VERSION=1, migrate_expires_at_and_scopes, prune_expired_chunks, scope_filter, ExpiringChunksResponse, expired_chunk_count, MCP tool updates, has_ttl_cols guard), regenerated the OpenAPI snapshot, and ran the full suite (6360 passed, 93% coverage).
+- Action: At E2a-style feature close-outs, run the fact-checks first before planning documentation work — prior tasks often already completed the doc updates. The snapshot regeneration and full suite run are always needed regardless.
+- Confidence: high

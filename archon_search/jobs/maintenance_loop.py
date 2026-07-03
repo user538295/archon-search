@@ -68,10 +68,11 @@ _EMPTY_STATE: dict[str, Any] = {
 class MaintenanceLoop:
     """Drives scheduled per-collection maintenance passes.
 
-    Owns the ``.maintenance-state.json`` file. Implements all three
-    per-collection policies inline: FTS optimize (``_run_fts_optimize``),
-    orphan chunk cleanup (``_run_orphan_cleanup``), and failed-ingest
-    retry (``_run_failed_ingest_retry``).
+    Owns the ``.maintenance-state.json`` file. Implements four configurable
+    policies per pass: three run per-non-excluded-collection — FTS optimize
+    (``_run_fts_optimize``), orphan chunk cleanup (``_run_orphan_cleanup``),
+    and expired-chunk pruning (``_run_expired_chunk_pruning``) — plus one
+    pass-level policy: failed-ingest retry (``_run_failed_ingest_retry``).
     """
 
     def __init__(

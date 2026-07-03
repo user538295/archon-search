@@ -253,7 +253,7 @@ On Linux, use `journalctl --user -u archon-search | grep 'centroid stale'`.
 
 ## Maintenance runbook (D5)
 
-`MaintenanceLoop` runs three configurable policies per non-excluded collection each pass: FTS optimize, orphan chunk cleanup, and failed-ingest retry. Disabled by default (`interval_hours = 0`).
+`MaintenanceLoop` runs four configurable policies each pass: FTS optimize, orphan chunk cleanup, and expired-chunk pruning (**E2a**, `prune_expired_chunks`) are per-non-excluded-collection; failed-ingest retry is pass-level (runs once per maintenance pass, not per-collection). Disabled by default (`interval_hours = 0`).
 
 ### Enabling scheduled maintenance
 
@@ -267,6 +267,7 @@ orphan_cleanup = true      # remove chunks whose source file is gone
 failed_ingest_retry = true # re-enqueue failed ingest jobs
 retry_max_attempts = 3
 retry_max_age_hours = 72
+prune_expired_chunks = true # delete chunks past their expires_at (E2a)
 ```
 
 Restart the server for the change to take effect.
@@ -317,6 +318,8 @@ The `maintenance.collection_health` block in `GET /status` is namespace-scoped t
 | `collection_health[n].meta_chunk_count` | Chunk count from the O(1) metadata row (written at ingest time) |
 | `collection_health[n].mutations_since_recompute` | Mutations since last centroid recompute (from metadata row) |
 | `collection_health[n].centroid_recompute_threshold` | Current configured threshold for triggering a centroid recompute |
+| `expired_chunk_count` | Live count of chunks with `expires_at < now_utc` in the caller-visible collection tables (not namespace-scoped within shared tables — all tenants in a shared-table collection contribute; see store.py `count_expired_chunks` docstring for the caveat); always an integer (never null); 0 when no expired chunks exist. Resets as chunks are pruned or new TTL-expiry occurs. |
+| `last_expired_pruned_at` | ISO-8601 UTC timestamp of the last successful expired-chunk prune pass; `null` until the first prune pass runs. |
 
 ### Troubleshooting
 
@@ -329,6 +332,53 @@ The `maintenance.collection_health` block in `GET /status` is namespace-scoped t
 **Failed ingest job not retried**: check that `source_path` is non-empty on the job (`GET /jobs/{job_id}`). Pre-D5 jobs with `source_path=""` are skipped by the retry policy (source path is unknown). Re-trigger manually via `POST /ingest`.
 
 **FTS index not found (`fts_optimized_at` stays null after a pass)**: the collection has no FTS index (never searched with FTS or no documents ingested). A WARNING is logged at the DEBUG level and the policy skips silently. Ingest at least one document and run a search to create the FTS index, then re-trigger.
+
+### TTL pruning runbook (E2a)
+
+`MaintenanceLoop` runs an expired-chunk pruning policy as a fourth per-collection pass when `prune_expired_chunks = true` (default). Chunks with `expires_at < now_utc` are deleted and a WARNING is logged with the pruned doc_ids.
+
+**Note on cross-tenant scope**: `prune_expired_chunks` operates on the entire collection table — it is NOT scoped to a single namespace. In multi-namespace deployments where multiple tenants share a collection, pruning triggered by tenant A's maintenance pass also removes expired chunks belonging to other tenants in the same collection.
+
+**Prerequisites**: each collection must have been migrated to E2a schema before TTL chunks can be stored. Un-migrated collections are silently skipped by the prune policy (no error, no deletion). To migrate:
+
+```bash
+# Via REST:
+curl -s -X POST http://localhost:8765/collections/<name>/migrate \
+  -H "Authorization: Bearer <your-api-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"backup_confirmed": false}'
+
+# Verify migration applied:
+curl -s http://localhost:8765/collections/<name>/migrations/pending \
+  -H "Authorization: Bearer <your-api-key>"
+# Should return {"pending": []} after migration
+```
+
+**Key behaviours**:
+- `PATCH /collections/{name}` `default_ttl_seconds` is **forward-only**: changing the collection default does NOT retroactively update existing chunks. Only newly ingested chunks pick up the new default.
+- `chunk_scopes=[]` (explicit empty list) at ingest time is normalized to `null` — no storage difference from passing `null`.
+- Watcher-triggered ingests always use `chunk_ttl_seconds=None` and `chunk_scopes=None`; the collection `default_ttl_seconds` still applies if set.
+- Pruned chunks disappear permanently. If watcher-managed files had their chunks pruned, they will NOT be automatically re-ingested — the watcher tracks by file mtime, not chunk presence. Files must be touched (or re-ingested via REST) to restore chunks.
+
+**Monitoring expired chunks**:
+
+```bash
+# How many expired chunks currently exist in the namespace?
+curl -s http://localhost:8765/status \
+  -H "Authorization: Bearer <your-api-key>" | python3 -m json.tool | grep -A 5 '"maintenance"'
+# Look for expired_chunk_count (live point-in-time count) and last_expired_pruned_at
+
+# Preview chunks expiring within the next 24 hours:
+curl -s "http://localhost:8765/collections/<name>/expiring?within_hours=24" \
+  -H "Authorization: Bearer <your-api-key>" | python3 -m json.tool
+```
+
+**Disabling TTL pruning** (leave other policies enabled):
+```toml
+[maintenance]
+interval_hours = 24
+prune_expired_chunks = false
+```
 
 ## See also
 

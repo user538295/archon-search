@@ -51,6 +51,7 @@ End-user / operator documentation. Audience is medior-technical operators runnin
 | [`UserManual/07_troubleshooting.md`](../UserManual/07_troubleshooting.md) | Common failure modes: auth, empty results, stuck reindex, install hangs. |
 | [`UserManual/08_running_with_docker.md`](../UserManual/08_running_with_docker.md) | C9 — Docker image (CPU + GPU), `docker run` / `docker compose`, env-var matrix, persistence layout. |
 | [`UserManual/09_multi_instance_setup.md`](../UserManual/09_multi_instance_setup.md) | MIS — Run a native-service prod instance and a Docker dev-UAT instance side by side; data isolation, API key isolation, MCP client config for both, optional shared fastembed model cache. |
+| [`UserManual/12_ttl_and_scoping.md`](../UserManual/12_ttl_and_scoping.md) | **E2a** — Operator runbook: schema migration, TTL configuration, scope tags, expiring-chunk preview, maintenance pruning, and troubleshooting. |
 
 ## Migration Guide
 
