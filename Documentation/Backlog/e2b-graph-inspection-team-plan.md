@@ -489,7 +489,7 @@ flowchart LR
 
 ### Slice 4 · MCP summary tools *(adds get_graph and get_graph_cross_collection MCP tools)*
 
-- [ ] **BE-11** — Add `get_graph` and `get_graph_cross_collection` tools to `mcp.py`; add `graph_store` as an optional keyword parameter with a default of `None` to both `create_app()` and `create_mcp_http_app()` — `graph_store: GraphStore | None = None` — so existing test call sites do not break; update `app.py` lifespan to pass `graph_store=app.state.graph_store`; both tools guard on `config.graph.enabled` and `graph_store is not None`; summary response: `node_count`, `edge_count`, `entity_type_distribution`, `top_nodes` (top-20 by salience), `top_edges` (top-20 by weight); use `McpErrorResponse` pattern for `graph.enabled=false` #backend-role
+- [x] **BE-11** — Add `get_graph` and `get_graph_cross_collection` tools to `mcp.py`; add `graph_store` as an optional keyword parameter with a default of `None` to both `create_app()` and `create_mcp_http_app()` — `graph_store: GraphStore | None = None` — so existing test call sites do not break; update `app.py` lifespan to pass `graph_store=app.state.graph_store`; both tools guard on `config.graph.enabled` and `graph_store is not None`; summary response: `node_count`, `edge_count`, `entity_type_distribution`, `top_nodes` (top-20 by salience), `top_edges` (top-20 by weight); use `McpErrorResponse` pattern for `graph.enabled=false` #backend-role
     - Presentation · 3.0h
     - needs BE-6, BE-9 · completes S15, S16, S18
     - Tests

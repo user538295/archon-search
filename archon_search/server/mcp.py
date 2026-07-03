@@ -71,6 +71,7 @@ from archon_search.types import JobStatus
 
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
+    from archon_search.graph_store import GraphStore
     from archon_search.hyde import HyDEGenerator
     from archon_search.jobs.store import JobStore
     from archon_search.rag_fusion import RAGFusionGenerator
@@ -266,6 +267,7 @@ def create_app(
     rag_fusion_generator: "RAGFusionGenerator | None" = None,
     key_store: "KeyStore | None" = None,
     doc_id_hasher: Callable[[str], str] | None = None,
+    graph_store: "GraphStore | None" = None,
 ) -> FastMCP:
     """Create a FastMCP app with 13 RAG tools + up to 4 optional key-management tools.
 
@@ -1826,6 +1828,195 @@ def create_app(
                     "old_key_status": old_key_status,
                 }
 
+    # -----------------------------------------------------------------------
+    # Graph inspection tools (E2b) — always registered; guard at runtime.
+    # -----------------------------------------------------------------------
+
+    from archon_search.graph_inspector import inspect_collection, inspect_cross_collection  # noqa: PLC0415
+
+    @app.tool()
+    async def get_graph(collection: str) -> dict[str, Any]:
+        """Return a summary of the entity graph for a single collection.
+
+        Returns node_count, edge_count, entity_type_distribution, and top-20
+        nodes (by salience) and edges (by weight) for inspection and visualization.
+        """
+        # Guard: graph must be enabled and graph_store must be available
+        _gg_config = getattr(config, "graph", None)
+        _gg_enabled = getattr(_gg_config, "enabled", False) if _gg_config is not None else False
+        if not _gg_enabled or graph_store is None:
+            return McpErrorResponse(
+                error="graph inspection requires [graph] enabled=true in server config",
+                code="graph_disabled",
+            )
+
+        ns = _get_request_namespace()
+        try:
+            meta = await pipeline.get_collection_meta(collection, namespace=ns)
+            if meta is None:
+                return McpErrorResponse(error=f"collection {collection!r} not found", code="not_found")
+
+            total_chunk_count = meta.chunk_count
+            max_nodes = getattr(_gg_config, "max_inspection_nodes", 5000)
+            max_edges = getattr(_gg_config, "max_inspection_edges", 25000)
+
+            view = await inspect_collection(
+                graph_store=graph_store,
+                collection=collection,
+                total_chunk_count=total_chunk_count,
+                max_nodes=max_nodes,
+                max_edges=max_edges,
+            )
+
+            # Build entity_type_distribution from nodes
+            # For now, we count entities by extracting type from entity_id
+            # (e.g., "PERSON:alice" → type is "PERSON")
+            entity_type_dist: dict[str, int] = {}
+            for node in view.nodes:
+                # Extract entity type (prefix before ':')
+                if ":" in node.entity_id:
+                    entity_type = node.entity_id.split(":", 1)[0]
+                else:
+                    entity_type = "unknown"
+                entity_type_dist[entity_type] = entity_type_dist.get(entity_type, 0) + 1
+
+            # Top nodes: sorted by salience desc, take first 20
+            top_nodes_list = sorted(view.nodes, key=lambda n: (-n.salience, n.entity_id))[:20]
+            top_nodes = [
+                {
+                    "entity_id": n.entity_id,
+                    "entity_name": n.entity_name,
+                    "chunk_count": n.chunk_count,
+                    "salience": n.salience,
+                }
+                for n in top_nodes_list
+            ]
+
+            # Top edges: sorted by weight desc, take first 20
+            top_edges_list = sorted(view.edges, key=lambda e: (-e.weight, e.edge_id))[:20]
+            top_edges = [
+                {
+                    "edge_id": e.edge_id,
+                    "source_entity_id": e.source_entity_id,
+                    "target_entity_id": e.target_entity_id,
+                    "weight": e.weight,
+                }
+                for e in top_edges_list
+            ]
+
+            return {
+                "node_count": view.node_count,
+                "edge_count": view.edge_count,
+                "entity_type_distribution": entity_type_dist,
+                "top_nodes": top_nodes,
+                "top_edges": top_edges,
+            }
+        except Exception as exc:
+            logger.exception("get_graph failed")
+            return McpErrorResponse(error=str(exc), code="internal_error")
+
+    @app.tool()
+    async def get_graph_cross_collection(collections: list[str]) -> dict[str, Any]:
+        """Return a summary of the merged entity graph across multiple collections.
+
+        Returns the same fields as get_graph but for a merged view across collections.
+        Requires at least 2 collections; same-named entities and edges are merged.
+        """
+        # Guard: graph must be enabled and graph_store must be available
+        _ggc_config = getattr(config, "graph", None)
+        _ggc_enabled = getattr(_ggc_config, "enabled", False) if _ggc_config is not None else False
+        if not _ggc_enabled or graph_store is None:
+            return McpErrorResponse(
+                error="graph inspection requires [graph] enabled=true in server config",
+                code="graph_disabled",
+            )
+
+        ns = _get_request_namespace()
+        try:
+            # Validate collections parameter: at least 2 required
+            if not collections or len(collections) < 2:
+                return McpErrorResponse(
+                    error="collections must contain at least 2 distinct collection names",
+                    code="validation_error",
+                )
+
+            # Deduplicate collection names
+            deduped_collections = []
+            seen: set[str] = set()
+            for col in collections:
+                if col not in seen:
+                    deduped_collections.append(col)
+                    seen.add(col)
+
+            if len(deduped_collections) < 2:
+                return McpErrorResponse(
+                    error="collections must contain at least 2 distinct collection names after deduplication",
+                    code="validation_error",
+                )
+
+            # Fetch metadata for each collection and build total_chunk_counts
+            total_chunk_counts: dict[str, int] = {}
+            for col in deduped_collections:
+                meta = await pipeline.get_collection_meta(col, namespace=ns)
+                if meta is None:
+                    return McpErrorResponse(error=f"collection {col!r} not found", code="not_found")
+                total_chunk_counts[col] = meta.chunk_count
+
+            max_nodes = getattr(_ggc_config, "max_inspection_nodes", 5000)
+            max_edges = getattr(_ggc_config, "max_inspection_edges", 25000)
+
+            view = await inspect_cross_collection(
+                graph_store=graph_store,
+                collections=deduped_collections,
+                total_chunk_counts=total_chunk_counts,
+                max_nodes=max_nodes,
+                max_edges=max_edges,
+            )
+
+            # Build entity_type_distribution from merged nodes
+            entity_type_dist: dict[str, int] = {}
+            for node in view.nodes:
+                if ":" in node.entity_id:
+                    entity_type = node.entity_id.split(":", 1)[0]
+                else:
+                    entity_type = "unknown"
+                entity_type_dist[entity_type] = entity_type_dist.get(entity_type, 0) + 1
+
+            # Top nodes: sorted by salience desc, take first 20
+            top_nodes_list = sorted(view.nodes, key=lambda n: (-n.salience, n.entity_id))[:20]
+            top_nodes = [
+                {
+                    "entity_id": n.entity_id,
+                    "entity_name": n.entity_name,
+                    "chunk_count": n.chunk_count,
+                    "salience": n.salience,
+                }
+                for n in top_nodes_list
+            ]
+
+            # Top edges: sorted by weight desc, take first 20
+            top_edges_list = sorted(view.edges, key=lambda e: (-e.weight, e.edge_id))[:20]
+            top_edges = [
+                {
+                    "edge_id": e.edge_id,
+                    "source_entity_id": e.source_entity_id,
+                    "target_entity_id": e.target_entity_id,
+                    "weight": e.weight,
+                }
+                for e in top_edges_list
+            ]
+
+            return {
+                "node_count": view.node_count,
+                "edge_count": view.edge_count,
+                "entity_type_distribution": entity_type_dist,
+                "top_nodes": top_nodes,
+                "top_edges": top_edges,
+            }
+        except Exception as exc:
+            logger.exception("get_graph_cross_collection failed")
+            return McpErrorResponse(error=str(exc), code="internal_error")
+
     @app.custom_route("/health", methods=["GET"])
     async def health_check(request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
@@ -1845,6 +2036,7 @@ def create_mcp_http_app(
     rag_fusion_generator: "RAGFusionGenerator | None" = None,
     key_store: "KeyStore | None" = None,
     doc_id_hasher: Callable[[str], str] | None = None,
+    graph_store: "GraphStore | None" = None,
 ) -> Starlette:
     """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
 
@@ -1866,7 +2058,7 @@ def create_mcp_http_app(
     """
     from archon_search.server.middleware_context import RequestContextMiddleware
 
-    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator, key_store=key_store, doc_id_hasher=doc_id_hasher)
+    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator, key_store=key_store, doc_id_hasher=doc_id_hasher, graph_store=graph_store)
     # FastMCP 3.4.x renamed ``streamable_http_app()`` to ``http_app()``; ``path='/'``
     # exposes the JSON-RPC endpoint at the sub-app root so it is reachable at the
     # ``/mcp`` mount point without an extra suffix (see ADR 09, K-1 spike).
