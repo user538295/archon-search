@@ -617,3 +617,46 @@ class MigrateInPlaceResponse(BaseModel):
     """Response body for POST /collections/{name}/migrate (in-place synchronous path)."""
 
     migrations_applied: list[str]
+
+
+class GraphNodeResponse(BaseModel):
+    """A node in a graph inspection response (E2b)."""
+
+    entity_id: str
+    """ID of the graph node (from make_stable_entity_id)."""
+    entity_name: str
+    """Human-readable name of the entity."""
+    chunk_count: int
+    """Number of distinct chunks where this entity was mentioned."""
+    salience: float
+    """Chunk frequency relative to total collection chunks; clamped to [0.0, 1.0]."""
+
+
+class GraphEdgeResponse(BaseModel):
+    """An edge in a graph inspection response (E2b)."""
+
+    edge_id: str
+    """ID of the edge (from make_stable_edge_id)."""
+    source_entity_id: str
+    """ID of the source node."""
+    target_entity_id: str
+    """ID of the target node."""
+    weight: int
+    """Number of chunks where both endpoints are mentioned (co-occurrence count)."""
+    source_chunk_ids: list[str]
+    """Chunk IDs where both endpoints co-occur; sorted lexicographically, capped at 20."""
+
+
+class GraphInspectionResponse(BaseModel):
+    """Response body for GET /graph/{collection} (E2b)."""
+
+    nodes: list[GraphNodeResponse]
+    """List of nodes with derived metrics, sorted and truncated."""
+    edges: list[GraphEdgeResponse]
+    """List of edges where both endpoints survive node truncation, sorted and truncated."""
+    truncated: bool
+    """True if node cap, edge cap, or mention scan ceiling was reached."""
+    node_count: int
+    """Total number of nodes in the graph (before truncation)."""
+    edge_count: int
+    """Number of edges where BOTH endpoints exist (after node filter, before edge cap)."""

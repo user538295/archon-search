@@ -427,7 +427,7 @@ flowchart LR
         - #unit_test — `test_inspect_sets_truncated_when_mentions_exceed_ceiling` — when get_all_mentions returns exactly _MENTIONS_SCAN_CEILING rows (ceiling hit), truncated=True regardless of node/edge counts
         - #integration_test — `test_inspect_collection_end_to_end` — real GraphStore in tmp_path; write 2 nodes + 1 edge + 3 mentions; inspect returns correct derived fields
 
-- [ ] **BE-7** — New `archon_search/server/routes_graph.py`: `router = APIRouter()`; `GET /graph/{collection}` with `?format` param; `schemas.py` additions (`GraphNodeResponse`, `GraphEdgeResponse`, `GraphInspectionResponse`); all guards (422 for `graph.enabled=false`, 404 for collection not found); `graph.enabled=true` but tables absent → 200 empty; register in `app.py` with `include_router` #backend-role
+- [x] **BE-7** — New `archon_search/server/routes_graph.py`: `router = APIRouter()`; `GET /graph/{collection}` with `?format` param; `schemas.py` additions (`GraphNodeResponse`, `GraphEdgeResponse`, `GraphInspectionResponse`); all guards (422 for `graph.enabled=false`, 404 for collection not found); `graph.enabled=true` but tables absent → 200 empty; register in `app.py` with `include_router` #backend-role
     - Presentation · 3.0h
     - needs BE-6 · completes S1, S5, S6, S8, S17
     - Tests
