@@ -847,3 +847,154 @@ def test_graphml_networkx_import_error_yields_clear_message():
             to_graphml(view)
         assert "GraphML export requires networkx" in str(exc_info.value)
         assert "archon-search[graph]" in str(exc_info.value)
+
+
+# ============================================================================
+# Integration tests (real GraphStore with LanceDB)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_inspect_cross_collection_real_store(tmp_path):
+    """Integration test: cross-collection inspection with real GraphStore and LanceDB.
+
+    Writes data to 2 collections with a shared entity, verifies that
+    inspect_cross_collection correctly merges the entity (summed chunk_count).
+    """
+    from archon_search.graph_store import GraphStore
+
+    # Create a GraphStore instance with the tmp_path
+    db_path = str(tmp_path / "test.db")
+    graph_store = GraphStore(db_path)
+
+    # Connect to the database
+    await graph_store.connect()
+
+    # Define collections
+    col_a = "collection-a"
+    col_b = "collection-b"
+
+    # Ensure graph tables exist for both collections
+    await graph_store.ensure_graph_tables(col_a)
+    await graph_store.ensure_graph_tables(col_b)
+
+    # Create nodes for collection A
+    nodes_a = [
+        GraphNode(
+            id="entity-1",  # Shared entity across collections
+            entity_name="Entity One",
+            entity_type=EntityType.concept,
+            source_doc_id="doc-a-1",
+            collection_name=col_a,
+        ),
+        GraphNode(
+            id="entity-a-2",  # Unique to collection A
+            entity_name="Entity A2",
+            entity_type=EntityType.concept,
+            source_doc_id="doc-a-2",
+            collection_name=col_a,
+        ),
+    ]
+
+    # Create nodes for collection B
+    nodes_b = [
+        GraphNode(
+            id="entity-1",  # Shared entity across collections
+            entity_name="Entity One",
+            entity_type=EntityType.concept,
+            source_doc_id="doc-b-1",
+            collection_name=col_b,
+        ),
+        GraphNode(
+            id="entity-b-2",  # Unique to collection B
+            entity_name="Entity B2",
+            entity_type=EntityType.concept,
+            source_doc_id="doc-b-2",
+            collection_name=col_b,
+        ),
+    ]
+
+    # Create edges for collection A
+    edges_a = [
+        GraphEdge(
+            id="edge-1a",
+            source_node_id="entity-1",
+            target_node_id="entity-a-2",
+            relationship_type=RelationshipType.related_to,
+            source_doc_id="doc-a-1",
+        ),
+    ]
+
+    # Create edges for collection B
+    edges_b = [
+        GraphEdge(
+            id="edge-1b",
+            source_node_id="entity-1",
+            target_node_id="entity-b-2",
+            relationship_type=RelationshipType.related_to,
+            source_doc_id="doc-b-1",
+        ),
+    ]
+
+    # Create mentions for collection A (entity-1 in 2 chunks, entity-a-2 in 1 chunk)
+    mentions_a = [
+        GraphMention(entity_id="entity-1", chunk_id="chunk-a-1", doc_id="doc-a-1"),
+        GraphMention(entity_id="entity-1", chunk_id="chunk-a-2", doc_id="doc-a-1"),
+        GraphMention(entity_id="entity-a-2", chunk_id="chunk-a-3", doc_id="doc-a-2"),
+    ]
+
+    # Create mentions for collection B (entity-1 in 3 chunks, entity-b-2 in 1 chunk)
+    mentions_b = [
+        GraphMention(entity_id="entity-1", chunk_id="chunk-b-1", doc_id="doc-b-1"),
+        GraphMention(entity_id="entity-1", chunk_id="chunk-b-2", doc_id="doc-b-1"),
+        GraphMention(entity_id="entity-1", chunk_id="chunk-b-3", doc_id="doc-b-1"),
+        GraphMention(entity_id="entity-b-2", chunk_id="chunk-b-4", doc_id="doc-b-2"),
+    ]
+
+    # Write data to collection A
+    await graph_store.write_graph(col_a, nodes_a, edges_a)
+    await graph_store.write_mentions(col_a, mentions_a)
+
+    # Write data to collection B
+    await graph_store.write_graph(col_b, nodes_b, edges_b)
+    await graph_store.write_mentions(col_b, mentions_b)
+
+    # Call inspect_cross_collection
+    total_chunk_counts = {
+        col_a: 10,  # Denominator for salience in collection A
+        col_b: 10,  # Denominator for salience in collection B
+    }
+    view = await inspect_cross_collection(
+        graph_store,
+        [col_a, col_b],
+        total_chunk_counts,
+        max_nodes=1000,
+        max_edges=1000,
+    )
+
+    # Verify merged nodes
+    # entity-1 should be merged with chunk_count = 2 + 3 = 5
+    assert view.node_count == 3  # Total nodes before dedup: 2 + 2
+    assert len(view.nodes) == 3  # All 3 merged nodes
+
+    # Find the merged entity-1
+    entity_1_merged = None
+    for node in view.nodes:
+        if node.entity_id == "entity-1":
+            entity_1_merged = node
+            break
+
+    assert entity_1_merged is not None
+    assert entity_1_merged.chunk_count == 5  # 2 from A + 3 from B
+
+    # Other entities should have their counts unchanged
+    entity_a2 = next((n for n in view.nodes if n.entity_id == "entity-a-2"), None)
+    assert entity_a2 is not None
+    assert entity_a2.chunk_count == 1
+
+    entity_b2 = next((n for n in view.nodes if n.entity_id == "entity-b-2"), None)
+    assert entity_b2 is not None
+    assert entity_b2.chunk_count == 1
+
+    # Verify edges are present
+    assert len(view.edges) == 2  # edge-1a and edge-1b (different IDs, no merge)

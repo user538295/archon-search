@@ -461,7 +461,7 @@ flowchart LR
 
 ### Slice 3 · Cross-collection merged graph *(adds GET /graph/cross-collection)*
 
-- [ ] **BE-9** — Add `inspect_cross_collection(graph_store, collections, total_chunk_counts, max_nodes, max_edges) -> CrossCollectionGraphView` to `graph_inspector.py`: merge nodes by `entity_id` (sum chunk_counts, weighted-avg salience), merge edges by edge `id` (sum weights, union source_chunk_ids capped at 20), apply truncation. When merging `source_chunk_ids` across collections: take the union of all chunk_ids, sort lexicographically, cap at `MAX_SOURCE_CHUNK_IDS` (20). This is deterministic. Reuses `_truncate_graph(nodes, edges, max_nodes, max_edges)` helper from BE-6. #backend-role
+- [x] **BE-9** — Add `inspect_cross_collection(graph_store, collections, total_chunk_counts, max_nodes, max_edges) -> CrossCollectionGraphView` to `graph_inspector.py`: merge nodes by `entity_id` (sum chunk_counts, weighted-avg salience), merge edges by edge `id` (sum weights, union source_chunk_ids capped at 20), apply truncation. When merging `source_chunk_ids` across collections: take the union of all chunk_ids, sort lexicographically, cap at `MAX_SOURCE_CHUNK_IDS` (20). This is deterministic. Reuses `_truncate_graph(nodes, edges, max_nodes, max_edges)` helper from BE-6. #backend-role
     - Use Cases · 3.0h
     - needs BE-6 · completes S3, S13, S14, S17
     - Tests
