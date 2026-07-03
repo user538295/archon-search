@@ -1880,6 +1880,8 @@ class SearchStore:
 
         has_glob = bool(filters and filters.source_path_glob)
         fetch = _compute_fetch(top_k, has_glob=has_glob)
+        # NOTE: hybrid_search does not support scope_filter; production code uses
+        # hybrid_search_with_trace which threads scope_filter through build_where (BE-9).
         pred = build_where(filters) if filters else ""
 
         # Vector search
@@ -1989,15 +1991,21 @@ class SearchStore:
         query_text: str,
         candidate_depth: int,
         filters: "SearchFilters | None" = None,
+        scope_filter: str | None = None,
     ) -> list[ScoredSearchCandidate]:
         """Thin instance-method delegate to module-level _hybrid_search_with_trace.
 
         Used both for eval/debug observability and as the production search backend
         for the RAG Fusion path (Task 2.2, C5).  The *filters* parameter applies
-        the same field-predicate logic as :meth:`hybrid_search`.
+        the same field-predicate logic as :meth:`hybrid_search`.  The optional
+        *scope_filter* restricts results to chunks whose ``scopes`` list contains
+        the given value (exact match); unscoped chunks (``scopes IS NULL``) always
+        pass through as shared/global.  Wildcard suffixes (``"user:*"``) are not
+        applied at the SQL level — the caller must post-filter.
         """
         return await _hybrid_search_with_trace(
-            self, collection, query_vector, query_text, candidate_depth, filters=filters
+            self, collection, query_vector, query_text, candidate_depth,
+            filters=filters, scope_filter=scope_filter,
         )
 
     async def has_vector_index(self, collection: str) -> bool:
@@ -2737,12 +2745,17 @@ async def _hybrid_search_with_trace(
     query_text: str,
     candidate_depth: int,
     filters: "SearchFilters | None" = None,
+    scope_filter: str | None = None,
 ) -> list[ScoredSearchCandidate]:
     """Internal trace helper — returns full score provenance per candidate.
 
     Used both for eval/debug observability and as the production search backend
     for the RAG Fusion path (Task 2.2, C5).  The optional *filters* parameter
     applies the same field-predicate logic as :meth:`SearchStore.hybrid_search`.
+    The optional *scope_filter* restricts results to chunks whose ``scopes`` list
+    contains the given value (exact match); unscoped chunks (``scopes IS NULL``)
+    always pass through as shared/global.  Wildcard suffixes are not applied at
+    the SQL level — callers must post-filter.
 
     Args:
         store: A connected :class:`SearchStore` instance.
@@ -2752,6 +2765,8 @@ async def _hybrid_search_with_trace(
         candidate_depth: Maximum number of raw candidates to fetch from each
             search leg (analogous to ``fetch`` in :meth:`SearchStore.hybrid_search`).
         filters: Optional field filters applied to both the vector and FTS legs.
+        scope_filter: Optional scope tag for exact-match pre-retrieval filtering.
+            Unscoped chunks (``scopes IS NULL``) always pass through.
 
     Returns:
         List of :class:`ScoredSearchCandidate` ordered by descending RRF score.
@@ -2764,7 +2779,7 @@ async def _hybrid_search_with_trace(
     except ValueError:
         return []
 
-    pred = build_where(filters) if filters else ""
+    pred = build_where(filters, scope_filter)
 
     # --- Vector search ---
     with record_stage("vector"):

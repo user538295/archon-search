@@ -276,6 +276,16 @@ def test_build_where_language_sql_safe():
     assert "'fr'" in predicate
 
 
+def test_build_where_scope_empty_string_not_added() -> None:
+    """scope_filter='' (empty string) → no scope clause added (defensive guard)."""
+    from archon_search.store_filters import build_where
+    from archon_search.filters import SearchFilters
+
+    result = build_where(SearchFilters(), scope_filter="")
+    assert "list_has" not in result
+    assert "scopes" not in result
+
+
 def test_build_where_all_sql_filters():
     from archon_search.store_filters import build_where
     dt_after = datetime(2024, 1, 1, tzinfo=timezone.utc)

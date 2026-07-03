@@ -36,13 +36,31 @@ def escape_like(s: str) -> str:
     return s
 
 
-def build_where(filters: "SearchFilters") -> str:
-    """Compile *filters* into a SQL WHERE predicate string.
+def _where_list_has_or_null(col: str, value: str) -> str:
+    """Return a SQL predicate matching rows where *col* contains *value* OR is NULL.
+
+    Used for the scope predicate: unscoped chunks (``scopes IS NULL``) are treated
+    as shared/global and always match any scope filter.
+
+    Example::
+
+        _where_list_has_or_null("scopes", "user:alice")
+        # → "(scopes IS NULL OR list_has(scopes, 'user:alice'))"
+
+    The value is safely quoted via :func:`_sql_quote_str` — this is the ONLY place
+    in *store_filters.py* where a controlled f-string is used (factory function, not
+    ad-hoc inline SQL).
+    """
+    return f"({col} IS NULL OR list_has({col}, {_sql_quote_str(value)}))"
+
+
+def build_where(filters: "SearchFilters | None", scope_filter: str | None = None) -> str:
+    """Compile *filters* (and optional *scope_filter*) into a SQL WHERE predicate string.
 
     Returns ``""`` when no SQL-expressible filters are set (caller should skip
     ``.where()`` entirely in that case).
 
-    Fields handled:
+    Fields handled from *filters*:
     - ``file_type``           → ``file_type = '<value>'``
     - ``source_path_prefix``  → ``source_path LIKE '<escaped>%' ESCAPE '\\'``
     - ``indexed_after``       → ``indexed_at >= '<fixed-width UTC>'``
@@ -52,27 +70,36 @@ def build_where(filters: "SearchFilters") -> str:
     Fields deliberately NOT emitted as SQL:
     - ``source_path_glob``  — post-RRF Python-side filter
     - ``include_metadata``  — response-shaping flag
+
+    *scope_filter* handling:
+    - ``None`` → no scope clause added.
+    - Exact value (no trailing ``*``) → ``(scopes IS NULL OR list_has(scopes, '<value>'))`` ANDed in.
+    - Wildcard (trailing ``*``) → clause omitted; caller applies Python-side post-filter.
     """
     from archon_search._types import normalize_iso_utc  # lazy import
 
     clauses: list[str] = []
 
-    if filters.file_type is not None:
-        clauses.append("file_type = " + _sql_quote_str(filters.file_type))
+    if filters is not None:
+        if filters.file_type is not None:
+            clauses.append("file_type = " + _sql_quote_str(filters.file_type))
 
-    if filters.source_path_prefix is not None:
-        escaped = escape_like(filters.source_path_prefix)
-        pattern = _sql_quote_str(escaped + "%")
-        clauses.append("source_path LIKE " + pattern + " ESCAPE '\\'")
+        if filters.source_path_prefix is not None:
+            escaped = escape_like(filters.source_path_prefix)
+            pattern = _sql_quote_str(escaped + "%")
+            clauses.append("source_path LIKE " + pattern + " ESCAPE '\\'")
 
-    if filters.indexed_after is not None:
-        clauses.append("indexed_at >= " + _sql_quote_str(normalize_iso_utc(filters.indexed_after)))
+        if filters.indexed_after is not None:
+            clauses.append("indexed_at >= " + _sql_quote_str(normalize_iso_utc(filters.indexed_after)))
 
-    if filters.indexed_before is not None:
-        clauses.append("indexed_at <= " + _sql_quote_str(normalize_iso_utc(filters.indexed_before)))
+        if filters.indexed_before is not None:
+            clauses.append("indexed_at <= " + _sql_quote_str(normalize_iso_utc(filters.indexed_before)))
 
-    if filters.language is not None:
-        clauses.append("language = " + _sql_quote_str(filters.language))
+        if filters.language is not None:
+            clauses.append("language = " + _sql_quote_str(filters.language))
+
+    if scope_filter is not None and scope_filter and not scope_filter.endswith("*"):
+        clauses.append(_where_list_has_or_null("scopes", scope_filter))
 
     return " AND ".join(clauses)
 
