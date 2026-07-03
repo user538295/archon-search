@@ -202,6 +202,16 @@
 - Action: When adding a pinned spaCy model wheel URL to optional extras, always match the spaCy version range to the model's minor version. Use `spacy>=X.Y,<X.(Y+1)` and `en_core_web_sm-X.Y.Z` with matching major.minor.
 - Confidence: high
 
+**[2026-07-03] — iterative-review on E2b plan doc: plan-to-brief divergence silently drops requirements**
+- Observation: The E2b brief explicitly specified a `_MENTIONS_SCAN_CEILING` constant (OOM safety valve for large mention tables). The plan dropped it entirely. DA agents caught this as Critical — the implementer would build an unbounded scan. Also, the plan's `edge_count` description said "at least one surviving node" while the algorithm and test both required "BOTH endpoints survive" — a one-word inconsistency that would cause implementors to compute the wrong predicate.
+- Action: When writing a plan from a brief, always search the brief for every capitalized constant name (e.g. `_MENTIONS_SCAN_CEILING`, `MAX_SOURCE_CHUNK_IDS`) and verify each one has a corresponding task or constant definition in the plan. Also: any quantifier word in a definition (at least one, both, all) must match exactly the quantifier in the algorithm and tests.
+- Confidence: high
+
+**[2026-07-03] — iterative-review on E2b plan doc: _truncate_graph signature contradicted its own algorithm**
+- Observation: The fix agent added `surviving_entity_ids` to the `_truncate_graph` parameter list while the algorithm description said "step 1 produces it." This created two incompatible implementations: (A) caller pre-caps nodes and passes the set; (B) helper does all 4 steps including cap. The resolution was to drop the parameter (Interpretation B — helper owns all steps, set is internal). The "What changes" section already had the correct simpler signature; only the BE-6/BE-9 task body was wrong.
+- Action: When a helper function's algorithm description says "step N produces X," X must NOT appear in the function's parameter list. If it does, one of the two is wrong — the algorithm is usually more authoritative. Always cross-check parameter lists against the step-by-step algorithm in the same section.
+- Confidence: high
+
 **[2026-07-02] — E2a BE-4: `page_count` not `total` for scan-bounded endpoints**
 - Observation: `ExpiringChunksResponse` initially had `total: int = len(items)`. This is page count, not a cross-page total — `DocumentListResponse.total` IS a cross-page total. Using the same field name for two semantically different things is a silent lie. DA review flagged it as Major.
 - Action: Any endpoint whose count field only reflects the current page's item count (not the global store total) must be named `page_count`, `returned_count`, or similar — never `total`. Use `total` only when the value represents the full collection count (paginated or not).
@@ -1139,4 +1149,44 @@
 **[2026-07-03] — E2a T-5 close-out: all documentation was pre-updated by prior tasks**
 - Observation: Every documentation target listed for T-5 (130, 160, 600 architecture docs; CLAUDE.md; BREAKING.md; toml.example; UserManual/12_ttl_and_scoping.md) was already fully updated by the prior T-1–T-4 implementation tasks. T-5 fact-checked all acceptance criteria (STORE_SCHEMA_VERSION=1, migrate_expires_at_and_scopes, prune_expired_chunks, scope_filter, ExpiringChunksResponse, expired_chunk_count, MCP tool updates, has_ttl_cols guard), regenerated the OpenAPI snapshot, and ran the full suite (6360 passed, 93% coverage).
 - Action: At E2a-style feature close-outs, run the fact-checks first before planning documentation work — prior tasks often already completed the doc updates. The snapshot regeneration and full suite run are always needed regardless.
+- Confidence: high
+
+**[2026-07-03] — E2b brief revision: LanceDB merge_insert cannot increment counters — persist incidence, derive counts**
+- Observation: The original E2b brief specced `chunk_count`/`weight` accumulation "via `merge_insert()` upsert". `merge_insert("id").when_matched_update_all()` (the only upsert in the codebase, `graph_store.py write_graph`) REPLACES matched rows — arithmetic increments are not expressible, and read-modify-write counters double-count on re-ingest because a document's prior contribution is unknown once summed. The fix: persist a `(entity_id, chunk_id, doc_id)` mentions incidence table with doc-scoped delete-then-add (chunk_ids are deterministic `{doc_id}-{idx:06d}`, pipeline.py:522), and derive all counts/weights at read time.
+- Action: Never spec an accumulating counter column on a LanceDB merge_insert-upserted table. Persist the incidence rows (keyed so a document's contribution is deletable) and derive aggregates at read. Applies to any future per-entity/per-edge statistics.
+- Confidence: high
+
+**[2026-07-03] — Graph tables are write-only: no delete/TTL/maintenance path touches `_archon_graph_*`**
+- Observation: `delete_document`, `delete_by_source_path`, `prune_expired_chunks`, and all four maintenance-loop policies operate only on chunk tables — graph nodes/edges/communities are never reconciled, so re-ingest/delete/TTL-expiry leave orphaned graph rows forever (verified store.py:2037-2420, jobs/maintenance_loop.py). Community `representative_chunk_ids` pointing at dead chunks are only skipped at read time via `get_chunks_by_ids`.
+- Action: Any brief/plan touching graph inspection, metrics, or retrieval must state the staleness interaction explicitly and check `delete_document` + maintenance-loop for graph-table access first. Graph GC is roadmapped as E2d — do not silently assume graph rows track chunk lifecycle.
+- Confidence: high
+
+**[2026-07-03] — Eval graph gates prove only the fallback path — never cite them as community-retrieval evidence**
+- Observation: `CommunityStoreStub` in `eval/backends.py` returns intentionally fake chunk IDs, so `get_chunks_by_ids` yields `[]` and local/global eval queries fall back to standard hybrid search. The gated `graph_local_mrr = graph_global_mrr = 1.0` floors in thresholds.toml are calibrated on that fallback (the calibration comment admits it); `graph_mrr` is report-only.
+- Action: When claiming eval coverage for graph modes, check whether the store stub actually resolves chunk IDs. The current gates prove the non-raising fallback contract only — real community-retrieval quality gating is E2e.
+- Confidence: high
+
+**[2026-07-03] — CLAUDE.md E2a claim about GraphCollectionStats is wrong**
+- Observation: CLAUDE.md states `GraphCollectionStats` gained `community_count` and `last_built_at` in E2a. Verified against `schemas.py:312-321`: `GraphCollectionStats` has only `collection, node_count, edge_count`; the two fields exist only on `StatusCollectionEntry` (`schemas.py:107-109`).
+- Action: Do not trust the CLAUDE.md E2a bullet for `GraphCollectionStats` fields — grep `schemas.py` instead. Fix the CLAUDE.md line whenever an E2-series close-out next touches that section.
+- Confidence: high
+
+**[2026-07-03] — Roadmap mermaid chart labels drift from list numbering — re-sync when touching items**
+- Observation: The "Remaining" quadrantChart in 03_world_class_roadmap.md still used pre-renumbering labels ("E7 GraphRAG", "E8 TTL+scoping+entity graph", "E1 Streaming results") that no longer matched the Phase E list (E1=GraphRAG, E3=streaming, E7=connectors, E8=admin UI). Cross-references inside G4/G16 ("requires E7 active") pointed at the old GraphRAG number too.
+- Action: When adding or renaming roadmap items, always grep the file for the item family in BOTH mermaid charts and in other items' cross-references (`grep -n "E7\|E8" 03_world_class_roadmap.md`) and re-sync in the same edit session — the doc mandates chart/list sync.
+- Confidence: high
+
+**[2026-07-03] — E2b plan-maker: FastAPI literal-vs-parameterized route ordering is a planning-level concern**
+- Observation: `GET /graph/cross-collection` and `GET /graph/{collection}` on the same prefix will cause FastAPI to match "cross-collection" as the `{collection}` path parameter if the literal route is declared second. This must be captured as an explicit implementation note (Q1) in the plan, not left as an implementation detail — the developer must know to declare the literal route first in `routes_graph.py`.
+- Action: Any plan that adds both a fixed-path route (e.g. `/graph/cross-collection`) and a parameterized sibling (e.g. `/graph/{collection}`) under the same prefix must include a Q# or implementation note requiring literal-before-parameterized declaration order. This is a FastAPI registration constraint, not a runtime guard — it cannot be tested after the fact.
+- Confidence: high
+
+**[2026-07-03] — E2b plan-maker: always Read the actual file to confirm method existence before specifying "add X" tasks**
+- Observation: The architecture investigation agent initially stated `get_all_nodes` and `get_all_edges` "do not exist in graph_store.py". Direct file read (`Read graph_store.py` with offset=600) confirmed both methods exist at lines 629–657. Specifying "add get_all_nodes" tasks based on agent reports without file verification would have wasted implementation time and confused the dev.
+- Action: When an investigation agent says a method does not exist, always verify with `Read` (with offset into the relevant section) before writing tasks that add it. File read is authoritative over agent assertions about absence. This applies especially to methods in large files (>300 lines) where the agent's read window may not have reached the method's location.
+- Confidence: high
+
+**[2026-07-03] — Background research agents: idle notification ≠ delivered report; session-limited agents can self-recover inline**
+- Observation: Named background agents (Agent tool, run_in_background) emitted idle notifications without their final reports reaching the main session; a SendMessage "deliver your report now, split into parts" retrieved full multi-part reports. Two agents whose own SUBAGENTS died to account session limits recovered by re-doing the research inline on their main thread. A respawned duplicate agent proceeded anyway after a stand-down message and delivered useful source-level verification — stand-downs are best-effort, budget accordingly.
+- Action: After spawning background research agents: (1) on idle-without-report, SendMessage requesting delivery in parts rather than respawning immediately; (2) reserve respawn-with-identical-prompt for agents that confirm zero recoverable findings; (3) tell respawns "do NOT spawn subagents" when the failure was subagent session limits; (4) unauthenticated GitHub API calls across parallel agents exhaust the shared 60/hr IP quota — instruct agents to prefer raw.githubusercontent.com fetches and use the API sparingly.
 - Confidence: high

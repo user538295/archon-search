@@ -1,0 +1,175 @@
+openapi: 3.0.0
+info:
+  title: E1B Search Graph Mode API
+  version: 0.0.0
+tags: []
+paths:
+  /search:
+    post:
+      operationId: Search_search
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '422':
+          description: Client error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphCommunitiesNotBuiltError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+components:
+  schemas:
+    GraphCommunitiesNotBuiltError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: object
+          properties:
+            code:
+              type: string
+              enum:
+                - graph_communities_not_built
+            message:
+              type: string
+          required:
+            - code
+            - message
+    GraphMode:
+      type: string
+      enum:
+        - naive
+        - local
+        - global
+      description: Allowed graph retrieval modes.
+    SearchFilters:
+      type: object
+      required:
+        - fileType
+        - language
+        - sourcePathPrefix
+        - sourcePathGlob
+        - indexedAfter
+        - indexedBefore
+      properties:
+        fileType:
+          type: string
+          nullable: true
+        language:
+          type: string
+          nullable: true
+        sourcePathPrefix:
+          type: string
+          nullable: true
+        sourcePathGlob:
+          type: string
+          nullable: true
+        indexedAfter:
+          type: string
+          format: date-time
+          nullable: true
+        indexedBefore:
+          type: string
+          format: date-time
+          nullable: true
+    SearchRequest:
+      type: object
+      required:
+        - collection
+        - collections
+        - query
+        - topK
+        - filters
+        - hyde
+        - ragFusion
+        - graphMode
+      properties:
+        collection:
+          type: string
+          nullable: true
+        collections:
+          type: array
+          items:
+            type: string
+          nullable: true
+        query:
+          type: string
+        topK:
+          type: integer
+          format: int32
+        filters:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/SearchFilters'
+          nullable: true
+        hyde:
+          type: boolean
+        ragFusion:
+          type: boolean
+        graphMode:
+          allOf:
+            - $ref: '#/components/schemas/GraphMode'
+          nullable: true
+          description: Null = standard hybrid search. "naive" = E1a entity expansion. "local" = community-scoped. "global" = all-community representatives.
+    SearchResponse:
+      type: object
+      required:
+        - results
+        - aclFiltered
+        - embeddingModel
+        - hydeApplied
+        - ragFusionApplied
+        - graphExpansionApplied
+        - appliedFilters
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResultItem'
+        aclFiltered:
+          type: boolean
+        embeddingModel:
+          type: string
+        hydeApplied:
+          type: boolean
+        ragFusionApplied:
+          type: boolean
+        graphExpansionApplied:
+          type: boolean
+          description: True when graph retrieval (local or global) augmented the result set.
+        appliedFilters:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/SearchFilters'
+          nullable: true
+    SearchResultItem:
+      type: object
+      required:
+        - chunkId
+        - score
+        - sourceDocId
+        - collection
+        - text
+      properties:
+        chunkId:
+          type: string
+        score:
+          type: number
+          format: float
+        sourceDocId:
+          type: string
+        collection:
+          type: string
+        text:
+          type: string

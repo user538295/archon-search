@@ -1,0 +1,63 @@
+openapi: 3.0.0
+info:
+  title: E1B Status Communities API
+  version: 0.0.0
+tags: []
+paths:
+  /status:
+    get:
+      operationId: Status_status
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+components:
+  schemas:
+    StatusCollectionEntry:
+      type: object
+      required:
+        - name
+        - docCount
+        - chunkCount
+        - status
+        - watching
+        - communityCount
+        - lastBuiltAt
+      properties:
+        name:
+          type: string
+        docCount:
+          type: integer
+          format: int32
+        chunkCount:
+          type: integer
+          format: int32
+        status:
+          type: string
+        watching:
+          type: boolean
+        communityCount:
+          type: integer
+          format: int32
+          description: Count of built Leiden communities. 0 if build-communities has never run.
+        lastBuiltAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: ISO 8601 timestamp of the last build-communities run. Null if never run.
+    StatusResponse:
+      type: object
+      required:
+        - collections
+        - version
+      properties:
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/StatusCollectionEntry'
+        version:
+          type: string

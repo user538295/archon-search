@@ -400,7 +400,7 @@ flowchart LR
         - #unit_test — `test_extractor_ner_mentions` — provide 3 ChunkInput objects with distinct chunk_ids; spaCy NER stub produces entities in chunks 0 and 2 but not 1; assert mentions contain exactly two GraphMention objects referencing chunk_ids[0] and chunk_ids[2] respectively (not chunk_ids[1]); verifies zip alignment is correct
         - #unit_test — `test_extractor_early_exit_mentions_empty` — when spaCy not importable, `mentions=[]` on returned result
 
-- [ ] **BE-5** — In `pipeline.py` post-ingest graph hook (lines 628+): after `write_graph(...)`, call `self._graph_store.delete_mentions_by_doc(collection, doc_id)` then `self._graph_store.write_mentions(collection, _extraction_result.mentions)`. Both `delete_mentions_by_doc` and `write_mentions` are inside the same `try/except Exception` block that wraps the existing `write_graph` call (lines 629+). If delete fails, write is skipped and the exception is appended to warnings — same pattern as the existing graph write error handling. #backend-role
+- [x] **BE-5** — In `pipeline.py` post-ingest graph hook (lines 628+): after `write_graph(...)`, call `self._graph_store.delete_mentions_by_doc(collection, doc_id)` then `self._graph_store.write_mentions(collection, _extraction_result.mentions)`. Both `delete_mentions_by_doc` and `write_mentions` are inside the same `try/except Exception` block that wraps the existing `write_graph` call (lines 629+). If delete fails, write is skipped and the exception is appended to warnings — same pattern as the existing graph write error handling. #backend-role
     - Use Cases · 1.0h
     - needs BE-3, BE-4 · completes S11
     - Tests

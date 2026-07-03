@@ -634,6 +634,9 @@ class SearchPipeline:
                     await self._graph_store.write_graph(
                         collection, _extraction_result.nodes, _extraction_result.edges
                     )
+                # E2b: delete existing mentions for this doc, then write new ones
+                await self._graph_store.delete_mentions_by_doc(collection, doc_id)
+                await self._graph_store.write_mentions(collection, _extraction_result.mentions)
                 edge_count = await self._graph_store.edge_count(collection)
                 if edge_count >= self._graph_config.backend_threshold_edges:
                     hint = (

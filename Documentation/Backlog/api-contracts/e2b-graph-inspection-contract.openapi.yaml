@@ -1,0 +1,243 @@
+openapi: 3.0.0
+info:
+  title: E2B Graph Inspection API
+  version: 0.0.0
+tags: []
+paths:
+  /graph/cross-collection:
+    get:
+      operationId: GraphInspection_getCrossCollection
+      description: |-
+        Return a merged node and edge list across two or more collections.
+        Nodes are deduplicated by entity_id (chunk_counts summed, salience is chunk-count-weighted average).
+        Edges are deduplicated by edge id (weights summed, source_chunk_ids unioned, capped at 20).
+        Requires at least 2 distinct collections; returns 422 otherwise.
+      parameters:
+        - name: collections
+          in: query
+          required: true
+          schema:
+            type: string
+          explode: false
+        - name: format
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/GraphFormat'
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CrossCollectionGraphInspectionResponse'
+        '404':
+          description: The server cannot find the requested resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionNotFoundError'
+        '422':
+          description: Client error
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/GraphDisabledError'
+                  - $ref: '#/components/schemas/CrossCollectionMinimumError'
+  /graph/{collection}:
+    get:
+      operationId: GraphInspection_getSingleCollection
+      description: |-
+        Return the full node and edge list for a single collection.
+        Use ?format=graphml to receive a GraphML document (application/xml) for import into Gephi, yEd, or Neo4j.
+        Returns empty nodes/edges (not 404) when graph.enabled=true but no ingest has run yet.
+      parameters:
+        - name: collection
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: format
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/GraphFormat'
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphInspectionResponse'
+        '404':
+          description: The server cannot find the requested resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionNotFoundError'
+        '422':
+          description: Client error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphDisabledError'
+components:
+  schemas:
+    CollectionNotFoundError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          enum:
+            - collection not found
+      description: 404 error when a collection does not exist in the caller's namespace.
+    CrossCollectionGraphInspectionResponse:
+      type: object
+      required:
+        - collections
+        - nodes
+        - edges
+        - node_count
+        - edge_count
+        - truncated
+      properties:
+        collections:
+          type: array
+          items:
+            type: string
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphNodeResponse'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdgeResponse'
+        node_count:
+          type: integer
+          format: int32
+        edge_count:
+          type: integer
+          format: int32
+        truncated:
+          type: boolean
+      description: Full adjacency response for a merged cross-collection view.
+    CrossCollectionMinimumError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+      description: 422 error when cross-collection query has fewer than 2 distinct collections.
+    GraphDisabledError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          enum:
+            - graph inspection requires [graph] enabled=true in server config
+      description: 422 error when graph.enabled = false.
+    GraphEdgeResponse:
+      type: object
+      required:
+        - edge_id
+        - source_node_id
+        - target_node_id
+        - relationship_type
+        - weight
+        - source_chunk_ids
+      properties:
+        edge_id:
+          type: string
+          description: SHA-256 hex of "{source_id}:{target_id}:{relationship_type}".
+        source_node_id:
+          type: string
+        target_node_id:
+          type: string
+        relationship_type:
+          type: string
+        weight:
+          type: integer
+          format: int32
+          description: Number of distinct chunks where both endpoints are mentioned. 0 for pre-E2b edges.
+        source_chunk_ids:
+          type: array
+          items:
+            type: string
+          description: Up to 20 chunk IDs contributing to the co-occurrence weight. Empty for pre-E2b edges.
+      description: A single graph edge with co-occurrence weight computed from the mentions table.
+    GraphFormat:
+      type: string
+      enum:
+        - json
+        - graphml
+      description: Graph export format.
+    GraphInspectionResponse:
+      type: object
+      required:
+        - collection
+        - nodes
+        - edges
+        - node_count
+        - edge_count
+        - truncated
+      properties:
+        collection:
+          type: string
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphNodeResponse'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdgeResponse'
+        node_count:
+          type: integer
+          format: int32
+          description: Total nodes before truncation was applied.
+        edge_count:
+          type: integer
+          format: int32
+          description: Total edges before truncation was applied.
+        truncated:
+          type: boolean
+          description: True when node or edge count exceeded the configured ceiling and the response was deterministically truncated.
+      description: Full adjacency response for one collection. Returned when format=json (default).
+    GraphNodeResponse:
+      type: object
+      required:
+        - entity_id
+        - entity_name
+        - entity_type
+        - entity_subtype
+        - chunk_count
+        - salience
+      properties:
+        entity_id:
+          type: string
+          description: SHA-256 hex of "{entity_type}:{entity_name}". Stable across re-ingest.
+        entity_name:
+          type: string
+        entity_type:
+          type: string
+        entity_subtype:
+          type: string
+          nullable: true
+        chunk_count:
+          type: integer
+          format: int32
+          description: Number of distinct chunks in which this entity is mentioned. 0 for pre-E2b nodes.
+        salience:
+          type: number
+          format: float
+          description: chunk_count / total_chunks_in_collection. 0.0 for pre-E2b nodes or empty collection.
+      description: A single graph node with derived salience metrics computed from the mentions table.
