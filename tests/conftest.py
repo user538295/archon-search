@@ -221,3 +221,39 @@ def three_page_pdf(tmp_path_factory: pytest.TempPathFactory) -> Path:
     pdf_path = tmp_path_factory.mktemp("pdfs") / "three_page.pdf"
     generate_three_page_pdf(pdf_path)
     return pdf_path
+
+
+# ---------------------------------------------------------------------------
+# MockGraphStore fixture for unit testing graph_inspector.py (E2b)
+# ---------------------------------------------------------------------------
+
+
+class MockGraphStore:
+    """Mock GraphStore for unit testing graph inspection logic without LanceDB."""
+
+    def __init__(self) -> None:
+        """Initialize with empty node/edge/mention collections per collection."""
+        self.nodes: dict[str, list] = {}
+        self.edges: dict[str, list] = {}
+        self.mentions: dict[str, list] = {}
+
+    async def get_all_nodes(self, collection: str):  # type: ignore[no-untyped-def]
+        """Return all nodes for *collection*; empty list if not in store."""
+        return self.nodes.get(collection, [])
+
+    async def get_all_edges(self, collection: str):  # type: ignore[no-untyped-def]
+        """Return all edges for *collection*; empty list if not in store."""
+        return self.edges.get(collection, [])
+
+    async def get_all_mentions(self, collection: str, limit: int | None = None):  # type: ignore[no-untyped-def]
+        """Return mentions for *collection* up to *limit*; empty list if not in store."""
+        mentions = self.mentions.get(collection, [])
+        if limit is not None:
+            return mentions[:limit]
+        return mentions
+
+
+@pytest.fixture
+def mock_graph_store() -> MockGraphStore:
+    """Fixture providing a MockGraphStore instance for unit tests."""
+    return MockGraphStore()
