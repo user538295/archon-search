@@ -129,9 +129,9 @@ def test_graph_table_names_use_archon_prefix(tmp_path) -> None:
 
     raw_tables, user_collections = asyncio.run(_run())
 
-    # Both graph tables must start with _archon_
+    # Graph tables (nodes, edges, mentions) must all start with _archon_
     graph_tables = [t for t in raw_tables if "graph" in t]
-    assert len(graph_tables) == 2
+    assert len(graph_tables) == 3  # nodes, edges, mentions (E2b)
     for t in graph_tables:
         assert t.startswith("_archon_"), f"Expected _archon_ prefix but got: {t}"
 
@@ -331,3 +331,83 @@ def test_graph_store_entity_subtype_none_roundtrip(tmp_path) -> None:
     )
     assert "process" in by_name
     assert by_name["process"].entity_subtype == "method"
+
+
+# ---------------------------------------------------------------------------
+# Mentions table (E2b — BE-3 integration tests)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_mentions_write_and_read_roundtrip(tmp_path) -> None:
+    """Write 3 mentions, get_all returns 3; with real LanceDB in tmp_path."""
+    from archon_search.graph_store import GraphStore
+    from archon_search.graph_types import GraphMention
+
+    col = "testcol"
+
+    async def _run():
+        gs = GraphStore(str(tmp_path / "db"))
+        await gs.connect()
+        try:
+            await gs.ensure_graph_tables(col)
+            # Write 3 mentions
+            mentions = [
+                GraphMention(entity_id="entity-a", chunk_id="chunk-1", doc_id="doc-1"),
+                GraphMention(entity_id="entity-b", chunk_id="chunk-2", doc_id="doc-1"),
+                GraphMention(entity_id="entity-c", chunk_id="chunk-3", doc_id="doc-1"),
+            ]
+            await gs.write_mentions(col, mentions)
+            # Read all mentions
+            result = await gs.get_all_mentions(col)
+            return result
+        finally:
+            await gs.disconnect()
+
+    result = asyncio.run(_run())
+    assert len(result) == 3
+    # Verify the mentions are correctly stored (order may vary)
+    entity_ids = {m.entity_id for m in result}
+    assert entity_ids == {"entity-a", "entity-b", "entity-c"}
+    chunk_ids = {m.chunk_id for m in result}
+    assert chunk_ids == {"chunk-1", "chunk-2", "chunk-3"}
+
+
+@pytest.mark.integration
+def test_mentions_delete_by_doc_then_write_is_idempotent(tmp_path) -> None:
+    """Write, delete by doc_id, re-write; get_all returns same count not doubled."""
+    from archon_search.graph_store import GraphStore
+    from archon_search.graph_types import GraphMention
+
+    col = "testcol"
+    doc_id = "doc-123"
+
+    async def _run():
+        gs = GraphStore(str(tmp_path / "db"))
+        await gs.connect()
+        try:
+            await gs.ensure_graph_tables(col)
+            # First write
+            mentions_1 = [
+                GraphMention(entity_id="entity-x", chunk_id="chunk-x1", doc_id=doc_id),
+                GraphMention(entity_id="entity-y", chunk_id="chunk-x2", doc_id=doc_id),
+            ]
+            await gs.write_mentions(col, mentions_1)
+            count_1 = len(await gs.get_all_mentions(col))
+
+            # Delete by doc_id
+            await gs.delete_mentions_by_doc(col, doc_id)
+            count_after_delete = len(await gs.get_all_mentions(col))
+
+            # Re-write the same mentions
+            await gs.write_mentions(col, mentions_1)
+            count_2 = len(await gs.get_all_mentions(col))
+
+            return count_1, count_after_delete, count_2
+        finally:
+            await gs.disconnect()
+
+    count_1, count_after_delete, count_2 = asyncio.run(_run())
+    assert count_1 == 2
+    assert count_after_delete == 0
+    assert count_2 == 2, f"Expected 2 after re-write, got {count_2} (idempotency violated)"

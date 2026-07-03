@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from archon_search.graph_types import Community, EntityType, GraphEdge, GraphNode, RelationshipType
+from archon_search.graph_types import Community, EntityType, GraphEdge, GraphMention, GraphNode, RelationshipType
 from archon_search.store_filters import _sql_quote_str
 
 if TYPE_CHECKING:
@@ -105,6 +105,9 @@ class GraphStore:
     def _communities_table_name(self, collection: str) -> str:
         return _ARCHON_PREFIX + "graph_" + collection + "_communities"
 
+    def _mentions_table_name(self, collection: str) -> str:
+        return _ARCHON_PREFIX + "graph_" + collection + "_mentions"
+
     @staticmethod
     def _nodes_schema():  # type: ignore[return]
         """Return the PyArrow schema for the nodes table."""
@@ -151,12 +154,28 @@ class GraphStore:
             pa.field("built_at", pa.utf8()),
         ])
 
+    @staticmethod
+    def _mentions_schema():  # type: ignore[return]
+        """Return the PyArrow schema for the mentions table (E2b).
+
+        Stores incidence records: entity_id, chunk_id, doc_id. All fields are utf8.
+        The mentions table allows duplicate rows with the same (entity_id, chunk_id)
+        if an extractor produces the same entity twice in one chunk.
+        """
+        import pyarrow as pa  # noqa: PLC0415
+
+        return pa.schema([
+            pa.field("entity_id", pa.utf8()),
+            pa.field("chunk_id", pa.utf8()),
+            pa.field("doc_id", pa.utf8()),
+        ])
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     async def ensure_graph_tables(self, collection: str) -> None:
-        """Create nodes and edges tables for *collection* if they don't already exist.
+        """Create nodes, edges, and mentions tables for *collection* if they don't already exist.
 
         Idempotent — safe to call multiple times. Raises ``ValueError`` for
         collection names that fail the naming regex.
@@ -172,6 +191,11 @@ class GraphStore:
         await db.create_table(
             self._edges_table_name(collection),
             schema=self._edges_schema(),
+            exist_ok=True,
+        )
+        await db.create_table(
+            self._mentions_table_name(collection),
+            schema=self._mentions_schema(),
             exist_ok=True,
         )
 
@@ -429,6 +453,107 @@ class GraphStore:
             schema=self._communities_schema(),
         )
         await table.add(data)
+
+    # ------------------------------------------------------------------
+    # Mentions table (E2b)
+    # ------------------------------------------------------------------
+
+    async def write_mentions(
+        self,
+        collection: str,
+        mentions: list[GraphMention],
+    ) -> None:
+        """Append *mentions* into the collection's mentions table (E2b).
+
+        This is an append-only operation; the mentions table has no upsert key.
+        The pipeline uses delete-then-add per doc_id for idempotency on re-ingest:
+        ``delete_mentions_by_doc(doc_id)`` followed by ``write_mentions(new_mentions)``.
+        """
+        import pyarrow as pa  # noqa: PLC0415
+
+        self._validate_collection(collection)
+        db = self._require_db()
+        await self.ensure_graph_tables(collection)
+
+        if not mentions:
+            return
+
+        table = await db.open_table(self._mentions_table_name(collection))
+        data = pa.table(
+            {
+                "entity_id": [m.entity_id for m in mentions],
+                "chunk_id": [m.chunk_id for m in mentions],
+                "doc_id": [m.doc_id for m in mentions],
+            },
+            schema=self._mentions_schema(),
+        )
+        await table.add(data)
+
+    async def delete_mentions_by_doc(
+        self,
+        collection: str,
+        doc_id: str,
+    ) -> None:
+        """Delete all mentions for a given *doc_id* from the collection's mentions table.
+
+        Uses ``_where_eq`` for SQL-safe predicate construction. Idempotent — deleting
+        a non-existent doc_id is a noop.
+        """
+        self._validate_collection(collection)
+        db = self._require_db()
+
+        try:
+            table = await db.open_table(self._mentions_table_name(collection))
+        except (FileNotFoundError, ValueError):
+            # Table doesn't exist; nothing to delete
+            return
+
+        predicate = _where_eq("doc_id", doc_id)
+        await table.delete(predicate)
+
+    async def get_all_mentions(
+        self,
+        collection: str,
+        limit: int | None = None,
+    ) -> list[GraphMention]:
+        """Return mentions for *collection*; optionally limited to first *limit* rows.
+
+        When *limit* is None, returns all rows. When *limit* is provided, returns
+        at most *limit* rows (storage order, not sorted). Returns empty list if
+        the mentions table does not exist.
+
+        Note: The mentions table allows duplicate rows with the same (entity_id, chunk_id)
+        if the extractor produces the same entity twice in one chunk. Deduplication is
+        the responsibility of the caller (e.g., ``graph_inspector.py``).
+        """
+        self._validate_collection(collection)
+        db = self._require_db()
+
+        try:
+            table = await db.open_table(self._mentions_table_name(collection))
+        except (FileNotFoundError, ValueError):
+            return []
+
+        query = table.query()
+        if limit is not None:
+            query = query.limit(limit)
+        arrow = await query.to_arrow()
+
+        # Convert PyArrow table to GraphMention objects
+        results: list[GraphMention] = []
+        entity_ids = arrow["entity_id"].to_pylist()
+        chunk_ids = arrow["chunk_id"].to_pylist()
+        doc_ids = arrow["doc_id"].to_pylist()
+
+        for entity_id, chunk_id, doc_id in zip(entity_ids, chunk_ids, doc_ids):
+            results.append(
+                GraphMention(
+                    entity_id=entity_id,
+                    chunk_id=chunk_id,
+                    doc_id=doc_id,
+                )
+            )
+        return results
 
     # ponytail: LanceDB's _where_in helper generates simple equality predicates and cannot filter
     # list-typed columns. This method performs a full table scan and applies the intersection

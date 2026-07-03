@@ -99,8 +99,8 @@ def test_ensure_graph_tables_idempotent() -> None:
         store._db = mock_db
         await store.ensure_graph_tables("mycol")
         await store.ensure_graph_tables("mycol")
-        # create_table called twice (once per table per call = 4 total)
-        assert mock_db.create_table.call_count == 4
+        # create_table called twice (once per table per call = 6 total for 3 tables: nodes, edges, mentions)
+        assert mock_db.create_table.call_count == 6
 
     asyncio.run(_run())
 
@@ -751,3 +751,63 @@ def test_get_edges_for_nodes_no_matching_edges() -> None:
 
     result = asyncio.run(_run())
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Mentions table (E2b — BE-3 unit tests)
+# ---------------------------------------------------------------------------
+
+
+def test_mentions_table_name_format() -> None:
+    """Mentions table name follows _archon_graph_{col}_mentions pattern."""
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db")
+    name = store._mentions_table_name("test-collection")
+    assert name == "_archon_graph_test-collection_mentions"
+
+
+def test_mentions_schema_columns() -> None:
+    """Mentions schema has entity_id, chunk_id, doc_id all as utf8."""
+    import pyarrow as pa
+
+    from archon_search.graph_store import GraphStore
+
+    schema = GraphStore._mentions_schema()
+    assert isinstance(schema, pa.Schema)
+    field_names = [f.name for f in schema]
+    assert "entity_id" in field_names
+    assert "chunk_id" in field_names
+    assert "doc_id" in field_names
+    # All fields must be utf8
+    for f in schema:
+        if f.name in ["entity_id", "chunk_id", "doc_id"]:
+            assert f.type == pa.utf8(), f"Expected utf8 for {f.name}, got {f.type}"
+
+
+def test_delete_mentions_uses_safe_predicate() -> None:
+    """delete_mentions_by_doc uses _where_eq, never f-strings."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-delete-mentions")
+
+    # Mock table that tracks delete() call
+    mock_table = AsyncMock()
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+
+    async def _run() -> str:
+        store._db = mock_db
+        await store.delete_mentions_by_doc("test-col", "doc-123")
+        # Capture the predicate passed to delete()
+        return mock_table.delete.call_args[0][0]
+
+    predicate = asyncio.run(_run())
+    # Must use _where_eq pattern: doc_id = 'doc-123' (SQL-safe quoting)
+    assert "doc_id" in predicate
+    assert "=" in predicate
+    # Must NOT contain an f-string with unquoted doc_id
+    assert "{" not in predicate
+    assert "f\"" not in predicate
