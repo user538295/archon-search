@@ -603,19 +603,19 @@ Add test: `test_graph_mode_defensive_assertion_fires` — call any of the four m
         - #unit_test — `test_mcp_search_scope_filter_with_graph_mode_returns_error` — `scope_filter='user:alice'` + `graph_mode='naive'` → `McpErrorResponse(code='scope_filter_graph_mode_incompatible')`
         - #unit_test — `test_mcp_explain_scope_filter_with_graph_mode_returns_error` — same pattern for explain tool
 
-- [ ] **T-3** — E2e: ingest chunks with different scopes; search with exact scope_filter (verify S8); search with wildcard (verify S9); search on unscoped collection (verify S10); test bare `*` → 400 (S11); test leading `*` → 400 (S12); verify `GET /documents` includes scopes (S13) #tester-role
+- [x] **T-3** — E2e: ingest chunks with different scopes; search with exact scope_filter (verify S8); search with wildcard (verify S9); search on unscoped collection (verify S10); test bare `*` → 400 (S11); test leading `*` → 400 (S12); verify `GET /documents` includes scopes (S13) #tester-role
     - — · 3.0h
     - needs BE-11, BE-12 · completes S8, S9, S10, S11, S12, S13
     - Tests
-        - #e2e_test — `test_scope_exact_match_e2e` — ingest scoped chunks; POST /search scope_filter="user:alice"; only alice chunks returned (S8)
-        - #e2e_test — `test_scope_wildcard_match_e2e` — POST /search scope_filter="user:alice*"; alice and alice:thread-1 returned; bob excluded (S9)
-        - #e2e_test — `test_scope_noop_on_unscoped_collection_e2e` — collection with no scoped chunks; scope_filter returns all top-k; no error (S10)
-        - #e2e_test — `test_scope_filter_bare_wildcard_400_e2e` — POST /search scope_filter="*" → 400 (S11)
-        - #e2e_test — `test_scope_filter_leading_wildcard_400_e2e` — POST /search scope_filter="user:*alice" → 400 (S12)
-        - #e2e_test — `test_scope_filter_on_explain_e2e` — **e2e, not a smoke test**: ingest 3 chunks: `scopes=['user:alice']`, `scopes=['user:bob']`, `scopes=null` (unscoped); POST /explain `query='...' scope_filter='user:alice'`; assert candidates contain alice-scoped chunk and unscoped chunk; assert bob-scoped chunk is absent from both `results` and `near_misses`
-        - #e2e_test — `test_get_documents_includes_scopes_e2e` — ingest with chunk_scopes; GET /documents; scopes field populated (S13)
-        - #integration_test — `test_pipeline_explain_wildcard_scope_filter_applied` — ingest chunks with `scopes=['user:alice']`, `scopes=['user:bob']`, `scopes=null`; call `pipeline.explain(query, scope_filter='user:*')`; verify results and near_misses contain only alice-scoped, bob-scoped (both match `user:*`), and unscoped chunks; no cross-prefix chunks present
-        - #e2e_test — `test_explain_scope_filter_multi_collection_e2e` — ingest scoped chunks in 2 collections; POST /explain with `collections: ['c1', 'c2']` and `scope_filter='user:alice'`; verify only alice-scoped and unscoped chunks appear in results
+        - [x] #e2e_test — `test_scope_exact_match_e2e` — ingest scoped chunks; POST /search scope_filter="user:alice"; only alice chunks returned (S8)
+        - [x] #e2e_test — `test_scope_wildcard_match_e2e` — POST /search scope_filter="user:alice*"; alice and alice:thread-1 returned; bob excluded (S9)
+        - [x] #e2e_test — `test_scope_noop_on_unscoped_collection_e2e` — collection with no scoped chunks; scope_filter returns all top-k; no error (S10)
+        - [x] #e2e_test — `test_scope_filter_bare_wildcard_400_e2e` — POST /search scope_filter="*" → 400 (S11)
+        - [x] #e2e_test — `test_scope_filter_leading_wildcard_400_e2e` — POST /search scope_filter="user:*alice" → 400 (S12)
+        - [x] #e2e_test — `test_scope_filter_on_explain_e2e` — **e2e, not a smoke test**: ingest 3 chunks: `scopes=['user:alice']`, `scopes=['user:bob']`, `scopes=null` (unscoped); POST /explain `query='...' scope_filter='user:alice'`; assert candidates contain alice-scoped chunk and unscoped chunk; assert bob-scoped chunk is absent from both `results` and `near_misses`
+        - [x] #e2e_test — `test_get_documents_includes_scopes_e2e` — ingest with chunk_scopes; GET /documents; scopes field populated (S13)
+        - [x] #integration_test — `test_pipeline_explain_wildcard_scope_filter_applied` — ingest chunks with `scopes=['user:alice']`, `scopes=['user:bob']`, `scopes=null`; call `pipeline.explain(query, scope_filter='user:*')`; verify results and near_misses contain only alice-scoped, bob-scoped (both match `user:*`), and unscoped chunks; no cross-prefix chunks present
+        - [x] #e2e_test — `test_explain_scope_filter_multi_collection_e2e` — ingest scoped chunks in 2 collections; POST /explain with `collections: ['c1', 'c2']` and `scope_filter='user:alice'`; verify only alice-scoped and unscoped chunks appear in results
 
 - [ ] **T-4** — Benchmark: pre-seed 1000+ chunks with mixed scopes; run `POST /search` with `scope_filter="user:*"` 100 times at `top_k=1000`; measure p99 wildcard post-filter overhead; assert <10ms p99 #tester-role
     - — · 1.5h
