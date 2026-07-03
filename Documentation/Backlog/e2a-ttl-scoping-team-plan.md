@@ -516,7 +516,7 @@ Do NOT write `f"expires_at IS NOT NULL AND expires_at < '{now_utc_iso}'"`. Same 
         - #integration_test — `test_expired_chunk_count_is_scoped_to_caller_namespace` — seed expired chunks in namespace "ns_a" and "ns_b"; GET /status as "ns_a"; verify `expired_chunk_count` reflects only ns_a chunks
         - #unit_test — `test_build_maintenance_status_receives_store_parameter` — verify `_build_maintenance_status` signature accepts `store` and is `async`; mock `store.count_expired_chunks` to return 5; verify `expired_chunk_count=5` in response
 
-- [ ] **T-2** — E2e: ingest a chunk with a past `expires_at` (via mocked time or direct store write); trigger maintenance loop; verify chunk deleted; verify `GET /status` shows `last_expired_pruned_at` set and `expired_chunk_count` reflects live state #tester-role
+- [x] **T-2** — E2e: ingest a chunk with a past `expires_at` (via mocked time or direct store write); trigger maintenance loop; verify chunk deleted; verify `GET /status` shows `last_expired_pruned_at` set and `expired_chunk_count` reflects live state #tester-role
     - — · 2.0h
     - needs BE-8 · completes S6, S7
     - Tests
