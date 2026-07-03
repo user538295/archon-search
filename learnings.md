@@ -573,6 +573,11 @@
 **`or fallback` is wrong for falsy-valid attribute values**
 - Action: `getattr(..., "api_key", None) or self._api_key` silently falls back when the value is `""`. Always use explicit `is not None` guard.
 
+**[2026-07-03] — E2b T-2 close-out: FastAPI route response_model=None omits OpenAPI schema**
+- Observation: `@router.get("/path", response_model=None)` tells FastAPI not to document the response schema, causing `test_no_empty_schemas_remain` to fail with "empty or missing schema". Setting `response_model=GraphInspectionResponse` fixes it — even for routes that return different types based on a query param (format=json vs format=graphml). The response_model documents the JSON case; the graphml case returns a Response object which FastAPI doesn't validate against the model.
+- Action: Always specify `response_model=<ExpectedResponse>` on `@router` decorators for routes that return JSON. Never use `response_model=None`. When a route branches on format/type, specify the primary response model (JSON case); the alternate type (e.g. Response object) bypasses model validation automatically.
+- Confidence: high
+
 **`None == None` is True — guard nullable-id lookups with explicit type check**
 - Action: Synthetic TOML records have `id=None`. Add `if not isinstance(key_id, str): raise KeyError(...)` at entry to any method matching against a nullable entity field.
 
