@@ -30,7 +30,7 @@ from archon_search.server.schemas import (
     StatusResponse,
     TelemetryStatusDetail,
 )
-from archon_search.store import STORE_SCHEMA_VERSION
+from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -138,7 +138,9 @@ async def status(request: Request) -> StatusResponse:
 
     readiness = await collect_readiness(request.app.state, state)
     backup_detail = _build_backup_status(request, config, ns, sorted(ns_names))
-    maintenance_detail = _build_maintenance_status(request, config, ns)
+    maintenance_detail = await _build_maintenance_status(
+        request, config, ns, request.app.state.search_store, sorted(ns_names)
+    )
     model_validation = _build_model_validation_status(request)
     telemetry_detail = _build_telemetry_status(request, config)
     mcp_detail = _build_mcp_status(request, config)
@@ -365,8 +367,12 @@ async def _build_graph_status(
     )
 
 
-def _build_maintenance_status(
-    request: Request, config: SearchConfig, ns: str
+async def _build_maintenance_status(
+    request: Request,
+    config: SearchConfig,
+    ns: str,
+    store: SearchStore,
+    ns_collection_names: list[str],
 ) -> MaintenanceStatusDetail | None:
     """Populate the ``maintenance`` sub-object for the caller's namespace.
 
@@ -376,6 +382,14 @@ def _build_maintenance_status(
     Namespace scoping: ``collection_health`` entries are filtered to those whose
     ``{namespace}/{collection}`` key starts with ``{ns}/``, following the precedent
     in ``_build_backup_status`` which scopes backup status to the caller's namespace.
+
+    E2a BE-8: ``expired_chunk_count`` is the live sum of ``store.count_expired_chunks()``
+    across all collection tables belonging to the caller's namespace.  Note: counts are
+    table-wide — not namespace-scoped within a shared table.  For single-namespace
+    deployments this is exact; in multi-tenant deployments where two namespaces share
+    a collection name, the count includes all namespaces' expired chunks for that table.
+    ``last_expired_pruned_at`` is read from the maintenance state file (written by
+    ``MaintenanceLoop`` after each prune run; null until the first prune).
     """
     maintenance_loop = getattr(request.app.state, "maintenance_loop", None)
     if maintenance_loop is None:
@@ -388,6 +402,7 @@ def _build_maintenance_status(
     state = maintenance_loop._load_state()
     last_run_at: str | None = state.get("last_run_at")
     next_run_at: str | None = state.get("next_run_at")
+    last_expired_pruned_at: str | None = state.get("last_expired_pruned_at")
     all_health: dict = state.get("collection_health", {})
     if not isinstance(all_health, dict):
         all_health = {}
@@ -413,10 +428,24 @@ def _build_maintenance_status(
             )
         )
 
+    # E2a BE-8 — live count of expired chunks across all collections in this namespace
+    expired_chunk_count = 0
+    for col in ns_collection_names:
+        try:
+            expired_chunk_count += await store.count_expired_chunks(col, ns)
+        except Exception:
+            logger.warning(
+                "expired_chunk_count unavailable for collection %r: store.count_expired_chunks failed",
+                col,
+                exc_info=True,
+            )
+
     return MaintenanceStatusDetail(
         enabled=enabled,
         interval_hours=interval_hours,
         last_run_at=last_run_at,
         next_run_at=next_run_at,
         collection_health=collection_health,
+        expired_chunk_count=expired_chunk_count,
+        last_expired_pruned_at=last_expired_pruned_at,
     )

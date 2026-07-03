@@ -420,6 +420,77 @@
         "title": "DisabledResponse",
         "type": "object"
       },
+      "DocumentInfoItem": {
+        "description": "One document entry in a DocumentListResponse (E0c BE-6).\n\nMirrors the public fields of ``archon_search._types.DocumentInfo``.",
+        "properties": {
+          "chunk_count": {
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "indexed_at": {
+            "title": "Indexed At",
+            "type": "string"
+          },
+          "scopes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          },
+          "source_path": {
+            "title": "Source Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "source_path",
+          "chunk_count",
+          "indexed_at"
+        ],
+        "title": "DocumentInfoItem",
+        "type": "object"
+      },
+      "DocumentListResponse": {
+        "description": "Response for GET /collections/{name}/documents (E0c BE-6).\n\nMirrors the shape of ``JobListResponse`` \u2014 ``items`` contains the current\npage, ``next_cursor`` is the opaque cursor for the next page (``None`` on\nthe last page), and ``total`` is the full document count for the collection\nindependent of pagination.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentInfoItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "total"
+        ],
+        "title": "DocumentListResponse",
+        "type": "object"
+      },
       "EndpointKind": {
         "enum": [
           "search",
@@ -575,6 +646,69 @@
         "title": "ExcludedCollectionSchema",
         "type": "object"
       },
+      "ExpiringChunkItem": {
+        "description": "One entry in an ExpiringChunksResponse (E2a BE-4).\n\nMirrors the dict shape returned by ``SearchStore.query_expiring_chunks``.",
+        "properties": {
+          "chunk_id": {
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "source_path": {
+            "title": "Source Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chunk_id",
+          "doc_id",
+          "source_path",
+          "expires_at"
+        ],
+        "title": "ExpiringChunkItem",
+        "type": "object"
+      },
+      "ExpiringChunksResponse": {
+        "description": "Response for GET /collections/{name}/expiring (E2a BE-4).\n\n``items`` contains the current page of expiring chunks sorted by\n``(expires_at ASC, chunk_id ASC)``.  ``next_cursor`` is the opaque\ncursor for the next page (``None`` on the last page).  ``page_count``\nis the count of items in the current page (scan-bounded endpoint \u2014\nunlike ``DocumentListResponse.total``, there is no full-collection count).",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExpiringChunkItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "page_count": {
+            "title": "Page Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "page_count"
+        ],
+        "title": "ExpiringChunksResponse",
+        "type": "object"
+      },
       "ExplainNearMiss": {
         "additionalProperties": false,
         "properties": {
@@ -693,6 +827,22 @@
             ],
             "title": "Collections"
           },
+          "graph_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "naive",
+                  "local",
+                  "global"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Mode"
+          },
           "hyde": {
             "default": false,
             "title": "Hyde",
@@ -714,7 +864,6 @@
           },
           "top_k": {
             "default": 5,
-            "maximum": 100.0,
             "minimum": 1.0,
             "title": "Top K",
             "type": "integer"
@@ -749,6 +898,22 @@
             },
             "title": "Excluded Collections",
             "type": "array"
+          },
+          "graph_mode_applied": {
+            "anyOf": [
+              {
+                "enum": [
+                  "naive",
+                  "local",
+                  "global"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Mode Applied"
           },
           "hyde_applied": {
             "default": false,
@@ -885,6 +1050,16 @@
             "default": "",
             "title": "File Type",
             "type": "string"
+          },
+          "graph_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphProvenanceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "indexed_at": {
             "default": "",
@@ -1052,6 +1227,77 @@
         "title": "ExportRequest",
         "type": "object"
       },
+      "GraphCollectionStats": {
+        "description": "Per-collection graph statistics (E1a FE-1 / C2).\n\nEach entry reports the number of nodes and edges in the collection's\n``_archon_graph_{col}_nodes`` / ``_archon_graph_{col}_edges`` tables.",
+        "properties": {
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "edge_count": {
+            "minimum": 0.0,
+            "title": "Edge Count",
+            "type": "integer"
+          },
+          "node_count": {
+            "minimum": 0.0,
+            "title": "Node Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "collection",
+          "node_count",
+          "edge_count"
+        ],
+        "title": "GraphCollectionStats",
+        "type": "object"
+      },
+      "GraphProvenanceResponse": {
+        "additionalProperties": false,
+        "description": "Pydantic response model for the full graph traversal chain of a chunk.\n\nAn empty ``steps`` list is valid and signals a graph-layer bug (a chunk\nwas attributed to graph retrieval but no traversal path was recorded).\nIt is returned as-is rather than masked as null \u2014 surfacing it to the\noperator is the correct behaviour (S11).",
+        "properties": {
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/TraversalStepResponse"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "steps"
+        ],
+        "title": "GraphProvenanceResponse",
+        "type": "object"
+      },
+      "GraphStatusDetail": {
+        "description": "Graph feature status sub-object for GET /status (E1a FE-1 / C2).\n\nPresent when ``[graph] enabled = true``; the parent ``graph`` field\nbeing ``null`` signals that graph is disabled.\n\n``backend_threshold_edges`` mirrors the configured operator threshold\nfor the NetworkX backend \u2014 above this count a WARNING is emitted on\ningest and the hint to migrate to Kuzu (E1b) is surfaced.",
+        "properties": {
+          "backend_threshold_edges": {
+            "title": "Backend Threshold Edges",
+            "type": "integer"
+          },
+          "collections": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/GraphCollectionStats"
+            },
+            "title": "Collections",
+            "type": "array"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "backend_threshold_edges"
+        ],
+        "title": "GraphStatusDetail",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1091,6 +1337,20 @@
           "version"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "HydeStatusDetail": {
+        "description": "HyDE feature status sub-object for GET /status (E0b BE-8 / C2).\n\nPresent only when ``[hyde] enabled = true``; the parent ``hyde`` field\nbeing ``null`` signals that HyDE is not configured.\n\n``key_available`` is ``True`` when ``ANTHROPIC_API_KEY`` is set in the\nserver's environment at request time.",
+        "properties": {
+          "key_available": {
+            "title": "Key Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key_available"
+        ],
+        "title": "HydeStatusDetail",
         "type": "object"
       },
       "ImportRequest": {
@@ -1222,6 +1482,31 @@
       },
       "IngestRequest": {
         "properties": {
+          "chunk_scopes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Scopes"
+          },
+          "chunk_ttl_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Ttl Seconds"
+          },
           "collection": {
             "title": "Collection",
             "type": "string"
@@ -1802,11 +2087,27 @@
             "title": "Enabled",
             "type": "boolean"
           },
+          "expired_chunk_count": {
+            "default": 0,
+            "title": "Expired Chunk Count",
+            "type": "integer"
+          },
           "interval_hours": {
             "default": 0,
             "minimum": 0.0,
             "title": "Interval Hours",
             "type": "integer"
+          },
+          "last_expired_pruned_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Expired Pruned At"
           },
           "last_run_at": {
             "anyOf": [
@@ -2021,15 +2322,44 @@
       },
       "PatchCollectionBody": {
         "properties": {
+          "default_ttl_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Ttl Seconds"
+          },
           "embedding_model": {
-            "title": "Embedding Model",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Model"
+          }
+        },
+        "title": "PatchCollectionBody",
+        "type": "object"
+      },
+      "RagFusionStatusDetail": {
+        "description": "RAG Fusion feature status sub-object for GET /status (E0b BE-8 / C2).\n\nPresent only when ``[rag_fusion] enabled = true``; the parent ``rag_fusion``\nfield being ``null`` signals that RAG Fusion is not configured.\n\n``key_available`` is ``True`` when ``ANTHROPIC_API_KEY`` is set in the\nserver's environment at request time.",
+        "properties": {
+          "key_available": {
+            "title": "Key Available",
+            "type": "boolean"
           }
         },
         "required": [
-          "embedding_model"
+          "key_available"
         ],
-        "title": "PatchCollectionBody",
+        "title": "RagFusionStatusDetail",
         "type": "object"
       },
       "RagFusionSubQueryResult": {
@@ -2392,6 +2722,22 @@
               }
             ]
           },
+          "graph_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "naive",
+                  "local",
+                  "global"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Mode"
+          },
           "hyde": {
             "default": false,
             "title": "Hyde",
@@ -2408,7 +2754,6 @@
           },
           "top_k": {
             "default": 5,
-            "maximum": 100.0,
             "minimum": 1.0,
             "title": "Top K",
             "type": "integer"
@@ -2447,6 +2792,27 @@
             },
             "title": "Excluded Collections",
             "type": "array"
+          },
+          "expansion_used": {
+            "default": false,
+            "title": "Expansion Used",
+            "type": "boolean"
+          },
+          "expansion_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expansion Warning"
+          },
+          "graph_expansion_applied": {
+            "default": false,
+            "title": "Graph Expansion Applied",
+            "type": "boolean"
           },
           "hyde_applied": {
             "default": false,
@@ -2567,6 +2933,25 @@
         "title": "SearchResultSchema",
         "type": "object"
       },
+      "SearchStatusDetail": {
+        "description": "Search configuration status sub-object for GET /status (E0c BE-4 / C4).\n\nExposes the operator-configured search limits so clients can introspect\nthe active ceiling without reading TOML directly.  Both fields always\nreflect the live ``SearchConfig`` values \u2014 defaults or TOML overrides.",
+        "properties": {
+          "max_fanout": {
+            "title": "Max Fanout",
+            "type": "integer"
+          },
+          "top_k_max": {
+            "title": "Top K Max",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_fanout",
+          "top_k_max"
+        ],
+        "title": "SearchStatusDetail",
+        "type": "object"
+      },
       "SkippedItem": {
         "description": "One entry in BackupTriggerResponse.skipped \u2014 collection + machine-readable reason.",
         "properties": {
@@ -2649,6 +3034,11 @@
             "title": "Total Queries",
             "type": "integer"
           },
+          "truncated_count": {
+            "default": 0,
+            "title": "Truncated Count",
+            "type": "integer"
+          },
           "until": {
             "anyOf": [
               {
@@ -2684,6 +3074,11 @@
             "title": "Chunk Count",
             "type": "integer"
           },
+          "community_count": {
+            "default": 0,
+            "title": "Community Count",
+            "type": "integer"
+          },
           "doc_count": {
             "default": 0,
             "title": "Doc Count",
@@ -2715,6 +3110,17 @@
               }
             ],
             "title": "Eta Seconds"
+          },
+          "last_built_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Built At"
           },
           "name": {
             "title": "Name",
@@ -2793,6 +3199,31 @@
             "title": "Collections Schema Behind",
             "type": "integer"
           },
+          "failed_expired_ingest_count": {
+            "default": 0,
+            "title": "Failed Expired Ingest Count",
+            "type": "integer"
+          },
+          "graph": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hyde": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HydeStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "maintenance": {
             "anyOf": [
               {
@@ -2827,6 +3258,16 @@
             "title": "Pid",
             "type": "integer"
           },
+          "rag_fusion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RagFusionStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "readiness": {
             "anyOf": [
               {
@@ -2841,10 +3282,30 @@
             "title": "Running",
             "type": "boolean"
           },
+          "search": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "store_schema_version": {
             "default": 0,
             "title": "Store Schema Version",
             "type": "integer"
+          },
+          "telemetry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TelemetryStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "version": {
             "title": "Version",
@@ -2858,6 +3319,78 @@
           "collections"
         ],
         "title": "StatusResponse",
+        "type": "object"
+      },
+      "TelemetryStatusDetail": {
+        "description": "Telemetry status sub-object for GET /status (D8 BE-5 / C3).\n\nPresent when ``telemetry.enabled = true``; the parent ``telemetry`` field\nbeing ``null`` signals that telemetry is disabled.\n\n``hash_doc_ids_enabled`` is ``True`` only when both the config flag is on\n**and** a valid salt was loaded at startup (guards the salt-unreadable\nfallback case per S5).",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "hash_doc_ids_enabled": {
+            "title": "Hash Doc Ids Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "hash_doc_ids_enabled"
+        ],
+        "title": "TelemetryStatusDetail",
+        "type": "object"
+      },
+      "TraversalStepResponse": {
+        "additionalProperties": false,
+        "description": "Pydantic response model for a single graph traversal hop.\n\nEnforces the invariant that at least one of ``relationship``,\n``community_id``, or ``chunk_id`` is set \u2014 degenerate steps (all three\nnull) are meaningless and are rejected at the wire boundary.\n\nPopulated from ``archon_search._diagnostics.TraversalStep`` dataclass\ninstances by ``GraphProvenanceResponse.from_provenance()``.",
+        "properties": {
+          "chunk_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Id"
+          },
+          "community_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Community Id"
+          },
+          "entity": {
+            "title": "Entity",
+            "type": "string"
+          },
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "relationship": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relationship"
+          }
+        },
+        "required": [
+          "entity",
+          "entity_id"
+        ],
+        "title": "TraversalStepResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -3220,7 +3753,7 @@
         "summary": "Get Collection Info"
       },
       "patch": {
-        "description": "Update the embedding model for a collection. Triggers reindex if needed.",
+        "description": "Update a collection's embedding model and/or default TTL. Triggers reindex when the model changes.",
         "operationId": "patch_collection_collections__name__patch",
         "parameters": [
           {
@@ -3301,6 +3834,203 @@
           }
         ],
         "summary": "Patch Collection"
+      }
+    },
+    "/collections/{name}/documents": {
+      "get": {
+        "description": "List documents in a collection with cursor-based pagination (E0c BE-6).\n\n- ``limit``: 1\u2013200, default 50.\n- ``cursor``: opaque cursor from the previous response's ``next_cursor``.\n  A cursor referencing a deleted document silently resumes from the next\n  sort position \u2014 no 4xx is raised.\n- Returns 404 when the collection does not exist in the caller's namespace.\n- Returns 422 when ``limit`` is outside [1, 200].",
+        "operationId": "list_collection_documents_collections__name__documents_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Collection Documents"
+      }
+    },
+    "/collections/{name}/expiring": {
+      "get": {
+        "description": "List chunks expiring within *within_hours* hours (E2a BE-4).\n\n- ``within_hours``: 1\u20138760 (1 hour to 1 year); required.\n- ``limit``: 1\u2013200, default 50.\n- ``cursor``: opaque cursor from a previous response's ``next_cursor``.\n- Returns 404 when the collection does not exist in the caller's namespace.\n- Already-expired chunks are excluded; chunks with no expiry are excluded.",
+        "operationId": "get_expiring_chunks_collections__name__expiring_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "within_hours",
+            "required": true,
+            "schema": {
+              "maximum": 8760,
+              "minimum": 1,
+              "title": "Within Hours",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExpiringChunksResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Expiring Chunks"
       }
     },
     "/collections/{name}/export": {
@@ -3858,6 +4588,16 @@
               }
             },
             "description": "Unauthorized"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "File size exceeds configured max_file_mb limit"
           },
           "422": {
             "content": {

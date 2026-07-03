@@ -96,6 +96,9 @@ def _gather_status(api_url: str, api_key: str | None) -> dict[str, Any]:
     # model_validation is server-global (D6) — only available from GET /status,
     # never persisted to the on-disk maintenance state file.
     model_validation: dict[str, Any] | None = None
+    # E2a BE-8 — expired chunk count and last prune timestamp from server
+    expired_chunk_count: int = 0
+    last_expired_pruned_at: str | None = None
 
     server_reachable = False
     server_payload = _fetch_server_status(api_url, api_key)
@@ -113,6 +116,9 @@ def _gather_status(api_url: str, api_key: str | None) -> dict[str, Any]:
             last_run_at = maintenance_obj["last_run_at"]
         if maintenance_obj.get("next_run_at") is not None:
             next_run_at = maintenance_obj["next_run_at"]
+        if "expired_chunk_count" in maintenance_obj:
+            expired_chunk_count = int(maintenance_obj["expired_chunk_count"])
+        last_expired_pruned_at = maintenance_obj.get("last_expired_pruned_at")
         # Server collection_health is authoritative — it's namespace-scoped.
         server_health = maintenance_obj.get("collection_health")
         if server_health:
@@ -127,6 +133,8 @@ def _gather_status(api_url: str, api_key: str | None) -> dict[str, Any]:
         "last_run_at": last_run_at,
         "next_run_at": next_run_at,
         "collection_health": collection_health,
+        "expired_chunk_count": expired_chunk_count,
+        "last_expired_pruned_at": last_expired_pruned_at,
     }
     if model_validation is not None:
         payload["model_validation"] = model_validation
@@ -196,6 +204,11 @@ def _print_status_text(data: dict[str, Any]) -> None:
     if server_reachable:
         click.echo(f"Last run:  {payload['last_run_at'] or 'never'}")
         click.echo(f"Next run:  {payload['next_run_at'] or 'unknown'}")
+        # E2a BE-8 — expired chunk count and last prune timestamp
+        expired_count = payload.get("expired_chunk_count", 0)
+        last_pruned = payload.get("last_expired_pruned_at") or "never"
+        click.echo(f"Expired chunks (live): {expired_count}")
+        click.echo(f"Last expired pruned:   {last_pruned}")
     else:
         click.echo("Last run:  [server unavailable]")
         click.echo("Next run:  [server unavailable]")

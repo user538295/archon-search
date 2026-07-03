@@ -182,6 +182,11 @@
 - Action: Never call `importlib.reload()` inside a `patch()` context manager for MCP unit tests. Instead, import the module once (`from archon_search.server import mcp as mcp_mod`) inside the patch block — the patch already replaces the attribute on the existing module object; no reload is needed.
 - Confidence: high
 
+**[2026-07-03] — `dict(module_level_dict)` is a shallow copy — nested mutable values are shared**
+- Observation: `_EMPTY_STATE` contained `"collection_health": {}` and `"retry_counts": {}` as nested dict literals. Returning `dict(_EMPTY_STATE)` from `_load_state()` created a new outer dict, but the SAME inner `{}` objects were shared across all callers. When `_run_one_pass` mutated `health[key] = col_health`, it was mutating the module-level `_EMPTY_STATE["collection_health"]` dict, causing test contamination across test runs in the same process.
+- Action: When returning a defensive copy of a module-level constant dict that contains mutable values, use `copy.deepcopy(the_dict)` — never `dict(the_dict)`. This applies to any `_EMPTY_*` sentinel dicts with list or dict values.
+- Confidence: high
+
 **[2026-07-02] — E2a BE-5 MCP: scope length validation must use len(scope) not len(scope.encode("utf-8"))**
 - Observation: The REST layer (`routes_jobs.py` line 80) validates scope length using `len(item)` (Python character count). The initial MCP implementation used `len(scope.encode("utf-8"))` (UTF-8 byte count). These diverge for multibyte characters: a 200-char CJK scope is 400 UTF-8 bytes and would pass REST validation but fail MCP validation.
 - Action: Always use `len(scope)` (Python character count) for scope string length validation to match the REST layer. Never use `.encode("utf-8")` for this purpose in MCP tools.
@@ -1049,6 +1054,21 @@
 **[2026-07-03] — E2a T-1 e2e: asyncio.run() on server's store object is unsafe — prime meta via HTTP ingest instead**
 - Observation: `asyncio.run(store.update_collection_meta(...))` from a synchronous test body (inside `make_real_app` TestClient context) acquires `asyncio.Lock` objects in a new, temporary event loop. After `asyncio.run()` exits, those locks remain in `store._collection_locks[col]` tied to the dead loop. When the TestClient's thread acquires the same lock in its own event loop, the behaviour is undefined (may silently corrupt state). The established safe alternative — documented in `test_migrate_dry_run_in_place_e2e.py` — is to use a fresh `lancedb.connect_async(cfg.db_path)` connection for any direct DB operations, which shares no locks with the server.
 - Action: Never call async store methods via `asyncio.run()` inside a `make_real_app` TestClient context. To prime collection meta, do a real HTTP ingest (creates the meta row safely through the server stack). For schema inspection, open a fresh `lancedb.connect_async(cfg.db_path)` connection inside the `asyncio.run()` block — never pass `store._db` or call `store._require_connected()`.
+- Confidence: high
+
+**[2026-07-03] — E2a BE-6: adding a field to a dataclass shifts `Path.home()` line numbers in config.py**
+- Observation: Adding `prune_expired_chunks: bool = True` to `MaintenanceConfig` shifted an existing `Path.home()` callsite in `config.py` from line 231 to 232. The `test_no_hardcoded_path_home.py` ratchet test stores `path:line:sha256` tuples and failed immediately. Fix is to update `tests/path_home_allowlist.txt` with the new line number.
+- Action: Whenever adding a field to any dataclass in `config.py`, run `uv run pytest tests/test_no_hardcoded_path_home.py -n0` immediately after. If it fails, update the line number in `tests/path_home_allowlist.txt` — the sha256 stays the same (same code, just shifted). Also update `tests/test_config_defaults.py` snapshot if it exists for that dataclass.
+- Confidence: high
+
+**[2026-07-03] — E2a BE-6: `prune_expired_chunks` SELECT must be bounded by `_EXPIRING_SCAN_CEILING`**
+- Observation: Initial implementation used an unbounded `table.query().where(pred).select(["doc_id"]).to_list()`. DA review flagged this as Moderate — on large collections with many expired rows this materializes all ids into memory. The sibling method `query_expiring_chunks` already caps at `_EXPIRING_SCAN_CEILING`. Fix: add `.limit(_EXPIRING_SCAN_CEILING)` to the SELECT and note in the docstring that returned doc_ids may be a subset (DELETE still removes ALL expired rows via predicate).
+- Action: Any store SELECT that feeds logging data should cap at `_EXPIRING_SCAN_CEILING` if the result is never paginated. If the SELECT result is fully consumed into memory before the DELETE, the cap is required.
+- Confidence: high
+
+**[2026-07-03] — E2a BE-6: `prune_expired_chunks` must deduplicate returned doc_ids**
+- Observation: `[r["doc_id"] for r in raw_rows]` returns one entry per chunk row. A document with 5 expired chunks produces `["abc", "abc", "abc", "abc", "abc"]`. The maintenance loop caller logs "pruned N documents" — duplicates inflate the count and produce misleading log output. Fix: `list(dict.fromkeys(r["doc_id"] for r in raw_rows))` to deduplicate while preserving insertion order.
+- Action: Any prune/delete method that returns doc_ids for logging must deduplicate at the document level. Test with multiple chunks sharing the same `doc_id` to verify.
 - Confidence: high
 
 **[2026-07-02] — E1c T-5 close-out: UserManual graph_mode error table had two stale E1c placeholder entries**

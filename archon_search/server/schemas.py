@@ -149,6 +149,10 @@ class MaintenanceStatusDetail(BaseModel):
     last_run_at: str | None = None
     next_run_at: str | None = None
     collection_health: list[CollectionHealthEntry] = []
+    # E2a BE-8 — live count of chunks currently past their expires_at (never null)
+    expired_chunk_count: int = Field(default=0, ge=0)
+    # E2a BE-8 — timestamp of the last expired-chunk prune run (null until first run)
+    last_expired_pruned_at: str | None = None
 
 
 class MaintenanceTriggerResponse(BaseModel):

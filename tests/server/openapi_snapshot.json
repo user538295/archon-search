@@ -2087,11 +2087,28 @@
             "title": "Enabled",
             "type": "boolean"
           },
+          "expired_chunk_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Expired Chunk Count",
+            "type": "integer"
+          },
           "interval_hours": {
             "default": 0,
             "minimum": 0.0,
             "title": "Interval Hours",
             "type": "integer"
+          },
+          "last_expired_pruned_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Expired Pruned At"
           },
           "last_run_at": {
             "anyOf": [
