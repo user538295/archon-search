@@ -481,6 +481,7 @@ def test_document_info_schema_fields():
         "source_path",
         "chunk_count",
         "indexed_at",
+        "scopes",
     }
 
 

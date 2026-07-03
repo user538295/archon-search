@@ -304,6 +304,7 @@ class DocumentInfoSchema(BaseModel):
     source_path: str
     chunk_count: int
     indexed_at: str
+    scopes: list[str] = []
 
     @classmethod
     def from_result(cls, r: DocumentInfo) -> DocumentInfoSchema:
@@ -312,6 +313,7 @@ class DocumentInfoSchema(BaseModel):
             source_path=r.source_path,
             chunk_count=r.chunk_count,
             indexed_at=r.indexed_at,
+            scopes=r.scopes,
         )
 
 

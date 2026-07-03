@@ -262,6 +262,16 @@
 - Action: When a plan change affects a contract seam, update the .tsp file in the SAME edit session as the plan prose. Never defer contract file fixes with a "fix before implementation" note — the files are the contract.
 - Confidence: high
 
+**[2026-07-03] — E2a BE-12: adding a field to a Pydantic schema breaks exact-field-set snapshot tests in the same test file**
+- Observation: Adding `scopes: list[str] = []` to `DocumentInfoSchema` caused `test_document_info_schema_fields` in `test_mcp_schemas.py` to fail — it asserted an exact field set without the new `scopes` field. The test was an intentional regression guard.
+- Action: After adding any field to a Pydantic schema in `mcp_schemas.py`, grep `tests/test_mcp_schemas.py` for the class name and check for exact field-set assertions. Update them in the same step. These tests are regression guards, not snapshots to delete.
+- Confidence: high
+
+**[2026-07-03] — E2a BE-12: MCP scope_filter validation must be a module-level helper, not inline code per tool**
+- Observation: BE-12 required the same validation logic in three tools (search, search_with_context, explain). Inlining the 10-line validation in each tool would create three divergence points. Extracting `_validate_scope_filter()` as a module-level helper (analogous to `_validate_ttl_and_scopes`) keeps validation logic in one place and is consistent with the existing MCP validation pattern.
+- Action: Any validation logic needed in more than one MCP tool must be extracted to a module-level `_validate_*` helper following the `_validate_ttl_and_scopes` pattern: accepts params, returns `McpErrorResponse | None`. Never inline the same validation logic in multiple tool closures.
+- Confidence: high
+
 **[2026-06-28] — E1a iterative-review: query-time expansion cannot call make_stable_entity_id (unknown entity_type)**
 - Observation: The plan initially said GraphExpander calls `make_stable_entity_id` to look up nodes. But `make_stable_entity_id` requires `entity_type` which is unknown at query time. The correct approach is a `findNodesByName` lookup (by entity_name, case-insensitive) — name-based, not ID-based.
 - Action: At query time, always use name-based lookup (findNodesByName / exact case-insensitive match) against graph node tables, not stable ID computation. Stable IDs are an ingest-time concern; query expansion is a runtime name-matching concern.
@@ -335,6 +345,11 @@
 **[2026-07-03] — E2a BE-9: stale mock assertion breaks on new kwargs — always include all default kwargs**
 - Observation: `test_lance_store_hybrid_search_with_trace_delegates_to_module_function` in `test_store_trace.py` had `mock_fn.assert_awaited_once_with(..., filters=None)`. After BE-9 added `scope_filter=None` to the forwarded call, the assertion failed because the actual call included `scope_filter=None` but the expected call did not. The test was asserting exact kwargs.
 - Action: When a delegate method (thin instance-method wrapper) gains a new parameter with a default value, update its corresponding mock assertion to include that parameter. Grep for `assert_awaited_once_with` and `assert_called_once_with` whenever a method signature changes.
+- Confidence: high
+
+**[2026-07-03] — E2a BE-11: ExplainRequest extra="forbid" requires field declared on model, not handler-body only**
+- Observation: `ExplainRequest` has `model_config = ConfigDict(extra="forbid")`. Adding `scope_filter` only as a handler-body check (without declaring `scope_filter: str | None = None` on the Pydantic model) causes Pydantic to reject any request that includes `scope_filter` with a 422 "Extra inputs are not permitted" before the handler runs at all.
+- Action: Before adding any handler-body validation for a new field on `ExplainRequest`, always declare the field on the Pydantic model first. Pattern: declare field with `None` default on the model → validate syntax/semantics in handler body. Applies to any model with `extra="forbid"`.
 - Confidence: high
 
 **[2026-07-03] — E2a BE-9: defensive empty-string guard in predicate builders prevents nonsensical SQL**

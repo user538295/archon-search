@@ -125,6 +125,39 @@ _MAX_SCOPE_LIST_ITEMS: int = 100
 _MAX_SCOPE_ITEM_LEN: int = 255
 
 
+def _validate_scope_filter(scope_filter: str | None) -> "McpErrorResponse | None":
+    """Validate the scope_filter parameter for MCP search/explain tools.
+
+    Mirrors ``_check_scope_filter`` in ``routes_search.py``.
+    Returns a McpErrorResponse dict if invalid, None if valid.
+    """
+    if scope_filter is None:
+        return None
+    if not scope_filter:
+        return McpErrorResponse(error="scope_filter must not be empty", code="invalid_scope_filter")
+    if "*" not in scope_filter:
+        return None  # exact match — always valid
+    star_count = scope_filter.count("*")
+    if star_count > 1:
+        return McpErrorResponse(
+            error="scope_filter contains multiple '*' characters; only a single trailing '*' is permitted",
+            code="invalid_scope_filter",
+        )
+    # Exactly one '*' — must be at end with non-empty prefix
+    if not scope_filter.endswith("*"):
+        return McpErrorResponse(
+            error="scope_filter wildcard '*' must appear only at the end of the string",
+            code="invalid_scope_filter",
+        )
+    prefix = scope_filter[:-1]
+    if not prefix:
+        return McpErrorResponse(
+            error="bare '*' is not a valid scope_filter; use a prefix followed by '*' for wildcard matching",
+            code="invalid_scope_filter",
+        )
+    return None  # valid trailing wildcard
+
+
 def _validate_ttl_and_scopes(
     chunk_ttl_seconds: int | None,
     chunk_scopes: list[str] | None,
@@ -293,6 +326,7 @@ def create_app(
         hyde: bool = False,
         rag_fusion: bool = False,
         graph_mode: str | None = None,
+        scope_filter: str | None = None,
     ) -> dict[str, Any]:
         """Search for relevant document chunks using hybrid vector + FTS search.
 
@@ -313,6 +347,17 @@ def create_app(
         _graph_enabled = getattr(_graph_config, "enabled", False) if _graph_config is not None else False
         if graph_mode is not None and not _graph_enabled:
             return McpErrorResponse(error="graph_mode requires [graph] enabled=true", code="graph_disabled")
+
+        # scope_filter syntax validation
+        _sf_err = _validate_scope_filter(scope_filter)
+        if _sf_err is not None:
+            return _sf_err
+        # scope_filter and graph_mode are mutually exclusive
+        if scope_filter is not None and graph_mode is not None:
+            return McpErrorResponse(
+                error="scope_filter is not supported with graph_mode; use scope_filter without graph_mode or use graph_mode without scope_filter",
+                code="scope_filter_graph_mode_incompatible",
+            )
 
         # Mutual exclusion: rag_fusion=True suppresses HyDE entirely.
         _rf_config = getattr(config, "rag_fusion", None)
@@ -396,6 +441,7 @@ def create_app(
                     rag_fusion_config=_rf_config,
                     filters=_multi_filters,
                     graph_mode=graph_mode,
+                    scope_filter=scope_filter,
                 )
             except RAGFusionDependencyError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
@@ -484,6 +530,7 @@ def create_app(
                     rag_fusion_generator=rag_fusion_generator,
                     rag_fusion_config=_rf_config,
                     graph_mode=graph_mode,
+                    scope_filter=scope_filter,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -574,6 +621,7 @@ def create_app(
         hyde: bool = False,
         rag_fusion: bool = False,
         graph_mode: str | None = None,
+        scope_filter: str | None = None,
     ) -> dict[str, Any]:
         """Search and return surrounding chunks for richer context.
 
@@ -586,6 +634,11 @@ def create_app(
                 error="graph_mode (naive, local, global) on search_with_context is not supported; use the search tool instead",
                 code="graph_mode_not_supported",
             )
+
+        # scope_filter syntax validation
+        _swc_sf_err = _validate_scope_filter(scope_filter)
+        if _swc_sf_err is not None:
+            return _swc_sf_err
 
         _swc_ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
@@ -641,6 +694,7 @@ def create_app(
                     rag_fusion=rag_fusion,
                     rag_fusion_generator=rag_fusion_generator,
                     rag_fusion_config=_swc_rf_config,
+                    scope_filter=scope_filter,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -737,6 +791,7 @@ def create_app(
         hyde: bool = False,
         rag_fusion: bool = False,
         graph_mode: str | None = None,
+        scope_filter: str | None = None,
     ) -> dict[str, Any]:
         """Return the per-stage retrieval/reranking trace for a query, plus the
         routing decision when no collection is pinned. Operates in the caller's
@@ -773,6 +828,17 @@ def create_app(
         )
         if graph_mode is not None and not _explain_graph_enabled:
             return McpErrorResponse(error="graph_mode requires [graph] enabled=true", code="graph_disabled")
+
+        # scope_filter syntax validation
+        _explain_sf_err = _validate_scope_filter(scope_filter)
+        if _explain_sf_err is not None:
+            return _explain_sf_err
+        # scope_filter and graph_mode are mutually exclusive
+        if scope_filter is not None and graph_mode is not None:
+            return McpErrorResponse(
+                error="scope_filter is not supported with graph_mode; use scope_filter without graph_mode or use graph_mode without scope_filter",
+                code="scope_filter_graph_mode_incompatible",
+            )
 
         # Mutual exclusion: graph_mode wins over HyDE — skip the LLM call entirely.
         # rag_fusion=True also suppresses HyDE. graph_mode check comes first so the
@@ -839,6 +905,7 @@ def create_app(
                     rag_fusion=rag_fusion,
                     rag_fusion_generator=rag_fusion_generator,
                     rag_fusion_config=_explain_rf_config,
+                    scope_filter=scope_filter,
                 )
             except RAGFusionDependencyError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
@@ -954,6 +1021,7 @@ def create_app(
                     rag_fusion_generator=rag_fusion_generator,
                     rag_fusion_config=_explain_rf_config,
                     graph_mode=graph_mode,
+                    scope_filter=scope_filter,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
