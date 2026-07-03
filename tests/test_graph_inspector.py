@@ -13,6 +13,7 @@ from archon_search.graph_inspector import (
     _truncate_graph,
     inspect_collection,
     inspect_cross_collection,
+    to_graphml,
 )
 from archon_search.graph_types import GraphEdge, GraphMention, GraphNode, EntityType, RelationshipType
 from tests.conftest import MockGraphStore
@@ -741,3 +742,108 @@ async def test_cross_collection_truncation_fires_after_merge(mock_graph_store: M
     assert view.node_count == 6
     assert len(view.nodes) == 4
     assert view.truncated is True
+
+
+# ============================================================================
+# GraphML export tests (BE-8)
+# ============================================================================
+
+
+def test_to_graphml_produces_valid_xml():
+    """to_graphml() produces valid XML with graphml root element."""
+    import xml.etree.ElementTree as ET
+
+    nodes = [
+        GraphNodeInspection("entity-1", "Entity One", chunk_count=5, salience=0.5),
+        GraphNodeInspection("entity-2", "Entity Two", chunk_count=3, salience=0.3),
+    ]
+    edges = [
+        GraphEdgeInspection(
+            "edge-1", "entity-1", "entity-2", weight=2, source_chunk_ids=["chunk-a", "chunk-b"]
+        )
+    ]
+    view = CollectionGraphView(
+        nodes=nodes, edges=edges, node_count=2, edge_count=1, truncated=False
+    )
+
+    graphml_bytes = to_graphml(view)
+
+    # Parse and verify root tag is graphml
+    root = ET.fromstring(graphml_bytes)
+    assert root.tag.endswith("graphml") or root.tag == "graphml"
+    # Verify it's valid bytes and can be decoded
+    assert isinstance(graphml_bytes, bytes)
+    assert len(graphml_bytes) > 0
+
+
+def test_to_graphml_includes_truncated_attribute():
+    """to_graphml() includes truncated flag as graph-level <data> element."""
+    import xml.etree.ElementTree as ET
+
+    nodes = [GraphNodeInspection("entity-1", "Entity One", chunk_count=5, salience=0.5)]
+    edges = []
+
+    # Test with truncated=True
+    view_truncated = CollectionGraphView(
+        nodes=nodes, edges=edges, node_count=1, edge_count=0, truncated=True
+    )
+    graphml_bytes = to_graphml(view_truncated)
+
+    root = ET.fromstring(graphml_bytes)
+    # Extract namespace from the root element
+    namespace = None
+    if '}' in root.tag:
+        namespace = root.tag.split('}')[0] + '}'
+
+    # Find the graph element and its truncated data child
+    if namespace:
+        graph_elem = root.find(f".//{namespace}graph")
+        data_elem = graph_elem.find(f"{namespace}data[@key='truncated']") if graph_elem is not None else None
+    else:
+        graph_elem = root.find(".//graph")
+        data_elem = graph_elem.find("data[@key='truncated']") if graph_elem is not None else None
+
+    assert data_elem is not None
+    assert data_elem.text == "true"
+
+    # Test with truncated=False
+    view_not_truncated = CollectionGraphView(
+        nodes=nodes, edges=edges, node_count=1, edge_count=0, truncated=False
+    )
+    graphml_bytes = to_graphml(view_not_truncated)
+
+    root = ET.fromstring(graphml_bytes)
+    # Extract namespace again for the new root
+    namespace = None
+    if '}' in root.tag:
+        namespace = root.tag.split('}')[0] + '}'
+
+    # Find the graph element and its truncated data child
+    if namespace:
+        graph_elem = root.find(f".//{namespace}graph")
+        data_elem = graph_elem.find(f"{namespace}data[@key='truncated']") if graph_elem is not None else None
+    else:
+        graph_elem = root.find(".//graph")
+        data_elem = graph_elem.find("data[@key='truncated']") if graph_elem is not None else None
+
+    assert data_elem is not None
+    assert data_elem.text == "false"
+
+
+def test_graphml_networkx_import_error_yields_clear_message():
+    """to_graphml() raises ImportError with actionable message when networkx missing."""
+    import sys
+    from unittest.mock import patch
+
+    nodes = [GraphNodeInspection("entity-1", "Entity One", chunk_count=5, salience=0.5)]
+    edges = []
+    view = CollectionGraphView(
+        nodes=nodes, edges=edges, node_count=1, edge_count=0, truncated=False
+    )
+
+    # Mock the networkx import to fail
+    with patch.dict(sys.modules, {"networkx": None}):
+        with pytest.raises(ImportError) as exc_info:
+            to_graphml(view)
+        assert "GraphML export requires networkx" in str(exc_info.value)
+        assert "archon-search[graph]" in str(exc_info.value)

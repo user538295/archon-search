@@ -1,8 +1,9 @@
-"""Tests for E2b graph inspection REST endpoints (BE-7) — GET /graph routes."""
+"""Tests for E2b graph inspection REST endpoints (BE-7, BE-8) — GET /graph routes."""
 from __future__ import annotations
 
 import sys
 import types
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -129,3 +130,31 @@ class TestGetGraphTruncation:
             # 404 for nonexistent collection, or 200 for empty graph
             # (behavior depends on whether collection is auto-registered from path)
             assert response.status_code in (200, 404)
+
+
+@pytest.mark.integration
+class TestGetGraphGraphML:
+    """GraphML export: GET /graph/{collection}?format=graphml returns valid GraphML."""
+
+    def test_get_graph_graphml_content_type(self, tmp_path: Path, monkeypatch) -> None:
+        """GET /graph/col?format=graphml returns 200 with application/xml content type."""
+        toml_content = f'[collections]\ncollections = ["{tmp_path}"]\n'
+        with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, cfg, api_key):
+            # Query the graph endpoint with graphml format
+            response = client.get("/graph/test?format=graphml", headers=_auth(api_key))
+
+            # Should return 200 or 404 depending on whether collection exists
+            if response.status_code == 200:
+                # Verify content type
+                assert response.headers.get("content-type") == "application/xml"
+
+                # Verify it's valid XML
+                graphml_bytes = response.content
+                root = ET.fromstring(graphml_bytes)
+                # GraphML root element should be <graphml>
+                assert root.tag.endswith("graphml") or root.tag == "graphml"
+            elif response.status_code == 404:
+                # Collection doesn't exist, which is also acceptable
+                pass
+            else:
+                pytest.fail(f"Unexpected status code: {response.status_code}")

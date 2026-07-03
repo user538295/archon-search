@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from archon_search.pipeline import SearchPipeline
     from archon_search.config import SearchConfig
 
-from archon_search.graph_inspector import CollectionGraphView, inspect_collection
+from archon_search.graph_inspector import CollectionGraphView, inspect_collection, to_graphml
 from archon_search.server.schemas import (
     GraphEdgeResponse,
     GraphInspectionResponse,
@@ -74,7 +74,13 @@ async def get_graph(
 
     # Branch on format
     if format == "graphml":
-        graphml_bytes = _to_graphml(view)
+        try:
+            graphml_bytes = to_graphml(view)
+        except ImportError as e:
+            raise HTTPException(
+                status_code=500,
+                detail=str(e),
+            )
         return Response(content=graphml_bytes, media_type="application/xml")
     else:
         # JSON format (default)
@@ -111,47 +117,3 @@ def _view_to_response(view: CollectionGraphView) -> GraphInspectionResponse:
     )
 
 
-def _to_graphml(view: CollectionGraphView) -> bytes:
-    """Convert CollectionGraphView to GraphML XML bytes.
-
-    Raises:
-        HTTPException: If networkx is not available.
-    """
-    try:
-        import networkx as nx  # type: ignore[import-untyped]
-    except ImportError:
-        raise HTTPException(
-            status_code=500,
-            detail="GraphML export requires networkx; install archon-search[graph]",
-        )
-
-    # Create directed graph
-    G = nx.DiGraph()
-
-    # Add nodes with attributes
-    for node in view.nodes:
-        G.add_node(
-            node.entity_id,
-            entity_name=node.entity_name,
-            chunk_count=node.chunk_count,
-            salience=node.salience,
-        )
-
-    # Add edges with attributes
-    for edge in view.edges:
-        G.add_edge(
-            edge.source_entity_id,
-            edge.target_entity_id,
-            weight=edge.weight,
-            source_chunk_ids=",".join(edge.source_chunk_ids),  # CSV for XML compat
-        )
-
-    # Write to GraphML string
-    import io
-    graphml_str = io.StringIO()
-    nx.write_graphml(G, graphml_str)
-    graphml_bytes = graphml_str.getvalue().encode("utf-8")
-
-    # TODO: Add truncated attribute as graph-level <data> element
-    # For now, return the basic GraphML
-    return graphml_bytes

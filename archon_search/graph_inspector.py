@@ -396,3 +396,99 @@ async def inspect_cross_collection(
         edge_count=total_edge_count,
         truncated=truncated,
     )
+
+
+def to_graphml(view: CollectionGraphView | CrossCollectionGraphView) -> bytes:
+    """Convert a graph view (single- or cross-collection) to GraphML XML bytes.
+
+    Produces a directed graph with nodes and edges, including derived attributes
+    (chunk_count, salience, weight, source_chunk_ids). Includes a graph-level
+    `<data>` element for the truncated flag.
+
+    Args:
+        view: A CollectionGraphView or CrossCollectionGraphView to export.
+
+    Returns:
+        GraphML XML as UTF-8 encoded bytes.
+
+    Raises:
+        ImportError: If networkx is not installed.
+    """
+    try:
+        import networkx as nx  # type: ignore[import-untyped]
+    except ImportError:
+        raise ImportError(
+            "GraphML export requires networkx; install archon-search[graph]"
+        )
+
+    import tempfile
+    import os
+    import xml.etree.ElementTree as ET
+
+    # Create directed graph
+    G = nx.DiGraph()
+
+    # Add nodes with attributes
+    for node in view.nodes:
+        G.add_node(
+            node.entity_id,
+            entity_name=node.entity_name,
+            chunk_count=node.chunk_count,
+            salience=node.salience,
+        )
+
+    # Add edges with attributes
+    for edge in view.edges:
+        G.add_edge(
+            edge.source_entity_id,
+            edge.target_entity_id,
+            weight=edge.weight,
+            source_chunk_ids=",".join(edge.source_chunk_ids),  # CSV for XML compat
+        )
+
+    # Write to temporary file (networkx works better with file paths)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.graphml', delete=False) as f:
+        temp_path = f.name
+        nx.write_graphml(G, temp_path)
+
+    try:
+        # Read the GraphML from the temporary file
+        with open(temp_path, 'rb') as f:
+            graphml_bytes = f.read()
+
+        # Parse to add graph-level truncated data
+        graphml_xml = graphml_bytes.decode('utf-8')
+        root = ET.fromstring(graphml_xml)
+
+        # Extract namespace from the root element (if present)
+        namespace = None
+        if '}' in root.tag:
+            namespace = root.tag.split('}')[0] + '}'
+
+        # Find the <graph> element
+        if namespace:
+            graph_elem = root.find(f".//{namespace}graph")
+        else:
+            graph_elem = root.find(".//graph")
+
+        if graph_elem is not None and namespace:
+            # Insert a <data> element for the truncated flag with proper namespace
+            truncated_data = ET.Element(f"{namespace}data")
+            truncated_data.set("key", "truncated")
+            truncated_data.text = "true" if view.truncated else "false"
+            # Insert at the beginning (index 0)
+            graph_elem.insert(0, truncated_data)
+        elif graph_elem is not None:
+            # No namespace, create unnamespaced element
+            truncated_data = ET.Element("data")
+            truncated_data.set("key", "truncated")
+            truncated_data.text = "true" if view.truncated else "false"
+            graph_elem.insert(0, truncated_data)
+
+        # Convert back to bytes
+        graphml_bytes = ET.tostring(root, encoding="utf-8")
+
+        return graphml_bytes
+    finally:
+        # Clean up the temporary file
+        os.unlink(temp_path)
