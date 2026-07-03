@@ -1071,6 +1071,16 @@
 - Action: Any prune/delete method that returns doc_ids for logging must deduplicate at the document level. Test with multiple chunks sharing the same `doc_id` to verify.
 - Confidence: high
 
+**[2026-07-03] — E2a T-2: `lancedb.connect_async().close()` is not a coroutine for local connections**
+- Observation: `await db.close()` raises `TypeError: object NoneType can't be used in 'await' expression` because `AsyncConnection.close()` for a local (file-backed) LanceDB connection returns `None`, not a coroutine. C2-DA3 flagged this during review; the code attempted `await db.close()` in `_count_chunks_fresh` and `_get_doc_ids_fresh`. Fix: `db.close()` (no await).
+- Action: When calling `db.close()` on a `lancedb.connect_async()` local connection, do NOT use `await`. The method is synchronous-returning for local backends. Only remote/cloud backends return an awaitable. Use `db.close()` in a `finally` block as a no-op cleanup for symmetry.
+- Confidence: high
+
+**[2026-07-03] — E2a T-2: fresh `SearchStore(db_path)` is safe inside `asyncio.run()` for seeding LanceDB in integration tests**
+- Observation: The documented learnings.md pattern — "never call async store methods via asyncio.run() using the server's own store object" — does NOT prohibit using a fresh `SearchStore(db_path)` inside `asyncio.run()`. Opening a brand-new `SearchStore` instance in the main test thread is safe: it creates its own connection and asyncio locks tied to the temporary event loop. After `asyncio.run()` returns and calls `fresh_store.disconnect()`, that event loop and all its state are gone. The critical violation to avoid is reusing `client.app.state.search_store` — that object's connection is bound to the ASGI server's background event loop.
+- Action: For seeding LanceDB data in integration tests: `asyncio.run(_seed_chunks(cfg.db_path, col, ...))` with a fresh `SearchStore(db_path)` created inside that async function is correct. Do not pass the server's store object across event-loop boundaries.
+- Confidence: high
+
 **[2026-07-02] — E1c T-5 close-out: UserManual graph_mode error table had two stale E1c placeholder entries**
 - Observation: The UserManual `05_searching.md` error table had `graph_mode on POST /explain → 422 (extra field rejected)` (pre-E1c state) and `MCP search_with_context + graph_mode → Error dict (deferred to E1c)`. Both needed updating: the first because E1c now accepts graph_mode on /explain; the second because "deferred to E1c" is no longer accurate now that E1c has shipped.
 - Action: At close-out, grep the UserManual for the feature tag (e.g., `grep "E1c\|deferred"`) and also explicitly check error tables for entries that describe the state BEFORE the feature was built. Update both the placeholder text and the now-shipped feature entries.
