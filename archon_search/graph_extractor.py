@@ -36,6 +36,7 @@ from archon_search.graph_types import (
     EntityType,
     GraphEdge,
     GraphExtractionResult,
+    GraphMention,
     GraphNode,
     RelationshipType,
     make_stable_edge_id,
@@ -199,6 +200,8 @@ class GraphExtractor:
         chunk_entity_ids: list[list[str]] = []
         # Deduplicated node map across all chunks (id → GraphNode).
         nodes: dict[str, GraphNode] = {}
+        # Mentions: entity incidence records for salience derivation (E2b).
+        mentions: list[GraphMention] = []
 
         # ------------------------------------------------------------------
         # C3 code-symbol path — spaCy NER is NOT run on code chunks.
@@ -216,6 +219,12 @@ class GraphExtractor:
                     entity_subtype=chunk.symbol_subtype,
                 )
             chunk_entity_ids.append([entity_id])
+            # Add mention for the entity in this chunk (E2b)
+            mentions.append(GraphMention(
+                entity_id=entity_id,
+                chunk_id=chunk.chunk_id,
+                doc_id=doc_id,
+            ))
 
         # ------------------------------------------------------------------
         # spaCy NER path for plain-text chunks.
@@ -235,6 +244,7 @@ class GraphExtractor:
                         return GraphExtractionResult(
                             nodes=list(nodes.values()),
                             edges=[],
+                            mentions=[],
                             fatal_error=error_msg,
                             warnings=[error_msg],
                         )
@@ -251,6 +261,7 @@ class GraphExtractor:
                         return GraphExtractionResult(
                             nodes=list(nodes.values()),
                             edges=[],
+                            mentions=[],
                             fatal_error=error_msg,
                             warnings=[error_msg],
                         )
@@ -270,11 +281,12 @@ class GraphExtractor:
                 return GraphExtractionResult(
                     nodes=list(nodes.values()),
                     edges=[],
+                    mentions=[],
                     fatal_error=error_msg,
                     warnings=[error_msg],
                 )
 
-            for raw_entities in ner_per_chunk:
+            for text_chunk, raw_entities in zip(text_chunks, ner_per_chunk):
                 ids_this_chunk: list[str] = []
                 for ent_text, ent_label in raw_entities:
                     entity_type = _LABEL_TO_ENTITY_TYPE.get(ent_label)
@@ -290,6 +302,12 @@ class GraphExtractor:
                             collection_name=collection,
                         )
                     ids_this_chunk.append(entity_id)
+                    # Add mention for the entity in this chunk (E2b)
+                    mentions.append(GraphMention(
+                        entity_id=entity_id,
+                        chunk_id=text_chunk.chunk_id,
+                        doc_id=doc_id,
+                    ))
                 chunk_entity_ids.append(ids_this_chunk)
 
         # ------------------------------------------------------------------
@@ -324,6 +342,7 @@ class GraphExtractor:
         return GraphExtractionResult(
             nodes=list(nodes.values()),
             edges=list(edges.values()),
+            mentions=mentions,
             llm_fallback_used=llm_fallback_used,
             warnings=warnings,
         )

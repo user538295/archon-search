@@ -25,6 +25,7 @@ import pytest
 from archon_search.graph_types import (
     ChunkInput,
     EntityType,
+    GraphMention,
     RelationshipType,
     make_stable_edge_id,
     make_stable_entity_id,
@@ -681,3 +682,137 @@ def test_extractor_mixed_code_and_text_chunks() -> None:
         "Expected 0 edges: each chunk has only 1 entity (no co-occurrence possible). "
         f"Got {len(result.edges)} edges."
     )
+
+
+# ---------------------------------------------------------------------------
+# BE-4: Mentions extraction (E2b entity incidence tracking)
+# ---------------------------------------------------------------------------
+
+
+def test_extractor_code_symbol_mentions() -> None:
+    """Code-symbol chunk produces GraphMention with correct chunk_id and entity_id."""
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    config = GraphConfig()
+    extractor = GraphExtractor(config)
+
+    chunk_id = "doc-1-000000"
+    doc_id = "doc-1"
+    code_chunk = ChunkInput(
+        chunk_id=chunk_id,
+        text="class MyService: ...",
+        symbol_type="class",
+        symbol_subtype="python-class",
+        containing_class="MyService",
+    )
+
+    async def _run():
+        return await extractor.extract([code_chunk], doc_id, "col")
+
+    result = asyncio.run(_run())
+
+    # Must have exactly one node (MyService)
+    assert len(result.nodes) == 1
+    node = result.nodes[0]
+    entity_id = node.id
+
+    # Must have exactly one mention linking MyService to the chunk
+    assert len(result.mentions) == 1, f"Expected 1 mention, got {len(result.mentions)}"
+    mention = result.mentions[0]
+    assert mention.entity_id == entity_id, (
+        f"Mention entity_id {mention.entity_id} does not match node id {entity_id}"
+    )
+    assert mention.chunk_id == chunk_id, (
+        f"Mention chunk_id {mention.chunk_id} does not match input chunk_id {chunk_id}"
+    )
+    assert mention.doc_id == doc_id, f"Mention doc_id {mention.doc_id} does not match {doc_id}"
+
+
+def test_extractor_ner_mentions() -> None:
+    """NER mentions correctly pair entities with their chunk_ids via zip alignment.
+
+    Three chunks: entities in chunks 0 and 2 (not 1).
+    Assert mentions contain exactly two GraphMention objects referencing the correct chunk_ids.
+    This verifies the zip(text_chunks, ner_per_chunk) alignment is correct.
+    """
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    config = GraphConfig()
+    extractor = GraphExtractor(config)
+
+    doc_id = "doc-1"
+    chunks = [
+        ChunkInput(chunk_id="doc-1-000000", text="Alice works here.", symbol_type=None, symbol_subtype=None),
+        ChunkInput(chunk_id="doc-1-000001", text="No entities here.", symbol_type=None, symbol_subtype=None),
+        ChunkInput(chunk_id="doc-1-000002", text="Bob is great.", symbol_type=None, symbol_subtype=None),
+    ]
+
+    # spaCy stub returns entities only in chunks 0 and 2
+    stub = _make_spacy_stub({
+        "Alice works here.": [("Alice", "PERSON")],
+        "No entities here.": [],
+        "Bob is great.": [("Bob", "PERSON")],
+    })
+
+    async def _run():
+        extractor._nlp = stub["spacy"].load("en_core_web_sm")
+        return await extractor.extract(chunks, doc_id, "col")
+
+    result = asyncio.run(_run())
+
+    # Must have exactly 2 nodes (Alice, Bob)
+    assert len(result.nodes) == 2, f"Expected 2 nodes, got {len(result.nodes)}"
+    node_map = {n.entity_name: n.id for n in result.nodes}
+    alice_id = node_map["Alice"]
+    bob_id = node_map["Bob"]
+
+    # Must have exactly 2 mentions (one for Alice, one for Bob)
+    assert len(result.mentions) == 2, f"Expected 2 mentions, got {len(result.mentions)}"
+
+    # Verify Alice mention is linked to chunk 0
+    alice_mentions = [m for m in result.mentions if m.entity_id == alice_id]
+    assert len(alice_mentions) == 1, f"Expected 1 mention for Alice, got {len(alice_mentions)}"
+    alice_mention = alice_mentions[0]
+    assert alice_mention.chunk_id == "doc-1-000000", (
+        f"Alice mention should be in chunk-0 (doc-1-000000), got {alice_mention.chunk_id}"
+    )
+    assert alice_mention.doc_id == doc_id
+
+    # Verify Bob mention is linked to chunk 2 (not chunk 1)
+    bob_mentions = [m for m in result.mentions if m.entity_id == bob_id]
+    assert len(bob_mentions) == 1, f"Expected 1 mention for Bob, got {len(bob_mentions)}"
+    bob_mention = bob_mentions[0]
+    assert bob_mention.chunk_id == "doc-1-000002", (
+        f"Bob mention should be in chunk-2 (doc-1-000002), got {bob_mention.chunk_id}"
+    )
+    assert bob_mention.doc_id == doc_id
+
+    # Crucially: no mention should reference chunk 1
+    chunk1_mentions = [m for m in result.mentions if m.chunk_id == "doc-1-000001"]
+    assert len(chunk1_mentions) == 0, (
+        f"No mentions should be in chunk-1 (no entities), but got {len(chunk1_mentions)}"
+    )
+
+
+def test_extractor_early_exit_mentions_empty() -> None:
+    """When spaCy not importable, mentions=[] on returned result."""
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    config = GraphConfig()
+    extractor = GraphExtractor(config)
+    extractor._nlp = None  # ensure import probe runs
+
+    chunk = ChunkInput(chunk_id="c1", text="Hello world.", symbol_type=None, symbol_subtype=None)
+
+    async def _run():
+        with patch.dict(sys.modules, {"spacy": None}):  # type: ignore[dict-item]
+            return await extractor.extract([chunk], "doc-1", "col")
+
+    result = asyncio.run(_run())
+
+    # When extraction fails with fatal_error, mentions must be empty
+    assert result.fatal_error is not None
+    assert result.mentions == [], f"Expected empty mentions on fatal error, got {result.mentions}"

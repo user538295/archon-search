@@ -392,7 +392,7 @@ flowchart LR
         - #integration_test — `test_mentions_write_and_read_roundtrip` — write 3 mentions, get_all returns 3; with real LanceDB in tmp_path
         - #integration_test — `test_mentions_delete_by_doc_then_write_is_idempotent` — write, delete, re-write; get_all returns same count not doubled
 
-- [ ] **BE-4** — Extend `GraphExtractor.extract()` to accumulate `mentions: list[GraphMention]` from per-chunk entity IDs: fix text-chunk loop to `zip(text_chunks, ner_per_chunk)` to preserve `chunk_id`; populate mentions in both code-symbol and NER paths; add `mentions=mentions` (or `mentions=[]` for early-exit paths) to all 4 `return GraphExtractionResult(...)` sites (`graph_extractor.py`) #backend-role
+- [x] **BE-4** — Extend `GraphExtractor.extract()` to accumulate `mentions: list[GraphMention]` from per-chunk entity IDs: fix text-chunk loop to `zip(text_chunks, ner_per_chunk)` to preserve `chunk_id`; populate mentions in both code-symbol and NER paths; add `mentions=mentions` (or `mentions=[]` for early-exit paths) to all 4 `return GraphExtractionResult(...)` sites (`graph_extractor.py`) #backend-role
     - Interface Adapters · 2.0h
     - needs BE-1 · completes C2
     - Tests
