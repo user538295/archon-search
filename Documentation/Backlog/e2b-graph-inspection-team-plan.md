@@ -451,7 +451,7 @@ flowchart LR
         - #unit_test — `test_graphml_networkx_import_error_yields_clear_message` — mock networkx import failure → 500 with actionable message
         - #integration_test — `test_get_graph_graphml_content_type` — GET /graph/col?format=graphml → 200, `Content-Type: application/xml`; valid GraphML parseable by `xml.etree.ElementTree`
 
-- [ ] **T-1** — Manual: export a real corpus via `GET /graph/col?format=graphml`; import the file into Gephi or yEd; verify nodes and edges render with correct attributes; check truncated flag appears when graph is large #tester-role
+- [x] **T-1** — Manual: export a real corpus via `GET /graph/col?format=graphml`; import the file into Gephi or yEd; verify nodes and edges render with correct attributes; check truncated flag appears when graph is large #tester-role
     - — · 1.0h
     - needs BE-8 · completes S2
     - Tests
