@@ -4516,6 +4516,120 @@
         "summary": "Explain Endpoint"
       }
     },
+    "/graph/cross-collection": {
+      "get": {
+        "description": "Inspect and merge graph data across multiple collections.\n\nQuery parameters:\n- `collections`: Comma-separated list of collection names (at least 2 required, deduped).\n- `format`: \"json\" (default) or \"graphml\" to export as GraphML XML.\n\nReturns:\n- 200: Merged graph inspection response (JSON or GraphML)\n- 404: Collection not found\n- 422: graph.enabled=false or <2 collections after dedup or invalid format\n\nScenarios:\n- S3: Merged graph data present \u2192 200 JSON with merged nodes, edges, truncated flag\n- S4: GraphML format \u2192 200 XML response\n- S5: graph.enabled=false \u2192 422\n- S7: Less than 2 collections \u2192 422\n- S17: One collection has no data \u2192 200 with data from other collections",
+        "operationId": "get_graph_cross_collection_graph_cross_collection_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "collections",
+            "required": true,
+            "schema": {
+              "title": "Collections",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "enum": [
+                "json",
+                "graphml"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Graph Cross Collection"
+      }
+    },
+    "/graph/{collection}": {
+      "get": {
+        "description": "Inspect a single collection's graph with derived metrics.\n\nQuery parameters:\n- `format`: \"json\" (default) or \"graphml\" to export as GraphML XML.\n\nReturns:\n- 200: Graph inspection response (JSON or GraphML)\n- 404: Collection not found\n- 422: graph.enabled=false\n\nScenarios:\n- S1: Graph data present \u2192 200 JSON with nodes, edges, truncated flag\n- S2: GraphML format \u2192 200 XML response\n- S5: graph.enabled=false \u2192 422\n- S6: Unknown collection \u2192 404\n- S8: No graph data (tables absent) \u2192 200 with empty nodes/edges",
+        "operationId": "get_graph_graph__collection__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "title": "Collection",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "enum": [
+                "json",
+                "graphml"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Graph"
+      }
+    },
     "/health": {
       "get": {
         "operationId": "health_health_get",

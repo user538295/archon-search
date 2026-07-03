@@ -130,12 +130,12 @@ def _make_valid_tar(tmp_path: Path, embedding_model: str = "BAAI/bge-small-en-v1
 # ---------------------------------------------------------------------------
 
 
-def test_mcp_tool_count_is_13(tmp_path: Path) -> None:
-    """create_app must register exactly 13 tools after adding export/import."""
+def test_mcp_tool_count_is_15(tmp_path: Path) -> None:
+    """create_app must register exactly 15 tools (13 base + 2 graph inspection E2b)."""
     pipeline = _make_pipeline()
     job_store = _make_job_store(tmp_path)
     app = _make_mcp_app(pipeline, job_store=job_store)
-    assert len(app.tools) == 13, f"Expected 13 tools, got {len(app.tools)}: {list(app.tools)}"
+    assert len(app.tools) == 15, f"Expected 15 tools, got {len(app.tools)}: {list(app.tools)}"
 
 
 # ---------------------------------------------------------------------------
