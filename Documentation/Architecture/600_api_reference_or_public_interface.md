@@ -412,6 +412,29 @@ All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce 
 
 503 is reserved for meta-lookup / router failures, consistent with A3's `/search` taxonomy. Pipeline-stage failures (store, reranker) surface as 500 with a stage-specific detail; the original exception message is sanitised server-side because FTS errors may echo the query.
 
+### `routes_graph.py` (E2b / E2c)
+
+Graph inspection endpoints; only available when `[graph] enabled = true` in `archon-search.toml`. Require `Bearer` token. Both endpoints resolve the collection(s) within the **authenticated namespace** (`request.state.namespace`) — collections owned by other namespaces return `404` (**E2c** namespace fix).
+
+| Method | Path | Purpose | Query params | Response schema |
+| --- | --- | --- | --- | --- |
+| GET | `/graph/{collection}` | Return node and edge list for a single collection, scored by the chosen salience mode. Returns `422` when `[graph] enabled = false`. Returns `404` when the collection does not exist in the caller's namespace. **E2c**: gains `?salience=` parameter. | `format?: "json" \| "graphml"` (default `"json"`); `salience?: "frequency" \| "tfidf"` (default `"frequency"`) — **E2c**: when `"tfidf"`, nodes are scored by TF-IDF; when omitted or `"frequency"`, nodes are ranked by raw chunk frequency (unchanged from E2b). `?salience=<other>` → `422`. | `GraphInspectionResponse` — `{nodes: [GraphNodeResponse{entity_id, entity_name, chunk_count, salience}], edges: [GraphEdgeResponse{edge_id, source_entity_id, target_entity_id, weight, source_chunk_ids}], node_count, edge_count, truncated: bool, salience_mode: "frequency" \| "tfidf"}`. **E2c**: `salience_mode` field always present, echoes the effective mode. When `format=graphml`, returns `application/xml`. `node.salience` in tfidf mode is ≥ 0.0 and unbounded above (TF × max(IDF, 0)); IDF is clamped to 0 if df > N+1 (a defensive floor; doesn't occur under normal input). In frequency mode, clamped `[0.0, 1.0]`. |
+| GET | `/graph/cross-collection` | Return merged node and edge list across ≥2 collections. Requires `?collections=` with ≥2 comma-separated names. Returns `422` when `[graph] enabled = false` or fewer than 2 valid collection names are provided. **E2c**: gains `?salience=` parameter; IDF denominator is namespace-scoped (all collections in the authenticated namespace, not just the listed ones). | `collections: str` (required; comma-separated, ≥2 names); `format?: "json" \| "graphml"` (default `"json"`); `salience?: "frequency" \| "tfidf"` (default `"frequency"`) — **E2c**: same semantics as single-collection endpoint; IDF denominator uses all namespace collections (two-list pattern: listed collections for node merging, all namespace collections for IDF denominator). | `CrossCollectionGraphInspectionResponse` — `{collections: [str], nodes: [...], edges: [...], node_count, edge_count, truncated: bool, salience_mode: "frequency" \| "tfidf"}`. **E2c**: `salience_mode` field always present. |
+
+**`GraphNodeResponse` field semantics** (frequency vs. tfidf mode):
+
+| Field | frequency mode | tfidf mode |
+|---|---|---|
+| `chunk_count` | mentions count from mentions table (or 0 if pre-E2b) | same |
+| `salience` | `chunk_count / total_chunks_in_collection`, clamped `[0.0, 1.0]` | `TF × max(IDF, 0), ≥ 0` where `TF = chunk_count / total_chunks` and `IDF = log((N+1) / df)` |
+| sort key | `(-chunk_count, entity_id)` | `(-salience, entity_id)` |
+
+where `N` = total namespace collection count, `df` = count of namespace collections containing the entity.
+
+For cross-collection inspection (`GET /graph/cross-collection`), entities present in multiple listed collections have their chunk counts summed across those collections. In frequency mode, the merged salience is a chunk-count-weighted average across those collections. In tfidf mode, this merged frequency salience is then multiplied by the entity's IDF factor (which is computed using all namespace collections as the denominator, not just the listed ones).
+
+**Truncation**: nodes are sorted and truncated by the mode-appropriate key before applying `max_inspection_nodes` / `max_inspection_edges` config ceilings. `truncated: true` signals that the cap was hit.
+
 ### `routes_telemetry.py`
 
 When telemetry is disabled, both endpoints return `DisabledResponse` (`schemas_telemetry.py`) — `{enabled: false}`.

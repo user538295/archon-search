@@ -8,9 +8,9 @@
 
 ## Changelog
 
-### [next release] — E2c: `GET /graph/{collection}` gains `salience_mode` field and namespace-scoped resolution
+### [next release] — E2c: `GET /graph/{collection}` and `GET /graph/cross-collection` gain `salience_mode` field and namespace-scoped resolution
 
-**Surface**: `GET /graph/{collection}` REST response (`GraphInspectionResponse`); collection-resolution behaviour inside the handler.
+**Surface**: `GET /graph/{collection}` REST response (`GraphInspectionResponse`); `GET /graph/cross-collection` REST response (`CrossCollectionGraphInspectionResponse`); collection-resolution behaviour inside both handlers.
 
 **Additive changes** (non-breaking for tolerant JSON consumers; breaking for strict-schema validators with `extra="forbid"`):
 
@@ -20,11 +20,15 @@
 
    To opt into TF×IDF salience: add `?salience=tfidf` to the query string.
 
+2. **`CrossCollectionGraphInspectionResponse` gains `salience_mode: Literal["frequency", "tfidf"] = "frequency"`** — same semantics as (1) above, for the cross-collection endpoint. Schema: `CrossCollectionGraphInspectionResponse.salience_mode: Literal["frequency", "tfidf"] = "frequency"`. Lenient clients are completely unaffected; strict-schema validators must add the field to their `CrossCollectionGraphInspectionResponse` type stubs.
+
 **Behaviour changes**:
 
-2. **`GET /graph/{collection}` now resolves collection names within the authenticated namespace only** — previously the handler resolved the collection against `DEFAULT_NAMESPACE` regardless of the caller's bearer token. After E2c, the handler passes `namespace=request.state.namespace` to `get_collection_meta`, so each caller can only inspect collections in their own namespace. Callers in non-default namespaces that previously received data from `DEFAULT_NAMESPACE` collections will now receive `404 collection not found`. Callers using the default namespace (single-tenant deployments) are unaffected.
+3. **`GET /graph/{collection}` now resolves collection names within the authenticated namespace only** — previously the handler resolved the collection against `DEFAULT_NAMESPACE` regardless of the caller's bearer token. After E2c, the handler passes `namespace=request.state.namespace` to `get_collection_meta`, so each caller can only inspect collections in their own namespace. Callers in non-default namespaces that previously received data from `DEFAULT_NAMESPACE` collections will now receive `404 collection not found`. Callers using the default namespace (single-tenant deployments) are unaffected.
 
-**Migration**: no action required for tolerant JSON consumers or single-tenant deployments. Multi-tenant operators: tokens in non-default namespaces must now call `GET /graph/{collection}` with a token scoped to the namespace that owns the collection. Strict-schema validators should add `salience_mode: "frequency" | "tfidf"` to their `GraphInspectionResponse` type stubs; regenerate from `GET /openapi.json`.
+4. **`GET /graph/cross-collection` now resolves collection names within the authenticated namespace only** — the same namespace fix applies to the cross-collection handler. The `?collections=` parameter is now filtered against the authenticated namespace: collection names that exist in other namespaces return `404 collection not found`. Additionally, when `?salience=tfidf` is used, the IDF denominator is scoped strictly to the authenticated namespace (`pipeline.get_all_collections_meta(namespace)`), preventing cross-namespace IDF leakage. Callers using the default namespace (single-tenant deployments) are unaffected.
+
+**Migration**: no action required for tolerant JSON consumers or single-tenant deployments. Multi-tenant operators: tokens in non-default namespaces must now call both graph endpoints with a token scoped to the namespace that owns the collection(s). Strict-schema validators should add `salience_mode: "frequency" | "tfidf"` to their `GraphInspectionResponse` and `CrossCollectionGraphInspectionResponse` type stubs; regenerate from `GET /openapi.json`.
 
 ---
 

@@ -245,18 +245,18 @@ N/A — no frontend work for this feature. `archon-search` is a pure REST/MCP se
 
 Docs the feature touches — the close-out task works through this list.
 
-- [ ] `Documentation/Backlog/e2c-graph-salience-tfidf-brief.md` — Edge Cases line 42 still uses old-style `log(1/1 + 1)` notation; update to `log((1+1)/1) = log(2)` for consistency with Q1 formula. Lines 43–44 were updated in C1 reviews and now use correct `log((N+1)/N)` / `log((N+1)/1)` notation.
-- [ ] `Documentation/Backlog/e2c-graph-salience-tfidf-team-plan.md` — this file
-- [ ] `Documentation/Backlog/e2c-c2-inspector-seam.tsp` — this plan (Realised by / Verified by task IDs already filled)
-- [ ] `Documentation/Backlog/e2c-c3-graphstore-presence-seam.tsp` — this plan (Realised by / Verified by already filled)
-- [ ] `Documentation/Backlog/api-contracts/e2c-graph-salience-contract.tsp` — this plan (already filled)
-- [ ] `Documentation/Backlog/api-contracts/e2c-graph-salience-contract.openapi.yaml` — regenerate if contract changes during implementation
-- [ ] `CLAUDE.md` — update `graph_inspector.py` and `routes_graph.py` inline docs to reference E2c
-- [ ] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `?salience=` param to both endpoints
-- [ ] `Documentation/Architecture/130_data_architecture_and_persistence.md` — note TF-IDF scoring in graph inspection section
-- [ ] `BREAKING.md` — `salience_mode` field added to both response schemas (additive, non-breaking for lenient clients; may break strict deserialisers)
-- [ ] `BREAKING.md` — add entry: behavior change: `GET /graph/{collection}` and `GET /graph/cross-collection` now resolve collection names within the authenticated namespace only; collections that exist in other namespaces now return 404 rather than the pre-namespace-fix behavior (which silently resolved against DEFAULT_NAMESPACE)
-- [ ] `learnings.md` — post-task observations
+- [x] `Documentation/Backlog/e2c-graph-salience-tfidf-brief.md` — Edge Cases line 42 still uses old-style `log(1/1 + 1)` notation; update to `log((1+1)/1) = log(2)` for consistency with Q1 formula. Lines 43–44 were updated in C1 reviews and now use correct `log((N+1)/N)` / `log((N+1)/1)` notation.
+- [x] `Documentation/Backlog/e2c-graph-salience-tfidf-team-plan.md` — this file
+- [x] `Documentation/Backlog/e2c-c2-inspector-seam.tsp` — this plan (Realised by / Verified by task IDs already filled)
+- [x] `Documentation/Backlog/e2c-c3-graphstore-presence-seam.tsp` — this plan (Realised by / Verified by already filled)
+- [x] `Documentation/Backlog/api-contracts/e2c-graph-salience-contract.tsp` — this plan (already filled)
+- [x] `Documentation/Backlog/api-contracts/e2c-graph-salience-contract.openapi.yaml` — regenerate if contract changes during implementation
+- [x] `CLAUDE.md` — update `graph_inspector.py` and `routes_graph.py` inline docs to reference E2c
+- [x] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `?salience=` param to both endpoints
+- [x] `Documentation/Architecture/130_data_architecture_and_persistence.md` — note TF-IDF scoring in graph inspection section
+- [x] `BREAKING.md` — `salience_mode` field added to both response schemas (additive, non-breaking for lenient clients; may break strict deserialisers)
+- [x] `BREAKING.md` — add entry: behavior change: `GET /graph/{collection}` and `GET /graph/cross-collection` now resolve collection names within the authenticated namespace only; collections that exist in other namespaces now return 404 rather than the pre-namespace-fix behavior (which silently resolved against DEFAULT_NAMESPACE)
+- [x] `learnings.md` — post-task observations
 
 ---
 
@@ -426,7 +426,7 @@ flowchart LR
 
 ### Phase 3 · Close-out
 
-- [ ] **T-3** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-3** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs T-1, T-2, BE-6
     - Tests

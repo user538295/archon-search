@@ -150,7 +150,7 @@ The per-field partition map (**system** / **filterable** / **ranking** / **audit
 
 The three B5 columns are additive and populated lazily: rows written by an older binary that lacks B5 will have `None` for all three fields, which the store treats identically to the `needs_recompute = True` state and triggers a full recompute on next access. See also `BREAKING.md` for mixed-version deployment caveats.
 
-### Per-collection graph tables (E1a / E1b)
+### Per-collection graph tables (E1a / E1b / E2b / E2c)
 
 When `[graph].enabled = true`, `GraphStore` creates two auxiliary tables per collection on first ingest:
 
@@ -170,6 +170,26 @@ When `[graph].enabled = true`, `GraphStore` creates two auxiliary tables per col
 | `built_at` | string (ISO 8601 UTC) | UTC timestamp of last `build-communities` run; stored as `pa.utf8()` following the same convention as other timestamp columns |
 
 The table becomes stale whenever new entities are ingested after the last `build-communities` run. `GET /status` exposes `graph.last_built_at` per collection to signal staleness. `graph_mode="local"` falls back to hybrid search when the table is absent or empty; `graph_mode="global"` raises `GraphCommunitiesNotBuiltError` → `422`.
+
+**E2b** adds a fourth auxiliary table per collection — the entity–chunk mentions incidence table (see `graph_store.py`):
+
+- **`_archon_graph_{col}_mentions`** — one row per entity–chunk pair (`entity_id`, `chunk_id`, `doc_id`). Written by `GraphStore.write_mentions` during ingest when `[graph].enabled = true`. Provides the raw data for IDF computation in E2c.
+
+**E2c — TF-IDF salience scoring for graph inspection**: `GET /graph/{collection}` and `GET /graph/cross-collection` accept a `?salience=frequency|tfidf` query parameter. In tfidf mode, `graph_inspector.py` computes a TF-IDF score for each node using:
+
+```
+TF(entity, collection) = chunk_count / total_chunks_in_collection
+IDF(entity)            = log((num_namespace_collections + 1) / df(entity))
+salience_tfidf         = TF × max(IDF, 0)
+```
+
+where `chunk_count` comes from the mentions table, `total_chunks_in_collection` from `CollectionMeta.chunk_count`, and `df(entity)` is the count of namespace collections containing the entity (computed in one batch pass via `GraphStore.get_entity_presence_across_collections`). IDF is namespace-scoped; cross-namespace IDF computation is not supported. In frequency mode (the default), salience is `chunk_count / total_chunks_in_collection` clamped to `[0.0, 1.0]` (unchanged from E2b). In tfidf mode, salience is non-negative (TF × max(IDF, 0)); the upper bound is unbounded (TF-IDF can exceed 1.0), while the lower bound is 0.0 (IDF is clamped non-negative; under valid inputs df ≤ N so IDF ≥ 0, making the floor a defensive guard only). Single-collection namespaces produce identical node ordering under both modes because every entity receives the same IDF factor `log(2)`, which cancels in ranking.
+
+**TF zero-guard**: when `total_chunks_in_collection = 0`, TF is 0 and thus salience is 0 for all nodes in that collection.
+
+**TF clamping**: in frequency mode, TF is additionally clamped to `[0.0, 1.0]` to handle mentions-table / collection-meta drift. In tfidf mode, TF is unclamped — the IDF factor already provides the intended unbounded upper range; a TF > 1.0 from stale meta produces inflated salience, which is accepted as a degraded-accuracy condition rather than a correctness error.
+
+**df fallback**: if an entity is not found in the presence map (possible when a collection's node table is unreadable or was written before E2b), `df` falls back to 1, giving the entity the maximum IDF boost. A WARNING is logged when the fallback fires.
 
 ### Timestamp format
 

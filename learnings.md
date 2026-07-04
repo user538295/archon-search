@@ -17,6 +17,28 @@
 - Action: When adding a new GraphStore method that scans node tables per collection, delegate to `get_all_nodes` rather than calling `_load_all_from_table` directly — it handles both validation and absent-table fallback in one call.
 - Confidence: high
 
+**[2026-07-04] — E2c T-3 close-out: brief notation was already correct**
+- Observation: The plan's Documentation update section said brief line 42 used old-style `log(1/1 + 1)` notation and needed updating to `log((1+1)/1) = log(2)`. Actual inspection found line 42 already used the correct notation — the edit had been done as part of an earlier task or the brief was originally written correctly.
+- Action: Always read the actual file before applying a documentation edit described in a plan; do not assume the plan's "before" description matches the current file state.
+- Confidence: high
+
+**[2026-07-04] — E2c T-3 close-out: 600 API reference doc was missing routes_graph.py section entirely**
+- Observation: E2b introduced `routes_graph.py` with two endpoints (`GET /graph/{collection}` and `GET /graph/cross-collection`) but never added a `### routes_graph.py` section to `Documentation/Architecture/600_api_reference_or_public_interface.md`. T-3's task ("add `?salience=` param to both endpoints") assumed the section existed; it did not. The correct action was to create the full section.
+- Action: When a documentation task says "add X to existing endpoint Y," verify the endpoint section actually exists before making the edit. If missing, create the full section covering the endpoint first.
+- Confidence: high
+
+**[2026-07-04] — E2c T-3 close-out: BREAKING.md E2c entry was incomplete for cross-collection endpoint**
+- Observation: The BREAKING.md E2c entry only mentioned `GraphInspectionResponse` and `GET /graph/{collection}` — it omitted `CrossCollectionGraphInspectionResponse` and `GET /graph/cross-collection`. The cross-collection changes (BE-5) were implemented in code but not documented in BREAKING.md.
+- Action: When adding BREAKING.md entries for a feature that touches multiple endpoints/schemas, ensure every affected endpoint and schema is listed in the same entry or a sibling entry. Reviewing the plan's "what changes" table before closing out helps catch omissions.
+- Confidence: high
+
+## Known Bugs / Future Work
+
+**[2026-07-04] — E2c T-3 review: cross-collection edge_count pre-existing filter divergence**
+- Observation: `inspect_cross_collection` computes `edge_count` from ALL merged edges before node truncation, while `inspect_collection` applies a post-cap node-survival filter. The `CrossCollectionGraphView.edge_count` docstring says "after node survival filter" but the code doesn't apply the filter. Discovered during E2c iterative-review but is a pre-existing E2b defect.
+- Action: Fix in a future task — apply the same `surviving_node_ids_pre_cap` filter in `inspect_cross_collection` before computing `total_edge_count`, add a test with a cross-collection graph exceeding `max_nodes` asserting `edge_count` counts only edges whose endpoints survive truncation.
+- Confidence: high
+
 ## What Has Failed
 
 **[2026-06-28] — Roadmap expansion: agents hitting session limit make zero edits — respawn with identical prompt**
