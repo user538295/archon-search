@@ -35,6 +35,7 @@ router = APIRouter()
 async def get_graph_cross_collection(
     collections: str = Query(...),
     format: Literal["json", "graphml"] = Query(default="json"),
+    salience: Literal["frequency", "tfidf"] = Query(default="frequency"),
     request: Request = None,
 ):
     """Inspect and merge graph data across multiple collections.
@@ -42,11 +43,13 @@ async def get_graph_cross_collection(
     Query parameters:
     - `collections`: Comma-separated list of collection names (at least 2 required, deduped).
     - `format`: "json" (default) or "graphml" to export as GraphML XML.
+    - `salience`: "frequency" (default, chunk ratio clamped to [0,1]) or
+      "tfidf" (TF×IDF across all namespace collections).
 
     Returns:
     - 200: Merged graph inspection response (JSON or GraphML)
     - 404: Collection not found
-    - 422: graph.enabled=false or <2 collections after dedup or invalid format
+    - 422: graph.enabled=false or <2 collections after dedup or invalid format or invalid salience value
 
     Scenarios:
     - S3: Merged graph data present → 200 JSON with merged nodes, edges, truncated flag
@@ -58,6 +61,7 @@ async def get_graph_cross_collection(
     pipeline = request.app.state.pipeline
     graph_store = request.app.state.graph_store
     config = request.app.state.config
+    ns = request.state.namespace
 
     # Guard 1: Check if graph is enabled
     if not config.graph.enabled:
@@ -85,10 +89,25 @@ async def get_graph_cross_collection(
     # Guard 4: Check if each collection exists
     total_chunk_counts: dict[str, int] = {}
     for col in collection_list:
-        collection_meta = await pipeline.get_collection_meta(col)
+        collection_meta = await pipeline.get_collection_meta(col, namespace=ns)
         if collection_meta is None:
             raise HTTPException(status_code=404, detail="collection not found")
         total_chunk_counts[col] = collection_meta.chunk_count
+
+    # Resolve entity presence for IDF denominator — Presentation→Frameworks&Drivers direct call
+    # (E2c architectural exception: GraphStore is already available on app.state alongside the
+    # pipeline the route holds; a Use Case wrapper for this single read-only fanout is unnecessary
+    # abstraction per the Key Decisions note in the E2c plan.)
+    if salience == "tfidf":
+        all_meta = await pipeline.get_all_collections_meta(ns)
+        all_ns_collection_names = [m.name for m in all_meta]
+        entity_presence = await graph_store.get_entity_presence_across_collections(
+            all_ns_collection_names
+        )
+        num_collections = len(all_ns_collection_names)
+    else:
+        entity_presence = None
+        num_collections = 1
 
     # Inspect the cross-collection graph
     view = await inspect_cross_collection(
@@ -97,6 +116,9 @@ async def get_graph_cross_collection(
         total_chunk_counts=total_chunk_counts,
         max_nodes=config.graph.max_inspection_nodes,
         max_edges=config.graph.max_inspection_edges,
+        salience_mode=salience,
+        entity_presence=entity_presence,
+        num_collections=num_collections,
     )
 
     # Branch on format
@@ -229,6 +251,7 @@ def _cross_collection_view_to_response(
         truncated=view.truncated,
         node_count=view.node_count,
         edge_count=view.edge_count,
+        salience_mode=view.salience_mode,
     )
 
 

@@ -396,14 +396,14 @@ flowchart LR
         - [x] #unit_test — `test_inspect_cross_collection_tfidf_blend_formula` — 2-collection fixture with controlled TF values and known IDF; verifies `merged_salience_tfidf = merged_freq_salience × IDF(entity)` produces the hand-calculated expected salience value (pins the Q2 algebraic identity and catches IDF-applied-per-collection-before-merge misimplementation)
         - [x] #unit_test — `test_inspect_cross_collection_tfidf_entity_presence_none_raises` — calling `inspect_cross_collection(salience_mode='tfidf', entity_presence=None)` raises `ValueError('entity_presence required for tfidf mode')`
 
-- [ ] **BE-5** — Add `?salience=` param, namespace fix, and `_cross_collection_view_to_response` update to cross-collection handler in `routes_graph.py`; add `salience_mode` to `CrossCollectionGraphInspectionResponse` in `schemas.py` #backend-role
+- [x] **BE-5** — Add `?salience=` param, namespace fix, and `_cross_collection_view_to_response` update to cross-collection handler in `routes_graph.py`; add `salience_mode` to `CrossCollectionGraphInspectionResponse` in `schemas.py` #backend-role
     - Presentation · 1.5h
     - needs BE-4, BE-3 · completes C1 (complete), S13, S15, S16
     - Note: **Two-list pattern** — maintain `all_ns_collection_names = [c.name for c in pipeline.get_all_collections_meta(ns)]` (all namespace collections, for IDF denominator and `num_collections`) and `listed_collections` (user-requested `?collections=` subset, for node merging). See the two-list pattern note in "What changes" above. **Important:** `pipeline.get_all_collections_meta(ns)` returns `list[CollectionMeta]`; extract `.name` before passing to `get_entity_presence_across_collections`.
     - Tests
-        - #unit_test — `test_cross_collection_view_to_response_includes_salience_mode` — helper propagates `salience_mode`
-        - #integration_test — `test_cross_collection_route_salience_invalid_returns_422` — `?salience=bad` → 422
-        - #integration_test — `test_cross_collection_route_salience_frequency_default` — no `?salience=` → `salience_mode: "frequency"` in response
+        - [x] #unit_test — `test_cross_collection_view_to_response_includes_salience_mode` — helper propagates `salience_mode`
+        - [x] #integration_test — `test_cross_collection_route_salience_invalid_returns_422` — `?salience=bad` → 422
+        - [x] #integration_test — `test_cross_collection_route_salience_frequency_default` — no `?salience=` → `salience_mode: "frequency"` in response
 
 - [ ] **BE-6** — Final OpenAPI snapshot regen after all schema and route changes #backend-role
     - Frameworks & Drivers · 0.5h

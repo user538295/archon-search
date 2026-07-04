@@ -423,6 +423,15 @@
             "title": "Nodes",
             "type": "array"
           },
+          "salience_mode": {
+            "default": "frequency",
+            "enum": [
+              "frequency",
+              "tfidf"
+            ],
+            "title": "Salience Mode",
+            "type": "string"
+          },
           "truncated": {
             "title": "Truncated",
             "type": "boolean"
@@ -4681,7 +4690,7 @@
     },
     "/graph/cross-collection": {
       "get": {
-        "description": "Inspect and merge graph data across multiple collections.\n\nQuery parameters:\n- `collections`: Comma-separated list of collection names (at least 2 required, deduped).\n- `format`: \"json\" (default) or \"graphml\" to export as GraphML XML.\n\nReturns:\n- 200: Merged graph inspection response (JSON or GraphML)\n- 404: Collection not found\n- 422: graph.enabled=false or <2 collections after dedup or invalid format\n\nScenarios:\n- S3: Merged graph data present \u2192 200 JSON with merged nodes, edges, truncated flag\n- S4: GraphML format \u2192 200 XML response\n- S5: graph.enabled=false \u2192 422\n- S7: Less than 2 collections \u2192 422\n- S17: One collection has no data \u2192 200 with data from other collections",
+        "description": "Inspect and merge graph data across multiple collections.\n\nQuery parameters:\n- `collections`: Comma-separated list of collection names (at least 2 required, deduped).\n- `format`: \"json\" (default) or \"graphml\" to export as GraphML XML.\n- `salience`: \"frequency\" (default, chunk ratio clamped to [0,1]) or\n  \"tfidf\" (TF\u00d7IDF across all namespace collections).\n\nReturns:\n- 200: Merged graph inspection response (JSON or GraphML)\n- 404: Collection not found\n- 422: graph.enabled=false or <2 collections after dedup or invalid format or invalid salience value\n\nScenarios:\n- S3: Merged graph data present \u2192 200 JSON with merged nodes, edges, truncated flag\n- S4: GraphML format \u2192 200 XML response\n- S5: graph.enabled=false \u2192 422\n- S7: Less than 2 collections \u2192 422\n- S17: One collection has no data \u2192 200 with data from other collections",
         "operationId": "get_graph_cross_collection_graph_cross_collection_get",
         "parameters": [
           {
@@ -4704,6 +4713,20 @@
                 "graphml"
               ],
               "title": "Format",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "salience",
+            "required": false,
+            "schema": {
+              "default": "frequency",
+              "enum": [
+                "frequency",
+                "tfidf"
+              ],
+              "title": "Salience",
               "type": "string"
             }
           }

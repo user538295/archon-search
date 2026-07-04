@@ -679,3 +679,5 @@ class CrossCollectionGraphInspectionResponse(BaseModel):
     """Total merged node count (before edge survival filter and truncation)."""
     edge_count: int
     """Total merged edge count (after node survival filter, before edge cap)."""
+    salience_mode: Literal["frequency", "tfidf"] = "frequency"
+    """Salience scoring mode used: 'frequency' (chunk ratio, clamped) or 'tfidf' (TF×IDF)."""

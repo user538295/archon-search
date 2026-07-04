@@ -742,3 +742,270 @@ def test_get_graph_tfidf_unknown_collection_returns_404(
             f"Expected 404 for unknown collection with tfidf, "
             f"got {response.status_code}: {response.text}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test 10 (unit): _cross_collection_view_to_response propagates salience_mode
+# ---------------------------------------------------------------------------
+
+
+def test_cross_collection_view_to_response_includes_salience_mode() -> None:
+    """_cross_collection_view_to_response(view) → response.salience_mode == view.salience_mode.
+
+    Unit test: does not require a running app or database.
+
+    Verifies that view.salience_mode wires the response field, consistent with
+    _view_to_response which also reads from view.salience_mode (not a separate parameter).
+    """
+    from archon_search.graph_inspector import CrossCollectionGraphView
+    from archon_search.server.routes_graph import _cross_collection_view_to_response
+
+    view = CrossCollectionGraphView(
+        collections=["col-a", "col-b"],
+        nodes=[],
+        edges=[],
+        node_count=0,
+        edge_count=0,
+        truncated=False,
+        salience_mode="tfidf",
+    )
+
+    response = _cross_collection_view_to_response(view)
+
+    assert response.salience_mode == "tfidf", (
+        f"Expected salience_mode='tfidf' (from view.salience_mode), "
+        f"got {response.salience_mode!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 11 (integration): cross-collection default → salience_mode == 'frequency'
+# ---------------------------------------------------------------------------
+
+
+def test_cross_collection_route_salience_frequency_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /graph/cross-collection (no ?salience=) → 200, salience_mode == 'frequency'.
+
+    Creates 2 collections and calls the cross-collection endpoint without
+    specifying ?salience=. The response must echo salience_mode='frequency'.
+    """
+    _install_spacy_stub(monkeypatch)
+
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        for col_name in ("col-cc-a", "col-cc-b"):
+            col_file = tmp_path / f"{col_name}.txt"
+            col_file.write_text(f"cross collection test document for {col_name}", encoding="utf-8")
+            ingest_file_via_path(client, col_name, str(col_file), api_key=api_key)
+
+        response = client.get(
+            "/graph/cross-collection?collections=col-cc-a,col-cc-b",
+            headers=_auth(api_key),
+        )
+
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.text}"
+        )
+        data = response.json()
+        assert "salience_mode" in data, "Expected salience_mode in cross-collection response body"
+        assert data["salience_mode"] == "frequency", (
+            f"Expected salience_mode='frequency' for default (no ?salience=), "
+            f"got {data['salience_mode']!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 12 (integration): cross-collection ?salience=bm25 → 422
+# ---------------------------------------------------------------------------
+
+
+def test_cross_collection_route_salience_invalid_returns_422(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /graph/cross-collection?salience=bm25 → 422.
+
+    FastAPI enum validation rejects any value not in {'frequency', 'tfidf'}.
+    """
+    _install_spacy_stub(monkeypatch)
+
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        for col_name in ("col-cc-inv-a", "col-cc-inv-b"):
+            col_file = tmp_path / f"{col_name}.txt"
+            col_file.write_text(f"invalid salience cross collection test for {col_name}", encoding="utf-8")
+            ingest_file_via_path(client, col_name, str(col_file), api_key=api_key)
+
+        response = client.get(
+            "/graph/cross-collection?collections=col-cc-inv-a,col-cc-inv-b&salience=bm25",
+            headers=_auth(api_key),
+        )
+
+        assert response.status_code == 422, (
+            f"Expected 422 for ?salience=bm25 on cross-collection, "
+            f"got {response.status_code}: {response.text}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 13 (integration, C1-MAJ-1): cross-collection ?salience=tfidf → salience_mode == 'tfidf'
+# ---------------------------------------------------------------------------
+
+
+def test_cross_collection_route_salience_tfidf_returns_salience_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /graph/cross-collection?collections=...&salience=tfidf → 200, salience_mode == 'tfidf'.
+
+    Smoke test for the tfidf branch in the cross-collection route handler: verifies
+    that the tfidf code path (building all_ns_collection_names, calling
+    get_entity_presence_across_collections, passing to inspect_cross_collection)
+    executes and echoes salience_mode='tfidf' in the response.
+    """
+    _install_spacy_stub(monkeypatch)
+
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        for col_name in ("col-cc-tfidf-a", "col-cc-tfidf-b"):
+            col_file = tmp_path / f"{col_name}.txt"
+            col_file.write_text(f"tfidf cross collection smoke test for {col_name}", encoding="utf-8")
+            ingest_file_via_path(client, col_name, str(col_file), api_key=api_key)
+
+        response = client.get(
+            "/graph/cross-collection?collections=col-cc-tfidf-a,col-cc-tfidf-b&salience=tfidf",
+            headers=_auth(api_key),
+        )
+
+        assert response.status_code == 200, (
+            f"Expected 200 for cross-collection tfidf, got {response.status_code}: {response.text}"
+        )
+        data = response.json()
+        assert "salience_mode" in data, "Expected salience_mode in cross-collection tfidf response"
+        assert data["salience_mode"] == "tfidf", (
+            f"Expected salience_mode='tfidf', got {data['salience_mode']!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 14 (integration, C1-MAJ-2): cross-collection tfidf IDF denominator uses ALL namespace collections
+# ---------------------------------------------------------------------------
+
+
+def test_cross_collection_route_tfidf_uses_all_namespace_collections_for_idf(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The IDF denominator uses ALL namespace collections, verified via absolute salience value.
+
+    Setup: 3-collection namespace (N=3). Only 2 are listed in ?collections=.
+    Entity X is seeded in col-all-1 (listed, 5 mentions) and col-all-3 (unlisted, 1 mention).
+
+    Correct (N=3, all namespace):
+      entity_presence sees X in col-all-1 + col-all-3 → df=2
+      TF = 5/20 = 0.25; IDF = log((3+1)/2) = log(2); salience = 0.25 × log(2) ≈ 0.173
+
+    Wrong (N=2, only listed collections counted):
+      entity_presence sees X only in col-all-1 → df=1
+      IDF = log((2+1)/1) = log(3); salience = 0.25 × log(3) ≈ 0.275
+
+    Asserts the absolute salience matches the N=3 formula, catching the N=2 regression.
+    """
+    from archon_search.graph_types import EntityType, make_stable_entity_id
+
+    _install_spacy_stub(monkeypatch)
+
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        # Create 3 collections with precise chunk counts (default namespace)
+        # col-all-1: 20 chunks (TF denominator)
+        # col-all-2: 1 chunk (listed in request, no entity X → pure second listed collection)
+        # col-all-3: 1 chunk (unlisted; in namespace to contribute to IDF denominator N)
+        for col, count in [("col-all-1", 20), ("col-all-2", 1), ("col-all-3", 1)]:
+            asyncio.run(_seed_namespace_collection(cfg.db_path, col, "default", chunk_count=count))
+
+        # Entity X: 5 mentions in col-all-1 (listed), 1 mention in col-all-3 (unlisted)
+        # → df=2 when all 3 namespace collections are queried
+        entity_x_id = make_stable_entity_id(EntityType.concept.value, "EntityX")
+        asyncio.run(_seed_node_with_mentions(
+            cfg.db_path, "col-all-1", entity_x_id, "EntityX",
+            [f"chunk-x-{i:06d}" for i in range(5)],
+        ))
+        asyncio.run(_seed_node_with_mentions(
+            cfg.db_path, "col-all-3", entity_x_id, "EntityX",
+            ["chunk-x-c-000000"],
+        ))
+
+        # List only col-all-1 and col-all-2; col-all-3 is unlisted but still in namespace
+        response = client.get(
+            "/graph/cross-collection?collections=col-all-1,col-all-2&salience=tfidf",
+            headers=_auth(api_key),
+        )
+
+        assert response.status_code == 200, (
+            f"Expected 200 for cross-collection tfidf with unlisted namespace collection, "
+            f"got {response.status_code}: {response.text}"
+        )
+        data = response.json()
+        assert data["salience_mode"] == "tfidf", (
+            f"Expected salience_mode='tfidf', got {data['salience_mode']!r}"
+        )
+
+        nodes = data["nodes"]
+        assert nodes, "Expected non-empty node list — EntityX must appear in the response"
+        node_x = next((n for n in nodes if n["entity_name"] == "EntityX"), None)
+        assert node_x is not None, (
+            f"EntityX not found in nodes: {[n['entity_name'] for n in nodes]}"
+        )
+
+        # Absolute salience check (N=3, df=2):
+        #   TF = 5/20 = 0.25 (5 mentions in col-all-1; col-all-2 has no X)
+        #   IDF = log((3+1)/2) = log(2)
+        #   salience = 0.25 × log(2) ≈ 0.173
+        # If the wrong N=2 is used: entity_presence queries only the 2 listed collections,
+        # sees X only in col-all-1 (df=1), IDF = log(3) → salience ≈ 0.275 (differs).
+        expected_salience = (5 / 20) * math.log(2)
+        actual_salience = node_x["salience"]
+        assert math.isclose(actual_salience, expected_salience, rel_tol=1e-6), (
+            f"Expected salience = (5/20)×log(2) = {expected_salience:.6f} (N=3, df=2), "
+            f"got {actual_salience:.6f}. "
+            f"A value near {(5/20)*math.log(3):.6f} indicates N=2 was used (only listed "
+            f"collections counted instead of all namespace collections)."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 15 (integration, C1-MOD-2): cross-collection tfidf + graphml → application/xml
+# ---------------------------------------------------------------------------
+
+
+def test_cross_collection_route_tfidf_graphml_returns_xml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /graph/cross-collection?salience=tfidf&format=graphml → 200 application/xml.
+
+    Verifies that the cross-collection endpoint with both tfidf and graphml format
+    parameters returns a valid XML response with Content-Type: application/xml.
+    """
+    _install_spacy_stub(monkeypatch)
+
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        for col_name in ("col-cc-gml-a", "col-cc-gml-b"):
+            col_file = tmp_path / f"{col_name}.txt"
+            col_file.write_text(f"tfidf graphml cross collection test for {col_name}", encoding="utf-8")
+            ingest_file_via_path(client, col_name, str(col_file), api_key=api_key)
+
+        response = client.get(
+            "/graph/cross-collection?collections=col-cc-gml-a,col-cc-gml-b"
+            "&salience=tfidf&format=graphml",
+            headers=_auth(api_key),
+        )
+
+        assert response.status_code == 200, (
+            f"Expected 200 for cross-collection tfidf graphml, "
+            f"got {response.status_code}: {response.text}"
+        )
+        content_type = response.headers.get("content-type", "")
+        assert "application/xml" in content_type, (
+            f"Expected application/xml content-type for graphml, got: {content_type!r}"
+        )
