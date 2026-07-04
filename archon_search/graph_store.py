@@ -766,6 +766,91 @@ class GraphStore:
             return []
         return self._arrow_to_nodes(arrow)
 
+    async def get_entity_presence_across_collections(
+        self, collection_names: list[str]
+    ) -> dict[str, int]:
+        """Return entity_id → count of distinct collections containing that entity.
+
+        For each collection in *collection_names*, scans the nodes table and counts
+        how many distinct collections each entity appears in. An entity is counted
+        at most once per collection even if it has duplicate rows.
+
+        Returns ``{}`` if *collection_names* is empty. Collections whose node
+        tables don't exist are skipped — absent tables contribute 0 to entity counts.
+        Unreadable tables are skipped with a WARNING log.
+        """
+        if not collection_names:
+            return {}
+
+        # Deduplicate while preserving order — duplicate names would double-count entities
+        collection_names = list(dict.fromkeys(collection_names))
+
+        # Verify store is connected before the loop — a disconnected store must fail
+        # loudly, not silently return {}, because an empty presence map causes every
+        # entity to receive df=1 (max IDF boost), corrupting TF-IDF salience scores.
+        self._require_db()
+
+        presence: dict[str, int] = {}
+        for collection in collection_names:
+            try:
+                node_ids = await self._fetch_collection_entity_ids(collection)
+            except RuntimeError as e:
+                logger.debug(
+                    "get_entity_presence_across_collections: skipping collection %r — read failed: %s",
+                    collection,
+                    e,
+                )
+                continue
+            seen_in_collection: set[str] = set()
+            for entity_id in node_ids:
+                if entity_id not in seen_in_collection:
+                    seen_in_collection.add(entity_id)
+                    presence[entity_id] = presence.get(entity_id, 0) + 1
+
+        return presence
+
+    async def _fetch_collection_entity_ids(self, collection: str) -> list[str]:
+        """Return all entity IDs from *collection*'s node table; ``[]`` if absent.
+
+        Fetches only the ``id`` column — avoids loading all 6 node columns and
+        constructing ``GraphNode`` objects when only IDs are needed.
+
+        Raises:
+            RuntimeError: On unexpected storage / I/O errors (table absent
+                returns ``[]``, not an error).
+        """
+        self._validate_collection(collection)
+        db = self._require_db()
+        # Block 1: open the table — FileNotFoundError/ValueError = absent, silent skip
+        try:
+            table = await db.open_table(self._nodes_table_name(collection))
+        except (FileNotFoundError, ValueError):
+            return []
+        except Exception as exc:  # unexpected open failure — log + raise
+            logger.warning(
+                "_fetch_collection_entity_ids: failed to open node table for %r: %s",
+                collection,
+                exc,
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"Failed to open node table for collection {collection!r}"
+            ) from exc
+        # Block 2: read IDs — any failure = corrupt/unreadable, log + raise
+        try:
+            arrow = await table.query().select(["id"]).to_arrow()
+            return arrow["id"].to_pylist()
+        except Exception as exc:
+            logger.warning(
+                "_fetch_collection_entity_ids: failed to read node ids for %r: %s",
+                collection,
+                exc,
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"Failed to read entity ids from {collection}"
+            ) from exc
+
     async def get_all_edges(self, collection: str) -> list[GraphEdge]:
         """Return all edges for *collection*; empty list if table absent.
 

@@ -327,13 +327,13 @@ flowchart LR
 
 ### Phase 1 · Single-collection TF-IDF endpoint *(walking skeleton: GET /graph/{col}?salience=tfidf works end-to-end)*
 
-- [ ] **BE-1** — Add `get_entity_presence_across_collections` to `graph_store.py` #backend-role
+- [x] **BE-1** — Add `get_entity_presence_across_collections` to `graph_store.py` #backend-role
     - Frameworks & Drivers · 2.0h
     - needs K1 · completes C3, S18, S19
     - Tests
-        - #unit_test — `test_get_entity_presence_across_collections_basic` — entity in 2 of 3 collections → count=2; unique entity → count=1
-        - #unit_test — `test_get_entity_presence_empty_collections` — empty list returns {}
-        - #unit_test — `test_get_entity_presence_absent_table_skipped` — absent table contributes 0, no exception
+        - [x] #unit_test — `test_get_entity_presence_across_collections_basic` — entity in 2 of 3 collections → count=2; unique entity → count=1
+        - [x] #unit_test — `test_get_entity_presence_empty_collections` — empty list returns {}
+        - [x] #unit_test — `test_get_entity_presence_absent_table_skipped` — absent table contributes 0, no exception
 
 - [ ] **BE-2** — Add TF-IDF scoring to `inspect_collection`, mode branch to `_truncate_graph`, `salience_mode` to `CollectionGraphView`, ponytail comment in `graph_inspector.py` #backend-role
     - Use Cases · 3.0h

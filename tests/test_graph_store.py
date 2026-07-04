@@ -811,3 +811,458 @@ def test_delete_mentions_uses_safe_predicate() -> None:
     # Must NOT contain an f-string with unquoted doc_id
     assert "{" not in predicate
     assert "f\"" not in predicate
+
+
+# ---------------------------------------------------------------------------
+# get_entity_presence_across_collections (BE-1)
+# ---------------------------------------------------------------------------
+
+
+def _build_nodes_arrow(nodes: list[GraphNode]):  # type: ignore[return]
+    """Build a PyArrow table of node rows for use in mocks."""
+    import pyarrow as pa
+
+    from archon_search.graph_store import GraphStore
+
+    # Use the production schema rather than duplicating it — prevents silent drift
+    # if _nodes_schema() gains or renames columns. See GraphStore._nodes_schema().
+    node_schema = GraphStore._nodes_schema()
+    if not nodes:
+        return pa.table(
+            {"id": [], "entity_name": [], "entity_type": [], "source_doc_id": [], "collection_name": [], "entity_subtype": []},
+            schema=node_schema,
+        )
+    return pa.table(
+        {
+            "id": [n.id for n in nodes],
+            "entity_name": [n.entity_name for n in nodes],
+            "entity_type": [n.entity_type.value for n in nodes],
+            "source_doc_id": [n.source_doc_id for n in nodes],
+            "collection_name": [n.collection_name for n in nodes],
+            "entity_subtype": [n.entity_subtype for n in nodes],
+        },
+        schema=node_schema,
+    )
+
+
+def _make_nodes_table_mock(nodes: list[GraphNode]) -> MagicMock:
+    """Build a mock LanceDB table that returns *nodes* from query().to_arrow()."""
+    arrow = _build_nodes_arrow(nodes)
+    query = MagicMock()
+    query.select.return_value = query  # support .select([...]) chaining
+    query.to_arrow = AsyncMock(return_value=arrow)
+    table = MagicMock()
+    table.query.return_value = query
+    return table
+
+
+def test_get_entity_presence_across_collections_basic() -> None:
+    """Entity in 2 of 3 collections → count=2; unique entity → count=1.
+
+    - node_alpha appears in col1 and col2 → presence count = 2
+    - node_beta appears only in col3 → presence count = 1
+    """
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    node_alpha = GraphNode(
+        id=make_stable_entity_id("concept", "Alpha"),
+        entity_name="Alpha",
+        entity_type=EntityType.concept,
+        source_doc_id="doc-1",
+        collection_name="col1",
+    )
+    node_beta = GraphNode(
+        id=make_stable_entity_id("concept", "Beta"),
+        entity_name="Beta",
+        entity_type=EntityType.concept,
+        source_doc_id="doc-3",
+        collection_name="col3",
+    )
+
+    col1_table = _make_nodes_table_mock([node_alpha])
+    col2_table = _make_nodes_table_mock([node_alpha])
+    col3_table = _make_nodes_table_mock([node_beta])
+
+    def _table_name_for(col: str) -> str:
+        return "_archon_graph_" + col + "_nodes"
+
+    async def _open_table(name: str):
+        if name == _table_name_for("col1"):
+            return col1_table
+        if name == _table_name_for("col2"):
+            return col2_table
+        if name == _table_name_for("col3"):
+            return col3_table
+        raise FileNotFoundError(f"Table not found: {name}")
+
+    store = GraphStore("/tmp/fake-db-presence-basic")
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(side_effect=_open_table)
+
+    async def _run() -> dict:
+        store._db = mock_db
+        return await store.get_entity_presence_across_collections(["col1", "col2", "col3"])
+
+    result = asyncio.run(_run())
+
+    assert result[node_alpha.id] == 2, f"Alpha should appear in 2 collections, got {result.get(node_alpha.id)}"
+    assert result[node_beta.id] == 1, f"Beta should appear in 1 collection, got {result.get(node_beta.id)}"
+    assert len(result) == 2
+    # Verify only the id column was fetched (efficiency: no GraphNode construction)
+    col1_table.query.return_value.select.assert_called_once_with(["id"])
+
+
+def test_get_entity_presence_empty_collections() -> None:
+    """Empty collection_names list returns {} immediately without any DB call."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-presence-empty")
+    mock_db = AsyncMock()
+
+    async def _run() -> dict:
+        store._db = mock_db
+        return await store.get_entity_presence_across_collections([])
+
+    result = asyncio.run(_run())
+
+    assert result == {}
+    mock_db.open_table.assert_not_called()
+
+
+def test_get_entity_presence_absent_table_skipped() -> None:
+    """Absent node table contributes 0 to entity counts; no exception is raised.
+
+    - col1 has a node table with node_alpha
+    - col2 has no node table (FileNotFoundError)
+    - Result: {node_alpha.id: 1} — col2 is silently skipped
+    """
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    node_alpha = GraphNode(
+        id=make_stable_entity_id("concept", "Alpha"),
+        entity_name="Alpha",
+        entity_type=EntityType.concept,
+        source_doc_id="doc-1",
+        collection_name="col1",
+    )
+
+    col1_table = _make_nodes_table_mock([node_alpha])
+
+    async def _open_table(name: str):
+        if name == "_archon_graph_col1_nodes":
+            return col1_table
+        raise FileNotFoundError(f"Table not found: {name}")
+
+    store = GraphStore("/tmp/fake-db-presence-absent")
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(side_effect=_open_table)
+
+    async def _run() -> dict:
+        store._db = mock_db
+        return await store.get_entity_presence_across_collections(["col1", "col2"])
+
+    result = asyncio.run(_run())
+
+    assert result == {node_alpha.id: 1}, f"Expected only alpha with count=1, got {result}"
+
+
+def test_get_entity_presence_dedup_within_collection() -> None:
+    """Duplicate entity rows in one collection count as ONE collection, not many.
+
+    Setup:
+    - col1: node_alpha appears TWICE (two rows with same entity_id) — dedup must apply
+    - col2: node_alpha appears ONCE (decoy to make total rows = 3)
+    - Correct answer: alpha.count == 2 (distinct collections), not 3 (total rows)
+
+    This test FAILS if the seen_in_collection dedup guard is removed.
+    """
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    node_alpha = GraphNode(
+        id=make_stable_entity_id("concept", "Alpha"),
+        entity_name="Alpha",
+        entity_type=EntityType.concept,
+        source_doc_id="doc-1",
+        collection_name="col1",
+    )
+    # Same entity_id, different source_doc_id — simulates a duplicate row in col1
+    node_alpha_dup = GraphNode(
+        id=node_alpha.id,  # SAME id — this is the duplicate
+        entity_name="Alpha",
+        entity_type=EntityType.concept,
+        source_doc_id="doc-2",
+        collection_name="col1",
+    )
+
+    # col1 has 2 rows for the same entity; col2 has 1 row for that entity
+    col1_table = _make_nodes_table_mock([node_alpha, node_alpha_dup])
+    col2_table = _make_nodes_table_mock([node_alpha])
+
+    async def _open_table(name: str):
+        if name == "_archon_graph_col1_nodes":
+            return col1_table
+        if name == "_archon_graph_col2_nodes":
+            return col2_table
+        raise FileNotFoundError(f"Table not found: {name}")
+
+    store = GraphStore("/tmp/fake-db-presence-dedup")
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(side_effect=_open_table)
+
+    async def _run() -> dict:
+        store._db = mock_db
+        return await store.get_entity_presence_across_collections(["col1", "col2"])
+
+    result = asyncio.run(_run())
+
+    # Total rows across both collections = 3; correct answer = 2 distinct collections
+    assert result[node_alpha.id] == 2, (
+        f"Alpha should be counted in 2 distinct collections (not 3 total rows), got {result.get(node_alpha.id)}"
+    )
+    assert len(result) == 1
+
+
+def test_get_entity_presence_duplicate_collection_names_deduplicated() -> None:
+    """Duplicate collection names are deduplicated; entity count is not inflated.
+
+    Setup:
+    - collection_names = ["col1", "col1"] — same collection passed twice
+    - col1 has node_alpha
+    - Correct answer: alpha.count == 1 (one distinct collection), not 2
+
+    This test FAILS if the dict.fromkeys dedup guard is removed.
+    """
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    node_alpha = GraphNode(
+        id=make_stable_entity_id("concept", "Alpha"),
+        entity_name="Alpha",
+        entity_type=EntityType.concept,
+        source_doc_id="doc-1",
+        collection_name="col1",
+    )
+
+    col1_table = _make_nodes_table_mock([node_alpha])
+
+    async def _open_table(name: str):
+        if name == "_archon_graph_col1_nodes":
+            return col1_table
+        raise FileNotFoundError(f"Table not found: {name}")
+
+    store = GraphStore("/tmp/fake-db-presence-dedup-colnames")
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(side_effect=_open_table)
+
+    async def _run() -> dict:
+        store._db = mock_db
+        return await store.get_entity_presence_across_collections(["col1", "col1"])
+
+    result = asyncio.run(_run())
+
+    assert result[node_alpha.id] == 1, (
+        f"Alpha should be counted in 1 distinct collection (not 2 due to duplicate name), "
+        f"got {result.get(node_alpha.id)}"
+    )
+    assert len(result) == 1
+
+
+def test_get_entity_presence_unreadable_table_skipped() -> None:
+    """A RuntimeError from an unreadable table is caught; other collections proceed.
+
+    Setup:
+    - col1: valid node table with node_alpha
+    - col2: open_table raises RuntimeError("simulated corruption")
+    - Expected: result == {node_alpha.id: 1}, no exception raised
+    """
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    node_alpha = GraphNode(
+        id=make_stable_entity_id("concept", "Alpha"),
+        entity_name="Alpha",
+        entity_type=EntityType.concept,
+        source_doc_id="doc-1",
+        collection_name="col1",
+    )
+
+    col1_table = _make_nodes_table_mock([node_alpha])
+
+    async def _open_table(name: str):
+        if name == "_archon_graph_col1_nodes":
+            return col1_table
+        if name == "_archon_graph_col2_nodes":
+            raise RuntimeError("simulated corruption")
+        raise FileNotFoundError(f"Table not found: {name}")
+
+    store = GraphStore("/tmp/fake-db-presence-corrupt")
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(side_effect=_open_table)
+
+    async def _run() -> dict:
+        store._db = mock_db
+        return await store.get_entity_presence_across_collections(["col1", "col2"])
+
+    result = asyncio.run(_run())
+
+    assert result == {node_alpha.id: 1}, (
+        f"col2 corruption should be skipped; expected {{alpha: 1}}, got {result}"
+    )
+
+
+def test_get_entity_presence_store_not_connected_raises() -> None:
+    """A disconnected GraphStore raises RuntimeError, not silently returning {}.
+
+    An empty presence map causes all entities to receive df=1 (max IDF boost),
+    corrupting TF-IDF salience scores — so a disconnected store must fail loudly.
+    """
+    import asyncio
+
+    import pytest
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-presence-not-connected")
+    # _db is None by default — store is not connected
+
+    async def _run() -> dict:
+        return await store.get_entity_presence_across_collections(["col1"])
+
+    with pytest.raises(RuntimeError, match="not connected"):
+        asyncio.run(_run())
+
+
+def test_get_entity_presence_to_arrow_failure_skips_collection() -> None:
+    """Block 2 failure: to_arrow raises OSError → col2 skipped with WARNING; col1 counts.
+
+    Setup:
+    - col1: valid node table with node_alpha
+    - col2: open_table succeeds but to_arrow raises OSError("corrupt page")
+    - Expected: result == {node_alpha.id: 1}, WARNING logged for col2
+    """
+    import asyncio
+    import io
+    import logging as _logging
+
+    from archon_search.graph_store import GraphStore
+
+    node_alpha = GraphNode(
+        id=make_stable_entity_id("concept", "Alpha"),
+        entity_name="Alpha",
+        entity_type=EntityType.concept,
+        source_doc_id="doc-1",
+        collection_name="col1",
+    )
+
+    col1_table = _make_nodes_table_mock([node_alpha])
+
+    bad_query = MagicMock()
+    bad_query.select.return_value = bad_query
+    bad_query.to_arrow = AsyncMock(side_effect=OSError("corrupt page"))
+    col2_table = MagicMock()
+    col2_table.query.return_value = bad_query
+
+    async def _open_table(name: str):
+        if name == "_archon_graph_col1_nodes":
+            return col1_table
+        if name == "_archon_graph_col2_nodes":
+            return col2_table
+        raise FileNotFoundError(f"Table not found: {name}")
+
+    store = GraphStore("/tmp/fake-db-presence-to-arrow-fail")
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(side_effect=_open_table)
+
+    async def _run() -> dict:
+        store._db = mock_db
+        return await store.get_entity_presence_across_collections(["col1", "col2"])
+
+    log_stream = io.StringIO()
+    handler = _logging.StreamHandler(log_stream)
+    handler.setLevel(_logging.WARNING)
+    archon_logger = _logging.getLogger("archon_search")
+    archon_logger.addHandler(handler)
+    try:
+        result = asyncio.run(_run())
+    finally:
+        archon_logger.removeHandler(handler)
+
+    log_output = log_stream.getvalue()
+    assert result == {node_alpha.id: 1}, (
+        f"col2 to_arrow failure should be skipped; expected {{alpha: 1}}, got {result}"
+    )
+    assert "col2" in log_output or "corrupt page" in log_output, (
+        f"Expected a WARNING log for col2 to_arrow failure, got: {log_output!r}"
+    )
+
+
+def test_get_entity_presence_open_table_unexpected_failure_skips_collection() -> None:
+    """Block 1 unexpected failure: OSError from open_table → WARNING logged + col2 skipped.
+
+    With Fix 1 applied, a non-FileNotFoundError/ValueError exception from open_table
+    is caught, logged at WARNING, and re-raised as RuntimeError — which the upstream
+    loop in get_entity_presence_across_collections catches and skips.
+
+    Setup:
+    - col1: valid node table with node_alpha
+    - col2: open_table raises OSError("disk error") — neither FileNotFoundError nor ValueError
+    - Expected: result == {node_alpha.id: 1}, WARNING logged for col2
+    """
+    import asyncio
+    import io
+    import logging as _logging
+
+    from archon_search.graph_store import GraphStore
+
+    node_alpha = GraphNode(
+        id=make_stable_entity_id("concept", "Alpha"),
+        entity_name="Alpha",
+        entity_type=EntityType.concept,
+        source_doc_id="doc-1",
+        collection_name="col1",
+    )
+
+    col1_table = _make_nodes_table_mock([node_alpha])
+
+    async def _open_table(name: str):
+        if name == "_archon_graph_col1_nodes":
+            return col1_table
+        if name == "_archon_graph_col2_nodes":
+            raise OSError("disk error")
+        raise FileNotFoundError(f"Table not found: {name}")
+
+    store = GraphStore("/tmp/fake-db-presence-open-fail")
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(side_effect=_open_table)
+
+    async def _run() -> dict:
+        store._db = mock_db
+        return await store.get_entity_presence_across_collections(["col1", "col2"])
+
+    log_stream = io.StringIO()
+    handler = _logging.StreamHandler(log_stream)
+    handler.setLevel(_logging.WARNING)
+    archon_logger = _logging.getLogger("archon_search")
+    archon_logger.addHandler(handler)
+    try:
+        result = asyncio.run(_run())
+    finally:
+        archon_logger.removeHandler(handler)
+
+    log_output = log_stream.getvalue()
+    assert result == {node_alpha.id: 1}, (
+        f"col2 open failure should be skipped; expected {{alpha: 1}}, got {result}"
+    )
+    assert "WARNING" in log_output or "col2" in log_output or "disk error" in log_output, (
+        f"Expected a WARNING log for col2 open_table failure, got: {log_output!r}"
+    )
