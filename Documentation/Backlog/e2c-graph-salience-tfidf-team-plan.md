@@ -366,18 +366,18 @@ flowchart LR
         - [x] #integration_test — `test_graph_route_cross_namespace_collection_returns_404` — collection exists in namespace B; request authenticated as namespace A; verify 404 (not 200 as before the namespace fix)
         - [x] After implementing, run: `uv run --python 3.12 pytest tests/server/test_openapi_snapshot.py --update-openapi-snapshot -n0 -x` to keep the snapshot current. (BE-6 will do the final regen after BE-5; this intermediate regen prevents T-1 from running against a stale snapshot.)
 
-- [ ] **T-1** — Route integration tests for single-collection endpoint #tester-role
+- [x] **T-1** — Route integration tests for single-collection endpoint #tester-role
     - — · 2.0h
     - needs BE-3 · completes S9, S10, S12, S17
     - Tests
-        - #e2e_test — `test_get_graph_tfidf_echoes_salience_mode` — `GET /graph/{col}?salience=tfidf` → 200, `response.json()["salience_mode"] == "tfidf"`
-        - #e2e_test — `test_get_graph_tfidf_reranks_nodes_end_to_end` — multi-collection namespace fixture (domain-specific entity D in 1 collection, ubiquitous entity U in all 3 collections); `GET /graph/{col}?salience=tfidf` → response JSON node list has D ranked above U; same request with `?salience=frequency` → U ranks above D (proving the handler correctly wired entity_presence, not just echoed the mode)
-        - #e2e_test — `test_get_graph_frequency_default_echoes_salience_mode` — no `?salience=` → `salience_mode == "frequency"`
-        - #e2e_test — `test_get_graph_explicit_frequency_identical_to_default` — `?salience=frequency` explicit → response body identical to omitting `?salience=`
-        - #e2e_test — `test_get_graph_invalid_salience_422` — `?salience=bm25` → 422
-        - #e2e_test — `test_get_graph_tfidf_graphml_returns_xml` — `?salience=tfidf&format=graphml` → 200 `application/xml`; parse returned XML and assert that at least one node's `salience` attribute is a float value consistent with TF-IDF scoring (i.e., greater than 0 for a node with known chunk mentions, and the value differs from the same node's salience under `?salience=frequency` on a multi-collection fixture)
-        - #e2e_test — `test_get_graph_tfidf_graph_disabled_422` — graph disabled → 422 (existing guard)
-        - #e2e_test — `test_get_graph_tfidf_namespace_idf_isolation` — two namespaces ns-A (3 collections) and ns-B (1 collection); entity E with identical chunk_count=5 and total_chunks=20 in one collection of each namespace; in ns-A: E appears in all 3 collections (df=3, IDF=log(4/3)), so salience_A = (5/20)×log(4/3); in ns-B: E appears in 1 of 1 collection (df=1, IDF=log(2)), so salience_B = (5/20)×log(2); assert `salience_A < salience_B` (because log(4/3) < log(2)); if the handler used a global denominator instead of namespace-scoped, salience_A would be miscalculated using N=4, producing a wrong IDF
+        - [x] #e2e_test — `test_get_graph_tfidf_echoes_salience_mode` — `GET /graph/{col}?salience=tfidf` → 200, `response.json()["salience_mode"] == "tfidf"`
+        - [x] #e2e_test — `test_get_graph_tfidf_reranks_nodes_end_to_end` — multi-collection namespace fixture (domain-specific entity D in 1 collection, ubiquitous entity U in all 3 collections); `GET /graph/{col}?salience=tfidf` → response JSON node list has D ranked above U; same request with `?salience=frequency` → U ranks above D (proving the handler correctly wired entity_presence, not just echoed the mode)
+        - [x] #e2e_test — `test_get_graph_frequency_default_echoes_salience_mode` — no `?salience=` → `salience_mode == "frequency"`
+        - [x] #e2e_test — `test_get_graph_explicit_frequency_identical_to_default` — `?salience=frequency` explicit → response body identical to omitting `?salience=`
+        - [x] #e2e_test — `test_get_graph_invalid_salience_422` — `?salience=bm25` → 422
+        - [x] #e2e_test — `test_get_graph_tfidf_graphml_returns_xml` — `?salience=tfidf&format=graphml` → 200 `application/xml`; parse returned XML and assert that at least one node's `salience` attribute is a float value consistent with TF-IDF scoring (i.e., greater than 0 for a node with known chunk mentions, and the value differs from the same node's salience under `?salience=frequency` on a multi-collection fixture)
+        - [x] #e2e_test — `test_get_graph_tfidf_graph_disabled_422` — graph disabled → 422 (existing guard)
+        - [x] #e2e_test — `test_get_graph_tfidf_namespace_idf_isolation` — two namespaces ns-A (3 collections) and ns-B (1 collection); entity E with identical chunk_count=5 and total_chunks=20 in one collection of each namespace; in ns-A: E appears in all 3 collections (df=3, IDF=log(4/3)), so salience_A = (5/20)×log(4/3); in ns-B: E appears in 1 of 1 collection (df=1, IDF=log(2)), so salience_B = (5/20)×log(2); assert `salience_A < salience_B` (because log(4/3) < log(2)); if the handler used a global denominator instead of namespace-scoped, salience_A would be miscalculated using N=4, producing a wrong IDF
 
 ---
 
