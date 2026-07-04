@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import math
+
 import pytest
 
 from archon_search.graph_inspector import (
@@ -998,3 +1001,631 @@ async def test_inspect_cross_collection_real_store(tmp_path):
 
     # Verify edges are present
     assert len(view.edges) == 2  # edge-1a and edge-1b (different IDs, no merge)
+
+
+# ============================================================================
+# TF-IDF salience tests (BE-2 / E2c)
+# ============================================================================
+
+
+def _make_node(entity_id: str, entity_name: str, collection: str = "test") -> "GraphNode":
+    return GraphNode(
+        id=entity_id,
+        entity_name=entity_name,
+        entity_type=EntityType.concept,
+        source_doc_id="doc1",
+        collection_name=collection,
+    )
+
+
+def _make_mention(entity_id: str, chunk_id: str) -> "GraphMention":
+    return GraphMention(entity_id=entity_id, chunk_id=chunk_id, doc_id="doc1")
+
+
+@pytest.mark.asyncio
+async def test_inspect_collection_tfidf_domain_specific_outranks_ubiquitous(mock_graph_store: MockGraphStore):
+    """Domain-specific entity (low df) ranks above ubiquitous entity (high df) in tfidf mode.
+
+    unique-entity: chunk_count=3, TF=0.3, IDF=log(4/1)≈1.386, salience≈0.416
+    common-entity: chunk_count=6, TF=0.6, IDF=log(4/3)≈0.288, salience≈0.173
+    Despite common-entity having higher chunk_count, unique-entity should rank first.
+    """
+    mock_graph_store.nodes["test"] = [
+        _make_node("unique-entity", "Unique"),
+        _make_node("common-entity", "Common"),
+    ]
+    mock_graph_store.mentions["test"] = (
+        [_make_mention("unique-entity", f"u-chunk-{i}") for i in range(3)]
+        + [_make_mention("common-entity", f"c-chunk-{i}") for i in range(6)]
+    )
+
+    entity_presence = {"unique-entity": 1, "common-entity": 3}
+
+    view = await inspect_collection(
+        mock_graph_store,
+        "test",
+        total_chunk_count=10,
+        max_nodes=1000,
+        max_edges=1000,
+        salience_mode="tfidf",
+        entity_presence=entity_presence,
+        num_collections=3,
+    )
+
+    assert view.salience_mode == "tfidf"
+    # unique-entity should rank first (higher TF-IDF salience despite lower chunk_count)
+    assert view.nodes[0].entity_id == "unique-entity"
+    assert view.nodes[1].entity_id == "common-entity"
+    # Verify salience values are correct (TF-IDF, unbounded)
+    import math
+    expected_unique = (3 / 10) * math.log((3 + 1) / 1)
+    expected_common = (6 / 10) * math.log((3 + 1) / 3)
+    assert view.nodes[0].salience == pytest.approx(expected_unique, rel=1e-6)
+    assert view.nodes[1].salience == pytest.approx(expected_common, rel=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_inspect_collection_tfidf_single_namespace_collection_same_order(mock_graph_store: MockGraphStore):
+    """With 1 namespace collection, TF-IDF rank order equals frequency rank order.
+
+    When num_collections=1, IDF=log(2/df). All entities have df=1 (only one collection),
+    so IDF=log(2) for all. Salience = TF * log(2), which preserves chunk_count ordering.
+    """
+    mock_graph_store.nodes["test"] = [
+        _make_node("entity-a", "A"),
+        _make_node("entity-b", "B"),
+        _make_node("entity-c", "C"),
+    ]
+    mock_graph_store.mentions["test"] = (
+        [_make_mention("entity-a", f"a-{i}") for i in range(5)]
+        + [_make_mention("entity-b", f"b-{i}") for i in range(3)]
+        + [_make_mention("entity-c", f"c-{i}") for i in range(1)]
+    )
+
+    entity_presence = {"entity-a": 1, "entity-b": 1, "entity-c": 1}
+
+    view_freq = await inspect_collection(
+        mock_graph_store,
+        "test",
+        total_chunk_count=20,
+        max_nodes=1000,
+        max_edges=1000,
+        salience_mode="frequency",
+    )
+    view_tfidf = await inspect_collection(
+        mock_graph_store,
+        "test",
+        total_chunk_count=20,
+        max_nodes=1000,
+        max_edges=1000,
+        salience_mode="tfidf",
+        entity_presence=entity_presence,
+        num_collections=1,
+    )
+
+    # Both modes should produce the same entity ordering
+    assert [n.entity_id for n in view_freq.nodes] == [n.entity_id for n in view_tfidf.nodes]
+    assert view_tfidf.salience_mode == "tfidf"
+
+
+@pytest.mark.asyncio
+async def test_inspect_collection_tfidf_entity_in_all_collections_near_zero(mock_graph_store: MockGraphStore):
+    """Entity present in all N collections has salience approaching 0 as N grows.
+
+    IDF = log((N+1)/N) → 0 as N → ∞.
+    """
+    mock_graph_store.nodes["test"] = [_make_node("ubiquitous", "Ubiquitous")]
+    mock_graph_store.mentions["test"] = [_make_mention("ubiquitous", f"chunk-{i}") for i in range(5)]
+
+    import math
+
+    for num_collections in (10, 100, 1000):
+        entity_presence = {"ubiquitous": num_collections}  # in all collections
+        view = await inspect_collection(
+            mock_graph_store,
+            "test",
+            total_chunk_count=10,
+            max_nodes=1000,
+            max_edges=1000,
+            salience_mode="tfidf",
+            entity_presence=entity_presence,
+            num_collections=num_collections,
+        )
+        idf = math.log((num_collections + 1) / num_collections)
+        tf = 5 / 10
+        expected_salience = tf * idf
+        assert view.nodes[0].salience == pytest.approx(expected_salience, rel=1e-6)
+
+    # Verify that salience decreases as N grows
+    results = []
+    for num_collections in (5, 50, 500):
+        entity_presence = {"ubiquitous": num_collections}
+        view = await inspect_collection(
+            mock_graph_store,
+            "test",
+            total_chunk_count=10,
+            max_nodes=1000,
+            max_edges=1000,
+            salience_mode="tfidf",
+            entity_presence=entity_presence,
+            num_collections=num_collections,
+        )
+        results.append(view.nodes[0].salience)
+
+    assert results[0] > results[1] > results[2]
+
+
+@pytest.mark.asyncio
+async def test_inspect_collection_tfidf_truncation_uses_salience_not_chunk_count(mock_graph_store: MockGraphStore):
+    """TF-IDF truncation sorts by salience, not chunk_count.
+
+    In tfidf mode: node with lower chunk_count but higher salience survives the cap
+    over a high-frequency but ubiquitous node.
+    """
+    # unique-entity: chunk_count=2, TF=2/20=0.1, IDF=log(4/1)=log(4)≈1.386, salience≈0.139
+    # common-entity: chunk_count=8, TF=8/20=0.4, IDF=log(4/3)≈0.288, salience≈0.115
+    # unique-entity has LOWER chunk_count but HIGHER tfidf salience
+    mock_graph_store.nodes["test"] = [
+        _make_node("unique-entity", "Unique"),
+        _make_node("common-entity", "Common"),
+    ]
+    mock_graph_store.mentions["test"] = (
+        [_make_mention("unique-entity", f"u-{i}") for i in range(2)]
+        + [_make_mention("common-entity", f"c-{i}") for i in range(8)]
+    )
+
+    entity_presence = {"unique-entity": 1, "common-entity": 3}
+
+    # With max_nodes=1 in tfidf mode, unique-entity should survive (higher salience)
+    view_tfidf = await inspect_collection(
+        mock_graph_store,
+        "test",
+        total_chunk_count=20,
+        max_nodes=1,
+        max_edges=1000,
+        salience_mode="tfidf",
+        entity_presence=entity_presence,
+        num_collections=3,
+    )
+    assert view_tfidf.nodes[0].entity_id == "unique-entity"
+
+    # With max_nodes=1 in frequency mode, common-entity should survive (higher chunk_count)
+    view_freq = await inspect_collection(
+        mock_graph_store,
+        "test",
+        total_chunk_count=20,
+        max_nodes=1,
+        max_edges=1000,
+        salience_mode="frequency",
+    )
+    assert view_freq.nodes[0].entity_id == "common-entity"
+
+
+@pytest.mark.asyncio
+async def test_inspect_collection_tfidf_zero_chunks(mock_graph_store: MockGraphStore):
+    """Collection with 0 total chunks → all salience=0.0 in tfidf mode."""
+    mock_graph_store.nodes["test"] = [_make_node("entity-a", "A")]
+    mock_graph_store.mentions["test"] = [_make_mention("entity-a", "chunk-1")]
+
+    view = await inspect_collection(
+        mock_graph_store,
+        "test",
+        total_chunk_count=0,
+        max_nodes=1000,
+        max_edges=1000,
+        salience_mode="tfidf",
+        entity_presence={"entity-a": 1},
+        num_collections=3,
+    )
+
+    assert all(n.salience == 0.0 for n in view.nodes)
+    assert view.salience_mode == "tfidf"
+
+
+@pytest.mark.asyncio
+async def test_inspect_collection_tfidf_pre_e2b_nodes(mock_graph_store: MockGraphStore):
+    """Absent mentions table → chunk_count=0, salience=0.0, salience_mode echoed."""
+    mock_graph_store.nodes["test"] = [
+        _make_node("entity-a", "A"),
+        _make_node("entity-b", "B"),
+    ]
+    # No mentions (pre-E2b state)
+    mock_graph_store.mentions["test"] = []
+
+    view = await inspect_collection(
+        mock_graph_store,
+        "test",
+        total_chunk_count=10,
+        max_nodes=1000,
+        max_edges=1000,
+        salience_mode="tfidf",
+        entity_presence={"entity-a": 1, "entity-b": 1},
+        num_collections=3,
+    )
+
+    assert all(n.chunk_count == 0 for n in view.nodes)
+    assert all(n.salience == 0.0 for n in view.nodes)
+    assert view.salience_mode == "tfidf"
+
+
+@pytest.mark.asyncio
+async def test_inspect_collection_frequency_unchanged(mock_graph_store: MockGraphStore):
+    """Frequency mode (default) produces same results as before BE-2 (regression guard)."""
+    mock_graph_store.nodes["test"] = [
+        _make_node("entity-a", "A"),
+        _make_node("entity-b", "B"),
+    ]
+    mock_graph_store.mentions["test"] = (
+        [_make_mention("entity-a", f"a-{i}") for i in range(4)]
+        + [_make_mention("entity-b", f"b-{i}") for i in range(2)]
+    )
+
+    # Default call (no new params) should work with salience_mode='frequency'
+    view = await inspect_collection(
+        mock_graph_store,
+        "test",
+        total_chunk_count=10,
+        max_nodes=1000,
+        max_edges=1000,
+    )
+
+    assert view.salience_mode == "frequency"
+    # entity-a has higher chunk_count, should rank first
+    assert view.nodes[0].entity_id == "entity-a"
+    assert view.nodes[0].chunk_count == 4
+    assert view.nodes[0].salience == pytest.approx(0.4)  # 4/10 clamped to [0.0, 1.0]
+    assert view.nodes[1].entity_id == "entity-b"
+    assert view.nodes[1].salience == pytest.approx(0.2)  # 2/10
+
+
+@pytest.mark.asyncio
+async def test_inspect_collection_tfidf_edge_count_consistent_with_node_set(mock_graph_store: MockGraphStore):
+    """In tfidf mode, edge_count uses tfidf sort — the surviving node set differs from frequency.
+
+    Three-node, two-edge fixture where frequency and tfidf select different top-2 nodes:
+      node-a: chunk_count=10, df=3 (ubiquitous) → freq rank 1, tfidf rank 3
+      node-b: chunk_count=5,  df=1 (unique)      → freq rank 2, tfidf rank 1
+      node-c: chunk_count=3,  df=1 (unique)      → freq rank 3, tfidf rank 2
+
+    With num_collections=3, total_chunk_count=20:
+      tfidf-a = 0.5  * log(4/3) ≈ 0.144
+      tfidf-b = 0.25 * log(4/1) ≈ 0.347
+      tfidf-c = 0.15 * log(4/1) ≈ 0.208
+
+    Frequency top-2: {node-a, node-b}
+    TF-IDF top-2:    {node-b, node-c}
+
+    Two edges: edge-ab (node-a → node-b) and edge-bc (node-b → node-c)
+      TF-IDF mode:   node-a not in {b, c} → edge-ab drops, edge-bc survives → edge_count = 1
+      Frequency mode: node-c not in {a, b} → edge-bc drops, edge-ab survives → edge_count = 1
+
+    The test asserts nodes[0], edges[0], and edge_count for both modes.
+    If edge_count incorrectly uses the frequency sort key in tfidf mode,
+    it would return 0 instead of 1 (edge-bc filtered out), and the assertion catches the bug.
+    """
+    from archon_search.graph_types import GraphEdge, RelationshipType
+
+    mock_graph_store.nodes["test"] = [
+        _make_node("node-a", "A"),
+        _make_node("node-b", "B"),
+        _make_node("node-c", "C"),
+    ]
+    mock_graph_store.edges["test"] = [
+        GraphEdge(
+            id="edge-ab",
+            source_node_id="node-a",
+            target_node_id="node-b",
+            relationship_type=RelationshipType.related_to,
+            source_doc_id="doc1",
+        ),
+        GraphEdge(
+            id="edge-bc",
+            source_node_id="node-b",
+            target_node_id="node-c",
+            relationship_type=RelationshipType.related_to,
+            source_doc_id="doc1",
+        ),
+    ]
+    mock_graph_store.mentions["test"] = (
+        [_make_mention("node-a", f"a-{i}") for i in range(10)]
+        + [_make_mention("node-b", f"b-{i}") for i in range(5)]
+        + [_make_mention("node-c", f"c-{i}") for i in range(3)]
+    )
+
+    entity_presence = {"node-a": 3, "node-b": 1, "node-c": 1}
+    num_collections = 3
+    total_chunk_count = 20
+
+    # --- TF-IDF mode ---
+    view_tfidf = await inspect_collection(
+        mock_graph_store,
+        "test",
+        total_chunk_count=total_chunk_count,
+        max_nodes=2,
+        max_edges=1000,
+        salience_mode="tfidf",
+        entity_presence=entity_presence,
+        num_collections=num_collections,
+    )
+
+    # node-b has highest tfidf salience
+    assert view_tfidf.nodes[0].entity_id == "node-b"
+    # node-a not in tfidf top-2; edge-ab (node-a → node-b) is dropped
+    assert view_tfidf.edge_count == 1   # only edge-bc (node-b → node-c) survives
+    assert len(view_tfidf.edges) == 1
+    assert view_tfidf.edges[0].edge_id == "edge-bc"
+
+    # --- Frequency mode (regression guard: different edge survives) ---
+    view_freq = await inspect_collection(
+        mock_graph_store,
+        "test",
+        total_chunk_count=total_chunk_count,
+        max_nodes=2,
+        max_edges=1000,
+        salience_mode="frequency",
+    )
+
+    # node-a and node-b are top-2 by chunk_count; edge-ab survives, not edge-bc
+    surviving_freq = {n.entity_id for n in view_freq.nodes}
+    assert surviving_freq == {"node-a", "node-b"}
+    assert view_freq.edge_count == 1
+    assert view_freq.edges[0].edge_id == "edge-ab"
+
+
+@pytest.mark.asyncio
+async def test_inspect_collection_tfidf_equal_salience_tiebreak_entity_id(mock_graph_store: MockGraphStore):
+    """Two entities with identical TF-IDF salience are ordered by entity_id ascending."""
+    # entity-aaa and entity-zzz: same chunk_count, same df → same TF-IDF salience
+    mock_graph_store.nodes["test"] = [
+        _make_node("entity-zzz", "Z"),
+        _make_node("entity-aaa", "A"),
+    ]
+    mock_graph_store.mentions["test"] = (
+        [_make_mention("entity-zzz", f"z-{i}") for i in range(3)]
+        + [_make_mention("entity-aaa", f"a-{i}") for i in range(3)]
+    )
+
+    entity_presence = {"entity-zzz": 1, "entity-aaa": 1}
+
+    view = await inspect_collection(
+        mock_graph_store,
+        "test",
+        total_chunk_count=10,
+        max_nodes=1000,
+        max_edges=1000,
+        salience_mode="tfidf",
+        entity_presence=entity_presence,
+        num_collections=3,
+    )
+
+    # Both have same salience; entity-aaa < entity-zzz lexicographically → entity-aaa first
+    assert view.nodes[0].entity_id == "entity-aaa"
+    assert view.nodes[1].entity_id == "entity-zzz"
+    assert view.nodes[0].salience == pytest.approx(view.nodes[1].salience)
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_graph_still_returns_summary_after_signature_change(mock_graph_store: MockGraphStore):
+    """Calling inspect_collection with default params works and returns expected shape.
+
+    Verifies backward compatibility after BE-2 signature change:
+    - salience_mode defaults to 'frequency'
+    - CollectionGraphView still has nodes, edges, node_count, edge_count fields
+      that mcp.py reads to build the summary dict.
+    """
+    mock_graph_store.nodes["test"] = [
+        _make_node("entity-x", "X"),
+        _make_node("entity-y", "Y"),
+    ]
+    mock_graph_store.mentions["test"] = [
+        _make_mention("entity-x", "chunk-1"),
+        _make_mention("entity-y", "chunk-2"),
+    ]
+
+    # Call with no new params — same as before BE-2
+    view = await inspect_collection(
+        mock_graph_store,
+        "test",
+        total_chunk_count=10,
+        max_nodes=1000,
+        max_edges=1000,
+    )
+
+    # Verify the fields mcp.py reads exist and are correct types
+    assert isinstance(view, CollectionGraphView)
+    assert view.salience_mode == "frequency"
+    assert isinstance(view.nodes, list)
+    assert isinstance(view.edges, list)
+    assert isinstance(view.node_count, int)
+    assert isinstance(view.edge_count, int)
+    assert isinstance(view.truncated, bool)
+
+    # Verify the exact dict structure mcp.py builds
+    top_nodes = sorted(view.nodes, key=lambda n: (-n.salience, n.entity_id))[:20]
+    summary_top_nodes = [
+        {
+            "entity_id": n.entity_id,
+            "entity_name": n.entity_name,
+            "chunk_count": n.chunk_count,
+            "salience": n.salience,
+        }
+        for n in top_nodes
+    ]
+    assert len(summary_top_nodes) == 2
+    assert all("salience" in entry for entry in summary_top_nodes)
+
+
+@pytest.mark.asyncio
+async def test_inspect_collection_tfidf_entity_presence_none_raises(mock_graph_store: MockGraphStore):
+    """Calling inspect_collection(salience_mode='tfidf', entity_presence=None) raises ValueError."""
+    mock_graph_store.nodes["test"] = [_make_node("entity-a", "A")]
+    mock_graph_store.mentions["test"] = [_make_mention("entity-a", "chunk-1")]
+
+    with pytest.raises(ValueError, match="entity_presence required for tfidf mode"):
+        await inspect_collection(
+            mock_graph_store,
+            "test",
+            total_chunk_count=10,
+            max_nodes=1000,
+            max_edges=1000,
+            salience_mode="tfidf",
+            entity_presence=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_inspect_collection_tfidf_df_zero_in_presence_uses_df1(mock_graph_store: MockGraphStore):
+    """entity_presence with explicit 0 value must not cause ZeroDivisionError; df=1 is used."""
+    entity_id = "entity-a"
+    mock_graph_store.nodes["test"] = [_make_node(entity_id, "A")]
+    mock_graph_store.mentions["test"] = [_make_mention(entity_id, "chunk-1")]
+
+    num_collections = 3
+    # Explicit 0 in entity_presence — should NOT cause ZeroDivisionError
+    view = await inspect_collection(
+        mock_graph_store,
+        "test",
+        total_chunk_count=10,
+        max_nodes=1000,
+        max_edges=1000,
+        salience_mode="tfidf",
+        entity_presence={entity_id: 0},
+        num_collections=num_collections,
+    )
+
+    # df=1 fallback must be used (max(..., 1) guards against the explicit 0)
+    tf = 1 / 10
+    expected_salience = tf * math.log((num_collections + 1) / 1)
+    assert view.nodes[0].salience == pytest.approx(expected_salience, rel=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_inspect_collection_tfidf_entity_not_in_presence_uses_df1_and_warns(
+    mock_graph_store: MockGraphStore, caplog
+):
+    """Missing entity_presence key falls back to df=1 and emits exactly one aggregated WARNING.
+
+    3 nodes total; only entity-x is present in entity_presence (entity-y and entity-z absent).
+    The warning must say "2 of 3" — proving (a) aggregation (single warning, not one per entity)
+    and (b) the correct argument order in the format string.
+    """
+    # 3 nodes: entity-x present in entity_presence; entity-y and entity-z absent
+    mock_graph_store.nodes["test"] = [
+        _make_node("entity-x", "X"),
+        _make_node("entity-y", "Y"),
+        _make_node("entity-z", "Z"),
+    ]
+    mock_graph_store.mentions["test"] = [
+        _make_mention("entity-x", "chunk-1"),
+        # entity-y: 5 distinct chunks
+        *[_make_mention("entity-y", f"y-chunk-{i}") for i in range(5)],
+        # entity-z: 3 distinct chunks
+        *[_make_mention("entity-z", f"z-chunk-{i}") for i in range(3)],
+    ]
+
+    total = 20
+    num_collections = 3
+    with caplog.at_level(logging.WARNING, logger="archon_search.graph_inspector"):
+        view = await inspect_collection(
+            mock_graph_store,
+            "test",
+            total_chunk_count=total,
+            max_nodes=1000,
+            max_edges=1000,
+            salience_mode="tfidf",
+            entity_presence={"entity-x": 1},  # entity-y and entity-z are absent
+            num_collections=num_collections,
+        )
+
+    # All three entities use df=1 fallback (entity-x explicitly set to 1; y and z default to 1)
+    idf_fallback = math.log((num_collections + 1) / 1)
+    node_map = {n.entity_id: n for n in view.nodes}
+    assert node_map["entity-x"].salience == pytest.approx((1 / total) * idf_fallback, rel=1e-6)
+    assert node_map["entity-y"].salience == pytest.approx((5 / total) * idf_fallback, rel=1e-6)
+    assert node_map["entity-z"].salience == pytest.approx((3 / total) * idf_fallback, rel=1e-6)
+
+    # Exactly one aggregated WARNING (not one per entity)
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warning_records) == 1
+    # "2 of 3" proves: 2 missing entities counted correctly, total 3 is node count not missing count
+    assert "2 of 3" in warning_records[0].message
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_inspect_collection_tfidf_idf_formula(tmp_path):
+    """Integration: verifies log((N+1)/df) IDF formula against hand-calculated values.
+
+    Uses a real GraphStore with LanceDB to ensure end-to-end correctness.
+    """
+    import math
+    from archon_search.graph_store import GraphStore
+
+    db_path = str(tmp_path / "test.db")
+    graph_store = GraphStore(db_path)
+    await graph_store.connect()
+
+    col = "tfidf-idf-test"
+    await graph_store.ensure_graph_tables(col)
+
+    # Create 3 entities with different document frequencies:
+    #   entity-df1: unique (df=1)
+    #   entity-df2: in 2 collections (df=2)
+    #   entity-df3: in all 3 collections (df=3)
+    from archon_search.graph_types import GraphNode, GraphMention, EntityType
+
+    nodes = [
+        GraphNode(id="entity-df1", entity_name="DF1", entity_type=EntityType.concept,
+                  source_doc_id="doc1", collection_name=col),
+        GraphNode(id="entity-df2", entity_name="DF2", entity_type=EntityType.concept,
+                  source_doc_id="doc1", collection_name=col),
+        GraphNode(id="entity-df3", entity_name="DF3", entity_type=EntityType.concept,
+                  source_doc_id="doc1", collection_name=col),
+    ]
+
+    # Same TF for all: chunk_count=4, total=20 → TF=0.2
+    mentions = (
+        [GraphMention(entity_id="entity-df1", chunk_id=f"df1-{i}", doc_id="doc1") for i in range(4)]
+        + [GraphMention(entity_id="entity-df2", chunk_id=f"df2-{i}", doc_id="doc1") for i in range(4)]
+        + [GraphMention(entity_id="entity-df3", chunk_id=f"df3-{i}", doc_id="doc1") for i in range(4)]
+    )
+
+    await graph_store.write_graph(col, nodes, [])
+    await graph_store.write_mentions(col, mentions)
+
+    num_collections = 3
+    entity_presence = {"entity-df1": 1, "entity-df2": 2, "entity-df3": 3}
+    total_chunk_count = 20
+
+    view = await inspect_collection(
+        graph_store,
+        col,
+        total_chunk_count=total_chunk_count,
+        max_nodes=1000,
+        max_edges=1000,
+        salience_mode="tfidf",
+        entity_presence=entity_presence,
+        num_collections=num_collections,
+    )
+
+    tf = 4 / 20  # TF = chunk_count / total_chunks
+
+    # Verify each entity's salience matches the IDF formula
+    node_map = {n.entity_id: n for n in view.nodes}
+
+    # entity-df1: IDF = log((3+1)/1) = log(4)
+    expected_df1 = tf * math.log((num_collections + 1) / 1)
+    assert node_map["entity-df1"].salience == pytest.approx(expected_df1, rel=1e-6)
+
+    # entity-df2: IDF = log((3+1)/2) = log(2)
+    expected_df2 = tf * math.log((num_collections + 1) / 2)
+    assert node_map["entity-df2"].salience == pytest.approx(expected_df2, rel=1e-6)
+
+    # entity-df3: IDF = log((3+1)/3) = log(4/3)
+    expected_df3 = tf * math.log((num_collections + 1) / 3)
+    assert node_map["entity-df3"].salience == pytest.approx(expected_df3, rel=1e-6)
+
+    # Ordering should be df1 > df2 > df3 (lower df → higher IDF → higher salience)
+    assert node_map["entity-df1"].salience > node_map["entity-df2"].salience > node_map["entity-df3"].salience
+
+    assert view.salience_mode == "tfidf"

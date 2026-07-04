@@ -335,23 +335,23 @@ flowchart LR
         - [x] #unit_test — `test_get_entity_presence_empty_collections` — empty list returns {}
         - [x] #unit_test — `test_get_entity_presence_absent_table_skipped` — absent table contributes 0, no exception
 
-- [ ] **BE-2** — Add TF-IDF scoring to `inspect_collection`, mode branch to `_truncate_graph`, `salience_mode` to `CollectionGraphView`, ponytail comment in `graph_inspector.py` #backend-role
+- [x] **BE-2** — Add TF-IDF scoring to `inspect_collection`, mode branch to `_truncate_graph`, `salience_mode` to `CollectionGraphView`, ponytail comment in `graph_inspector.py` #backend-role
     - Use Cases · 3.0h
     - needs BE-1 · completes C2 (partial), S3, S4, S5, S6, S7, S8, S20
     - Also in scope: update the secondary sort in `inspect_collection` at line ~239 (used for `edge_count` computation) to use the same conditional key `(-n.salience if salience_mode == 'tfidf' else -n.chunk_count, n.entity_id)` to keep the edge_count's surviving-node set in sync with `_truncate_graph`'s output.
     - Tests
-        - #unit_test — `test_inspect_collection_tfidf_domain_specific_outranks_ubiquitous` — entity unique to collection ranks above entity shared across all 3 namespace collections
-        - #unit_test — `test_inspect_collection_tfidf_single_namespace_collection_same_order` — with 1 namespace collection, tfidf rank order equals frequency rank order
-        - #unit_test — `test_inspect_collection_tfidf_entity_in_all_collections_near_zero` — entity in all N collections has salience approaching 0 as N grows
-        - #unit_test — `test_inspect_collection_tfidf_truncation_uses_salience_not_chunk_count` — node with lower chunk_count but higher TF-IDF score survives cap over higher-frequency ubiquitous node
-        - #unit_test — `test_inspect_collection_tfidf_zero_chunks` — collection with 0 total chunks → all salience=0.0
-        - #unit_test — `test_inspect_collection_tfidf_pre_e2b_nodes` — absent mentions table → chunk_count=0, salience=0.0, salience_mode echoed
-        - #unit_test — `test_inspect_collection_frequency_unchanged` — frequency mode produces same results as before (regression)
-        - #unit_test — `test_inspect_collection_tfidf_edge_count_consistent_with_node_set` — verifies that edge_count only counts edges where both endpoints are in the returned node set
-        - #unit_test — `test_inspect_collection_tfidf_equal_salience_tiebreak_entity_id` — two entities with identical TF-IDF salience; verify deterministic ordering by entity_id ascending
-        - #unit_test — `test_mcp_get_graph_still_returns_summary_after_signature_change` — call `inspect_collection` with no new params (defaults only); verify it returns a valid `CollectionGraphView` with `salience_mode='frequency'` and the summary dict structure mcp.py expects is unchanged
-        - #integration_test — `test_inspect_collection_tfidf_idf_formula` — verifies `log((N+1)/df)` formula against hand-calculated expected values
-        - #unit_test — `test_inspect_collection_tfidf_entity_presence_none_raises` — calling `inspect_collection(salience_mode='tfidf', entity_presence=None)` raises `ValueError('entity_presence required for tfidf mode')`
+        - [x] #unit_test — `test_inspect_collection_tfidf_domain_specific_outranks_ubiquitous` — entity unique to collection ranks above entity shared across all 3 namespace collections
+        - [x] #unit_test — `test_inspect_collection_tfidf_single_namespace_collection_same_order` — with 1 namespace collection, tfidf rank order equals frequency rank order
+        - [x] #unit_test — `test_inspect_collection_tfidf_entity_in_all_collections_near_zero` — entity in all N collections has salience approaching 0 as N grows
+        - [x] #unit_test — `test_inspect_collection_tfidf_truncation_uses_salience_not_chunk_count` — node with lower chunk_count but higher TF-IDF score survives cap over higher-frequency ubiquitous node
+        - [x] #unit_test — `test_inspect_collection_tfidf_zero_chunks` — collection with 0 total chunks → all salience=0.0
+        - [x] #unit_test — `test_inspect_collection_tfidf_pre_e2b_nodes` — absent mentions table → chunk_count=0, salience=0.0, salience_mode echoed
+        - [x] #unit_test — `test_inspect_collection_frequency_unchanged` — frequency mode produces same results as before (regression)
+        - [x] #unit_test — `test_inspect_collection_tfidf_edge_count_consistent_with_node_set` — verifies that edge_count only counts edges where both endpoints are in the returned node set
+        - [x] #unit_test — `test_inspect_collection_tfidf_equal_salience_tiebreak_entity_id` — two entities with identical TF-IDF salience; verify deterministic ordering by entity_id ascending
+        - [x] #unit_test — `test_mcp_get_graph_still_returns_summary_after_signature_change` — call `inspect_collection` with no new params (defaults only); verify it returns a valid `CollectionGraphView` with `salience_mode='frequency'` and the summary dict structure mcp.py expects is unchanged
+        - [x] #integration_test — `test_inspect_collection_tfidf_idf_formula` — verifies `log((N+1)/df)` formula against hand-calculated expected values
+        - [x] #unit_test — `test_inspect_collection_tfidf_entity_presence_none_raises` — calling `inspect_collection(salience_mode='tfidf', entity_presence=None)` raises `ValueError('entity_presence required for tfidf mode')`
 
 - [ ] **BE-3** — Add `salience_mode` to `GraphInspectionResponse` in `schemas.py`; add `?salience=` param, namespace fix, and `_view_to_response` update to single-collection handler in `routes_graph.py` #backend-role
     - Presentation · 2.0h

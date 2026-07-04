@@ -1,15 +1,25 @@
-"""Graph inspection use case for reading and deriving graph metrics — E2b.
+"""Graph inspection use case for reading and deriving graph metrics — E2b/E2c.
 
 Reads nodes, edges, and mentions from graph tables; derives chunk_count, salience,
 weight, and source_chunk_ids; applies deterministic truncation; returns inspection
 views for both single-collection and cross-collection queries.
+
+TF-IDF salience (E2c / salience_mode="tfidf"):
+    TF(entity, collection) = chunk_count / total_chunks_in_collection
+    IDF(entity) = log((num_collections + 1) / df)
+    salience = TF * IDF  (unbounded, not clamped)
+
+    where df = max(entity_presence.get(entity_id, 1), 1) — the number of namespace
+    collections that contain this entity (clamped to ≥1 to guard against absent or
+    corrupt entries).
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from archon_search.graph_store import GraphStore
@@ -19,6 +29,11 @@ logger = logging.getLogger(__name__)
 # Safety valve against OOM on pathologically large mention tables; adjust via
 # operator-level config if needed.
 _MENTIONS_SCAN_CEILING = 500_000
+# ponytail: _MENTIONS_SCAN_CEILING is a safety valve against OOM on large mention tables.
+# Even in tfidf mode, inspect_collection still scans the full mention table to derive
+# chunk_count per entity (line ~225). Pre-computation of entity_presence does not change
+# the mention scan cost. Upgrade path: move the ceiling check to the GraphStore layer
+# or stream chunks per entity rather than loading all mentions into memory.
 
 
 @dataclass
@@ -32,7 +47,7 @@ class GraphNodeInspection:
     chunk_count: int
     """Number of distinct chunks where this entity was mentioned."""
     salience: float
-    """Chunk frequency relative to total collection chunks; clamped to [0.0, 1.0]."""
+    """In frequency mode, clamped to [0.0, 1.0]. In tfidf mode, unbounded (TF × IDF)."""
 
 
 @dataclass
@@ -56,7 +71,8 @@ class CollectionGraphView:
     """Inspection view of a single collection's graph."""
 
     nodes: list[GraphNodeInspection]
-    """Truncated node list; sorted by (chunk_count desc, entity_id asc) then capped."""
+    """Truncated node list; sorted by salience desc (or chunk_count desc in frequency mode),
+    then entity_id asc as tiebreaker; capped at max_nodes."""
     edges: list[GraphEdgeInspection]
     """Truncated edge list where both endpoints survive node truncation;
     sorted by (weight desc, edge_id asc) then capped."""
@@ -67,6 +83,8 @@ class CollectionGraphView:
     (after node survival filter, before edge cap)."""
     truncated: bool
     """True if node cap or edge cap was reached, or if mention scan ceiling was hit."""
+    salience_mode: Literal["frequency", "tfidf"] = "frequency"
+    """Salience scoring mode used: 'frequency' (chunk ratio, clamped) or 'tfidf' (TF×IDF)."""
 
 
 @dataclass
@@ -91,16 +109,28 @@ class CrossCollectionGraphView:
 _MAX_SOURCE_CHUNK_IDS = 20
 
 
+def _node_sort_key(
+    n: "GraphNodeInspection", salience_mode: Literal["frequency", "tfidf"]
+) -> tuple[float, str]:
+    """Return the sort key for a node given the active salience mode."""
+    if salience_mode == "tfidf":
+        return (-n.salience, n.entity_id)
+    return (-n.chunk_count, n.entity_id)
+
+
 def _truncate_graph(
     nodes: list[GraphNodeInspection],
     edges: list[GraphEdgeInspection],
     max_nodes: int,
     max_edges: int,
+    salience_mode: Literal["frequency", "tfidf"] = "frequency",
 ) -> tuple[list[GraphNodeInspection], list[GraphEdgeInspection], bool]:
     """Apply deterministic truncation to nodes and edges.
 
     Steps:
-    1. Sort nodes by (chunk_count desc, entity_id asc); cap at max_nodes.
+    1. Sort nodes by salience key (mode-dependent); cap at max_nodes.
+       - frequency: sort by (-chunk_count, entity_id)
+       - tfidf:     sort by (-salience, entity_id)
     2. Build set of surviving entity IDs.
     3. Filter edges to those where BOTH source and target are in surviving set.
     4. Sort surviving edges by (weight desc, edge_id asc); cap at max_edges.
@@ -111,12 +141,14 @@ def _truncate_graph(
         edges: List of GraphEdgeInspection objects to filter and truncate.
         max_nodes: Maximum number of nodes to return.
         max_edges: Maximum number of edges to return.
+        salience_mode: Sort key for node truncation; 'frequency' uses chunk_count,
+            'tfidf' uses salience score.
 
     Returns:
         Tuple of (truncated_nodes, truncated_edges, truncated_flag).
     """
-    # Step 1: Sort and cap nodes
-    sorted_nodes = sorted(nodes, key=lambda n: (-n.chunk_count, n.entity_id))
+    # Step 1: Sort and cap nodes — key depends on salience mode
+    sorted_nodes = sorted(nodes, key=lambda n: _node_sort_key(n, salience_mode))
     nodes_out = sorted_nodes[:max_nodes]
     node_truncated = len(sorted_nodes) > max_nodes
 
@@ -147,6 +179,9 @@ async def inspect_collection(
     total_chunk_count: int,
     max_nodes: int,
     max_edges: int,
+    salience_mode: Literal["frequency", "tfidf"] = "frequency",
+    entity_presence: dict[str, int] | None = None,
+    num_collections: int = 1,
 ) -> CollectionGraphView:
     """Inspect a single collection's graph and derive metrics.
 
@@ -161,16 +196,30 @@ async def inspect_collection(
             Used as denominator for salience calculation. If 0, salience is 0.0 for all nodes.
         max_nodes: Maximum nodes to return (truncation cap).
         max_edges: Maximum edges to return (truncation cap).
+        salience_mode: 'frequency' (default) computes salience as chunk_count/total,
+            clamped to [0.0, 1.0]. 'tfidf' computes TF×IDF (unbounded).
+        entity_presence: Required when salience_mode='tfidf'. Maps entity_id to the
+            number of namespace collections that contain that entity (document frequency).
+            Absent entries default to df=1 with a WARNING log.
+        num_collections: Total number of namespace collections; used as N in the IDF
+            formula log((N+1)/df). Ignored in frequency mode.
 
     Returns:
         CollectionGraphView with derived metrics and truncation info.
+
+    Raises:
+        ValueError: If salience_mode='tfidf' and entity_presence is None.
 
     Note:
         - Pre-E2b nodes (no mentions) read as chunk_count=0, salience=0.0.
         - Mentions scan ceiling: if mention count >= _MENTIONS_SCAN_CEILING,
           truncated=True even if node/edge caps don't fire.
-        - Salience is clamped: salience = min(chunk_count / total_chunk_count, 1.0).
+        - Frequency mode: salience = min(chunk_count / total_chunk_count, 1.0).
+        - TF-IDF mode: salience = (chunk_count / total_chunk_count) * log((N+1) / df).
     """
+    if salience_mode == "tfidf" and entity_presence is None:
+        raise ValueError("entity_presence required for tfidf mode")
+
     # Fetch all nodes and edges
     all_nodes = await graph_store.get_all_nodes(collection)
     all_edges = await graph_store.get_all_edges(collection)
@@ -190,13 +239,31 @@ async def inspect_collection(
 
     # Derive node metrics
     node_inspections: list[GraphNodeInspection] = []
+    missing_presence_count = 0
     for node in all_nodes:
         chunk_count = len(entity_chunks.get(node.id, set()))
-        # Salience = chunk_count / total_chunk_count, clamped to [0.0, 1.0]
-        if total_chunk_count > 0:
-            salience = min(chunk_count / total_chunk_count, 1.0)
+
+        if salience_mode == "tfidf":
+            assert entity_presence is not None  # guarded above
+            if total_chunk_count == 0:
+                salience = 0.0
+            else:
+                tf = chunk_count / total_chunk_count
+                if node.id not in entity_presence:
+                    missing_presence_count += 1
+                # Note: missing key → df=1 (counted for aggregated warning above).
+                # An explicit df=0 or negative from a corrupt presence map is also clamped
+                # to 1 silently — it is treated as a data integrity issue for the caller to
+                # diagnose separately (e.g., inspect get_entity_presence_across_collections output).
+                df = max(entity_presence.get(node.id, 1), 1)
+                idf = math.log((num_collections + 1) / df)
+                salience = tf * idf
         else:
-            salience = 0.0
+            # Frequency mode: salience = chunk_count / total, clamped to [0.0, 1.0]
+            if total_chunk_count > 0:
+                salience = min(chunk_count / total_chunk_count, 1.0)
+            else:
+                salience = 0.0
 
         node_inspections.append(
             GraphNodeInspection(
@@ -205,6 +272,13 @@ async def inspect_collection(
                 chunk_count=chunk_count,
                 salience=salience,
             )
+        )
+
+    if salience_mode == "tfidf" and missing_presence_count > 0:
+        logger.warning(
+            "%d of %d entities missing from entity_presence — used df=1 fallback for each",
+            missing_presence_count,
+            len(all_nodes),
         )
 
     # Derive edge metrics
@@ -231,13 +305,13 @@ async def inspect_collection(
 
     # Apply truncation; _truncate_graph filters edges to surviving nodes and caps both
     truncated_nodes, truncated_edges, truncation_fired = _truncate_graph(
-        node_inspections, edge_inspections, max_nodes, max_edges
+        node_inspections, edge_inspections, max_nodes, max_edges, salience_mode=salience_mode
     )
 
     # Compute edge_count: number of edges where both endpoints survive the node filter
-    # (before the edge cap; _truncate_graph's surviving_edges is what we need)
-    sorted_nodes_pre_cap = sorted(node_inspections, key=lambda n: (-n.chunk_count, n.entity_id))
-    surviving_node_ids_pre_cap = {n.entity_id for n in sorted_nodes_pre_cap[:max_nodes]}
+    # (before the edge cap). Derive from the already-computed truncated_nodes to
+    # guarantee structural consistency — re-sorting independently could diverge.
+    surviving_node_ids_pre_cap = {n.entity_id for n in truncated_nodes}
     edges_post_node_filter = [
         e
         for e in edge_inspections
@@ -254,6 +328,7 @@ async def inspect_collection(
         node_count=len(node_inspections),
         edge_count=total_edge_count,
         truncated=truncated,
+        salience_mode=salience_mode,
     )
 
 
