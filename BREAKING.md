@@ -8,6 +8,26 @@
 
 ## Changelog
 
+### [next release] — E2c: `GET /graph/{collection}` gains `salience_mode` field and namespace-scoped resolution
+
+**Surface**: `GET /graph/{collection}` REST response (`GraphInspectionResponse`); collection-resolution behaviour inside the handler.
+
+**Additive changes** (non-breaking for tolerant JSON consumers; breaking for strict-schema validators with `extra="forbid"`):
+
+1. **`GraphInspectionResponse` gains `salience_mode: Literal["frequency", "tfidf"] = "frequency"`** — always present in the JSON response. The default value `"frequency"` preserves the previous implicit behaviour. Clients using strict JSON schema validation (`extra="forbid"`) may reject the response if they have not updated their type stubs. Lenient clients are completely unaffected.
+
+   Schema: `GraphInspectionResponse.salience_mode: Literal["frequency", "tfidf"] = "frequency"`.
+
+   To opt into TF×IDF salience: add `?salience=tfidf` to the query string.
+
+**Behaviour changes**:
+
+2. **`GET /graph/{collection}` now resolves collection names within the authenticated namespace only** — previously the handler resolved the collection against `DEFAULT_NAMESPACE` regardless of the caller's bearer token. After E2c, the handler passes `namespace=request.state.namespace` to `get_collection_meta`, so each caller can only inspect collections in their own namespace. Callers in non-default namespaces that previously received data from `DEFAULT_NAMESPACE` collections will now receive `404 collection not found`. Callers using the default namespace (single-tenant deployments) are unaffected.
+
+**Migration**: no action required for tolerant JSON consumers or single-tenant deployments. Multi-tenant operators: tokens in non-default namespaces must now call `GET /graph/{collection}` with a token scoped to the namespace that owns the collection. Strict-schema validators should add `salience_mode: "frequency" | "tfidf"` to their `GraphInspectionResponse` type stubs; regenerate from `GET /openapi.json`.
+
+---
+
 ### [next release] — E2a: TTL and scoping — additive chunk columns, new endpoints, scope_filter, maintenance fields
 
 **Surface**: `POST /ingest` and `POST /ingest/directory` request bodies; `PATCH /collections/{name}` request body; new `GET /collections/{name}/expiring` endpoint; `POST /search` and `POST /explain` request bodies; `GET /status` maintenance sub-object; `GET /collections/{name}/documents` response items; MCP tools `ingest_file`, `ingest_directory`, `search`, `search_with_context`, `explain`; LanceDB chunk-table and meta-table schemas; `STORE_SCHEMA_VERSION`.

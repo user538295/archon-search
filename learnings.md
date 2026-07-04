@@ -1,5 +1,12 @@
 # Learnings
 
+## What Has Worked
+
+**[2026-07-04] — BE-1 GraphStore new method: reuse get_all_nodes for cross-collection scan**
+- Observation: `get_all_nodes` already handles absent tables (returns `[]`) and validates collection names, making it the right primitive to reuse for `get_entity_presence_across_collections`.
+- Action: When adding a new GraphStore method that scans node tables per collection, delegate to `get_all_nodes` rather than calling `_load_all_from_table` directly — it handles both validation and absent-table fallback in one call.
+- Confidence: high
+
 ## What Has Failed
 
 **[2026-06-28] — Roadmap expansion: agents hitting session limit make zero edits — respawn with identical prompt**
@@ -407,6 +414,31 @@
 **Exit code assertions need a unique string to pin the code path**
 - Action: When two code paths share an exit code, add `assert "specific string" in result.stderr`. Exit code alone is insufficient.
 
+**[2026-07-04] — E2c BE-2 TDD: explicit df=0 in entity_presence must be clamped to df=1**
+- Observation: `entity_presence.get(node.id, 1)` guards against missing keys (returns 1) but does NOT guard against an explicit `entity_presence[node.id] = 0`. A caller that computes presence counts can produce `0` for an entity with no observed co-presence. Using `df=0` causes `ZeroDivisionError` in `log((N+1)/df)`. The fix is `df = max(entity_presence.get(node.id, 1), 1)`.
+- Action: When implementing any IDF formula that reads from a caller-supplied dict, always clamp the value with `max(..., 1)` regardless of whether the missing-key fallback is already handled. Add a separate test for explicit-zero in the dict — it is a distinct code path from the missing-key fallback.
+- Confidence: high
+
+**[2026-07-04] — E2c BE-2 TDD: aggregated WARNING is harder to test than per-entity WARNING — upgrade fixture to prove aggregation**
+- Observation: Initial warning test had N=1 entity absent from entity_presence, so the warning message "1 of 1 entities missing" was equally consistent with a per-entity loop and a post-loop aggregation. The review correctly flagged this as untestable. The fix: upgrade the fixture to 3 nodes with 2 absent from entity_presence, then assert `len(warning_records) == 1` AND `"2 of 3" in message`. This simultaneously proves single-aggregation (not per-entity) and the count format.
+- Action: Whenever testing aggregated-vs-per-entity WARNING behavior, design the fixture so N>1 entities trigger the warning path. A single-entity fixture cannot distinguish the two implementations.
+- Confidence: high
+
+**[2026-07-04] — E2c BE-2 TDD: edge_count test must use a fixture where tfidf and frequency select DIFFERENT edge sets**
+- Observation: Initial edge_count consistency test used max_nodes=1, producing edge_count=0 under both correct tfidf and buggy frequency — the test was non-discriminating. The fix: 3-node/2-edge fixture where entity A is high-frequency/low-IDF, entity B is mid, entity C is low-frequency/high-IDF. Frequency selects {A, B} → edge AB survives. TF-IDF selects {B, C} → edge BC survives. With max_nodes=2, the test forces a different edge_count under each mode. But even "1 vs 1" edge_count is too weak — the fix also asserts `result.edges[0].edge_id == "edge-bc"` to pin which edge survived.
+- Action: Edge consistency tests must assert both `edge_count` and the identity of the surviving edge (via `edge_id`). A fixture where both modes produce the same edge_count is always non-discriminating regardless of whether the edges are different.
+- Confidence: high
+
+**[2026-07-04] — E2c BE-2 TDD: `write_mentions` calls `ensure_graph_tables` internally — no separate call needed**
+- Observation: The integration test initially called `graph_store.ensure_mentions_table(col)` which does not exist. `write_mentions` already calls `ensure_graph_tables(collection)` internally (graph_store.py:476), so calling `ensure_graph_tables` before `write_mentions` is sufficient for integration tests.
+- Action: In integration tests that call `write_mentions`, do NOT call a separate `ensure_mentions_table`. Just call `ensure_graph_tables` (which creates all graph tables including mentions), then call `write_mentions` directly.
+- Confidence: high
+
+**[2026-07-04] — E2c BE-2 TDD: dataclass fields with defaults must come after fields without defaults**
+- Observation: Adding `salience_mode: Literal["frequency", "tfidf"] = "frequency"` to `CollectionGraphView` works cleanly only if it comes AFTER the five non-default fields (nodes, edges, node_count, edge_count, truncated). Python dataclasses require fields with defaults to appear after fields without defaults; placing them before causes `TypeError: non-default argument follows default argument`.
+- Action: When adding a new field with a default value to an existing dataclass, always append it after all existing non-default fields. Never insert it in the middle if existing fields lack defaults.
+- Confidence: high
+
 **Assert directly on result.stderr, not combined stdout+stderr**
 - Action: Never concatenate `result.output + result.stderr`. Assert on `result.stderr` directly. In Click 8.3.3, default `CliRunner()` already separates streams — never pass `mix_stderr=False`.
 
@@ -576,6 +608,21 @@
 **[2026-07-03] — E2b T-2 close-out: FastAPI route response_model=None omits OpenAPI schema**
 - Observation: `@router.get("/path", response_model=None)` tells FastAPI not to document the response schema, causing `test_no_empty_schemas_remain` to fail with "empty or missing schema". Setting `response_model=GraphInspectionResponse` fixes it — even for routes that return different types based on a query param (format=json vs format=graphml). The response_model documents the JSON case; the graphml case returns a Response object which FastAPI doesn't validate against the model.
 - Action: Always specify `response_model=<ExpectedResponse>` on `@router` decorators for routes that return JSON. Never use `response_model=None`. When a route branches on format/type, specify the primary response model (JSON case); the alternate type (e.g. Response object) bypasses model validation automatically.
+
+**[2026-07-04] — E2c plan-maker-for-team: IDF formula ambiguity must be resolved in the plan, not deferred**
+- Observation: The brief's IDF formula `log(total_collections / collections_containing_entity + 1)` is internally contradictory — the edge-case examples in the brief only work with `log((total_collections + 1) / collections_containing_entity)`. Without resolving this before writing the plan, the implementation and unit test assertions would diverge.
+- Action: For any feature with a mathematical formula stated in the brief, verify it against all stated edge cases before authoring TypeSpec contracts or writing scenarios. If the formula is inconsistent, resolve it (showing the working) and mark the resolution in the plan's Open Questions section as "Resolved in this revision." Surface for team confirmation in K1.
+- Confidence: high
+
+**[2026-07-04] — E2c plan-maker-for-team: GraphStore namespace gap — brief interface vs. actual layer contract**
+- Observation: The brief specified `get_entity_presence_across_collections(namespace)` but GraphStore (Frameworks & Drivers) has no namespace concept — it only knows collection names. The route handler resolves namespace → collection names via `pipeline.get_all_collections_meta(ns)` (already exists). The correct interface is `get_entity_presence_across_collections(collection_names: list[str])`.
+- Action: When a brief specifies a new method signature on a lower-layer component, always verify what concepts that layer is aware of (GraphStore knows only collection names, not namespaces). If the brief's signature crosses layer boundaries, note the discrepancy in the plan and write the correct signature in the TypeSpec seam.
+- Confidence: high
+
+**[2026-07-04] — E2c plan-maker-for-team: pre-existing namespace bug in route handlers must be fixed by the feature that needs it**
+- Observation: Neither `GET /graph/{collection}` nor `GET /graph/cross-collection` read `request.state.namespace`. E2c's tfidf mode requires namespace-scoped IDF computation, so fixing this gap is now in-scope for E2c. Leaving it for a future cleanup would make the tfidf feature incorrect from day 1.
+- Action: When a new feature requires data that a pre-existing handler silently ignores, include the handler fix in the feature scope (not as a separate cleanup task). Tying the fix to the feature that needs it ensures it lands before the feature ships.
+- Confidence: high
 - Confidence: high
 
 **`None == None` is True — guard nullable-id lookups with explicit type check**
@@ -1194,4 +1241,29 @@
 **[2026-07-03] — Background research agents: idle notification ≠ delivered report; session-limited agents can self-recover inline**
 - Observation: Named background agents (Agent tool, run_in_background) emitted idle notifications without their final reports reaching the main session; a SendMessage "deliver your report now, split into parts" retrieved full multi-part reports. Two agents whose own SUBAGENTS died to account session limits recovered by re-doing the research inline on their main thread. A respawned duplicate agent proceeded anyway after a stand-down message and delivered useful source-level verification — stand-downs are best-effort, budget accordingly.
 - Action: After spawning background research agents: (1) on idle-without-report, SendMessage requesting delivery in parts rather than respawning immediately; (2) reserve respawn-with-identical-prompt for agents that confirm zero recoverable findings; (3) tell respawns "do NOT spawn subagents" when the failure was subagent session limits; (4) unauthenticated GitHub API calls across parallel agents exhaust the shared 60/hr IP quota — instruct agents to prefer raw.githubusercontent.com fetches and use the API sparingly.
+- Confidence: high
+
+**[2026-07-03] — E2b implement-all: MCP tool subagent skipped tests and committed nothing**
+- Observation: BE-11 subagent checked the plan checkbox and wrote implementation code but (a) never created any test files and (b) never committed anything. Recovery required: parent committed the implementation, then a dedicated fix agent wrote the 6 missing tests and committed them separately.
+- Action: In implement-all recovery, if the task is checked but no new commit exists: check git status for modified files, commit them, then assess whether tests are missing. If tests are missing (required by task spec), spawn a fix agent with an explicit list of the missing test names and their exact assertions from the plan. Never accept a "checked but untested" state as complete.
+- Confidence: high
+
+**[2026-07-04] — E2c iterative-review: plan documents must specify API return types at critical call sites**
+- Observation: `pipeline.get_all_collections_meta(ns)` returns `list[CollectionMeta]` objects, not `list[str]`. Three cycles of review were needed before this was caught: earlier cycles fixed higher-level structural issues; Cycle 3's source-verification agent caught the type mismatch when verifying the fix agent's prose against actual `pipeline.py:2865`. The fix was "always extract `.name` before passing to `get_entity_presence_across_collections`" but it took 3 agents to land because the plan used informal prose (`all_ns_collections`) that obscured the type.
+- Action: When writing plan tasks that pass intermediate values between API calls, always write the exact Python expression (e.g., `[c.name for c in pipeline.get_all_collections_meta(ns)]`) rather than a variable placeholder. Type mismatches in plan prose are invisible until a source-verifying agent checks the actual return type — they won't cause a failing test, they'll cause a runtime TypeError in the implementer's first pass.
+- Confidence: high
+
+**[2026-07-04] — E2c iterative-review: "both X and Y" phrasing in plan notes caused accurate-code / inaccurate-description divergence**
+- Observation: BE-3 note said `all_ns_collections` feeds the inspector as "both denominator and node source". The code described nearby was correct (`inspect_collection(collection: str, ...)` reads only from the single target), but the summary phrase conflated single-collection and cross-collection paths. Implementers reading the note before the code would misunderstand the single-collection handler's scope.
+- Action: In plan tasks, avoid "both X and Y" shorthand when X and Y come from different code paths. Write separate sentences for each caller's responsibility instead of a combined statement that holds only for one of them.
+- Confidence: high
+
+**[2026-07-04] — BE-3 integration tests: collections must be registered via POST /collections, not TOML paths**
+- Observation: Integration tests that rely on `get_collection_meta` finding a collection cannot use TOML `collections = ["/path"]` alone. The collection only appears in the LanceDB metadata table after being registered via `POST /collections` (which calls `update_collection_meta` synchronously) or after a full ingest. A TOML path entry is config only — it does not write to the store.
+- Action: In integration tests for graph/search routes that require an existing collection, call `POST /collections` with the path before testing the endpoint. The 202 response confirms metadata is written. Use directory names that are already lowercase alphanumeric (no hyphens) to avoid sanitization surprises (`path_to_collection_name` replaces `-` with `_`).
+- Confidence: high
+
+**[2026-07-04] — iterative-review: test-verifiability must be checked against response schema, not just logic**
+- Observation: C2 added `test_cross_collection_tfidf_idf_denominator_is_all_namespace_collections` framed as "verify IDF denominator count in response reflects all 4". The response schema has no `num_collections` field — only node salience values. Cycle 2 DA caught this. The fix was to rewrite the test using a hand-computed absolute salience assertion (the only way to distinguish N=4 vs N=2 denominator). Plan tests that reference observable response fields must be cross-checked against the actual schema before the plan is finalized.
+- Action: For every test in a plan that asserts a response field value, explicitly confirm the field is declared in the response schema (in the plan's Contracts section or schema definition). If the only observable signal requires back-solving from computed values, say so explicitly in the test description.
 - Confidence: high

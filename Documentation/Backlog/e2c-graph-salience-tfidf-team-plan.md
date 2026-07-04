@@ -353,18 +353,18 @@ flowchart LR
         - [x] #integration_test — `test_inspect_collection_tfidf_idf_formula` — verifies `log((N+1)/df)` formula against hand-calculated expected values
         - [x] #unit_test — `test_inspect_collection_tfidf_entity_presence_none_raises` — calling `inspect_collection(salience_mode='tfidf', entity_presence=None)` raises `ValueError('entity_presence required for tfidf mode')`
 
-- [ ] **BE-3** — Add `salience_mode` to `GraphInspectionResponse` in `schemas.py`; add `?salience=` param, namespace fix, and `_view_to_response` update to single-collection handler in `routes_graph.py` #backend-role
+- [x] **BE-3** — Add `salience_mode` to `GraphInspectionResponse` in `schemas.py`; add `?salience=` param, namespace fix, and `_view_to_response` update to single-collection handler in `routes_graph.py` #backend-role
     - Presentation · 2.0h
     - needs BE-2 · completes C1 (partial), S1, S2, S9, S10, S11, S12, S17
     - When `salience_mode == 'tfidf'`: resolve `all_ns_collection_names = [c.name for c in pipeline.get_all_collections_meta(ns)]`, call `entity_presence = graph_store.get_entity_presence_across_collections(all_ns_collection_names)`, then pass `salience_mode`, `entity_presence`, and `num_collections=len(all_ns_collection_names)` to `inspect_collection`. (No `listed_collections` split needed here — `all_ns_collection_names` feeds only the IDF denominator; the node source remains the single target `{collection}` passed to `inspect_collection`.)
     - Tests
-        - #unit_test — `test_view_to_response_includes_salience_mode` — `_view_to_response` propagates `salience_mode` field to `GraphInspectionResponse`
-        - #integration_test — `test_graph_route_salience_frequency_default` — no `?salience=` param → `salience_mode: "frequency"` in response
-        - #integration_test — `test_graph_route_salience_invalid_returns_422` — `?salience=bm25` → 422
+        - [x] #unit_test — `test_view_to_response_includes_salience_mode` — `_view_to_response` propagates `salience_mode` field to `GraphInspectionResponse`
+        - [x] #integration_test — `test_graph_route_salience_frequency_default` — no `?salience=` param → `salience_mode: "frequency"` in response
+        - [x] #integration_test — `test_graph_route_salience_invalid_returns_422` — `?salience=bm25` → 422
         - Note: `salience` is declared as a `Literal["frequency", "tfidf"]` FastAPI query param, so framework-level 422 fires before the handler runs — invalid-salience error takes precedence over 404 and graph-disabled-422. No separate combined-guard test is needed; the invalid-salience 422 occurs at the parameter-binding layer.
-        - #integration_test — `test_graph_route_namespace_is_read` — handler reads `request.state.namespace` (not DEFAULT_NAMESPACE) for collection meta lookup
-        - #integration_test — `test_graph_route_cross_namespace_collection_returns_404` — collection exists in namespace B; request authenticated as namespace A; verify 404 (not 200 as before the namespace fix)
-        - After implementing, run: `uv run --python 3.12 pytest tests/server/test_openapi_snapshot.py --update-openapi-snapshot -n0 -x` to keep the snapshot current. (BE-6 will do the final regen after BE-5; this intermediate regen prevents T-1 from running against a stale snapshot.)
+        - [x] #integration_test — `test_graph_route_salience_tfidf_returns_salience_mode` — `?salience=tfidf` → 200, `salience_mode: "tfidf"` in response (empty-graph smoke test; full IDF ranking proof deferred to T-1)
+        - [x] #integration_test — `test_graph_route_cross_namespace_collection_returns_404` — collection exists in namespace B; request authenticated as namespace A; verify 404 (not 200 as before the namespace fix)
+        - [x] After implementing, run: `uv run --python 3.12 pytest tests/server/test_openapi_snapshot.py --update-openapi-snapshot -n0 -x` to keep the snapshot current. (BE-6 will do the final regen after BE-5; this intermediate regen prevents T-1 from running against a stale snapshot.)
 
 - [ ] **T-1** — Route integration tests for single-collection endpoint #tester-role
     - — · 2.0h

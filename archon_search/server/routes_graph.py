@@ -118,17 +118,20 @@ async def get_graph_cross_collection(
 async def get_graph(
     collection: str,
     format: Literal["json", "graphml"] = Query(default="json"),
+    salience: Literal["frequency", "tfidf"] = Query(default="frequency"),
     request: Request = None,
 ):
     """Inspect a single collection's graph with derived metrics.
 
     Query parameters:
     - `format`: "json" (default) or "graphml" to export as GraphML XML.
+    - `salience`: "frequency" (default, chunk ratio clamped to [0,1]) or
+      "tfidf" (TF×IDF across all namespace collections).
 
     Returns:
     - 200: Graph inspection response (JSON or GraphML)
     - 404: Collection not found
-    - 422: graph.enabled=false
+    - 422: graph.enabled=false or invalid salience value
 
     Scenarios:
     - S1: Graph data present → 200 JSON with nodes, edges, truncated flag
@@ -140,6 +143,7 @@ async def get_graph(
     pipeline = request.app.state.pipeline
     graph_store = request.app.state.graph_store
     config = request.app.state.config
+    ns = request.state.namespace
 
     # Guard 1: Check if graph is enabled
     if not config.graph.enabled:
@@ -148,10 +152,25 @@ async def get_graph(
             detail="graph inspection requires [graph] enabled=true in server config",
         )
 
-    # Guard 2: Check if collection exists
-    collection_meta = await pipeline.get_collection_meta(collection)
+    # Guard 2: Check if collection exists in the caller's namespace
+    collection_meta = await pipeline.get_collection_meta(collection, namespace=ns)
     if collection_meta is None:
         raise HTTPException(status_code=404, detail="collection not found")
+
+    # Resolve entity presence for IDF denominator — Presentation→Frameworks&Drivers direct call
+    # (E2c architectural exception: GraphStore is already available on app.state alongside the
+    # pipeline the route holds; a Use Case wrapper for this single read-only fanout is unnecessary
+    # abstraction per the Key Decisions note in the E2c plan.)
+    if salience == "tfidf":
+        all_meta = await pipeline.get_all_collections_meta(ns)
+        all_ns_collection_names = [m.name for m in all_meta]
+        entity_presence = await graph_store.get_entity_presence_across_collections(
+            all_ns_collection_names
+        )
+        num_collections = len(all_ns_collection_names)
+    else:
+        entity_presence = None
+        num_collections = 1
 
     # Inspect the collection's graph
     view = await inspect_collection(
@@ -160,6 +179,9 @@ async def get_graph(
         total_chunk_count=collection_meta.chunk_count,
         max_nodes=config.graph.max_inspection_nodes,
         max_edges=config.graph.max_inspection_edges,
+        salience_mode=salience,
+        entity_presence=entity_presence,
+        num_collections=num_collections,
     )
 
     # Branch on format
@@ -237,6 +259,7 @@ def _view_to_response(view: CollectionGraphView) -> GraphInspectionResponse:
         truncated=view.truncated,
         node_count=view.node_count,
         edge_count=view.edge_count,
+        salience_mode=view.salience_mode,
     )
 
 

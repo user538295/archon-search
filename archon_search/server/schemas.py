@@ -660,6 +660,8 @@ class GraphInspectionResponse(BaseModel):
     """Total number of nodes in the graph (before truncation)."""
     edge_count: int
     """Number of edges where BOTH endpoints exist (after node filter, before edge cap)."""
+    salience_mode: Literal["frequency", "tfidf"] = "frequency"
+    """Salience scoring mode used: 'frequency' (chunk ratio, clamped) or 'tfidf' (TF×IDF)."""
 
 
 class CrossCollectionGraphInspectionResponse(BaseModel):
