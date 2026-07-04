@@ -410,17 +410,17 @@ flowchart LR
     - needs BE-5 · completes (OpenAPI snapshot sync — final regen after BE-3, BE-5 changes)
     - Tests
 
-- [ ] **T-2** — Route integration tests for cross-collection endpoint #tester-role
+- [x] **T-2** — Route integration tests for cross-collection endpoint #tester-role
     - — · 1.5h
     - needs BE-5 · completes S16
     - Note: S13, S14, S15 are verified by BE-4 unit tests; T-2 adds route-level verification of S16 and the salience_mode echo.
     - Tests
-        - #e2e_test — `test_cross_collection_tfidf_echoes_salience_mode` — `?salience=tfidf` → 200, `salience_mode == "tfidf"`
-        - #e2e_test — `test_cross_collection_invalid_salience_422` — `?salience=bm25` → 422
-        - #e2e_test — `test_cross_collection_frequency_default_echoes_salience_mode` — no `?salience=` → `salience_mode == "frequency"`
-        - #e2e_test — `test_cross_collection_explicit_frequency_identical_to_default` — same for cross-collection
-        - #e2e_test — `test_cross_collection_graph_disabled_422` — graph disabled → GET /graph/cross-collection → 422 (mirrors T-1's test_get_graph_tfidf_graph_disabled_422)
-        - #e2e_test — `test_cross_collection_tfidf_idf_denominator_is_all_namespace_collections` — namespace has 4 collections (A, B, C, D); request specifies only A and B; fixture has entity X appearing in all 4 collections (df=4) and entity Y appearing only in A (df=1); under tfidf, entity Y's salience must exceed entity X's salience (because IDF(Y)=log(5/1)>>IDF(X)=log(5/4)); if the IDF denominator incorrectly used only the 2 listed collections (df_wrong: X→2, Y→1), both entities would have IDF(X)=log(3/2) and IDF(Y)=log(3/1) which produces the same ranking direction — so the test must assert the absolute salience of Y matches the hand-computed value using N=4 (not N=2)
+        - [x] #e2e_test — `test_cross_collection_tfidf_echoes_salience_mode` — `?salience=tfidf` → 200, `salience_mode == "tfidf"`
+        - [x] #e2e_test — `test_cross_collection_invalid_salience_422` — `?salience=bm25` → 422
+        - [x] #e2e_test — `test_cross_collection_frequency_default_echoes_salience_mode` — no `?salience=` → `salience_mode == "frequency"`
+        - [x] #e2e_test — `test_cross_collection_explicit_frequency_identical_to_default` — same for cross-collection
+        - [x] #e2e_test — `test_cross_collection_graph_disabled_422` — graph disabled → GET /graph/cross-collection → 422 (mirrors T-1's test_get_graph_tfidf_graph_disabled_422)
+        - [x] #e2e_test — `test_cross_collection_tfidf_idf_denominator_is_all_namespace_collections` — namespace has 4 collections (A, B, C, D); request specifies only A and B; fixture has entity X appearing in all 4 collections (df=4) and entity Y appearing only in A (df=1); under tfidf, entity Y's salience must exceed entity X's salience (because IDF(Y)=log(5/1)>>IDF(X)=log(5/4)); if the IDF denominator incorrectly used only the 2 listed collections (df_wrong: X→2, Y→1), both entities would have IDF(X)=log(3/2) and IDF(Y)=log(3/1) which produces the same ranking direction — so the test must assert the absolute salience of Y matches the hand-computed value using N=4 (not N=2)
 
 ---
 

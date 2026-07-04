@@ -1,6 +1,6 @@
-"""Route integration tests for GET /graph/{collection} salience parameter — E2c T-1.
+"""Route integration tests for GET /graph/{collection} salience parameter — E2c T-1 and T-2.
 
-Tests the single-collection graph inspection endpoint's salience query parameter:
+Tests the single-collection graph inspection endpoint's salience query parameter (T-1):
   - tfidf mode echoes salience_mode in response
   - tfidf reranks nodes vs frequency (domain-specific entity outranks ubiquitous)
   - frequency default echoes salience_mode
@@ -9,6 +9,14 @@ Tests the single-collection graph inspection endpoint's salience query parameter
   - tfidf graphml format returns application/xml with float salience attributes
   - graph disabled → 422 regardless of salience param
   - tfidf IDF is namespace-scoped (larger namespace → lower IDF → lower salience)
+
+Tests the cross-collection graph inspection endpoint's salience parameter (T-2):
+  - tfidf mode echoes salience_mode in cross-collection response
+  - invalid salience value → 422 (with body assertion on salience field)
+  - frequency default echoes salience_mode in cross-collection response
+  - explicit frequency produces identical cross-collection response to default
+  - graph disabled → 422 on cross-collection endpoint
+  - IDF denominator uses ALL namespace collections (not just listed ones)
 
 Run with:
     uv run pytest tests/integration/test_routes_graph_salience.py -n0 -v --no-cov
@@ -779,201 +787,6 @@ def test_cross_collection_view_to_response_includes_salience_mode() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 11 (integration): cross-collection default → salience_mode == 'frequency'
-# ---------------------------------------------------------------------------
-
-
-def test_cross_collection_route_salience_frequency_default(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """GET /graph/cross-collection (no ?salience=) → 200, salience_mode == 'frequency'.
-
-    Creates 2 collections and calls the cross-collection endpoint without
-    specifying ?salience=. The response must echo salience_mode='frequency'.
-    """
-    _install_spacy_stub(monkeypatch)
-
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
-        for col_name in ("col-cc-a", "col-cc-b"):
-            col_file = tmp_path / f"{col_name}.txt"
-            col_file.write_text(f"cross collection test document for {col_name}", encoding="utf-8")
-            ingest_file_via_path(client, col_name, str(col_file), api_key=api_key)
-
-        response = client.get(
-            "/graph/cross-collection?collections=col-cc-a,col-cc-b",
-            headers=_auth(api_key),
-        )
-
-        assert response.status_code == 200, (
-            f"Expected 200, got {response.status_code}: {response.text}"
-        )
-        data = response.json()
-        assert "salience_mode" in data, "Expected salience_mode in cross-collection response body"
-        assert data["salience_mode"] == "frequency", (
-            f"Expected salience_mode='frequency' for default (no ?salience=), "
-            f"got {data['salience_mode']!r}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Test 12 (integration): cross-collection ?salience=bm25 → 422
-# ---------------------------------------------------------------------------
-
-
-def test_cross_collection_route_salience_invalid_returns_422(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """GET /graph/cross-collection?salience=bm25 → 422.
-
-    FastAPI enum validation rejects any value not in {'frequency', 'tfidf'}.
-    """
-    _install_spacy_stub(monkeypatch)
-
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
-        for col_name in ("col-cc-inv-a", "col-cc-inv-b"):
-            col_file = tmp_path / f"{col_name}.txt"
-            col_file.write_text(f"invalid salience cross collection test for {col_name}", encoding="utf-8")
-            ingest_file_via_path(client, col_name, str(col_file), api_key=api_key)
-
-        response = client.get(
-            "/graph/cross-collection?collections=col-cc-inv-a,col-cc-inv-b&salience=bm25",
-            headers=_auth(api_key),
-        )
-
-        assert response.status_code == 422, (
-            f"Expected 422 for ?salience=bm25 on cross-collection, "
-            f"got {response.status_code}: {response.text}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Test 13 (integration, C1-MAJ-1): cross-collection ?salience=tfidf → salience_mode == 'tfidf'
-# ---------------------------------------------------------------------------
-
-
-def test_cross_collection_route_salience_tfidf_returns_salience_mode(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """GET /graph/cross-collection?collections=...&salience=tfidf → 200, salience_mode == 'tfidf'.
-
-    Smoke test for the tfidf branch in the cross-collection route handler: verifies
-    that the tfidf code path (building all_ns_collection_names, calling
-    get_entity_presence_across_collections, passing to inspect_cross_collection)
-    executes and echoes salience_mode='tfidf' in the response.
-    """
-    _install_spacy_stub(monkeypatch)
-
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
-        for col_name in ("col-cc-tfidf-a", "col-cc-tfidf-b"):
-            col_file = tmp_path / f"{col_name}.txt"
-            col_file.write_text(f"tfidf cross collection smoke test for {col_name}", encoding="utf-8")
-            ingest_file_via_path(client, col_name, str(col_file), api_key=api_key)
-
-        response = client.get(
-            "/graph/cross-collection?collections=col-cc-tfidf-a,col-cc-tfidf-b&salience=tfidf",
-            headers=_auth(api_key),
-        )
-
-        assert response.status_code == 200, (
-            f"Expected 200 for cross-collection tfidf, got {response.status_code}: {response.text}"
-        )
-        data = response.json()
-        assert "salience_mode" in data, "Expected salience_mode in cross-collection tfidf response"
-        assert data["salience_mode"] == "tfidf", (
-            f"Expected salience_mode='tfidf', got {data['salience_mode']!r}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Test 14 (integration, C1-MAJ-2): cross-collection tfidf IDF denominator uses ALL namespace collections
-# ---------------------------------------------------------------------------
-
-
-def test_cross_collection_route_tfidf_uses_all_namespace_collections_for_idf(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The IDF denominator uses ALL namespace collections, verified via absolute salience value.
-
-    Setup: 3-collection namespace (N=3). Only 2 are listed in ?collections=.
-    Entity X is seeded in col-all-1 (listed, 5 mentions) and col-all-3 (unlisted, 1 mention).
-
-    Correct (N=3, all namespace):
-      entity_presence sees X in col-all-1 + col-all-3 → df=2
-      TF = 5/20 = 0.25; IDF = log((3+1)/2) = log(2); salience = 0.25 × log(2) ≈ 0.173
-
-    Wrong (N=2, only listed collections counted):
-      entity_presence sees X only in col-all-1 → df=1
-      IDF = log((2+1)/1) = log(3); salience = 0.25 × log(3) ≈ 0.275
-
-    Asserts the absolute salience matches the N=3 formula, catching the N=2 regression.
-    """
-    from archon_search.graph_types import EntityType, make_stable_entity_id
-
-    _install_spacy_stub(monkeypatch)
-
-    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
-        # Create 3 collections with precise chunk counts (default namespace)
-        # col-all-1: 20 chunks (TF denominator)
-        # col-all-2: 1 chunk (listed in request, no entity X → pure second listed collection)
-        # col-all-3: 1 chunk (unlisted; in namespace to contribute to IDF denominator N)
-        for col, count in [("col-all-1", 20), ("col-all-2", 1), ("col-all-3", 1)]:
-            asyncio.run(_seed_namespace_collection(cfg.db_path, col, "default", chunk_count=count))
-
-        # Entity X: 5 mentions in col-all-1 (listed), 1 mention in col-all-3 (unlisted)
-        # → df=2 when all 3 namespace collections are queried
-        entity_x_id = make_stable_entity_id(EntityType.concept.value, "EntityX")
-        asyncio.run(_seed_node_with_mentions(
-            cfg.db_path, "col-all-1", entity_x_id, "EntityX",
-            [f"chunk-x-{i:06d}" for i in range(5)],
-        ))
-        asyncio.run(_seed_node_with_mentions(
-            cfg.db_path, "col-all-3", entity_x_id, "EntityX",
-            ["chunk-x-c-000000"],
-        ))
-
-        # List only col-all-1 and col-all-2; col-all-3 is unlisted but still in namespace
-        response = client.get(
-            "/graph/cross-collection?collections=col-all-1,col-all-2&salience=tfidf",
-            headers=_auth(api_key),
-        )
-
-        assert response.status_code == 200, (
-            f"Expected 200 for cross-collection tfidf with unlisted namespace collection, "
-            f"got {response.status_code}: {response.text}"
-        )
-        data = response.json()
-        assert data["salience_mode"] == "tfidf", (
-            f"Expected salience_mode='tfidf', got {data['salience_mode']!r}"
-        )
-
-        nodes = data["nodes"]
-        assert nodes, "Expected non-empty node list — EntityX must appear in the response"
-        node_x = next((n for n in nodes if n["entity_name"] == "EntityX"), None)
-        assert node_x is not None, (
-            f"EntityX not found in nodes: {[n['entity_name'] for n in nodes]}"
-        )
-
-        # Absolute salience check (N=3, df=2):
-        #   TF = 5/20 = 0.25 (5 mentions in col-all-1; col-all-2 has no X)
-        #   IDF = log((3+1)/2) = log(2)
-        #   salience = 0.25 × log(2) ≈ 0.173
-        # If the wrong N=2 is used: entity_presence queries only the 2 listed collections,
-        # sees X only in col-all-1 (df=1), IDF = log(3) → salience ≈ 0.275 (differs).
-        expected_salience = (5 / 20) * math.log(2)
-        actual_salience = node_x["salience"]
-        assert math.isclose(actual_salience, expected_salience, rel_tol=1e-6), (
-            f"Expected salience = (5/20)×log(2) = {expected_salience:.6f} (N=3, df=2), "
-            f"got {actual_salience:.6f}. "
-            f"A value near {(5/20)*math.log(3):.6f} indicates N=2 was used (only listed "
-            f"collections counted instead of all namespace collections)."
-        )
-
-
-# ---------------------------------------------------------------------------
 # Test 15 (integration, C1-MOD-2): cross-collection tfidf + graphml → application/xml
 # ---------------------------------------------------------------------------
 
@@ -1008,4 +821,315 @@ def test_cross_collection_route_tfidf_graphml_returns_xml(
         content_type = response.headers.get("content-type", "")
         assert "application/xml" in content_type, (
             f"Expected application/xml content-type for graphml, got: {content_type!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T-2 tests: Cross-collection endpoint — salience parameter route integration
+# ---------------------------------------------------------------------------
+
+
+def test_cross_collection_tfidf_echoes_salience_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /graph/cross-collection?salience=tfidf → 200, salience_mode == 'tfidf'.
+
+    Verifies the route echoes the salience mode in the cross-collection JSON body
+    regardless of whether the collections contain graph data.
+    """
+    _install_spacy_stub(monkeypatch)
+
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        for col_name in ("t2-tfidf-echo-a", "t2-tfidf-echo-b"):
+            col_file = tmp_path / f"{col_name}.txt"
+            col_file.write_text(f"tfidf echo test content for {col_name}", encoding="utf-8")
+            ingest_file_via_path(client, col_name, str(col_file), api_key=api_key)
+
+        response = client.get(
+            "/graph/cross-collection?collections=t2-tfidf-echo-a,t2-tfidf-echo-b&salience=tfidf",
+            headers=_auth(api_key),
+        )
+
+        assert response.status_code == 200, (
+            f"Expected 200 for cross-collection ?salience=tfidf, "
+            f"got {response.status_code}: {response.text}"
+        )
+        data = response.json()
+        assert "salience_mode" in data, "Expected salience_mode in cross-collection response body"
+        assert data["salience_mode"] == "tfidf", (
+            f"Expected salience_mode='tfidf', got {data['salience_mode']!r}"
+        )
+
+
+def test_cross_collection_invalid_salience_422(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /graph/cross-collection?salience=bm25 → 422.
+
+    FastAPI enum validation rejects any value not in {'frequency', 'tfidf'}.
+    """
+    _install_spacy_stub(monkeypatch)
+
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        for col_name in ("t2-inv-a", "t2-inv-b"):
+            col_file = tmp_path / f"{col_name}.txt"
+            col_file.write_text(f"invalid salience test for {col_name}", encoding="utf-8")
+            ingest_file_via_path(client, col_name, str(col_file), api_key=api_key)
+
+        response = client.get(
+            "/graph/cross-collection?collections=t2-inv-a,t2-inv-b&salience=bm25",
+            headers=_auth(api_key),
+        )
+
+        assert response.status_code == 422, (
+            f"Expected 422 for ?salience=bm25 on cross-collection, "
+            f"got {response.status_code}: {response.text}"
+        )
+        error = response.json()
+        assert "detail" in error
+        detail = error["detail"]
+        # FastAPI enum validation produces a list of errors with location info
+        if isinstance(detail, list):
+            locs = [e.get("loc", []) for e in detail]
+            assert any("salience" in loc for loc in locs), (
+                f"Expected salience in error locs, got: {locs}"
+            )
+        else:
+            assert "salience" in str(detail), (
+                f"Expected salience in error detail, got: {detail!r}"
+            )
+
+
+def test_cross_collection_frequency_default_echoes_salience_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /graph/cross-collection (no ?salience=) → 200, salience_mode == 'frequency'.
+
+    Verifies that omitting ?salience= applies the 'frequency' default and the
+    cross-collection response body echoes it.
+    """
+    _install_spacy_stub(monkeypatch)
+
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        for col_name in ("t2-freq-def-a", "t2-freq-def-b"):
+            col_file = tmp_path / f"{col_name}.txt"
+            col_file.write_text(f"frequency default test for {col_name}", encoding="utf-8")
+            ingest_file_via_path(client, col_name, str(col_file), api_key=api_key)
+
+        response = client.get(
+            "/graph/cross-collection?collections=t2-freq-def-a,t2-freq-def-b",
+            headers=_auth(api_key),
+        )
+
+        assert response.status_code == 200, (
+            f"Expected 200 for cross-collection default (no ?salience=), "
+            f"got {response.status_code}: {response.text}"
+        )
+        data = response.json()
+        assert "salience_mode" in data, "Expected salience_mode in cross-collection response body"
+        assert data["salience_mode"] == "frequency", (
+            f"Expected salience_mode='frequency' for default (no ?salience=), "
+            f"got {data['salience_mode']!r}"
+        )
+
+
+def test_cross_collection_explicit_frequency_identical_to_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /graph/cross-collection?salience=frequency → response body identical to omitting ?salience=.
+
+    Both explicit and implicit frequency must produce exactly the same response for the
+    cross-collection endpoint. A shared entity with mentions in both collections ensures
+    the body comparison exercises actual node salience values, not just empty graphs.
+    """
+    from archon_search.graph_types import EntityType, make_stable_entity_id
+
+    _install_spacy_stub(monkeypatch)
+
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        # Seed both collections with real chunk data and a shared entity so the
+        # frequency-mode node list is non-empty and the body comparison is non-vacuous.
+        asyncio.run(_seed_namespace_collection(cfg.db_path, "t2-expl-freq-a", "default", chunk_count=10))
+        asyncio.run(_seed_namespace_collection(cfg.db_path, "t2-expl-freq-b", "default", chunk_count=10))
+
+        entity_id = make_stable_entity_id(EntityType.concept.value, "SharedEntity")
+        asyncio.run(_seed_node_with_mentions(
+            cfg.db_path, "t2-expl-freq-a", entity_id, "SharedEntity",
+            ["chunk-ef-a-000", "chunk-ef-a-001", "chunk-ef-a-002"],
+        ))
+        asyncio.run(_seed_node_with_mentions(
+            cfg.db_path, "t2-expl-freq-b", entity_id, "SharedEntity",
+            ["chunk-ef-b-000", "chunk-ef-b-001"],
+        ))
+
+        resp_default = client.get(
+            "/graph/cross-collection?collections=t2-expl-freq-a,t2-expl-freq-b",
+            headers=_auth(api_key),
+        )
+        resp_explicit = client.get(
+            "/graph/cross-collection?collections=t2-expl-freq-a,t2-expl-freq-b&salience=frequency",
+            headers=_auth(api_key),
+        )
+
+        assert resp_default.status_code == 200
+        assert resp_explicit.status_code == 200
+
+        default_data = resp_default.json()
+        explicit_data = resp_explicit.json()
+
+        # Confirm nodes are non-empty so this is a real comparison, not a vacuous {} == {} check
+        assert default_data.get("nodes"), (
+            "Expected non-empty nodes in default response — SharedEntity seeding must have worked"
+        )
+        assert default_data == explicit_data, (
+            "Explicit ?salience=frequency on cross-collection should produce identical "
+            "body to omitting the param"
+        )
+
+
+def test_cross_collection_graph_disabled_422(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /graph/cross-collection → 422 when graph.enabled=false.
+
+    The existing graph-disabled guard fires regardless of salience param.
+    No spaCy stub is required here — create_app skips the spaCy check when
+    graph.enabled=false.
+    """
+    # graph_enabled=False (default) — no spaCy stub needed
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, cfg, api_key):
+        response = client.get(
+            "/graph/cross-collection?collections=any-a,any-b",
+            headers=_auth(api_key),
+        )
+
+        assert response.status_code == 422, (
+            f"Expected 422 when graph disabled, got {response.status_code}: {response.text}"
+        )
+        assert "graph inspection requires [graph] enabled=true" in response.json()["detail"], (
+            f"Expected graph-disabled error message, got: {response.json()['detail']!r}"
+        )
+
+
+def test_cross_collection_tfidf_idf_denominator_is_all_namespace_collections(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """IDF denominator uses ALL 4 namespace collections, verified via absolute salience value.
+
+    Setup: 4-collection namespace (A, B, C, D). Only A and B are listed in ?collections=.
+      - Entity X: present in all 4 collections (df=4)
+          IDF(X) = log((4+1)/4) = log(5/4) ≈ 0.223
+      - Entity Y: present ONLY in collection A (df=1)
+          IDF(Y) = log((4+1)/1) = log(5) ≈ 1.609
+
+    Under tfidf entity Y's salience must exceed entity X's salience because
+    IDF(Y) >> IDF(X).
+
+    Absolute salience assertion for Y (pins the N=4 formula):
+      chunk_count(Y in A) = 3, total_chunks(A) = 20
+      TF(Y) = 3/20 = 0.15
+      expected_salience_Y = (3/20) × log(5)
+
+    If the handler incorrectly used only the 2 listed collections for the IDF denominator
+    (N=2 bug):
+      df(Y) in listed only = 1  → IDF(Y) = log(3/1) = log(3) ≈ 1.099
+      wrong_salience_Y = (3/20) × log(3) ≈ 0.165
+
+    The two values (≈0.241 vs ≈0.165) are far enough apart that rel_tol=1e-6 catches the bug.
+    """
+    from archon_search.graph_types import EntityType, make_stable_entity_id
+
+    _install_spacy_stub(monkeypatch)
+
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        # Create 4 collections with precise chunk counts (default namespace)
+        # A: 20 chunks (TF denominator for Y and X)
+        # B: 5 chunks (listed, no Y → contributes to X df and N count)
+        # C: 1 chunk (unlisted; contributes to N and X df)
+        # D: 1 chunk (unlisted; contributes to N and X df)
+        for col, count in [
+            ("t2-idf-a", 20),
+            ("t2-idf-b", 5),
+            ("t2-idf-c", 1),
+            ("t2-idf-d", 1),
+        ]:
+            asyncio.run(_seed_namespace_collection(cfg.db_path, col, "default", chunk_count=count))
+
+        entity_x_id = make_stable_entity_id(EntityType.concept.value, "EntityX4")
+        entity_y_id = make_stable_entity_id(EntityType.concept.value, "EntityY4")
+
+        # Entity X: 10 mentions in A (high chunk_count to beat Y in frequency mode),
+        # 1 mention each in B, C, D (to achieve df=4 across all namespace collections)
+        asyncio.run(_seed_node_with_mentions(
+            cfg.db_path, "t2-idf-a", entity_x_id, "EntityX4",
+            [f"chunk-x4-a-{i:06d}" for i in range(10)],
+        ))
+        for col in ("t2-idf-b", "t2-idf-c", "t2-idf-d"):
+            asyncio.run(_seed_node_with_mentions(
+                cfg.db_path, col, entity_x_id, "EntityX4",
+                [f"chunk-x4-{col}-000000"],
+            ))
+
+        # Entity Y: 3 mentions only in A (df=1 across all namespace collections)
+        asyncio.run(_seed_node_with_mentions(
+            cfg.db_path, "t2-idf-a", entity_y_id, "EntityY4",
+            [f"chunk-y4-{i:06d}" for i in range(3)],
+        ))
+
+        # Request only A and B; C and D are unlisted but still in the namespace
+        response = client.get(
+            "/graph/cross-collection?collections=t2-idf-a,t2-idf-b&salience=tfidf",
+            headers=_auth(api_key),
+        )
+
+        assert response.status_code == 200, (
+            f"Expected 200 for cross-collection tfidf (4-collection namespace), "
+            f"got {response.status_code}: {response.text}"
+        )
+        data = response.json()
+        assert data["salience_mode"] == "tfidf", (
+            f"Expected salience_mode='tfidf', got {data['salience_mode']!r}"
+        )
+
+        nodes = data["nodes"]
+        assert nodes, "Expected non-empty node list"
+
+        node_y = next((n for n in nodes if n["entity_name"] == "EntityY4"), None)
+        node_x = next((n for n in nodes if n["entity_name"] == "EntityX4"), None)
+        assert node_y is not None, (
+            f"EntityY4 not found in nodes: {[n['entity_name'] for n in nodes]}"
+        )
+        assert node_x is not None, (
+            f"EntityX4 not found in nodes: {[n['entity_name'] for n in nodes]}"
+        )
+
+        # Ranking assertion: Y (unique → high IDF) must outrank X (ubiquitous → low IDF)
+        node_names = [n["entity_name"] for n in nodes]
+        assert node_names.index("EntityY4") < node_names.index("EntityX4"), (
+            f"Expected EntityY4 (df=1, IDF=log(5)≈{math.log(5):.4f}) to rank above "
+            f"EntityX4 (df=4, IDF=log(5/4)≈{math.log(5/4):.4f}); "
+            f"actual order: {node_names}"
+        )
+
+        # Absolute salience assertion for EntityY4 (pins N=4 denominator):
+        #   chunk_count(Y in A) = 3, total_chunks(A) = 20 → TF = 3/20
+        #   IDF(Y) = log((4+1)/1) = log(5)  [N=4 all-namespace denominator]
+        #   expected_salience_Y = (3/20) × log(5)
+        #
+        # If N=2 (only listed collections) was incorrectly used:
+        #   df(Y in listed) = 1 → IDF(Y) = log(3/1) = log(3)
+        #   wrong_salience_Y = (3/20) × log(3) ≈ 0.165  (differs from ≈0.241)
+        expected_salience_y = (3 / 20) * math.log(5)
+        actual_salience_y = node_y["salience"]
+        assert math.isclose(actual_salience_y, expected_salience_y, rel_tol=1e-6), (
+            f"EntityY4 salience mismatch — expected (3/20)×log(5) = {expected_salience_y:.6f} "
+            f"(N=4 all-namespace), got {actual_salience_y:.6f}. "
+            f"A value near {(3/20)*math.log(3):.6f} indicates N=2 was used (only listed "
+            f"collections counted instead of all 4 namespace collections)."
         )
