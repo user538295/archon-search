@@ -7,7 +7,7 @@ views for both single-collection and cross-collection queries.
 TF-IDF salience (E2c / salience_mode="tfidf"):
     TF(entity, collection) = chunk_count / total_chunks_in_collection
     IDF(entity) = log((num_collections + 1) / df)
-    salience = TF * IDF  (unbounded, not clamped)
+    salience = TF * max(IDF, 0)  (IDF floored at 0 to guard against df > num_collections over-count)
 
     where df = max(entity_presence.get(entity_id, 1), 1) — the number of namespace
     collections that contain this entity (clamped to ≥1 to guard against absent or
@@ -47,7 +47,7 @@ class GraphNodeInspection:
     chunk_count: int
     """Number of distinct chunks where this entity was mentioned."""
     salience: float
-    """In frequency mode, clamped to [0.0, 1.0]. In tfidf mode, unbounded (TF × IDF)."""
+    """In frequency mode, clamped to [0.0, 1.0]. In tfidf mode, floored at 0 (TF × max(IDF, 0)); unbounded above."""
 
 
 @dataclass
@@ -103,6 +103,8 @@ class CrossCollectionGraphView:
     """Total merged edge count (after node survival filter, before edge cap)."""
     truncated: bool
     """True if node cap, edge cap, or mention scan ceiling was reached."""
+    salience_mode: Literal["frequency", "tfidf"] = "frequency"
+    """Salience scoring mode used: 'frequency' (chunk ratio, clamped) or 'tfidf' (TF×IDF)."""
 
 
 # Maximum number of source chunk IDs to include per edge
@@ -173,6 +175,50 @@ def _truncate_graph(
     return nodes_out, edges_out, truncated
 
 
+def _apply_tfidf(
+    nodes: list[GraphNodeInspection],
+    entity_presence: dict[str, int],
+    num_collections: int,
+) -> list[GraphNodeInspection]:
+    """Apply IDF multiplier to a list of nodes' salience values.
+
+    Returns a new list of GraphNodeInspection instances with salience = base_salience * IDF.
+    IDF = log((num_collections + 1) / df) where df = max(entity_presence.get(entity_id, 1), 1).
+    Logs a single WARNING if any entities are missing from entity_presence.
+    """
+    missing_count = 0
+    clamped_count = 0
+    result: list[GraphNodeInspection] = []
+    for node in nodes:
+        if node.entity_id not in entity_presence:
+            missing_count += 1
+        df = max(entity_presence.get(node.entity_id, 1), 1)
+        raw_idf = math.log((num_collections + 1) / df)
+        if raw_idf < 0.0:
+            clamped_count += 1
+            raw_idf = 0.0
+        idf = raw_idf
+        result.append(GraphNodeInspection(
+            entity_id=node.entity_id,
+            entity_name=node.entity_name,
+            chunk_count=node.chunk_count,
+            salience=node.salience * idf,
+        ))
+    if missing_count > 0:
+        logger.warning(
+            "%d of %d entities missing from entity_presence — used df=1 fallback for each",
+            missing_count,
+            len(nodes),
+        )
+    if clamped_count > 0:
+        logger.warning(
+            "%d of %d entities had IDF clamped to 0.0 (df > num_collections+1 — upstream presence over-count?)",
+            clamped_count,
+            len(nodes),
+        )
+    return result
+
+
 async def inspect_collection(
     graph_store: "GraphStore",
     collection: str,
@@ -197,7 +243,7 @@ async def inspect_collection(
         max_nodes: Maximum nodes to return (truncation cap).
         max_edges: Maximum edges to return (truncation cap).
         salience_mode: 'frequency' (default) computes salience as chunk_count/total,
-            clamped to [0.0, 1.0]. 'tfidf' computes TF×IDF (unbounded).
+            clamped to [0.0, 1.0]. 'tfidf' computes TF×max(IDF, 0) (IDF floored at 0).
         entity_presence: Required when salience_mode='tfidf'. Maps entity_id to the
             number of namespace collections that contain that entity (document frequency).
             Absent entries default to df=1 with a WARNING log.
@@ -215,10 +261,13 @@ async def inspect_collection(
         - Mentions scan ceiling: if mention count >= _MENTIONS_SCAN_CEILING,
           truncated=True even if node/edge caps don't fire.
         - Frequency mode: salience = min(chunk_count / total_chunk_count, 1.0).
-        - TF-IDF mode: salience = (chunk_count / total_chunk_count) * log((N+1) / df).
+        - TF-IDF mode: salience = (chunk_count / total_chunk_count) * max(log((N+1) / df), 0.0)
+          (IDF floored at 0 to guard against df > num_collections over-count).
     """
     if salience_mode == "tfidf" and entity_presence is None:
         raise ValueError("entity_presence required for tfidf mode")
+    if salience_mode == "tfidf" and num_collections < 1:
+        raise ValueError("num_collections must be >= 1 in tfidf mode")
 
     # Fetch all nodes and edges
     all_nodes = await graph_store.get_all_nodes(collection)
@@ -239,25 +288,15 @@ async def inspect_collection(
 
     # Derive node metrics
     node_inspections: list[GraphNodeInspection] = []
-    missing_presence_count = 0
     for node in all_nodes:
         chunk_count = len(entity_chunks.get(node.id, set()))
 
         if salience_mode == "tfidf":
-            assert entity_presence is not None  # guarded above
+            # Compute TF only; IDF multiplier applied by _apply_tfidf after the loop
             if total_chunk_count == 0:
                 salience = 0.0
             else:
-                tf = chunk_count / total_chunk_count
-                if node.id not in entity_presence:
-                    missing_presence_count += 1
-                # Note: missing key → df=1 (counted for aggregated warning above).
-                # An explicit df=0 or negative from a corrupt presence map is also clamped
-                # to 1 silently — it is treated as a data integrity issue for the caller to
-                # diagnose separately (e.g., inspect get_entity_presence_across_collections output).
-                df = max(entity_presence.get(node.id, 1), 1)
-                idf = math.log((num_collections + 1) / df)
-                salience = tf * idf
+                salience = chunk_count / total_chunk_count
         else:
             # Frequency mode: salience = chunk_count / total, clamped to [0.0, 1.0]
             if total_chunk_count > 0:
@@ -274,12 +313,8 @@ async def inspect_collection(
             )
         )
 
-    if salience_mode == "tfidf" and missing_presence_count > 0:
-        logger.warning(
-            "%d of %d entities missing from entity_presence — used df=1 fallback for each",
-            missing_presence_count,
-            len(all_nodes),
-        )
+    if salience_mode == "tfidf":
+        node_inspections = _apply_tfidf(node_inspections, entity_presence, num_collections)  # type: ignore[arg-type]
 
     # Derive edge metrics
     edge_inspections: list[GraphEdgeInspection] = []
@@ -338,12 +373,16 @@ async def inspect_cross_collection(
     total_chunk_counts: dict[str, int],
     max_nodes: int,
     max_edges: int,
+    salience_mode: Literal["frequency", "tfidf"] = "frequency",
+    entity_presence: dict[str, int] | None = None,
+    num_collections: int = 1,
 ) -> CrossCollectionGraphView:
     """Inspect and merge graph data across multiple collections.
 
     For each collection, fetches nodes and edges, then merges them:
     - Nodes are deduplicated by entity_id; chunk_counts and saliences are merged
-      using weighted average.
+      using weighted average (frequency salience).
+    - In tfidf mode, the merged frequency salience is multiplied by IDF after merging.
     - Edges are deduplicated by edge_id; weights are summed; source_chunk_ids
       are unioned and capped at 20.
 
@@ -354,10 +393,26 @@ async def inspect_cross_collection(
             (for per-collection salience denominators before averaging).
         max_nodes: Maximum nodes to return (truncation cap).
         max_edges: Maximum edges to return (truncation cap).
+        salience_mode: 'frequency' (default) uses weighted-average frequency salience
+            for truncation ordering; 'tfidf' multiplies the merged frequency salience by
+            IDF = log((num_collections + 1) / df) and uses that for ordering.
+        entity_presence: Required when salience_mode='tfidf'. Maps entity_id to the
+            number of namespace collections that contain that entity (document frequency).
+            Absent or zero entries default to df=1.
+        num_collections: Total number of namespace collections; used as N in the IDF
+            formula log((N+1)/df). Should be the full namespace count, not just the
+            number of collections listed. Ignored in frequency mode.
 
     Returns:
-        CrossCollectionGraphView with merged data and truncation info.
+        CrossCollectionGraphView with merged data, truncation info, and salience_mode echoed.
+
+    Raises:
+        ValueError: If salience_mode='tfidf' and entity_presence is None.
     """
+    if salience_mode == "tfidf" and entity_presence is None:
+        raise ValueError("entity_presence required for tfidf mode")
+    if salience_mode == "tfidf" and num_collections < 1:
+        raise ValueError("num_collections must be >= 1 in tfidf mode")
     merged_nodes: dict[str, GraphNodeInspection] = {}
     merged_edges: dict[str, GraphEdgeInspection] = {}
     total_mentions_scanned = 0
@@ -450,12 +505,16 @@ async def inspect_cross_collection(
                     source_chunk_ids=source_chunk_ids,
                 )
 
-    # Convert merged dicts to lists and apply truncation
+    # Convert merged dicts to lists
     merged_nodes_list = list(merged_nodes.values())
     merged_edges_list = list(merged_edges.values())
 
+    # Apply TF-IDF scoring if requested: multiply merged frequency salience by IDF
+    if salience_mode == "tfidf":
+        merged_nodes_list = _apply_tfidf(merged_nodes_list, entity_presence, num_collections)  # type: ignore[arg-type]
+
     truncated_nodes, truncated_edges, truncation_fired = _truncate_graph(
-        merged_nodes_list, merged_edges_list, max_nodes, max_edges
+        merged_nodes_list, merged_edges_list, max_nodes, max_edges, salience_mode=salience_mode
     )
 
     # edge_count is pre-edge-cap (after node filter)
@@ -470,6 +529,7 @@ async def inspect_cross_collection(
         node_count=len(merged_nodes),
         edge_count=total_edge_count,
         truncated=truncated,
+        salience_mode=salience_mode,
     )
 
 

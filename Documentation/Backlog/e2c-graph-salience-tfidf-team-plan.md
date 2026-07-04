@@ -383,18 +383,18 @@ flowchart LR
 
 ### Phase 2 · Cross-collection TF-IDF endpoint
 
-- [ ] **BE-4** — Add TF-IDF scoring to `inspect_cross_collection`, `salience_mode` to `CrossCollectionGraphView` in `graph_inspector.py` #backend-role
+- [x] **BE-4** — Add TF-IDF scoring to `inspect_cross_collection`, `salience_mode` to `CrossCollectionGraphView` in `graph_inspector.py` #backend-role
     - Use Cases · 2.0h
     - needs BE-1, BE-2 · completes C2 (complete), S13, S14, S15, S20
     - When calling `_truncate_graph` for cross-collection tfidf, ensure `salience_mode` is forwarded so the conditional sort key (`-salience` for tfidf, `-chunk_count` for frequency) is respected. BE-2 implements the branch in the shared helper; BE-4 only needs to pass the flag through correctly.
     - Tests
-        - #unit_test — `test_inspect_cross_collection_tfidf_namespace_scoped_idf` — IDF denominator = all namespace collections, not just listed ones
-        - #unit_test — `test_inspect_cross_collection_tfidf_domain_specific_outranks_ubiquitous` — entity unique to listed collections ranks above entity shared across all namespace collections
-        - #unit_test — `test_inspect_cross_collection_tfidf_empty_collection_contributes_to_idf` — empty collection still counted in denominator
-        - #unit_test — `test_inspect_cross_collection_frequency_unchanged` — frequency mode produces same output as before (regression); fixture MUST have at least two nodes where `chunk_count`-sum order disagrees with `merged_salience` order (i.e., node A has higher total chunk_count across listed collections but lower weighted-average salience than node B) so that using `-salience` instead of `-chunk_count` in frequency mode would produce a different ranking and be caught by this test
-        - #unit_test — `test_mcp_get_graph_cross_collection_still_returns_summary_after_signature_change` — same for `inspect_cross_collection`
-        - #unit_test — `test_inspect_cross_collection_tfidf_blend_formula` — 2-collection fixture with controlled TF values and known IDF; verifies `merged_salience_tfidf = merged_freq_salience × IDF(entity)` produces the hand-calculated expected salience value (pins the Q2 algebraic identity and catches IDF-applied-per-collection-before-merge misimplementation)
-        - #unit_test — `test_inspect_cross_collection_tfidf_entity_presence_none_raises` — calling `inspect_cross_collection(salience_mode='tfidf', entity_presence=None)` raises `ValueError('entity_presence required for tfidf mode')`
+        - [x] #unit_test — `test_inspect_cross_collection_tfidf_namespace_scoped_idf` — IDF denominator = all namespace collections, not just listed ones
+        - [x] #unit_test — `test_inspect_cross_collection_tfidf_domain_specific_outranks_ubiquitous` — entity unique to listed collections ranks above entity shared across all namespace collections
+        - [x] #unit_test — `test_inspect_cross_collection_tfidf_empty_collection_contributes_to_idf` — empty collection still counted in denominator
+        - [x] #unit_test — `test_inspect_cross_collection_frequency_unchanged` — frequency mode produces same output as before (regression); fixture MUST have at least two nodes where `chunk_count`-sum order disagrees with `merged_salience` order (i.e., node A has higher total chunk_count across listed collections but lower weighted-average salience than node B) so that using `-salience` instead of `-chunk_count` in frequency mode would produce a different ranking and be caught by this test
+        - [x] #unit_test — `test_mcp_get_graph_cross_collection_still_returns_summary_after_signature_change` — same for `inspect_cross_collection`
+        - [x] #unit_test — `test_inspect_cross_collection_tfidf_blend_formula` — 2-collection fixture with controlled TF values and known IDF; verifies `merged_salience_tfidf = merged_freq_salience × IDF(entity)` produces the hand-calculated expected salience value (pins the Q2 algebraic identity and catches IDF-applied-per-collection-before-merge misimplementation)
+        - [x] #unit_test — `test_inspect_cross_collection_tfidf_entity_presence_none_raises` — calling `inspect_cross_collection(salience_mode='tfidf', entity_presence=None)` raises `ValueError('entity_presence required for tfidf mode')`
 
 - [ ] **BE-5** — Add `?salience=` param, namespace fix, and `_cross_collection_view_to_response` update to cross-collection handler in `routes_graph.py`; add `salience_mode` to `CrossCollectionGraphInspectionResponse` in `schemas.py` #backend-role
     - Presentation · 1.5h

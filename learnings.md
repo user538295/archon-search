@@ -2,6 +2,16 @@
 
 ## What Has Worked
 
+**[2026-07-04] — E2c BE-4 cross-collection tfidf: post-merge node list must be rebuilt, not mutated via merged_nodes dict**
+- Observation: `merged_nodes_list = list(merged_nodes.values())` creates a list of the original objects. Mutating `node.salience` in-place on these objects would work but is fragile if the same objects are referenced elsewhere. Rebuilding as new `GraphNodeInspection` instances after the frequency merge loop (before calling `_truncate_graph`) is the cleanest pattern and avoids aliasing bugs.
+- Action: For any post-merge tfidf transformation in cross-collection, create fresh `GraphNodeInspection` instances in a new list. Never mutate the objects produced by the merge loop — they may alias dict values.
+- Confidence: high
+
+**[2026-07-04] — E2c BE-4 cross-collection tfidf: frequency regression test must use asymmetric collection sizes**
+- Observation: To create a fixture where chunk_count-sum order disagrees with merged_salience order, use asymmetric `total_chunk_counts` (e.g. 10 vs 100). With symmetric denominators, the weighted-average salience preserves chunk_count order. Only when one collection has a much larger denominator does a node with few large-collection chunks end up with lower merged_salience than a node with many small-collection chunks despite higher total chunk_count.
+- Action: For cross-collection frequency regression tests that must distinguish `-chunk_count` from `-salience` ordering, always use asymmetric denominators (e.g., {"col-a": 10, "col-b": 100}) in the fixture. Symmetric denominators make the two orderings identical and the test is non-discriminating.
+- Confidence: high
+
 **[2026-07-04] — BE-1 GraphStore new method: reuse get_all_nodes for cross-collection scan**
 - Observation: `get_all_nodes` already handles absent tables (returns `[]`) and validates collection names, making it the right primitive to reuse for `get_entity_presence_across_collections`.
 - Action: When adding a new GraphStore method that scans node tables per collection, delegate to `get_all_nodes` rather than calling `_load_all_from_table` directly — it handles both validation and absent-table fallback in one call.
