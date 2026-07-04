@@ -405,7 +405,7 @@ flowchart LR
         - [x] #integration_test — `test_cross_collection_route_salience_invalid_returns_422` — `?salience=bad` → 422
         - [x] #integration_test — `test_cross_collection_route_salience_frequency_default` — no `?salience=` → `salience_mode: "frequency"` in response
 
-- [ ] **BE-6** — Final OpenAPI snapshot regen after all schema and route changes #backend-role
+- [x] **BE-6** — Final OpenAPI snapshot regen after all schema and route changes #backend-role
     - Frameworks & Drivers · 0.5h
     - needs BE-5 · completes (OpenAPI snapshot sync — final regen after BE-3, BE-5 changes)
     - Tests

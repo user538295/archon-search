@@ -153,7 +153,7 @@ async def get_graph(
     Returns:
     - 200: Graph inspection response (JSON or GraphML)
     - 404: Collection not found
-    - 422: graph.enabled=false or invalid salience value
+    - 422: graph.enabled=false or invalid format or invalid salience value
 
     Scenarios:
     - S1: Graph data present → 200 JSON with nodes, edges, truncated flag

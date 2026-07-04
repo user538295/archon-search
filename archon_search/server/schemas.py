@@ -629,7 +629,7 @@ class GraphNodeResponse(BaseModel):
     chunk_count: int
     """Number of distinct chunks where this entity was mentioned."""
     salience: float
-    """Chunk frequency relative to total collection chunks; clamped to [0.0, 1.0]."""
+    """Salience score for this entity. In frequency mode: chunk ratio clamped to [0.0, 1.0]. In tfidf mode: TF×IDF score (unbounded above 1.0)."""
 
 
 class GraphEdgeResponse(BaseModel):
