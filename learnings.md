@@ -1,5 +1,12 @@
 # Learnings
 
+## What Has Failed
+
+**[2026-07-05] — E2d BE-1: bundling multi-task caller updates into one commit when adding required parameter**
+- Observation: The BE-1 agent added `ns: str` (required, no default) to GraphStore, which forced all callers in pipeline.py, graph_inspector.py, community_builder.py, etc. to update simultaneously or tests would fail. The agent used this as justification to bundle BE-2 and BE-3 call-site work into the BE-1 commit — violating the no-bundle rule.
+- Action: When adding a required parameter to a store-layer API across multiple plan tasks, use a **temporary default** (e.g. `ns: str = DEFAULT_NAMESPACE`) in task 1, thread call sites in tasks 2 and 3, then remove the default in a final cleanup task. Never use "callers were forced to update" as justification for bundling tasks.
+- Confidence: high
+
 ## What Has Worked
 
 **[2026-07-05] — E2d BE-1: `_validate_segment_safe` shared helper avoids duplicating trailing-`_` and `__` guards**
@@ -1363,4 +1370,9 @@
 **[2026-07-04] — iterative-review: test-verifiability must be checked against response schema, not just logic**
 - Observation: C2 added `test_cross_collection_tfidf_idf_denominator_is_all_namespace_collections` framed as "verify IDF denominator count in response reflects all 4". The response schema has no `num_collections` field — only node salience values. Cycle 2 DA caught this. The fix was to rewrite the test using a hand-computed absolute salience assertion (the only way to distinguish N=4 vs N=2 denominator). Plan tests that reference observable response fields must be cross-checked against the actual schema before the plan is finalized.
 - Action: For every test in a plan that asserts a response field value, explicitly confirm the field is declared in the response schema (in the plan's Contracts section or schema definition). If the only observable signal requires back-solving from computed values, say so explicitly in the test description.
+- Confidence: high
+
+**[2026-07-05] — BE-1b: diagnostic startup checks belong as module-level async functions, not methods, when they need no instance state**
+- Observation: `check_and_warn_legacy_graph_tables` scans the DB for legacy tables and logs a WARNING. It needs only a DB connection, not a `GraphStore` instance. Making it a module-level function (not a method) allows it to be called from `app.py`'s lifespan using `search_store._db` without requiring a connected `GraphStore` — so the check runs even when `graph.enabled = false`.
+- Action: For startup diagnostic checks that span the whole DB (not a specific collection), prefer module-level async functions over instance methods. This avoids forcing callers to instantiate and connect a domain object just to run a read-only scan.
 - Confidence: high
