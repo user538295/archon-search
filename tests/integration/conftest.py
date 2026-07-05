@@ -283,3 +283,64 @@ async def make_real_pipeline(tmp_path, monkeypatch):
         top_k_return=5,
     )
     return store, pipeline
+
+
+# ---------------------------------------------------------------------------
+# spaCy stub helper — used by graph-related e2e tests (T-2, T-3, T-4).
+# ---------------------------------------------------------------------------
+
+
+def install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Install a fake spaCy NLP model that recognizes entity names in text.
+
+    Recognises: "Alice" → PERSON, "Bob" → PERSON, "Google" → ORG.
+
+    Must be called BEFORE make_real_app(graph_enabled=True) because create_app
+    calls _check_graph_deps which imports spaCy synchronously.
+
+    Usage::
+        install_spacy_stub(monkeypatch)
+        with make_real_app(..., graph_enabled=True) as (client, cfg, api_key):
+            ...
+    """
+    import sys
+    import types
+
+    class _FakeEnt:
+        def __init__(self, text: str, label: str) -> None:
+            self.text = text
+            self.label_ = label
+
+    class _FakeDoc:
+        def __init__(self, ents: list) -> None:
+            self.ents = ents
+
+    _ENTITY_MAP = [
+        ("Alice", "PERSON"),
+        ("Bob", "PERSON"),
+        ("Google", "ORG"),
+    ]
+
+    class _FakeNLP:
+        def __call__(self, text: str) -> _FakeDoc:
+            ents = [
+                _FakeEnt(name, label)
+                for name, label in _ENTITY_MAP
+                if name in text
+            ]
+            return _FakeDoc(ents)
+
+    nlp_instance = _FakeNLP()
+
+    fake_util = types.ModuleType("spacy.util")
+    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
+    fake_cli = types.ModuleType("spacy.cli")
+    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
+    fake_spacy = types.ModuleType("spacy")
+    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
+    fake_spacy.util = fake_util  # type: ignore[attr-defined]
+    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
+    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
+    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)

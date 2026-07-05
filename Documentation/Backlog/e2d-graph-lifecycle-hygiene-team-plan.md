@@ -577,7 +577,7 @@ flowchart LR
         - #unit_test — `test_status_cli_displays_last_graph_gc_at` — mock response with non-null `maintenance.last_graph_gc_at`, assert timestamp appears in output
         - #unit_test — `test_status_cli_graph_fields_absent_when_graph_disabled` — mock response with `graph=null`, assert no crash
 
-- [ ] **T-3** — E2e: GET /status graph.stale_mention_count and maintenance.last_graph_gc_at correct after GC pass #tester-role
+- [x] **T-3** — E2e: GET /status graph.stale_mention_count and maintenance.last_graph_gc_at correct after GC pass #tester-role
     - — · 1.0h
     - needs BE-8 · completes S5
     - Tests

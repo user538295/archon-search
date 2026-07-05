@@ -28,15 +28,17 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import sys
 import time
-import types
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests.integration.conftest import (
+    ingest_file_via_path,
+    install_spacy_stub,
+    make_real_app,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -55,55 +57,6 @@ _POLL_INTERVAL_S: float = 0.1
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
-
-
-# ---------------------------------------------------------------------------
-# spaCy stub — returns entities based on names present in the input text.
-# Recognises: "Alice" → PERSON, "Bob" → PERSON, "Google" → ORG.
-# Must be installed BEFORE make_real_app(graph_enabled=True) because create_app
-# calls _check_graph_deps which imports spaCy synchronously.
-# ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _FakeEnt:
-        def __init__(self, text: str, label: str) -> None:
-            self.text = text
-            self.label_ = label
-
-    class _FakeDoc:
-        def __init__(self, ents: list) -> None:
-            self.ents = ents
-
-    _ENTITY_MAP = [
-        ("Alice", "PERSON"),
-        ("Bob", "PERSON"),
-        ("Google", "ORG"),
-    ]
-
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            ents = [
-                _FakeEnt(name, label)
-                for name, label in _ENTITY_MAP
-                if name in text
-            ]
-            return _FakeDoc(ents)
-
-    nlp_instance = _FakeNLP()
-
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +245,7 @@ def test_e2d_t2_gc_removes_orphan_nodes_visible_in_graph(
        Assert "Bob" PRESENT (survivor — GC did not over-delete).
     7. Assert maintenance.last_graph_gc_at is a non-null ISO-8601 string.
     """
-    _install_spacy_stub(monkeypatch)
+    install_spacy_stub(monkeypatch)
 
     col = "gc-orphan-col"
 
@@ -508,7 +461,7 @@ def test_e2d_t2_gc_status_fields_populated(
     cached from last GC pass) — it reflects the MEASURED count from the most recent pass,
     not a live query.
     """
-    _install_spacy_stub(monkeypatch)
+    install_spacy_stub(monkeypatch)
 
     col = "gc-status-col"
 
