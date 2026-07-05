@@ -341,6 +341,11 @@ async def _build_graph_status(
     when graph is disabled **or** when no ``GraphStore`` is wired on
     ``app.state`` — the latter keeps the endpoint resilient to alternative app
     factories used in tests.
+
+    BE-8: reads ``communities_invalidated`` per collection and ``stale_mention_count``
+    from the maintenance state file via the shared ``_load_state`` helper on the
+    ``MaintenanceLoop`` instance.  Falls back to defaults (``False`` / ``0``) when no
+    ``MaintenanceLoop`` is wired on ``app.state``.
     """
     if not config.graph.enabled:
         return None
@@ -349,15 +354,29 @@ async def _build_graph_status(
         return None
 
     ns: str = request.state.namespace
+
+    # BE-8 — read maintenance state once; shared with _build_maintenance_status
+    maintenance_loop = getattr(request.app.state, "maintenance_loop", None)
+    if maintenance_loop is not None:
+        state = maintenance_loop._load_state()
+    else:
+        state = {}
+    collection_health: dict = state.get("collection_health", {}) if state else {}
+    stale_mention_count: int = state.get("stale_mention_count", 0) if state else 0
+
     collection_stats: list[GraphCollectionStats] = []
     for col in ns_collection_names:
         node_count = await graph_store.node_count(col, ns=ns)
         edge_count = await graph_store.edge_count(col, ns=ns)
+        col_key = f"{ns}/{col}"
+        col_health_entry: dict = collection_health.get(col_key, {})
+        communities_invalidated: bool = bool(col_health_entry.get("communities_invalidated", False))
         collection_stats.append(
             GraphCollectionStats(
                 collection=col,
                 node_count=node_count,
                 edge_count=edge_count,
+                communities_invalidated=communities_invalidated,
             )
         )
 
@@ -365,6 +384,7 @@ async def _build_graph_status(
         enabled=True,
         backend_threshold_edges=config.graph.backend_threshold_edges,
         collections=collection_stats,
+        stale_mention_count=stale_mention_count,
     )
 
 
@@ -404,6 +424,7 @@ async def _build_maintenance_status(
     last_run_at: str | None = state.get("last_run_at")
     next_run_at: str | None = state.get("next_run_at")
     last_expired_pruned_at: str | None = state.get("last_expired_pruned_at")
+    last_graph_gc_at: str | None = state.get("last_graph_gc_at")
     all_health: dict = state.get("collection_health", {})
     if not isinstance(all_health, dict):
         all_health = {}
@@ -449,4 +470,5 @@ async def _build_maintenance_status(
         collection_health=collection_health,
         expired_chunk_count=expired_chunk_count,
         last_expired_pruned_at=last_expired_pruned_at,
+        last_graph_gc_at=last_graph_gc_at,
     )

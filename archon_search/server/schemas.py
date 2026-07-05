@@ -153,6 +153,8 @@ class MaintenanceStatusDetail(BaseModel):
     expired_chunk_count: int = Field(default=0, ge=0)
     # E2a BE-8 — timestamp of the last expired-chunk prune run (null until first run)
     last_expired_pruned_at: str | None = None
+    # BE-8 (graph GC) — timestamp of the last graph GC pass (null until first GC run)
+    last_graph_gc_at: str | None = None
 
 
 class MaintenanceTriggerResponse(BaseModel):
@@ -314,11 +316,15 @@ class GraphCollectionStats(BaseModel):
 
     Each entry reports the number of nodes and edges in the collection's
     ``_archon_graph_{col}_nodes`` / ``_archon_graph_{col}_edges`` tables.
+    ``communities_invalidated`` is ``True`` when graph GC removed nodes/edges
+    but communities have not yet been rebuilt for this collection (BE-8).
     """
 
     collection: str
     node_count: int = Field(ge=0)
     edge_count: int = Field(ge=0)
+    # BE-8 — True when GC invalidated communities and rebuild is pending
+    communities_invalidated: bool = False
 
 
 class GraphStatusDetail(BaseModel):
@@ -330,11 +336,15 @@ class GraphStatusDetail(BaseModel):
     ``backend_threshold_edges`` mirrors the configured operator threshold
     for the NetworkX backend — above this count a WARNING is emitted on
     ingest and the hint to migrate to Kuzu (E1b) is surfaced.
+    ``stale_mention_count`` is the aggregate count of stale mention rows
+    detected during the last graph GC pass (BE-8); 0 before any GC pass.
     """
 
     enabled: bool
     backend_threshold_edges: int
     collections: list[GraphCollectionStats] = []
+    # BE-8 — sum of stale mention rows detected across all collections during last GC
+    stale_mention_count: int = 0
 
 
 class StatusResponse(BaseModel):

@@ -1296,11 +1296,16 @@
         "type": "object"
       },
       "GraphCollectionStats": {
-        "description": "Per-collection graph statistics (E1a FE-1 / C2).\n\nEach entry reports the number of nodes and edges in the collection's\n``_archon_graph_{col}_nodes`` / ``_archon_graph_{col}_edges`` tables.",
+        "description": "Per-collection graph statistics (E1a FE-1 / C2).\n\nEach entry reports the number of nodes and edges in the collection's\n``_archon_graph_{col}_nodes`` / ``_archon_graph_{col}_edges`` tables.\n``communities_invalidated`` is ``True`` when graph GC removed nodes/edges\nbut communities have not yet been rebuilt for this collection (BE-8).",
         "properties": {
           "collection": {
             "title": "Collection",
             "type": "string"
+          },
+          "communities_invalidated": {
+            "default": false,
+            "title": "Communities Invalidated",
+            "type": "boolean"
           },
           "edge_count": {
             "minimum": 0.0,
@@ -1455,7 +1460,7 @@
         "type": "object"
       },
       "GraphStatusDetail": {
-        "description": "Graph feature status sub-object for GET /status (E1a FE-1 / C2).\n\nPresent when ``[graph] enabled = true``; the parent ``graph`` field\nbeing ``null`` signals that graph is disabled.\n\n``backend_threshold_edges`` mirrors the configured operator threshold\nfor the NetworkX backend \u2014 above this count a WARNING is emitted on\ningest and the hint to migrate to Kuzu (E1b) is surfaced.",
+        "description": "Graph feature status sub-object for GET /status (E1a FE-1 / C2).\n\nPresent when ``[graph] enabled = true``; the parent ``graph`` field\nbeing ``null`` signals that graph is disabled.\n\n``backend_threshold_edges`` mirrors the configured operator threshold\nfor the NetworkX backend \u2014 above this count a WARNING is emitted on\ningest and the hint to migrate to Kuzu (E1b) is surfaced.\n``stale_mention_count`` is the aggregate count of stale mention rows\ndetected during the last graph GC pass (BE-8); 0 before any GC pass.",
         "properties": {
           "backend_threshold_edges": {
             "title": "Backend Threshold Edges",
@@ -1472,6 +1477,11 @@
           "enabled": {
             "title": "Enabled",
             "type": "boolean"
+          },
+          "stale_mention_count": {
+            "default": 0,
+            "title": "Stale Mention Count",
+            "type": "integer"
           }
         },
         "required": [
@@ -2292,6 +2302,17 @@
               }
             ],
             "title": "Last Expired Pruned At"
+          },
+          "last_graph_gc_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Graph Gc At"
           },
           "last_run_at": {
             "anyOf": [
