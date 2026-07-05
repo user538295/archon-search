@@ -2859,7 +2859,19 @@ class SearchPipeline:
         meta = await self.store.get_collection_meta(collection, namespace=namespace)
         if meta is None:
             raise ValueError(f"collection {collection!r} not found in namespace {namespace!r}")
-        return await self.store.delete_document(collection, doc_id, namespace=namespace)
+        deleted = await self.store.delete_document(collection, doc_id, namespace=namespace)
+        if self._graph_store is not None:
+            try:
+                await self._graph_store.delete_mentions_by_doc(collection, doc_id, ns=namespace)
+            except Exception:
+                logger.warning(
+                    "delete_document: graph mention cleanup failed for doc_id=%r collection=%r; "
+                    "stale mentions may persist until the next maintenance GC pass removes them",
+                    doc_id,
+                    collection,
+                    exc_info=True,
+                )
+        return deleted
 
     async def list_collections(self) -> list[CollectionInfo]:
         return await self.store.list_collections()

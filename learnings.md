@@ -1376,3 +1376,14 @@
 - Observation: `check_and_warn_legacy_graph_tables` scans the DB for legacy tables and logs a WARNING. It needs only a DB connection, not a `GraphStore` instance. Making it a module-level function (not a method) allows it to be called from `app.py`'s lifespan using `search_store._db` without requiring a connected `GraphStore` — so the check runs even when `graph.enabled = false`.
 - Action: For startup diagnostic checks that span the whole DB (not a specific collection), prefer module-level async functions over instance methods. This avoids forcing callers to instantiate and connect a domain object just to run a read-only scan.
 - Confidence: high
+
+
+**[2026-07-05] — BE-4 TDD: integration test doc_ids must be derived from ingest results, not hardcoded**
+- Observation: `pipeline.delete_document` validates doc_id as 64 hex chars (sha256). Integration tests that hardcode doc_ids like "doc-to-delete" fail this validation. The real doc_id is `sha256(path.resolve())`, available on `IngestResult.doc_id`. 
+- Action: In integration tests for `delete_document`, always get the doc_id from `ingest_result.doc_id` rather than hardcoding a value. For stub extractors that need to reference the doc_id at mention-write time, use a coroutine-style extractor that captures the doc_id from the `extract(chunks, doc_id, collection)` call rather than closing over a pre-set value.
+- Confidence: high
+
+**[2026-07-05] — BE-4: graph hook pattern for delete_document**
+- Observation: The guard-and-swallow pattern (`if self._graph_store is not None: try: ... except Exception: logger.warning(...)`) is correct for post-delete graph cleanup hooks — the delete must succeed even if the graph layer fails, since the GC pass handles stale mentions.
+- Action: For all post-delete graph hooks in pipeline.py, use this exact pattern. Do NOT re-raise from the except block. The WARNING log is sufficient signal for operators.
+- Confidence: high

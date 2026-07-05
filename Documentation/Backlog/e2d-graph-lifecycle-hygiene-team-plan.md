@@ -472,7 +472,7 @@ flowchart LR
         - #unit_test — `test_community_builder_passes_namespace` — mock `graph_store`, pass `ns='tenant_x'`, verify `get_all_nodes` and `write_communities` called with `ns='tenant_x'` as keyword argument
         - #unit_test — `test_graph_expander_passes_namespace` — mock, pass `ns='tenant_x'`, verify `find_nodes_by_name` called with `ns='tenant_x'` as keyword argument
 
-- [ ] **BE-4** — Wire `graph_store.delete_mentions_by_doc(collection, doc_id, namespace)` into `pipeline.delete_document` immediately after `store.delete_document`. The graph mention hook must be guarded: `if self._graph_store is not None:`. If `delete_mentions_by_doc` raises, catch the exception, log a WARNING, and return the normal delete result — the GC pass will catch stale mentions on the next run. Graph hook failure must NOT fail an otherwise-successful document delete. #backend-role
+- [x] **BE-4** — Wire `graph_store.delete_mentions_by_doc(collection, doc_id, namespace)` into `pipeline.delete_document` immediately after `store.delete_document`. The graph mention hook must be guarded: `if self._graph_store is not None:`. If `delete_mentions_by_doc` raises, catch the exception, log a WARNING, and return the normal delete result — the GC pass will catch stale mentions on the next run. Graph hook failure must NOT fail an otherwise-successful document delete. #backend-role
     - Use Cases · 1.0h
     - needs BE-2 · completes S1, S12
     - Tests
