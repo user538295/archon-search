@@ -61,7 +61,9 @@ bash release.sh --dry-run
 
 Note: release CI (`archon-search-release.yml` and `archon-search-pr.yml`) passes `-n0` explicitly to disable xdist parallelism. CI uses multi-step `--cov-append` across separate pytest invocations; xdist's per-invocation combine step would corrupt the accumulated `.coverage` file.
 
-**PARALLEL TESTS ARE MANDATORY: Always run `uv run pytest` without `-n0`. The `addopts` in `pyproject.toml` already sets `-n auto --dist=loadgroup`. Never add `-n0` — it disables parallelism and is reserved for developer debugging only. To see more failure detail, use `--tb=short` or `--tb=long`, never `-n0 -s`.**
+**PARALLEL TESTS ARE MANDATORY: Always run `uv run pytest` without `-n0`. The `addopts` in `pyproject.toml` already sets `-n 4 --dist=loadgroup`. The worker count is deliberately capped at 4 — never raise it back to `-n auto`: auto meant 14 workers on this 14-core machine, and on model-loading paths each worker holds ~2 GB (fastembed/onnxruntime/torch), which OOM-crashed the 48 GB machine on 2026-07-05. Never add `-n0` — it disables parallelism and is reserved for developer debugging only. To see more failure detail, use `--tb=short` or `--tb=long`, never `-n0 -s`.**
+
+**ONE TEST SUITE AT A TIME: Never launch `uv run pytest` via a background mechanism (e.g. `run_in_background`), and never start a new suite run while a previous one may still be alive. Before any test run, `pgrep -fl pytest` must return nothing; if a run timed out or produced no output, wait for its workers to exit before re-running — stacked suite runs are what OOM-crashed the machine on 2026-07-05. While iterating, run scoped paths (`uv run pytest tests/test_x.py --no-cov`); run the full suite once, in the foreground, at task completion.**
 
 `git-cliff >= 2.4` is a release-only prerequisite (not needed for development): `brew install git-cliff` (macOS) or `cargo install git-cliff --version '>=2.4'` (cross-platform).
 
@@ -176,4 +178,11 @@ Do not add:
 - Redundant restatements of existing entries
 
 You MUST update `learnings.md` before ending the session. This is required even if nothing new was discovered. If existing patterns held, add a brief note confirming that.
+
+**Size cap — 150 lines, non-negotiable:**
+`learnings.md` must always stay **under 150 lines** and remain clear, concise, and compact. After every update you MUST review the whole file and re-compact it so it stays under the cap:
+- Merge overlapping or same-theme entries into one dense entry.
+- Delete entries that are stale, superseded, or now enforced elsewhere (code guards, tests, this CLAUDE.md).
+- Compress kept entries — collapse Observation/Action/Confidence into a single action-first bullet (keep the date tag) when space demands it.
+If an update would push the file past 150 lines, compress first, then add.
 

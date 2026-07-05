@@ -109,7 +109,10 @@ norecursedirs = [
 # only on the combined report run, not on intermediate invocations.
 # `--no-cov` is a local-only override developers can pass on the CLI when
 # iterating; it must never be baked into addopts here.
-addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n auto --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark\""
+# -n is capped at 4 — never "auto": auto meant 14 workers on this 14-core machine, and on
+# model-loading paths each worker holds ~2 GB (fastembed/onnxruntime/torch); stacked runs
+# OOM-crashed the 48 GB machine on 2026-07-05 (Jetsam + WindowServer watchdog kill).
+addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n 4 --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark\""
 markers = [
     "benchmark: latency benchmark — serialized via xdist_group('benchmark'); server-dependent tests auto-skip when server is unreachable",
     "integration: integration tests requiring live infrastructure",

@@ -133,7 +133,7 @@ The default test command:
 uv run pytest
 ```
 
-This run excludes `live`, `eval`, `benchmark`, and `integration` markers, enforces `--cov-fail-under=85`, and runs tests in parallel via `pytest-xdist` (`-n auto --dist=loadgroup`). To skip coverage while iterating locally:
+This run excludes `live`, `eval`, `benchmark`, and `integration` markers, enforces `--cov-fail-under=85`, and runs tests in parallel via `pytest-xdist` (`-n 4 --dist=loadgroup`; the worker count is deliberately capped — do not raise it back to `-n auto`, see the testing policy in `CLAUDE.md`). To skip coverage while iterating locally:
 
 ```bash
 uv run pytest --no-cov
