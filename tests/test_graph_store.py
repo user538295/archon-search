@@ -10,6 +10,11 @@ Tests verify:
 - No f-string SQL in graph_store.py
 - find_nodes_by_name is case-insensitive
 - find_nodes_by_name handles multi-word names
+- check_and_warn_legacy_graph_tables warns on old-pattern tables (BE-1b)
+- check_and_warn_legacy_graph_tables is silent when no legacy tables exist (BE-1b)
+- check_and_warn_legacy_graph_tables returns [] and warns when list_tables raises (BE-1b)
+- check_and_warn_legacy_graph_tables handles empty table list (BE-1b)
+- check_and_warn_legacy_graph_tables does not flag ambiguous collection names (BE-1b)
 """
 from __future__ import annotations
 
@@ -1265,4 +1270,226 @@ def test_get_entity_presence_open_table_unexpected_failure_skips_collection() ->
     )
     assert "WARNING" in log_output or "col2" in log_output or "disk error" in log_output, (
         f"Expected a WARNING log for col2 open_table failure, got: {log_output!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# BE-1b — Legacy graph table startup warning
+# ---------------------------------------------------------------------------
+
+
+def test_startup_warns_on_legacy_graph_tables(caplog) -> None:
+    """check_and_warn_legacy_graph_tables must emit a WARNING listing legacy tables.
+
+    A legacy table is one whose name starts with ``_archon_graph_`` but does NOT
+    match the E2d positive regex.  Two such tables are present in the mock DB;
+    the function must log a WARNING that names both of them and includes
+    instructions to delete them manually.
+    """
+    import asyncio
+    import logging
+
+    from archon_search.graph_store import check_and_warn_legacy_graph_tables
+
+    # Simulate list_tables() returning a mix: four legacy + two new-pattern tables.
+    list_tables_result = MagicMock()
+    list_tables_result.tables = [
+        "_archon_graph_mycol_nodes",
+        "_archon_graph_mycol_edges",
+        "_archon_graph_mycol_communities",
+        "_archon_graph_mycol_mentions",
+        "_archon_graph_default__mycol_nodes",
+        "_archon_graph_default__mycol_edges",
+        "some_other_table",
+    ]
+    mock_db = AsyncMock()
+    mock_db.list_tables = AsyncMock(return_value=list_tables_result)
+
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        legacy = asyncio.run(check_and_warn_legacy_graph_tables(mock_db))
+
+    assert "_archon_graph_mycol_nodes" in legacy
+    assert "_archon_graph_mycol_edges" in legacy
+    assert "_archon_graph_mycol_communities" in legacy
+    assert "_archon_graph_mycol_mentions" in legacy
+    assert len(legacy) == 4
+
+    assert any("legacy" in rec.message.lower() for rec in caplog.records), (
+        f"Expected 'legacy' in WARNING log, got: {caplog.records!r}"
+    )
+    assert any("_archon_graph_mycol_nodes" in rec.message for rec in caplog.records), (
+        f"Expected legacy table name in WARNING log, got: {caplog.records!r}"
+    )
+    assert any("_archon_graph_mycol_edges" in rec.message for rec in caplog.records), (
+        f"Expected legacy table name in WARNING log, got: {caplog.records!r}"
+    )
+    # Must include actionable delete instructions
+    assert any(
+        "delete" in rec.message.lower() or "manual" in rec.message.lower()
+        for rec in caplog.records
+    ), f"Expected delete/manual instructions in WARNING log, got: {caplog.records!r}"
+    import logging
+    assert any(
+        rec.levelno == logging.WARNING and "legacy" in rec.message.lower()
+        for rec in caplog.records
+    ), f"Expected WARNING-level 'legacy' record, got: {caplog.records!r}"
+
+
+def test_startup_no_warn_when_no_legacy_tables(caplog) -> None:
+    """check_and_warn_legacy_graph_tables must be silent when only new-pattern tables exist.
+
+    New-pattern tables all match the E2d positive regex.  No WARNING must be
+    emitted; the return value must be an empty list.
+    """
+    import asyncio
+    import logging
+
+    from archon_search.graph_store import check_and_warn_legacy_graph_tables
+
+    list_tables_result = MagicMock()
+    list_tables_result.tables = [
+        "_archon_graph_default__col1_nodes",
+        "_archon_graph_default__col1_edges",
+        "_archon_graph_ns1__col2_communities",
+        "some_unrelated_table",
+    ]
+    mock_db = AsyncMock()
+    mock_db.list_tables = AsyncMock(return_value=list_tables_result)
+
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        legacy = asyncio.run(check_and_warn_legacy_graph_tables(mock_db))
+
+    assert legacy == [], f"Expected empty list when no legacy tables, got: {legacy}"
+    archon_warnings = [r for r in caplog.records if r.name.startswith("archon_search")]
+    assert not archon_warnings
+
+
+def test_check_and_warn_legacy_graph_tables_exception(caplog) -> None:
+    """check_and_warn_legacy_graph_tables must return [] and log WARNING when list_tables raises."""
+    import asyncio
+    import logging
+
+    from archon_search.graph_store import check_and_warn_legacy_graph_tables
+
+    mock_db = AsyncMock()
+    mock_db.list_tables = AsyncMock(side_effect=RuntimeError("DB connection lost"))
+
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        legacy = asyncio.run(check_and_warn_legacy_graph_tables(mock_db))
+
+    assert legacy == [], f"Expected [] on exception, got: {legacy}"
+    assert any("scan failed" in rec.message.lower() or "skipping" in rec.message.lower() for rec in caplog.records), (
+        f"Expected scan-failed WARNING on exception, got: {caplog.records!r}"
+    )
+    import logging
+    assert any(
+        rec.levelno == logging.WARNING
+        for rec in caplog.records
+        if "scan failed" in rec.message.lower() or "skipping" in rec.message.lower()
+    ), f"Expected WARNING-level scan-failed record, got: {caplog.records!r}"
+
+
+def test_check_and_warn_legacy_graph_tables_empty(caplog) -> None:
+    """check_and_warn_legacy_graph_tables returns [] and emits no WARNING for an empty table list."""
+    import asyncio
+    import logging
+
+    from archon_search.graph_store import check_and_warn_legacy_graph_tables
+
+    list_tables_result = MagicMock()
+    list_tables_result.tables = []
+    mock_db = AsyncMock()
+    mock_db.list_tables = AsyncMock(return_value=list_tables_result)
+
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        legacy = asyncio.run(check_and_warn_legacy_graph_tables(mock_db))
+
+    assert legacy == []
+    archon_warnings = [r for r in caplog.records if r.name.startswith("archon_search")]
+    assert not archon_warnings
+
+
+def test_check_and_warn_legacy_graph_tables_ambiguous_collection_name(caplog) -> None:
+    """Known limitation: a table whose collection name contains __ is NOT flagged as legacy.
+
+    A table named ``_archon_graph_foo__bar_nodes`` matches the E2d positive regex
+    because the regex treats ``foo`` as the namespace and ``bar`` as the collection.
+    This is an intentional false-negative — the heuristic prefers missing legacy
+    tables over falsely warning about valid new-pattern tables.
+    """
+    import asyncio
+    import logging
+
+    from archon_search.graph_store import check_and_warn_legacy_graph_tables
+
+    list_tables_result = MagicMock()
+    list_tables_result.tables = [
+        # This looks like a legacy table but has __ in the collection name portion;
+        # the regex matches it as new-pattern (ns=foo, col=bar) — known limitation.
+        "_archon_graph_foo__bar_nodes",
+    ]
+    mock_db = AsyncMock()
+    mock_db.list_tables = AsyncMock(return_value=list_tables_result)
+
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        legacy = asyncio.run(check_and_warn_legacy_graph_tables(mock_db))
+
+    # Current heuristic treats this as new-pattern — NOT flagged as legacy.
+    assert legacy == [], (
+        "Known limitation: foo__bar_nodes matches E2d regex and is not flagged as legacy"
+    )
+    archon_warnings = [r for r in caplog.records if r.name.startswith("archon_search")]
+    assert not archon_warnings
+
+
+def test_check_and_warn_no_false_positive_underscored_segments(caplog) -> None:
+    """Valid E2d tables with underscores in ns/col must NOT be flagged as legacy.
+
+    E.g. _archon_graph_a_b__c_d_nodes has ns='a_b' and col='c_d' —
+    the positive regex must match this as new-pattern and NOT warn.
+    """
+    import asyncio
+    import logging
+
+    from archon_search.graph_store import check_and_warn_legacy_graph_tables
+
+    list_tables_result = MagicMock()
+    list_tables_result.tables = [
+        "_archon_graph_a_b__c_d_nodes",     # ns=a_b, col=c_d
+        "_archon_graph_tenant_1__my_docs_edges",  # ns=tenant_1, col=my_docs
+    ]
+    mock_db = AsyncMock()
+    mock_db.list_tables = AsyncMock(return_value=list_tables_result)
+
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        legacy = asyncio.run(check_and_warn_legacy_graph_tables(mock_db))
+
+    assert legacy == [], f"Expected no legacy tables for underscore-bearing names, got: {legacy}"
+    archon_warnings = [r for r in caplog.records if r.name.startswith("archon_search")]
+    assert not archon_warnings
+
+
+def test_new_pattern_re_matches_all_table_name_helper_outputs() -> None:
+    """_NEW_PATTERN_RE must match every table name produced by GraphStore's name helpers.
+
+    This test mechanically binds the regex to the actual table name format produced by
+    _table_name, preventing silent drift if the separator or suffix set changes.
+    """
+    from archon_search.graph_store import _NEW_PATTERN_RE, GraphStore
+
+    # GraphStore table-name helpers require no DB connection — instantiate without __init__
+    gs = GraphStore.__new__(GraphStore)
+
+    # All four suffixes, two different ns/col pairs
+    for ns, col in [("default", "mycol"), ("tenant_a", "my_docs")]:
+        for method_name in ["_nodes_table_name", "_edges_table_name", "_communities_table_name", "_mentions_table_name"]:
+            method = getattr(gs, method_name)
+            table_name = method(col, ns)
+            assert _NEW_PATTERN_RE.match(table_name), (
+                f"_NEW_PATTERN_RE must match {method_name}({col!r}, ns={ns!r}) output {table_name!r}"
+            )
+
+    # Confirm legacy names (no __ separator) are NOT matched
+    assert not _NEW_PATTERN_RE.match("_archon_graph_mycol_nodes"), (
+        "_NEW_PATTERN_RE must NOT match legacy-pattern names"
     )

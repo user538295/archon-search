@@ -34,6 +34,7 @@ from archon_search.progress import IndexingStateStore
 from archon_search.reranker import ModelReranker, Reranker
 from archon_search.server.middleware_auth import APIKeyMiddleware, _EXEMPT_PATHS
 from archon_search.server.middleware_context import RequestContextMiddleware
+from archon_search.graph_store import check_and_warn_legacy_graph_tables
 from archon_search.store import SearchStore
 
 try:
@@ -187,6 +188,14 @@ def create_app(
         # Startup: connect search store
         await app.state.search_store.connect()
         await app.state.search_store._run_startup_migrations()
+
+        # Startup: warn once if legacy graph tables (pre-E2d naming) exist in the DB.
+        # This check runs unconditionally so operators are notified even when
+        # graph.enabled = false.  Never raises — startup continues regardless.
+        try:
+            await check_and_warn_legacy_graph_tables(app.state.search_store._db)
+        except Exception:  # noqa: BLE001 — never block startup for a diagnostic check
+            logger.warning("Legacy graph table scan failed; skipping", exc_info=True)
 
         # Startup: connect graph store (if graph is enabled)
         if app.state.graph_store is not None:

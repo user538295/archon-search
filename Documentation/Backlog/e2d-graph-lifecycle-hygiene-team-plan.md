@@ -448,7 +448,7 @@ flowchart LR
         - #unit_test — `test_validate_namespace_accepts_valid_names` — `"tenant-a"`, `"tenant_a"`, `"ns123"` all pass
         - #integration_test — `test_graph_tables_isolated_across_namespaces` — write DIFFERENT data to ns_a/docs and ns_b/docs; assert ns_a reads its own data AND ns_b reads its own DIFFERENT data; assert ns_a writes do not appear in ns_b reads AND vice versa (two-sided isolation); real LanceDB in `tmp_path`
 
-- [ ] **BE-1b** — At server startup, scan the LanceDB database for tables matching the old pattern `_archon_graph_{col}_*` (no `__` separator) and emit a one-time WARNING listing them with instructions to delete manually #backend-role
+- [x] **BE-1b** — At server startup, scan the LanceDB database for tables matching the old pattern `_archon_graph_{col}_*` (no `__` separator) and emit a one-time WARNING listing them with instructions to delete manually #backend-role
     - Frameworks & Drivers · 1.0h
     - needs BE-1 · completes S6 (operator-visible upgrade notice)
     - Tests

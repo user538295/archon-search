@@ -100,6 +100,7 @@ class GraphStore:
         _validate_segment_safe(collection, "collection name")
 
     def _table_name(self, collection: str, ns: str, suffix: str) -> str:
+        # Note: _NEW_PATTERN_RE (below) must stay in sync with this format
         return _ARCHON_PREFIX + "graph_" + ns + "__" + collection + "_" + suffix
 
     def _nodes_table_name(self, collection: str, ns: str) -> str:
@@ -899,3 +900,80 @@ class GraphStore:
         if arrow is None:
             return []
         return self._arrow_to_edges(arrow)
+
+
+# ---------------------------------------------------------------------------
+# BE-1b — Legacy graph table startup warning
+# ---------------------------------------------------------------------------
+
+# _ARCHON_PREFIX is defined above; derive the graph-table prefix from it.
+_LEGACY_GRAPH_PREFIX = _ARCHON_PREFIX + "graph_"
+
+# Positive regex for the E2d (new-pattern) naming scheme:
+#   _archon_graph_{ns}__{col}_{suffix}
+# where ns and col each match [a-zA-Z0-9][a-zA-Z0-9_-]* and suffix is one of
+# nodes / edges / communities / mentions.
+#
+# Known limitation: a collection named ``foo__bar`` (containing double
+# underscores) produces a table name that matches this regex even though it
+# uses the new-pattern separator.  Such names are therefore NOT flagged as
+# legacy.  This is intentional — false negatives are preferable to false
+# positives when deciding whether to warn operators.
+# Must stay in sync with _table_name above
+_NEW_PATTERN_RE = re.compile(
+    re.escape(_LEGACY_GRAPH_PREFIX)
+    + r"[a-zA-Z0-9][a-zA-Z0-9_-]*__[a-zA-Z0-9][a-zA-Z0-9_-]*_(?:nodes|edges|communities|mentions)$"
+)
+
+
+async def check_and_warn_legacy_graph_tables(db: "lancedb.db.AsyncConnection") -> list[str]:
+    """Scan *db* for legacy graph tables and emit a WARNING if any are found.
+
+    Runs on every server startup so operators are notified whenever old tables
+    remain on disk, regardless of how many times the server has been started.
+
+    Legacy tables use the pre-E2d naming scheme ``_archon_graph_{col}_*`` (single
+    underscore between the prefix and the collection name, no namespace component).
+    The E2d scheme uses a double-underscore separator: ``_archon_graph_{ns}__{col}_*``.
+
+    A table is considered legacy when its name:
+    - starts with ``_archon_graph_``
+    - does NOT match ``_NEW_PATTERN_RE`` (the positive E2d regex)
+
+    Note: a collection name that itself contains ``__`` (e.g. ``foo__bar``) will
+    produce a table name that matches the new-pattern regex and will NOT be flagged.
+    This is the known ambiguity in the heuristic.
+
+    Never raises — on any error from ``list_tables()`` a WARNING is logged and
+    ``[]`` is returned so startup continues unaffected.
+
+    Args:
+        db: An open LanceDB async connection (typically ``SearchStore._db``).
+
+    Returns:
+        List of legacy table names found in the database (may be empty).
+    """
+    try:
+        result = await db.list_tables()
+        all_names: list[str] = result.tables
+
+        legacy = [
+            name
+            for name in all_names
+            if name.startswith(_LEGACY_GRAPH_PREFIX) and not _NEW_PATTERN_RE.match(name)
+        ]
+
+        if legacy:
+            names_str = ", ".join(legacy)
+            logger.warning(
+                "Legacy graph tables detected from a pre-E2d schema (missing namespace separator): "
+                "[%s]. These tables are no longer read by archon-search and should be deleted "
+                "manually from the LanceDB data directory to reclaim disk space. "
+                "No automatic migration is performed.",
+                names_str,
+            )
+
+        return legacy
+    except Exception:  # noqa: BLE001
+        logger.warning("Legacy graph table scan failed; skipping", exc_info=True)
+        return []
