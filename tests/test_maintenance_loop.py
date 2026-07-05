@@ -714,9 +714,9 @@ async def test_run_graph_gc_fetches_live_chunk_ids_with_correct_namespace(
     ss.list_chunks_raw = _fake_list_chunks_raw
 
     gs = MagicMock()
-    gs.count_stale_mentions = MagicMock(return_value=0)
-    gs.prune_stale_mentions = MagicMock(return_value=0)
-    gs.delete_orphan_nodes_and_edges = MagicMock(return_value=MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0))
+    gs.count_stale_mentions = AsyncMock(return_value=0)
+    gs.prune_stale_mentions = AsyncMock(return_value=0)
+    gs.delete_orphan_nodes_and_edges = AsyncMock(return_value=MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0))
 
     cfg = MaintenanceConfig(interval_hours=0)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
@@ -745,14 +745,14 @@ async def test_run_graph_gc_calls_prune_then_delete_orphans(tmp_path: Path) -> N
     ss.list_chunks_raw = _fake_list_chunks_raw
 
     gs = MagicMock()
-    gs.count_stale_mentions = MagicMock(
+    gs.count_stale_mentions = AsyncMock(
         side_effect=lambda *args, **kwargs: (call_order.append("count_stale_mentions"), 5)[1]
     )
-    gs.prune_stale_mentions = MagicMock(
+    gs.prune_stale_mentions = AsyncMock(
         side_effect=lambda *args, **kwargs: (call_order.append("prune_stale_mentions"), 5)[1]
     )
     gc_result = MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0, communities_invalidated=False)
-    gs.delete_orphan_nodes_and_edges = MagicMock(
+    gs.delete_orphan_nodes_and_edges = AsyncMock(
         side_effect=lambda *args, **kwargs: (call_order.append("delete_orphan_nodes_and_edges"), gc_result)[1]
     )
 
@@ -778,15 +778,17 @@ async def test_run_graph_gc_sets_communities_invalidated_when_nodes_removed(tmp_
     ss.list_chunks_raw = _fake_list_chunks_raw
 
     gs = MagicMock()
-    gs.count_stale_mentions = MagicMock(return_value=0)
-    gs.prune_stale_mentions = MagicMock(return_value=0)
+    gs.count_stale_mentions = AsyncMock(return_value=0)
+    gs.prune_stale_mentions = AsyncMock(return_value=0)
     gc_result = MagicMock(orphan_nodes_removed=1, orphan_edges_removed=2, communities_invalidated=True)
-    gs.delete_orphan_nodes_and_edges = MagicMock(return_value=gc_result)
+    gs.delete_orphan_nodes_and_edges = AsyncMock(return_value=gc_result)
 
     cfg = MaintenanceConfig(interval_hours=0)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
     loop._config_graph_enabled = True
+    # Prevent fire-and-forget rebuild task leak; this test asserts the result flag, not the rebuild side effect.
+    loop._spawn_rebuild_task = MagicMock()
 
     stale_count, gc_result_returned = await loop._run_graph_gc("docs", "default")
 
@@ -844,7 +846,11 @@ async def test_run_graph_gc_aborts_when_list_chunks_raises_exception(
     ss.list_chunks_raw = AsyncMock(side_effect=RuntimeError("db connection lost"))
 
     gs = MagicMock()
-    gs.prune_stale_mentions = MagicMock()
+    # C1-I-4: Use AsyncMock so an early-return regression produces a clean
+    # assert_not_called() failure rather than a TypeError on await.
+    gs.count_stale_mentions = AsyncMock()
+    gs.prune_stale_mentions = AsyncMock()
+    gs.delete_orphan_nodes_and_edges = AsyncMock()
 
     cfg = MaintenanceConfig(interval_hours=0)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
@@ -872,23 +878,28 @@ async def test_run_graph_gc_prunes_when_collection_genuinely_empty(tmp_path: Pat
     ss.list_chunks_raw = _empty_iterator
 
     gs = MagicMock()
-    gs.count_stale_mentions = MagicMock(return_value=5)
-    gs.prune_stale_mentions = MagicMock(return_value=5)
-    gc_result = MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0)
-    gs.delete_orphan_nodes_and_edges = MagicMock(return_value=gc_result)
+    gs.count_stale_mentions = AsyncMock(return_value=5)
+    gs.prune_stale_mentions = AsyncMock(return_value=5)
+    gc_result = MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0, communities_invalidated=False)
+    gs.delete_orphan_nodes_and_edges = AsyncMock(return_value=gc_result)
 
     cfg = MaintenanceConfig(interval_hours=0)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
     loop._config_graph_enabled = True
+    # Prevent fire-and-forget rebuild task leak; this test asserts the result flag, not the rebuild side effect.
+    loop._spawn_rebuild_task = MagicMock()
 
     result = await loop._run_graph_gc("docs", "default")
 
     # Should call prune_stale_mentions with empty frozenset
     gs.prune_stale_mentions.assert_called_once()
     call_args = gs.prune_stale_mentions.call_args
-    # Check that live_chunk_ids is empty
     assert call_args is not None
+    # Plan spec (BE-7): prune IS called with live_chunk_ids == frozenset() —
+    # an empty live set from a successful list_chunks_raw read is trusted, not aborted.
+    live_chunk_ids_arg = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs["live_chunk_ids"]
+    assert live_chunk_ids_arg == frozenset()
 
 
 @pytest.mark.asyncio
@@ -903,10 +914,10 @@ async def test_run_graph_gc_no_invalidation_when_zero_orphans(tmp_path: Path) ->
     ss.list_chunks_raw = _empty_iterator
 
     gs = MagicMock()
-    gs.count_stale_mentions = MagicMock(return_value=0)
-    gs.prune_stale_mentions = MagicMock(return_value=0)
+    gs.count_stale_mentions = AsyncMock(return_value=0)
+    gs.prune_stale_mentions = AsyncMock(return_value=0)
     gc_result = MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0, communities_invalidated=False)
-    gs.delete_orphan_nodes_and_edges = MagicMock(return_value=gc_result)
+    gs.delete_orphan_nodes_and_edges = AsyncMock(return_value=gc_result)
 
     cfg = MaintenanceConfig(interval_hours=0)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
@@ -934,10 +945,11 @@ async def test_maintenance_state_writes_last_graph_gc_at(tmp_path: Path) -> None
     ss.list_chunks_raw = _empty_iterator
 
     gs = MagicMock()
-    gs.count_stale_mentions = MagicMock(return_value=3)
-    gs.prune_stale_mentions = MagicMock(return_value=3)
+    # C1-I-3: gs.count_stale_mentions / prune_stale_mentions / delete_orphan_nodes_and_edges
+    # are dead configuration here — loop._run_graph_gc is stubbed wholesale below.
+    # Removed dead mock-assignment lines; gs itself is kept for _graph_store assignment.
+
     gc_result = MagicMock(orphan_nodes_removed=1, orphan_edges_removed=2, communities_invalidated=True)
-    gs.delete_orphan_nodes_and_edges = MagicMock(return_value=gc_result)
 
     cfg = MaintenanceConfig(interval_hours=0, prune_expired_chunks=False)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
@@ -981,10 +993,11 @@ async def test_stale_mention_count_is_sum_across_collections(tmp_path: Path) -> 
     ss.list_chunks_raw = _empty_iterator
 
     gs = MagicMock()
-    gs.count_stale_mentions = MagicMock(return_value=3)  # 3 for each call
-    gs.prune_stale_mentions = MagicMock(return_value=3)  # 3 pruned each
+    # C1-I-3: gs.count_stale_mentions / prune_stale_mentions / delete_orphan_nodes_and_edges
+    # are dead configuration here — loop._run_graph_gc is stubbed wholesale below.
+    # Removed dead mock-assignment lines; gs itself is kept for _graph_store assignment.
+
     gc_result = MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0, communities_invalidated=False)
-    gs.delete_orphan_nodes_and_edges = MagicMock(return_value=gc_result)
 
     cfg = MaintenanceConfig(interval_hours=0, prune_expired_chunks=False)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)

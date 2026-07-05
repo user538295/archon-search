@@ -558,7 +558,7 @@ flowchart LR
         - #unit_test — `test_build_graph_status_reads_communities_invalidated_both_true_and_false` — parametrize over `True` and `False` state values; assert exact propagation
         - #integration_test — `test_get_status_graph_fields_after_gc` — full app, run GC via trigger, GET `/status`, assert `graph.stale_mention_count` ≥ 0 and `maintenance.last_graph_gc_at` non-null
 
-- [ ] **T-2** — E2e: POST /maintenance/trigger → orphan nodes cleaned; stale_mention_count in graph section and last_graph_gc_at in maintenance section of GET /status #tester-role
+- [x] **T-2** — E2e: POST /maintenance/trigger → orphan nodes cleaned; stale_mention_count in graph section and last_graph_gc_at in maintenance section of GET /status #tester-role
     - — · 2.0h
     - needs BE-7, BE-8 · completes S2, S3, S5
     - Tests

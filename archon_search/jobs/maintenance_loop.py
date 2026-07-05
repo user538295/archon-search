@@ -422,13 +422,13 @@ class MaintenanceLoop:
         live_chunk_ids_frozen = frozenset(live_chunk_ids)
 
         # Phase 2: Count stale mentions (read-only)
-        stale_count = self._graph_store.count_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
+        stale_count = await self._graph_store.count_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
 
         # Phase 3: Prune stale mentions
-        pruned_count = self._graph_store.prune_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
+        pruned_count = await self._graph_store.prune_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
 
         # Phase 4: Delete orphan nodes and edges
-        gc_result = self._graph_store.delete_orphan_nodes_and_edges(collection, ns=namespace)
+        gc_result = await self._graph_store.delete_orphan_nodes_and_edges(collection, ns=namespace)
 
         # Phase 5: Handle community invalidation and rebuild
         if gc_result.communities_invalidated:

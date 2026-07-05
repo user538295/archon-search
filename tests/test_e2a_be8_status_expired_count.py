@@ -185,9 +185,13 @@ def test_status_maintenance_count_expired_chunks_called_per_collection(
 
 @pytest.mark.integration
 def test_status_maintenance_last_expired_pruned_at_null_by_default(
-    tmp_path: Path, auth_headers: dict[str, str]
+    tmp_path: Path, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """BE-8 S8: last_expired_pruned_at is null when not yet written to state file."""
+    # Isolate the data dir: MaintenanceLoop writes .maintenance-state.json to
+    # get_data_dir(), which is worker-shared by default — a sibling test's
+    # _save_state would otherwise leak a non-null value into this test.
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     client = _make_client(tmp_path, auth_headers)
     with client:
         response = client.get("/status")
@@ -198,9 +202,12 @@ def test_status_maintenance_last_expired_pruned_at_null_by_default(
 
 @pytest.mark.integration
 def test_status_maintenance_last_expired_pruned_at_from_state_file(
-    tmp_path: Path, auth_headers: dict[str, str]
+    tmp_path: Path, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """BE-8 S9: last_expired_pruned_at is read from maintenance state file."""
+    # Isolate the data dir so this test's _save_state cannot pollute the
+    # worker-shared state file read by other tests (order-dependent flake).
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     expected_ts = "2026-07-03T08:00:00+00:00"
     client = _make_client(tmp_path, auth_headers)
     with client:
