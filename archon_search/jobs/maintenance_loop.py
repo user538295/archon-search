@@ -431,9 +431,9 @@ class MaintenanceLoop:
         gc_result = await self._graph_store.delete_orphan_nodes_and_edges(collection, ns=namespace)
 
         # Phase 5: Handle community invalidation and rebuild
+        rebuild_key = (namespace, collection)
         if gc_result.communities_invalidated:
             # Check if rebuild already in flight
-            rebuild_key = (namespace, collection)
             if rebuild_key in self._rebuild_state:
                 existing_state = self._rebuild_state[rebuild_key]
                 if not existing_state.task.done():
@@ -446,6 +446,14 @@ class MaintenanceLoop:
             else:
                 # No existing rebuild; spawn a new task
                 self._spawn_rebuild_task(namespace, collection)
+        else:
+            # No new orphans this pass. Consume any completed rebuild state entry so
+            # the health update logic can reset communities_invalidated to False.
+            # (completed=True means the rebuild finished; the flag may be cleared now.)
+            if rebuild_key in self._rebuild_state:
+                existing_state = self._rebuild_state[rebuild_key]
+                if existing_state.completed:
+                    del self._rebuild_state[rebuild_key]
 
         return (stale_count, gc_result)
 
@@ -872,9 +880,21 @@ class MaintenanceLoop:
                 if _gc_result is not None and getattr(_gc_result, "communities_invalidated", False):
                     col_health["communities_invalidated"] = True
                 else:
-                    # Only reset if a rebuild just completed (entry cleanup happens in _run_graph_gc)
-                    if (ns, col) not in self._rebuild_state:
+                    # Reset communities_invalidated when no new orphans were found.
+                    # Two cases:
+                    # 1. No rebuild in flight (key absent) — clear immediately.
+                    # 2. Rebuild completed since last pass (completed=True) — consume the flag,
+                    #    remove the entry, and clear communities_invalidated.
+                    rebuild_key = (ns, col)
+                    existing = self._rebuild_state.get(rebuild_key)
+                    if existing is None:
                         col_health["communities_invalidated"] = False
+                    elif existing.completed:
+                        # Rebuild finished; consume the completed entry and reset the flag.
+                        del self._rebuild_state[rebuild_key]
+                        col_health["communities_invalidated"] = False
+                    # else: rebuild still in flight — keep communities_invalidated as-is
+                    #       (the state file's value from Phase 5 of the previous pass remains).
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "MaintenanceLoop: _run_graph_gc failed for %s: %s", key, exc

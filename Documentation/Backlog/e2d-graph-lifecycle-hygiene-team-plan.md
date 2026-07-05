@@ -583,7 +583,7 @@ flowchart LR
     - Tests
         - #e2e_test — `test_e2d_t3_status_stale_mention_count_zero_after_clean_gc` — ingest, no deletions, POST trigger, GET `/status`, assert `graph.stale_mention_count == 0` and `maintenance.last_graph_gc_at` non-null
 
-- [ ] **T-4** — E2e + manual: communities auto-rebuild after GC; CPU priority degrades gracefully #tester-role
+- [x] **T-4** — E2e + manual: communities auto-rebuild after GC; CPU priority degrades gracefully #tester-role
     - — · 2.0h
     - needs BE-7 · completes S4, S9, S10
     - Tests
