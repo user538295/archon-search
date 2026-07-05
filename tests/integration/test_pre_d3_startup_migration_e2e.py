@@ -210,9 +210,14 @@ def test_pre_d3_startup_applies_in_place_migrations_e2e(
         f"(migration ran twice?): "
         f"{[(r.name, r.levelname, r.message) for r in concurrent_migration_warnings]}"
     )
-    # All other WARNING+ records are also unexpected during a clean startup migration.
+    # gc_rebuild_cpu_priority warnings are expected on non-Linux dev machines —
+    # the default 'low' priority is a no-op on macOS/Windows and is correctly
+    # warned about at startup (E2d BE-6).  Filter these out before the clean
+    # startup assertion.
     other_warnings = [
-        r for r in all_archon_warnings if "Concurrent migration" not in r.message
+        r for r in all_archon_warnings
+        if "Concurrent migration" not in r.message
+        and "gc_rebuild_cpu_priority" not in r.message
     ]
     assert other_warnings == [], (
         f"unexpected WARNING+ log messages from archon_search during startup migration: "

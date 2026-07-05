@@ -187,6 +187,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "retry_max_age_hours": 72,
             "exclude": [],
             "prune_expired_chunks": True,
+            "graph_gc": True,
         },
         # [auth]
         "auth": {
@@ -211,6 +212,8 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "max_global_candidates": 100,
             "max_inspection_nodes": 5000,
             "max_inspection_edges": 25000,
+            "gc_rebuild_communities": True,
+            "gc_rebuild_cpu_priority": "low",
         },
     }
 

@@ -275,7 +275,7 @@ async def test_run_one_pass_no_collections(tmp_path: Path) -> None:
     loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
     loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
     loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
-    loop._run_graph_gc = AsyncMock()  # type: ignore[method-assign]
+    loop._run_graph_gc = AsyncMock(return_value=(0, None))  # type: ignore[method-assign]
     loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
 
     await loop._run_one_pass()
@@ -503,7 +503,7 @@ async def test_run_one_pass_health_entry_conforms_to_c3_schema(tmp_path: Path) -
     loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
     loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
     loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
-    loop._run_graph_gc = AsyncMock()  # type: ignore[method-assign]
+    loop._run_graph_gc = AsyncMock(return_value=(0, None))  # type: ignore[method-assign]
     loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
 
     await loop._run_one_pass()
@@ -788,10 +788,10 @@ async def test_run_graph_gc_sets_communities_invalidated_when_nodes_removed(tmp_
     loop._graph_store = gs
     loop._config_graph_enabled = True
 
-    result = await loop._run_graph_gc("docs", "default")
+    stale_count, gc_result_returned = await loop._run_graph_gc("docs", "default")
 
-    assert result is not None
-    assert result.communities_invalidated is True
+    assert gc_result_returned is not None
+    assert gc_result_returned.communities_invalidated is True
 
 
 @pytest.mark.asyncio
@@ -803,10 +803,11 @@ async def test_run_graph_gc_skips_when_graph_disabled(tmp_path: Path) -> None:
     # graph_store NOT set
     loop._config_graph_enabled = False
 
-    result = await loop._run_graph_gc("docs", "default")
+    stale_count, gc_result_returned = await loop._run_graph_gc("docs", "default")
 
-    # Should skip silently
-    assert result is not None or result is None  # Method exists and either returns None or empty result
+    # Should skip silently — returns (0, None)
+    assert stale_count == 0
+    assert gc_result_returned is None
 
 
 @pytest.mark.asyncio
@@ -912,10 +913,10 @@ async def test_run_graph_gc_no_invalidation_when_zero_orphans(tmp_path: Path) ->
     loop._graph_store = gs
     loop._config_graph_enabled = True
 
-    result = await loop._run_graph_gc("docs", "default")
+    stale_count, gc_result_returned = await loop._run_graph_gc("docs", "default")
 
-    assert result is not None
-    assert result.communities_invalidated is False
+    assert gc_result_returned is not None
+    assert gc_result_returned.communities_invalidated is False
 
 
 @pytest.mark.asyncio
@@ -943,8 +944,8 @@ async def test_maintenance_state_writes_last_graph_gc_at(tmp_path: Path) -> None
     loop._graph_store = gs
     loop._config_graph_enabled = True
 
-    # Stub the GC method if not yet implemented
-    loop._run_graph_gc = AsyncMock(return_value=gc_result)  # type: ignore[method-assign]
+    # Stub the GC method — returns (stale_count, gc_result) tuple
+    loop._run_graph_gc = AsyncMock(return_value=(3, gc_result))  # type: ignore[method-assign]
 
     loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
     loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
@@ -990,7 +991,8 @@ async def test_stale_mention_count_is_sum_across_collections(tmp_path: Path) -> 
     loop._graph_store = gs
     loop._config_graph_enabled = True
 
-    loop._run_graph_gc = AsyncMock(return_value=gc_result)  # type: ignore[method-assign]
+    # _run_graph_gc returns (stale_count, gc_result) — 3 stale per collection
+    loop._run_graph_gc = AsyncMock(return_value=(3, gc_result))  # type: ignore[method-assign]
     loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
     loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
     loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]

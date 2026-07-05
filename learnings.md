@@ -1422,3 +1422,13 @@
 - Observation: `graph_inspector.py`'s `inspect_collection()` calls `get_all_nodes()` which returns all nodes including orphans with `chunk_count=0`. Orphan nodes remain visible via GET /graph until GC explicitly removes them from the nodes table (BE-5 `delete_orphan_nodes_and_edges`). The maintenance loop has no GC policy yet (BE-7 pending).
 - Action: When a test asserts behavior that requires future tasks (BE-5+BE-7) that are not yet implemented, use a conditional `pytest.xfail()` call — check the condition first (`if alice_after_gc is not None: pytest.xfail(reason)`) so the xfail is only triggered when needed. This auto-resolves when the future tasks land (condition becomes false, xfail branch is skipped, test passes naturally). CRITICAL: the implement-next protocol requires all tests to be green — a hard-failing assertion blocks commits and is NOT a "regression gate"; it is a blocker. xfail with a documented reason is the correct approach for cross-phase dependencies. When the future tasks land, the if/xfail block should be removed.
 - Confidence: high
+
+**[2026-07-05] — E2d BE-6: startup warning triggers break existing integration tests that assert no warnings**
+- Observation: Adding a new startup warning (`warn_gc_cpu_priority`) caused `test_pre_d3_startup_migration_e2e` to fail — that test asserts no unexpected WARNING+ log records during startup. The new warning is legitimate (macOS default `"low"` priority), but the test was unaware of it.
+- Action: When a new startup warning is added, scan for integration tests that assert clean startup logs (grep for `other_warnings == []` or `all_archon_warnings`). Add an explicit filter for the new warning message pattern alongside any existing filters. This is the correct pattern — do NOT suppress the warning itself.
+- Confidence: high
+
+**[2026-07-05] — E2d BE-6: adding `import sys` at the top of config.py shifts line numbers and breaks the path_home_allowlist ratchet**
+- Observation: `test_no_hardcoded_path_home.py` pins `(file, lineno, sha)` tuples. Adding any import before a `Path.home()` callsite shifts its line number and breaks the ratchet, even though the code content (sha) is unchanged.
+- Action: After adding any import to `archon_search/config.py`, recheck `tests/path_home_allowlist.txt` and update the line number for the `config.py` entry. Use `grep -n "Path.home()" archon_search/config.py` to find the new line number.
+- Confidence: high

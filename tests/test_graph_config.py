@@ -99,6 +99,8 @@ def test_graph_config_snapshot(tmp_path: Path) -> None:
         "max_global_candidates": 100,
         "max_inspection_nodes": 5000,
         "max_inspection_edges": 25000,
+        "gc_rebuild_communities": True,
+        "gc_rebuild_cpu_priority": "low",
     }
 
 

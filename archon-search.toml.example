@@ -290,6 +290,10 @@ num_queries = 2
 # Requires E2a schema migration (POST /collections/{name}/migrate) before chunks with TTL are stored.
 # prune_expired_chunks = true
 #
+# Enable graph garbage-collection maintenance policy (removes orphaned graph nodes/edges
+# whose source documents have been deleted from the collection).
+# graph_gc = true
+#
 # Maximum number of retry attempts per source file per collection before giving up.
 # retry_max_attempts = 3
 #
@@ -384,6 +388,19 @@ num_queries = 2
 # node truncation, then sorted by weight desc and id asc, and capped at
 # max_inspection_edges. Must be > 0.
 # max_inspection_edges = 25000
+
+# E2d graph garbage-collection fields
+#
+# gc_rebuild_communities (bool, default true): Automatically rebuild communities after
+# GC removes nodes. Keeps community membership current after document deletions.
+# gc_rebuild_communities = true
+
+# gc_rebuild_cpu_priority (str, default "low"): CPU priority for the community rebuild
+# thread spawned after GC. Valid values: "low" (nice 10), "normal" (nice 0), "high"
+# (nice -5). Per-thread CPU priority reduction is a Linux-only feature; on other
+# platforms, os.setpriority() affects the entire process rather than just the rebuild
+# thread, and a startup WARNING is logged when the GC rebuild pipeline is fully active.
+# gc_rebuild_cpu_priority = "low"
 
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.

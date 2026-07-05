@@ -368,7 +368,7 @@ class MaintenanceLoop:
         if hasattr(self, "_current_health"):
             self._current_health["expired_chunks_removed_last_run"] = n
 
-    async def _run_graph_gc(self, collection: str, namespace: str) -> Any:
+    async def _run_graph_gc(self, collection: str, namespace: str) -> tuple[int, Any]:
         """Graph garbage collection for a single collection (BE-7).
 
         Algorithm:
@@ -384,11 +384,12 @@ class MaintenanceLoop:
              - If task done or no task: spawn new async rebuild task with done-callback
            - Update per-collection health entry: communities_invalidated=True
 
-        Returns: GcPassResult object (or None if skipped due to graph disabled)
+        Returns: (stale_count, GcPassResult) tuple where stale_count is the count
+                 measured BEFORE pruning. Returns (0, None) if skipped.
         """
         # Early exit if graph is disabled
         if self._graph_store is None:
-            return None
+            return (0, None)
 
         # Check if graph.enabled = false in config (realistic path when store is live)
         # This is a defense-in-depth check; route handlers should have already guarded this
@@ -397,7 +398,7 @@ class MaintenanceLoop:
             # We don't have direct access to the full config here, so we check a simpler marker
             # that would be set by tests or initialization
             if not getattr(self, "_config_graph_enabled", True):
-                return None
+                return (0, None)
         except Exception:
             pass  # Proceed on any config lookup error
 
@@ -415,7 +416,7 @@ class MaintenanceLoop:
                 collection,
                 exc,
             )
-            return None
+            return (0, None)
 
         # Convert to frozenset for GraphStore API
         live_chunk_ids_frozen = frozenset(live_chunk_ids)
@@ -446,11 +447,7 @@ class MaintenanceLoop:
                 # No existing rebuild; spawn a new task
                 self._spawn_rebuild_task(namespace, collection)
 
-            # Update health entry to indicate communities need rebuilding
-            if hasattr(self, "_current_health"):
-                self._current_health["communities_invalidated"] = True
-
-        return gc_result
+        return (stale_count, gc_result)
 
     def _spawn_rebuild_task(self, namespace: str, collection: str) -> None:
         """Spawn an async community rebuild task for a collection.
@@ -807,6 +804,9 @@ class MaintenanceLoop:
             logger.error("MaintenanceLoop: list_collections failed during pass: %s", exc)
             return
 
+        # Accumulate stale mention counts from per-collection GC runs.
+        per_collection_stale_counts: list[int] = []
+
         for info in collections:
             col = info.name
             ns = info.namespace
@@ -866,7 +866,15 @@ class MaintenanceLoop:
                 col_health["last_error"] = str(exc)
 
             try:
-                await self._run_graph_gc(col, ns)
+                gc_stale_count, _gc_result = await self._run_graph_gc(col, ns)
+                per_collection_stale_counts.append(gc_stale_count)
+                # Update communities_invalidated from gc_result if nodes were removed
+                if _gc_result is not None and getattr(_gc_result, "communities_invalidated", False):
+                    col_health["communities_invalidated"] = True
+                else:
+                    # Only reset if a rebuild just completed (entry cleanup happens in _run_graph_gc)
+                    if (ns, col) not in self._rebuild_state:
+                        col_health["communities_invalidated"] = False
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "MaintenanceLoop: _run_graph_gc failed for %s: %s", key, exc
@@ -887,10 +895,9 @@ class MaintenanceLoop:
         if self._graph_store is not None:
             last_graph_gc_at = now_str
 
-        # Aggregate stale mention counts from collection health entries
-        stale_mention_count = 0
-        # Note: stale_mention_count is aggregated from individual collection GC results
-        # For now, we use a pass-level counter (could be enhanced to track per-collection)
+        # Aggregate stale mention counts from per-collection GC runs.
+        # The spec requires SUM — not last-collection-wins, average, or max.
+        stale_mention_count = sum(per_collection_stale_counts)
 
         # Pass-level retry (once per pass, after all per-collection work).
         # Passes the pass-level health and retry_counts dicts so the method
