@@ -482,7 +482,7 @@ flowchart LR
         - #integration_test — `test_pipeline_delete_document_removes_mentions_real_graph` — ingest doc, delete, assert 0 mention rows for `doc_id` in real graph store
         - #integration_test — `test_pipeline_delete_document_idempotent_on_re_ingest` — delete then re-ingest, assert no duplicate mentions
 
-- [ ] **T-1** — E2e: delete doc removes namespace-isolated graph mentions; shared entity survives in sibling doc #tester-role
+- [x] **T-1** — E2e: delete doc removes namespace-isolated graph mentions; shared entity survives in sibling doc #tester-role
     - — · 2.0h
     - needs BE-4, BE-3 · completes S6, S7
     - Tests

@@ -1387,3 +1387,13 @@
 - Observation: The guard-and-swallow pattern (`if self._graph_store is not None: try: ... except Exception: logger.warning(...)`) is correct for post-delete graph cleanup hooks — the delete must succeed even if the graph layer fails, since the GC pass handles stale mentions.
 - Action: For all post-delete graph hooks in pipeline.py, use this exact pattern. Do NOT re-raise from the except block. The WARNING log is sufficient signal for operators.
 - Confidence: high
+
+**[2026-07-05] — E2d T-1: collection metadata design prevents same collection name in two namespaces**
+- Observation: `store.update_collection_meta` raises `ValueError: Collection 'X' belongs to namespace 'A'; cannot reassign to 'B'` when two namespaces try to share the same collection name. The `_archon_collection_meta` table has one row per collection name — NOT per (namespace, name) pair. This makes it impossible to use `_seed_collection_with_namespace` twice with the same name and different namespaces.
+- Action: For namespace-isolation graph tests where two namespaces need the same collection name, seed ONLY graph data (no collection metadata) and assert via direct GraphStore reads. Skip HTTP GET /graph/{collection} assertions (they require a meta row and return 404 without one). The graph table namespace isolation lives in the graph store layer, not the collection metadata.
+- Confidence: high
+
+**[2026-07-05] — E2d T-1: S7 last assertion documents a deliberate blocker**
+- Observation: `graph_inspector.py`'s `inspect_collection()` calls `get_all_nodes()` which returns all nodes including orphans with `chunk_count=0`. Orphan nodes remain visible via GET /graph until GC explicitly removes them from the nodes table (BE-5 `delete_orphan_nodes_and_edges`). The maintenance loop has no GC policy yet (BE-7 pending).
+- Action: When a test asserts behavior that requires future tasks (BE-5+BE-7) that are not yet implemented, use a conditional `pytest.xfail()` call — check the condition first (`if alice_after_gc is not None: pytest.xfail(reason)`) so the xfail is only triggered when needed. This auto-resolves when the future tasks land (condition becomes false, xfail branch is skipped, test passes naturally). CRITICAL: the implement-next protocol requires all tests to be green — a hard-failing assertion blocks commits and is NOT a "regression gate"; it is a blocker. xfail with a documented reason is the correct approach for cross-phase dependencies. When the future tasks land, the if/xfail block should be removed.
+- Confidence: high
