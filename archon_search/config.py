@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -80,6 +81,8 @@ class MaintenanceConfig:
     retry_max_age_hours: int = 72
     exclude: list[str] = field(default_factory=list)
     prune_expired_chunks: bool = True
+    graph_gc: bool = True
+    """Enable the graph garbage-collection maintenance policy (E2d)."""
 
 
 @dataclass
@@ -128,6 +131,17 @@ class GraphConfig:
     max_inspection_edges: int = 25000
     """Maximum number of edges to return in GET /graph/{collection} responses.
     Edges are truncated deterministically by highest weight-first sort."""
+    # E2d graph garbage-collection fields
+    gc_rebuild_communities: bool = True
+    """Automatically rebuild communities after graph GC removes nodes."""
+    gc_rebuild_cpu_priority: str = "low"
+    """CPU priority for the community rebuild thread after GC.
+    Valid values: 'low' (nice 10), 'normal' (nice 0), 'high' (nice -5).
+    Per-thread CPU priority reduction is a Linux-only feature; on other platforms,
+    os.setpriority() affects the entire process rather than just the rebuild thread.
+    A startup WARNING is logged when the GC rebuild pipeline is fully active
+    (graph.enabled, graph_gc, gc_rebuild_communities all true) and running on a
+    non-Linux platform."""
 
 
 @dataclass
@@ -656,6 +670,8 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         maintenance.prune_expired_chunks = _coerce_bool(
             maintenance_cfg["prune_expired_chunks"], "[maintenance].prune_expired_chunks"
         )
+    if "graph_gc" in maintenance_cfg:
+        maintenance.graph_gc = _coerce_bool(maintenance_cfg["graph_gc"], "[maintenance].graph_gc")
     config.maintenance = maintenance
 
     auth_cfg = doc.get("auth", {})
@@ -745,6 +761,17 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         graph.max_inspection_edges = _coerce_bounded_int(
             graph_cfg["max_inspection_edges"], "[graph].max_inspection_edges", minimum=1
         )
+    if "gc_rebuild_communities" in graph_cfg:
+        graph.gc_rebuild_communities = _coerce_bool(
+            graph_cfg["gc_rebuild_communities"], "[graph].gc_rebuild_communities"
+        )
+    if "gc_rebuild_cpu_priority" in graph_cfg:
+        raw_priority = _coerce_str(graph_cfg["gc_rebuild_cpu_priority"], "[graph].gc_rebuild_cpu_priority")
+        if raw_priority not in {"low", "normal", "high"}:
+            raise ConfigError(
+                f"[graph].gc_rebuild_cpu_priority must be 'low', 'normal', or 'high', got {raw_priority!r}"
+            )
+        graph.gc_rebuild_cpu_priority = raw_priority
     config.graph = graph
 
 
@@ -754,6 +781,32 @@ def _post_process_maintenance(config: SearchConfig) -> None:
         _logger.warning(
             "[maintenance].retry_max_age_hours = 0: all failed ingest jobs will be immediately "
             "eligible for retry regardless of age; this may cause excessive retry churn"
+        )
+
+
+def warn_gc_cpu_priority(config: SearchConfig) -> None:
+    """Log a WARNING when gc_rebuild_cpu_priority is not 'normal' on a non-Linux platform.
+
+    Per-thread CPU priority reduction via ``os.setpriority(os.PRIO_PROCESS, ...)``
+    is a Linux-only feature.  On macOS, BSD, and Windows the setting is a no-op
+    and operators should be alerted at startup so they are not surprised by
+    the lack of effect.
+
+    Call this from the server lifespan after config is loaded.
+    """
+    if (
+        config.graph.enabled
+        and config.maintenance.graph_gc
+        and config.graph.gc_rebuild_communities
+        and config.graph.gc_rebuild_cpu_priority != "normal"
+        and sys.platform != "linux"
+    ):
+        _logger.warning(
+            "[graph].gc_rebuild_cpu_priority = %r but per-thread CPU priority reduction "
+            "is only supported on Linux; on this platform, os.setpriority() would affect "
+            "the entire process. Setting will have no per-thread effect on %r",
+            config.graph.gc_rebuild_cpu_priority,
+            sys.platform,
         )
 
 

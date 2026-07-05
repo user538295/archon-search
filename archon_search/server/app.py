@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from archon_search.chunker import DocumentChunker
-from archon_search.config import ConfigError, SearchConfig
+from archon_search.config import ConfigError, SearchConfig, warn_gc_cpu_priority
 from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, get_fasttext_models_dir
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.embedder_cache import EmbedderCache
@@ -188,6 +188,10 @@ def create_app(
         # Startup: connect search store
         await app.state.search_store.connect()
         await app.state.search_store._run_startup_migrations()
+
+        # Startup: warn when gc_rebuild_cpu_priority is non-normal on non-Linux platforms
+        # (CPU priority reduction via os.nice() is Linux-only).
+        warn_gc_cpu_priority(config)
 
         # Startup: warn once if legacy graph tables (pre-E2d naming) exist in the DB.
         # This check runs unconditionally so operators are notified even when

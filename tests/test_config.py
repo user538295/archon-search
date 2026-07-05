@@ -1273,3 +1273,210 @@ def test_telemetry_config_hash_doc_ids_in_load_config(tmp_path: Path) -> None:
     assert config.telemetry.enabled is True
     assert config.telemetry.retention_days == 14
     assert config.telemetry.hash_doc_ids is True
+
+
+# ---------------------------------------------------------------------------
+# BE-6: Config fields for graph garbage collection
+# ---------------------------------------------------------------------------
+
+
+def test_maintenance_config_graph_gc_default_true() -> None:
+    """MaintenanceConfig() has graph_gc=True by default."""
+    from archon_search.config import MaintenanceConfig
+
+    cfg = MaintenanceConfig()
+    assert cfg.graph_gc is True
+
+
+def test_graph_config_gc_rebuild_defaults() -> None:
+    """GraphConfig() has gc_rebuild_communities=True and gc_rebuild_cpu_priority='low' by default."""
+    from archon_search.config import GraphConfig
+
+    cfg = GraphConfig()
+    assert cfg.gc_rebuild_communities is True
+    assert cfg.gc_rebuild_cpu_priority == "low"
+
+
+def test_toml_graph_gc_false_overrides_default(tmp_path: Path) -> None:
+    """TOML [maintenance] graph_gc = false → MaintenanceConfig.graph_gc == False."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[maintenance]\ngraph_gc = false\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.maintenance.graph_gc is False
+
+
+def test_toml_gc_cpu_priority_round_trip(tmp_path: Path) -> None:
+    """TOML [graph] gc_rebuild_cpu_priority = 'normal' → GraphConfig.gc_rebuild_cpu_priority == 'normal'."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text('[graph]\ngc_rebuild_cpu_priority = "normal"\n', encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.graph.gc_rebuild_cpu_priority == "normal"
+
+
+def test_toml_gc_rebuild_communities_false(tmp_path: Path) -> None:
+    """TOML [graph] gc_rebuild_communities = false → GraphConfig.gc_rebuild_communities == False."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[graph]\ngc_rebuild_communities = false\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.graph.gc_rebuild_communities is False
+
+
+def test_toml_gc_cpu_priority_invalid_raises(tmp_path: Path) -> None:
+    """TOML [graph] gc_rebuild_cpu_priority with invalid value → ConfigError."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text('[graph]\ngc_rebuild_cpu_priority = "urgent"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="gc_rebuild_cpu_priority"):
+        load_config(path=toml_file)
+
+
+def test_toml_gc_cpu_priority_all_valid_values(tmp_path: Path) -> None:
+    """TOML [graph] gc_rebuild_cpu_priority accepts 'low', 'normal', 'high'."""
+    for value in ("low", "normal", "high"):
+        toml_file = tmp_path / f"cfg_{value}.toml"
+        toml_file.write_text(f'[graph]\ngc_rebuild_cpu_priority = "{value}"\n', encoding="utf-8")
+        config = load_config(path=toml_file)
+        assert config.graph.gc_rebuild_cpu_priority == value
+
+
+def test_toml_gc_cpu_priority_empty_string_raises(tmp_path: Path) -> None:
+    """TOML [graph] gc_rebuild_cpu_priority = '' raises ConfigError."""
+    from archon_search.config import ConfigError
+
+    toml_file = tmp_path / "cfg_empty.toml"
+    toml_file.write_text('[graph]\ngc_rebuild_cpu_priority = ""\n', encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path=toml_file)
+
+
+def test_warn_gc_cpu_priority_wired_in_app_lifespan() -> None:
+    """Verify that app.py imports and calls warn_gc_cpu_priority in its lifespan.
+
+    Verified by source inspection: archon_search/server/app.py line 19 imports
+    warn_gc_cpu_priority from archon_search.config, and line 194 calls it with
+    the loaded config. This test asserts those facts remain true so any future
+    refactor that removes the wiring fails loudly.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    app_src = (_Path(__file__).parent.parent / "archon_search" / "server" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(app_src)
+
+    # Assert import of warn_gc_cpu_priority
+    imported = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "archon_search.config":
+            if any(alias.name == "warn_gc_cpu_priority" for alias in node.names):
+                imported = True
+                break
+    assert imported, "app.py must import warn_gc_cpu_priority from archon_search.config"
+
+    # Assert call to warn_gc_cpu_priority
+    called = False
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "warn_gc_cpu_priority"
+        ):
+            called = True
+            break
+    assert called, "app.py lifespan must call warn_gc_cpu_priority(config)"
+
+
+def test_startup_warns_when_cpu_priority_non_normal_on_non_linux(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """warn_gc_cpu_priority logs WARNING on non-Linux when priority != 'normal';
+    no WARNING when priority == 'normal'; no WARNING on Linux regardless of value."""
+    import logging
+    import sys
+
+    from archon_search.config import GraphConfig, SearchConfig, warn_gc_cpu_priority
+
+    # Case 1: non-Linux, low priority, graph fully active → WARNING
+    cfg = SearchConfig()
+    cfg.graph = GraphConfig(enabled=True, gc_rebuild_cpu_priority="low")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        warn_gc_cpu_priority(cfg)
+    assert any(
+        "gc_rebuild_cpu_priority" in r.message and r.levelno == logging.WARNING
+        for r in caplog.records
+    )
+
+    caplog.clear()
+
+    # Case 2: non-Linux (still darwin from Case 1 monkeypatch), normal priority, graph
+    # fully active → no WARNING. Suppression is because priority == 'normal', NOT because
+    # graph is disabled — graph.enabled=True here to prevent a tautological pass.
+    cfg2 = SearchConfig()
+    cfg2.graph = GraphConfig(enabled=True, gc_rebuild_cpu_priority="normal")
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        warn_gc_cpu_priority(cfg2)
+    assert not any("gc_rebuild_cpu_priority" in r.message for r in caplog.records)
+
+    caplog.clear()
+
+    # Case 3: non-Linux, high priority, graph fully active → WARNING
+    cfg3 = SearchConfig()
+    cfg3.graph = GraphConfig(enabled=True, gc_rebuild_cpu_priority="high")
+    # platform is still "darwin" from Case 1 monkeypatch
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        warn_gc_cpu_priority(cfg3)
+    assert any(
+        "gc_rebuild_cpu_priority" in r.message and r.levelno == logging.WARNING
+        for r in caplog.records
+    )
+
+    caplog.clear()
+
+    # Case 4: Linux, low priority → no WARNING
+    cfg4 = SearchConfig()
+    cfg4.graph = GraphConfig(enabled=True, gc_rebuild_cpu_priority="low")
+    monkeypatch.setattr(sys, "platform", "linux")
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        warn_gc_cpu_priority(cfg4)
+    assert not any("gc_rebuild_cpu_priority" in r.message for r in caplog.records)
+
+
+def test_startup_warns_suppressed_when_feature_inactive(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """warn_gc_cpu_priority is suppressed when the GC feature is not fully active,
+    even when priority != 'normal' on non-Linux."""
+    import logging
+    import sys
+
+    from archon_search.config import GraphConfig, MaintenanceConfig, SearchConfig, warn_gc_cpu_priority
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    # Case 1: graph.enabled=False → no WARNING
+    cfg1 = SearchConfig()
+    cfg1.graph = GraphConfig(enabled=False, gc_rebuild_cpu_priority="low")
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        warn_gc_cpu_priority(cfg1)
+    assert not any("gc_rebuild_cpu_priority" in r.message for r in caplog.records)
+
+    caplog.clear()
+
+    # Case 2: maintenance.graph_gc=False → no WARNING
+    cfg2 = SearchConfig()
+    cfg2.graph = GraphConfig(enabled=True, gc_rebuild_cpu_priority="low")
+    cfg2.maintenance = MaintenanceConfig(graph_gc=False)
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        warn_gc_cpu_priority(cfg2)
+    assert not any("gc_rebuild_cpu_priority" in r.message for r in caplog.records)
+
+    caplog.clear()
+
+    # Case 3: gc_rebuild_communities=False → no WARNING
+    cfg3 = SearchConfig()
+    cfg3.graph = GraphConfig(enabled=True, gc_rebuild_communities=False, gc_rebuild_cpu_priority="low")
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        warn_gc_cpu_priority(cfg3)
+    assert not any("gc_rebuild_cpu_priority" in r.message for r in caplog.records)

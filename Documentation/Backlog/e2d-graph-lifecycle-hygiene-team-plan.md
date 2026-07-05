@@ -506,7 +506,7 @@ flowchart LR
         - #unit_test — `test_count_stale_mentions_returns_correct_count` — mention table has 3 stale rows and 2 live rows; assert `count_stale_mentions == 3`; after `prune_stale_mentions`, assert `count_stale_mentions == 0`
         - #integration_test — `test_graph_gc_methods_real_lancedb` — write orphan node (no mention), call `delete_orphan_nodes_and_edges`, assert node gone; write stale mention (no chunk in store), call `prune_stale_mentions` with appropriate `live_chunk_ids`, assert 0 stale mentions
 
-- [ ] **BE-6** — `MaintenanceConfig.graph_gc: bool = True` + `GraphConfig.gc_rebuild_communities: bool = True` + `gc_rebuild_cpu_priority: str = "low"` + TOML loading in `_apply_toml`; startup WARNING when `gc_rebuild_cpu_priority != 'normal'` and `sys.platform != 'linux'` (operator-visible signal that the config field is a no-op on the current OS) #backend-role
+- [x] **BE-6** — `MaintenanceConfig.graph_gc: bool = True` + `GraphConfig.gc_rebuild_communities: bool = True` + `gc_rebuild_cpu_priority: str = "low"` + TOML loading in `_apply_toml`; startup WARNING when `gc_rebuild_cpu_priority != 'normal'` and `sys.platform != 'linux'` (operator-visible signal that the config field is a no-op on the current OS) #backend-role
     - Entities · 1.0h
     - needs K1 · completes C3 (config portion)
     - Tests
