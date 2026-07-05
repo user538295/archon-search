@@ -89,7 +89,6 @@ pytestmark = pytest.mark.integration
 # Named constants
 # ---------------------------------------------------------------------------
 
-_POLL_TIMEOUT_S: float = 30.0
 _POLL_INTERVAL_S: float = 0.1
 _REBUILD_POLL_TIMEOUT_S: float = 20.0
 
@@ -187,6 +186,13 @@ def _wait_for_rebuild_completion(
     maintenance_loop = client.app.state.maintenance_loop
     rebuild_key = (ns, col)
 
+    # C1-I-5: Cross-thread read of asyncio internals. The test thread reads
+    # _rebuild_state and RebuildState.completed while the TestClient's event loop
+    # thread mutates them. In practice this is low-risk because (a) dict reads/writes
+    # are GIL-protected in CPython, (b) RebuildState.completed is a plain bool set
+    # exactly once, and (c) the _POLL_INTERVAL_S sleep gives the event loop time to
+    # run callbacks before the next read. A production implementation would use a
+    # threading.Event; for test scaffolding this is acceptable.
     deadline = time.monotonic() + deadline_s
     while time.monotonic() < deadline:
         rebuild_state = maintenance_loop._rebuild_state.get(rebuild_key)
@@ -327,7 +333,20 @@ def test_e2d_t4_communities_invalidated_then_rebuilt_after_gc(
         """Write a synthetic Bob community via the reusable helper; return one Community."""
         from archon_search.graph_store import GraphStore
 
+        # C1-I-10: db_path_holder is populated after app startup (line below the
+        # make_real_app context entry). The rebuild task is spawned by the maintenance
+        # loop AFTER Pass 1, which happens well after db_path_holder is populated, so
+        # IndexError should never occur in practice. Guard defensively anyway.
+        if not db_path_holder:
+            raise RuntimeError(
+                "_fake_builder_build called before db_path_holder was populated — "
+                "db_path_holder.append(cfg.db_path) must run before any rebuild task fires."
+            )
         db_path = db_path_holder[0]
+        # C1-I-11: This stub opens its own GraphStore connection concurrently with the
+        # server's SearchStore connection to the same LanceDB directory. LanceDB allows
+        # multiple concurrent async connections to the same on-disk store; each
+        # AsyncConnection is independent. Low-risk for tests; not recommended in production.
         await _write_community_to_store(
             db_path, collection, ns, community_id="t4-rebuilt-comm"
         )
