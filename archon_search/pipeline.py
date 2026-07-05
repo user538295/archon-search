@@ -629,15 +629,15 @@ class SearchPipeline:
             if _extraction_result.warnings:
                 acl_warnings.extend(_extraction_result.warnings)
             try:
-                await self._graph_store.ensure_graph_tables(collection)
+                await self._graph_store.ensure_graph_tables(collection, ns=namespace)
                 if _extraction_result.nodes or _extraction_result.edges:
                     await self._graph_store.write_graph(
-                        collection, _extraction_result.nodes, _extraction_result.edges
+                        collection, _extraction_result.nodes, _extraction_result.edges, ns=namespace
                     )
                 # E2b: delete existing mentions for this doc, then write new ones
-                await self._graph_store.delete_mentions_by_doc(collection, doc_id)
-                await self._graph_store.write_mentions(collection, _extraction_result.mentions)
-                edge_count = await self._graph_store.edge_count(collection)
+                await self._graph_store.delete_mentions_by_doc(collection, doc_id, ns=namespace)
+                await self._graph_store.write_mentions(collection, _extraction_result.mentions, ns=namespace)
+                edge_count = await self._graph_store.edge_count(collection, ns=namespace)
                 if edge_count >= self._graph_config.backend_threshold_edges:
                     hint = (
                         f"Graph edge count ({edge_count:,}) has reached "
@@ -1018,7 +1018,7 @@ class SearchPipeline:
         if graph_mode == "naive":
             if self._graph_expander is None:
                 return query
-            expanded = await self._graph_expander.expand(query, collection)
+            expanded = await self._graph_expander.expand(query, collection, ns=namespace)
             return expanded.expanded_text if expanded.expansion_applied else query
 
         if graph_mode == "local":
@@ -1034,7 +1034,7 @@ class SearchPipeline:
                 return await self._search_standard(
                     query, collection, namespace, embedder=self._global_embedder, filters=filters,
                 )
-            communities = await self._graph_store.list_community_representatives(collection)
+            communities = await self._graph_store.list_community_representatives(collection, ns=namespace)
             if not communities:
                 raise GraphCommunitiesNotBuiltError(collection)
 
@@ -1131,7 +1131,7 @@ class SearchPipeline:
             )
 
         try:
-            matched_nodes = await self._graph_store.find_nodes_by_name(collection, ngrams)
+            matched_nodes = await self._graph_store.find_nodes_by_name(collection, ngrams, ns=namespace)
         except Exception:
             logger.warning(
                 "_search_local_mode: find_nodes_by_name failed for collection %r (fp=%s); falling back",
@@ -1152,7 +1152,7 @@ class SearchPipeline:
 
         # Step 3: check if communities table exists (build-communities must have run).
         try:
-            table_exists = await self._graph_store.communities_table_exists(collection)
+            table_exists = await self._graph_store.communities_table_exists(collection, ns=namespace)
         except Exception:
             logger.warning(
                 "_search_local_mode: communities_table_exists check failed for collection %r (fp=%s); falling back",
@@ -1177,7 +1177,7 @@ class SearchPipeline:
         # Step 4: community lookup for matched entity IDs.
         entity_ids = [n.id for n in matched_nodes]
         try:
-            communities = await self._graph_store.get_communities_for_entities(collection, entity_ids)
+            communities = await self._graph_store.get_communities_for_entities(collection, entity_ids, ns=namespace)
         except Exception:
             logger.warning(
                 "_search_local_mode: get_communities_for_entities failed for collection %r (fp=%s); falling back",
@@ -1195,7 +1195,7 @@ class SearchPipeline:
                 collection, fp,
             )
             if self._graph_expander is not None:
-                expanded = await self._graph_expander.expand(query, collection)
+                expanded = await self._graph_expander.expand(query, collection, ns=namespace)
                 effective_query = expanded.expanded_text if expanded.expansion_applied else query
             else:
                 effective_query = query
@@ -1514,6 +1514,7 @@ class SearchPipeline:
             # local/global: E1b community traversal wiring (BE-8).
             community_candidates = await self._explain_community_candidates(
                 query, collection, graph_mode,
+                namespace=namespace,
                 scope_filter=scope_filter,
             )
 
@@ -1725,7 +1726,7 @@ class SearchPipeline:
 
         # Step 2: find matching graph nodes.
         try:
-            matched_nodes = await self._graph_store.find_nodes_by_name(collection, ngrams)
+            matched_nodes = await self._graph_store.find_nodes_by_name(collection, ngrams, ns=namespace)
         except Exception:
             logger.warning(
                 "_explain_naive_graph: find_nodes_by_name failed for collection %r (fp=%s); returning []",
@@ -1741,7 +1742,7 @@ class SearchPipeline:
 
         # Step 3: fetch edges for matched nodes (needed for TraversalStep.relationship).
         try:
-            edges = await self._graph_store.get_edges_for_nodes(collection, matched_ids)
+            edges = await self._graph_store.get_edges_for_nodes(collection, matched_ids, ns=namespace)
         except Exception:
             logger.warning(
                 "_explain_naive_graph: get_edges_for_nodes failed for collection %r (fp=%s); using []",
@@ -1751,7 +1752,7 @@ class SearchPipeline:
 
         # Step 4: get first-degree neighbour nodes for query expansion.
         try:
-            neighbour_nodes = await self._graph_store.get_neighbours(collection, matched_ids)
+            neighbour_nodes = await self._graph_store.get_neighbours(collection, matched_ids, ns=namespace)
         except Exception:
             logger.warning(
                 "_explain_naive_graph: get_neighbours failed for collection %r (fp=%s); returning []",
@@ -1890,6 +1891,7 @@ class SearchPipeline:
         collection: str,
         graph_mode: Literal["local", "global"],
         *,
+        namespace: str = DEFAULT_NAMESPACE,
         scope_filter: str | None = None,
     ) -> list[ScoredSearchCandidate]:
         """Community-mode graph retrieval for explain — E1b wiring (BE-8).
@@ -1931,7 +1933,7 @@ class SearchPipeline:
 
             # Step 2: entity matching.
             try:
-                matched_nodes = await self._graph_store.find_nodes_by_name(collection, ngrams)
+                matched_nodes = await self._graph_store.find_nodes_by_name(collection, ngrams, ns=namespace)
             except Exception:
                 logger.warning(
                     "_explain_community_candidates local: find_nodes_by_name failed for "
@@ -1949,7 +1951,7 @@ class SearchPipeline:
 
             # Step 2b: communities table guard.
             try:
-                table_exists = await self._graph_store.communities_table_exists(collection)
+                table_exists = await self._graph_store.communities_table_exists(collection, ns=namespace)
             except Exception:
                 logger.warning(
                     "_explain_community_candidates local: communities_table_exists failed for "
@@ -1964,7 +1966,7 @@ class SearchPipeline:
             entity_ids = [n.id for n in matched_nodes]
             try:
                 communities = await self._graph_store.get_communities_for_entities(
-                    collection, entity_ids
+                    collection, entity_ids, ns=namespace
                 )
             except Exception:
                 logger.warning(
@@ -2017,7 +2019,7 @@ class SearchPipeline:
 
         else:  # global
             # Fetch all communities; raise if none (mirrors search global path).
-            communities = await self._graph_store.list_community_representatives(collection)
+            communities = await self._graph_store.list_community_representatives(collection, ns=namespace)
             if not communities:
                 raise GraphCommunitiesNotBuiltError(collection)
 
@@ -2345,7 +2347,7 @@ class SearchPipeline:
             )
             # Step 1: Expand query per collection in parallel.
             expansions: list["ExpandedQuery"] = list(await asyncio.gather(*[
-                self._graph_expander.expand(query, coll)
+                self._graph_expander.expand(query, coll, ns=namespace)
                 for coll in collections_in_scope
             ]))
             graph_expansion_applied = any(e.expansion_applied for e in expansions)
@@ -2432,7 +2434,7 @@ class SearchPipeline:
             acl_filtered: bool = False
             all_candidates: list[ScoredSearchCandidate] = []
             for coll in collections_in_scope:
-                communities = await self._graph_store.list_community_representatives(coll)
+                communities = await self._graph_store.list_community_representatives(coll, ns=namespace)
                 if not communities:
                     raise GraphCommunitiesNotBuiltError(coll)
                 coll_chunk_ids: list[str] = []
@@ -2506,7 +2508,7 @@ class SearchPipeline:
 
                 # 1. Entity matching for this collection.
                 try:
-                    matched_nodes = await self._graph_store.find_nodes_by_name(coll, ngrams_for_local)
+                    matched_nodes = await self._graph_store.find_nodes_by_name(coll, ngrams_for_local, ns=namespace)
                 except Exception:
                     logger.warning(
                         "search_many local: find_nodes_by_name failed for collection %r; falling back",
@@ -2520,7 +2522,7 @@ class SearchPipeline:
 
                 # 2. Check communities table exists.
                 try:
-                    table_exists = await self._graph_store.communities_table_exists(coll)
+                    table_exists = await self._graph_store.communities_table_exists(coll, ns=namespace)
                 except Exception:
                     logger.warning(
                         "search_many local: communities_table_exists failed for collection %r; falling back",
@@ -2539,7 +2541,7 @@ class SearchPipeline:
                 # 3. Community lookup for matched entity IDs.
                 entity_ids = [n.id for n in matched_nodes]
                 try:
-                    communities = await self._graph_store.get_communities_for_entities(coll, entity_ids)
+                    communities = await self._graph_store.get_communities_for_entities(coll, entity_ids, ns=namespace)
                 except Exception:
                     logger.warning(
                         "search_many local: get_communities_for_entities failed for collection %r; falling back",

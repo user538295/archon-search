@@ -282,7 +282,7 @@ def test_get_status_community_stats_called_per_collection(tmp_path: Path) -> Non
     # Return distinct stats keyed on the collection name argument.
     stats_by_col = {col_a: (7, built_at_a), col_b: (2, built_at_b)}
 
-    async def _side_effect(name: str) -> tuple:
+    async def _side_effect(name: str, ns: str = "default") -> tuple:
         return stats_by_col[name]
 
     mock_graph_store = MagicMock()

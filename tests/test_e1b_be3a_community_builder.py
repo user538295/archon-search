@@ -80,7 +80,7 @@ async def test_build_communities_no_graph_nodes_raises():
     builder = CommunityBuilder(store, config)
 
     with pytest.raises(ValueError, match="entity graph"):
-        await builder.build("my-col")
+        await builder.build("my-col", ns="default")
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +98,7 @@ async def test_build_communities_single_entity_one_community(caplog):
     builder = CommunityBuilder(store, config)
 
     with caplog.at_level(logging.WARNING, logger="archon_search.community_builder"):
-        communities = await builder.build("test-col")
+        communities = await builder.build("test-col", ns="default")
 
     assert len(communities) == 1
     assert communities[0].entity_ids == ["node-a"]
@@ -207,7 +207,7 @@ async def test_build_communities_zero_edges_many_nodes():
         "archon_search.community_builder._run_leiden_partition_sync",
         return_value=singleton_groups,
     ):
-        communities = await builder.build("test-col")
+        communities = await builder.build("test-col", ns="default")
 
     assert len(communities) == 10
     # Each community has exactly 1 entity
@@ -265,7 +265,7 @@ async def test_get_all_nodes_table_absent_returns_empty():
     store._arrow_to_nodes = GraphStore._arrow_to_nodes
 
     # Call the real method, binding it to the mock
-    result = await GraphStore.get_all_nodes(store, "test-col")
+    result = await GraphStore.get_all_nodes(store, "test-col", ns="default")
     assert result == []
 
 
@@ -279,7 +279,7 @@ async def test_get_all_edges_table_absent_returns_empty():
     store._load_all_from_table = AsyncMock(return_value=None)
     store._arrow_to_edges = GraphStore._arrow_to_edges
 
-    result = await GraphStore.get_all_edges(store, "test-col")
+    result = await GraphStore.get_all_edges(store, "test-col", ns="default")
     assert result == []
 
 
@@ -295,7 +295,7 @@ async def test_get_all_nodes_storage_error_raises_runtime_error():
     )
 
     with pytest.raises(RuntimeError, match="Failed to load table"):
-        await GraphStore.get_all_nodes(store, "test-col")
+        await GraphStore.get_all_nodes(store, "test-col", ns="default")
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +343,6 @@ async def test_build_leiden_returns_empty_groups():
         "archon_search.community_builder._run_leiden_partition_sync",
         return_value=[],
     ):
-        communities = await builder.build("test-col")
+        communities = await builder.build("test-col", ns="default")
 
     assert communities == []

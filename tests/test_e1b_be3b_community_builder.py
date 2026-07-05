@@ -101,7 +101,7 @@ async def test_llm_summary_failure_falls_back_to_mmr(caplog):
         return_value=[["a", "b"], ["c", "d"]],
     ):
         with caplog.at_level(logging.WARNING, logger="archon_search.community_builder"):
-            communities = await builder.build("test-col")
+            communities = await builder.build("test-col", ns="default")
 
     # Both communities should have MMR representatives despite LLM failure
     assert len(communities) == 2
@@ -229,7 +229,7 @@ async def test_build_single_node_uses_mmr_and_writes(caplog):
     builder = CommunityBuilder(graph_store, config, search_store=search_store)
 
     with caplog.at_level(logging.WARNING, logger="archon_search.community_builder"):
-        communities = await builder.build("test-col")
+        communities = await builder.build("test-col", ns="default")
 
     assert len(communities) == 1
     assert communities[0].entity_ids == ["a"]

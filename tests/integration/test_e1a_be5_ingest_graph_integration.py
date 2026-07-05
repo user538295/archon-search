@@ -129,8 +129,8 @@ async def test_ingest_file_graph_entities_written(tmp_path: Path, monkeypatch):
     result = await pipeline.ingest_file(doc_file, collection, embedder=_make_embedder())
     assert result.status == "ok"
 
-    assert await graph_store.node_count(collection) == 2
-    assert await graph_store.edge_count(collection) == 1
+    assert await graph_store.node_count(collection, ns="default") == 2
+    assert await graph_store.edge_count(collection, ns="default") == 1
 
     await store.disconnect()
     await graph_store.disconnect()
@@ -186,7 +186,7 @@ async def test_ingest_after_graph_disable_skips_extraction_preserves_tables(tmp_
     result = await pipeline_on.ingest_file(doc_file, collection, embedder=_make_embedder())
     assert result.status == "ok"
     assert call_count == 1
-    assert await graph_store.node_count(collection) == 1
+    assert await graph_store.node_count(collection, ns="default") == 1
 
     # Second ingest: pipeline without graph components (graph disabled)
     pipeline_off = _make_pipeline_with_graph(store, None, None, GraphConfig(enabled=False))
@@ -197,7 +197,7 @@ async def test_ingest_after_graph_disable_skips_extraction_preserves_tables(tmp_
     assert call_count == 1
 
     # Tables from first ingest still have the node
-    assert await graph_store.node_count(collection) == 1
+    assert await graph_store.node_count(collection, ns="default") == 1
 
     await store.disconnect()
     await graph_store.disconnect()
@@ -295,17 +295,17 @@ async def test_ingest_two_docs_merges_graph(tmp_path: Path):
     assert result2.status == "ok"
 
     # AuthService is merged (same stable ID) → 3 unique nodes total
-    node_count = await graph_store.node_count(collection)
+    node_count = await graph_store.node_count(collection, ns="default")
     assert node_count == 3, f"Expected 3 unique nodes (AuthService, TokenValidator, UserStore), got {node_count}"
 
     # 2 unique edges
-    edge_count = await graph_store.edge_count(collection)
+    edge_count = await graph_store.edge_count(collection, ns="default")
     assert edge_count == 2, f"Expected 2 edges, got {edge_count}"
 
     # Verify AuthService (merged node) has both TokenValidator and UserStore as neighbours
     from archon_search.graph_types import EntityType, make_stable_entity_id
     auth_id = make_stable_entity_id(EntityType.concept.value, "authservice")
-    neighbours = await graph_store.get_neighbours(collection, [auth_id])
+    neighbours = await graph_store.get_neighbours(collection, [auth_id], ns="default")
     neighbour_names = {n.entity_name for n in neighbours}
     assert "TokenValidator" in neighbour_names, f"Expected TokenValidator in AuthService neighbours, got: {neighbour_names}"
     assert "UserStore" in neighbour_names, f"Expected UserStore in AuthService neighbours, got: {neighbour_names}"

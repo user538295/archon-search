@@ -315,7 +315,7 @@ num_queries = 2
 #
 # When the full E1a slice is deployed: enabling and re-ingesting causes each
 # ingested document's chunks to be entity-extracted into
-# per-collection _archon_graph_{col}_nodes / _archon_graph_{col}_edges LanceDB tables.
+# per-collection _archon_graph_{ns}__{col}_nodes / _archon_graph_{ns}__{col}_edges LanceDB tables.
 # Adding graph_mode=naive to POST /search or the MCP search tool expands queries
 # with first-degree graph-neighbour entity names before the normal hybrid search pipeline runs.
 #
@@ -323,10 +323,10 @@ num_queries = 2
 # Existing chunks already stored before enabling graph will NOT be auto-extracted.
 # Set enabled = true, then re-ingest all collections whose graph you want built.
 #
-# MULTI-NAMESPACE WARNING: graph table names are _archon_graph_{collection}_nodes —
-# they do NOT include the namespace. Two collections with the same name in different
-# namespaces share graph tables. Operators running multi-namespace deployments must NOT
-# enable graph until E1b, which adds namespace-scoped table names.
+# UPGRADE NOTE (E2d): graph table names now include the namespace prefix using a
+# double-underscore separator (_archon_graph_{ns}__{col}_nodes). Tables created
+# before E2d are orphaned after upgrade — delete them manually and re-ingest to
+# rebuild graph data under the new namespace-scoped names.
 #
 # enabled = false
 

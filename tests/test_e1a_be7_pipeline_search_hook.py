@@ -123,7 +123,7 @@ async def test_search_with_graph_mode_naive_calls_expander(connected_store, col_
             graph_mode="naive",
         )
 
-    expander.expand.assert_awaited_once_with("AuthService", col_name)
+    expander.expand.assert_awaited_once_with("AuthService", col_name, ns="default")
     # _search_standard must receive the expanded text, not the original
     assert mock_std.call_args[0][0] == "AuthService TokenValidator"
 
@@ -256,7 +256,7 @@ async def test_search_graph_mode_with_rag_fusion_applies_expansion_to_original(
                 )
 
     # Expansion ran on the original query
-    expander.expand.assert_awaited_once_with("AuthService", col_name)
+    expander.expand.assert_awaited_once_with("AuthService", col_name, ns="default")
     assert result.graph_expansion_applied is True
     # RAG Fusion variants generated from ORIGINAL (not expanded) query
     mock_rag_gen.generate_variants.assert_awaited_once_with("AuthService")
@@ -283,7 +283,7 @@ async def test_search_graph_mode_with_hyde_applies_expansion_to_original(
         )
 
     # Graph expansion must run on original query
-    expander.expand.assert_awaited_once_with("AuthService", col_name)
+    expander.expand.assert_awaited_once_with("AuthService", col_name, ns="default")
     # Result must reflect expansion
     assert result.graph_expansion_applied is True
     # _search_standard gets the expanded text
@@ -297,7 +297,7 @@ async def test_search_many_applies_expansion_per_leg(connected_store, col_name):
 
     expander = MagicMock()
     expander.expand = AsyncMock(
-        side_effect=lambda q, coll: ExpandedQuery(
+        side_effect=lambda q, coll, ns="default": ExpandedQuery(
             original_query=q,
             expanded_text=f"{q} extra_{coll}",
             expansion_applied=True,

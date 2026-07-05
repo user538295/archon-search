@@ -65,15 +65,15 @@ def test_write_and_read_communities(tmp_path) -> None:
         gs = GraphStore(str(tmp_path / "db"))
         await gs.connect()
         try:
-            await gs.ensure_communities_table(col)
-            await gs.write_communities(col, [comm0, comm1, comm2])
+            await gs.ensure_communities_table(col, ns="default")
+            await gs.write_communities(col, [comm0, comm1, comm2], ns="default")
 
             # Query entity B → should return comm0 only
-            result_b = await gs.get_communities_for_entities(col, ["entity-B"])
+            result_b = await gs.get_communities_for_entities(col, ["entity-B"], ns="default")
             # Query entity C + D → should return comm1 and comm2
-            result_cd = await gs.get_communities_for_entities(col, ["entity-C", "entity-D"])
+            result_cd = await gs.get_communities_for_entities(col, ["entity-C", "entity-D"], ns="default")
             # Query unknown entity → should return empty
-            result_unknown = await gs.get_communities_for_entities(col, ["entity-Z"])
+            result_unknown = await gs.get_communities_for_entities(col, ["entity-Z"], ns="default")
             return result_b, result_cd, result_unknown
         finally:
             await gs.disconnect()
@@ -115,7 +115,7 @@ def test_get_community_stats_empty(tmp_path) -> None:
         await gs.connect()
         try:
             # Do NOT call ensure_communities_table — table does not exist
-            return await gs.get_community_stats(col)
+            return await gs.get_community_stats(col, ns="default")
         finally:
             await gs.disconnect()
 
@@ -144,9 +144,9 @@ def test_get_community_stats_after_write(tmp_path) -> None:
         gs = GraphStore(str(tmp_path / "db"))
         await gs.connect()
         try:
-            await gs.ensure_communities_table(col)
-            await gs.write_communities(col, communities)
-            return await gs.get_community_stats(col)
+            await gs.ensure_communities_table(col, ns="default")
+            await gs.write_communities(col, communities, ns="default")
+            return await gs.get_community_stats(col, ns="default")
         finally:
             await gs.disconnect()
 
@@ -178,9 +178,9 @@ def test_list_community_representatives_all(tmp_path) -> None:
         gs = GraphStore(str(tmp_path / "db"))
         await gs.connect()
         try:
-            await gs.ensure_communities_table(col)
-            await gs.write_communities(col, communities)
-            return await gs.list_community_representatives(col)
+            await gs.ensure_communities_table(col, ns="default")
+            await gs.write_communities(col, communities, ns="default")
+            return await gs.list_community_representatives(col, ns="default")
         finally:
             await gs.disconnect()
 
@@ -226,9 +226,9 @@ def test_write_communities_summary_text_roundtrip(tmp_path) -> None:
         gs = GraphStore(str(tmp_path / "db"))
         await gs.connect()
         try:
-            await gs.ensure_communities_table(col)
-            await gs.write_communities(col, [comm_with_summary, comm_without_summary])
-            return await gs.list_community_representatives(col)
+            await gs.ensure_communities_table(col, ns="default")
+            await gs.write_communities(col, [comm_with_summary, comm_without_summary], ns="default")
+            return await gs.list_community_representatives(col, ns="default")
         finally:
             await gs.disconnect()
 
@@ -259,12 +259,12 @@ def test_write_communities_idempotent(tmp_path) -> None:
         gs = GraphStore(str(tmp_path / "db"))
         await gs.connect()
         try:
-            await gs.ensure_communities_table(col)
-            await gs.write_communities(col, communities_v1)
-            count_after_first, _ = await gs.get_community_stats(col)
-            await gs.write_communities(col, communities_v2)
-            count_after_second, _ = await gs.get_community_stats(col)
-            remaining = await gs.list_community_representatives(col)
+            await gs.ensure_communities_table(col, ns="default")
+            await gs.write_communities(col, communities_v1, ns="default")
+            count_after_first, _ = await gs.get_community_stats(col, ns="default")
+            await gs.write_communities(col, communities_v2, ns="default")
+            count_after_second, _ = await gs.get_community_stats(col, ns="default")
+            remaining = await gs.list_community_representatives(col, ns="default")
             return count_after_first, count_after_second, remaining
         finally:
             await gs.disconnect()
@@ -296,12 +296,12 @@ def test_write_communities_empty_list_clears_existing(tmp_path) -> None:
         gs = GraphStore(str(tmp_path / "db"))
         await gs.connect()
         try:
-            await gs.ensure_communities_table(col)
-            await gs.write_communities(col, communities)
-            count_before, _ = await gs.get_community_stats(col)
+            await gs.ensure_communities_table(col, ns="default")
+            await gs.write_communities(col, communities, ns="default")
+            count_before, _ = await gs.get_community_stats(col, ns="default")
             # Write empty list — should clear all communities
-            await gs.write_communities(col, [])
-            count_after, _ = await gs.get_community_stats(col)
+            await gs.write_communities(col, [], ns="default")
+            count_after, _ = await gs.get_community_stats(col, ns="default")
             return count_before, count_after
         finally:
             await gs.disconnect()

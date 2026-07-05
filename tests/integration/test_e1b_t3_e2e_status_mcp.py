@@ -99,7 +99,7 @@ async def _write_communities_to_store(
     gs = GraphStore(db_path)
     await gs.connect()
     try:
-        await gs.ensure_communities_table(col)
+        await gs.ensure_communities_table(col, ns="default")
         community = Community(
             community_id=community_id,
             entity_ids=entity_ids or ["entity-t3-1"],
@@ -107,7 +107,7 @@ async def _write_communities_to_store(
             built_at=built_at or datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
             summary_text=None,
         )
-        await gs.write_communities(col, [community])
+        await gs.write_communities(col, [community], ns="default")
     finally:
         await gs.disconnect()
 

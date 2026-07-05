@@ -69,7 +69,7 @@ async def test_expander_empty_query_is_noop() -> None:
 
     for q in ("", "   "):
         mock_store.reset_mock()
-        result = await expander.expand(q, "mycol")
+        result = await expander.expand(q, "mycol", ns="default")
         assert result.expansion_applied is False
         assert result.expanded_text == q
         mock_store.find_nodes_by_name.assert_not_called()
@@ -90,7 +90,7 @@ async def test_expander_appends_neighbour_names() -> None:
     from archon_search.graph_expander import GraphExpander
 
     expander = GraphExpander(graph_store=mock_store)
-    result = await expander.expand("AuthService usage", "mycol")
+    result = await expander.expand("AuthService usage", "mycol", ns="default")
 
     assert result.expansion_applied is True
     assert "TokenValidator" in result.expanded_text
@@ -111,7 +111,7 @@ async def test_expander_no_entities_is_noop() -> None:
     from archon_search.graph_expander import GraphExpander
 
     expander = GraphExpander(graph_store=mock_store)
-    result = await expander.expand("what is the meaning of life", "mycol")
+    result = await expander.expand("what is the meaning of life", "mycol", ns="default")
 
     assert result.expansion_applied is False
     assert result.expanded_text == "what is the meaning of life"
@@ -131,7 +131,7 @@ async def test_expander_empty_graph_is_noop() -> None:
     from archon_search.graph_expander import GraphExpander
 
     expander = GraphExpander(graph_store=mock_store)
-    result = await expander.expand("AuthService", "mycol")
+    result = await expander.expand("AuthService", "mycol", ns="default")
 
     assert result.expansion_applied is False
     assert result.expanded_text == "AuthService"
@@ -155,7 +155,7 @@ async def test_expander_does_not_duplicate_entity_names() -> None:
 
     expander = GraphExpander(graph_store=mock_store)
     # TokenValidator is already in the original query
-    result = await expander.expand("AuthService TokenValidator", "mycol")
+    result = await expander.expand("AuthService TokenValidator", "mycol", ns="default")
 
     # TokenValidator should NOT be appended again
     assert result.expanded_text.count("TokenValidator") == 1
@@ -177,7 +177,7 @@ async def test_expander_matches_multi_word_entities() -> None:
     from archon_search.graph_expander import GraphExpander
 
     expander = GraphExpander(graph_store=mock_store)
-    result = await expander.expand("what does Token Validator do", "mycol")
+    result = await expander.expand("what does Token Validator do", "mycol", ns="default")
 
     assert result.expansion_applied is True
     assert "UserStore" in result.expanded_text
@@ -192,7 +192,7 @@ async def test_expander_batches_all_ngrams_in_single_findnodes_call() -> None:
     from archon_search.graph_expander import GraphExpander
 
     expander = GraphExpander(graph_store=mock_store)
-    await expander.expand("AuthService checks Token Validator rules", "mycol")
+    await expander.expand("AuthService checks Token Validator rules", "mycol", ns="default")
 
     # find_nodes_by_name called exactly once (batched)
     assert mock_store.find_nodes_by_name.call_count == 1
@@ -213,7 +213,7 @@ async def test_expander_ngram_cap_at_3() -> None:
 
     expander = GraphExpander(graph_store=mock_store)
     # Query has 5 tokens
-    await expander.expand("a b c d e", "mycol")
+    await expander.expand("a b c d e", "mycol", ns="default")
 
     call_args = mock_store.find_nodes_by_name.call_args
     names_arg = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("names", [])
@@ -238,7 +238,7 @@ async def test_expander_multiword_neighbour_not_duplicated_when_present_in_query
 
     expander = GraphExpander(graph_store=mock_store)
     # "Token Validator" is already in the query — suppress it
-    result = await expander.expand("Token Validator usage", "mycol")
+    result = await expander.expand("Token Validator usage", "mycol", ns="default")
 
     assert result.expansion_applied is False
     assert result.expanded_text == "Token Validator usage"
@@ -261,7 +261,7 @@ async def test_expander_cross_node_neighbour_dedup() -> None:
     from archon_search.graph_expander import GraphExpander
 
     expander = GraphExpander(graph_store=mock_store)
-    result = await expander.expand("AuthService UserStore", "mycol")
+    result = await expander.expand("AuthService UserStore", "mycol", ns="default")
 
     # TokenValidator should appear only once, not twice
     assert result.expanded_text.count("TokenValidator") == 1
@@ -277,7 +277,7 @@ async def test_expander_find_nodes_failure_returns_noop() -> None:
     from archon_search.graph_expander import GraphExpander
 
     expander = GraphExpander(graph_store=mock_store)
-    result = await expander.expand("AuthService", "mycol")
+    result = await expander.expand("AuthService", "mycol", ns="default")
 
     assert result.expansion_applied is False
     assert result.expanded_text == "AuthService"
@@ -297,7 +297,7 @@ async def test_expander_get_neighbours_failure_returns_noop() -> None:
     from archon_search.graph_expander import GraphExpander
 
     expander = GraphExpander(graph_store=mock_store)
-    result = await expander.expand("AuthService", "mycol")
+    result = await expander.expand("AuthService", "mycol", ns="default")
 
     assert result.expansion_applied is False
     assert result.expanded_text == "AuthService"
@@ -388,7 +388,7 @@ async def test_expander_with_real_graph_store(tmp_path: Path) -> None:
     await store.connect()
 
     collection = "integ-col"
-    await store.ensure_graph_tables(collection)
+    await store.ensure_graph_tables(collection, ns="default")
 
     auth_node = GraphNode(
         id=make_stable_entity_id("system", "AuthService"),
@@ -411,10 +411,10 @@ async def test_expander_with_real_graph_store(tmp_path: Path) -> None:
         relationship_type=RelationshipType.related_to,
         source_doc_id="doc-1",
     )
-    await store.write_graph(collection, [auth_node, token_node], [edge])
+    await store.write_graph(collection, [auth_node, token_node], [edge], ns="default")
 
     expander = GraphExpander(graph_store=store)
-    result = await expander.expand("AuthService", collection)
+    result = await expander.expand("AuthService", collection, ns="default")
 
     assert result.expansion_applied is True
     assert "TokenValidator" in result.expanded_text

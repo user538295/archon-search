@@ -80,8 +80,8 @@ def test_build_communities_cli_real_store(tmp_path: Path) -> None:
     async def _seed() -> None:
         graph_store = GraphStore(tmp_path / "graph_db")
         await graph_store.connect()
-        await graph_store.ensure_graph_tables(col)
-        await graph_store.write_graph(col, nodes, edges)
+        await graph_store.ensure_graph_tables(col, ns="default")
+        await graph_store.write_graph(col, nodes, edges, ns="default")
         await graph_store.disconnect()
 
         search_store = SearchStore(db_path)
@@ -123,7 +123,7 @@ def test_build_communities_cli_real_store(tmp_path: Path) -> None:
     async def _verify() -> None:
         graph_store = GraphStore(tmp_path / "graph_db")
         await graph_store.connect()
-        count, last_built_at = await graph_store.get_community_stats(col)
+        count, last_built_at = await graph_store.get_community_stats(col, ns="default")
         await graph_store.disconnect()
         assert count >= 1, f"Expected at least 1 community, got {count}"
         assert last_built_at is not None, "Expected last_built_at to be set"

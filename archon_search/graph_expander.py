@@ -144,7 +144,7 @@ class GraphExpander:
     def __init__(self, graph_store: "GraphStore") -> None:
         self._store = graph_store
 
-    async def expand(self, query: str, collection: str) -> ExpandedQuery:
+    async def expand(self, query: str, collection: str, ns: str) -> ExpandedQuery:
         """Expand *query* with first-degree graph-neighbour entity names.
 
         Args:
@@ -169,7 +169,7 @@ class GraphExpander:
 
         # Step 2: single batched lookup — all N-gram candidates in one call.
         try:
-            matched_nodes = await self._store.find_nodes_by_name(collection, ngram_candidates)
+            matched_nodes = await self._store.find_nodes_by_name(collection, ngram_candidates, ns=ns)
         except Exception:
             _logger.warning(
                 "graph_expander: store lookup failed for collection %r (fp=%s); skipping expansion",
@@ -189,7 +189,7 @@ class GraphExpander:
         # Step 3: retrieve first-degree neighbours.
         matched_ids = [n.id for n in matched_nodes]
         try:
-            neighbour_nodes = await self._store.get_neighbours(collection, matched_ids)
+            neighbour_nodes = await self._store.get_neighbours(collection, matched_ids, ns=ns)
         except Exception:
             _logger.warning(
                 "graph_expander: neighbour lookup failed for collection %r (fp=%s); skipping expansion",

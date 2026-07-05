@@ -1,9 +1,10 @@
-"""GraphStore — LanceDB-backed graph node and edge storage for GraphRAG (E1a/E1b).
+"""GraphStore — LanceDB-backed graph node and edge storage for GraphRAG (E1a/E1b/E2b).
 
-Wraps per-collection LanceDB tables:
-  _archon_graph_{collection}_nodes
-  _archon_graph_{collection}_edges
-  _archon_graph_{collection}_communities   (E1b)
+Wraps per-collection, per-namespace LanceDB tables (E2d naming scheme):
+  _archon_graph_{ns}__{col}_nodes
+  _archon_graph_{ns}__{col}_edges
+  _archon_graph_{ns}__{col}_communities   (E1b)
+  _archon_graph_{ns}__{col}_mentions      (E2b)
 
 All SQL predicates MUST go through ``_where_eq`` / ``_where_in`` helpers
 (from ``archon_search.store_filters``), never f-strings passed directly to
@@ -17,6 +18,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from archon_search.constants import _validate_namespace, _validate_segment_safe
 from archon_search.graph_types import Community, EntityType, GraphEdge, GraphMention, GraphNode, RelationshipType
 from archon_search.store_filters import _sql_quote_str
 
@@ -95,18 +97,22 @@ class GraphStore:
                 f"Invalid collection name {collection!r}: must match "
                 r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$"
             )
+        _validate_segment_safe(collection, "collection name")
 
-    def _nodes_table_name(self, collection: str) -> str:
-        return _ARCHON_PREFIX + "graph_" + collection + "_nodes"
+    def _table_name(self, collection: str, ns: str, suffix: str) -> str:
+        return _ARCHON_PREFIX + "graph_" + ns + "__" + collection + "_" + suffix
 
-    def _edges_table_name(self, collection: str) -> str:
-        return _ARCHON_PREFIX + "graph_" + collection + "_edges"
+    def _nodes_table_name(self, collection: str, ns: str) -> str:
+        return self._table_name(collection, ns, "nodes")
 
-    def _communities_table_name(self, collection: str) -> str:
-        return _ARCHON_PREFIX + "graph_" + collection + "_communities"
+    def _edges_table_name(self, collection: str, ns: str) -> str:
+        return self._table_name(collection, ns, "edges")
 
-    def _mentions_table_name(self, collection: str) -> str:
-        return _ARCHON_PREFIX + "graph_" + collection + "_mentions"
+    def _communities_table_name(self, collection: str, ns: str) -> str:
+        return self._table_name(collection, ns, "communities")
+
+    def _mentions_table_name(self, collection: str, ns: str) -> str:
+        return self._table_name(collection, ns, "mentions")
 
     @staticmethod
     def _nodes_schema():  # type: ignore[return]
@@ -174,27 +180,28 @@ class GraphStore:
     # Public API
     # ------------------------------------------------------------------
 
-    async def ensure_graph_tables(self, collection: str) -> None:
+    async def ensure_graph_tables(self, collection: str, ns: str) -> None:
         """Create nodes, edges, and mentions tables for *collection* if they don't already exist.
 
         Idempotent — safe to call multiple times. Raises ``ValueError`` for
         collection names that fail the naming regex.
         """
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
 
         await db.create_table(
-            self._nodes_table_name(collection),
+            self._nodes_table_name(collection, ns),
             schema=self._nodes_schema(),
             exist_ok=True,
         )
         await db.create_table(
-            self._edges_table_name(collection),
+            self._edges_table_name(collection, ns),
             schema=self._edges_schema(),
             exist_ok=True,
         )
         await db.create_table(
-            self._mentions_table_name(collection),
+            self._mentions_table_name(collection, ns),
             schema=self._mentions_schema(),
             exist_ok=True,
         )
@@ -204,6 +211,7 @@ class GraphStore:
         collection: str,
         nodes: list[GraphNode],
         edges: list[GraphEdge],
+        ns: str,
     ) -> None:
         """Upsert *nodes* and *edges* into the collection's graph tables.
 
@@ -213,10 +221,11 @@ class GraphStore:
         import pyarrow as pa  # noqa: PLC0415
 
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
 
         if nodes:
-            nodes_table = await db.open_table(self._nodes_table_name(collection))
+            nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
             nodes_data = pa.table(
                 {
                     "id": [n.id for n in nodes],
@@ -236,7 +245,7 @@ class GraphStore:
             )
 
         if edges:
-            edges_table = await db.open_table(self._edges_table_name(collection))
+            edges_table = await db.open_table(self._edges_table_name(collection, ns))
             edges_data = pa.table(
                 {
                     "id": [e.id for e in edges],
@@ -255,7 +264,7 @@ class GraphStore:
             )
 
     async def get_neighbours(
-        self, collection: str, entity_ids: list[str]
+        self, collection: str, entity_ids: list[str], ns: str
     ) -> list[GraphNode]:
         """Return GraphNode objects that are first-degree neighbours of *entity_ids*.
 
@@ -266,9 +275,10 @@ class GraphStore:
             return []
 
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
 
-        edges_table = await db.open_table(self._edges_table_name(collection))
+        edges_table = await db.open_table(self._edges_table_name(collection, ns))
 
         # Build safe predicate: source_node_id IN (...) OR target_node_id IN (...)
         src_pred = _where_in("source_node_id", entity_ids)
@@ -294,14 +304,14 @@ class GraphStore:
         if not neighbour_ids:
             return []
 
-        nodes_table = await db.open_table(self._nodes_table_name(collection))
+        nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
         node_pred = _where_in("id", neighbour_ids)
         nodes_arrow = await nodes_table.query().where(node_pred).to_arrow()
 
         return self._arrow_to_nodes(nodes_arrow)
 
     async def get_edges_for_nodes(
-        self, collection: str, entity_ids: list[str]
+        self, collection: str, entity_ids: list[str], ns: str
     ) -> list[GraphEdge]:
         """Return edges where any of *entity_ids* appears as source or target node.
 
@@ -315,9 +325,10 @@ class GraphStore:
             return []
 
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
 
-        edges_table = await db.open_table(self._edges_table_name(collection))
+        edges_table = await db.open_table(self._edges_table_name(collection, ns))
         src_pred = _where_in("source_node_id", entity_ids)
         tgt_pred = _where_in("target_node_id", entity_ids)
         pred = "(" + src_pred + " OR " + tgt_pred + ")"
@@ -325,12 +336,13 @@ class GraphStore:
         arrow = await edges_table.query().where(pred).to_arrow()
         return self._arrow_to_edges(arrow)
 
-    async def edge_count(self, collection: str) -> int:
+    async def edge_count(self, collection: str, ns: str) -> int:
         """Return the number of edges in *collection*'s graph table; 0 if table absent."""
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
         try:
-            edges_table = await db.open_table(self._edges_table_name(collection))
+            edges_table = await db.open_table(self._edges_table_name(collection, ns))
             return await edges_table.count_rows()
         except FileNotFoundError:
             return 0
@@ -340,12 +352,13 @@ class GraphStore:
             )
             return 0
 
-    async def node_count(self, collection: str) -> int:
+    async def node_count(self, collection: str, ns: str) -> int:
         """Return the number of nodes in *collection*'s graph table; 0 if table absent."""
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
         try:
-            nodes_table = await db.open_table(self._nodes_table_name(collection))
+            nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
             return await nodes_table.count_rows()
         except FileNotFoundError:
             return 0
@@ -356,7 +369,7 @@ class GraphStore:
             return 0
 
     async def find_nodes_by_name(
-        self, collection: str, names: list[str]
+        self, collection: str, names: list[str], ns: str
     ) -> list[GraphNode]:
         """Return nodes whose ``entity_name`` matches any of *names* (case-insensitive).
 
@@ -368,6 +381,7 @@ class GraphStore:
             return []
 
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
 
         lower_names = [n.lower() for n in names]
@@ -375,7 +389,7 @@ class GraphStore:
         items = ", ".join(_sql_quote_str(n) for n in lower_names)
         predicate = "lower(entity_name) IN (" + items + ")"
 
-        nodes_table = await db.open_table(self._nodes_table_name(collection))
+        nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
         nodes_arrow = await nodes_table.query().where(predicate).to_arrow()
 
         return self._arrow_to_nodes(nodes_arrow)
@@ -384,7 +398,7 @@ class GraphStore:
     # Communities table (E1b)
     # ------------------------------------------------------------------
 
-    async def communities_table_exists(self, collection: str) -> bool:
+    async def communities_table_exists(self, collection: str, ns: str) -> bool:
         """Return ``True`` if the communities table exists for *collection*.
 
         Does NOT indicate whether any communities have been written — only
@@ -392,22 +406,24 @@ class GraphStore:
         been called at least once for this collection.
         """
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
         try:
-            await db.open_table(self._communities_table_name(collection))
+            await db.open_table(self._communities_table_name(collection, ns))
             return True
         except (FileNotFoundError, ValueError):
             return False
 
-    async def ensure_communities_table(self, collection: str) -> None:
+    async def ensure_communities_table(self, collection: str, ns: str) -> None:
         """Create the communities table for *collection* if it doesn't already exist.
 
         Idempotent — safe to call multiple times.
         """
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
         await db.create_table(
-            self._communities_table_name(collection),
+            self._communities_table_name(collection, ns),
             schema=self._communities_schema(),
             exist_ok=True,
         )
@@ -416,6 +432,7 @@ class GraphStore:
         self,
         collection: str,
         communities: list[Community],
+        ns: str,
     ) -> None:
         """Persist *communities* for *collection*, replacing any existing data.
 
@@ -432,9 +449,10 @@ class GraphStore:
         import pyarrow as pa  # noqa: PLC0415
 
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
-        await self.ensure_communities_table(collection)
-        table = await db.open_table(self._communities_table_name(collection))
+        await self.ensure_communities_table(collection, ns)
+        table = await db.open_table(self._communities_table_name(collection, ns))
 
         # Clear existing communities before inserting the new set
         await table.delete("1=1")
@@ -462,6 +480,7 @@ class GraphStore:
         self,
         collection: str,
         mentions: list[GraphMention],
+        ns: str,
     ) -> None:
         """Append *mentions* into the collection's mentions table (E2b).
 
@@ -472,13 +491,14 @@ class GraphStore:
         import pyarrow as pa  # noqa: PLC0415
 
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
-        await self.ensure_graph_tables(collection)
+        await self.ensure_graph_tables(collection, ns)
 
         if not mentions:
             return
 
-        table = await db.open_table(self._mentions_table_name(collection))
+        table = await db.open_table(self._mentions_table_name(collection, ns))
         data = pa.table(
             {
                 "entity_id": [m.entity_id for m in mentions],
@@ -493,6 +513,7 @@ class GraphStore:
         self,
         collection: str,
         doc_id: str,
+        ns: str,
     ) -> None:
         """Delete all mentions for a given *doc_id* from the collection's mentions table.
 
@@ -500,10 +521,11 @@ class GraphStore:
         a non-existent doc_id is a noop.
         """
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
 
         try:
-            table = await db.open_table(self._mentions_table_name(collection))
+            table = await db.open_table(self._mentions_table_name(collection, ns))
         except (FileNotFoundError, ValueError):
             # Table doesn't exist; nothing to delete
             return
@@ -515,6 +537,8 @@ class GraphStore:
         self,
         collection: str,
         limit: int | None = None,
+        *,
+        ns: str,
     ) -> list[GraphMention]:
         """Return mentions for *collection*; optionally limited to first *limit* rows.
 
@@ -527,10 +551,11 @@ class GraphStore:
         the responsibility of the caller (e.g., ``graph_inspector.py``).
         """
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
 
         try:
-            table = await db.open_table(self._mentions_table_name(collection))
+            table = await db.open_table(self._mentions_table_name(collection, ns))
         except (FileNotFoundError, ValueError):
             return []
 
@@ -563,16 +588,18 @@ class GraphStore:
         self,
         collection: str,
         entity_ids: list[str],
+        ns: str,
     ) -> list[Community]:
         """Return all communities whose ``entity_ids`` list intersects *entity_ids*."""
         if not entity_ids:
             return []
 
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
 
         try:
-            table = await db.open_table(self._communities_table_name(collection))
+            table = await db.open_table(self._communities_table_name(collection, ns))
         except (FileNotFoundError, ValueError):
             return []
 
@@ -587,6 +614,7 @@ class GraphStore:
     async def list_community_representatives(
         self,
         collection: str,
+        ns: str,
     ) -> list[Community]:
         """Return all communities stored for *collection*.
 
@@ -594,10 +622,11 @@ class GraphStore:
         All returned ``Community`` objects have ``representative_chunk_ids`` populated.
         """
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
 
         try:
-            table = await db.open_table(self._communities_table_name(collection))
+            table = await db.open_table(self._communities_table_name(collection, ns))
         except (FileNotFoundError, ValueError):
             return []
 
@@ -607,6 +636,7 @@ class GraphStore:
     async def get_community_stats(
         self,
         collection: str,
+        ns: str,
     ) -> tuple[int, "datetime | None"]:
         """Return ``(community_count, last_built_at)`` for *collection*.
 
@@ -617,10 +647,11 @@ class GraphStore:
         from datetime import datetime  # noqa: PLC0415
 
         self._validate_collection(collection)
+        _validate_namespace(ns)
         db = self._require_db()
 
         try:
-            table = await db.open_table(self._communities_table_name(collection))
+            table = await db.open_table(self._communities_table_name(collection, ns))
         except (FileNotFoundError, ValueError):
             return 0, None
 
@@ -751,7 +782,7 @@ class GraphStore:
                 f"Failed to load table {table_name!r} ({context_label}): {exc}"
             ) from exc
 
-    async def get_all_nodes(self, collection: str) -> list[GraphNode]:
+    async def get_all_nodes(self, collection: str, ns: str) -> list[GraphNode]:
         """Return all nodes for *collection*; empty list if table absent.
 
         Raises:
@@ -759,15 +790,16 @@ class GraphStore:
                 returns ``[]``, not an error).
         """
         self._validate_collection(collection)
+        _validate_namespace(ns)
         arrow = await self._load_all_from_table(
-            self._nodes_table_name(collection), f"collection={collection!r}"
+            self._nodes_table_name(collection, ns), f"collection={collection!r} ns={ns!r}"
         )
         if arrow is None:
             return []
         return self._arrow_to_nodes(arrow)
 
     async def get_entity_presence_across_collections(
-        self, collection_names: list[str]
+        self, collection_names: list[str], ns: str
     ) -> dict[str, int]:
         """Return entity_id → count of distinct collections containing that entity.
 
@@ -782,6 +814,7 @@ class GraphStore:
         if not collection_names:
             return {}
 
+        _validate_namespace(ns)
         # Deduplicate while preserving order — duplicate names would double-count entities
         collection_names = list(dict.fromkeys(collection_names))
 
@@ -793,7 +826,7 @@ class GraphStore:
         presence: dict[str, int] = {}
         for collection in collection_names:
             try:
-                node_ids = await self._fetch_collection_entity_ids(collection)
+                node_ids = await self._fetch_collection_entity_ids(collection, ns)
             except RuntimeError as e:
                 logger.debug(
                     "get_entity_presence_across_collections: skipping collection %r — read failed: %s",
@@ -809,7 +842,7 @@ class GraphStore:
 
         return presence
 
-    async def _fetch_collection_entity_ids(self, collection: str) -> list[str]:
+    async def _fetch_collection_entity_ids(self, collection: str, ns: str) -> list[str]:
         """Return all entity IDs from *collection*'s node table; ``[]`` if absent.
 
         Fetches only the ``id`` column — avoids loading all 6 node columns and
@@ -823,7 +856,7 @@ class GraphStore:
         db = self._require_db()
         # Block 1: open the table — FileNotFoundError/ValueError = absent, silent skip
         try:
-            table = await db.open_table(self._nodes_table_name(collection))
+            table = await db.open_table(self._nodes_table_name(collection, ns))
         except (FileNotFoundError, ValueError):
             return []
         except Exception as exc:  # unexpected open failure — log + raise
@@ -851,7 +884,7 @@ class GraphStore:
                 f"Failed to read entity ids from {collection}"
             ) from exc
 
-    async def get_all_edges(self, collection: str) -> list[GraphEdge]:
+    async def get_all_edges(self, collection: str, ns: str) -> list[GraphEdge]:
         """Return all edges for *collection*; empty list if table absent.
 
         Raises:
@@ -859,8 +892,9 @@ class GraphStore:
                 returns ``[]``, not an error).
         """
         self._validate_collection(collection)
+        _validate_namespace(ns)
         arrow = await self._load_all_from_table(
-            self._edges_table_name(collection), f"collection={collection!r}"
+            self._edges_table_name(collection, ns), f"collection={collection!r} ns={ns!r}"
         )
         if arrow is None:
             return []

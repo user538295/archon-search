@@ -73,11 +73,11 @@ def test_graph_store_roundtrip(tmp_path) -> None:
         gs = GraphStore(str(tmp_path / "db"))
         await gs.connect()
         try:
-            await gs.ensure_graph_tables(col)
-            await gs.write_graph(col, [node_a, node_b], [edge_ab])
-            count = await gs.edge_count(col)
-            ncount = await gs.node_count(col)
-            neighbours = await gs.get_neighbours(col, [node_a.id])
+            await gs.ensure_graph_tables(col, ns="default")
+            await gs.write_graph(col, [node_a, node_b], [edge_ab], ns="default")
+            count = await gs.edge_count(col, ns="default")
+            ncount = await gs.node_count(col, ns="default")
+            neighbours = await gs.get_neighbours(col, [node_a.id], ns="default")
             return count, ncount, neighbours
         finally:
             await gs.disconnect()
@@ -110,7 +110,7 @@ def test_graph_table_names_use_archon_prefix(tmp_path) -> None:
         gs = GraphStore(db_path)
         await gs.connect()
         try:
-            await gs.ensure_graph_tables(col)
+            await gs.ensure_graph_tables(col, ns="default")
             # Get the raw LanceDB table names
             db = await lancedb.connect_async(db_path)
             raw_tables = await db.table_names()
@@ -159,13 +159,13 @@ def test_reingest_same_document_edges_not_duplicated(tmp_path) -> None:
         gs = GraphStore(str(tmp_path / "db"))
         await gs.connect()
         try:
-            await gs.ensure_graph_tables(col)
+            await gs.ensure_graph_tables(col, ns="default")
             # First ingest
-            await gs.write_graph(col, [node_a, node_b], [edge_ab])
-            count_after_first = await gs.edge_count(col)
+            await gs.write_graph(col, [node_a, node_b], [edge_ab], ns="default")
+            count_after_first = await gs.edge_count(col, ns="default")
             # Second ingest — same nodes + same edge (simulating re-ingest)
-            await gs.write_graph(col, [node_a, node_b], [edge_ab])
-            count_after_second = await gs.edge_count(col)
+            await gs.write_graph(col, [node_a, node_b], [edge_ab], ns="default")
+            count_after_second = await gs.edge_count(col, ns="default")
             return count_after_first, count_after_second
         finally:
             await gs.disconnect()
@@ -226,9 +226,9 @@ def test_graph_tables_preserve_edges_after_document_deletion(tmp_path) -> None:
         gs = GraphStore(db_path)
         await gs.connect()
         try:
-            await gs.ensure_graph_tables(col)
-            await gs.write_graph(col, [node_a, node_b], [edge_ab])
-            count_before_delete = await gs.edge_count(col)
+            await gs.ensure_graph_tables(col, ns="default")
+            await gs.write_graph(col, [node_a, node_b], [edge_ab], ns="default")
+            count_before_delete = await gs.edge_count(col, ns="default")
         finally:
             await gs.disconnect()
 
@@ -244,7 +244,7 @@ def test_graph_tables_preserve_edges_after_document_deletion(tmp_path) -> None:
         gs2 = GraphStore(db_path)
         await gs2.connect()
         try:
-            count_after_delete = await gs2.edge_count(col)
+            count_after_delete = await gs2.edge_count(col, ns="default")
         finally:
             await gs2.disconnect()
 
@@ -276,14 +276,14 @@ def test_graph_store_find_nodes_by_name_real_lancedb(tmp_path) -> None:
         gs = GraphStore(str(tmp_path / "db"))
         await gs.connect()
         try:
-            await gs.ensure_graph_tables(col)
-            await gs.write_graph(col, [node], [])
+            await gs.ensure_graph_tables(col, ns="default")
+            await gs.write_graph(col, [node], [], ns="default")
             # Match with lowercase query
-            results_lower = await gs.find_nodes_by_name(col, ["authservice"])
+            results_lower = await gs.find_nodes_by_name(col, ["authservice"], ns="default")
             # Match with uppercase query
-            results_upper = await gs.find_nodes_by_name(col, ["AUTHSERVICE"])
+            results_upper = await gs.find_nodes_by_name(col, ["AUTHSERVICE"], ns="default")
             # No match
-            results_miss = await gs.find_nodes_by_name(col, ["doesnotexist"])
+            results_miss = await gs.find_nodes_by_name(col, ["doesnotexist"], ns="default")
             return results_lower, results_upper, results_miss
         finally:
             await gs.disconnect()
@@ -316,9 +316,9 @@ def test_graph_store_entity_subtype_none_roundtrip(tmp_path) -> None:
         gs = GraphStore(str(tmp_path / "db"))
         await gs.connect()
         try:
-            await gs.ensure_graph_tables(col)
-            await gs.write_graph(col, [node_with_none, node_with_subtype], [])
-            results = await gs.find_nodes_by_name(col, ["servicea", "process"])
+            await gs.ensure_graph_tables(col, ns="default")
+            await gs.write_graph(col, [node_with_none, node_with_subtype], [], ns="default")
+            results = await gs.find_nodes_by_name(col, ["servicea", "process"], ns="default")
             return results
         finally:
             await gs.disconnect()
@@ -350,16 +350,16 @@ def test_mentions_write_and_read_roundtrip(tmp_path) -> None:
         gs = GraphStore(str(tmp_path / "db"))
         await gs.connect()
         try:
-            await gs.ensure_graph_tables(col)
+            await gs.ensure_graph_tables(col, ns="default")
             # Write 3 mentions
             mentions = [
                 GraphMention(entity_id="entity-a", chunk_id="chunk-1", doc_id="doc-1"),
                 GraphMention(entity_id="entity-b", chunk_id="chunk-2", doc_id="doc-1"),
                 GraphMention(entity_id="entity-c", chunk_id="chunk-3", doc_id="doc-1"),
             ]
-            await gs.write_mentions(col, mentions)
+            await gs.write_mentions(col, mentions, ns="default")
             # Read all mentions
-            result = await gs.get_all_mentions(col)
+            result = await gs.get_all_mentions(col, ns="default")
             return result
         finally:
             await gs.disconnect()
@@ -386,22 +386,22 @@ def test_mentions_delete_by_doc_then_write_is_idempotent(tmp_path) -> None:
         gs = GraphStore(str(tmp_path / "db"))
         await gs.connect()
         try:
-            await gs.ensure_graph_tables(col)
+            await gs.ensure_graph_tables(col, ns="default")
             # First write
             mentions_1 = [
                 GraphMention(entity_id="entity-x", chunk_id="chunk-x1", doc_id=doc_id),
                 GraphMention(entity_id="entity-y", chunk_id="chunk-x2", doc_id=doc_id),
             ]
-            await gs.write_mentions(col, mentions_1)
-            count_1 = len(await gs.get_all_mentions(col))
+            await gs.write_mentions(col, mentions_1, ns="default")
+            count_1 = len(await gs.get_all_mentions(col, ns="default"))
 
             # Delete by doc_id
-            await gs.delete_mentions_by_doc(col, doc_id)
-            count_after_delete = len(await gs.get_all_mentions(col))
+            await gs.delete_mentions_by_doc(col, doc_id, ns="default")
+            count_after_delete = len(await gs.get_all_mentions(col, ns="default"))
 
             # Re-write the same mentions
-            await gs.write_mentions(col, mentions_1)
-            count_2 = len(await gs.get_all_mentions(col))
+            await gs.write_mentions(col, mentions_1, ns="default")
+            count_2 = len(await gs.get_all_mentions(col, ns="default"))
 
             return count_1, count_after_delete, count_2
         finally:

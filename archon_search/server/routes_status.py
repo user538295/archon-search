@@ -99,7 +99,7 @@ async def status(request: Request) -> StatusResponse:
         last_built_at: str | None = None
         if config.graph.enabled and graph_store is not None:
             try:
-                count, built_at_dt = await graph_store.get_community_stats(name)
+                count, built_at_dt = await graph_store.get_community_stats(name, ns=ns)
                 community_count = count
                 if built_at_dt is not None:
                     last_built_at = built_at_dt.isoformat()
@@ -348,10 +348,11 @@ async def _build_graph_status(
     if graph_store is None:
         return None
 
+    ns: str = request.state.namespace
     collection_stats: list[GraphCollectionStats] = []
     for col in ns_collection_names:
-        node_count = await graph_store.node_count(col)
-        edge_count = await graph_store.edge_count(col)
+        node_count = await graph_store.node_count(col, ns=ns)
+        edge_count = await graph_store.edge_count(col, ns=ns)
         collection_stats.append(
             GraphCollectionStats(
                 collection=col,

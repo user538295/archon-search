@@ -152,7 +152,7 @@ async def _build_communities_async(db_path: str, col: str, cfg) -> list:
     await search_store.connect()
     try:
         builder = CommunityBuilder(graph_store, cfg.graph, search_store=search_store)
-        return await builder.build(col)
+        return await builder.build(col, ns="default")
     finally:
         await graph_store.disconnect()
         await search_store.disconnect()

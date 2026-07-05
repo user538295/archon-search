@@ -378,7 +378,7 @@ class CommunityBuilder:
 
         return _mmr_select(candidate_chunks, self._config.community_summary_chunks), candidate_chunks
 
-    async def build(self, collection: str) -> list["Community"]:
+    async def build(self, collection: str, ns: str) -> list["Community"]:
         """Build Leiden communities for *collection*.
 
         Fills ``representative_chunk_ids`` via MMR when a ``search_store`` is
@@ -404,7 +404,7 @@ class CommunityBuilder:
         """
         from archon_search.graph_types import Community  # noqa: PLC0415
 
-        nodes = await self._store.get_all_nodes(collection)
+        nodes = await self._store.get_all_nodes(collection, ns=ns)
         if not nodes:
             raise ValueError(
                 f"No entity graph nodes found for collection {collection!r}. "
@@ -434,10 +434,10 @@ class CommunityBuilder:
                     summary_text=None,
                 )
             ]
-            await self._store.write_communities(collection, result)
+            await self._store.write_communities(collection, result, ns=ns)
             return result
 
-        edges = await self._store.get_all_edges(collection)
+        edges = await self._store.get_all_edges(collection, ns=ns)
 
         resolution = self._config.leiden_resolution
         max_size = self._config.max_community_size
@@ -488,5 +488,5 @@ class CommunityBuilder:
                 )
             )
 
-        await self._store.write_communities(collection, final_communities)
+        await self._store.write_communities(collection, final_communities, ns=ns)
         return final_communities

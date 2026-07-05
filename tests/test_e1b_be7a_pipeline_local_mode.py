@@ -268,7 +268,7 @@ async def test_local_mode_isolated_node_falls_back_to_naive(connected_store, col
 
     # Naive expansion falls back with graph_expansion_applied=True (per spec S9)
     assert result.graph_expansion_applied is True
-    expander.expand.assert_awaited_once_with("AuthService logs", col_name)
+    expander.expand.assert_awaited_once_with("AuthService logs", col_name, ns="default")
 
 
 @pytest.mark.asyncio
@@ -681,8 +681,8 @@ async def test_pipeline_local_mode_real(tmp_path, monkeypatch):
         source_doc_id="doc-1",
         collection_name=col,
     )
-    await graph_store.ensure_graph_tables(col)
-    await graph_store.write_graph(col, nodes=[node], edges=[])
+    await graph_store.ensure_graph_tables(col, ns="default")
+    await graph_store.write_graph(col, nodes=[node], edges=[], ns="default")
 
     # Create and write a community with that chunk_id
     community = Community(
@@ -692,7 +692,7 @@ async def test_pipeline_local_mode_real(tmp_path, monkeypatch):
         built_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         summary_text=None,
     )
-    await graph_store.write_communities(col, [community])
+    await graph_store.write_communities(col, [community], ns="default")
 
     # Search with local mode using a query that contains "authservice"
     result = await pipeline.search(
@@ -798,8 +798,8 @@ async def test_local_mode_acl_filters_community_chunks(tmp_path, monkeypatch):
         source_doc_id="doc-1",
         collection_name=col,
     )
-    await graph_store.ensure_graph_tables(col)
-    await graph_store.write_graph(col, nodes=[node], edges=[])
+    await graph_store.ensure_graph_tables(col, ns="default")
+    await graph_store.write_graph(col, nodes=[node], edges=[], ns="default")
 
     # Community includes both chunk IDs
     community = Community(
@@ -809,7 +809,7 @@ async def test_local_mode_acl_filters_community_chunks(tmp_path, monkeypatch):
         built_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         summary_text=None,
     )
-    await graph_store.write_communities(col, [community])
+    await graph_store.write_communities(col, [community], ns="default")
 
     # Search with local mode from namespace_A — should only get namespace_A chunks
     result = await pipeline.search(

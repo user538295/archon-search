@@ -102,7 +102,7 @@ async def get_graph_cross_collection(
         all_meta = await pipeline.get_all_collections_meta(ns)
         all_ns_collection_names = [m.name for m in all_meta]
         entity_presence = await graph_store.get_entity_presence_across_collections(
-            all_ns_collection_names
+            all_ns_collection_names, ns=ns
         )
         num_collections = len(all_ns_collection_names)
     else:
@@ -119,6 +119,7 @@ async def get_graph_cross_collection(
         salience_mode=salience,
         entity_presence=entity_presence,
         num_collections=num_collections,
+        ns=ns,
     )
 
     # Branch on format
@@ -187,7 +188,7 @@ async def get_graph(
         all_meta = await pipeline.get_all_collections_meta(ns)
         all_ns_collection_names = [m.name for m in all_meta]
         entity_presence = await graph_store.get_entity_presence_across_collections(
-            all_ns_collection_names
+            all_ns_collection_names, ns=ns
         )
         num_collections = len(all_ns_collection_names)
     else:
@@ -204,6 +205,7 @@ async def get_graph(
         salience_mode=salience,
         entity_presence=entity_presence,
         num_collections=num_collections,
+        ns=ns,
     )
 
     # Branch on format

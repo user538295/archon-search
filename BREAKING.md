@@ -8,6 +8,29 @@
 
 ## Changelog
 
+### [next release] — E2d: graph table names are now namespace-scoped (`_archon_graph_{ns}__{col}_*`)
+
+**Surface**: LanceDB internal graph tables (auxiliary storage); `archon-search graph build-communities` CLI; all `GET /graph/*` endpoints (read path).
+
+**Breaking change**:
+
+1. **All graph LanceDB tables renamed from `_archon_graph_{col}_*` to `_archon_graph_{ns}__{col}_*`** — the namespace is now embedded in the table name, separated from the collection name by a double underscore (`__`). Affected table suffixes: `_nodes`, `_edges`, `_communities` (E1b), `_mentions` (E2b). After upgrading to E2d, all existing graph tables (created under the old naming scheme) become **orphaned** — they are no longer referenced by the server and will not be read or written. The server does not automatically migrate or delete them.
+
+2. **Namespace and collection name charset constraint** — collection names and namespace names must NOT contain consecutive underscores (`__`) and must NOT end with `_`. Names that violate these constraints are rejected with `ValueError` at ingest time. The constraint existed implicitly (the `__` separator requires it for unambiguous parsing); E2d makes it explicit and enforced at the store layer. Valid examples: `docs`, `tenant-a`, `ns_a`. Invalid examples: `docs_`, `my__col`, `tenant_`.
+
+3. **Startup WARNING (BE-1b)** — after upgrade, the server will log a WARNING listing any LanceDB tables that match the old `_archon_graph_{col}_*` pattern (without a namespace prefix). These are orphaned tables from pre-E2d ingests.
+
+**Impact**: all graph data (entities, edges, communities, mentions) is invisible after upgrade. Graph search modes (`naive`, `local`, `global`) return empty results until data is re-ingested.
+
+**Remediation**:
+1. After upgrading to E2d, delete old graph tables manually (use the `lancedb` Python client or LanceDB CLI to drop tables matching `_archon_graph_<collection>_nodes`, `_archon_graph_<collection>_edges`, etc.).
+2. Re-ingest all collections with `[graph] enabled = true` to rebuild graph data under the new namespace-scoped table names.
+3. If communities were built (`archon-search graph build-communities`), re-run that command after re-ingest.
+
+**Deployments without `[graph] enabled = true`** are completely unaffected — no graph tables exist and no migration is required.
+
+---
+
 ### [next release] — E2c: `GET /graph/{collection}` and `GET /graph/cross-collection` gain `salience_mode` field and namespace-scoped resolution
 
 **Surface**: `GET /graph/{collection}` REST response (`GraphInspectionResponse`); `GET /graph/cross-collection` REST response (`CrossCollectionGraphInspectionResponse`); collection-resolution behaviour inside both handlers.

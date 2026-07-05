@@ -32,6 +32,21 @@
 - Action: When adding BREAKING.md entries for a feature that touches multiple endpoints/schemas, ensure every affected endpoint and schema is listed in the same entry or a sibling entry. Reviewing the plan's "what changes" table before closing out helps catch omissions.
 - Confidence: high
 
+**[2026-07-05] — E2d BE-1: namespace-scoping a store with many callers — bulk surgery strategy**
+- Observation: Adding `ns: str` as a required positional argument to ~20 GraphStore methods cascades through 15+ test files, 4 production callers (pipeline.py, community_builder.py, graph_expander.py, mcp.py), 3 presentation-layer callers (routes_graph.py, routes_status.py, graph_cmd.py), and 3 eval stubs (backends.py). The failures were systematic and predictable once the root signature change was in place.
+- Action: When adding a required parameter to a store-layer class with many callers: (1) fix the store first, (2) fix production callers (pipeline → expander → community_builder → graph_inspector), (3) fix presentation layer (routes_*, cli/*), (4) run suite to identify all test failures at once, (5) batch-fix test files using Python string replacement scripts. Don't fix tests one-by-one — collect all failures first, then batch. The `ns="default"` default in eval stubs and mock side-effects is correct because tests that don't exercise namespace isolation don't need a non-default namespace.
+- Confidence: high
+
+**[2026-07-05] — E2d BE-1: eval hash refresh after eval backend changes**
+- Observation: Changes to `archon_search/eval/backends.py` (StubGraphExpander, CommunityStoreStub) change the `eval_hash` recorded in `tests/eval/baselines/baseline.json`. The hash covers the eval harness code as well as fixture files.
+- Action: After any change to `archon_search/eval/backends.py` or `archon_search/eval/runner.py`, run `uv run python tests/eval/baselines/regenerate.py` to refresh `baseline.json` and `baseline.md`. Without this, `test_baseline_contract.py` and the gated eval tests fail with "Stale baseline — recorded hashes differ."
+- Confidence: high
+
+**[2026-07-05] — E2d BE-1: lambda side-effects in Mock must accept keyword args the production code passes**
+- Observation: When production code gains a new keyword argument (e.g., `ns=namespace`), any lambda used as an AsyncMock `side_effect` that doesn't accept `**kwargs` or the specific kwarg will raise `TypeError: unexpected keyword argument 'ns'`. This fails silently (the pipeline catches the exception and falls back to hybrid), making the test pass for the wrong reason instead of failing.
+- Action: After adding `ns=` to a method, grep for `side_effect=lambda` that references that method and add `ns="default"` to each lambda signature. The pattern is `lambda coll, ngrams: ...` → `lambda coll, ngrams, ns="default": ...`.
+- Confidence: high
+
 ## Known Bugs / Future Work
 
 **[2026-07-04] — E2c T-3 review: cross-collection edge_count pre-existing filter divergence**

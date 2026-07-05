@@ -119,10 +119,10 @@ async def _seed_graph_and_community(
     gs = GraphStore(db_path)
     await gs.connect()
     try:
-        await gs.ensure_graph_tables(col)
-        await gs.write_graph(col, [node], [])
+        await gs.ensure_graph_tables(col, ns="default")
+        await gs.write_graph(col, [node], [], ns="default")
 
-        await gs.ensure_communities_table(col)
+        await gs.ensure_communities_table(col, ns="default")
         community = Community(
             community_id="test-comm-local-1",
             entity_ids=[node.id],
@@ -130,7 +130,7 @@ async def _seed_graph_and_community(
             built_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
             summary_text=None,
         )
-        await gs.write_communities(col, [community])
+        await gs.write_communities(col, [community], ns="default")
     finally:
         await gs.disconnect()
 
@@ -157,7 +157,7 @@ async def _seed_isolated_node(db_path: str, col: str, node_name: str, doc_id: st
     await gs.connect()
     try:
         # Table was already created by _seed_graph_and_community above.
-        await gs.write_graph(col, [isolated_node], [])
+        await gs.write_graph(col, [isolated_node], [], ns="default")
     finally:
         await gs.disconnect()
 

@@ -61,7 +61,7 @@ def test_build_communities_cli_success(tmp_path: Path) -> None:
     assert "Built 3 communities" in result.output, (
         f"Community count not found in output: {result.output!r}"
     )
-    mock_builder.build.assert_awaited_once_with("my-collection")
+    mock_builder.build.assert_awaited_once_with("my-collection", ns="default")
     mock_gs.disconnect.assert_awaited_once()
     mock_ss.disconnect.assert_awaited_once()
 

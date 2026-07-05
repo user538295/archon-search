@@ -433,7 +433,7 @@ flowchart LR
 
 ### Phase 1 · Delete a document — graph mentions immediately removed, namespaces isolated *(walking skeleton: carries the namespace-scoped table rename foundation inside the first demoable behavior)*
 
-- [ ] **BE-1** — Namespace-scope all `GraphStore` table names and method signatures; add trailing/leading-`_` validation guard #backend-role
+- [x] **BE-1** — Namespace-scope all `GraphStore` table names and method signatures; add trailing/leading-`_` validation guard #backend-role
     - Frameworks & Drivers · 4.0h
     - needs K1 · completes C2, S6, S11
     - Tests

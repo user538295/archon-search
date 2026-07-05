@@ -228,6 +228,8 @@ async def inspect_collection(
     salience_mode: Literal["frequency", "tfidf"] = "frequency",
     entity_presence: dict[str, int] | None = None,
     num_collections: int = 1,
+    *,
+    ns: str,
 ) -> CollectionGraphView:
     """Inspect a single collection's graph and derive metrics.
 
@@ -270,11 +272,11 @@ async def inspect_collection(
         raise ValueError("num_collections must be >= 1 in tfidf mode")
 
     # Fetch all nodes and edges
-    all_nodes = await graph_store.get_all_nodes(collection)
-    all_edges = await graph_store.get_all_edges(collection)
+    all_nodes = await graph_store.get_all_nodes(collection, ns=ns)
+    all_edges = await graph_store.get_all_edges(collection, ns=ns)
 
     # Fetch mentions up to the ceiling
-    all_mentions = await graph_store.get_all_mentions(collection, limit=_MENTIONS_SCAN_CEILING)
+    all_mentions = await graph_store.get_all_mentions(collection, limit=_MENTIONS_SCAN_CEILING, ns=ns)
 
     # Check if mentions hit the ceiling
     mentions_ceiling_hit = len(all_mentions) >= _MENTIONS_SCAN_CEILING
@@ -376,6 +378,8 @@ async def inspect_cross_collection(
     salience_mode: Literal["frequency", "tfidf"] = "frequency",
     entity_presence: dict[str, int] | None = None,
     num_collections: int = 1,
+    *,
+    ns: str,
 ) -> CrossCollectionGraphView:
     """Inspect and merge graph data across multiple collections.
 
@@ -420,9 +424,9 @@ async def inspect_cross_collection(
 
     for collection in collections:
         # Fetch nodes, edges, mentions for this collection
-        all_nodes = await graph_store.get_all_nodes(collection)
-        all_edges = await graph_store.get_all_edges(collection)
-        all_mentions = await graph_store.get_all_mentions(collection, limit=_MENTIONS_SCAN_CEILING)
+        all_nodes = await graph_store.get_all_nodes(collection, ns=ns)
+        all_edges = await graph_store.get_all_edges(collection, ns=ns)
+        all_mentions = await graph_store.get_all_mentions(collection, limit=_MENTIONS_SCAN_CEILING, ns=ns)
 
         # Check if this collection hit the ceiling
         if len(all_mentions) >= _MENTIONS_SCAN_CEILING:

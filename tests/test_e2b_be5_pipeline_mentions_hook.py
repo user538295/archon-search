@@ -263,7 +263,7 @@ async def test_ingest_writes_mentions_then_reingest_is_idempotent(
 
             graph_store = GraphStore(cfg.db_path)
             await graph_store.connect()
-            mentions_1 = await graph_store.get_all_mentions(col_name)
+            mentions_1 = await graph_store.get_all_mentions(col_name, ns="default")
             initial_mention_count = len(mentions_1)
             assert initial_mention_count >= 0  # Should have at least 0 mentions (may be 0 with stubs)
 
@@ -271,7 +271,7 @@ async def test_ingest_writes_mentions_then_reingest_is_idempotent(
             ingest_file_via_path(client, col_name, str(doc_file), api_key=api_key)
 
             # Check mention count after re-ingest
-            mentions_2 = await graph_store.get_all_mentions(col_name)
+            mentions_2 = await graph_store.get_all_mentions(col_name, ns="default")
             reingest_mention_count = len(mentions_2)
 
             # Counts should be equal (idempotent — delete-then-add, not doubled)

@@ -151,10 +151,10 @@ async def test_build_graph_status_multiple_collections() -> None:
     node_counts = {"col_a": 10, "col_b": 20}
     edge_counts = {"col_a": 4, "col_b": 8}
 
-    async def _node_count(col: str) -> int:
+    async def _node_count(col: str, ns: str = "default") -> int:
         return node_counts[col]
 
-    async def _edge_count(col: str) -> int:
+    async def _edge_count(col: str, ns: str = "default") -> int:
         return edge_counts[col]
 
     mock_graph_store = MagicMock()

@@ -143,7 +143,7 @@ class GraphEdge:
 class GraphMention:
     """An incidence record linking an entity to a chunk where it was mentioned — E2b.
 
-    Stored in ``_archon_graph_{col}_mentions`` per collection. Each mention
+    Stored in ``_archon_graph_{ns}__{col}_mentions`` per collection. Each mention
     records that a specific entity was extracted from a specific chunk within
     a specific document, enabling derivation of chunk frequency (salience) and
     co-occurrence metrics at inspection time.
@@ -195,7 +195,7 @@ class GraphExtractionResult:
 class Community:
     """A Leiden-detected community of related graph entities — E1b.
 
-    Stored in ``_archon_graph_{col}_communities`` per collection. Each community
+    Stored in ``_archon_graph_{ns}__{col}_communities`` per collection. Each community
     groups entities that are strongly connected in the entity graph; its
     ``representative_chunk_ids`` are the MMR-selected diverse chunk IDs used
     at search time for local and global graph-mode retrieval.

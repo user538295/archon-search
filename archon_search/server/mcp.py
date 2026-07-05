@@ -1866,6 +1866,7 @@ def create_app(
                 total_chunk_count=total_chunk_count,
                 max_nodes=max_nodes,
                 max_edges=max_edges,
+                ns=ns,
             )
 
             # Build entity_type_distribution from nodes
@@ -1971,6 +1972,7 @@ def create_app(
                 total_chunk_counts=total_chunk_counts,
                 max_nodes=max_nodes,
                 max_edges=max_edges,
+                ns=ns,
             )
 
             # Build entity_type_distribution from merged nodes

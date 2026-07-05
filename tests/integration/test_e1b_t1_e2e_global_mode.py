@@ -87,7 +87,7 @@ async def _write_communities_to_store(
     gs = GraphStore(db_path)
     await gs.connect()
     try:
-        await gs.ensure_communities_table(col)
+        await gs.ensure_communities_table(col, ns="default")
         community = Community(
             community_id=community_id,
             entity_ids=entity_ids or ["entity-1"],
@@ -95,7 +95,7 @@ async def _write_communities_to_store(
             built_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
             summary_text=None,
         )
-        await gs.write_communities(col, [community])
+        await gs.write_communities(col, [community], ns="default")
     finally:
         await gs.disconnect()
 
@@ -169,8 +169,8 @@ def test_e2e_build_communities_cli(tmp_path: Path) -> None:
     async def _seed() -> None:
         graph_store = GraphStore(db_path)
         await graph_store.connect()
-        await graph_store.ensure_graph_tables(col)
-        await graph_store.write_graph(col, [node_a, node_b], [edge])
+        await graph_store.ensure_graph_tables(col, ns="default")
+        await graph_store.write_graph(col, [node_a, node_b], [edge], ns="default")
         await graph_store.disconnect()
 
         search_store = SearchStore(db_path)
@@ -221,7 +221,7 @@ def test_e2e_build_communities_cli(tmp_path: Path) -> None:
     async def _verify() -> None:
         graph_store = GraphStore(db_path)
         await graph_store.connect()
-        count, last_built_at = await graph_store.get_community_stats(col)
+        count, last_built_at = await graph_store.get_community_stats(col, ns="default")
         await graph_store.disconnect()
         assert count >= 1, f"Expected at least 1 community in store; got {count}"
         assert last_built_at is not None, "Expected last_built_at to be set after build"

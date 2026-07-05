@@ -189,11 +189,11 @@ async def test_search_many_local_mode_per_collection_isolation(connected_store, 
 
     graph_store = MagicMock()
     graph_store.find_nodes_by_name = AsyncMock(
-        side_effect=lambda coll, ngrams: [node_a] if coll == col_a else [node_b]
+        side_effect=lambda coll, ngrams, ns="default": [node_a] if coll == col_a else [node_b]
     )
     graph_store.communities_table_exists = AsyncMock(return_value=True)
     graph_store.get_communities_for_entities = AsyncMock(
-        side_effect=lambda coll, eids: communities_a if coll == col_a else communities_b
+        side_effect=lambda coll, eids, ns="default": communities_a if coll == col_a else communities_b
     )
 
     graph_config = GraphConfig(enabled=True)
@@ -262,11 +262,11 @@ async def test_search_many_local_mixed_match(connected_store, col_name):
 
     graph_store = MagicMock()
     graph_store.find_nodes_by_name = AsyncMock(
-        side_effect=lambda coll, ngrams: [node_a] if coll == col_a else [node_b]
+        side_effect=lambda coll, ngrams, ns="default": [node_a] if coll == col_a else [node_b]
     )
     graph_store.communities_table_exists = AsyncMock(return_value=True)
     graph_store.get_communities_for_entities = AsyncMock(
-        side_effect=lambda coll, eids: communities_a if coll == col_a else []
+        side_effect=lambda coll, eids, ns="default": communities_a if coll == col_a else []
     )
 
     graph_config = GraphConfig(enabled=True)
@@ -327,11 +327,11 @@ async def test_search_many_local_one_leg_all_stale_falls_back(connected_store, c
 
     graph_store = MagicMock()
     graph_store.find_nodes_by_name = AsyncMock(
-        side_effect=lambda coll, ngrams: [node_a] if coll == col_a else [node_b]
+        side_effect=lambda coll, ngrams, ns="default": [node_a] if coll == col_a else [node_b]
     )
     graph_store.communities_table_exists = AsyncMock(return_value=True)
     graph_store.get_communities_for_entities = AsyncMock(
-        side_effect=lambda coll, eids: communities_a if coll == col_a else communities_b
+        side_effect=lambda coll, eids, ns="default": communities_a if coll == col_a else communities_b
     )
 
     graph_config = GraphConfig(enabled=True)

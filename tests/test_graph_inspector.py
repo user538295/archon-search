@@ -174,7 +174,8 @@ async def test_inspect_derives_chunk_count_from_mentions(mock_graph_store: MockG
     ]
 
     view = await inspect_collection(
-        mock_graph_store, "test", total_chunk_count=10, max_nodes=1000, max_edges=1000
+        mock_graph_store, "test", total_chunk_count=10, max_nodes=1000, max_edges=1000,
+    ns="default"
     )
 
     assert len(view.nodes) == 1
@@ -199,19 +200,22 @@ async def test_inspect_salience_formula(mock_graph_store: MockGraphStore):
 
     # Case 1: Normal case
     view = await inspect_collection(
-        mock_graph_store, "test", total_chunk_count=10, max_nodes=1000, max_edges=1000
+        mock_graph_store, "test", total_chunk_count=10, max_nodes=1000, max_edges=1000,
+    ns="default"
     )
     assert view.nodes[0].salience == 0.5
 
     # Case 2: Clamping (chunk_count > total_chunk_count)
     view = await inspect_collection(
-        mock_graph_store, "test", total_chunk_count=3, max_nodes=1000, max_edges=1000
+        mock_graph_store, "test", total_chunk_count=3, max_nodes=1000, max_edges=1000,
+    ns="default"
     )
     assert view.nodes[0].salience == 1.0
 
     # Case 3: Zero denominator
     view = await inspect_collection(
-        mock_graph_store, "test", total_chunk_count=0, max_nodes=1000, max_edges=1000
+        mock_graph_store, "test", total_chunk_count=0, max_nodes=1000, max_edges=1000,
+    ns="default"
     )
     assert view.nodes[0].salience == 0.0
 
@@ -250,7 +254,8 @@ async def test_inspect_weight_is_cooccurrence_count(mock_graph_store: MockGraphS
     ]
 
     view = await inspect_collection(
-        mock_graph_store, "test", total_chunk_count=10, max_nodes=1000, max_edges=1000
+        mock_graph_store, "test", total_chunk_count=10, max_nodes=1000, max_edges=1000,
+    ns="default"
     )
 
     assert len(view.edges) == 1
@@ -287,7 +292,8 @@ async def test_inspect_source_chunk_ids_capped_at_20(mock_graph_store: MockGraph
     ] + [GraphMention(entity_id=entity_b, chunk_id=f"chunk-{i:02d}", doc_id="doc1") for i in range(30)]
 
     view = await inspect_collection(
-        mock_graph_store, "test", total_chunk_count=100, max_nodes=1000, max_edges=1000
+        mock_graph_store, "test", total_chunk_count=100, max_nodes=1000, max_edges=1000,
+    ns="default"
     )
 
     assert len(view.edges[0].source_chunk_ids) == 20
@@ -299,7 +305,8 @@ async def test_inspect_source_chunk_ids_capped_at_20(mock_graph_store: MockGraph
 async def test_inspect_empty_tables_returns_empty_view(mock_graph_store: MockGraphStore):
     """Absent/empty graph tables → empty view, not error."""
     view = await inspect_collection(
-        mock_graph_store, "test", total_chunk_count=10, max_nodes=1000, max_edges=1000
+        mock_graph_store, "test", total_chunk_count=10, max_nodes=1000, max_edges=1000,
+    ns="default"
     )
 
     assert view.nodes == []
@@ -336,7 +343,8 @@ async def test_inspect_pre_e2b_nodes_read_as_zero(mock_graph_store: MockGraphSto
     mock_graph_store.mentions["test"] = []
 
     view = await inspect_collection(
-        mock_graph_store, "test", total_chunk_count=10, max_nodes=1000, max_edges=1000
+        mock_graph_store, "test", total_chunk_count=10, max_nodes=1000, max_edges=1000,
+    ns="default"
     )
 
     assert all(n.chunk_count == 0 for n in view.nodes)
@@ -362,7 +370,8 @@ async def test_inspect_chunk_count_deduplicates_entity_chunk_pairs(mock_graph_st
     ]
 
     view = await inspect_collection(
-        mock_graph_store, "test", total_chunk_count=10, max_nodes=1000, max_edges=1000
+        mock_graph_store, "test", total_chunk_count=10, max_nodes=1000, max_edges=1000,
+    ns="default"
     )
 
     # chunk_count should be 2 (chunk-1 and chunk-2), not 3
@@ -388,7 +397,8 @@ async def test_inspect_node_count_is_pretruncation_total(mock_graph_store: MockG
         mock_graph_store.mentions.setdefault("test", []).append(GraphMention(entity_id=node.id, chunk_id=f"chunk-{node.id}", doc_id="doc1"))
 
     view = await inspect_collection(
-        mock_graph_store, "test", total_chunk_count=10, max_nodes=3, max_edges=1000
+        mock_graph_store, "test", total_chunk_count=10, max_nodes=3, max_edges=1000,
+    ns="default"
     )
 
     assert view.node_count == 5  # pre-truncation
@@ -438,7 +448,8 @@ async def test_inspect_edge_count_is_post_node_filter_pre_edge_cap(mock_graph_st
         )
 
     view = await inspect_collection(
-        mock_graph_store, "test", total_chunk_count=10, max_nodes=3, max_edges=2
+        mock_graph_store, "test", total_chunk_count=10, max_nodes=3, max_edges=2,
+    ns="default"
     )
 
     # With max_nodes=3, survivors are: id-0, id-1, id-2 (sorted by chunk_count desc, then id asc)
@@ -467,7 +478,8 @@ async def test_inspect_sets_truncated_when_mentions_exceed_ceiling(mock_graph_st
     ]
 
     view = await inspect_collection(
-        mock_graph_store, "test", total_chunk_count=10, max_nodes=10, max_edges=10
+        mock_graph_store, "test", total_chunk_count=10, max_nodes=10, max_edges=10,
+    ns="default"
     )
 
     # Even though node/edge counts don't exceed limits, truncated should be True
@@ -512,6 +524,7 @@ async def test_cross_collection_node_dedup_sums_chunk_counts(mock_graph_store: M
         {"a": 10, "b": 10},
         max_nodes=1000,
         max_edges=1000,
+    ns="default"
     )
 
     assert len(view.nodes) == 1
@@ -547,6 +560,7 @@ async def test_cross_collection_salience_weighted_avg(mock_graph_store: MockGrap
         {"a": 10, "b": 5},
         max_nodes=1000,
         max_edges=1000,
+    ns="default"
     )
 
     # Weighted avg: (4*0.4 + 2*0.4) / (4 + 2) = (1.6 + 0.8) / 6 = 2.4 / 6 = 0.4
@@ -607,6 +621,7 @@ async def test_cross_collection_edge_dedup_sums_weights(mock_graph_store: MockGr
         {"col1": 10, "col2": 10},
         max_nodes=1000,
         max_edges=1000,
+    ns="default"
     )
 
     assert len(view.edges) == 1
@@ -664,6 +679,7 @@ async def test_cross_collection_source_chunk_ids_unioned_and_capped(mock_graph_s
         {"c1": 100, "c2": 100},
         max_nodes=1000,
         max_edges=1000,
+    ns="default"
     )
 
     # Union of chunks: chunk-0 to chunk-19 (20 unique chunks)
@@ -696,6 +712,7 @@ async def test_cross_collection_one_empty_collection_contributes_zero(mock_graph
         {"a": 10, "b": 10},
         max_nodes=1000,
         max_edges=1000,
+    ns="default"
     )
 
     # Should contain only data from collection A
@@ -739,6 +756,7 @@ async def test_cross_collection_truncation_fires_after_merge(mock_graph_store: M
         {"a": 10, "b": 10},
         max_nodes=4,
         max_edges=1000,
+    ns="default"
     )
 
     # Merged has 6 nodes; cap at 4; should be truncated
@@ -878,8 +896,8 @@ async def test_inspect_cross_collection_real_store(tmp_path):
     col_b = "collection-b"
 
     # Ensure graph tables exist for both collections
-    await graph_store.ensure_graph_tables(col_a)
-    await graph_store.ensure_graph_tables(col_b)
+    await graph_store.ensure_graph_tables(col_a, ns="default")
+    await graph_store.ensure_graph_tables(col_b, ns="default")
 
     # Create nodes for collection A
     nodes_a = [
@@ -955,12 +973,12 @@ async def test_inspect_cross_collection_real_store(tmp_path):
     ]
 
     # Write data to collection A
-    await graph_store.write_graph(col_a, nodes_a, edges_a)
-    await graph_store.write_mentions(col_a, mentions_a)
+    await graph_store.write_graph(col_a, nodes_a, edges_a, ns="default")
+    await graph_store.write_mentions(col_a, mentions_a, ns="default")
 
     # Write data to collection B
-    await graph_store.write_graph(col_b, nodes_b, edges_b)
-    await graph_store.write_mentions(col_b, mentions_b)
+    await graph_store.write_graph(col_b, nodes_b, edges_b, ns="default")
+    await graph_store.write_mentions(col_b, mentions_b, ns="default")
 
     # Call inspect_cross_collection
     total_chunk_counts = {
@@ -973,6 +991,7 @@ async def test_inspect_cross_collection_real_store(tmp_path):
         total_chunk_counts,
         max_nodes=1000,
         max_edges=1000,
+    ns="default"
     )
 
     # Verify merged nodes
@@ -1050,6 +1069,7 @@ async def test_inspect_collection_tfidf_domain_specific_outranks_ubiquitous(mock
         salience_mode="tfidf",
         entity_presence=entity_presence,
         num_collections=3,
+    ns="default"
     )
 
     assert view.salience_mode == "tfidf"
@@ -1091,6 +1111,7 @@ async def test_inspect_collection_tfidf_single_namespace_collection_same_order(m
         max_nodes=1000,
         max_edges=1000,
         salience_mode="frequency",
+    ns="default"
     )
     view_tfidf = await inspect_collection(
         mock_graph_store,
@@ -1101,6 +1122,7 @@ async def test_inspect_collection_tfidf_single_namespace_collection_same_order(m
         salience_mode="tfidf",
         entity_presence=entity_presence,
         num_collections=1,
+    ns="default"
     )
 
     # Both modes should produce the same entity ordering
@@ -1130,6 +1152,7 @@ async def test_inspect_collection_tfidf_entity_in_all_collections_near_zero(mock
             salience_mode="tfidf",
             entity_presence=entity_presence,
             num_collections=num_collections,
+        ns="default"
         )
         idf = math.log((num_collections + 1) / num_collections)
         tf = 5 / 10
@@ -1149,6 +1172,7 @@ async def test_inspect_collection_tfidf_entity_in_all_collections_near_zero(mock
             salience_mode="tfidf",
             entity_presence=entity_presence,
             num_collections=num_collections,
+        ns="default"
         )
         results.append(view.nodes[0].salience)
 
@@ -1186,6 +1210,7 @@ async def test_inspect_collection_tfidf_truncation_uses_salience_not_chunk_count
         salience_mode="tfidf",
         entity_presence=entity_presence,
         num_collections=3,
+    ns="default"
     )
     assert view_tfidf.nodes[0].entity_id == "unique-entity"
 
@@ -1197,6 +1222,7 @@ async def test_inspect_collection_tfidf_truncation_uses_salience_not_chunk_count
         max_nodes=1,
         max_edges=1000,
         salience_mode="frequency",
+    ns="default"
     )
     assert view_freq.nodes[0].entity_id == "common-entity"
 
@@ -1216,6 +1242,7 @@ async def test_inspect_collection_tfidf_zero_chunks(mock_graph_store: MockGraphS
         salience_mode="tfidf",
         entity_presence={"entity-a": 1},
         num_collections=3,
+    ns="default"
     )
 
     assert all(n.salience == 0.0 for n in view.nodes)
@@ -1241,6 +1268,7 @@ async def test_inspect_collection_tfidf_pre_e2b_nodes(mock_graph_store: MockGrap
         salience_mode="tfidf",
         entity_presence={"entity-a": 1, "entity-b": 1},
         num_collections=3,
+    ns="default"
     )
 
     assert all(n.chunk_count == 0 for n in view.nodes)
@@ -1267,6 +1295,7 @@ async def test_inspect_collection_frequency_unchanged(mock_graph_store: MockGrap
         total_chunk_count=10,
         max_nodes=1000,
         max_edges=1000,
+    ns="default"
     )
 
     assert view.salience_mode == "frequency"
@@ -1346,6 +1375,7 @@ async def test_inspect_collection_tfidf_edge_count_consistent_with_node_set(mock
         salience_mode="tfidf",
         entity_presence=entity_presence,
         num_collections=num_collections,
+    ns="default"
     )
 
     # node-b has highest tfidf salience
@@ -1363,6 +1393,7 @@ async def test_inspect_collection_tfidf_edge_count_consistent_with_node_set(mock
         max_nodes=2,
         max_edges=1000,
         salience_mode="frequency",
+    ns="default"
     )
 
     # node-a and node-b are top-2 by chunk_count; edge-ab survives, not edge-bc
@@ -1396,6 +1427,7 @@ async def test_inspect_collection_tfidf_equal_salience_tiebreak_entity_id(mock_g
         salience_mode="tfidf",
         entity_presence=entity_presence,
         num_collections=3,
+    ns="default"
     )
 
     # Both have same salience; entity-aaa < entity-zzz lexicographically → entity-aaa first
@@ -1429,6 +1461,7 @@ async def test_mcp_get_graph_still_returns_summary_after_signature_change(mock_g
         total_chunk_count=10,
         max_nodes=1000,
         max_edges=1000,
+    ns="default"
     )
 
     # Verify the fields mcp.py reads exist and are correct types
@@ -1470,6 +1503,7 @@ async def test_inspect_collection_tfidf_entity_presence_none_raises(mock_graph_s
             max_edges=1000,
             salience_mode="tfidf",
             entity_presence=None,
+        ns="default"
         )
 
 
@@ -1489,6 +1523,7 @@ async def test_inspect_collection_tfidf_num_collections_zero_raises(mock_graph_s
             salience_mode="tfidf",
             entity_presence={"entity-a": 1},
             num_collections=0,
+        ns="default"
         )
 
 
@@ -1512,6 +1547,7 @@ async def test_inspect_collection_tfidf_duplicate_mentions_deduped(mock_graph_st
         salience_mode="tfidf",
         entity_presence={entity_id: 1},
         num_collections=num_collections,
+    ns="default"
     )
 
     assert len(view.nodes) == 1
@@ -1540,6 +1576,7 @@ async def test_inspect_collection_tfidf_df_zero_in_presence_uses_df1(mock_graph_
         salience_mode="tfidf",
         entity_presence={entity_id: 0},
         num_collections=num_collections,
+    ns="default"
     )
 
     # df=1 fallback must be used (max(..., 1) guards against the explicit 0)
@@ -1584,6 +1621,7 @@ async def test_inspect_collection_tfidf_entity_not_in_presence_uses_df1_and_warn
             salience_mode="tfidf",
             entity_presence={"entity-x": 1},  # entity-y and entity-z are absent
             num_collections=num_collections,
+        ns="default"
         )
 
     # All three entities use df=1 fallback (entity-x explicitly set to 1; y and z default to 1)
@@ -1615,7 +1653,7 @@ async def test_inspect_collection_tfidf_idf_formula(tmp_path):
     await graph_store.connect()
 
     col = "tfidf-idf-test"
-    await graph_store.ensure_graph_tables(col)
+    await graph_store.ensure_graph_tables(col, ns="default")
 
     # Create 3 entities with different document frequencies:
     #   entity-df1: unique (df=1)
@@ -1639,8 +1677,8 @@ async def test_inspect_collection_tfidf_idf_formula(tmp_path):
         + [GraphMention(entity_id="entity-df3", chunk_id=f"df3-{i}", doc_id="doc1") for i in range(4)]
     )
 
-    await graph_store.write_graph(col, nodes, [])
-    await graph_store.write_mentions(col, mentions)
+    await graph_store.write_graph(col, nodes, [], ns="default")
+    await graph_store.write_mentions(col, mentions, ns="default")
 
     num_collections = 3
     entity_presence = {"entity-df1": 1, "entity-df2": 2, "entity-df3": 3}
@@ -1655,6 +1693,7 @@ async def test_inspect_collection_tfidf_idf_formula(tmp_path):
         salience_mode="tfidf",
         entity_presence=entity_presence,
         num_collections=num_collections,
+    ns="default"
     )
 
     tf = 4 / 20  # TF = chunk_count / total_chunks
@@ -1719,6 +1758,7 @@ async def test_inspect_cross_collection_tfidf_namespace_scoped_idf(mock_graph_st
         salience_mode="tfidf",
         entity_presence=entity_presence,
         num_collections=num_collections,
+    ns="default"
     )
 
     assert view.salience_mode == "tfidf"
@@ -1783,6 +1823,7 @@ async def test_inspect_cross_collection_tfidf_domain_specific_outranks_ubiquitou
         salience_mode="tfidf",
         entity_presence=entity_presence,
         num_collections=num_collections,
+    ns="default"
     )
 
     assert view.salience_mode == "tfidf"
@@ -1843,6 +1884,7 @@ async def test_inspect_cross_collection_tfidf_empty_collection_contributes_to_id
         salience_mode="tfidf",
         entity_presence=entity_presence,
         num_collections=num_collections,
+    ns="default"
     )
 
     assert view.salience_mode == "tfidf"
@@ -1896,6 +1938,7 @@ async def test_inspect_cross_collection_frequency_unchanged(mock_graph_store: Mo
         {"col-a": 10, "col-b": 100},
         max_nodes=1000,
         max_edges=1000,
+    ns="default"
     )
 
     assert view.salience_mode == "frequency"
@@ -1918,6 +1961,7 @@ async def test_inspect_cross_collection_frequency_unchanged(mock_graph_store: Mo
         {"col-a": 10, "col-b": 100},
         max_nodes=1,
         max_edges=1000,
+    ns="default"
     )
     assert view_capped.nodes[0].entity_id == "entity-y"  # higher chunk_count wins
 
@@ -1961,6 +2005,7 @@ async def test_inspect_cross_collection_default_signature_backward_compat(
         {"col-a": 10, "col-b": 10},
         max_nodes=1000,
         max_edges=1000,
+    ns="default"
     )
 
     # Verify container-level types (mcp.py reads these directly)
@@ -2041,6 +2086,7 @@ async def test_inspect_cross_collection_tfidf_blend_formula(mock_graph_store: Mo
         salience_mode="tfidf",
         entity_presence=entity_presence,
         num_collections=num_collections,
+    ns="default"
     )
 
     assert view.salience_mode == "tfidf"
@@ -2089,6 +2135,7 @@ async def test_inspect_cross_collection_tfidf_entity_presence_none_raises(
             max_edges=1000,
             salience_mode="tfidf",
             entity_presence=None,
+        ns="default"
         )
 
 
@@ -2110,6 +2157,7 @@ async def test_inspect_cross_collection_tfidf_num_collections_zero_raises(
             salience_mode="tfidf",
             entity_presence={"entity-a": 1},
             num_collections=0,
+        ns="default"
         )
 
 
@@ -2145,6 +2193,7 @@ async def test_inspect_cross_collection_tfidf_empty_entity_presence_applies_df1_
             salience_mode="tfidf",
             entity_presence={},  # empty dict — not None, passes the None guard
             num_collections=num_collections,
+        ns="default"
         )
 
     # No exception — empty dict is valid input
@@ -2190,6 +2239,7 @@ async def test_inspect_cross_collection_tfidf_zero_chunk_count(
         salience_mode="tfidf",
         entity_presence=entity_presence,
         num_collections=3,
+    ns="default"
     )
 
     # No ZeroDivisionError; all nodes have salience=0.0
@@ -2242,6 +2292,7 @@ async def test_inspect_cross_collection_tfidf_entity_in_single_collection(
         salience_mode="tfidf",
         entity_presence=entity_presence,
         num_collections=num_collections,
+    ns="default"
     )
 
     assert view.salience_mode == "tfidf"
@@ -2300,6 +2351,7 @@ async def test_apply_tfidf_clamps_negative_idf_to_zero(
             salience_mode="tfidf",
             entity_presence=entity_presence,
             num_collections=num_collections,
+        ns="default"
         )
 
     assert len(view.nodes) == 1

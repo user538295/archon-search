@@ -91,6 +91,7 @@ async def _seed_node_with_mentions(
     entity_id: str,
     entity_name: str,
     chunk_ids: list[str],
+    ns: str = "default",
 ) -> None:
     """Write a single graph node and its mentions into GraphStore.
 
@@ -105,7 +106,7 @@ async def _seed_node_with_mentions(
     gs = GraphStore(db_path)
     await gs.connect()
     try:
-        await gs.ensure_graph_tables(collection)
+        await gs.ensure_graph_tables(collection, ns=ns)
         node = GraphNode(
             id=entity_id,
             entity_name=entity_name,
@@ -113,12 +114,12 @@ async def _seed_node_with_mentions(
             source_doc_id="seeded-doc",
             collection_name=collection,
         )
-        await gs.write_graph(collection, [node], [])
+        await gs.write_graph(collection, [node], [], ns=ns)
         mention_objs = [
             GraphMention(entity_id=entity_id, chunk_id=cid, doc_id="seeded-doc")
             for cid in chunk_ids
         ]
-        await gs.write_mentions(collection, mention_objs)
+        await gs.write_mentions(collection, mention_objs, ns=ns)
     finally:
         await gs.disconnect()
 
@@ -662,11 +663,13 @@ def test_get_graph_tfidf_namespace_idf_isolation(
             asyncio.run(_seed_node_with_mentions(
                 cfg.db_path, col, entity_e_id, "EntityE",
                 [f"chunk-{col}-{i:06d}" for i in range(5)],
+                ns="ns-a",
             ))
 
         asyncio.run(_seed_node_with_mentions(
             cfg.db_path, "nsb-1", entity_e_id, "EntityE",
             [f"chunk-nsb-1-{i:06d}" for i in range(5)],
+            ns="ns-b",
         ))
 
         # --- ns-A: query nsa-1 with key_a → IDF uses N=3 namespace collections ---

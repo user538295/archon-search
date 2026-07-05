@@ -73,13 +73,13 @@ def test_ensure_communities_table_calls_create_table() -> None:
 
     async def _run() -> None:
         store._db = mock_db
-        await store.ensure_communities_table("mycol")
+        await store.ensure_communities_table("mycol", ns="default")
 
     asyncio.run(_run())
 
     assert mock_db.create_table.call_count == 1
     called_name = mock_db.create_table.call_args[0][0]
-    assert "_archon_graph_mycol_communities" == called_name
+    assert "_archon_graph_default__mycol_communities" == called_name
     call_kwargs = mock_db.create_table.call_args[1]
     assert call_kwargs.get("exist_ok") is True
 
@@ -260,7 +260,7 @@ def test_get_communities_for_entities_uses_python_side_filter() -> None:
 
     async def _run() -> list[Community]:
         store._db = mock_db
-        return await store.get_communities_for_entities("testcol", ["entity-A"])
+        return await store.get_communities_for_entities("testcol", ["entity-A"], ns="default")
 
     result = asyncio.run(_run())
 
@@ -285,7 +285,7 @@ def test_get_community_stats_empty_returns_zero_none() -> None:
 
     async def _run() -> tuple:
         store._db = mock_db
-        return await store.get_community_stats("testcol")
+        return await store.get_community_stats("testcol", ns="default")
 
     count, last_built = asyncio.run(_run())
 
@@ -328,7 +328,7 @@ def test_list_community_representatives_returns_all() -> None:
 
     async def _run() -> list[Community]:
         store._db = mock_db
-        return await store.list_community_representatives("testcol")
+        return await store.list_community_representatives("testcol", ns="default")
 
     result = asyncio.run(_run())
 

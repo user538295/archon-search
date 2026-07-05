@@ -80,8 +80,8 @@ async def test_representative_chunk_ids_populated(tmp_path: Path):
     # Set up GraphStore
     graph_store = GraphStore(tmp_path / "graph_db")
     await graph_store.connect()
-    await graph_store.ensure_graph_tables(col)
-    await graph_store.write_graph(col, nodes, edges)
+    await graph_store.ensure_graph_tables(col, ns="default")
+    await graph_store.write_graph(col, nodes, edges, ns="default")
 
     # Set up SearchStore with real chunks
     search_store = SearchStore(str(tmp_path / "search_db"))
@@ -126,8 +126,8 @@ async def test_llm_failure_still_writes_communities(tmp_path: Path):
 
     graph_store = GraphStore(tmp_path / "graph_db")
     await graph_store.connect()
-    await graph_store.ensure_graph_tables(col)
-    await graph_store.write_graph(col, nodes, edges)
+    await graph_store.ensure_graph_tables(col, ns="default")
+    await graph_store.write_graph(col, nodes, edges, ns="default")
 
     search_store = SearchStore(str(tmp_path / "search_db"))
     await search_store.connect()
@@ -176,8 +176,8 @@ async def test_build_idempotent(tmp_path: Path):
 
     graph_store = GraphStore(tmp_path / "graph_db")
     await graph_store.connect()
-    await graph_store.ensure_graph_tables(col)
-    await graph_store.write_graph(col, nodes, edges)
+    await graph_store.ensure_graph_tables(col, ns="default")
+    await graph_store.write_graph(col, nodes, edges, ns="default")
 
     config = GraphConfig(enabled=True, community_summary_chunks=1)
     from archon_search.community_builder import CommunityBuilder
@@ -190,7 +190,7 @@ async def test_build_idempotent(tmp_path: Path):
         await builder.build(col)
         await builder.build(col)  # Second build replaces, not appends
 
-    count, _ = await graph_store.get_community_stats(col)
+    count, _ = await graph_store.get_community_stats(col, ns="default")
     await graph_store.disconnect()
 
     assert count == 1, f"Expected 1 community after idempotent build, got {count}"

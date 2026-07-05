@@ -150,7 +150,7 @@ async def test_search_pipeline_global_mode_calls_community_store(connected_store
         graph_mode="global",
     )
 
-    graph_store.list_community_representatives.assert_awaited_once_with(col_name)
+    graph_store.list_community_representatives.assert_awaited_once_with(col_name, ns="default")
     pipeline.store.get_chunks_by_ids.assert_awaited_once()
     assert isinstance(result, SearchPipelineResult)
 
@@ -501,7 +501,7 @@ async def test_search_many_global_mode_calls_per_collection(connected_store, col
 
     graph_store = MagicMock()
     graph_store.list_community_representatives = AsyncMock(
-        side_effect=lambda coll: communities_a if coll == col_name else communities_b
+        side_effect=lambda coll, ns="default": communities_a if coll == col_name else communities_b
     )
 
     graph_config = GraphConfig(enabled=True, max_global_candidates=100)
@@ -542,8 +542,8 @@ async def test_search_many_global_mode_calls_per_collection(connected_store, col
         )
 
     assert graph_store.list_community_representatives.await_count == 2
-    graph_store.list_community_representatives.assert_any_await(col_name)
-    graph_store.list_community_representatives.assert_any_await(col_b)
+    graph_store.list_community_representatives.assert_any_await(col_name, ns="default")
+    graph_store.list_community_representatives.assert_any_await(col_b, ns="default")
     assert isinstance(result, SearchPipelineResult)
     assert result.graph_expansion_applied is True
 
@@ -623,7 +623,7 @@ async def test_pipeline_global_mode_real_communities(tmp_path, monkeypatch):
     chunk_id = all_rows[0]["chunk_id"]
 
     # Create and write a community with that chunk_id
-    await graph_store.ensure_communities_table(col)
+    await graph_store.ensure_communities_table(col, ns="default")
     community = Community(
         community_id="test-comm-1",
         entity_ids=["entity-1"],
@@ -631,7 +631,7 @@ async def test_pipeline_global_mode_real_communities(tmp_path, monkeypatch):
         built_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
         summary_text=None,
     )
-    await graph_store.write_communities(col, [community])
+    await graph_store.write_communities(col, [community], ns="default")
 
     # Search with global mode
     result = await pipeline.search(

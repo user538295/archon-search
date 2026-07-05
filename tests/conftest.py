@@ -237,15 +237,15 @@ class MockGraphStore:
         self.edges: dict[str, list] = {}
         self.mentions: dict[str, list] = {}
 
-    async def get_all_nodes(self, collection: str):  # type: ignore[no-untyped-def]
+    async def get_all_nodes(self, collection: str, *, ns: str = "default"):  # type: ignore[no-untyped-def]
         """Return all nodes for *collection*; empty list if not in store."""
         return self.nodes.get(collection, [])
 
-    async def get_all_edges(self, collection: str):  # type: ignore[no-untyped-def]
+    async def get_all_edges(self, collection: str, *, ns: str = "default"):  # type: ignore[no-untyped-def]
         """Return all edges for *collection*; empty list if not in store."""
         return self.edges.get(collection, [])
 
-    async def get_all_mentions(self, collection: str, limit: int | None = None):  # type: ignore[no-untyped-def]
+    async def get_all_mentions(self, collection: str, limit: int | None = None, *, ns: str = "default"):  # type: ignore[no-untyped-def]
         """Return mentions for *collection* up to *limit*; empty list if not in store."""
         mentions = self.mentions.get(collection, [])
         if limit is not None:

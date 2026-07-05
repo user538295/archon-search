@@ -47,6 +47,18 @@ _INGEST_CHUNK_BATCH_SIZE: Final[int] = 512
 _NAMESPACE_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}")
 
 
+def _validate_segment_safe(name: str, label: str) -> None:
+    """Raise ValueError if *name* contains patterns that break the __ table-name separator."""
+    if name.endswith("_"):
+        raise ValueError(
+            f"Invalid {label} {name!r}: must not end with '_'"
+        )
+    if "__" in name:
+        raise ValueError(
+            f"Invalid {label} {name!r}: must not contain consecutive underscores '__'"
+        )
+
+
 def _validate_namespace(name: str) -> None:
     """Raise ValueError if name is not a valid namespace identifier."""
     if name == "deny-all":
@@ -55,3 +67,4 @@ def _validate_namespace(name: str) -> None:
         raise ValueError(
             f"Invalid namespace {name!r}: must match ^[a-zA-Z0-9][a-zA-Z0-9_-]{{0,63}}$"
         )
+    _validate_segment_safe(name, "namespace")

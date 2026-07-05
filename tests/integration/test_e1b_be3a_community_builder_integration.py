@@ -65,8 +65,8 @@ async def test_max_community_size_split_real_leiden(tmp_path: Path):
 
     store = GraphStore(tmp_path / "graph_db")
     await store.connect()
-    await store.ensure_graph_tables(col)
-    await store.write_graph(col, nodes, edges)
+    await store.ensure_graph_tables(col, ns="default")
+    await store.write_graph(col, nodes, edges, ns="default")
 
     config = GraphConfig(
         enabled=True,

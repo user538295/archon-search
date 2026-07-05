@@ -67,13 +67,13 @@ def test_graph_store_rejects_invalid_collection_name() -> None:
     async def _run() -> None:
         # Names starting with underscore, or with spaces — should both fail.
         with pytest.raises(ValueError, match="Invalid collection name"):
-            await store.ensure_graph_tables("_bad_name")
+            await store.ensure_graph_tables("_bad_name", ns="default")
 
         with pytest.raises(ValueError, match="Invalid collection name"):
-            await store.ensure_graph_tables("has space")
+            await store.ensure_graph_tables("has space", ns="default")
 
         with pytest.raises(ValueError, match="Invalid collection name"):
-            await store.ensure_graph_tables("")
+            await store.ensure_graph_tables("", ns="default")
 
     asyncio.run(_run())
 
@@ -97,8 +97,8 @@ def test_ensure_graph_tables_idempotent() -> None:
 
     async def _run() -> None:
         store._db = mock_db
-        await store.ensure_graph_tables("mycol")
-        await store.ensure_graph_tables("mycol")
+        await store.ensure_graph_tables("mycol", ns="default")
+        await store.ensure_graph_tables("mycol", ns="default")
         # create_table called twice (once per table per call = 6 total for 3 tables: nodes, edges, mentions)
         assert mock_db.create_table.call_count == 6
 
@@ -134,8 +134,8 @@ def test_write_graph_upserts_by_stable_id() -> None:
 
     async def _run() -> None:
         store._db = mock_db
-        await store.write_graph("test-col", [node_a], [])
-        await store.write_graph("test-col", [node_a], [])
+        await store.write_graph("test-col", [node_a], [], ns="default")
+        await store.write_graph("test-col", [node_a], [], ns="default")
         # merge_insert called twice (once per write_graph call, on the nodes table)
         assert mock_table.merge_insert.call_count == 2
         # execute called twice (once per write_graph call for nodes)
@@ -174,8 +174,8 @@ def test_write_graph_upserts_edges_by_stable_id() -> None:
 
     async def _run() -> None:
         store._db = mock_db
-        await store.write_graph("test-col", [node_a, node_b], [edge_ab])
-        await store.write_graph("test-col", [node_a, node_b], [edge_ab])
+        await store.write_graph("test-col", [node_a, node_b], [edge_ab], ns="default")
+        await store.write_graph("test-col", [node_a, node_b], [edge_ab], ns="default")
         # merge_insert is called for both nodes and edges tables — 4 calls total (2 per write)
         assert mock_table.merge_insert.call_count == 4
 
@@ -268,7 +268,7 @@ def test_get_neighbours_returns_first_degree() -> None:
 
     async def _run() -> list:
         store._db = mock_db
-        return await store.get_neighbours("test-col", [node_a.id])
+        return await store.get_neighbours("test-col", [node_a.id], ns="default")
 
     result = asyncio.run(_run())
     assert len(result) == 1
@@ -295,7 +295,7 @@ def test_edge_count_zero_before_ingest() -> None:
 
     async def _run() -> int:
         store._db = mock_db
-        return await store.edge_count("empty-col")
+        return await store.edge_count("empty-col", ns="default")
 
     count = asyncio.run(_run())
     assert count == 0
@@ -368,11 +368,11 @@ def test_find_nodes_by_name_case_insensitive() -> None:
 
     async def _run_hit() -> list:
         store._db = mock_db_hit
-        return await store.find_nodes_by_name("col1", ["authservice"])
+        return await store.find_nodes_by_name("col1", ["authservice"], ns="default")
 
     async def _run_miss() -> list:
         store._db = mock_db_miss
-        return await store.find_nodes_by_name("col1", ["unknown_name"])
+        return await store.find_nodes_by_name("col1", ["unknown_name"], ns="default")
 
     hit_results = asyncio.run(_run_hit())
     assert len(hit_results) == 1
@@ -425,7 +425,7 @@ def test_find_nodes_by_name_multi_word() -> None:
 
     async def _run() -> list:
         store._db = mock_db
-        return await store.find_nodes_by_name("col1", ["token validator"])
+        return await store.find_nodes_by_name("col1", ["token validator"], ns="default")
 
     results = asyncio.run(_run())
     assert len(results) == 1
@@ -450,7 +450,7 @@ def test_node_count_zero_before_ingest() -> None:
 
     async def _run() -> int:
         store._db = mock_db
-        return await store.node_count("empty-col")
+        return await store.node_count("empty-col", ns="default")
 
     count = asyncio.run(_run())
     assert count == 0
@@ -472,7 +472,7 @@ def test_get_neighbours_empty_entity_ids() -> None:
 
     async def _run() -> list:
         store._db = mock_db
-        return await store.get_neighbours("test-col", [])
+        return await store.get_neighbours("test-col", [], ns="default")
 
     result = asyncio.run(_run())
     assert result == []
@@ -490,7 +490,7 @@ def test_find_nodes_by_name_empty_names() -> None:
 
     async def _run() -> list:
         store._db = mock_db
-        return await store.find_nodes_by_name("test-col", [])
+        return await store.find_nodes_by_name("test-col", [], ns="default")
 
     result = asyncio.run(_run())
     assert result == []
@@ -586,7 +586,7 @@ def test_get_neighbours_multiple_entity_ids() -> None:
 
     async def _run() -> list:
         store._db = mock_db
-        return await store.get_neighbours(col, [node_a.id, node_c.id])
+        return await store.get_neighbours(col, [node_a.id, node_c.id], ns="default")
 
     result = asyncio.run(_run())
     assert len(result) == 1, f"Expected 1 neighbour (B), got {len(result)}: {[r.entity_name for r in result]}"
@@ -609,7 +609,7 @@ def test_get_edges_for_nodes_empty_entity_ids() -> None:
 
     async def _run() -> list:
         store._db = mock_db
-        return await store.get_edges_for_nodes("test-col", [])
+        return await store.get_edges_for_nodes("test-col", [], ns="default")
 
     result = asyncio.run(_run())
     assert result == []
@@ -664,7 +664,7 @@ def test_get_edges_for_nodes_entity_as_source() -> None:
 
     async def _run() -> list:
         store._db = mock_db
-        return await store.get_edges_for_nodes("test-col", [node_a.id])
+        return await store.get_edges_for_nodes("test-col", [node_a.id], ns="default")
 
     result = asyncio.run(_run())
     assert len(result) == 1
@@ -690,7 +690,7 @@ def test_get_edges_for_nodes_entity_as_target() -> None:
     async def _run() -> list:
         store._db = mock_db
         # Query by target node (B) — should still return the edge A→B
-        return await store.get_edges_for_nodes("test-col", [node_b.id])
+        return await store.get_edges_for_nodes("test-col", [node_b.id], ns="default")
 
     result = asyncio.run(_run())
     assert len(result) == 1
@@ -723,7 +723,7 @@ def test_get_edges_for_nodes_entity_as_both_source_and_target() -> None:
     async def _run() -> list:
         store._db = mock_db
         # A appears as source in A→B and as target in C→A
-        return await store.get_edges_for_nodes("test-col", [node_a.id])
+        return await store.get_edges_for_nodes("test-col", [node_a.id], ns="default")
 
     result = asyncio.run(_run())
     assert len(result) == 2
@@ -747,7 +747,7 @@ def test_get_edges_for_nodes_no_matching_edges() -> None:
 
     async def _run() -> list:
         store._db = mock_db
-        return await store.get_edges_for_nodes("test-col", [node_x.id])
+        return await store.get_edges_for_nodes("test-col", [node_x.id], ns="default")
 
     result = asyncio.run(_run())
     assert result == []
@@ -759,12 +759,12 @@ def test_get_edges_for_nodes_no_matching_edges() -> None:
 
 
 def test_mentions_table_name_format() -> None:
-    """Mentions table name follows _archon_graph_{col}_mentions pattern."""
+    """Mentions table name follows _archon_graph_{ns}__{col}_mentions pattern."""
     from archon_search.graph_store import GraphStore
 
     store = GraphStore("/tmp/fake-db")
-    name = store._mentions_table_name("test-collection")
-    assert name == "_archon_graph_test-collection_mentions"
+    name = store._mentions_table_name("test-collection", "default")
+    assert name == "_archon_graph_default__test-collection_mentions"
 
 
 def test_mentions_schema_columns() -> None:
@@ -800,7 +800,7 @@ def test_delete_mentions_uses_safe_predicate() -> None:
 
     async def _run() -> str:
         store._db = mock_db
-        await store.delete_mentions_by_doc("test-col", "doc-123")
+        await store.delete_mentions_by_doc("test-col", "doc-123", ns="default")
         # Capture the predicate passed to delete()
         return mock_table.delete.call_args[0][0]
 
@@ -886,7 +886,7 @@ def test_get_entity_presence_across_collections_basic() -> None:
     col3_table = _make_nodes_table_mock([node_beta])
 
     def _table_name_for(col: str) -> str:
-        return "_archon_graph_" + col + "_nodes"
+        return "_archon_graph_default__" + col + "_nodes"
 
     async def _open_table(name: str):
         if name == _table_name_for("col1"):
@@ -903,7 +903,7 @@ def test_get_entity_presence_across_collections_basic() -> None:
 
     async def _run() -> dict:
         store._db = mock_db
-        return await store.get_entity_presence_across_collections(["col1", "col2", "col3"])
+        return await store.get_entity_presence_across_collections(["col1", "col2", "col3"], ns="default")
 
     result = asyncio.run(_run())
 
@@ -925,7 +925,7 @@ def test_get_entity_presence_empty_collections() -> None:
 
     async def _run() -> dict:
         store._db = mock_db
-        return await store.get_entity_presence_across_collections([])
+        return await store.get_entity_presence_across_collections([], ns="default")
 
     result = asyncio.run(_run())
 
@@ -955,7 +955,7 @@ def test_get_entity_presence_absent_table_skipped() -> None:
     col1_table = _make_nodes_table_mock([node_alpha])
 
     async def _open_table(name: str):
-        if name == "_archon_graph_col1_nodes":
+        if name == "_archon_graph_default__col1_nodes":
             return col1_table
         raise FileNotFoundError(f"Table not found: {name}")
 
@@ -965,7 +965,7 @@ def test_get_entity_presence_absent_table_skipped() -> None:
 
     async def _run() -> dict:
         store._db = mock_db
-        return await store.get_entity_presence_across_collections(["col1", "col2"])
+        return await store.get_entity_presence_across_collections(["col1", "col2"], ns="default")
 
     result = asyncio.run(_run())
 
@@ -1007,9 +1007,9 @@ def test_get_entity_presence_dedup_within_collection() -> None:
     col2_table = _make_nodes_table_mock([node_alpha])
 
     async def _open_table(name: str):
-        if name == "_archon_graph_col1_nodes":
+        if name == "_archon_graph_default__col1_nodes":
             return col1_table
-        if name == "_archon_graph_col2_nodes":
+        if name == "_archon_graph_default__col2_nodes":
             return col2_table
         raise FileNotFoundError(f"Table not found: {name}")
 
@@ -1019,7 +1019,7 @@ def test_get_entity_presence_dedup_within_collection() -> None:
 
     async def _run() -> dict:
         store._db = mock_db
-        return await store.get_entity_presence_across_collections(["col1", "col2"])
+        return await store.get_entity_presence_across_collections(["col1", "col2"], ns="default")
 
     result = asyncio.run(_run())
 
@@ -1055,7 +1055,7 @@ def test_get_entity_presence_duplicate_collection_names_deduplicated() -> None:
     col1_table = _make_nodes_table_mock([node_alpha])
 
     async def _open_table(name: str):
-        if name == "_archon_graph_col1_nodes":
+        if name == "_archon_graph_default__col1_nodes":
             return col1_table
         raise FileNotFoundError(f"Table not found: {name}")
 
@@ -1065,7 +1065,7 @@ def test_get_entity_presence_duplicate_collection_names_deduplicated() -> None:
 
     async def _run() -> dict:
         store._db = mock_db
-        return await store.get_entity_presence_across_collections(["col1", "col1"])
+        return await store.get_entity_presence_across_collections(["col1", "col1"], ns="default")
 
     result = asyncio.run(_run())
 
@@ -1099,9 +1099,9 @@ def test_get_entity_presence_unreadable_table_skipped() -> None:
     col1_table = _make_nodes_table_mock([node_alpha])
 
     async def _open_table(name: str):
-        if name == "_archon_graph_col1_nodes":
+        if name == "_archon_graph_default__col1_nodes":
             return col1_table
-        if name == "_archon_graph_col2_nodes":
+        if name == "_archon_graph_default__col2_nodes":
             raise RuntimeError("simulated corruption")
         raise FileNotFoundError(f"Table not found: {name}")
 
@@ -1111,7 +1111,7 @@ def test_get_entity_presence_unreadable_table_skipped() -> None:
 
     async def _run() -> dict:
         store._db = mock_db
-        return await store.get_entity_presence_across_collections(["col1", "col2"])
+        return await store.get_entity_presence_across_collections(["col1", "col2"], ns="default")
 
     result = asyncio.run(_run())
 
@@ -1136,7 +1136,7 @@ def test_get_entity_presence_store_not_connected_raises() -> None:
     # _db is None by default — store is not connected
 
     async def _run() -> dict:
-        return await store.get_entity_presence_across_collections(["col1"])
+        return await store.get_entity_presence_across_collections(["col1"], ns="default")
 
     with pytest.raises(RuntimeError, match="not connected"):
         asyncio.run(_run())
@@ -1173,9 +1173,9 @@ def test_get_entity_presence_to_arrow_failure_skips_collection() -> None:
     col2_table.query.return_value = bad_query
 
     async def _open_table(name: str):
-        if name == "_archon_graph_col1_nodes":
+        if name == "_archon_graph_default__col1_nodes":
             return col1_table
-        if name == "_archon_graph_col2_nodes":
+        if name == "_archon_graph_default__col2_nodes":
             return col2_table
         raise FileNotFoundError(f"Table not found: {name}")
 
@@ -1185,7 +1185,7 @@ def test_get_entity_presence_to_arrow_failure_skips_collection() -> None:
 
     async def _run() -> dict:
         store._db = mock_db
-        return await store.get_entity_presence_across_collections(["col1", "col2"])
+        return await store.get_entity_presence_across_collections(["col1", "col2"], ns="default")
 
     log_stream = io.StringIO()
     handler = _logging.StreamHandler(log_stream)
@@ -1235,9 +1235,9 @@ def test_get_entity_presence_open_table_unexpected_failure_skips_collection() ->
     col1_table = _make_nodes_table_mock([node_alpha])
 
     async def _open_table(name: str):
-        if name == "_archon_graph_col1_nodes":
+        if name == "_archon_graph_default__col1_nodes":
             return col1_table
-        if name == "_archon_graph_col2_nodes":
+        if name == "_archon_graph_default__col2_nodes":
             raise OSError("disk error")
         raise FileNotFoundError(f"Table not found: {name}")
 
@@ -1247,7 +1247,7 @@ def test_get_entity_presence_open_table_unexpected_failure_skips_collection() ->
 
     async def _run() -> dict:
         store._db = mock_db
-        return await store.get_entity_presence_across_collections(["col1", "col2"])
+        return await store.get_entity_presence_across_collections(["col1", "col2"], ns="default")
 
     log_stream = io.StringIO()
     handler = _logging.StreamHandler(log_stream)

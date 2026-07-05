@@ -69,7 +69,11 @@ def build_communities_cmd(collection: str, config_path: Path | None) -> None:
             await graph_store.connect()
             await search_store.connect()
             builder = CommunityBuilder(graph_store, cfg.graph, search_store=search_store)
-            communities = await builder.build(collection)
+            from archon_search.constants import DEFAULT_NAMESPACE  # noqa: PLC0415
+            # Note: the graph CLI commands operate on the default namespace only.
+            # Multi-namespace deployments have no REST or CLI path to build communities
+            # for non-default namespaces — this is a known E2d limitation.
+            communities = await builder.build(collection, ns=DEFAULT_NAMESPACE)
             click.echo(
                 f"Built {len(communities)} communities for collection {collection!r}."
             )

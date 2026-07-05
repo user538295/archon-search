@@ -96,7 +96,7 @@ class StubGraphExpander:
     def __init__(self, entity_map: dict[str, list[str]]) -> None:
         self._entity_map = {k.lower(): v for k, v in entity_map.items()}
 
-    async def expand(self, query: str, collection: str) -> "ExpandedQuery":  # type: ignore[name-defined]  # noqa: F821
+    async def expand(self, query: str, collection: str, ns: str = "default") -> "ExpandedQuery":  # type: ignore[name-defined]  # noqa: F821
         from archon_search.graph_expander import (
             ExpandedQuery,
             build_expanded_text,
@@ -163,12 +163,12 @@ class CommunityStoreStub:
     ``SearchPipeline._search_graph_mode()`` and ``SearchPipeline._search_local_mode()``.
     """
 
-    async def communities_table_exists(self, collection: str) -> bool:
+    async def communities_table_exists(self, collection: str, ns: str = "default") -> bool:
         """Return True only for the graph collection used in eval fixtures."""
         return collection == _EVAL_COMMUNITY_COLLECTION
 
     async def list_community_representatives(
-        self, collection: str
+        self, collection: str, ns: str = "default"
     ) -> list:  # list[Community]
         """Return one stub community for the graph collection; empty otherwise."""
         from datetime import datetime, timezone
@@ -188,7 +188,7 @@ class CommunityStoreStub:
         ]
 
     async def find_nodes_by_name(
-        self, collection: str, names: list[str]
+        self, collection: str, names: list[str], ns: str = "default"
     ) -> list:  # list[GraphNode]
         """Return a stub GraphNode when any recognised entity name is present."""
         from archon_search.graph_types import EntityType, GraphNode
@@ -209,7 +209,7 @@ class CommunityStoreStub:
         ]
 
     async def get_communities_for_entities(
-        self, collection: str, entity_ids: list[str]
+        self, collection: str, entity_ids: list[str], ns: str = "default"
     ) -> list:  # list[Community]
         """Return one stub community when entity_ids are non-empty for graph collection."""
         from datetime import datetime, timezone
