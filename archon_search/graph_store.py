@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from archon_search.constants import _validate_namespace, _validate_segment_safe
-from archon_search.graph_types import Community, EntityType, GraphEdge, GraphMention, GraphNode, RelationshipType
+from archon_search.graph_types import Community, EntityType, GcPassResult, GraphEdge, GraphMention, GraphNode, RelationshipType
 from archon_search.store_filters import _sql_quote_str
 
 if TYPE_CHECKING:
@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 _ARCHON_PREFIX = "_archon_"
+_GC_DELETE_BATCH_SIZE = 500
 
 # ---------------------------------------------------------------------------
 # SQL helpers (same pattern as store.py)
@@ -884,6 +885,205 @@ class GraphStore:
             raise RuntimeError(
                 f"Failed to read entity ids from {collection}"
             ) from exc
+
+    # ------------------------------------------------------------------
+    # GC helpers (E2d BE-5)
+    # ------------------------------------------------------------------
+
+    async def delete_orphan_nodes_and_edges(
+        self, collection: str, ns: str
+    ) -> GcPassResult:
+        """Delete graph nodes that have no remaining mention rows, then delete
+        edges whose source or target endpoint was among the deleted nodes.
+
+        A node is considered an "orphan" when the mentions table contains no row
+        with that entity's ``entity_id``.  All edges touching an orphan node are
+        also considered orphaned because at least one endpoint no longer exists.
+
+        Returns:
+            ``GcPassResult`` with ``orphan_nodes_removed`` and
+            ``orphan_edges_removed`` counts.  ``communities_invalidated`` is
+            derived automatically (``True`` when nodes were removed).
+
+        Notes:
+            - If the mentions table does not exist, returns ``GcPassResult(0, 0)``
+              because orphan status cannot be determined without mention data.
+            - Uses ``_where_in`` for all SQL predicates (no f-string SQL).
+            - When called in the same GC pass after ``prune_stale_mentions`` has
+              emptied the mentions table (all chunks TTL-expired or deleted), this
+              method will skip with a WARNING.  The orchestrator
+              (``_run_graph_gc``) is responsible for detecting this case (via
+              ``list_chunks_raw`` returning empty) and clearing the graph tables
+              directly.
+        """
+        self._validate_collection(collection)
+        _validate_namespace(ns)
+        db = self._require_db()
+
+        # --- Step 1: collect entity IDs that have at least one mention ---
+        try:
+            mentions_table = await db.open_table(self._mentions_table_name(collection, ns))
+        except (FileNotFoundError, ValueError):
+            # No mentions table → cannot determine orphans safely; skip GC.
+            return GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
+
+        mentions_arrow = await mentions_table.query().select(["entity_id"]).to_arrow()
+        mentioned_entity_ids: set[str] = set(mentions_arrow["entity_id"].to_pylist())
+
+        # Fix C1-I-1: empty mentions table is indistinguishable from "mentions never
+        # populated" — cannot safely determine orphan status; skip GC.
+        if not mentioned_entity_ids:
+            logger.warning(
+                "GC skipped for collection %r (ns=%r): mentions table exists but has "
+                "zero rows — cannot safely determine orphan status.",
+                collection,
+                ns,
+            )
+            return GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
+
+        # --- Step 2: find orphan nodes (node IDs not in mentioned_entity_ids) ---
+        # Fix C1-A-1/C1-I-2: guard against absent nodes table.
+        try:
+            nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
+        except (FileNotFoundError, ValueError):
+            return GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
+
+        nodes_arrow = await nodes_table.query().select(["id"]).to_arrow()
+        all_node_ids: list[str] = nodes_arrow["id"].to_pylist()
+
+        orphan_node_ids = [nid for nid in all_node_ids if nid not in mentioned_entity_ids]
+
+        if not orphan_node_ids:
+            return GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
+
+        # --- Step 3: find orphan edges (any endpoint is an orphan node) ---
+        orphan_node_ids_set = set(orphan_node_ids)
+        orphan_edge_ids: list[str] = []
+        edges_table = None
+        try:
+            edges_table = await db.open_table(self._edges_table_name(collection, ns))
+        except (FileNotFoundError, ValueError):
+            # edges table genuinely absent → skip edge collection, still delete orphan nodes
+            pass
+
+        if edges_table is not None:
+            edges_arrow = await edges_table.query().select(["id", "source_node_id", "target_node_id"]).to_arrow()
+            orphan_edge_ids = [
+                eid
+                for eid, src_id, tgt_id in zip(
+                    edges_arrow["id"].to_pylist(),
+                    edges_arrow["source_node_id"].to_pylist(),
+                    edges_arrow["target_node_id"].to_pylist(),
+                )
+                if src_id in orphan_node_ids_set or tgt_id in orphan_node_ids_set
+            ]
+
+        # --- Step 4: delete orphan edges first, then orphan nodes ---
+        if orphan_edge_ids and edges_table is not None:
+            for i in range(0, len(orphan_edge_ids), _GC_DELETE_BATCH_SIZE):
+                batch = orphan_edge_ids[i : i + _GC_DELETE_BATCH_SIZE]
+                await edges_table.delete(_where_in("id", batch))
+
+        for i in range(0, len(orphan_node_ids), _GC_DELETE_BATCH_SIZE):
+            batch = orphan_node_ids[i : i + _GC_DELETE_BATCH_SIZE]
+            await nodes_table.delete(_where_in("id", batch))
+
+        return GcPassResult(
+            orphan_nodes_removed=len(orphan_node_ids),
+            orphan_edges_removed=len(orphan_edge_ids),
+        )
+
+    async def _fetch_stale_chunk_ids(
+        self, collection: str, live_chunk_ids: frozenset[str], ns: str
+    ) -> list[str]:
+        """Return a list of stale chunk IDs from the mentions table.
+
+        A chunk ID is stale when it is present in the mentions table but absent
+        from *live_chunk_ids*.  The returned list preserves duplicate rows (one
+        entry per mention row) so callers can report accurate row counts.
+
+        Returns an empty list if the mentions table does not exist or has no
+        stale rows.  Only the ``chunk_id`` column is fetched.
+
+        Callers MUST validate ``collection`` and ``ns`` before calling this method.
+        """
+        db = self._require_db()
+        try:
+            table = await db.open_table(self._mentions_table_name(collection, ns))
+        except (FileNotFoundError, ValueError):
+            return []
+        mentions_arrow = await table.query().select(["chunk_id"]).to_arrow()
+        all_chunk_ids: list[str] = mentions_arrow["chunk_id"].to_pylist()
+        return [cid for cid in all_chunk_ids if cid not in live_chunk_ids]
+
+    async def prune_stale_mentions(
+        self, collection: str, live_chunk_ids: frozenset[str], ns: str
+    ) -> int:
+        """Delete mention rows whose ``chunk_id`` is NOT in *live_chunk_ids*.
+
+        A mention is "stale" when the chunk it references has been deleted from
+        the search store (e.g. by TTL expiry or document deletion).  Pruning
+        stale mentions keeps the mentions table accurate so that subsequent GC
+        passes correctly identify orphan nodes.
+
+        Args:
+            collection: Collection name.
+            live_chunk_ids: Set of chunk IDs that are still present in the search
+                store.  Mention rows with a ``chunk_id`` absent from this set are
+                deleted.
+            ns: Namespace string (LAST parameter; required, no default).
+
+        Returns:
+            Number of stale mention rows identified at read time (not exact
+            deletion count under concurrent writes).
+
+        Notes:
+            - Returns 0 without error if the mentions table does not exist.
+            - Uses ``_where_in`` for the SQL predicate (no f-string SQL).
+        """
+        self._validate_collection(collection)
+        _validate_namespace(ns)
+        db = self._require_db()
+
+        stale_chunk_ids = await self._fetch_stale_chunk_ids(collection, live_chunk_ids, ns)
+        if not stale_chunk_ids:
+            return 0
+
+        try:
+            table = await db.open_table(self._mentions_table_name(collection, ns))
+        except (FileNotFoundError, ValueError):
+            return 0
+
+        # Build the unique set for the SQL predicate but return raw row count
+        # (duplicates included) as the deletion count.
+        stale_chunk_ids_unique = list(dict.fromkeys(stale_chunk_ids))
+        for i in range(0, len(stale_chunk_ids_unique), _GC_DELETE_BATCH_SIZE):
+            batch = stale_chunk_ids_unique[i : i + _GC_DELETE_BATCH_SIZE]
+            await table.delete(_where_in("chunk_id", batch))
+
+        return len(stale_chunk_ids)
+
+    async def count_stale_mentions(
+        self, collection: str, live_chunk_ids: frozenset[str], ns: str
+    ) -> int:
+        """Count mention rows whose ``chunk_id`` is NOT in *live_chunk_ids*.
+
+        Identical semantics to ``prune_stale_mentions`` but does NOT delete any
+        rows.  Useful for pre-flight inspection (e.g. to decide whether to run a
+        full GC pass).
+
+        Args:
+            collection: Collection name.
+            live_chunk_ids: Set of chunk IDs currently present in the search store.
+            ns: Namespace string (LAST parameter; required, no default).
+
+        Returns:
+            Count of stale mention rows.  Returns 0 if the mentions table does not
+            exist.
+        """
+        self._validate_collection(collection)
+        _validate_namespace(ns)
+        return len(await self._fetch_stale_chunk_ids(collection, live_chunk_ids, ns))
 
     async def get_all_edges(self, collection: str, ns: str) -> list[GraphEdge]:
         """Return all edges for *collection*; empty list if table absent.

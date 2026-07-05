@@ -493,7 +493,7 @@ flowchart LR
 
 ### Phase 2 · Maintenance GC cleans orphans; freshness visible in GET /status
 
-- [ ] **BE-5** — New `GraphStore` GC methods: `delete_orphan_nodes_and_edges(collection, ns)`, `prune_stale_mentions(collection, live_chunk_ids: frozenset[str], ns)`, `count_stale_mentions(collection, live_chunk_ids: frozenset[str], ns)` — all with `ns` as the LAST parameter per C2 convention. `prune_stale_mentions` and `count_stale_mentions` receive `live_chunk_ids` from the Use Case layer (which fetches them from `SearchStore`); `GraphStore` itself has no access to `SearchStore`. #backend-role
+- [x] **BE-5** — New `GraphStore` GC methods: `delete_orphan_nodes_and_edges(collection, ns)`, `prune_stale_mentions(collection, live_chunk_ids: frozenset[str], ns)`, `count_stale_mentions(collection, live_chunk_ids: frozenset[str], ns)` — all with `ns` as the LAST parameter per C2 convention. `prune_stale_mentions` and `count_stale_mentions` receive `live_chunk_ids` from the Use Case layer (which fetches them from `SearchStore`); `GraphStore` itself has no access to `SearchStore`. #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-1 · completes C2 (GC methods)
     - Tests

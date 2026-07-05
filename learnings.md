@@ -9,6 +9,31 @@
 
 ## What Has Worked
 
+**[2026-07-05] — E2d BE-5: GcPassResult init=False field requires field(init=False) + __post_init__**
+- Observation: `communities_invalidated` is derived from `orphan_nodes_removed > 0`. Using `field(init=False)` prevents callers from accidentally overriding the computed value. The `__post_init__` pattern keeps the derivation co-located with the dataclass definition.
+- Action: For any computed field in a dataclass that must always reflect another field's state, use `field(init=False)` + `__post_init__`. Never make it a constructor parameter — that allows the invariant to be violated silently.
+- Confidence: high
+
+**[2026-07-05] — E2d BE-5: GC delete_orphan_nodes_and_edges: delete edges BEFORE nodes to avoid partial state**
+- Observation: If the nodes delete runs first and the process is interrupted before edges delete, the graph has edges pointing to non-existent nodes. Deleting orphan edges first ensures the graph is never left in a state with dangling pointers in either direction.
+- Action: In any GC pass that deletes both edges and their endpoints, always delete edges first, then nodes. The reverse order leaves dangling edges on interruption.
+- Confidence: high
+
+**[2026-07-05] — E2d BE-5: prune_stale_mentions should use unique stale chunk IDs for the SQL predicate but raw row count for return value**
+- Observation: The mentions table allows duplicate rows with the same (entity_id, chunk_id). The `_where_in("chunk_id", ...)` predicate must use unique chunk IDs (otherwise duplicate IDs in the predicate waste SQL space but don't cause bugs). However, the return value should be the raw row count (including duplicates) because callers need to know how many rows were actually deleted from disk.
+- Action: In `prune_stale_mentions`: use `list(dict.fromkeys(stale_chunk_ids))` for the SQL predicate to deduplicate; count the raw stale rows for the return value. These two numbers differ when duplicate mentions exist.
+- Confidence: high
+
+**[2026-07-05] — E2d BE-5: absent mentions table is a safe early-exit for GC, not an error**
+- Observation: If the mentions table doesn't exist, returning GcPassResult(0, 0) is the safe choice. Treating all nodes as orphans would be dangerous — it could delete nodes from a collection that was ingested before the E2b mentions feature. The absence of mentions data means "we can't determine orphan status" not "all nodes are orphans."
+- Action: For any GC method that reads the mentions table to determine orphan status: if the table is absent (FileNotFoundError/ValueError), return GcPassResult(0, 0) or count 0. Never treat absent mentions as "zero mentions for all entities."
+- Confidence: high
+
+**[2026-07-05] — E2d BE-5: `_validate_collection` and `_validate_namespace` must be called at the top of every new public GraphStore method**
+- Observation: All existing GraphStore public methods call `_validate_collection(collection)` and `_validate_namespace(ns)` before any database access. Omitting them from new methods creates an inconsistency and removes early error messages for invalid inputs.
+- Action: Template for every new GraphStore public method: (1) `self._validate_collection(collection)`, (2) `_validate_namespace(ns)`, (3) `db = self._require_db()`. This pattern is mandatory for all three GC methods.
+- Confidence: high
+
 **[2026-07-05] — E2d BE-1: `_validate_segment_safe` shared helper avoids duplicating trailing-`_` and `__` guards**
 - Observation: Both `_validate_collection` (graph_store.py) and `_validate_namespace` (constants.py) needed the same two charset guards (trailing `_`, internal `__`). Extracting `_validate_segment_safe(name, label)` to `constants.py` gives a single source of truth; both validators call it after their existing regex check. Without this, the two guards drifted immediately.
 - Action: Whenever two validators in different modules need the same charset rule, extract a shared `_validate_*_safe` helper to `constants.py` and call it from both. The shared label param gives clear error messages in both contexts.

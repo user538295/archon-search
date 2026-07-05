@@ -13,6 +13,30 @@ from datetime import datetime
 from enum import Enum
 
 
+@dataclass
+class GcPassResult:
+    """Result of a single garbage-collection pass on graph tables — E2d.
+
+    Returned by ``GraphStore.delete_orphan_nodes_and_edges``.
+    ``communities_invalidated`` is derived automatically: it is ``True`` whenever
+    at least one orphan node was removed (because community membership is anchored
+    to node IDs; stale communities must be rebuilt after a GC pass that removes nodes).
+    """
+
+    orphan_nodes_removed: int
+    """Number of graph nodes deleted because they had zero remaining mention rows."""
+    orphan_edges_removed: int
+    """Number of graph edges deleted because at least one endpoint was an orphan node."""
+    communities_invalidated: bool = field(init=False)
+    """``True`` when ``orphan_nodes_removed > 0``; computed by ``__post_init__``.
+    When ``True`` the caller should trigger a ``build-communities`` pass to
+    rebuild community data for the collection.
+    """
+
+    def __post_init__(self) -> None:
+        self.communities_invalidated = self.orphan_nodes_removed > 0
+
+
 class EntityType(str, Enum):
     """Supported entity categories for graph nodes."""
 
