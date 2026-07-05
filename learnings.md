@@ -2,6 +2,26 @@
 
 ## What Has Worked
 
+**[2026-07-05] — E2d BE-1: `_validate_segment_safe` shared helper avoids duplicating trailing-`_` and `__` guards**
+- Observation: Both `_validate_collection` (graph_store.py) and `_validate_namespace` (constants.py) needed the same two charset guards (trailing `_`, internal `__`). Extracting `_validate_segment_safe(name, label)` to `constants.py` gives a single source of truth; both validators call it after their existing regex check. Without this, the two guards drifted immediately.
+- Action: Whenever two validators in different modules need the same charset rule, extract a shared `_validate_*_safe` helper to `constants.py` and call it from both. The shared label param gives clear error messages in both contexts.
+- Confidence: high
+
+**[2026-07-05] — E2d BE-1: four table-name methods should delegate to one `_table_name(collection, ns, suffix)` helper**
+- Observation: `_nodes_table_name`, `_edges_table_name`, `_communities_table_name`, `_mentions_table_name` all repeated `_ARCHON_PREFIX + "graph_" + ns + "__" + collection + "_" + suffix`. A typo in any one (e.g. single `_` instead of `__`) silently produces a wrong table name and breaks namespace isolation. Extracting `_table_name` as the single source of truth eliminates all four duplication points.
+- Action: Any time multiple table-name helpers share a template string, extract a private `_table_name(...)` helper that owns the format. The four helpers become one-liners over the template.
+- Confidence: high
+
+**[2026-07-05] — E2d BE-1: requiring `ns` as last positional (no default) structurally prevents the DEFAULT_NAMESPACE silent-bug**
+- Observation: Making `ns` a required parameter (no default) across all GraphStore public methods forces every caller to supply an explicit namespace at the call site. The alternative (default `ns = DEFAULT_NAMESPACE`) would allow silent misuse at call sites that never needed to think about namespaces. The no-default choice was intentional and surfaced all call-site gaps at compile time.
+- Action: For any store-layer API that is per-namespace, make the namespace parameter REQUIRED with no default. The short-term pain of updating all call sites is worth eliminating the class of silent-wrong-namespace bugs.
+- Confidence: high
+
+**[2026-07-05] — E2d BE-1: review comment with wrong remediation is worse than no comment**
+- Observation: The initial cli/graph_cmd.py comment said "use POST /maintenance/trigger for multi-namespace builds." That endpoint does not build communities. A false remediation actively wastes operator time. DA reviewers caught it in Cycle 2.
+- Action: Before documenting a remediation path in a comment or BREAKING.md, verify the path actually exists (grep the codebase for the endpoint/CLI command). A comment that points to a non-existent path is a bug. When there is no current remediation, say "there is no current path — known limitation."
+- Confidence: high
+
 **[2026-07-04] — E2c BE-4 cross-collection tfidf: post-merge node list must be rebuilt, not mutated via merged_nodes dict**
 - Observation: `merged_nodes_list = list(merged_nodes.values())` creates a list of the original objects. Mutating `node.salience` in-place on these objects would work but is fragile if the same objects are referenced elsewhere. Rebuilding as new `GraphNodeInspection` instances after the frequency merge loop (before calling `_truncate_graph`) is the cleanest pattern and avoids aliasing bugs.
 - Action: For any post-merge tfidf transformation in cross-collection, create fresh `GraphNodeInspection` instances in a new list. Never mutate the objects produced by the merge loop — they may alias dict values.
