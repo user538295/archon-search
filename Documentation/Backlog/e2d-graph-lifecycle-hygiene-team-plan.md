@@ -569,7 +569,7 @@ flowchart LR
 
 ### Phase 3 · Communities auto-rebuild after GC; CLI shows graph freshness
 
-- [ ] **BE-10** — `cli/status.py`: display `stale_mention_count` and `last_graph_gc_at` from the `graph` sub-object in `archon-search status` output #backend-role
+- [x] **BE-10** — `cli/status.py`: display `stale_mention_count` and `last_graph_gc_at` from the `graph` sub-object in `archon-search status` output #backend-role
     - Presentation · 1.0h
     - needs BE-8 · completes (CLI observability from the brief's goal)
     - Tests

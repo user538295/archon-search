@@ -92,6 +92,31 @@ def _print_telemetry_status(telemetry: dict[str, Any]) -> None:
     click.echo(f"  hash_doc_ids_enabled: {hash_doc_ids_enabled}")
 
 
+def _print_graph_gc_status(server_payload: dict[str, Any]) -> None:
+    """Render the graph GC status (stale_mention_count and last_graph_gc_at) from GET /status.
+
+    BE-10 — display graph.stale_mention_count and maintenance.last_graph_gc_at.
+    Only displays when graph is enabled and at least one field is non-null/non-zero.
+    """
+    graph = server_payload.get("graph")
+    maintenance = server_payload.get("maintenance")
+
+    # Return early if graph is not enabled
+    if graph is None:
+        return
+
+    stale_mention_count = graph.get("stale_mention_count", 0) or 0
+    last_graph_gc_at = maintenance.get("last_graph_gc_at") if maintenance else None
+
+    # Only display if we have something to show (stale mentions or GC timestamp)
+    if stale_mention_count > 0 or last_graph_gc_at is not None:
+        click.echo("\nGraph:")
+        if stale_mention_count > 0:
+            click.echo(f"  stale_mention_count: {stale_mention_count}")
+        if last_graph_gc_at is not None:
+            click.echo(f"  last_graph_gc_at: {last_graph_gc_at}")
+
+
 @click.command()
 @click.option(
     "--api-url",
@@ -136,6 +161,7 @@ def status(api_url: str, api_key: str | None) -> None:
 
     _print_expansion_key_warnings(server_payload)
     _print_failed_expired_count(server_payload)
+    _print_graph_gc_status(server_payload)
 
     telemetry = server_payload.get("telemetry")
     if telemetry is None:

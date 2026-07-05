@@ -535,3 +535,97 @@ def test_status_cli_shows_failed_expired_count_singular(runner: CliRunner) -> No
     assert "1 ingest job(s) expired" in result.stdout, (
         f"Expected '1 ingest job(s) expired' in stdout; got: {result.stdout!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# BE-10 — Graph GC status display in CLI
+# ---------------------------------------------------------------------------
+
+
+def test_status_cli_displays_stale_mention_count(runner: CliRunner) -> None:
+    """Mock GET /status response with graph.stale_mention_count=5 → assert 5 appears in output."""
+    server_payload = {
+        "graph": {
+            "enabled": True,
+            "backend_threshold_edges": 1000,
+            "collections": [],
+            "stale_mention_count": 5,
+        },
+        "maintenance": {
+            "enabled": True,
+            "interval_hours": 1,
+            "last_run_at": None,
+            "next_run_at": None,
+            "collection_health": [],
+            "expired_chunk_count": 0,
+            "last_expired_pruned_at": None,
+            "last_graph_gc_at": "2026-07-05T12:00:00Z",
+        },
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "5" in result.output
+    assert "stale" in result.output.lower() or "mention" in result.output.lower()
+
+
+def test_status_cli_displays_last_graph_gc_at(runner: CliRunner) -> None:
+    """Mock response with non-null maintenance.last_graph_gc_at → assert timestamp appears in output."""
+    server_payload = {
+        "graph": {
+            "enabled": True,
+            "backend_threshold_edges": 1000,
+            "collections": [],
+            "stale_mention_count": 0,
+        },
+        "maintenance": {
+            "enabled": True,
+            "interval_hours": 1,
+            "last_run_at": None,
+            "next_run_at": None,
+            "collection_health": [],
+            "expired_chunk_count": 0,
+            "last_expired_pruned_at": None,
+            "last_graph_gc_at": "2026-07-05T12:00:00Z",
+        },
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "2026-07-05T12:00:00Z" in result.output
+
+
+def test_status_cli_graph_fields_absent_when_graph_disabled(runner: CliRunner) -> None:
+    """Mock response with graph=null (feature disabled) → assert no crash."""
+    server_payload = {
+        "graph": None,
+        "maintenance": {
+            "enabled": True,
+            "interval_hours": 1,
+            "last_run_at": None,
+            "next_run_at": None,
+            "collection_health": [],
+            "expired_chunk_count": 0,
+            "last_expired_pruned_at": None,
+            "last_graph_gc_at": None,
+        },
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    # Should not crash even with null graph
