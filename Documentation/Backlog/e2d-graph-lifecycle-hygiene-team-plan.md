@@ -424,7 +424,7 @@ flowchart LR
 
 ### Phase 0 · Kickoff
 
-- [ ] **K1** — Agree contracts and scenarios with the team #team
+- [x] **K1** — Agree contracts and scenarios with the team #team
     - — · 1.0h
     - completes C1, C2, C3
     - Tests
