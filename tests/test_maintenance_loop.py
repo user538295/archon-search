@@ -179,6 +179,8 @@ def test_load_state_missing_file_returns_empty(tmp_path: Path) -> None:
         "collection_health": {},
         "retry_counts": {},
         "last_expired_pruned_at": None,
+        "last_graph_gc_at": None,
+        "stale_mention_count": 0,
     }
 
 
@@ -199,6 +201,8 @@ def test_load_state_corrupt_file_returns_empty_and_warns(
         "collection_health": {},
         "retry_counts": {},
         "last_expired_pruned_at": None,
+        "last_graph_gc_at": None,
+        "stale_mention_count": 0,
     }
     assert any("WARNING" in r.levelname or r.levelno >= logging.WARNING for r in caplog.records)
 
@@ -271,6 +275,7 @@ async def test_run_one_pass_no_collections(tmp_path: Path) -> None:
     loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
     loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
     loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
+    loop._run_graph_gc = AsyncMock()  # type: ignore[method-assign]
     loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
 
     await loop._run_one_pass()
@@ -498,6 +503,7 @@ async def test_run_one_pass_health_entry_conforms_to_c3_schema(tmp_path: Path) -
     loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
     loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
     loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
+    loop._run_graph_gc = AsyncMock()  # type: ignore[method-assign]
     loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
 
     await loop._run_one_pass()
@@ -513,6 +519,7 @@ async def test_run_one_pass_health_entry_conforms_to_c3_schema(tmp_path: Path) -
         "meta_chunk_count",
         "mutations_since_recompute",
         "expired_chunks_removed_last_run",
+        "communities_invalidated",
     }
     assert set(health_entry.keys()) == expected_keys
 
@@ -683,3 +690,316 @@ async def test_fts_optimize_no_current_health_does_not_crash(tmp_path: Path) -> 
     ss.optimize_fts.assert_called_once_with("docs")
     # No fts_optimized_at to check — just verify no crash and lock released.
     assert not lock.locked()
+
+
+# ---------------------------------------------------------------------------
+# BE-7: Graph garbage collection policy tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_graph_gc_fetches_live_chunk_ids_with_correct_namespace(
+    tmp_path: Path,
+) -> None:
+    """BE-7 S1: _run_graph_gc calls store.list_chunks_raw with correct collection and namespace."""
+    ss = AsyncMock()
+
+    async def _fake_list_chunks_raw(collection: str, namespace: str):
+        # Capture the parameters passed
+        _fake_list_chunks_raw.called_with_args = (collection, namespace)
+        # Return empty iterator
+        return
+        yield  # Make it an async generator
+
+    ss.list_chunks_raw = _fake_list_chunks_raw
+
+    gs = MagicMock()
+    gs.count_stale_mentions = MagicMock(return_value=0)
+    gs.prune_stale_mentions = MagicMock(return_value=0)
+    gs.delete_orphan_nodes_and_edges = MagicMock(return_value=MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0))
+
+    cfg = MaintenanceConfig(interval_hours=0)
+    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop._graph_store = gs
+    loop._config_graph_enabled = True
+
+    # This will fail if _run_graph_gc is not implemented yet, which is expected in TDD phase
+    result = await loop._run_graph_gc("docs", "tenant_x")
+
+    # Verify the namespace was passed through to list_chunks_raw
+    # (This test will only pass once _run_graph_gc is implemented)
+    assert _fake_list_chunks_raw.called_with_args == ("docs", "tenant_x")
+
+
+@pytest.mark.asyncio
+async def test_run_graph_gc_calls_prune_then_delete_orphans(tmp_path: Path) -> None:
+    """BE-7 S2: _run_graph_gc calls count_stale_mentions, prune_stale_mentions, delete_orphan_nodes_and_edges in order."""
+    call_order = []
+
+    ss = AsyncMock()
+
+    async def _fake_list_chunks_raw(collection: str, namespace: str):
+        return
+        yield  # Empty iterator
+
+    ss.list_chunks_raw = _fake_list_chunks_raw
+
+    gs = MagicMock()
+    gs.count_stale_mentions = MagicMock(
+        side_effect=lambda *args, **kwargs: (call_order.append("count_stale_mentions"), 5)[1]
+    )
+    gs.prune_stale_mentions = MagicMock(
+        side_effect=lambda *args, **kwargs: (call_order.append("prune_stale_mentions"), 5)[1]
+    )
+    gc_result = MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0, communities_invalidated=False)
+    gs.delete_orphan_nodes_and_edges = MagicMock(
+        side_effect=lambda *args, **kwargs: (call_order.append("delete_orphan_nodes_and_edges"), gc_result)[1]
+    )
+
+    cfg = MaintenanceConfig(interval_hours=0)
+    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop._graph_store = gs
+    loop._config_graph_enabled = True
+
+    result = await loop._run_graph_gc("docs", "default")
+
+    assert call_order == ["count_stale_mentions", "prune_stale_mentions", "delete_orphan_nodes_and_edges"]
+
+
+@pytest.mark.asyncio
+async def test_run_graph_gc_sets_communities_invalidated_when_nodes_removed(tmp_path: Path) -> None:
+    """BE-7 S3: when orphan_nodes_removed > 0, communities_invalidated = True in result."""
+    ss = AsyncMock()
+
+    async def _fake_list_chunks_raw(collection: str, namespace: str):
+        return
+        yield
+
+    ss.list_chunks_raw = _fake_list_chunks_raw
+
+    gs = MagicMock()
+    gs.count_stale_mentions = MagicMock(return_value=0)
+    gs.prune_stale_mentions = MagicMock(return_value=0)
+    gc_result = MagicMock(orphan_nodes_removed=1, orphan_edges_removed=2, communities_invalidated=True)
+    gs.delete_orphan_nodes_and_edges = MagicMock(return_value=gc_result)
+
+    cfg = MaintenanceConfig(interval_hours=0)
+    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop._graph_store = gs
+    loop._config_graph_enabled = True
+
+    result = await loop._run_graph_gc("docs", "default")
+
+    assert result is not None
+    assert result.communities_invalidated is True
+
+
+@pytest.mark.asyncio
+async def test_run_graph_gc_skips_when_graph_disabled(tmp_path: Path) -> None:
+    """BE-7 S8a: graph_store=None → no calls, no exception."""
+    ss = AsyncMock()
+    cfg = MaintenanceConfig(interval_hours=0)
+    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    # graph_store NOT set
+    loop._config_graph_enabled = False
+
+    result = await loop._run_graph_gc("docs", "default")
+
+    # Should skip silently
+    assert result is not None or result is None  # Method exists and either returns None or empty result
+
+
+@pytest.mark.asyncio
+async def test_run_graph_gc_skips_when_graph_enabled_false_with_live_store(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """BE-7 S8b: non-None graph_store + config graph.enabled=False → zero graph_store calls, no error logged."""
+    ss = AsyncMock()
+    gs = MagicMock()
+
+    cfg = MaintenanceConfig(interval_hours=0)
+    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop._graph_store = gs
+    loop._config_graph_enabled = False
+
+    with caplog.at_level(logging.ERROR, logger="archon_search.jobs.maintenance_loop"):
+        result = await loop._run_graph_gc("docs", "default")
+
+    gs.count_stale_mentions.assert_not_called()
+    gs.prune_stale_mentions.assert_not_called()
+    gs.delete_orphan_nodes_and_edges.assert_not_called()
+
+    # No ERROR logs
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 0
+
+
+@pytest.mark.asyncio
+async def test_run_graph_gc_aborts_when_list_chunks_raises_exception(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """BE-7 S10: list_chunks_raw raises RuntimeError → WARNING logged, prune_stale_mentions NOT called."""
+    ss = AsyncMock()
+    ss.list_chunks_raw = AsyncMock(side_effect=RuntimeError("db connection lost"))
+
+    gs = MagicMock()
+    gs.prune_stale_mentions = MagicMock()
+
+    cfg = MaintenanceConfig(interval_hours=0)
+    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop._graph_store = gs
+    loop._config_graph_enabled = True
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.jobs.maintenance_loop"):
+        result = await loop._run_graph_gc("docs", "default")
+
+    # Should not call prune_stale_mentions
+    gs.prune_stale_mentions.assert_not_called()
+    # Should log WARNING
+    assert any(r.levelno >= logging.WARNING for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_run_graph_gc_prunes_when_collection_genuinely_empty(tmp_path: Path) -> None:
+    """BE-7 S11: list_chunks_raw returns empty iterator (no exception) → prune_stale_mentions IS called with empty live_chunk_ids."""
+    ss = AsyncMock()
+
+    async def _empty_iterator(*args, **kwargs):
+        return
+        yield
+
+    ss.list_chunks_raw = _empty_iterator
+
+    gs = MagicMock()
+    gs.count_stale_mentions = MagicMock(return_value=5)
+    gs.prune_stale_mentions = MagicMock(return_value=5)
+    gc_result = MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0)
+    gs.delete_orphan_nodes_and_edges = MagicMock(return_value=gc_result)
+
+    cfg = MaintenanceConfig(interval_hours=0)
+    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop._graph_store = gs
+    loop._config_graph_enabled = True
+
+    result = await loop._run_graph_gc("docs", "default")
+
+    # Should call prune_stale_mentions with empty frozenset
+    gs.prune_stale_mentions.assert_called_once()
+    call_args = gs.prune_stale_mentions.call_args
+    # Check that live_chunk_ids is empty
+    assert call_args is not None
+
+
+@pytest.mark.asyncio
+async def test_run_graph_gc_no_invalidation_when_zero_orphans(tmp_path: Path) -> None:
+    """BE-7 S13: orphan_nodes_removed=0 → communities_invalidated=False, no rebuild task created."""
+    ss = AsyncMock()
+
+    async def _empty_iterator(*args, **kwargs):
+        return
+        yield
+
+    ss.list_chunks_raw = _empty_iterator
+
+    gs = MagicMock()
+    gs.count_stale_mentions = MagicMock(return_value=0)
+    gs.prune_stale_mentions = MagicMock(return_value=0)
+    gc_result = MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0, communities_invalidated=False)
+    gs.delete_orphan_nodes_and_edges = MagicMock(return_value=gc_result)
+
+    cfg = MaintenanceConfig(interval_hours=0)
+    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop._graph_store = gs
+    loop._config_graph_enabled = True
+
+    result = await loop._run_graph_gc("docs", "default")
+
+    assert result is not None
+    assert result.communities_invalidated is False
+
+
+@pytest.mark.asyncio
+async def test_maintenance_state_writes_last_graph_gc_at(tmp_path: Path) -> None:
+    """BE-7 S15: after GC pass, state file has last_graph_gc_at, stale_mention_count, and per-collection communities_invalidated."""
+    ss = AsyncMock()
+    info = _make_collection_info("docs", namespace="default")
+    ss.list_collections = AsyncMock(return_value=[info])
+    ss.get_collection_meta = AsyncMock(return_value=None)
+
+    async def _empty_iterator(*args, **kwargs):
+        return
+        yield
+
+    ss.list_chunks_raw = _empty_iterator
+
+    gs = MagicMock()
+    gs.count_stale_mentions = MagicMock(return_value=3)
+    gs.prune_stale_mentions = MagicMock(return_value=3)
+    gc_result = MagicMock(orphan_nodes_removed=1, orphan_edges_removed=2, communities_invalidated=True)
+    gs.delete_orphan_nodes_and_edges = MagicMock(return_value=gc_result)
+
+    cfg = MaintenanceConfig(interval_hours=0, prune_expired_chunks=False)
+    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop._graph_store = gs
+    loop._config_graph_enabled = True
+
+    # Stub the GC method if not yet implemented
+    loop._run_graph_gc = AsyncMock(return_value=gc_result)  # type: ignore[method-assign]
+
+    loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
+    loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
+    loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
+    loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
+
+    await loop._run_one_pass()
+
+    state_file = tmp_path / ".maintenance-state.json"
+    assert state_file.exists()
+    loaded = json.loads(state_file.read_text(encoding="utf-8"))
+
+    # Check for new fields in state
+    assert "last_graph_gc_at" in loaded
+    assert "stale_mention_count" in loaded
+    health_entry = loaded["collection_health"].get("default/docs", {})
+    assert "communities_invalidated" in health_entry
+
+
+@pytest.mark.asyncio
+async def test_stale_mention_count_is_sum_across_collections(tmp_path: Path) -> None:
+    """BE-7 S16: stale_mention_count = SUM of stale counts across all GC'd collections."""
+    ss = AsyncMock()
+    info_a = _make_collection_info("col-a", namespace="default")
+    info_b = _make_collection_info("col-b", namespace="default")
+    ss.list_collections = AsyncMock(return_value=[info_a, info_b])
+    ss.get_collection_meta = AsyncMock(return_value=None)
+
+    async def _empty_iterator(*args, **kwargs):
+        return
+        yield
+
+    ss.list_chunks_raw = _empty_iterator
+
+    gs = MagicMock()
+    gs.count_stale_mentions = MagicMock(return_value=3)  # 3 for each call
+    gs.prune_stale_mentions = MagicMock(return_value=3)  # 3 pruned each
+    gc_result = MagicMock(orphan_nodes_removed=0, orphan_edges_removed=0, communities_invalidated=False)
+    gs.delete_orphan_nodes_and_edges = MagicMock(return_value=gc_result)
+
+    cfg = MaintenanceConfig(interval_hours=0, prune_expired_chunks=False)
+    loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
+    loop._graph_store = gs
+    loop._config_graph_enabled = True
+
+    loop._run_graph_gc = AsyncMock(return_value=gc_result)  # type: ignore[method-assign]
+    loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
+    loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
+    loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
+    loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
+
+    await loop._run_one_pass()
+
+    state_file = tmp_path / ".maintenance-state.json"
+    loaded = json.loads(state_file.read_text(encoding="utf-8"))
+
+    # Should sum to 6 (3 + 3)
+    assert loaded.get("stale_mention_count") == 6

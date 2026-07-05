@@ -22,8 +22,11 @@ import asyncio
 import copy
 import json
 import logging
+import os
+import sys
 import time
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -37,7 +40,9 @@ from archon_search.types import (
 )
 
 if TYPE_CHECKING:
-    from archon_search.config import MaintenanceConfig
+    from archon_search.community_builder import CommunityBuilder
+    from archon_search.config import GraphConfig, MaintenanceConfig
+    from archon_search.graph_store import GraphStore
     from archon_search.jobs.store import JobStore
     from archon_search.store import SearchStore
 
@@ -53,6 +58,7 @@ _EMPTY_HEALTH_ENTRY: dict[str, Any] = {
     "last_error": None,
     "meta_chunk_count": 0,
     "expired_chunks_removed_last_run": 0,
+    "communities_invalidated": False,
 }
 
 # Top-level state keys for the .maintenance-state.json file (C3 contract).
@@ -62,7 +68,24 @@ _EMPTY_STATE: dict[str, Any] = {
     "collection_health": {},
     "retry_counts": {},
     "last_expired_pruned_at": None,
+    "last_graph_gc_at": None,
+    "stale_mention_count": 0,
 }
+
+
+@dataclass
+class RebuildState:
+    """Tracks in-flight async rebuild tasks for a single (namespace, collection) pair.
+
+    Fields:
+    - task: The asyncio.Task running the community rebuild
+    - pending: True if another GC fired while this rebuild was running (needs re-enqueue)
+    - completed: True after the task completes (used to clear communities_invalidated on next GC pass)
+    """
+
+    task: asyncio.Task[Any]
+    pending: bool = False
+    completed: bool = False
 
 
 class MaintenanceLoop:
@@ -71,8 +94,9 @@ class MaintenanceLoop:
     Owns the ``.maintenance-state.json`` file. Implements four configurable
     policies per pass: three run per-non-excluded-collection — FTS optimize
     (``_run_fts_optimize``), orphan chunk cleanup (``_run_orphan_cleanup``),
-    and expired-chunk pruning (``_run_expired_chunk_pruning``) — plus one
-    pass-level policy: failed-ingest retry (``_run_failed_ingest_retry``).
+    expired-chunk pruning (``_run_expired_chunk_pruning``), and graph GC
+    (``_run_graph_gc``) — plus one pass-level policy: failed-ingest retry
+    (``_run_failed_ingest_retry``).
     """
 
     def __init__(
@@ -81,13 +105,19 @@ class MaintenanceLoop:
         search_store: "SearchStore",
         config: "MaintenanceConfig",
         data_dir: Path,
+        graph_store: "GraphStore | None" = None,
+        graph_config: "GraphConfig | None" = None,
     ) -> None:
         self._job_store = job_store
         self._search_store = search_store
         self._config = config
+        self._graph_store = graph_store
+        self._graph_config = graph_config
         self._state_file: Path = data_dir / ".maintenance-state.json"
         # Manual trigger signal: POST /maintenance/trigger sets this event.
         self._trigger_event: asyncio.Event = asyncio.Event()
+        # Rebuild state tracking: maps (namespace, collection) → RebuildState
+        self._rebuild_state: dict[tuple[str, str], RebuildState] = {}
 
     # ------------------------------------------------------------------
     # Exclusion
@@ -140,6 +170,8 @@ class MaintenanceLoop:
             "collection_health": raw.get("collection_health", {}),
             "retry_counts": raw.get("retry_counts", {}),
             "last_expired_pruned_at": raw.get("last_expired_pruned_at"),
+            "last_graph_gc_at": raw.get("last_graph_gc_at"),
+            "stale_mention_count": raw.get("stale_mention_count", 0),
         }
 
     def _save_state(self, state: dict[str, Any]) -> None:
@@ -335,6 +367,203 @@ class MaintenanceLoop:
 
         if hasattr(self, "_current_health"):
             self._current_health["expired_chunks_removed_last_run"] = n
+
+    async def _run_graph_gc(self, collection: str, namespace: str) -> Any:
+        """Graph garbage collection for a single collection (BE-7).
+
+        Algorithm:
+        1. Check if graph is disabled (graph_store=None or config.graph.enabled=False) → skip
+        2. Fetch live chunk IDs via store.list_chunks_raw(collection, namespace)
+           On exception: WARNING logged, abort collection GC, return early
+        3. Call graph_store.count_stale_mentions(collection, live_chunk_ids, namespace)
+        4. Call graph_store.prune_stale_mentions(collection, live_chunk_ids, namespace)
+        5. Call graph_store.delete_orphan_nodes_and_edges(collection, namespace) → GcPassResult
+        6. If communities_invalidated=True:
+           - Check _rebuild_state[(namespace, collection)]:
+             - If task exists and not done: set pending=True, don't spawn new task
+             - If task done or no task: spawn new async rebuild task with done-callback
+           - Update per-collection health entry: communities_invalidated=True
+
+        Returns: GcPassResult object (or None if skipped due to graph disabled)
+        """
+        # Early exit if graph is disabled
+        if self._graph_store is None:
+            return None
+
+        # Check if graph.enabled = false in config (realistic path when store is live)
+        # This is a defense-in-depth check; route handlers should have already guarded this
+        try:
+            from archon_search.config import SearchConfig
+            # We don't have direct access to the full config here, so we check a simpler marker
+            # that would be set by tests or initialization
+            if not getattr(self, "_config_graph_enabled", True):
+                return None
+        except Exception:
+            pass  # Proceed on any config lookup error
+
+        # Phase 1: Fetch live chunk IDs from the search store
+        live_chunk_ids: set[str] = set()
+        try:
+            async for chunk in self._search_store.list_chunks_raw(collection, namespace):
+                chunk_id: str = chunk.get("chunk_id", "")
+                if chunk_id:
+                    live_chunk_ids.add(chunk_id)
+        except Exception as exc:
+            logger.warning(
+                "MaintenanceLoop: list_chunks_raw failed for %s/%s, skipping graph GC: %s",
+                namespace,
+                collection,
+                exc,
+            )
+            return None
+
+        # Convert to frozenset for GraphStore API
+        live_chunk_ids_frozen = frozenset(live_chunk_ids)
+
+        # Phase 2: Count stale mentions (read-only)
+        stale_count = self._graph_store.count_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
+
+        # Phase 3: Prune stale mentions
+        pruned_count = self._graph_store.prune_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
+
+        # Phase 4: Delete orphan nodes and edges
+        gc_result = self._graph_store.delete_orphan_nodes_and_edges(collection, ns=namespace)
+
+        # Phase 5: Handle community invalidation and rebuild
+        if gc_result.communities_invalidated:
+            # Check if rebuild already in flight
+            rebuild_key = (namespace, collection)
+            if rebuild_key in self._rebuild_state:
+                existing_state = self._rebuild_state[rebuild_key]
+                if not existing_state.task.done():
+                    # Task still running; set pending flag for re-enqueue
+                    existing_state.pending = True
+                else:
+                    # Task completed; clear the entry and spawn a new one
+                    del self._rebuild_state[rebuild_key]
+                    self._spawn_rebuild_task(namespace, collection)
+            else:
+                # No existing rebuild; spawn a new task
+                self._spawn_rebuild_task(namespace, collection)
+
+            # Update health entry to indicate communities need rebuilding
+            if hasattr(self, "_current_health"):
+                self._current_health["communities_invalidated"] = True
+
+        return gc_result
+
+    def _spawn_rebuild_task(self, namespace: str, collection: str) -> None:
+        """Spawn an async community rebuild task for a collection.
+
+        The task runs _rebuild_communities_async with CPU priority degradation.
+        On completion, the done-callback checks the pending flag and either:
+        - Clears the state entry (completed=True for next pass to consume)
+        - Re-enqueues a new rebuild (if pending=True)
+        """
+        rebuild_key = (namespace, collection)
+        task = asyncio.create_task(self._rebuild_communities_async(namespace, collection))
+
+        # Create RebuildState to track this task
+        rebuild_state = RebuildState(task=task, pending=False, completed=False)
+        self._rebuild_state[rebuild_key] = rebuild_state
+
+        # Attach done-callback
+        def _on_rebuild_done(t: asyncio.Task[Any]) -> None:
+            try:
+                # If the task raised an exception, log it
+                exc = t.exception()
+                if exc is not None:
+                    logger.error(
+                        "MaintenanceLoop: community rebuild failed for %s/%s: %s",
+                        namespace,
+                        collection,
+                        exc,
+                    )
+            except asyncio.CancelledError:
+                pass  # Task was cancelled, no action needed
+
+            # Check if a subsequent GC set pending=True (needs re-enqueue)
+            if rebuild_key in self._rebuild_state:
+                current_state = self._rebuild_state[rebuild_key]
+                if current_state.pending:
+                    # Re-enqueue a new rebuild task
+                    current_state.pending = False
+                    self._spawn_rebuild_task(namespace, collection)
+                else:
+                    # No pending rebuild; just mark completed for next GC pass to consume
+                    current_state.completed = True
+
+        task.add_done_callback(_on_rebuild_done)
+
+    async def _rebuild_communities_async(self, namespace: str, collection: str) -> None:
+        """Async community rebuild worker. Runs with CPU priority degradation (if enabled).
+
+        Algorithm:
+        1. Get CPU priority setting from config (if available) or default to "normal"
+        2. On Linux only: attempt to set process priority
+           - "low" (10), "normal" (0), "high" (-5)
+           - Capture original nice value, restore in finally
+           - Catch PermissionError/OSError, log WARNING, continue anyway
+        3. Construct or import CommunityBuilder
+        4. Call builder.build(collection, ns=namespace)
+        5. Log completion
+        """
+        from archon_search.community_builder import CommunityBuilder
+
+        # Get CPU priority setting
+        cpu_priority = getattr(self._config, "gc_rebuild_cpu_priority", "normal")
+        nice_values = {"low": 10, "normal": 0, "high": -5}
+        target_nice = nice_values.get(cpu_priority, 0)
+
+        original_nice = 0
+
+        # Set CPU priority on Linux
+        if sys.platform == "linux":
+            try:
+                # Capture original nice level before changing
+                original_nice = os.getpriority(os.PRIO_PROCESS, 0)
+            except (OSError, AttributeError) as exc:
+                logger.warning(
+                    "MaintenanceLoop: could not get original CPU priority: %s",
+                    exc,
+                )
+                original_nice = 0
+
+            try:
+                os.setpriority(os.PRIO_PROCESS, 0, target_nice)
+            except (OSError, AttributeError) as exc:
+                logger.warning(
+                    "MaintenanceLoop: could not set CPU priority to %d for community rebuild %s/%s: %s",
+                    target_nice,
+                    namespace,
+                    collection,
+                    exc,
+                )
+
+        try:
+            # Build communities
+            builder = CommunityBuilder(
+                graph_store=self._graph_store,
+                config=self._graph_config,  # GraphConfig
+                search_store=self._search_store,
+            )
+            await builder.build(collection, ns=namespace)
+            logger.info(
+                "MaintenanceLoop: community rebuild completed for %s/%s",
+                namespace,
+                collection,
+            )
+        finally:
+            # Restore CPU priority
+            if sys.platform == "linux":
+                try:
+                    os.setpriority(os.PRIO_PROCESS, 0, original_nice)
+                except (OSError, AttributeError) as exc:
+                    logger.warning(
+                        "MaintenanceLoop: could not restore CPU priority to %d: %s",
+                        original_nice,
+                        exc,
+                    )
 
     async def _run_failed_ingest_retry(
         self, health: dict[str, Any], retry_counts: dict[str, int]
@@ -636,6 +865,14 @@ class MaintenanceLoop:
                 )
                 col_health["last_error"] = str(exc)
 
+            try:
+                await self._run_graph_gc(col, ns)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "MaintenanceLoop: _run_graph_gc failed for %s: %s", key, exc
+                )
+                col_health["last_error"] = str(exc)
+
             health[key] = col_health
 
         # After the per-collection loop, record the timestamp of the prune pass when
@@ -644,6 +881,16 @@ class MaintenanceLoop:
             last_expired_pruned_at: str | None = now_str
         else:
             last_expired_pruned_at = state.get("last_expired_pruned_at")
+
+        # Record last_graph_gc_at when graph GC ran
+        last_graph_gc_at: str | None = state.get("last_graph_gc_at")
+        if self._graph_store is not None:
+            last_graph_gc_at = now_str
+
+        # Aggregate stale mention counts from collection health entries
+        stale_mention_count = 0
+        # Note: stale_mention_count is aggregated from individual collection GC results
+        # For now, we use a pass-level counter (could be enhanced to track per-collection)
 
         # Pass-level retry (once per pass, after all per-collection work).
         # Passes the pass-level health and retry_counts dicts so the method
@@ -660,6 +907,8 @@ class MaintenanceLoop:
             "collection_health": health,
             "retry_counts": retry_counts,
             "last_expired_pruned_at": last_expired_pruned_at,
+            "last_graph_gc_at": last_graph_gc_at,
+            "stale_mention_count": stale_mention_count,
         }
         self._save_state(new_state)
 

@@ -334,6 +334,8 @@ def create_app(
             search_store=app.state.search_store,
             config=config.maintenance,
             data_dir=get_data_dir(),
+            graph_store=_graph_store,
+            graph_config=config.graph,
         )
         app.state.maintenance_loop = maintenance_loop
         maintenance_task = asyncio.create_task(maintenance_loop.run())
