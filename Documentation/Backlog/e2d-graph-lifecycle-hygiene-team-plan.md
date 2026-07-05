@@ -516,7 +516,7 @@ flowchart LR
         - #unit_test — `test_toml_gc_cpu_priority_round_trip` — TOML `[graph] gc_rebuild_cpu_priority = "normal"` → `GraphConfig.gc_rebuild_cpu_priority == "normal"`
         - #unit_test — `test_startup_warns_when_cpu_priority_non_normal_on_non_linux` — mock `sys.platform = 'darwin'` and `gc_rebuild_cpu_priority = "low"`; assert WARNING logged at startup containing `gc_rebuild_cpu_priority`; assert no WARNING when `gc_rebuild_cpu_priority = "normal"` on non-Linux; assert no WARNING on Linux regardless of value
 
-- [ ] **BE-7** — `MaintenanceLoop._run_graph_gc()` policy + async community rebuild + CPU priority + `__init__` wiring + state file + `app.py` wiring #backend-role
+- [x] **BE-7** — `MaintenanceLoop._run_graph_gc()` policy + async community rebuild + CPU priority + `__init__` wiring + state file + `app.py` wiring #backend-role
     - Use Cases · 6.0h
     - needs BE-5, BE-6, BE-3 · completes S2, S3, S4, S8, S9, S10, S13, C3
     - Notes: Before calling `prune_stale_mentions`, the Use Case fetches the live chunk_id set via `store.list_chunks_raw(collection, namespace)` (or equivalent) and passes it as `live_chunk_ids` to `GraphStore`. `_run_graph_gc` fetches live chunk ids from `SearchStore` before calling `prune_stale_mentions`. GC results are returned to `_run_one_pass` for state-file write — `_run_graph_gc` never calls `_save_state` directly. CPU priority mapping: `"low"` → `os.setpriority(os.PRIO_PROCESS, 0, 10)` (lower priority), `"normal"` → `os.setpriority(os.PRIO_PROCESS, 0, 0)` (unchanged), `"high"` → `os.setpriority(os.PRIO_PROCESS, 0, -5)` (higher priority, may require privilege; caught by `OSError` guard).
