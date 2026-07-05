@@ -455,7 +455,7 @@ flowchart LR
         - #unit_test — `test_startup_warns_on_legacy_graph_tables` — mock DB with two old-pattern table names, assert WARNING logged listing both
         - #unit_test — `test_startup_no_warn_when_no_legacy_tables` — mock DB with only new-pattern tables, assert no WARNING
 
-- [ ] **BE-2** — Thread `namespace` through all `graph_store.*` call sites in `pipeline.py` (ingest, search, explain paths) #backend-role
+- [x] **BE-2** — Thread `namespace` through all `graph_store.*` call sites in `pipeline.py` (ingest, search, explain paths) #backend-role
     - Use Cases · 3.0h
     - needs BE-1 · completes (foundational for BE-4)
     - Tests
@@ -464,7 +464,7 @@ flowchart LR
         - #unit_test — `test_explain_graph_mode_passes_namespace_to_graph_store` — mock `_graph_store`; call `pipeline.explain(graph_mode="naive", namespace="tenant_x")`; assert graph_store method called with `ns="tenant_x"`
         - #unit_test — `test_search_global_mode_passes_namespace_to_graph_store` — mock `_graph_store`; call `pipeline.search(graph_mode="global", namespace="tenant_x")`; assert `list_community_representatives` or equivalent called with `ns="tenant_x"`
 
-- [ ] **BE-3** — Thread `namespace` through all remaining `GraphStore` callers: `graph_inspector.py`, `community_builder.py`, `graph_expander.py`, `routes_graph.py`, `routes_status.py`, `cli/graph_cmd.py`, `eval/backends.py` (`CommunityStoreStub`) #backend-role
+- [x] **BE-3** — Thread `namespace` through all remaining `GraphStore` callers: `graph_inspector.py`, `community_builder.py`, `graph_expander.py`, `routes_graph.py`, `routes_status.py`, `cli/graph_cmd.py`, `eval/backends.py` (`CommunityStoreStub`) #backend-role
     - Interface Adapters · 3.0h
     - needs BE-1 · completes (foundational for BE-7)
     - Tests
