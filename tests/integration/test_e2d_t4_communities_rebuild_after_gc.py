@@ -147,6 +147,26 @@ async def _get_community_count(db_path: str, collection: str, ns: str) -> int:
         await gs.disconnect()
 
 
+async def _get_community_ids_from_store(
+    db_path: str, collection: str, ns: str
+) -> list[str]:
+    """Return all community_ids from the communities table for (collection, ns)."""
+    from archon_search.graph_store import GraphStore
+
+    gs = GraphStore(db_path)
+    await gs.connect()
+    try:
+        table_name = gs._communities_table_name(collection, ns=ns)
+        try:
+            table = await gs._db.open_table(table_name)
+            rows = await table.query().select(["community_id"]).to_list()
+            return [r["community_id"] for r in rows]
+        except Exception:
+            return []
+    finally:
+        await gs.disconnect()
+
+
 # ---------------------------------------------------------------------------
 # Helper: poll rebuild state until task completes or timeout
 # ---------------------------------------------------------------------------
@@ -208,15 +228,21 @@ def _get_communities_invalidated(status_json: dict, col: str) -> bool:
     """Extract communities_invalidated for the named collection from status JSON.
 
     Reads from status.graph.collections[col].communities_invalidated.
-    Returns False when the collection is not found or graph block is absent.
+    Raises ValueError when the graph block is absent or the collection is not found,
+    so a vacuous pass is caught immediately instead of silently returning False.
     """
     graph_block = status_json.get("graph")
     if not graph_block:
-        return False
+        raise ValueError(
+            "graph block missing in status response — is graph.enabled=true in the test app config?"
+        )
     for col_entry in graph_block.get("collections", []):
         if col_entry.get("collection") == col:
             return bool(col_entry.get("communities_invalidated", False))
-    return False
+    found = [c.get("collection") for c in graph_block.get("collections", [])]
+    raise ValueError(
+        f"Collection '{col}' not found in status.graph.collections; found: {found}"
+    )
 
 
 def _get_community_count_from_status(status_json: dict, col: str) -> int:
@@ -262,10 +288,14 @@ def test_e2d_t4_communities_invalidated_then_rebuilt_after_gc(
       Step 2: Seed baseline community so community_count = 1 before deletion.
       Step 3: Assert community_count == 1 via GET /status (step (a) per task spec).
       Step 4: Delete D1. D2's Bob mention rows keep the table non-empty.
-      Pass 1: POST /maintenance/trigger → wait → assert communities_invalidated=True.
+      Pass 1 (S4): POST /maintenance/trigger → wait → assert communities_invalidated=True.
+                   Capture the rebuild task reference.
+      Pass 1.5 (S9): POST /maintenance/trigger immediately (rebuild may still be in-flight).
+                     If in-flight, assert no new task spawned (pending flag set instead).
       Step 5: Wait for rebuild task to complete (poll _rebuild_state).
+              Assert task raised no exception (Fix #1).
       Pass 2: POST /maintenance/trigger → wait → assert communities_invalidated=False
-              AND community_count >= 1.
+              AND community_count >= 1 AND t4-rebuilt-comm in GraphStore (Fix #2).
     """
     install_spacy_stub(monkeypatch)
 
@@ -410,6 +440,35 @@ def test_e2d_t4_communities_invalidated_then_rebuilt_after_gc(
             )
 
             # -----------------------------------------------------------------------
+            # S9: Second GC while rebuild still in-flight must NOT spawn a new task.
+            # Capture the task spawned in Pass 1. Check if it is still in-flight RIGHT NOW
+            # before triggering Pass 1.5. If it is, trigger Pass 1.5 and assert the same task
+            # object is still in _rebuild_state (pending=True was set, no new spawn).
+            # If the task already completed (fast stub path), skip the S9 in-flight assertion —
+            # S4 + Pass 2 still exercise the full sequence.
+            # -----------------------------------------------------------------------
+            task_after_pass1 = maintenance_loop._rebuild_state[rebuild_key].task
+            task_was_in_flight_before_s9 = not task_after_pass1.done()
+
+            last_run_at_before_s9 = status_pass1.get("maintenance", {}).get("last_run_at")
+            # Trigger Pass 1.5 — do NOT wait for the rebuild before triggering.
+            status_s9 = _trigger_and_poll_maintenance(
+                client, api_key, prev_last_run_at=last_run_at_before_s9
+            )
+
+            # S9 assertion: if the task was in-flight when Pass 1.5 fired, no new task should
+            # have been spawned (the GC must set pending=True on the existing state entry).
+            if task_was_in_flight_before_s9:
+                rebuild_state_after_s9 = maintenance_loop._rebuild_state.get(rebuild_key)
+                if rebuild_state_after_s9 is not None:
+                    assert rebuild_state_after_s9.task is task_after_pass1, (
+                        "S9 violated: a new rebuild task was spawned while the original was still "
+                        f"in-flight. Original task: {task_after_pass1!r}. "
+                        f"New task: {rebuild_state_after_s9.task!r}. "
+                        "_run_graph_gc must set pending=True instead of calling _spawn_rebuild_task."
+                    )
+
+            # -----------------------------------------------------------------------
             # Step 5: Wait for rebuild task to complete.
             # The done-callback sets RebuildState.completed=True.
             # Pass 2 must not run before rebuild completes — the status would still show
@@ -417,13 +476,19 @@ def test_e2d_t4_communities_invalidated_then_rebuilt_after_gc(
             # -----------------------------------------------------------------------
             _wait_for_rebuild_completion(client, col, ns)
 
+            # Fix #1 (CRITICAL): assert rebuild task did not raise an exception.
+            rebuild_state = maintenance_loop._rebuild_state.get(rebuild_key)
+            if rebuild_state is not None and rebuild_state.task.done():
+                exc = rebuild_state.task.exception()
+                assert exc is None, f"Rebuild task raised exception: {exc}"
+
             # -----------------------------------------------------------------------
             # Pass 2: POST /maintenance/trigger → wait → assert communities_invalidated=False
-            #         AND community_count >= 1.
+            #         AND community_count >= 1 AND t4-rebuilt-comm exists in GraphStore.
             # -----------------------------------------------------------------------
-            last_run_at_pass1 = status_pass1.get("maintenance", {}).get("last_run_at")
+            last_run_at_s9 = status_s9.get("maintenance", {}).get("last_run_at")
             status_pass2 = _trigger_and_poll_maintenance(
-                client, api_key, prev_last_run_at=last_run_at_pass1
+                client, api_key, prev_last_run_at=last_run_at_s9
             )
 
             communities_invalidated_pass2 = _get_communities_invalidated(status_pass2, col)
@@ -442,4 +507,16 @@ def test_e2d_t4_communities_invalidated_then_rebuilt_after_gc(
                 f"collections in status: {status_pass2.get('collections', [])}. "
                 "CommunityBuilder.build() stub must write at least one community to GraphStore. "
                 "Check _fake_builder_build and write_communities."
+            )
+
+            # Fix #2 (CRITICAL): verify t4-rebuilt-comm exists — proves the rebuild stub
+            # actually ran and wrote a new community, not just the baseline t4-baseline-comm.
+            community_ids_after_rebuild = asyncio.run(
+                _get_community_ids_from_store(cfg.db_path, col, ns)
+            )
+            assert "t4-rebuilt-comm" in community_ids_after_rebuild, (
+                f"Expected 't4-rebuilt-comm' in GraphStore communities after rebuild; "
+                f"found: {community_ids_after_rebuild}. "
+                "This confirms the rebuild stub ran, not just the baseline seeding. "
+                "If only 't4-baseline-comm' is present, the rebuild task did not execute."
             )
