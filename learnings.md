@@ -39,6 +39,36 @@
 - Action: Fix in a future task — apply the same `surviving_node_ids_pre_cap` filter in `inspect_cross_collection` before computing `total_edge_count`, add a test with a cross-collection graph exceeding `max_nodes` asserting `edge_count` counts only edges whose endpoints survive truncation.
 - Confidence: high
 
+**[2026-07-04] — E2d plan-maker: `namespace` is a reserved keyword in TypeSpec**
+- Observation: Using `namespace` as a parameter name in a TypeSpec `interface` block causes `multiple-blockless-namespace` errors — the compiler treats it as a namespace declaration, not a parameter. The error message is confusing but the fix is immediate: rename the parameter to `ns` or any non-reserved identifier.
+- Action: Never use `namespace` as a parameter name in TypeSpec `.tsp` files. Use `ns` instead. Same applies to other TypeSpec keywords like `model`, `interface`, `op`, `enum`.
+- Confidence: high
+
+**[2026-07-04] — E2d plan-maker: grep for `completes S[0-9]*` misses multi-scenario lines**
+- Observation: When verifying scenario coverage, `grep "completes S[0-9]*"` only matches lines where a single `S#` follows `completes`. Lines like `completes S2, S3, S4, S8, S13, C3` are partially matched (finds S2 only). All scenarios were actually covered; the grep gave a false alarm.
+- Action: For self-check scenario coverage, inspect the `completes` lines directly rather than relying on a single-scenario regex. Alternatively, extract all `S[0-9]+` references from completes lines with a broader grep and deduplicate.
+- Confidence: high
+
+**[2026-07-05] — E2d iterative-review: GraphStore cannot guard against empty live-sets using meta.chunk_count — prune_expired_chunks never decrements it**
+- Observation: `prune_expired_chunks` (`store.py:2340`) is a predicate-based DELETE that never updates `collection_meta.chunk_count`. Only explicit deletion (`store.py:1514`) decrements the meta. Any guard that checks `meta.chunk_count > 0` to abort a mention prune will permanently block GC for TTL-emptied collections because the count stays positive forever.
+- Action: Never use `collection_meta.chunk_count` as a signal for whether a collection is empty. Use the result of `list_chunks_raw` (trusted when it doesn't raise) or a live `count_rows()` call. Document this constraint whenever specifying empty-set guards in the maintenance pipeline.
+- Confidence: high
+
+**[2026-07-05] — E2d iterative-review: os.nice() is relative and cumulative; os.setpriority is absolute; prefer the latter for thread-pool workers**
+- Observation: `os.nice(10)` increments the calling thread's nice level by 10. `ThreadPoolExecutor` reuses threads, so successive calls accumulate (+10, +20, +30…). `os.setpriority(os.PRIO_PROCESS, 0, 10)` sets an absolute value on Linux (per-thread via NPTL). For any recurring background worker that must not leak priority to unrelated work, use `os.setpriority` + `try/finally` restore to the captured original. The restore must capture the original via `os.getpriority` (not hardcode 0), because the process may have been launched with a non-zero nice level.
+- Action: In all `asyncio.to_thread` workers that set CPU priority: (1) use `os.setpriority(os.PRIO_PROCESS, 0, value)` not `os.nice(value)`; (2) capture `original = os.getpriority(os.PRIO_PROCESS, 0)` before setting; (3) restore in `finally` using the captured original; (4) guard the entire block on `sys.platform == 'linux'`. The enter call must be independently guarded (its own try/except) so a PermissionError never skips the actual work.
+- Confidence: high
+
+**[2026-07-05] — E2d iterative-review: three parallel dicts (rebuild_tasks, rebuild_completed, rebuild_pending) cause TOCTOU races — collapse into one RebuildState dataclass**
+- Observation: When tracking async rebuild tasks with three separate dicts keyed by (ns, col), any interleaving of done-callback and _run_one_pass can produce TOCTOU races, orphaned flags for deleted collections, and a contradiction where re-enqueue deletes the key it just created. Collapsing into one RebuildState(task, completed, pending) per key eliminates all three failure modes structurally.
+- Action: When tracking per-item async state with more than two correlated fields, always use a single dataclass keyed on the item, not multiple parallel dicts. The ordering invariant (read completion flag BEFORE running GC for that item, not after) must be explicit in the spec.
+- Confidence: high
+
+**[2026-07-05] — E2d iterative-review: seam return type must match the method's scope — per-collection methods return per-collection types**
+- Observation: `runGraphGc(collection, ns)` was initially typed to return `GcMaintenanceState` (the cross-collection aggregate). This is impossible for a per-collection method. The correct return is the per-collection entry type; the caller (`_run_one_pass`) builds the aggregate by summing. Always check that a method's return type scope matches its parameter scope.
+- Action: When specifying seam contracts, verify that each method's return type is scoped to the same granularity as its parameters. A per-collection method cannot return a cross-collection aggregate; the aggregation step must be explicit in the caller spec.
+- Confidence: high
+
 ## What Has Failed
 
 **[2026-06-28] — Roadmap expansion: agents hitting session limit make zero edits — respawn with identical prompt**

@@ -1,0 +1,104 @@
+openapi: 3.0.0
+info:
+  title: E2d Graph Lifecycle Hygiene — GET /status changes
+  version: 0.0.0
+tags: []
+paths:
+  /status:
+    get:
+      operationId: StatusEndpoint_get
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponseGraphSlice'
+components:
+  schemas:
+    GraphCollectionStats:
+      type: object
+      required:
+        - collection
+        - node_count
+        - edge_count
+        - community_count
+        - last_built_at
+        - communities_invalidated
+      properties:
+        collection:
+          type: string
+        node_count:
+          type: integer
+          format: int32
+        edge_count:
+          type: integer
+          format: int32
+        community_count:
+          type: integer
+          format: int32
+        last_built_at:
+          type: string
+          nullable: true
+        communities_invalidated:
+          type: boolean
+          description: True from the moment GC removes nodes in this collection until the async rebuild completes.
+      description: Per-collection graph statistics; gains communities_invalidated in E2d.
+    GraphStatusDetail:
+      type: object
+      required:
+        - enabled
+        - backend_threshold_edges
+        - stale_mention_count
+        - collections
+      properties:
+        enabled:
+          type: boolean
+        backend_threshold_edges:
+          type: integer
+          format: int32
+        stale_mention_count:
+          type: integer
+          format: int32
+          description: Total orphan-mention count cached from the last GC run. O(1) read from state file.
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphCollectionStats'
+      description: Top-level graph sub-object on GET /status; gains stale_mention_count in E2d.
+    MaintenanceStatusDetail:
+      type: object
+      required:
+        - last_run_at
+        - last_expired_pruned_at
+        - last_graph_gc_at
+      properties:
+        last_run_at:
+          type: string
+          nullable: true
+        last_expired_pruned_at:
+          type: string
+          nullable: true
+        last_graph_gc_at:
+          type: string
+          nullable: true
+          description: ISO-8601 timestamp of the last graph GC pass, or null if GC has never run.
+      description: Maintenance sub-object gains last_graph_gc_at in E2d (consistent with last_expired_pruned_at from E2a).
+    StatusResponseGraphSlice:
+      type: object
+      required:
+        - graph
+        - maintenance
+      properties:
+        graph:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/GraphStatusDetail'
+          nullable: true
+        maintenance:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/MaintenanceStatusDetail'
+          nullable: true
+      description: 'Slim envelope: only the fields relevant to E2d changes.'
