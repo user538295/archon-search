@@ -111,7 +111,7 @@ async def _write_community_to_store(
     """Write a synthetic community to GraphStore without leidenalg.
 
     Used both to seed the baseline community (pre-deletion) and as the
-    stub body for CommunityBuilder.build() during the async rebuild.
+    async rebuild stub via monkeypatch.
     """
     from datetime import datetime, timezone
 
@@ -188,8 +188,10 @@ def _wait_for_rebuild_completion(
     if rebuild_state and rebuild_state.task.done():
         try:
             exc_info = rebuild_state.task.exception()
-        except Exception:
-            pass
+        except Exception as e:
+            # Task done but exception() raised (e.g., CancelledError).
+            # This is already unusual; log the error so diagnostic message is helpful.
+            exc_info = f"<exception retrieval failed: {type(e).__name__}>"
     pytest.fail(
         f"Rebuild task for {ns}/{col} did not complete within {deadline_s}s. "
         f"rebuild_state={rebuild_state!r}. "
@@ -292,26 +294,20 @@ def test_e2d_t4_communities_invalidated_then_rebuilt_after_gc(
     db_path_holder: list[str] = []  # filled once cfg is available
 
     async def _fake_builder_build(self_builder, collection: str, ns: str) -> list:
-        """Write a synthetic Bob community; return one Community object."""
-        from datetime import datetime, timezone
-
+        """Write a synthetic Bob community via the reusable helper; return one Community."""
         from archon_search.graph_store import GraphStore
-        from archon_search.graph_types import Community
 
         db_path = db_path_holder[0]
+        await _write_community_to_store(
+            db_path, collection, ns, community_id="t4-rebuilt-comm"
+        )
+        # Return the written community by querying it back (simulates what CommunityBuilder does)
         gs = GraphStore(db_path)
         await gs.connect()
         try:
-            await gs.ensure_communities_table(collection, ns=ns)
-            community = Community(
-                community_id="t4-rebuilt-comm",
-                entity_ids=["entity-bob"],
-                representative_chunk_ids=[],
-                built_at=datetime.now(timezone.utc),
-                summary_text=None,
-            )
-            await gs.write_communities(collection, [community], ns=ns)
-            return [community]
+            communities, _ = await gs.get_community_stats(collection, ns=ns)
+            # For stub purposes, return a minimal list — the rebuild task doesn't validate it
+            return [None] * communities if communities > 0 else []
         finally:
             await gs.disconnect()
 
@@ -355,9 +351,8 @@ def test_e2d_t4_communities_invalidated_then_rebuilt_after_gc(
             # -----------------------------------------------------------------------
             # Step 3 (a): Assert community_count == 1 before deletion (baseline).
             # -----------------------------------------------------------------------
-            # First, run a maintenance pass so status reflects the current state.
-            # (We need status polling to be accurate — the status reads from GraphStore live
-            # for community_count, so no maintenance pass is required here. Just GET /status.)
+            # Status reads community_count live from GraphStore, so no maintenance
+            # trigger required to see the baseline.
             auth_headers = _auth(api_key)
             status_baseline = client.get("/status", headers=auth_headers)
             assert status_baseline.status_code == 200, (
