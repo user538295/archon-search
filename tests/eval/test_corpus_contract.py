@@ -34,17 +34,21 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def test_eval_corpus_document_count_range() -> None:
-    """Corpus must contain between 50 and 100 documents (inclusive)."""
+    """Corpus must contain between 50 and 200 documents (inclusive).
+
+    Upper bound raised to 200 in E2e BE-9 to accommodate 100 new HotpotQA
+    distractor corpus documents for the negative control eval gate.
+    """
     corpus = load_eval_corpus(CORPUS_ROOT)
     count = len(corpus.documents)
-    assert 50 <= count <= 100, (
-        f"Expected 50–100 documents, got {count}. "
+    assert 50 <= count <= 200, (
+        f"Expected 50–200 documents, got {count}. "
         "Add or remove documents to satisfy the corpus size requirement."
     )
 
 
 def test_eval_corpus_query_count_range() -> None:
-    """Corpus must contain between 25 and 55 queries (inclusive).
+    """Corpus must contain between 25 and 150 queries (inclusive).
 
     Upper bound raised from 30 to 40 in B4 to accommodate 4 new routing
     queries added for the expanded routing fixture (Task 1.3).
@@ -52,11 +56,13 @@ def test_eval_corpus_query_count_range() -> None:
     graph-mode retrieval queries.
     Upper bound raised from 45 to 55 in E2e BE-7 to accommodate 2 new
     multihop-2wiki queries (plus future BE-9 HotpotQA queries).
+    Upper bound raised from 55 to 150 in E2e BE-9 to accommodate 100 new
+    HotpotQA distractor-setting queries for the negative control eval gate.
     """
     corpus = load_eval_corpus(CORPUS_ROOT)
     count = len(corpus.queries)
-    assert 25 <= count <= 55, (
-        f"Expected 25–55 queries, got {count}. "
+    assert 25 <= count <= 150, (
+        f"Expected 25–150 queries, got {count}. "
         "Add or remove queries to satisfy the benchmark size requirement."
     )
 
@@ -339,5 +345,83 @@ def test_all_2wiki_queries_have_labels() -> None:
     missing = [q.query_id for q in wiki2_queries if positives_by_query.get(q.query_id, 0) == 0]
     assert not missing, (
         f"2Wiki queries missing positive labels: {missing}. "
+        "Each query must have ≥1 label with grade > 0."
+    )
+
+
+# ---------------------------------------------------------------------------
+# BE-9: HotpotQA distractor corpus tests
+# ---------------------------------------------------------------------------
+
+
+def test_corpus_contract_hotpotqa() -> None:
+    """load_eval_corpus loads all HotpotQA documents without error.
+
+    All query entries have graph_mode='naive' and collection='hotpotqa'.
+    Corresponding labels present.
+    """
+    corpus = load_eval_corpus(CORPUS_ROOT)
+
+    # Verify HotpotQA documents exist and have correct collection name
+    hotpotqa_docs = [d for d in corpus.documents if d.collection == "hotpotqa"]
+    assert len(hotpotqa_docs) > 0, "No HotpotQA documents found in corpus"
+
+    # Verify HotpotQA queries exist and have correct schema
+    hotpotqa_queries = [q for q in corpus.queries if q.collection == "hotpotqa"]
+    assert len(hotpotqa_queries) > 0, "No HotpotQA queries found in corpus"
+
+    for query in hotpotqa_queries:
+        assert query.graph_mode == "naive", (
+            f"Query {query.query_id} should have graph_mode='naive', "
+            f"got {query.graph_mode!r}"
+        )
+        assert query.metric_scope == "retrieval", (
+            f"Query {query.query_id} should have metric_scope='retrieval', "
+            f"got {query.metric_scope!r}"
+        )
+        assert query.collection == "hotpotqa", (
+            f"Query {query.query_id} should have collection='hotpotqa', "
+            f"got {query.collection!r}"
+        )
+
+    # Verify all HotpotQA queries have at least one positive label
+    hotpotqa_query_ids = {q.query_id for q in hotpotqa_queries}
+    hotpotqa_labels = {lbl.query_id for lbl in corpus.labels if lbl.query_id in hotpotqa_query_ids and lbl.grade > 0}
+    assert hotpotqa_labels == hotpotqa_query_ids, (
+        f"HotpotQA queries missing positive labels: "
+        f"{hotpotqa_query_ids - hotpotqa_labels}"
+    )
+
+
+def test_license_datasets_includes_hotpotqa() -> None:
+    """LICENSE-DATASETS contains 'HotpotQA' and 'CC BY 4.0'."""
+    license_file = CORPUS_ROOT / "LICENSE-DATASETS"
+    assert license_file.exists(), (
+        f"LICENSE-DATASETS file not found at {license_file}"
+    )
+
+    content = license_file.read_text(encoding="utf-8")
+    assert "HotpotQA" in content, "LICENSE-DATASETS must mention 'HotpotQA'"
+    assert "CC BY 4.0" in content, "LICENSE-DATASETS must mention 'CC BY 4.0'"
+
+
+def test_all_hotpotqa_queries_have_labels() -> None:
+    """Every hotpotqa query entry has ≥1 positive label in labels.jsonl."""
+    corpus = load_eval_corpus(CORPUS_ROOT)
+
+    hotpotqa_queries = [q for q in corpus.queries if q.collection == "hotpotqa"]
+    assert len(hotpotqa_queries) > 0, "No HotpotQA queries found in corpus"
+
+    # Build positive label mapping for HotpotQA queries
+    hotpotqa_query_ids = {q.query_id for q in hotpotqa_queries}
+    positives_by_query: dict[str, int] = {}
+    for lbl in corpus.labels:
+        if lbl.query_id in hotpotqa_query_ids and lbl.grade > 0:
+            positives_by_query[lbl.query_id] = positives_by_query.get(lbl.query_id, 0) + 1
+
+    # Check every HotpotQA query has at least one positive label
+    missing = [q.query_id for q in hotpotqa_queries if positives_by_query.get(q.query_id, 0) == 0]
+    assert not missing, (
+        f"HotpotQA queries missing positive labels: {missing}. "
         "Each query must have ≥1 label with grade > 0."
     )

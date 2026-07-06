@@ -453,7 +453,7 @@ graph LR
 
 ### Slice 3: CI proves naive graph doesn't harm simple recall
 
-- [ ] **BE-9** — Commit HotpotQA distractor corpus: `tests/eval/corpus/hotpotqa/` (~100 questions); add entries to `documents.jsonl` (collection: `hotpotqa`), `queries.jsonl` (`graph_mode: "naive"`, `collection: "hotpotqa"`), `labels.jsonl`; update `LICENSE-DATASETS` (S12) #backend-role
+- [x] **BE-9** — Commit HotpotQA distractor corpus: `tests/eval/corpus/hotpotqa/` (~100 questions); add entries to `documents.jsonl` (collection: `hotpotqa`), `queries.jsonl` (`graph_mode: "naive"`, `collection: "hotpotqa"`), `labels.jsonl`; update `LICENSE-DATASETS` (S12) #backend-role
     - Frameworks & Drivers · 3.0h
     - needs BE-4 · completes S12
     - Tests
