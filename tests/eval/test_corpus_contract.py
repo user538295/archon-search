@@ -58,11 +58,13 @@ def test_eval_corpus_query_count_range() -> None:
     multihop-2wiki queries (plus future BE-9 HotpotQA queries).
     Upper bound raised from 55 to 150 in E2e BE-9 to accommodate 100 new
     HotpotQA distractor-setting queries for the negative control eval gate.
+    Upper bound raised from 150 to 200 in E2e T-2 to accommodate 8 additional
+    2WikiMultiHopQA queries (4 local + 4 global) for statistically meaningful gates.
     """
     corpus = load_eval_corpus(CORPUS_ROOT)
     count = len(corpus.queries)
-    assert 25 <= count <= 150, (
-        f"Expected 25–150 queries, got {count}. "
+    assert 25 <= count <= 200, (
+        f"Expected 25–200 queries, got {count}. "
         "Add or remove queries to satisfy the benchmark size requirement."
     )
 

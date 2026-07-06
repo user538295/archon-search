@@ -183,11 +183,10 @@ def build_communities_for_eval(eval_tmp_lancedb_root: Path):
     Yields: (lancedb_root, dict[collection_name, GraphStore])
     """
     import asyncio
+    import hashlib
 
     pytest.importorskip("leidenalg")  # Skip if graph extras absent
 
-    from archon_search.community_builder import CommunityBuilder
-    from archon_search.config import GraphConfig
     from archon_search.graph_store import GraphStore
     from archon_search.graph_types import (
         EntityType,
@@ -221,6 +220,12 @@ def build_communities_for_eval(eval_tmp_lancedb_root: Path):
                 all_edges = []
                 for txt_file in sorted(corpus_dir.glob("*.txt")):
                     text = txt_file.read_text(encoding="utf-8")
+                    # Compute source_doc_id using the same SHA-256 hash that
+                    # pipeline.ingest_file uses (line 377 of pipeline.py), so
+                    # CommunityBuilder.get_chunks_for_doc finds the right chunks.
+                    source_doc_id = hashlib.sha256(
+                        str(txt_file.resolve()).encode()
+                    ).hexdigest()
                     # Extract entity names from text (basic approach: capitalized words)
                     words = text.split()
                     entity_names = [
@@ -236,7 +241,7 @@ def build_communities_for_eval(eval_tmp_lancedb_root: Path):
                                 id=entity_id,
                                 entity_name=entity_name,
                                 entity_type=EntityType.concept,
-                                source_doc_id=txt_file.stem,
+                                source_doc_id=source_doc_id,
                                 collection_name=collection_name,
                             )
                             all_nodes[entity_id] = node
@@ -251,7 +256,7 @@ def build_communities_for_eval(eval_tmp_lancedb_root: Path):
                             source_node_id=doc_nodes[i].id,
                             target_node_id=doc_nodes[i + 1].id,
                             relationship_type=RelationshipType.related_to,
-                            source_doc_id=txt_file.stem,
+                            source_doc_id=source_doc_id,
                         )
                         all_edges.append(edge)
 
@@ -261,22 +266,10 @@ def build_communities_for_eval(eval_tmp_lancedb_root: Path):
                         collection_name, list(all_nodes.values()), all_edges, ns=ns
                     )
 
-                # Build communities using CommunityBuilder with deterministic seed
-                config = GraphConfig(enabled=True, leiden_resolution=1.0)
-                builder = CommunityBuilder(graph_store, config)
-                await builder.build(collection_name, ns=ns, seed=42)
-
-                # Verify communities were built
-                communities = await graph_store.list_community_representatives(
-                    collection_name, ns=ns
-                )
-                assert (
-                    len(communities) >= 1
-                ), f"No communities built for {collection_name}"
-                for community in communities:
-                    assert (
-                        len(community.representative_chunk_ids) >= 0
-                    ), f"Community missing representatives"
+                # NOTE: Communities are NOT built here. Building requires chunks in the
+                # search_store (for MMR representative selection), but chunks are only
+                # available after _ingest_corpus runs inside run_eval_suite. Community
+                # building is deferred to run_eval_suite, after _ingest_corpus completes.
 
                 graph_stores[collection_name] = graph_store
 

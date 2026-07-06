@@ -5,6 +5,7 @@ leidenalg is not installed.
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -33,11 +34,13 @@ _EMBEDDING_DIM = 3  # minimal dimension for tests
 
 
 def _make_node(name: str, source_doc_id: str, collection: str = "test-col") -> GraphNode:
+    # source_doc_id must be valid hex (matches chunk doc_id which is SHA-256 of path)
+    hex_doc_id = hashlib.sha256(source_doc_id.encode()).hexdigest()
     return GraphNode(
         id=make_stable_entity_id("concept", name),
         entity_name=name,
         entity_type=EntityType.concept,
-        source_doc_id=source_doc_id,
+        source_doc_id=hex_doc_id,
         collection_name=collection,
     )
 
@@ -53,9 +56,11 @@ def _make_edge(src: GraphNode, tgt: GraphNode) -> GraphEdge:
 
 
 def _make_chunk(doc_id: str, chunk_idx: int = 0) -> ChunkRecord:
-    chunk_id = f"{doc_id}-{chunk_idx:06d}"
+    # chunk_id must match [a-f0-9]{64}-\d{6}; hash the logical doc_id to get valid hex
+    hex_doc_id = hashlib.sha256(doc_id.encode()).hexdigest()
+    chunk_id = f"{hex_doc_id}-{chunk_idx:06d}"
     return ChunkRecord(
-        doc_id=doc_id,
+        doc_id=hex_doc_id,
         chunk_id=chunk_id,
         text=f"text for {doc_id} chunk {chunk_idx}",
         vector=[1.0, 0.0, 0.0],
@@ -86,6 +91,7 @@ async def test_representative_chunk_ids_populated(tmp_path: Path):
     # Set up SearchStore with real chunks
     search_store = SearchStore(str(tmp_path / "search_db"))
     await search_store.connect()
+    await search_store.ensure_collection(col, embedding_dim=_EMBEDDING_DIM)
     chunk_a = _make_chunk(doc_id_a, 0)
     chunk_b = _make_chunk(doc_id_b, 0)
     await search_store.ingest_chunks(col, [chunk_a])
@@ -131,6 +137,7 @@ async def test_llm_failure_still_writes_communities(tmp_path: Path):
 
     search_store = SearchStore(str(tmp_path / "search_db"))
     await search_store.connect()
+    await search_store.ensure_collection(col, embedding_dim=_EMBEDDING_DIM)
     chunk = _make_chunk(doc_id, 0)
     await search_store.ingest_chunks(col, [chunk])
 
@@ -158,7 +165,7 @@ async def test_llm_failure_still_writes_communities(tmp_path: Path):
     # Verify communities were persisted
     graph_store2 = GraphStore(tmp_path / "graph_db")
     await graph_store2.connect()
-    count, _ = await graph_store2.get_community_stats(col)
+    count, _ = await graph_store2.get_community_stats(col, ns="default")
     await graph_store2.disconnect()
     assert count == 1
 
@@ -187,8 +194,8 @@ async def test_build_idempotent(tmp_path: Path):
         "archon_search.community_builder._run_leiden_partition_sync",
         return_value=[[node_a.id, node_b.id]],
     ):
-        await builder.build(col)
-        await builder.build(col)  # Second build replaces, not appends
+        await builder.build(col, ns="default")
+        await builder.build(col, ns="default")  # Second build replaces, not appends
 
     count, _ = await graph_store.get_community_stats(col, ns="default")
     await graph_store.disconnect()

@@ -44,7 +44,15 @@
 {"query_id": "q-graph-global-01", "text": "JWT token expiry integrity verification enforcement", "collection": "graph", "metric_scope": "retrieval", "graph_mode": "global"}
 {"query_id": "q-musique-001", "text": "What is the relationship between machine learning and neural networks?", "collection": "multihop-musique", "metric_scope": "retrieval", "graph_mode": "naive"}
 {"query_id": "q-2wiki-local-01", "text": "Who works at the institution?", "collection": "multihop-2wiki", "metric_scope": "retrieval", "graph_mode": "local"}
+{"query_id": "q-2wiki-local-02", "text": "Where is the place where Alice works located?", "collection": "multihop-2wiki", "metric_scope": "retrieval", "graph_mode": "local"}
+{"query_id": "q-2wiki-local-03", "text": "In which city is MIT situated?", "collection": "multihop-2wiki", "metric_scope": "retrieval", "graph_mode": "local"}
+{"query_id": "q-2wiki-local-04", "text": "What state is the scientist's workplace found in?", "collection": "multihop-2wiki", "metric_scope": "retrieval", "graph_mode": "local"}
+{"query_id": "q-2wiki-local-05", "text": "Alice scientist MIT Cambridge Massachusetts relationship", "collection": "multihop-2wiki", "metric_scope": "retrieval", "graph_mode": "local"}
 {"query_id": "q-2wiki-global-01", "text": "Compare different entities", "collection": "multihop-2wiki", "metric_scope": "retrieval", "graph_mode": "global"}
+{"query_id": "q-2wiki-global-02", "text": "Alice MIT Cambridge bridge scenario multi-hop", "collection": "multihop-2wiki", "metric_scope": "retrieval", "graph_mode": "global"}
+{"query_id": "q-2wiki-global-03", "text": "scientist institution location Massachusetts", "collection": "multihop-2wiki", "metric_scope": "retrieval", "graph_mode": "global"}
+{"query_id": "q-2wiki-global-04", "text": "Who is Alice and where does she work?", "collection": "multihop-2wiki", "metric_scope": "retrieval", "graph_mode": "global"}
+{"query_id": "q-2wiki-global-05", "text": "bridge comparison scenario Alice MIT Cambridge multi-hop reasoning", "collection": "multihop-2wiki", "metric_scope": "retrieval", "graph_mode": "global"}
 {"query_id": "q-hotpotqa-001", "text": "How does physics and motion laws relate to chemistry and atomic structures?", "collection": "hotpotqa", "metric_scope": "retrieval", "graph_mode": "naive"}
 {"query_id": "q-hotpotqa-002", "text": "How does chemistry and atomic structures relate to biology and living organisms?", "collection": "hotpotqa", "metric_scope": "retrieval", "graph_mode": "naive"}
 {"query_id": "q-hotpotqa-003", "text": "How does biology and living organisms relate to astronomy and celestial bodies?", "collection": "hotpotqa", "metric_scope": "retrieval", "graph_mode": "naive"}

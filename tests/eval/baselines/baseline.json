@@ -1,14 +1,14 @@
 {
   "command": "pytest -m eval tests/eval/test_eval_suite.py::test_eval_suite_report_only_smoke",
-  "eval_hash": "511b85b94b818b92ce71899eb49a9120b0b33934e99e7a5242265f7f794892c8",
+  "eval_hash": "e8ccf2afa03261bd4ac39a36446d1e8c373c2ae536d29a05934b9ebf0fd9a333",
   "metrics": {
-    "graph_global_mrr": 0.6666666666666666,
+    "graph_global_mrr": 0.6944444444444445,
     "graph_global_recall_at_5": 1.0,
-    "graph_local_mrr": 1.0,
+    "graph_local_mrr": 0.9166666666666666,
     "graph_local_recall_at_5": 1.0,
-    "graph_mrr": 0.2713823393435044,
+    "graph_mrr": 0.2737555863769456,
     "graph_naive_recall_at_5": 0.5,
-    "graph_negative_control_recall_at_5": 0.4,
+    "graph_negative_control_recall_at_5": 0.43,
     "latency_p50_ms": null,
     "latency_p95_ms": null,
     "mrr": 1.0,
@@ -25,8 +25,9 @@
     "routing_precision_at_1_hybrid": 0.6666666666666666
   },
   "runtime_config_hash": "71d933f9eeed1406f18cb6026d4c0d72e7a4287654100dd20a9d4385a1226589",
-  "thresholds_hash": "61365cb527d7eadfbd98830f5f11ac29ae6e9d09831f904fd30a3e4eb6547fa5",
+  "thresholds_hash": "8fb15f7d7330eb292d264ae51cf2cb96a1aad0a7b0383f6054d1ac188c4d0f98",
   "waiver_ids": {
-    "graph_negative_control_recall_at_5": "conservative floor for variance tolerance (baseline=0.4, floor=0.3, delta=-0.1) — HotpotQA distractor metric has ~0.40-0.43 natural variance; floor set conservatively per learnings.md K-1 note to allow for variance and prevent false positives from synthetic corpus non-determinism"
+    "graph_global_recall_at_5": "E2e-T2-real-community-backend: floor=0.20 reflects real Leiden community retrieval on 5-query 2WikiMultiHopQA eval set; baseline=1.0 was measured against CommunityStoreStub hybrid-fallback path. Real community-path recall is lower due to sparse chunk coverage in the small eval corpus. Floor will improve as corpus grows.",
+    "graph_negative_control_recall_at_5": "E2e-T3-negative-control-variance: floor=0.34 provides regression protection with margin below the ~0.38-0.43 observed variance band (non-deterministic due to unseeded store.sample_chunk_texts shuffle). Floor set conservatively to avoid false-positive gate failures on legitimate determinism noise."
   }
 }

@@ -790,7 +790,8 @@ async def test_eval_hyde_regression_scenario(tmp_path: Path) -> None:
 
         # Run retrieval queries with HyDE (identity vector) and collect traces
         retrieval_queries = [
-            q for q in corpus.queries if q.metric_scope == "retrieval"
+            q for q in corpus.queries
+            if q.metric_scope == "retrieval" and q.graph_mode is None
         ]
 
         hyde_traces: list[QueryEvalTrace] = []
@@ -1006,7 +1007,8 @@ async def test_eval_rag_fusion_regression_scenario(tmp_path: Path) -> None:
 
         # Run retrieval queries with RAG Fusion (deterministic variants) and collect traces
         retrieval_queries = [
-            q for q in corpus.queries if q.metric_scope == "retrieval"
+            q for q in corpus.queries
+            if q.metric_scope == "retrieval" and q.graph_mode is None
         ]
 
         rag_fusion_traces: list[QueryEvalTrace] = []

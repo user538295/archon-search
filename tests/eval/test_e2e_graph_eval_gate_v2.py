@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.eval.runner import assert_thresholds, load_thresholds, render_report, run_eval_suite
+from archon_search.eval.runner import assert_thresholds, run_eval_suite
 
 # Require leidenalg for all tests in this module; skip the entire module if absent.
 pytest.importorskip("leidenalg")
@@ -52,8 +52,8 @@ async def test_eval_gate_graph_naive_recall_at_5(thresholds_path: Path) -> None:
     # calibration-only baseline rejection.
     assert_thresholds(report)
 
-    thresholds = load_thresholds(thresholds_path)
-    floor = thresholds.quality_floors.graph_naive_recall_at_5
+    assert report.thresholds is not None
+    floor = report.thresholds.quality_floors.graph_naive_recall_at_5
     actual = report.metrics.graph_naive_recall_at_5
 
     assert floor is not None, (
@@ -71,7 +71,11 @@ async def test_eval_gate_graph_naive_recall_at_5(thresholds_path: Path) -> None:
 
 
 @pytest.mark.eval
-async def test_eval_gate_graph_local_recall_at_5(thresholds_path: Path) -> None:
+async def test_eval_gate_graph_local_recall_at_5(
+    thresholds_path: Path,
+    build_communities_for_eval: tuple,
+    eval_tmp_lancedb_root: Path,
+) -> None:
     """Gated: graph_local_recall_at_5 meets the floor configured in thresholds.toml (T-2).
 
     Measures local-mode community retrieval on 2WikiMultiHopQA bridge+comparison
@@ -84,13 +88,14 @@ async def test_eval_gate_graph_local_recall_at_5(thresholds_path: Path) -> None:
         RUNTIME_CONFIG_PATH,
         thresholds_path=thresholds_path,
         baseline_path=BASELINE_JSON,
+        lancedb_root=eval_tmp_lancedb_root,
     )
     # Enforce the full production gate contract first: staleness checks, floor-drop policy,
     # calibration-only baseline rejection.
     assert_thresholds(report)
 
-    thresholds = load_thresholds(thresholds_path)
-    floor = thresholds.quality_floors.graph_local_recall_at_5
+    assert report.thresholds is not None
+    floor = report.thresholds.quality_floors.graph_local_recall_at_5
     actual = report.metrics.graph_local_recall_at_5
 
     assert floor is not None, (
@@ -108,7 +113,11 @@ async def test_eval_gate_graph_local_recall_at_5(thresholds_path: Path) -> None:
 
 
 @pytest.mark.eval
-async def test_eval_gate_graph_global_recall_at_5(thresholds_path: Path) -> None:
+async def test_eval_gate_graph_global_recall_at_5(
+    thresholds_path: Path,
+    build_communities_for_eval: tuple,
+    eval_tmp_lancedb_root: Path,
+) -> None:
     """Gated: graph_global_recall_at_5 meets the floor configured in thresholds.toml (T-2).
 
     Measures global-mode community aggregation on 2WikiMultiHopQA bridge+comparison
@@ -121,13 +130,14 @@ async def test_eval_gate_graph_global_recall_at_5(thresholds_path: Path) -> None
         RUNTIME_CONFIG_PATH,
         thresholds_path=thresholds_path,
         baseline_path=BASELINE_JSON,
+        lancedb_root=eval_tmp_lancedb_root,
     )
     # Enforce the full production gate contract first: staleness checks, floor-drop policy,
     # calibration-only baseline rejection.
     assert_thresholds(report)
 
-    thresholds = load_thresholds(thresholds_path)
-    floor = thresholds.quality_floors.graph_global_recall_at_5
+    assert report.thresholds is not None
+    floor = report.thresholds.quality_floors.graph_global_recall_at_5
     actual = report.metrics.graph_global_recall_at_5
 
     assert floor is not None, (
@@ -165,8 +175,8 @@ async def test_eval_gate_graph_negative_control_recall_at_5(thresholds_path: Pat
     # calibration-only baseline rejection.
     assert_thresholds(report)
 
-    thresholds = load_thresholds(thresholds_path)
-    floor = thresholds.quality_floors.graph_negative_control_recall_at_5
+    assert report.thresholds is not None
+    floor = report.thresholds.quality_floors.graph_negative_control_recall_at_5
     actual = report.metrics.graph_negative_control_recall_at_5
 
     assert floor is not None, (

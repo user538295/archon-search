@@ -6,6 +6,7 @@ Skips gracefully when leidenalg is not installed.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -33,12 +34,17 @@ from archon_search.graph_types import (
 from archon_search.store import SearchStore
 
 
+def _hex_doc_id(logical: str) -> str:
+    """Hash a logical doc name to a valid [a-f0-9]{64} doc_id."""
+    return hashlib.sha256(logical.encode()).hexdigest()
+
+
 def _make_node(name: str, source_doc_id: str, collection: str) -> GraphNode:
     return GraphNode(
         id=make_stable_entity_id("concept", name),
         entity_name=name,
         entity_type=EntityType.concept,
-        source_doc_id=source_doc_id,
+        source_doc_id=_hex_doc_id(source_doc_id),
         collection_name=collection,
     )
 
@@ -54,9 +60,11 @@ def _make_edge(src: GraphNode, tgt: GraphNode) -> GraphEdge:
 
 
 def _make_chunk(doc_id: str, idx: int = 0) -> ChunkRecord:
+    # chunk_id must match [a-f0-9]{64}-\d{6}
+    hex_id = _hex_doc_id(doc_id)
     return ChunkRecord(
-        doc_id=doc_id,
-        chunk_id=f"{doc_id}-{idx:06d}",
+        doc_id=hex_id,
+        chunk_id=f"{hex_id}-{idx:06d}",
         text=f"text for {doc_id} chunk {idx}",
         vector=[1.0, 0.0, 0.0],
         source_path=f"/fake/{doc_id}.txt",
@@ -86,6 +94,7 @@ def test_build_communities_cli_real_store(tmp_path: Path) -> None:
 
         search_store = SearchStore(db_path)
         await search_store.connect()
+        await search_store.ensure_collection(col, embedding_dim=3)
         await search_store.ingest_chunks(col, [_make_chunk(doc_id_a, 0)])
         await search_store.ingest_chunks(col, [_make_chunk(doc_id_b, 0)])
         await search_store.disconnect()

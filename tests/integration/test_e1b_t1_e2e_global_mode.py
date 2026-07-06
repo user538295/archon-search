@@ -14,6 +14,7 @@ Tests (b) and (c) use make_real_app + direct community seeding; no leidenalg nee
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sys
 import types
 from datetime import datetime, timezone
@@ -137,8 +138,9 @@ def test_e2e_build_communities_cli(tmp_path: Path) -> None:
     from archon_search.store import SearchStore
 
     col = "t1-build-communities"
-    doc_id_a = "docaaaaaaaaaaaaaaaaaaaaa"  # 24 chars
-    doc_id_b = "docbbbbbbbbbbbbbbbbbbbbb"  # 24 chars
+    # doc_id must match [a-f0-9]{64}; use SHA-256 of a logical name
+    doc_id_a = hashlib.sha256(b"doc-auth-service").hexdigest()
+    doc_id_b = hashlib.sha256(b"doc-token-validator").hexdigest()
 
     node_a = GraphNode(
         id=make_stable_entity_id("concept", "AuthService"),
@@ -175,6 +177,7 @@ def test_e2e_build_communities_cli(tmp_path: Path) -> None:
 
         search_store = SearchStore(db_path)
         await search_store.connect()
+        await search_store.ensure_collection(col, embedding_dim=3)
         await search_store.ingest_chunks(col, [
             ChunkRecord(
                 doc_id=doc_id_a,

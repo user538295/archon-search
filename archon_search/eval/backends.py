@@ -288,11 +288,13 @@ class DispatchingCommunityStore:
         self._backend_map = backend_map
 
     def _get_backend(self, collection: str) -> "RealCommunityEvalBackend | CommunityStoreStub":  # type: ignore[name-defined]  # noqa: F821
-        """Get the backend for a collection, raising KeyError if not found."""
-        try:
-            return self._backend_map[collection]
-        except KeyError:
-            raise KeyError(f"no community backend configured for collection {collection!r}; configured: {sorted(self._backend_map)}")  # noqa: B904
+        """Get the backend for a collection, falling back to CommunityStoreStub.
+
+        Collections not in the map (e.g. the ``graph`` collection retained for
+        backward-compat) fall back to ``CommunityStoreStub`` so that existing
+        graph-mode queries still exercise the stub-fallback → hybrid-search path.
+        """
+        return self._backend_map.get(collection, CommunityStoreStub())
 
     async def communities_table_exists(self, collection: str, ns: str = "default") -> bool:
         """Dispatch to the appropriate backend."""

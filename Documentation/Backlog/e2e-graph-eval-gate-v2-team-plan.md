@@ -495,7 +495,7 @@ graph LR
     - Tests
         - #unit_test — `test_stub_floors_absent_from_thresholds` — verifies `graph_local_mrr` and `graph_global_mrr` keys are absent from the committed `thresholds.toml`
 
-- [ ] **T-2** — Verify gated local/global eval gates pass under `--thresholds-path` with calibrated floors #tester-role
+- [x] **T-2** — Verify gated local/global eval gates pass under `--thresholds-path` with calibrated floors #tester-role
     - — · 1.0h
     - needs BE-12 · completes S2, S3
     - Tests

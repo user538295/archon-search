@@ -640,12 +640,11 @@ async def _build_pipeline_with_eval_backends(
         if community_backend_map is not None:
             # Dispatcher wraps per-collection backends
             community_backend = DispatchingCommunityStore(community_backend_map)
-            # For graph expander: use RealGraphExpander for multi-hop collections,
-            # StubGraphExpander for the graph collection
-            # The graph expander is used during query expansion, which is per-query,
-            # so we need a dispatching mechanism here too.
-            # For now, use stub for all (can be extended in BE-10)
-            graph_expander = StubGraphExpander(EVAL_GRAPH_ENTITY_MAP)
+            # Use RealGraphExpander backed by the real GraphStore for multihop
+            # collections so naive-mode entity expansion reads real graph nodes.
+            # The first backend value carries the shared GraphStore instance.
+            _real_gs = next(iter(community_backend_map.values()))._graph_store
+            graph_expander = RealGraphExpander(_real_gs)
         else:
             # Legacy mode: use stub for all
             community_backend = CommunityStoreStub()
@@ -739,6 +738,14 @@ async def _run_router_for_query(
     return [m.name for m in shortlist]
 
 
+_MULTIHOP_EVAL_COLLECTIONS = ("multihop-musique", "multihop-2wiki", "hotpotqa")
+# Collections that require Leiden community detection (local/global graph modes).
+# hotpotqa uses naive mode only and has no pre-built graph nodes — excluded.
+_COMMUNITY_EVAL_COLLECTIONS = ("multihop-musique", "multihop-2wiki")
+# Deterministic Leiden seed used by both the eval fixture and run_eval_suite.
+_EVAL_LEIDEN_SEED: int = 42
+
+
 async def run_eval_suite(
     corpus_root: Path,
     runtime_config_path: Path,
@@ -814,12 +821,49 @@ async def run_eval_suite(
     # regular retrieval_traces so baseline metrics are unaffected).
     graph_traces: list[QueryEvalTrace] = []
 
+    community_backend_map: dict | None = None
+    _graph_store_for_communities = None
+    if backend == "deterministic" and lancedb_root is not None:
+        from archon_search.eval.backends import RealCommunityEvalBackend
+        from archon_search.graph_store import GraphStore
+
+        _graph_store_for_communities = GraphStore(db_path=str(lancedb_root))
+        await _graph_store_for_communities.connect()
+        community_backend_map = {
+            col: RealCommunityEvalBackend(_graph_store_for_communities)
+            for col in _MULTIHOP_EVAL_COLLECTIONS
+        }
+
     with _db_path_context(lancedb_root) as db_path:
         pipeline = await _build_pipeline_with_eval_backends(
-            db_path, backend=backend, lancedb_root=lancedb_root
+            db_path, backend=backend, lancedb_root=lancedb_root,
+            community_backend_map=community_backend_map,
         )
         try:
             await _ingest_corpus(pipeline, corpus_root, corpus)
+
+            # Build communities for multihop eval collections AFTER corpus ingest.
+            # CommunityBuilder._select_representative_chunk_ids requires chunks in the
+            # search_store; they are only available after _ingest_corpus completes.
+            # The fixture (build_communities_for_eval) only writes graph nodes/edges;
+            # community detection runs here with the fully-populated search_store.
+            if community_backend_map is not None and _graph_store_for_communities is not None:
+                from archon_search.community_builder import CommunityBuilder
+                from archon_search.config import GraphConfig
+
+                _graph_config = GraphConfig(
+                    enabled=True,
+                    leiden_resolution=1.0,
+                    community_summary_chunks=3,
+                    max_community_size=10,
+                )
+                _community_builder = CommunityBuilder(
+                    _graph_store_for_communities,
+                    _graph_config,
+                    search_store=pipeline.store,
+                )
+                for _col in _COMMUNITY_EVAL_COLLECTIONS:
+                    await _community_builder.build(_col, ns="default", seed=_EVAL_LEIDEN_SEED)
 
             # Fetched after `_ingest_corpus` → `recompute_collection_meta`;
             # `description_embedding` is now load-bearing for hybrid routing,
