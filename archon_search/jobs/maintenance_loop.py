@@ -118,6 +118,13 @@ class MaintenanceLoop:
         self._trigger_event: asyncio.Event = asyncio.Event()
         # Rebuild state tracking: maps (namespace, collection) → RebuildState
         self._rebuild_state: dict[tuple[str, str], RebuildState] = {}
+        # E2f BE-5: synonym enrichment state tracking (separate from _rebuild_state).
+        # Maps (namespace, collection) → RebuildState for in-flight synonym enrichment tasks.
+        self._synonym_state: dict[tuple[str, str], RebuildState] = {}
+        # E2f BE-5: collections pending community rebuild after synonym enrichment.
+        # Producer: schedule_synonym_enrichment / _run_synonym_enrichment add to this set.
+        # Consumer: _drain_communities_pending_rebuild (called in _run_one_pass) removes from it.
+        self._communities_pending_rebuild: set[tuple[str, str]] = set()
 
     # ------------------------------------------------------------------
     # Exclusion
@@ -570,6 +577,150 @@ class MaintenanceLoop:
                         exc,
                     )
 
+    # ------------------------------------------------------------------
+    # E2f BE-5: Synonym enrichment — scheduling, debounce, and run
+    # ------------------------------------------------------------------
+
+    def schedule_synonym_enrichment(self, collection: str, ns: str) -> None:
+        """Schedule synonym enrichment for a (namespace, collection) pair.
+
+        Called by ``SearchPipeline.on_synonym_edges_written`` callback after
+        each ingest when ``config.graph.enrichment_auto = True``.
+
+        Debounce (S12): if an enrichment task is already in-flight for this
+        (ns, collection), set ``pending = True`` and return without spawning a
+        new task.  The done-callback on the in-flight task will re-enqueue if
+        pending is set.  This prevents duplicate concurrent enrichment tasks.
+
+        After ``_run_synonym_enrichment`` writes synonym edges, ``(ns, collection)``
+        is added to ``_communities_pending_rebuild`` so that the next maintenance
+        pass triggers a community rebuild (S3/S4).
+
+        ``pipeline.py`` calls this method via ``Callable`` only — no import of
+        ``MaintenanceLoop``.
+        """
+        key = (ns, collection)
+        if key in self._synonym_state:
+            existing = self._synonym_state[key]
+            if not existing.task.done():
+                # Task still in-flight — set pending flag for re-enqueue, return.
+                existing.pending = True
+                return
+            # Task completed; clear the entry and spawn a fresh one below.
+            del self._synonym_state[key]
+
+        task = asyncio.create_task(
+            self._run_synonym_enrichment(collection, ns)
+        )
+        state = RebuildState(task=task, pending=False, completed=False)
+        self._synonym_state[key] = state
+
+        def _on_enrichment_done(t: asyncio.Task[Any]) -> None:
+            try:
+                exc = t.exception()
+                if exc is not None:
+                    logger.error(
+                        "MaintenanceLoop: synonym enrichment failed for %s/%s: %s",
+                        ns, collection, exc,
+                    )
+            except asyncio.CancelledError:
+                pass
+
+            if key in self._synonym_state:
+                current = self._synonym_state[key]
+                if current.pending:
+                    current.pending = False
+                    self.schedule_synonym_enrichment(collection, ns)
+                else:
+                    # Enrichment done, no re-enqueue pending — clear the state entry.
+                    # Entry is only needed for debounce; once done, remove it to
+                    # prevent unbounded growth of _synonym_state.
+                    del self._synonym_state[key]
+
+        task.add_done_callback(_on_enrichment_done)
+
+    async def _run_synonym_enrichment(self, collection: str, ns: str) -> None:
+        """Run synonym detection for a collection and write synonym_of edges.
+
+        Algorithm:
+        1. Check prerequisites (graph_store present, config available).
+        2. Instantiate SynonymDetector with the graph_store and a stub embedder.
+           (Name embeddings are pre-stored on GraphNode.name_embedding; the embedder
+           is kept for forward-compatibility but is not called during detect().)
+        3. Call detector.detect(collection, ns=ns) → list[GraphEdge].
+        4. If edges found: call graph_store.write_graph(collection, [], edges, ns=ns),
+           then add (ns, collection) to _communities_pending_rebuild.
+
+        Errors are propagated to the caller (schedule_synonym_enrichment's done-callback
+        logs them as ERROR).
+        """
+        if self._graph_store is None or self._graph_config is None:
+            return
+
+        from archon_search.config import SearchConfig  # noqa: PLC0415
+        from archon_search.synonym_detector import SynonymDetector  # noqa: PLC0415
+        from archon_search.embedder import Embedder  # noqa: PLC0415
+
+        # Build a minimal SearchConfig shell carrying only the graph config.
+        # SynonymDetector.detect() uses only config.graph.synonym_threshold,
+        # so the other fields remain at defaults.
+        cfg = SearchConfig()
+        cfg.graph = self._graph_config
+
+        # SynonymDetector requires an Embedder at __init__ (forward-compatibility).
+        # detect() uses stored name_embedding only and never calls encode().
+        class _NullEmbedderBackend:
+            model_name: str = "null-embedder"
+            is_warm: bool = False
+
+            def encode(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover
+                raise NotImplementedError("SynonymDetector does not call embed() — stored name_embedding only")
+
+        embedder = Embedder(_NullEmbedderBackend())
+
+        detector = SynonymDetector(
+            graph_store=self._graph_store,
+            embedder=embedder,
+            config=cfg,
+        )
+        synonym_edges = await detector.detect(collection, ns=ns)
+
+        if synonym_edges:
+            await self._graph_store.write_graph(
+                collection, [], synonym_edges, ns=ns
+            )
+            logger.info(
+                "MaintenanceLoop: wrote %d synonym_of edges for %s/%s",
+                len(synonym_edges), ns, collection,
+            )
+            # Trigger community rebuild only when synonym edges were written.
+            # Spurious rebuilds on every ingest are wasteful — Leiden is expensive.
+            self._communities_pending_rebuild.add((ns, collection))
+
+    def _drain_communities_pending_rebuild(self) -> None:
+        """Drain ``_communities_pending_rebuild`` by spawning a community rebuild task
+        for each pending (ns, collection) pair.
+
+        Called once per maintenance pass in ``_run_one_pass``.  Producer is
+        ``schedule_synonym_enrichment`` / ``_run_synonym_enrichment``; this method is
+        the sole consumer.  The producer ONLY adds; this method ONLY removes.
+        """
+        if not self._communities_pending_rebuild:
+            return
+
+        # Snapshot and clear atomically before spawning to avoid re-processing
+        # entries added by concurrent enrichment tasks during the loop.
+        pending = set(self._communities_pending_rebuild)
+        self._communities_pending_rebuild -= pending
+
+        for ns, collection in pending:
+            self._spawn_rebuild_task(ns, collection)
+            logger.debug(
+                "MaintenanceLoop: triggered community rebuild for %s/%s "
+                "after synonym enrichment",
+                ns, collection,
+            )
+
     async def _run_failed_ingest_retry(
         self, health: dict[str, Any], retry_counts: dict[str, int]
     ) -> None:
@@ -918,6 +1069,15 @@ class MaintenanceLoop:
         # Aggregate stale mention counts from per-collection GC runs.
         # The spec requires SUM — not last-collection-wins, average, or max.
         stale_mention_count = sum(per_collection_stale_counts)
+
+        # E2f BE-5: drain _communities_pending_rebuild — spawn community rebuild tasks
+        # for any (ns, collection) pair added by synonym enrichment since the last pass.
+        # This is separate from the GC-triggered rebuild path (_run_graph_gc) and runs
+        # once per pass regardless of which collections had enrichment.
+        try:
+            self._drain_communities_pending_rebuild()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("MaintenanceLoop: _drain_communities_pending_rebuild failed: %s", exc)
 
         # Pass-level retry (once per pass, after all per-collection work).
         # Passes the pass-level health and retry_counts dicts so the method

@@ -341,6 +341,11 @@ class SearchPipeline:
         self._graph_store = graph_store
         self._graph_config = graph_config
         self._graph_expander = graph_expander
+        # E2f BE-5: post-ingest synonym enrichment callback.
+        # Assigned by app.py lifespan after MaintenanceLoop is constructed.
+        # CLI/eval paths that construct SearchPipeline without a MaintenanceLoop
+        # leave this as None — synonym enrichment is not triggered there.
+        self.on_synonym_edges_written: Callable[[str, str], None] | None = None
 
     # ------------------------------------------------------------------
     # Warm-status accessors (used by health/readiness route handlers)
@@ -655,6 +660,26 @@ class SearchPipeline:
                 )
                 acl_warnings.append(
                     f"Graph write failed for {doc_id!r}: graph data may be incomplete"
+                )
+
+        # E2f BE-5: post-ingest synonym enrichment hook.
+        # Fires after write_graph() completes, inside the same auxiliary-write safety
+        # pattern (try/except + WARNING + return normally). Gated by enrichment_auto.
+        # pipeline.py holds only a Callable — no import of MaintenanceLoop.
+        if (
+            _graph_enabled
+            and self.on_synonym_edges_written is not None
+            and self._graph_config is not None
+            and getattr(self._graph_config, "enrichment_auto", True)
+        ):
+            try:
+                self.on_synonym_edges_written(collection, namespace)
+            except Exception:
+                logger.warning(
+                    "Synonym enrichment callback failed for %r in %r; "
+                    "synonym edges may be incomplete",
+                    doc_id, collection,
+                    exc_info=True,
                 )
 
         return IngestResult(

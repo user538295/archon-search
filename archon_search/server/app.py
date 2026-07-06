@@ -342,6 +342,14 @@ def create_app(
         app.state._background_tasks.add(maintenance_task)
         maintenance_task.add_done_callback(app.state._background_tasks.discard)
 
+        # E2f BE-5: wire post-ingest synonym enrichment callback.
+        # Both SearchPipeline (created in create_app, sync) and MaintenanceLoop
+        # (created above in lifespan, async) are siblings — the wiring happens here,
+        # after both exist.  pipeline.py holds only a Callable — no MaintenanceLoop import.
+        app.state.pipeline.on_synonym_edges_written = (
+            maintenance_loop.schedule_synonym_enrichment
+        )
+
         # Startup: initialise telemetry if enabled
         if config.telemetry.enabled:
             log_dir = Path(config.telemetry.log_dir).expanduser()
