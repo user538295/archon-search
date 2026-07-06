@@ -6,9 +6,9 @@
     "graph_global_recall_at_5": 1.0,
     "graph_local_mrr": 0.9166666666666666,
     "graph_local_recall_at_5": 1.0,
-    "graph_mrr": 0.2737555863769456,
+    "graph_mrr": 0.28366081060255816,
     "graph_naive_recall_at_5": 0.5,
-    "graph_negative_control_recall_at_5": 0.43,
+    "graph_negative_control_recall_at_5": 0.41,
     "latency_p50_ms": null,
     "latency_p95_ms": null,
     "mrr": 1.0,
@@ -25,9 +25,9 @@
     "routing_precision_at_1_hybrid": 0.6666666666666666
   },
   "runtime_config_hash": "71d933f9eeed1406f18cb6026d4c0d72e7a4287654100dd20a9d4385a1226589",
-  "thresholds_hash": "8fb15f7d7330eb292d264ae51cf2cb96a1aad0a7b0383f6054d1ac188c4d0f98",
+  "thresholds_hash": "7f724ba3e5f0246c26a5c541e634895fb92ac6a1cf1b49214e1c753bcb785d36",
   "waiver_ids": {
-    "graph_global_recall_at_5": "E2e-T2-real-community-backend: floor=0.20 reflects real Leiden community retrieval on 5-query 2WikiMultiHopQA eval set; baseline=1.0 was measured against CommunityStoreStub hybrid-fallback path. Real community-path recall is lower due to sparse chunk coverage in the small eval corpus. Floor will improve as corpus grows.",
-    "graph_negative_control_recall_at_5": "E2e-T3-negative-control-variance: floor=0.34 provides regression protection with margin below the ~0.38-0.43 observed variance band (non-deterministic due to unseeded store.sample_chunk_texts shuffle). Floor set conservatively to avoid false-positive gate failures on legitimate determinism noise."
+    "graph_global_recall_at_5": "E2e-global-floor-below-stub-baseline: baseline=1.0 was measured via CommunityStoreStub hybrid fallback, not real Leiden community retrieval; real Leiden floor is 0.2 on the 5-query 2WikiMultiHopQA eval set",
+    "graph_negative_control_recall_at_5": "E2e-negative-control-nondeterministic: floor=0.34 is conservative regression guard for a non-deterministic metric (observed 0.38-0.43 range due to unseeded store.sample_chunk_texts shuffle); baseline=0.41 reflects a single calibration run"
   }
 }

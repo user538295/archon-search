@@ -63,6 +63,18 @@ async def main() -> None:
     metrics_dict["latency_p50_ms"] = None
     metrics_dict["latency_p95_ms"] = None
 
+    # Preserve any manually-set waivers from the existing baseline so that
+    # regenerate.py doesn't silently drop them and break gated tests.
+    existing_baseline_path = BASELINES_DIR / "baseline.json"
+    existing_waivers: dict[str, str] = {}
+    if existing_baseline_path.exists():
+        try:
+            existing_waivers = json.loads(existing_baseline_path.read_text()).get(
+                "waiver_ids", {}
+            )
+        except (json.JSONDecodeError, KeyError):
+            pass
+
     baseline: dict[str, object] = {
         "eval_hash": compute_eval_hash(EVAL_DIR),
         "runtime_config_hash": compute_runtime_config_hash(RUNTIME_TOML),
@@ -73,7 +85,7 @@ async def main() -> None:
         ),
         "command": CALIBRATION_COMMAND,
         "metrics": metrics_dict,
-        "waiver_ids": {},
+        "waiver_ids": existing_waivers,
     }
 
     BASELINES_DIR.mkdir(parents=True, exist_ok=True)
