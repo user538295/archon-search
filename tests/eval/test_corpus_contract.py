@@ -266,12 +266,6 @@ def test_corpus_contract_multihop_2wiki() -> None:
     wiki2_queries = [q for q in corpus.queries if q.collection == "multihop-2wiki"]
     assert len(wiki2_queries) > 0, "No 2WikiMultiHopQA queries found in corpus"
 
-    # Check local and global modes are present
-    graph_modes = {q.graph_mode for q in wiki2_queries}
-    assert "local" in graph_modes or "global" in graph_modes, (
-        f"2Wiki queries should have graph_mode='local' or 'global', got {graph_modes}"
-    )
-
     for query in wiki2_queries:
         assert query.graph_mode in ("local", "global"), (
             f"Query {query.query_id} should have graph_mode in ['local', 'global'], "
