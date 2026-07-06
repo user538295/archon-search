@@ -171,6 +171,10 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
         "graph_mrr",
         "graph_local_mrr",
         "graph_global_mrr",
+        "graph_naive_recall_at_5",
+        "graph_local_recall_at_5",
+        "graph_global_recall_at_5",
+        "graph_negative_control_recall_at_5",
     )
     optional_floats: dict[str, float | None] = {}
     for opt_key in _optional_float_fields:
@@ -197,6 +201,10 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
         graph_mrr=optional_floats["graph_mrr"],
         graph_local_mrr=optional_floats["graph_local_mrr"],
         graph_global_mrr=optional_floats["graph_global_mrr"],
+        graph_naive_recall_at_5=optional_floats["graph_naive_recall_at_5"],
+        graph_local_recall_at_5=optional_floats["graph_local_recall_at_5"],
+        graph_global_recall_at_5=optional_floats["graph_global_recall_at_5"],
+        graph_negative_control_recall_at_5=optional_floats["graph_negative_control_recall_at_5"],
     )
 
     # --- latency_ceilings section (optional) ----------------------------------
@@ -1000,6 +1008,10 @@ _QUALITY_FLOOR_FIELDS = (
     "graph_mrr",
     "graph_local_mrr",
     "graph_global_mrr",
+    "graph_naive_recall_at_5",
+    "graph_local_recall_at_5",
+    "graph_global_recall_at_5",
+    "graph_negative_control_recall_at_5",
 )
 
 
@@ -1174,6 +1186,10 @@ _RENDERED_QUALITY_FIELDS = (
     "graph_mrr",
     "graph_local_mrr",
     "graph_global_mrr",
+    "graph_naive_recall_at_5",
+    "graph_local_recall_at_5",
+    "graph_global_recall_at_5",
+    "graph_negative_control_recall_at_5",
 )
 
 _RENDERED_LATENCY_FIELDS = ("latency_p50_ms", "latency_p95_ms")

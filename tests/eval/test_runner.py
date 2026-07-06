@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import textwrap
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from archon_search.eval.runner import (
     BenchmarkThresholds,
     EvalLatencyCeilings,
     EvalQualityFloors,
+    EvalReport,
     EvalRuntimeConfig,
     EvalThresholds,
     load_benchmark_thresholds,
@@ -993,6 +995,10 @@ def _make_metrics(
     graph_mrr: float | None = None,
     graph_local_mrr: float | None = None,
     graph_global_mrr: float | None = None,
+    graph_naive_recall_at_5: float | None = None,
+    graph_local_recall_at_5: float | None = None,
+    graph_global_recall_at_5: float | None = None,
+    graph_negative_control_recall_at_5: float | None = None,
 ) -> EvalMetrics:
     return EvalMetrics(
         recall_at_1=recall_at_1,
@@ -1012,6 +1018,10 @@ def _make_metrics(
         graph_mrr=graph_mrr,
         graph_local_mrr=graph_local_mrr,
         graph_global_mrr=graph_global_mrr,
+        graph_naive_recall_at_5=graph_naive_recall_at_5,
+        graph_local_recall_at_5=graph_local_recall_at_5,
+        graph_global_recall_at_5=graph_global_recall_at_5,
+        graph_negative_control_recall_at_5=graph_negative_control_recall_at_5,
     )
 
 
@@ -1025,6 +1035,10 @@ def _make_quality_floors(**overrides) -> EvalQualityFloors:
         ndcg_at_10=0.72,
         routing_accuracy=None,
         graph_mrr=None,
+        graph_naive_recall_at_5=None,
+        graph_local_recall_at_5=None,
+        graph_global_recall_at_5=None,
+        graph_negative_control_recall_at_5=None,
     )
     defaults.update(overrides)
     return EvalQualityFloors(**defaults)
@@ -1768,3 +1782,73 @@ class TestLoadBenchmarkThresholdsFromLiveThresholdsToml:
         assert isinstance(result, BenchmarkThresholds)
         assert result.steady_state_p95_ms > 0
         assert result.cold_load_p90_ms > 0
+
+
+# ---------------------------------------------------------------------------
+# BE-2 Tests: runner.py constants + TOML parser for new graph recall fields
+# ---------------------------------------------------------------------------
+
+
+def test_load_thresholds_parses_new_graph_recall_floors(tmp_path: Path) -> None:
+    """TOML with all 4 new graph recall floor keys parses without error; None when key absent."""
+    # Test with all four new fields present
+    content = _FULL_QUALITY + textwrap.dedent("""
+    graph_naive_recall_at_5 = 0.65
+    graph_local_recall_at_5 = 0.70
+    graph_global_recall_at_5 = 0.68
+    graph_negative_control_recall_at_5 = 0.80
+    """)
+    path = _write_toml(tmp_path, content)
+    result = load_thresholds(path)
+
+    assert result.quality_floors.graph_naive_recall_at_5 == pytest.approx(0.65)
+    assert result.quality_floors.graph_local_recall_at_5 == pytest.approx(0.70)
+    assert result.quality_floors.graph_global_recall_at_5 == pytest.approx(0.68)
+    assert result.quality_floors.graph_negative_control_recall_at_5 == pytest.approx(0.80)
+
+
+def test_load_thresholds_parses_new_graph_recall_floors_as_none_when_absent(tmp_path: Path) -> None:
+    """Omitting the 4 new graph recall floors results in None — no error raised."""
+    path = _write_toml(tmp_path, _FULL_QUALITY)
+    result = load_thresholds(path)
+
+    assert result.quality_floors.graph_naive_recall_at_5 is None
+    assert result.quality_floors.graph_local_recall_at_5 is None
+    assert result.quality_floors.graph_global_recall_at_5 is None
+    assert result.quality_floors.graph_negative_control_recall_at_5 is None
+
+
+def test_quality_floor_fields_includes_new_recall_fields() -> None:
+    """_QUALITY_FLOOR_FIELDS contains all 4 new field names."""
+    from archon_search.eval.runner import _QUALITY_FLOOR_FIELDS
+
+    expected_new_fields = {
+        "graph_naive_recall_at_5",
+        "graph_local_recall_at_5",
+        "graph_global_recall_at_5",
+        "graph_negative_control_recall_at_5",
+    }
+    assert expected_new_fields.issubset(set(_QUALITY_FLOOR_FIELDS))
+
+
+def test_assert_thresholds_gating_on_new_fields() -> None:
+    """assert_thresholds fails when a new graph recall metric is below its floor; passes when at floor."""
+    from archon_search.eval.runner import assert_thresholds
+
+    # Test: fails when graph_naive_recall_at_5 is below floor
+    floors = _make_quality_floors(graph_naive_recall_at_5=0.70)
+    metrics = _make_metrics(graph_naive_recall_at_5=0.65)
+    report = _make_report(
+        metrics=metrics,
+        thresholds=EvalThresholds(quality_floors=floors),
+    )
+    with pytest.raises(AssertionError, match="graph_naive_recall_at_5"):
+        assert_thresholds(report)
+
+    # Test: passes when graph_naive_recall_at_5 meets floor
+    metrics_at_floor = _make_metrics(graph_naive_recall_at_5=0.70)
+    report_at_floor = _make_report(
+        metrics=metrics_at_floor,
+        thresholds=EvalThresholds(quality_floors=floors),
+    )
+    assert_thresholds(report_at_floor)  # Should not raise

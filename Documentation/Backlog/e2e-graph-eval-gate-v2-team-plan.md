@@ -380,7 +380,7 @@ graph LR
         - #unit_test — `test_eval_quality_floors_has_four_new_recall_fields` — EvalQualityFloors dataclass has all 4 new fields defaulting to None
         - #unit_test — `test_eval_metrics_field_set` — enumerate `EvalMetrics.model_fields` / `dataclasses.fields(EvalMetrics)` to assert exact field set includes new names
 
-- [ ] **BE-2** — Update `_optional_float_fields`, `_QUALITY_FLOOR_FIELDS`, `_RENDERED_QUALITY_FIELDS` tuples in `runner.py:162,984,1161`; update `load_thresholds` TOML parser for 4 new optional keys #backend-role
+- [x] **BE-2** — Update `_optional_float_fields`, `_QUALITY_FLOOR_FIELDS`, `_RENDERED_QUALITY_FIELDS` tuples in `runner.py:162,984,1161`; update `load_thresholds` TOML parser for 4 new optional keys #backend-role
     - Use Cases · 1.5h
     - needs BE-1 · completes C1
     - Tests
