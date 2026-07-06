@@ -39,6 +39,26 @@ _QUALITY_METRIC_FIELDS = (
 )
 
 
+def test_eval_determinism_includes_new_recall_fields() -> None:
+    """Verify _QUALITY_METRIC_FIELDS includes all four new graph recall metrics (BE-11/S11).
+
+    This test has no leidenalg dependency — it is pure tuple membership inspection.
+    It must remain in this file (no importorskip guard) so it runs on every CI leg.
+    """
+    required_fields = {
+        "graph_naive_recall_at_5",
+        "graph_local_recall_at_5",
+        "graph_global_recall_at_5",
+        "graph_negative_control_recall_at_5",
+    }
+    present_fields = set(_QUALITY_METRIC_FIELDS)
+    missing = required_fields - present_fields
+    assert not missing, (
+        f"_QUALITY_METRIC_FIELDS missing required fields: {missing}. "
+        f"Present fields: {present_fields}"
+    )
+
+
 @pytest.mark.eval
 async def test_eval_suite_report_only_smoke() -> None:
     """Full eval suite runs end-to-end against the committed corpus and renders
