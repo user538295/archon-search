@@ -1959,96 +1959,39 @@ async def test_standard_metrics_unaffected_by_multihop_corpus() -> None:
     assert report.metrics.ndcg_at_5 == pytest.approx(0.98516679592094, rel=1e-6)
 
 
-@pytest.mark.eval
-def test_negative_control_traces_partitioned_by_collection() -> None:
-    """HotpotQA traces route to negative_control_traces; MuSiQue to naive_multihop_traces.
+def test_negative_control_collection_constant_is_not_in_multihop_collections() -> None:
+    """hotpotqa must NOT be in _MULTIHOP_COLLECTIONS.
 
-    Verifies that the collection-based partitioning keeps HotpotQA (negative control)
-    separate from MuSiQue (multi-hop positive case), preventing signal cross-contamination.
-    Both use naive-mode graph_mode, so the partition logic is the only thing that
-    distinguishes them.
+    The negative-control partition relies on `collection == "hotpotqa"` being
+    mutually exclusive with `collection in _MULTIHOP_COLLECTIONS`. If hotpotqa
+    were added to _MULTIHOP_COLLECTIONS (the comment at runner.py:1011 names it),
+    the same trace would land in BOTH naive_multihop_traces AND negative_control_traces,
+    silently corrupting both metrics.
+
+    Pinned members: only multihop-musique and multihop-2wiki feed community recall.
     """
-    from archon_search.eval.types import QueryEvalTrace
-
-    # Simulate traces from both collections with naive-mode graph_mode.
-    musique_trace = QueryEvalTrace(
-        query_id="musique-1",
-        query_text="What is 2+2?",
-        collection="multihop-musique",
-        metric_scope="retrieval",
-        latency_ms=50.0,
-    )
-    hotpotqa_trace = QueryEvalTrace(
-        query_id="hotpotqa-1",
-        query_text="Who is the author?",
-        collection="hotpotqa",
-        metric_scope="retrieval",
-        latency_ms=50.0,
-    )
-
-    # Simulate query entries with graph_mode to set up the partition logic.
-    from archon_search.eval.fixtures import EvalQuery
-
-    queries = [
-        EvalQuery(
-            query_id="musique-1",
-            text="What is 2+2?",
-            collection="multihop-musique",
-            metric_scope="retrieval",
-            graph_mode="naive",
-        ),
-        EvalQuery(
-            query_id="hotpotqa-1",
-            text="Who is the author?",
-            collection="hotpotqa",
-            metric_scope="retrieval",
-            graph_mode="naive",
-        ),
-    ]
-
-    all_traces = [musique_trace, hotpotqa_trace]
-
-    # Partition as the runner does: group by graph_mode and collection.
-    graph_query_id_to_mode: dict[str, str | None] = {
-        q.query_id: q.graph_mode for q in queries if q.graph_mode is not None
-    }
-    graph_traces = all_traces  # In reality, filtered from all traces with metric_scope="retrieval"
-
-    naive_graph_traces = [
-        t for t in graph_traces if graph_query_id_to_mode.get(t.query_id) == "naive"
-    ]
-
     from archon_search.eval.runner import _MULTIHOP_COLLECTIONS
 
-    naive_multihop_traces = [
-        t for t in naive_graph_traces
-        if t.collection in _MULTIHOP_COLLECTIONS
-    ]
-    negative_control_traces = [
-        t for t in naive_graph_traces
-        if t.collection == "hotpotqa"
-    ]
-
-    # Verify partitions are mutually exclusive and exhaustive.
-    assert len(naive_multihop_traces) == 1
-    assert naive_multihop_traces[0].query_id == "musique-1"
-
-    assert len(negative_control_traces) == 1
-    assert negative_control_traces[0].query_id == "hotpotqa-1"
-
-    # Verify no cross-contamination.
-    all_partitioned = naive_multihop_traces + negative_control_traces
-    assert len(all_partitioned) == len(naive_graph_traces)
+    assert "hotpotqa" not in _MULTIHOP_COLLECTIONS, (
+        "hotpotqa must not be in _MULTIHOP_COLLECTIONS — it feeds the negative "
+        "control metric, not the community-based recall metrics"
+    )
+    assert _MULTIHOP_COLLECTIONS == frozenset({"multihop-musique", "multihop-2wiki"}), (
+        f"_MULTIHOP_COLLECTIONS changed: {_MULTIHOP_COLLECTIONS}. "
+        "Update this pin and verify negative-control partition stays mutually exclusive."
+    )
 
 
 @pytest.mark.eval
 async def test_eval_suite_reports_negative_control_recall_at_5() -> None:
-    """run_eval_suite on HotpotQA fixture produces non-None graph_negative_control_recall_at_5.
+    """run_eval_suite on HotpotQA fixture produces a meaningful graph_negative_control_recall_at_5.
 
-    Verifies that:
-    1. The metric is computed when HotpotQA queries exist
-    2. The value is in the valid range [0.0, 1.0]
-    3. It is present in the returned EvalMetrics dataclass
+    100 HotpotQA queries each have 1 positive doc out of 100 docs. The SHA-256
+    backend's ANN index has tie-breaking non-determinism on the synthetic corpus
+    (all docs share the same template), so the exact value floats ~0.40–0.43 across
+    runs — exact pinning is not viable. The `> 0.2` lower bound catches the real
+    failure modes: None (hotpotqa traces routed to wrong partition), or 0.0 (ANN
+    returning no results or all scores zero).
     """
     from pathlib import Path
 
@@ -2063,12 +2006,6 @@ async def test_eval_suite_reports_negative_control_recall_at_5() -> None:
         backend="deterministic",
     )
 
-    # Verify the negative control metric is computed.
-    assert report.metrics.graph_negative_control_recall_at_5 is not None, (
-        "graph_negative_control_recall_at_5 should be non-None when HotpotQA queries exist"
-    )
-
-    # Verify it's in a valid recall range [0.0, 1.0].
-    assert (
-        0.0 <= report.metrics.graph_negative_control_recall_at_5 <= 1.0
-    ), f"Recall must be in [0.0, 1.0], got {report.metrics.graph_negative_control_recall_at_5}"
+    v = report.metrics.graph_negative_control_recall_at_5
+    assert v is not None, "graph_negative_control_recall_at_5 is None — hotpotqa traces not routed"
+    assert v > 0.2, f"Recall@5 = {v} is below 0.2 floor — check trace routing or ANN results"

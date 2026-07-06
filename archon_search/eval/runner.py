@@ -1008,8 +1008,8 @@ async def run_eval_suite(
     )
 
     # Partition local/global traces by collection (multi-hop vs graph).
-    # Multi-hop collections (multihop-musique, multihop-2wiki, hotpotqa) feed
-    # the real community-based recall metrics.
+    # _MULTIHOP_COLLECTIONS (multihop-musique, multihop-2wiki) feed community recall.
+    # hotpotqa is NOT in _MULTIHOP_COLLECTIONS — it feeds the negative control metric.
     # The graph collection's local/global traces (from CommunityStoreStub)
     # are not used for gating — they measure hybrid search, not real communities.
     local_multihop_traces = [
