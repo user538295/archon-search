@@ -149,3 +149,95 @@ def test_routing_collections_manifest_exists() -> None:
     )
     for row in rows:
         assert "name" in row, f"Missing 'name' field in routing/collections.jsonl row: {row}"
+
+
+# ---------------------------------------------------------------------------
+# BE-3: MuSiQue-Ans corpus tests
+# ---------------------------------------------------------------------------
+
+
+def test_corpus_contract_multihop_musique() -> None:
+    """load_eval_corpus loads all MuSiQue documents without error.
+
+    All naive-mode query entries have correct schema fields.
+    Corresponding labels present.
+    """
+    corpus = load_eval_corpus(CORPUS_ROOT)
+
+    # Verify MuSiQue documents exist and have correct collection name
+    musique_docs = [d for d in corpus.documents if d.collection == "multihop-musique"]
+    assert len(musique_docs) > 0, "No MuSiQue documents found in corpus"
+
+    # Verify MuSiQue queries exist and have correct schema
+    musique_queries = [q for q in corpus.queries if q.collection == "multihop-musique"]
+    assert len(musique_queries) > 0, "No MuSiQue queries found in corpus"
+
+    for query in musique_queries:
+        assert query.graph_mode == "naive", (
+            f"Query {query.query_id} should have graph_mode='naive', "
+            f"got {query.graph_mode!r}"
+        )
+        assert query.metric_scope == "retrieval", (
+            f"Query {query.query_id} should have metric_scope='retrieval', "
+            f"got {query.metric_scope!r}"
+        )
+
+    # Verify all MuSiQue queries have at least one positive label
+    musique_query_ids = {q.query_id for q in musique_queries}
+    musique_labels = {lbl.query_id for lbl in corpus.labels if lbl.query_id in musique_query_ids and lbl.grade > 0}
+    assert musique_labels == musique_query_ids, (
+        f"MuSiQue queries missing positive labels: "
+        f"{musique_query_ids - musique_labels}"
+    )
+
+
+def test_musique_queries_are_naive_mode() -> None:
+    """All MuSiQue query entries have graph_mode='naive' and collection='multihop-musique'."""
+    corpus = load_eval_corpus(CORPUS_ROOT)
+    musique_queries = [q for q in corpus.queries if q.collection == "multihop-musique"]
+
+    assert len(musique_queries) > 0, "No MuSiQue queries found"
+
+    for query in musique_queries:
+        assert query.graph_mode == "naive", (
+            f"Query {query.query_id}: expected graph_mode='naive', got {query.graph_mode!r}"
+        )
+        assert query.collection == "multihop-musique", (
+            f"Query {query.query_id}: expected collection='multihop-musique', got {query.collection!r}"
+        )
+
+
+def test_license_datasets_file_exists() -> None:
+    """tests/eval/LICENSE-DATASETS exists and contains MuSiQue and CC BY 4.0."""
+    license_file = CORPUS_ROOT / "LICENSE-DATASETS"
+    assert license_file.exists(), (
+        f"LICENSE-DATASETS file not found at {license_file}"
+    )
+
+    content = license_file.read_text(encoding="utf-8")
+    assert "MuSiQue" in content, "LICENSE-DATASETS must mention 'MuSiQue'"
+    assert "CC BY 4.0" in content, "LICENSE-DATASETS must mention 'CC BY 4.0'"
+
+
+def test_all_graph_queries_have_labels() -> None:
+    """Every query entry with collection in multi-hop collections has ≥1 positive label.
+
+    This guards against silent scoring over an empty label set, which returns 0.0 with no error.
+    """
+    corpus = load_eval_corpus(CORPUS_ROOT)
+
+    multihop_collections = {"multihop-musique", "multihop-2wiki", "hotpotqa"}
+    multihop_queries = [q for q in corpus.queries if q.collection in multihop_collections]
+
+    # Build positive label mapping
+    positives_by_query: dict[str, int] = {}
+    for lbl in corpus.labels:
+        if lbl.query_id in {q.query_id for q in multihop_queries} and lbl.grade > 0:
+            positives_by_query[lbl.query_id] = positives_by_query.get(lbl.query_id, 0) + 1
+
+    # Check every multihop query has at least one positive label
+    missing = [q.query_id for q in multihop_queries if positives_by_query.get(q.query_id, 0) == 0]
+    assert not missing, (
+        f"Multi-hop queries missing positive labels: {missing}. "
+        "Each query must have ≥1 label with grade > 0."
+    )

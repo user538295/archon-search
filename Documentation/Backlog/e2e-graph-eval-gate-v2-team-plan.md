@@ -388,7 +388,7 @@ graph LR
         - #unit_test — `test_quality_floor_fields_includes_new_recall_fields` — `_QUALITY_FLOOR_FIELDS` contains all 4 new field names
         - #integration_test — `test_assert_thresholds_gating_on_new_fields` — `assert_thresholds` fails when a new metric is below its floor; passes when at floor
 
-- [ ] **BE-3** — Commit MuSiQue-Ans corpus: `tests/eval/corpus/multihop-musique/` (supporting paragraphs); add ~100 entries to `documents.jsonl`, `queries.jsonl` (`graph_mode: "naive"`, `collection: "multihop-musique"`), `labels.jsonl`; add `tests/eval/corpus/LICENSE-DATASETS` (S12) #backend-role
+- [x] **BE-3** — Commit MuSiQue-Ans corpus: `tests/eval/corpus/multihop-musique/` (supporting paragraphs); add ~100 entries to `documents.jsonl`, `queries.jsonl` (`graph_mode: "naive"`, `collection: "multihop-musique"`), `labels.jsonl`; add `tests/eval/corpus/LICENSE-DATASETS` (S12) #backend-role
     - Frameworks & Drivers · 4.0h
     - needs K-1 · completes S12 (partial)
     - Tests

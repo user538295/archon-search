@@ -60,3 +60,5 @@
 {"query_id": "q-graph-local-01", "doc_id": "graph-002", "grade": 1}
 {"query_id": "q-graph-global-01", "doc_id": "graph-002", "grade": 2}
 {"query_id": "q-graph-global-01", "doc_id": "graph-001", "grade": 1}
+{"query_id": "q-musique-001", "doc_id": "musique-001", "grade": 2}
+{"query_id": "q-musique-001", "doc_id": "musique-004", "grade": 1}

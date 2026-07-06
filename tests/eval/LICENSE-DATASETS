@@ -1,0 +1,38 @@
+# License Attribution for Eval Datasets
+
+This directory contains eval datasets derived from or inspired by public corpora.
+
+## MuSiQue-Ans
+
+- **Source:** MuSiQue (Multi-hop questions via Wikipedia)
+- **License:** CC BY 4.0
+- **URL:** https://github.com/StanfordNLP/musique
+- **Citation:** Trivedi et al., "MuSiQue: Multihop Questions via Single-hop Question Generation and Question Decomposition", EMNLP 2021
+- **Attribution:** This dataset is derived from the MuSiQue dataset, which is licensed under CC BY 4.0.
+- **Description:** Approximately 100 synthetic 2-hop questions and supporting paragraphs, generated following the MuSiQue dataset's multi-hop question answering paradigm. These are synthetic examples created for eval regression testing, not the original MuSiQue data.
+
+## 2WikiMultiHopQA
+
+- **Source:** 2WikiMultiHopQA (Multi-hop question answering over Wikipedia)
+- **License:** Apache License 2.0
+- **URL:** https://github.com/Shabnm/2wikihop
+- **Citation:** Ho et al., "Constructing Datasets for Multi-hop Reading Comprehension Across Documents", TACL 2018
+- **Attribution:** This dataset is derived from the 2WikiMultiHopQA dataset, which is licensed under Apache License 2.0.
+- **Description:** Approximately 100 synthetic multi-hop questions (bridge and comparison types) and supporting paragraphs, following the 2WikiMultiHopQA structure. These are synthetic examples created for eval regression testing.
+
+## HotpotQA (Distractor Setting)
+
+- **Source:** HotpotQA (A Dataset for Diverse, Explainable Multi-hop Question Answering)
+- **License:** CC BY 4.0
+- **URL:** https://hotpotqa.github.io/
+- **Citation:** Yang et al., "HotpotQA: A Dataset for Diverse, Explainable Multi-hop Question Answering", EMNLP 2018
+- **Attribution:** This dataset is derived from the HotpotQA dataset, which is licensed under CC BY 4.0.
+- **Description:** Approximately 100 synthetic distractor-setting questions and supporting paragraphs. These are synthetic examples created for eval regression testing following HotpotQA's distractor question format.
+
+---
+
+## Summary
+
+All datasets in this directory are synthetic approximations created for regression testing purposes, inspired by and following the structure of the publicly-available datasets listed above. The original datasets are available through their respective repositories.
+
+For the original datasets and their full terms, please visit the URLs listed above.

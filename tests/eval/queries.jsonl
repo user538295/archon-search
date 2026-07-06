@@ -32,13 +32,14 @@
 {"query_id": "q-route-06", "text": "deployment environment variables production server configuration", "collection": null, "metric_scope": "routing"}
 {"query_id": "q-alt-01", "text": "product quantization codebook subspace vector compression approximate nearest neighbor", "collection": "alt-model", "metric_scope": "retrieval"}
 {"query_id": "q-alt-02", "text": "multi-head self-attention transformer query key value softmax", "collection": "alt-model", "metric_scope": "retrieval"}
-{"query_id": "q-fr-01", "text": "installation configuration serveur prérequis Python pip", "collection": "fr-docs", "metric_scope": "retrieval"}
+{"query_id": "q-fr-01", "text": "installation configuration serveur pr\u00e9requis Python pip", "collection": "fr-docs", "metric_scope": "retrieval"}
 {"query_id": "q-fr-02", "text": "API REST authentification jeton Bearer endpoint recherche", "collection": "fr-docs", "metric_scope": "retrieval"}
 {"query_id": "q-fr-03", "text": "architecture pipeline ingestion vectorisation indexation LanceDB", "collection": "fr-docs", "metric_scope": "retrieval"}
-{"query_id": "q-fr-04", "text": "configuration multilingue seuil détection langue FastText", "collection": "fr-docs", "metric_scope": "retrieval"}
-{"query_id": "q-fr-05", "text": "dépannage erreur authentification résultats recherche qualité", "collection": "fr-docs", "metric_scope": "retrieval"}
+{"query_id": "q-fr-04", "text": "configuration multilingue seuil d\u00e9tection langue FastText", "collection": "fr-docs", "metric_scope": "retrieval"}
+{"query_id": "q-fr-05", "text": "d\u00e9pannage erreur authentification r\u00e9sultats recherche qualit\u00e9", "collection": "fr-docs", "metric_scope": "retrieval"}
 {"query_id": "page_provenance_001", "text": "find the beta content on page 2", "collection": "pdf-fixtures", "metric_scope": "retrieval"}
 {"query_id": "q-graph-01", "text": "AuthService authentication", "collection": "graph", "metric_scope": "retrieval", "graph_mode": "naive"}
 {"query_id": "q-graph-02", "text": "TokenValidator token verification", "collection": "graph", "metric_scope": "retrieval", "graph_mode": "naive"}
 {"query_id": "q-graph-local-01", "text": "AuthService user credentials session management login", "collection": "graph", "metric_scope": "retrieval", "graph_mode": "local"}
 {"query_id": "q-graph-global-01", "text": "JWT token expiry integrity verification enforcement", "collection": "graph", "metric_scope": "retrieval", "graph_mode": "global"}
+{"query_id": "q-musique-001", "text": "What is the relationship between machine learning and neural networks?", "collection": "multihop-musique", "metric_scope": "retrieval", "graph_mode": "naive"}
