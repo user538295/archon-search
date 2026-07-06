@@ -44,17 +44,19 @@ def test_eval_corpus_document_count_range() -> None:
 
 
 def test_eval_corpus_query_count_range() -> None:
-    """Corpus must contain between 25 and 45 queries (inclusive).
+    """Corpus must contain between 25 and 55 queries (inclusive).
 
     Upper bound raised from 30 to 40 in B4 to accommodate 4 new routing
     queries added for the expanded routing fixture (Task 1.3).
     Upper bound raised from 40 to 45 in E1a BE-9 to accommodate 2 new
     graph-mode retrieval queries.
+    Upper bound raised from 45 to 55 in E2e BE-7 to accommodate 2 new
+    multihop-2wiki queries (plus future BE-9 HotpotQA queries).
     """
     corpus = load_eval_corpus(CORPUS_ROOT)
     count = len(corpus.queries)
-    assert 25 <= count <= 45, (
-        f"Expected 25–45 queries, got {count}. "
+    assert 25 <= count <= 55, (
+        f"Expected 25–55 queries, got {count}. "
         "Add or remove queries to satisfy the benchmark size requirement."
     )
 
