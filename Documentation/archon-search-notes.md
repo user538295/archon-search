@@ -20,31 +20,88 @@ First we should support ChatGPT, Claude and Perplexity. Is there any services to
 
 If we have more collections in the future, then we should think over the handling of the search between collections. Now we have a heuristic, to determine in which collections should be search (not all of them), but later we should handle it even better. Eg.: What if we put another layer to collection search? The collections should have a larger more detailed description about what are in that collection and run a very fast and effective search on these descriptions to determine which collections will fit the best. We should define what does the more detailed collection mean. I expect that the 
 
-### Anthorpic key save and usage
+### multilanguage support 
 
-Where to set ANTHROPIC_API_KEY today (depends on how you start the server):
+### video trans-scripting with video frame linking. Finf the word or expression and show me the related video image (or seek the video there and pause it (and the user can play it))
 
-  - archon-search serve (foreground / container) — export ANTHROPIC_API_KEY=... in the shell. The process inherits the env. This is the documented path in Documentation/UserManual/05_searching.md:210-215.
-  - archon-search start (launchd on macOS, systemd on Linux) — the service templates only forward ARCHON_SEARCH_CONFIG (archon_search/platform/macos.py:33-37, archon_search/platform/linux.py:26). Shell env is NOT
-  inherited. To make HyDE / RAG Fusion / description-generation work under the managed service you must:
-    - macOS: edit ~/Library/LaunchAgents/com.archon.search.plist, add the key inside <key>EnvironmentVariables</key>, then launchctl unload && launchctl load.
-    - Linux: edit ~/.config/systemd/user/archon-search.service, add Environment=ANTHROPIC_API_KEY=... (or EnvironmentFile=~/.archon-search/.secrets.env with mode 600), then systemctl --user daemon-reload &&
-  systemctl --user restart archon-search.
-  - Tests — don't set it. C18 (just committed) clears it in the autouse fixture so the 30 s SDK timeout floor doesn't fire.
+### cloud drive support
 
-  There's a real doc gap: the user manual says "set it in the server's environment before starting" but doesn't explain that launchd/systemd templates won't inherit your shell. That's worth fixing as a separate doc
-   PR.
+sync, then index them, remove the file form the disk but keep the indexes on the drive and let check the search with the rag is it usable or not (check drive online to check file change, then pull  index and remove local copy?)
 
-  Should the wizard ask for it? My recommendation: no direct prompt.
+### connect to be able to search in apple notes too with automatic re-ingesting feature
 
-  - The key would end up written in plain text into ~/Library/LaunchAgents/com.archon.search.plist or ~/.config/systemd/user/archon-search.service — a security smell that contradicts the "operator-provisioned
-  credentials" stance in Documentation/ADRs/C4-hyde-external-llm-dependency.md:66.
-  - The wizard already does the right thing at discovery time: it asks to enable HyDE + RAG Fusion only when the key is detected in the env (archon_search/install.py:1083), and prints a post-install Tip when it's
-  missing (archon_search/install.py:1855-1861).
-  - The description-generator call site is silent on missing key (debug log only), so no UX nudge needed.
+### Ultra tier
 
-  If you do want a wizard-level improvement, a safer design: mirror the existing ~/.archon-search/.search.env pattern. Add EnvironmentFile=~/.archon-search/.secrets.env (mode 600, gitignored) to both service
-  templates; the wizard creates the empty file with right perms; the operator drops the key into the file. No secret ever lands in a wizard-prompted text and rotation = edit one file + restart [Superseded by D7 — use `archon-search key rotate`]. That's a separate,
-  meaningful design ticket — not in scope for C18.
+Honest answer: no ultra tier within fastembed's registry. The ceiling is ~2.3 GB for embedders and ~1.1 GB for rerankers. An M4 Pro 48 GB won't be RAM-constrained by any of these — the constraint is fastembed's
+  ONNX model catalog, not hardware.
 
+  However, two genuinely different options exist that could form an "ultra" tier — but they require architectural changes, not just bigger models:
+
+  ---
+  Option 1: ColBERT late-interaction — jinaai/jina-colbert-v2
+
+  This is a fundamentally different retrieval mechanism. Instead of one vector per document, it stores per-token vectors and scores with MaxSim at query time. fastembed has it (jinaai/jina-colbert-v2, 2.24 GB,
+  multilingual, 8192 token context), but archon-search's store layer is built around single dense vectors — supporting ColBERT would need LanceDB multi-vector index support added to store.py.
+
+  Benefit: much better precision on long documents and complex queries.
+
+  Option 2: Hybrid sparse+dense — SPLADE/BM25 + dense
+
+  fastembed has prithivida/Splade_PP_en_v1 (SPLADE++, 532 MB) and Qdrant/bm25 (BM25 multi-language). archon-search already does FTS (BM25) + dense RRF fusion, but SPLADE is learned sparse — much stronger than BM25.
+   Requires a sparse vector column in the LanceDB schema.
+
+  Benefit: better recall on exact-match and out-of-domain queries.
+
+  For the M4 Pro specifically
+
+  The real advantage on that machine isn't model size — it's CoreML acceleration. The existing max tier models running on the Neural Engine will be significantly faster than the same models on CPU. The current
+  configure_providers() already handles this.
+
+  Summary recommendation:
+
+  ┌──────────────────────────┬──────────────────────────────────────────────────────┬───────────────────────────┐
+  │           Tier           │                     Feasibility                      │       What it needs       │
+  ├──────────────────────────┼──────────────────────────────────────────────────────┼───────────────────────────┤
+  │ Minimal / Balanced / Max │ Works today, just config changes                     │ --profile flag in install │
+  ├──────────────────────────┼──────────────────────────────────────────────────────┼───────────────────────────┤
+  │ Ultra-ColBERT            │ Requires store.py multi-vector index work            │ Significant               │
+  ├──────────────────────────┼──────────────────────────────────────────────────────┼───────────────────────────┤
+  │ Ultra-Hybrid SPLADE      │ Requires sparse vector schema + SPLADE embedder path │ Moderate                  │
+  └──────────────────────────┴──────────────────────────────────────────────────────┴───────────────────────────┘
+
+  If you want an "ultra" install option that works without architecture changes today, the answer is: there isn't one within fastembed. The max tier is the hardware ceiling for the current design.
   
+### Pointer-based memory plus retrieval keys
+
+Description. Store full artefacts (transcripts, notes, KB entries) externally. Inject into the LLM prompt only:
+
+- a compact query,
+- constraints (time range, project, participants),
+- top‑k pointers (document IDs + minimal metadata),
+- optionally 1–3 verbatim “evidence” spans.
+
+This can beat any dialect because you stop paying repeated tokens for the same history.
+
+This is aligned with the MemPalace architecture itself: it stores verbatim content and uses summaries/metadata primarily as a routing layer; AAAK is explicitly framed as a separate compression layer, not the storage default. 
+
+Expected reduction. Effective reduction is dominated by “how much text you don’t send”. In steady-state agent systems, 10×–1000× reductions vs naïvely pasting full history are common in principle (highly workload-dependent).
+
+- Pros. Best token economy; high fidelity if retrieval is correct; supports audits with verbatim evidence.
+
+- Cons. Requires retrieval infra; failure mode is “missed evidence” rather than “bad compression”.
+
+- Complexity. Medium–High.
+
+- Compatibility. High with tool calling / RAG pipelines.
+
+- Recommended use cases. Meeting transcripts; large KB; long-term agent memory; compliance contexts.
+
+#### Implementation steps.
+
+Normalise artefacts into segments (turns/paragraphs) with stable IDs.
+Index with embeddings + metadata filters (project/date/participants).
+At query time: retrieve top‑k segments; optionally re-rank.
+Provide LLM with (a) IDs + (b) minimal snippets.
+Only fetch verbatim spans after the model commits to which IDs are needed.
+Example encoding (prompt injection).
+
