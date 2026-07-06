@@ -423,11 +423,11 @@ flowchart LR
         - [x] #unit_test — `test_alias_loader_invalid_toml_logs_warning_and_returns_empty` — malformed TOML logs WARNING and returns `([], set())`
         - [x] #integration_test — `test_alias_file_creates_manual_synonym_edge` — configure `alias_file` pointing to a temp TOML file; run enrichment with a matching ANN-similar pair; assert: (a) exactly ONE `synonym_of` edge exists in the store for the pair, AND (b) that edge has `extraction_method='manual'`. Do NOT assert list ordering — assert the outcome in the table. Note: if `skip_pairs` correctly excludes the pair, there is no ANN edge to collide with; to verify the dedup behavior the test must construct the collision explicitly (bypass skip_pairs, feed both edges to a single write_graph call) and assert the single-edge outcome. Add a `# ponytail:` comment if the outcome cannot be guaranteed across LanceDB versions — in that case, treat skip_pairs correctness as load-bearing.
 
-- [ ] **T-2** — e2e: configure alias file with one synonym pair; trigger enrichment; verify the manual edge exists and `extraction_method="manual"` #tester-role
+- [x] **T-2** — e2e: configure alias file with one synonym pair; trigger enrichment; verify the manual edge exists and `extraction_method="manual"` #tester-role
     - — · 2.0h
     - needs BE-6 · completes S5
     - Tests
-        - #e2e_test — `test_e2e_alias_file_creates_manual_synonym_edge` — write temp TOML alias file, run enrichment via TestClient, query graph store, assert `extraction_method == "manual"` on the edge
+        - [x] #e2e_test — `test_e2e_alias_file_creates_manual_synonym_edge` — write temp TOML alias file, run enrichment via TestClient, query graph store, assert `extraction_method == "manual"` on the edge
 
 ### Phase 3 · Health metrics surface synonym quality
 
