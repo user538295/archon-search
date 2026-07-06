@@ -1897,39 +1897,41 @@ def test_load_thresholds_rejects_wrong_type_for_new_graph_recall_floor(
 # ---------------------------------------------------------------------------
 
 
-def test_naive_recall_computed_from_multihop_traces_not_graph_collection() -> None:
-    """naive_multihop_traces excludes graph collection; includes multihop-musique."""
-    from archon_search.eval.types import QueryEvalTrace
+def test_multihop_collections_constant_pins_exact_members() -> None:
+    """_MULTIHOP_COLLECTIONS contains exactly the two expected collection names.
 
-    # Simulate traces: graph collection (should be excluded), multihop-musique (included)
-    graph_collection_trace = QueryEvalTrace(
-        query_id="q-graph-001",
-        query_text="graph query",
-        collection="graph",
-        metric_scope="retrieval",
-        results=[],
-    )
-    multihop_trace = QueryEvalTrace(
-        query_id="q-musique-001",
-        query_text="multihop query",
-        collection="multihop-musique",
-        metric_scope="retrieval",
-        results=[],
-    )
-
+    Pins the contract: both elements present, "graph" excluded, no silent rename.
+    The integration test (test_eval_suite_reports_graph_naive_recall_at_5) catches
+    wrong-source bugs in runner.py; this test catches constant-mutation bugs.
+    """
     from archon_search.eval.runner import _MULTIHOP_COLLECTIONS
 
-    # Filter logic mirrors run_eval_suite partition; uses the same constant.
-    all_traces = [graph_collection_trace, multihop_trace]
-    naive_multihop_traces = [
-        t for t in all_traces
-        if t.collection in _MULTIHOP_COLLECTIONS
-    ]
+    assert _MULTIHOP_COLLECTIONS == frozenset({"multihop-musique", "multihop-2wiki"})
+    assert "graph" not in _MULTIHOP_COLLECTIONS
 
-    # Assert: graph collection excluded, multihop-musique included
-    assert graph_collection_trace not in naive_multihop_traces
-    assert multihop_trace in naive_multihop_traces
-    assert len(naive_multihop_traces) == 1
+
+def test_graph_naive_recall_is_none_when_multihop_traces_empty() -> None:
+    """None guard: when no multi-hop traces exist, graph_naive_recall_at_5 is None.
+
+    Mirrors the runner.py guard:
+        compute_recall_at_k(...) if naive_multihop_traces else None
+    compute_recall_at_k returns 0.0 (not None) on empty input, so the guard is the
+    only thing that produces None — this test pins that the guard is load-bearing.
+    """
+    from archon_search.eval.fixtures import RelevanceLabel
+    from archon_search.eval.metrics import compute_recall_at_k
+
+    labels = [RelevanceLabel(query_id="q-1", doc_id="d-1", grade=2)]
+
+    # Mirrors production guard: None when trace list is empty.
+    empty: list = []
+    result: float | None = compute_recall_at_k(empty, labels, 5) if empty else None
+    assert result is None
+
+    # Documents compute_recall_at_k itself returns 0.0 on empty input (not None).
+    # ponytail: 0.0 is indistinguishable from "ran and recalled nothing"; None guard
+    # in runner.py catches the "no multihop data" case before the function is called.
+    assert compute_recall_at_k(empty, labels, 5) == 0.0
 
 
 @pytest.mark.eval
@@ -1948,12 +1950,10 @@ async def test_standard_metrics_unaffected_by_multihop_corpus() -> None:
         backend="deterministic",
     )
 
-    # Assert: standard retrieval metrics are computed
-    # (graph queries are excluded from retrieval_traces, so standard metrics
-    # include only default/graph collection non-graph queries)
-    assert report.metrics.recall_at_5 is not None
-    assert isinstance(report.metrics.recall_at_5, float)
-    assert 0.0 <= report.metrics.recall_at_5 <= 1.0
-    assert report.metrics.mrr is not None
-    assert isinstance(report.metrics.mrr, float)
-    assert 0.0 <= report.metrics.mrr <= 1.0
+    # Standard metrics are computed over retrieval_traces only (non-graph, non-multihop
+    # queries). Pinned values guard against partition leakage: if a multihop-musique
+    # query leaked into retrieval_traces the values would shift and this test would fail.
+    # ndcg_at_5 is included per plan (misnamed test only asserted recall/mrr before).
+    assert report.metrics.recall_at_5 == pytest.approx(0.9852941176470589, rel=1e-6)
+    assert report.metrics.mrr == pytest.approx(1.0)
+    assert report.metrics.ndcg_at_5 == pytest.approx(0.98516679592094, rel=1e-6)

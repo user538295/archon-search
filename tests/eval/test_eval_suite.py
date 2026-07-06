@@ -1475,13 +1475,19 @@ def test_ingest_latency_p95_single_file_on_large_corpus(tmp_path_factory) -> Non
 
 @pytest.mark.eval
 async def test_eval_suite_reports_graph_naive_recall_at_5() -> None:
-    """run_eval_suite on MuSiQue fixture produces non-None graph_naive_recall_at_5."""
+    """run_eval_suite on MuSiQue fixture produces the expected graph_naive_recall_at_5.
+
+    Pinned value: the single MuSiQue query (q-musique-001) has 2 positive labels
+    (musique-001 grade 2, musique-004 grade 1). The deterministic backend retrieves 1
+    of 2 relevant documents in top-5, so Recall@5 = 0.5 exactly.
+
+    Pinning catches wrong-trace bugs (e.g. source is naive_graph_traces instead of
+    naive_multihop_traces) — wrong traces produce a different value, not just 0.0.
+    """
     report = await run_eval_suite(
         corpus_root=CORPUS_ROOT,
         runtime_config_path=RUNTIME_CONFIG_PATH,
         backend="deterministic",
     )
 
-    assert report.metrics.graph_naive_recall_at_5 is not None
-    assert isinstance(report.metrics.graph_naive_recall_at_5, float)
-    assert 0.0 <= report.metrics.graph_naive_recall_at_5 <= 1.0
+    assert report.metrics.graph_naive_recall_at_5 == pytest.approx(0.5)
