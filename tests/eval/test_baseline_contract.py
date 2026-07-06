@@ -39,6 +39,10 @@ _QUALITY_FIELDS = (
     "routing_accuracy",
     "graph_local_mrr",
     "graph_global_mrr",
+    "graph_naive_recall_at_5",
+    "graph_local_recall_at_5",
+    "graph_global_recall_at_5",
+    "graph_negative_control_recall_at_5",
 )
 
 
