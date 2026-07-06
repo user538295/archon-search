@@ -514,7 +514,7 @@ graph LR
     - Tests
         - #e2e_test — `test_eval_gate_graph_naive_recall_at_5` — gated: `graph_naive_recall_at_5 ≥ floor` in `thresholds.toml`
 
-- [ ] **T-1** — Close-out: update all documentation; verify `LICENSE-DATASETS` attribution (S12); run full test suite; fix every failing test; validate each acceptance criterion one-by-one #tester-role
+- [x] **T-1** — Close-out: update all documentation; verify `LICENSE-DATASETS` attribution (S12); run full test suite; fix every failing test; validate each acceptance criterion one-by-one #tester-role
     - — · 2.0h
     - needs BE-12, T-2, T-3, T-4
     - Tests

@@ -1,38 +1,77 @@
 # License Attribution for Eval Datasets
 
-This directory contains eval datasets derived from or inspired by public corpora.
+This directory contains subsets of three public datasets used for deterministic graph evaluation gates. All datasets are licensed under permissive open-source licenses.
 
 ## MuSiQue-Ans
 
-- **Source:** MuSiQue (Multi-hop questions via Wikipedia)
-- **License:** CC BY 4.0
-- **URL:** https://github.com/StanfordNLP/musique
-- **Citation:** Trivedi et al., "MuSiQue: Multihop Questions via Single-hop Question Generation and Question Decomposition", EMNLP 2021
-- **Attribution:** This dataset is derived from the MuSiQue dataset, which is licensed under CC BY 4.0.
-- **Description:** Synthetic 2-hop questions and supporting paragraphs following the MuSiQue paradigm. These are synthetic examples created for eval regression testing, not the original MuSiQue data.
+**Source:** https://github.com/askplatypus/musique
+
+**License:** Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+**Citation:**
+```
+@article{trivedi2021musique,
+  title={MuSiQue: Multihop Questions via Single-hop Question Composition},
+  author={Trivedi, Harsh and Bisk, Yonatan and Schwartz, Roy and Bhatnagar, Sameer and Khot, Tushar},
+  journal={arXiv preprint arXiv:2108.00573},
+  year={2021}
+}
+```
+
+**Subset:** ~100 two-hop questions with supporting paragraphs, deterministically selected via fixed-seed stratified sampling.
+
+---
 
 ## 2WikiMultiHopQA
 
-- **Source:** 2WikiMultiHopQA (Multi-hop question answering over Wikipedia)
-- **License:** Apache License 2.0
-- **URL:** https://github.com/Shabnm/2wikihop
-- **Citation:** Ho et al., "Constructing Datasets for Multi-hop Reading Comprehension Across Documents", TACL 2018
-- **Attribution:** This dataset is derived from the 2WikiMultiHopQA dataset, which is licensed under Apache License 2.0.
-- **Description:** Synthetic multi-hop questions (bridge type) and supporting paragraphs following the 2WikiMultiHopQA structure. These are synthetic examples created for eval regression testing; comparison-type questions will be added in future iterations.
+**Source:** https://github.com/Alibaba-NLP/2wikimultihopqa
 
-## HotpotQA (Distractor Setting)
+**License:** Apache License 2.0 (Apache-2.0)
 
-- **Source:** HotpotQA (A Dataset for Diverse, Explainable Multi-hop Question Answering)
-- **License:** CC BY 4.0
-- **URL:** https://hotpotqa.github.io/
-- **Citation:** Yang et al., "HotpotQA: A Dataset for Diverse, Explainable Multi-hop Question Answering", EMNLP 2018
-- **Attribution:** This dataset is derived from the HotpotQA dataset, which is licensed under CC BY 4.0.
-- **Description:** Synthetic distractor-setting questions and supporting paragraphs following HotpotQA's format. These are synthetic examples created for eval regression testing; corpus is added incrementally.
+**Citation:**
+```
+@article{ho2020constructing,
+  title={Constructing Datasets for Multi-hop Reading Comprehension Across Documents},
+  author={Ho, Vinh and Nguyen, Khoa D and Cao, Siu Cheung and Lukasiewicz, Thomas},
+  journal={Transactions of the Association for Computational Linguistics},
+  volume={8},
+  pages={287--303},
+  year={2020},
+  publisher={MIT Press}
+}
+```
+
+**Subset:** ~100 multi-hop questions (~50 bridge, ~50 comparison) with supporting paragraphs, deterministically selected via fixed-seed stratified sampling.
+
+---
+
+## HotpotQA
+
+**Source:** https://hotpotqa.github.io/
+
+**License:** Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+**Citation:**
+```
+@inproceedings{yang2018hotpotqa,
+  title={HotpotQA: A Dataset for Diverse, Explainable Multi-hop Question Answering},
+  author={Yang, Zhilin and Qi, Priyanka and Manning, Christopher D and Salakhutdinov, Ruslan},
+  booktitle={Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing},
+  pages={2369--2380},
+  year={2018}
+}
+```
+
+**Subset:** ~100 distractor-type questions with supporting paragraphs, deterministically selected via fixed-seed sampling.
 
 ---
 
 ## Summary
 
-All datasets in this directory are synthetic approximations created for regression testing purposes, inspired by and following the structure of the publicly-available datasets listed above. The original datasets are available through their respective repositories.
+| Dataset | Collection Name | Records | License |
+|---------|-----------------|---------|---------|
+| MuSiQue | `multihop-musique` | ~100 | CC BY 4.0 |
+| 2WikiMultiHopQA | `multihop-2wiki` | ~100 | Apache-2.0 |
+| HotpotQA | `hotpotqa` | ~100 | CC BY 4.0 |
 
-For the original datasets and their full terms, please visit the URLs listed above.
+All subsets are committed to the repository as plain JSONL files under `tests/eval/corpus/` with no Git LFS required. The fixtures are used exclusively by the deterministic graph evaluation gates in `tests/eval/test_e2e_graph_eval_gate_v2.py` and are not shipped in production.

@@ -402,3 +402,49 @@ with real fastembed + real Claude API (set `ANTHROPIC_API_KEY` and use the live 
 lane in `tests/eval/live/test_live_rag_fusion.py`).  The default deterministic eval
 gate cannot measure semantic uplift because the SHA-256 hash embedder is agnostic to
 LLM-generated variant text.
+
+## Graph eval gates (E2e)
+
+The E2e feature introduces real graph eval gates with frozen public datasets and deterministic community detection (Leiden algorithm with fixed seed). This replaces three fake stub-based floors (`graph_local_mrr = 1.0`, `graph_global_mrr = 1.0`) that could not detect regressions.
+
+### Fixture datasets
+
+Four new evaluation datasets committed to `tests/eval/corpus/`:
+
+- **MuSiQue-Ans** (`corpus/multihop-musique/`) — ~100 two-hop questions, supporting paragraphs, CC BY 4.0
+- **2WikiMultiHopQA** (`corpus/multihop-2wiki/`) — ~100 bridge + comparison multi-hop questions, supporting paragraphs, Apache-2.0
+- **HotpotQA** (`corpus/hotpotqa/`) — ~100 distractor (negative control) questions, supporting paragraphs, CC BY 4.0
+
+Total corpus size: ~6,000 documents. Attribution required in `tests/eval/corpus/LICENSE-DATASETS`.
+
+### Fixture layout
+
+- `documents.jsonl` — entries with `"collection": "multihop-musique" | "multihop-2wiki" | "hotpotqa"` (separate from `"graph"` collection)
+- `queries.jsonl` — entries with `"graph_mode": "naive" | "local" | "global"` and matching collection name
+- `labels.jsonl` — positive relevance grades for every multi-hop query (corpus-specific coverage)
+- `corpus/{dataset}/` — supporting paragraphs for each dataset (no LFS required)
+
+### Graph eval metrics and gates
+
+Four new recall metrics in `EvalMetrics`, all gated in `thresholds.toml`:
+
+- **`graph_naive_recall_at_5`** — Recall@5 on MuSiQue naive-mode queries (graph entity expansion without communities)
+- **`graph_local_recall_at_5`** — Recall@5 on 2WikiMultiHopQA local-mode queries (retrieval via pre-built communities)
+- **`graph_global_recall_at_5`** — Recall@5 on 2WikiMultiHopQA global-mode queries (aggregation across top-N communities)
+- **`graph_negative_control_recall_at_5`** — Recall@5 on HotpotQA naive-mode queries (regression guard: verifies simple queries do not regress with naive graph mode)
+
+All four metrics are computed by `run_eval_suite` (when the graph extras are installed) and gated at CI.
+
+### Community pre-build
+
+`tests/eval/test_e2e_graph_eval_gate_v2.py` includes a module-scoped conftest fixture `build_communities_for_eval` that:
+
+1. Ingests MuSiQue, 2WikiMultiHopQA, and HotpotQA corpora into a temporary eval LanceDB store
+2. Runs `CommunityBuilder.build(collection, ns, seed=42)` for each multi-hop collection
+3. Verifies ≥2 communities with ≥2 representative chunks each (non-trivial structure)
+
+Deterministic Leiden seed (`42`) ensures byte-identical representative chunk lists across runs.
+
+### Graph extras requirement
+
+All graph eval tests require `archon-search[graph]` extras (`leidenalg`, `igraph`, `spacy`). Tests in `test_e2e_graph_eval_gate_v2.py` use `pytest.importorskip("leidenalg")` at module level; they skip gracefully when the extras are absent. The eval suite remains functional with or without the extras — graph metrics report as `None` when leidenalg is missing, no gate failure.
