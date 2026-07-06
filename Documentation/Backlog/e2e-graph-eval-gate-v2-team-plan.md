@@ -440,14 +440,14 @@ graph LR
         - [x] #unit_test — `test_license_datasets_includes_2wiki` — `LICENSE-DATASETS` contains "2WikiMultiHopQA" and "Apache-2.0"
         - [x] #unit_test — `test_all_2wiki_queries_have_labels` — every `multihop-2wiki` query entry has ≥1 positive label in `labels.jsonl` (see corpus-contract rule from BE-3)
 
-- [ ] **BE-8** — Update `run_eval_suite`: partition local/global traces by collection (multi-hop vs `graph`); compute `graph_local_recall_at_5` and `graph_global_recall_at_5`; add `lancedb_root: Path | None = None` parameter to `run_eval_suite`; skip the internal `TemporaryDirectory` when supplied; plumb it through to `_build_pipeline_with_eval_backends`; update `_build_pipeline_with_eval_backends` to accept `community_backend_map: dict[str, CommunityBackend]` (the four-method C2 protocol, not GraphStore) and wrap it in `DispatchingCommunityStore`, injecting `RealCommunityEvalBackend` for `multihop-*` collections and `CommunityStoreStub` for `graph` (Key decision §7) #backend-role
+- [x] **BE-8** — Update `run_eval_suite`: partition local/global traces by collection (multi-hop vs `graph`); compute `graph_local_recall_at_5` and `graph_global_recall_at_5`; add `lancedb_root: Path | None = None` parameter to `run_eval_suite`; skip the internal `TemporaryDirectory` when supplied; plumb it through to `_build_pipeline_with_eval_backends`; update `_build_pipeline_with_eval_backends` to accept `community_backend_map: dict[str, CommunityBackend]` (the four-method C2 protocol, not GraphStore) and wrap it in `DispatchingCommunityStore`, injecting `RealCommunityEvalBackend` for `multihop-*` collections and `CommunityStoreStub` for `graph` (Key decision §7) #backend-role
     - Use Cases · 2.5h
     - needs BE-6, BE-7 · completes S2, S3, S6
     - Tests
-        - #unit_test — `test_local_global_recall_computed_from_2wiki_traces` — traces for `multihop-2wiki` local/global feed the correct metric buckets; `graph` collection traces unaffected
-        - #unit_test — `test_build_pipeline_injects_correct_backend_per_collection` — directly calls `_build_pipeline_with_eval_backends` (or the dispatch mechanism) and asserts `multihop-2wiki` → `RealCommunityEvalBackend` and `graph` → `CommunityStoreStub` (inspect `DispatchingCommunityStore` routing table); without this, a wiring bug silently falls through to hybrid search
-        - #integration_test — `test_eval_suite_reports_local_global_recall_at_5` (requires leidenalg) — `run_eval_suite` produces non-None `graph_local_recall_at_5` and `graph_global_recall_at_5`; must pass `lancedb_root=eval_tmp_lancedb_root` fixture value so the pipeline reads communities from the pre-built store
-        - #integration_test — `test_existing_graph_collection_stub_unaffected` — `graph_local_mrr` and `graph_global_mrr` (from `CommunityStoreStub`) still computed correctly
+        - [x] #unit_test — `test_local_global_recall_computed_from_2wiki_traces` — traces for `multihop-2wiki` local/global feed the correct metric buckets; `graph` collection traces unaffected
+        - [x] #unit_test — `test_build_pipeline_injects_correct_backend_per_collection` — directly calls `_build_pipeline_with_eval_backends` (or the dispatch mechanism) and asserts `multihop-2wiki` → `RealCommunityEvalBackend` and `graph` → `CommunityStoreStub` (inspect `DispatchingCommunityStore` routing table); without this, a wiring bug silently falls through to hybrid search
+        - [x] #integration_test — `test_eval_suite_reports_local_global_recall_at_5` (requires leidenalg) — `run_eval_suite` produces non-None `graph_local_recall_at_5` and `graph_global_recall_at_5`; must pass `lancedb_root=eval_tmp_lancedb_root` fixture value so the pipeline reads communities from the pre-built store
+        - [x] #integration_test — `test_existing_graph_collection_stub_unaffected` — `graph_local_mrr` and `graph_global_mrr` (from `CommunityStoreStub`) still computed correctly
 
 ---
 

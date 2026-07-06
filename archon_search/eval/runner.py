@@ -5,6 +5,7 @@ the trace-executing eval suite runner (Task 3.3).
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -13,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Iterator, Literal
 
 try:
     import tomllib  # Python 3.11+
@@ -565,12 +566,37 @@ def _validate_queries(corpus: EvalCorpus, runtime_cfg: EvalRuntimeConfig) -> Non
             pass
 
 
+@contextlib.contextmanager
+def _db_path_context(
+    lancedb_root: Path | None,
+) -> Iterator[Path]:
+    """Context manager for database path (temporary or supplied).
+
+    Args:
+        lancedb_root: Optional supplied root. If None, creates a temporary directory.
+
+    Yields:
+        Path to the lancedb subdirectory.
+    """
+    if lancedb_root is not None:
+        # Use supplied path directly; caller is responsible for cleanup
+        db_path = lancedb_root / "lancedb"
+        yield db_path
+    else:
+        # Create temporary directory; context manager handles cleanup
+        with tempfile.TemporaryDirectory(prefix="archon-search-eval-") as tmpdir:
+            db_path = Path(tmpdir) / "lancedb"
+            yield db_path
+
+
 async def _build_pipeline_with_eval_backends(
     db_path: Path,
     *,
     backend: Literal["deterministic", "live"] = "deterministic",
     embedding_model_name: str = "BAAI/bge-small-en-v1.5",
     reranker_model_name: str = "Xenova/ms-marco-MiniLM-L-6-v2",
+    community_backend_map: dict | None = None,
+    lancedb_root: Path | None = None,
 ):
     from archon_search.chunker import DocumentChunker
     from archon_search.embedder import Embedder
@@ -600,15 +626,30 @@ async def _build_pipeline_with_eval_backends(
         from archon_search.eval.backends import (
             EVAL_GRAPH_ENTITY_MAP,
             CommunityStoreStub,
+            DispatchingCommunityStore,
             EvalEmbedderBackend,
             EvalRerankerBackend,
+            RealGraphExpander,
             StubGraphExpander,
         )
 
         embedder = Embedder(EvalEmbedderBackend())
         reranker = Reranker(EvalRerankerBackend())
-        graph_expander = StubGraphExpander(EVAL_GRAPH_ENTITY_MAP)
-        community_store_stub = CommunityStoreStub()
+
+        # Use provided community_backend_map or default to stub-only
+        if community_backend_map is not None:
+            # Dispatcher wraps per-collection backends
+            community_backend = DispatchingCommunityStore(community_backend_map)
+            # For graph expander: use RealGraphExpander for multi-hop collections,
+            # StubGraphExpander for the graph collection
+            # The graph expander is used during query expansion, which is per-query,
+            # so we need a dispatching mechanism here too.
+            # For now, use stub for all (can be extended in BE-10)
+            graph_expander = StubGraphExpander(EVAL_GRAPH_ENTITY_MAP)
+        else:
+            # Legacy mode: use stub for all
+            community_backend = CommunityStoreStub()
+            graph_expander = StubGraphExpander(EVAL_GRAPH_ENTITY_MAP)
     else:
         raise ValueError(f"unknown backend: {backend!r}")
 
@@ -623,7 +664,7 @@ async def _build_pipeline_with_eval_backends(
         top_k_retrieve=10,
         top_k_return=10,
         graph_expander=graph_expander,
-        graph_store=community_store_stub if backend == "deterministic" else None,
+        graph_store=community_backend if backend == "deterministic" else None,
     )
     return pipeline
 
@@ -705,8 +746,20 @@ async def run_eval_suite(
     baseline_path: Path | None = None,
     *,
     backend: Literal["deterministic", "live"] = "deterministic",
+    lancedb_root: Path | None = None,
 ) -> EvalReport:
     """Execute the trace-enabled eval suite over the corpus.
+
+    Args:
+        corpus_root: Root directory containing eval fixtures (corpus/, documents.jsonl, etc.)
+        runtime_config_path: Path to eval runtime config TOML
+        thresholds_path: Optional path to thresholds.toml for gated eval
+        baseline_path: Optional path to baseline.json for staleness checks
+        backend: Eval backend type ("deterministic" or "live")
+        lancedb_root: Optional LanceDB root path. When supplied, uses this path
+            instead of creating a temporary directory. Allows sharing a pre-built
+            LanceDB instance (e.g., with pre-built communities) across
+            multiple suite runs or fixtures.
 
     See the eval harness specification for full details.
     """
@@ -761,9 +814,10 @@ async def run_eval_suite(
     # regular retrieval_traces so baseline metrics are unaffected).
     graph_traces: list[QueryEvalTrace] = []
 
-    with tempfile.TemporaryDirectory(prefix="archon-search-eval-") as tmpdir:
-        db_path = Path(tmpdir) / "lancedb"
-        pipeline = await _build_pipeline_with_eval_backends(db_path, backend=backend)
+    with _db_path_context(lancedb_root) as db_path:
+        pipeline = await _build_pipeline_with_eval_backends(
+            db_path, backend=backend, lancedb_root=lancedb_root
+        )
         try:
             await _ingest_corpus(pipeline, corpus_root, corpus)
 
@@ -953,6 +1007,42 @@ async def run_eval_suite(
         if naive_multihop_traces else None
     )
 
+    # Partition local/global traces by collection (multi-hop vs graph).
+    # Multi-hop collections (multihop-musique, multihop-2wiki, hotpotqa) feed
+    # the real community-based recall metrics.
+    # The graph collection's local/global traces (from CommunityStoreStub)
+    # are not used for gating — they measure hybrid search, not real communities.
+    local_multihop_traces = [
+        t for t in local_graph_traces
+        if t.collection in _MULTIHOP_COLLECTIONS
+    ]
+    global_multihop_traces = [
+        t for t in global_graph_traces
+        if t.collection in _MULTIHOP_COLLECTIONS
+    ]
+    graph_local_recall_at_5: float | None = (
+        compute_recall_at_k(local_multihop_traces, corpus.labels, 5)
+        if local_multihop_traces else None
+    )
+    graph_global_recall_at_5: float | None = (
+        compute_recall_at_k(global_multihop_traces, corpus.labels, 5)
+        if global_multihop_traces else None
+    )
+
+    # Negative control: naive-mode recall on HotpotQA (distractor questions).
+    # This is a regression guard — a drop signals that naive-mode graph expansion
+    # has degraded performance on simple queries. Computed separately from
+    # naive_multihop_traces to keep the signal isolated.
+    hotpotqa_collection = "hotpotqa"
+    negative_control_traces = [
+        t for t in naive_graph_traces
+        if t.collection == hotpotqa_collection
+    ]
+    graph_negative_control_recall_at_5: float | None = (
+        compute_recall_at_k(negative_control_traces, corpus.labels, 5)
+        if negative_control_traces else None
+    )
+
     # Graph-mode traces are excluded from latency percentiles: the 2-document
     # graph fixture corpus is too small to produce meaningful latency samples,
     # and graph expansion latency will be tracked separately when the fixture
@@ -979,6 +1069,9 @@ async def run_eval_suite(
         graph_local_mrr=graph_local_mrr,
         graph_global_mrr=graph_global_mrr,
         graph_naive_recall_at_5=graph_naive_recall_at_5,
+        graph_local_recall_at_5=graph_local_recall_at_5,
+        graph_global_recall_at_5=graph_global_recall_at_5,
+        graph_negative_control_recall_at_5=graph_negative_control_recall_at_5,
     )
 
     current_eval_hash = compute_eval_hash(corpus_root)

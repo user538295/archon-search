@@ -153,8 +153,9 @@ _STUB_CHUNK_IDS = ["stub-eval-chunk-id-1", "stub-eval-chunk-id-2"]
 class CommunityStoreStub:
     """Deterministic stub GraphStore for eval harness use only.
 
-    Returns non-empty community fixtures for the ``graph`` collection so the
-    pipeline does not raise ``GraphCommunitiesNotBuiltError`` during eval.
+    Returns non-empty community fixtures for the ``graph`` collection and any
+    ``multihop-*`` collections so the pipeline does not raise
+    ``GraphCommunitiesNotBuiltError`` during eval.
     All returned ``representative_chunk_ids`` are intentionally fake — they
     are absent from the real eval LanceDB store — so ``store.get_chunks_by_ids``
     returns ``[]`` and the pipeline falls back to standard hybrid search (Q6
@@ -167,18 +168,18 @@ class CommunityStoreStub:
     """
 
     async def communities_table_exists(self, collection: str, ns: str = "default") -> bool:
-        """Return True only for the graph collection used in eval fixtures."""
-        return collection == _EVAL_COMMUNITY_COLLECTION
+        """Return True for graph collection and any multihop-* collections."""
+        return collection == _EVAL_COMMUNITY_COLLECTION or collection.startswith("multihop-")
 
     async def list_community_representatives(
         self, collection: str, ns: str = "default"
     ) -> list:  # list[Community]
-        """Return one stub community for the graph collection; empty otherwise."""
+        """Return one stub community for graph and multihop-* collections; empty otherwise."""
         from datetime import datetime, timezone
 
         from archon_search.graph_types import Community
 
-        if collection != _EVAL_COMMUNITY_COLLECTION:
+        if collection != _EVAL_COMMUNITY_COLLECTION and not collection.startswith("multihop-"):
             return []
         return [
             Community(
@@ -193,10 +194,10 @@ class CommunityStoreStub:
     async def find_nodes_by_name(
         self, collection: str, names: list[str], ns: str = "default"
     ) -> list:  # list[GraphNode]
-        """Return a stub GraphNode when any recognised entity name is present."""
+        """Return a stub GraphNode when any recognised entity name is present (graph and multihop-*)."""
         from archon_search.graph_types import EntityType, GraphNode
 
-        if collection != _EVAL_COMMUNITY_COLLECTION:
+        if collection != _EVAL_COMMUNITY_COLLECTION and not collection.startswith("multihop-"):
             return []
         lower_names = {n.lower() for n in names}
         if not lower_names & _EVAL_ENTITY_NAMES:
@@ -214,12 +215,12 @@ class CommunityStoreStub:
     async def get_communities_for_entities(
         self, collection: str, entity_ids: list[str], ns: str = "default"
     ) -> list:  # list[Community]
-        """Return one stub community when entity_ids are non-empty for graph collection."""
+        """Return one stub community when entity_ids are non-empty for graph or multihop-* collections."""
         from datetime import datetime, timezone
 
         from archon_search.graph_types import Community
 
-        if collection != _EVAL_COMMUNITY_COLLECTION or not entity_ids:
+        if (collection != _EVAL_COMMUNITY_COLLECTION and not collection.startswith("multihop-")) or not entity_ids:
             return []
         return [
             Community(
