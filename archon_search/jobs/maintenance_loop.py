@@ -644,11 +644,13 @@ class MaintenanceLoop:
 
         Algorithm:
         1. Check prerequisites (graph_store present, config available).
-        2. Instantiate SynonymDetector with the graph_store and a stub embedder.
+        2. Call AliasLoader.load(collection, ns) → (alias_edges, skip_pairs).
+        3. Instantiate SynonymDetector with the graph_store and a stub embedder.
            (Name embeddings are pre-stored on GraphNode.name_embedding; the embedder
            is kept for forward-compatibility but is not called during detect().)
-        3. Call detector.detect(collection, ns=ns) → list[GraphEdge].
-        4. If edges found: call graph_store.write_graph(collection, [], edges, ns=ns),
+        4. Call detector.detect(collection, ns=ns, skip_pairs=skip_pairs) → list[GraphEdge].
+        5. If any edges found (alias + ANN combined): call
+           graph_store.write_graph(collection, [], all_edges, ns=ns),
            then add (ns, collection) to _communities_pending_rebuild.
 
         Errors are propagated to the caller (schedule_synonym_enrichment's done-callback
@@ -657,9 +659,21 @@ class MaintenanceLoop:
         if self._graph_store is None or self._graph_config is None:
             return
 
+        from archon_search.alias_loader import AliasLoader  # noqa: PLC0415
         from archon_search.config import SearchConfig  # noqa: PLC0415
-        from archon_search.synonym_detector import SynonymDetector  # noqa: PLC0415
         from archon_search.embedder import Embedder  # noqa: PLC0415
+        from archon_search.synonym_detector import SynonymDetector  # noqa: PLC0415
+
+        # Step 1: Load manual alias edges and produce skip_pairs to exclude from ANN.
+        alias_loader = AliasLoader(config=self._graph_config, graph_store=self._graph_store)
+        try:
+            alias_edges, skip_pairs = await alias_loader.load(collection, ns)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "MaintenanceLoop: AliasLoader.load() failed for %s/%s; proceeding with ANN only",
+                ns, collection, exc_info=True,
+            )
+            alias_edges, skip_pairs = [], set()
 
         # Build a minimal SearchConfig shell carrying only the graph config.
         # SynonymDetector.detect() uses only config.graph.synonym_threshold,
@@ -683,15 +697,17 @@ class MaintenanceLoop:
             embedder=embedder,
             config=cfg,
         )
-        synonym_edges = await detector.detect(collection, ns=ns)
+        # Pass skip_pairs so alias pairs are not duplicated as ANN edges.
+        ann_edges = await detector.detect(collection, ns=ns, skip_pairs=skip_pairs)
 
-        if synonym_edges:
+        all_edges = alias_edges + ann_edges
+        if all_edges:
             await self._graph_store.write_graph(
-                collection, [], synonym_edges, ns=ns
+                collection, [], all_edges, ns=ns
             )
             logger.info(
-                "MaintenanceLoop: wrote %d synonym_of edges for %s/%s",
-                len(synonym_edges), ns, collection,
+                "MaintenanceLoop: wrote %d synonym_of edges (%d manual, %d ANN) for %s/%s",
+                len(all_edges), len(alias_edges), len(ann_edges), ns, collection,
             )
             # Trigger community rebuild only when synonym edges were written.
             # Spurious rebuilds on every ingest are wasteful — Leiden is expensive.
