@@ -100,6 +100,18 @@ class EvalMetrics:
             ``None`` when no local-mode graph queries are present.
         graph_global_mrr: Mean Reciprocal Rank over ``graph_mode="global"`` queries.
             ``None`` when no global-mode graph queries are present.
+        graph_naive_recall_at_5: Recall@5 over naive-mode graph queries on
+            multi-hop collections (MuSiQue, 2WikiMultiHopQA).  ``None`` until
+            BE-5/BE-6 are implemented.
+        graph_local_recall_at_5: Recall@5 over local-mode graph queries on
+            multi-hop collections.  ``None`` until BE-5/BE-6 are implemented.
+        graph_global_recall_at_5: Recall@5 over global-mode graph queries on
+            multi-hop collections.  ``None`` until BE-5/BE-6 are implemented.
+        graph_negative_control_recall_at_5: Recall@5 over naive-mode graph
+            queries on HotpotQA distractor — a **regression guard**, not a
+            harm-vs-no-graph baseline.  A drop here signals graph-mode
+            degradation on simple queries.  ``None`` until BE-5/BE-6 are
+            implemented.
     """
 
     recall_at_1: float
