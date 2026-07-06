@@ -502,7 +502,7 @@ graph LR
         - #e2e_test — `test_eval_gate_graph_local_recall_at_5` — gated: `graph_local_recall_at_5 ≥ floor` in `thresholds.toml`
         - #e2e_test — `test_eval_gate_graph_global_recall_at_5` — gated: `graph_global_recall_at_5 ≥ floor` in `thresholds.toml`
 
-- [ ] **T-3** — Verify gated negative control eval gate passes under `--thresholds-path` with calibrated floor #tester-role
+- [x] **T-3** — Verify gated negative control eval gate passes under `--thresholds-path` with calibrated floor #tester-role
     - — · 0.5h
     - needs BE-12 · completes S4
     - Tests
