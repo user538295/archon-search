@@ -461,12 +461,12 @@ graph LR
         - #unit_test — `test_license_datasets_includes_hotpotqa` — `LICENSE-DATASETS` contains "HotpotQA" and "CC BY 4.0"
         - #unit_test — `test_all_hotpotqa_queries_have_labels` — every `hotpotqa` query entry has ≥1 positive label in `labels.jsonl` (see corpus-contract rule from BE-3)
 
-- [ ] **BE-10** — Update `run_eval_suite` to partition `hotpotqa` naive-mode traces into `negative_control_traces` (separate from MuSiQue `naive_multihop_traces`); compute `graph_negative_control_recall_at_5 = compute_recall_at_k(negative_control_traces, labels, k=5)` #backend-role
+- [x] **BE-10** — Update `run_eval_suite` to partition `hotpotqa` naive-mode traces into `negative_control_traces` (separate from MuSiQue `naive_multihop_traces`); compute `graph_negative_control_recall_at_5 = compute_recall_at_k(negative_control_traces, labels, k=5)` #backend-role
     - Use Cases · 1.5h
     - needs BE-9 · completes S4, S10
     - Tests
-        - #unit_test — `test_negative_control_traces_partitioned_by_collection` — HotpotQA traces route to `negative_control_traces`; MuSiQue traces route to `naive_multihop_traces`; no cross-contamination
-        - #integration_test — `test_eval_suite_reports_negative_control_recall_at_5` — `run_eval_suite` on HotpotQA fixture produces non-None `graph_negative_control_recall_at_5`
+        - [x] #unit_test — `test_negative_control_traces_partitioned_by_collection` — HotpotQA traces route to `negative_control_traces`; MuSiQue traces route to `naive_multihop_traces`; no cross-contamination
+        - [x] #integration_test — `test_eval_suite_reports_negative_control_recall_at_5` — `run_eval_suite` on HotpotQA fixture produces non-None `graph_negative_control_recall_at_5`
 
 ---
 

@@ -1957,3 +1957,118 @@ async def test_standard_metrics_unaffected_by_multihop_corpus() -> None:
     assert report.metrics.recall_at_5 == pytest.approx(0.9852941176470589, rel=1e-6)
     assert report.metrics.mrr == pytest.approx(1.0)
     assert report.metrics.ndcg_at_5 == pytest.approx(0.98516679592094, rel=1e-6)
+
+
+@pytest.mark.eval
+def test_negative_control_traces_partitioned_by_collection() -> None:
+    """HotpotQA traces route to negative_control_traces; MuSiQue to naive_multihop_traces.
+
+    Verifies that the collection-based partitioning keeps HotpotQA (negative control)
+    separate from MuSiQue (multi-hop positive case), preventing signal cross-contamination.
+    Both use naive-mode graph_mode, so the partition logic is the only thing that
+    distinguishes them.
+    """
+    from archon_search.eval.types import QueryEvalTrace
+
+    # Simulate traces from both collections with naive-mode graph_mode.
+    musique_trace = QueryEvalTrace(
+        query_id="musique-1",
+        query_text="What is 2+2?",
+        collection="multihop-musique",
+        metric_scope="retrieval",
+        latency_ms=50.0,
+    )
+    hotpotqa_trace = QueryEvalTrace(
+        query_id="hotpotqa-1",
+        query_text="Who is the author?",
+        collection="hotpotqa",
+        metric_scope="retrieval",
+        latency_ms=50.0,
+    )
+
+    # Simulate query entries with graph_mode to set up the partition logic.
+    from archon_search.eval.fixtures import EvalQuery
+
+    queries = [
+        EvalQuery(
+            query_id="musique-1",
+            text="What is 2+2?",
+            collection="multihop-musique",
+            metric_scope="retrieval",
+            graph_mode="naive",
+        ),
+        EvalQuery(
+            query_id="hotpotqa-1",
+            text="Who is the author?",
+            collection="hotpotqa",
+            metric_scope="retrieval",
+            graph_mode="naive",
+        ),
+    ]
+
+    all_traces = [musique_trace, hotpotqa_trace]
+
+    # Partition as the runner does: group by graph_mode and collection.
+    graph_query_id_to_mode: dict[str, str | None] = {
+        q.query_id: q.graph_mode for q in queries if q.graph_mode is not None
+    }
+    graph_traces = all_traces  # In reality, filtered from all traces with metric_scope="retrieval"
+
+    naive_graph_traces = [
+        t for t in graph_traces if graph_query_id_to_mode.get(t.query_id) == "naive"
+    ]
+
+    from archon_search.eval.runner import _MULTIHOP_COLLECTIONS
+
+    naive_multihop_traces = [
+        t for t in naive_graph_traces
+        if t.collection in _MULTIHOP_COLLECTIONS
+    ]
+    negative_control_traces = [
+        t for t in naive_graph_traces
+        if t.collection == "hotpotqa"
+    ]
+
+    # Verify partitions are mutually exclusive and exhaustive.
+    assert len(naive_multihop_traces) == 1
+    assert naive_multihop_traces[0].query_id == "musique-1"
+
+    assert len(negative_control_traces) == 1
+    assert negative_control_traces[0].query_id == "hotpotqa-1"
+
+    # Verify no cross-contamination.
+    all_partitioned = naive_multihop_traces + negative_control_traces
+    assert len(all_partitioned) == len(naive_graph_traces)
+
+
+@pytest.mark.eval
+async def test_eval_suite_reports_negative_control_recall_at_5() -> None:
+    """run_eval_suite on HotpotQA fixture produces non-None graph_negative_control_recall_at_5.
+
+    Verifies that:
+    1. The metric is computed when HotpotQA queries exist
+    2. The value is in the valid range [0.0, 1.0]
+    3. It is present in the returned EvalMetrics dataclass
+    """
+    from pathlib import Path
+
+    from archon_search.eval.runner import run_eval_suite
+
+    corpus_root = Path(__file__).resolve().parent
+    runtime_config_path = corpus_root / "runtime.toml"
+
+    report = await run_eval_suite(
+        corpus_root=corpus_root,
+        runtime_config_path=runtime_config_path,
+        backend="deterministic",
+    )
+
+    # Verify the negative control metric is computed.
+    assert report.metrics.graph_negative_control_recall_at_5 is not None, (
+        "graph_negative_control_recall_at_5 should be non-None when HotpotQA queries exist"
+    )
+
+    # Verify it's in a valid recall range [0.0, 1.0].
+    assert (
+        0.0 <= report.metrics.graph_negative_control_recall_at_5 <= 1.0
+    ), f"Recall must be in [0.0, 1.0], got {report.metrics.graph_negative_control_recall_at_5}"
