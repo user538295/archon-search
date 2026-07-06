@@ -1480,3 +1480,133 @@ def test_startup_warns_suppressed_when_feature_inactive(
     with caplog.at_level(logging.WARNING, logger="archon_search.config"):
         warn_gc_cpu_priority(cfg3)
     assert not any("gc_rebuild_cpu_priority" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# BE-3: GraphConfig synonym fields
+# ---------------------------------------------------------------------------
+
+
+def test_graph_config_synonym_threshold_default() -> None:
+    """GraphConfig().synonym_threshold defaults to 0.85."""
+    from archon_search.config import GraphConfig
+
+    cfg = GraphConfig()
+    assert cfg.synonym_threshold == 0.85
+
+
+def test_graph_config_enrichment_auto_default_true() -> None:
+    """GraphConfig().enrichment_auto defaults to True."""
+    from archon_search.config import GraphConfig
+
+    cfg = GraphConfig()
+    assert cfg.enrichment_auto is True
+
+
+def test_graph_config_synonym_fields_toml_loading(tmp_path: Path) -> None:
+    """TOML overrides for synonym_threshold, alias_file, and enrichment_auto are read correctly."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        '[graph]\nsynonym_threshold = 0.75\nalias_file = "/etc/archon/aliases.toml"\nenrichment_auto = false\n',
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    assert config.graph.synonym_threshold == 0.75
+    assert config.graph.alias_file == "/etc/archon/aliases.toml"
+    assert config.graph.enrichment_auto is False
+
+
+def test_graph_config_synonym_threshold_zero_raises(tmp_path: Path) -> None:
+    """synonym_threshold = 0.0 raises ConfigError (exclusive lower bound)."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[graph]\nsynonym_threshold = 0.0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="synonym_threshold"):
+        load_config(path=toml_file)
+
+
+def test_graph_config_synonym_threshold_above_one_raises(tmp_path: Path) -> None:
+    """synonym_threshold = 1.5 raises ConfigError."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[graph]\nsynonym_threshold = 1.5\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="synonym_threshold"):
+        load_config(path=toml_file)
+
+
+def test_graph_config_synonym_threshold_bool_raises(tmp_path: Path) -> None:
+    """synonym_threshold = true in TOML raises ConfigError."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[graph]\nsynonym_threshold = true\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="synonym_threshold"):
+        load_config(path=toml_file)
+
+
+def test_graph_config_synonym_threshold_exactly_one_valid(tmp_path: Path) -> None:
+    """synonym_threshold = 1.0 is valid (inclusive upper bound)."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[graph]\nsynonym_threshold = 1.0\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.graph.synonym_threshold == 1.0
+
+
+def test_graph_config_alias_file_non_string_raises(tmp_path: Path) -> None:
+    """alias_file = 123 (integer) in TOML raises ConfigError."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[graph]\nalias_file = 123\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="alias_file"):
+        load_config(path=toml_file)
+
+
+def test_graph_config_enrichment_auto_non_bool_raises(tmp_path: Path) -> None:
+    """enrichment_auto = 1 (integer) in TOML raises ConfigError."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[graph]\nenrichment_auto = 1\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="enrichment_auto"):
+        load_config(path=toml_file)
+
+
+def test_graph_config_enrichment_auto_true_via_toml(tmp_path: Path) -> None:
+    """enrichment_auto = true in TOML is loaded correctly."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[graph]\nenrichment_auto = true\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.graph.enrichment_auto is True
+
+
+def test_graph_config_alias_file_empty_string_raises(tmp_path: Path) -> None:
+    """alias_file = "" (empty string) raises ConfigError."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text('[graph]\nalias_file = ""\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="alias_file"):
+        load_config(path=toml_file)
+
+
+def test_graph_config_alias_file_whitespace_only_raises(tmp_path: Path) -> None:
+    """alias_file = "   " (whitespace only) raises ConfigError."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text('[graph]\nalias_file = "   "\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="alias_file"):
+        load_config(path=toml_file)
+
+
+def test_graph_config_alias_file_leading_trailing_whitespace_stripped(tmp_path: Path) -> None:
+    """alias_file with surrounding whitespace is stored stripped."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text('[graph]\nalias_file = "  /etc/archon/aliases.toml  "\n', encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.graph.alias_file == "/etc/archon/aliases.toml"
+
+
+def test_graph_config_synonym_threshold_numeric_string_coerces(tmp_path: Path) -> None:
+    """synonym_threshold = "0.9" (quoted numeric string) is coerced to float 0.9 (pre-existing _coerce_float behavior)."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text('[graph]\nsynonym_threshold = "0.9"\n', encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.graph.synonym_threshold == pytest.approx(0.9)
+
+
+def test_graph_config_alias_file_default_none() -> None:
+    """GraphConfig().alias_file defaults to None."""
+    from archon_search.config import GraphConfig
+
+    cfg = GraphConfig()
+    assert cfg.alias_file is None

@@ -119,5 +119,16 @@
       "suggestion": 1
     },
     "scope": "archon_search/pipeline.py, archon_search/server/app.py, tests/pipeline/test_pipeline_size_guard_be3.py"
+  },
+  {
+    "date": "2026-07-06",
+    "mode": "PR Review",
+    "score": 78,
+    "findings": {
+      "critical": 1,
+      "warning": 1,
+      "suggestion": 2
+    },
+    "scope": "archon_search/graph_types.py, archon_search/graph_store.py, tests/test_graph_types_e2f_be1.py, tests/test_graph_types.py"
   }
 ]

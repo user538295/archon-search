@@ -402,6 +402,24 @@ num_queries = 2
 # thread, and a startup WARNING is logged when the GC rebuild pipeline is fully active.
 # gc_rebuild_cpu_priority = "low"
 
+# E2f synonym-detection fields
+#
+# synonym_threshold (float, default 0.85): Cosine similarity threshold for automatic
+# synonym detection. Pairs with similarity >= this value are written as synonym_of edges.
+# Must be in (0.0, 1.0] (exclusive lower bound, inclusive upper bound).
+# synonym_threshold = 0.85
+
+# alias_file (string|null, default null): Path to a TOML file of known synonym aliases
+# (manual synonyms). Each entry is a TOML key = value pair, e.g. "K8s" = "Kubernetes".
+# When set, these pairs are written as synonym_of edges with
+# extraction_method='manual'. A missing or unreadable file logs a WARNING
+# and is treated as if the field is unset.
+# alias_file = "/path/to/aliases.toml"  # Optional; omit or comment out to disable
+
+# enrichment_auto (bool, default true): When true, synonym enrichment runs automatically
+# after each ingest. When false, operators must trigger enrichment manually.
+# enrichment_auto = true
+
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.
 #

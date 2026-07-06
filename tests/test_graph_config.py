@@ -101,6 +101,9 @@ def test_graph_config_snapshot(tmp_path: Path) -> None:
         "max_inspection_edges": 25000,
         "gc_rebuild_communities": True,
         "gc_rebuild_cpu_priority": "low",
+        "synonym_threshold": 0.85,
+        "alias_file": None,
+        "enrichment_auto": True,
     }
 
 

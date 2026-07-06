@@ -367,13 +367,13 @@ flowchart LR
         - #integration_test — `test_write_graph_stores_and_retrieves_name_embedding` — a `GraphNode` with a non-null embedding survives a write-graph → read-node round-trip
         - #integration_test — `test_write_graph_preserves_existing_name_embedding_on_node_update` — write a node with embedding, then write the same node again without embedding, assert the embedding is preserved in the table
 
-- [ ] **BE-3** — Add `synonym_threshold: float = 0.85`, `alias_file: str | None = None`, `enrichment_auto: bool = True` to `GraphConfig` dataclass; add corresponding TOML loading blocks in `config.py` using `_coerce_float` / `_coerce_bool`; update `test_config_defaults.py` snapshot; check `path_home_allowlist.txt` line numbers after edits #backend-role
+- [x] **BE-3** — Add `synonym_threshold: float = 0.85`, `alias_file: str | None = None`, `enrichment_auto: bool = True` to `GraphConfig` dataclass; add corresponding TOML loading blocks in `config.py` using `_coerce_float` / `_coerce_bool`; update `test_config_defaults.py` snapshot; check `path_home_allowlist.txt` line numbers after edits #backend-role
     - Entities · 2.0h
     - needs K1 · completes C2, S14
     - Tests
-        - #unit_test — `test_graph_config_synonym_threshold_default` — `GraphConfig().synonym_threshold == 0.85`
-        - #unit_test — `test_graph_config_enrichment_auto_default_true` — `GraphConfig().enrichment_auto is True`
-        - #unit_test — `test_graph_config_synonym_fields_toml_loading` — TOML overrides for all three fields are read correctly
+        - [x] #unit_test — `test_graph_config_synonym_threshold_default` — `GraphConfig().synonym_threshold == 0.85`
+        - [x] #unit_test — `test_graph_config_enrichment_auto_default_true` — `GraphConfig().enrichment_auto is True`
+        - [x] #unit_test — `test_graph_config_synonym_fields_toml_loading` — TOML overrides for all three fields are read correctly
 
 - [ ] **BE-4** — New `archon_search/synonym_detector.py` (Use Cases): first define `GraphStoreProtocol` (ABC or `typing.Protocol`) in `archon_search/graph_store_protocol.py` (minimum protocol surface defined in C3 above); `SynonymDetector` and `AliasLoader` depend on the protocol, not the concrete `GraphStore`; accepts `skip_pairs: set[tuple[str, str]]` (entity-ID pairs already covered by manual aliases, precomputed by `AliasLoader`); for each entity-type group, embed all entity names via `Embedder.embed()`; **embedding_dim bootstrap:** ensure `Embedder.embedding_dim` is valid by embedding a single dummy string (e.g., `""`) to force the model to load and set the dimension (no `add_columns` needed — column is already in the schema per BE-2); call `graph_store.vector_search_nodes(collection, query_embedding=entity_embedding, entity_type=entity_type, limit=top_k, ns=ns)` (implemented in BE-2) using the LanceDB cosine index; filter pairs ≥ `synonym_threshold`, exclude `skip_pairs`, self-pairs, and cross-type pairs; **sort `(source_id, target_id)` lexicographically before constructing each `GraphEdge`** to ensure `make_stable_edge_id` is deterministic across ANN traversal directions; return `list[GraphEdge]` with `relationship_type=synonym_of`, `extraction_method="embedding"`; caller writes via `graph_store.write_graph(collection, nodes=[], edges=[...], ns=ns)` #backend-role
     - Use Cases · 6.5h

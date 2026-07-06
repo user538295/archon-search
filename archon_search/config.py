@@ -142,6 +142,19 @@ class GraphConfig:
     A startup WARNING is logged when the GC rebuild pipeline is fully active
     (graph.enabled, graph_gc, gc_rebuild_communities all true) and running on a
     non-Linux platform."""
+    # E2f synonym-detection fields
+    synonym_threshold: float = 0.85
+    """Cosine similarity threshold for automatic synonym detection.
+    Pairs with similarity >= this value are written as synonym_of edges."""
+    alias_file: str | None = None
+    """Path to a TOML file of known aliases (manual synonyms).
+    Entries have the form `"K8s" = "Kubernetes"`.
+    When set, these pairs are written as synonym_of edges with
+    extraction_method='manual'. A missing or unreadable file logs a
+    WARNING and is treated as if the field is unset (handled in BE-6)."""
+    enrichment_auto: bool = True
+    """When True, synonym enrichment runs automatically after each ingest.
+    When False, operators must trigger enrichment manually."""
 
 
 @dataclass
@@ -772,6 +785,25 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
                 f"[graph].gc_rebuild_cpu_priority must be 'low', 'normal', or 'high', got {raw_priority!r}"
             )
         graph.gc_rebuild_cpu_priority = raw_priority
+    if "synonym_threshold" in graph_cfg:
+        raw_st = graph_cfg["synonym_threshold"]
+        if isinstance(raw_st, bool):
+            raise ConfigError("Expected float for '[graph].synonym_threshold', got bool")
+        synonym_threshold = _coerce_float(raw_st, "[graph].synonym_threshold")
+        if not (0.0 < synonym_threshold <= 1.0):
+            raise ConfigError(
+                f"[graph].synonym_threshold must be in (0.0, 1.0], got {synonym_threshold}"
+            )
+        graph.synonym_threshold = synonym_threshold
+    if "alias_file" in graph_cfg:
+        raw_af = graph_cfg["alias_file"]
+        if not isinstance(raw_af, str):
+            raise ConfigError(f"Expected string for '[graph].alias_file', got {type(raw_af).__name__}")
+        if not raw_af.strip():
+            raise ConfigError("[graph].alias_file must not be empty when set")
+        graph.alias_file = raw_af.strip()
+    if "enrichment_auto" in graph_cfg:
+        graph.enrichment_auto = _coerce_bool(graph_cfg["enrichment_auto"], "[graph].enrichment_auto")
     config.graph = graph
 
 
