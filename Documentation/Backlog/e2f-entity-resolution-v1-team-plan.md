@@ -405,11 +405,11 @@ flowchart LR
         - #unit_test — `test_synonym_enrichment_failure_does_not_propagate` — exception in `SynonymDetector.detect()` is caught, WARNING logged, ingest result returned normally
         - #integration_test — `test_post_ingest_synonym_enrichment_fires_and_creates_edges` — full ingest via `make_real_app(graph_enabled=True)` + `install_spacy_stub` → trigger enrichment → `synonym_of` edge exists in graph store
 
-- [ ] **T-1** — e2e: ingest two documents with synonym entity names using a content-dependent vector stub; trigger synonym enrichment; assert search for one entity name returns content from the other's document. T-1 covers S1 and S2. S3 (community membership) is verified transitively by existing CommunityBuilder tests + BE-5 integration test — note: S3 (community membership) is verified at the NEXT maintenance pass, not immediately post-ingest; after synonym enrichment, trigger a maintenance loop pass explicitly before asserting community membership (S3). S4 (global search) is verified by eval gate (T-4/S8). #tester-role
+- [x] **T-1** — e2e: ingest two documents with synonym entity names using a content-dependent vector stub; trigger synonym enrichment; assert search for one entity name returns content from the other's document. T-1 covers S1 and S2. S3 (community membership) is verified transitively by existing CommunityBuilder tests + BE-5 integration test — note: S3 (community membership) is verified at the NEXT maintenance pass, not immediately post-ingest; after synonym enrichment, trigger a maintenance loop pass explicitly before asserting community membership (S3). S4 (global search) is verified by eval gate (T-4/S8). #tester-role
     - — · 3.0h
     - needs BE-5 · completes S1, S2
     - Tests
-        - #e2e_test — `test_e2e_search_traverses_synonym_edges` — ingest K8s-doc + Kubernetes-doc; run enrichment; graph_mode="naive" search for "K8s" returns a chunk from the Kubernetes document
+        - [x] #e2e_test — `test_e2e_search_traverses_synonym_edges` — ingest K8s-doc + Kubernetes-doc; run enrichment; graph_mode="naive" search for "K8s" returns a chunk from the Kubernetes document
 
 ### Phase 2 · Alias file pins manual synonyms
 
