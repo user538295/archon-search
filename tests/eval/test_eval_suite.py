@@ -1471,3 +1471,17 @@ def test_ingest_latency_p95_single_file_on_large_corpus(tmp_path_factory) -> Non
         "rebuild_fts_index — check that pipeline.ingest_file calls optimize_fts, "
         "not rebuild_fts_index, at batch end."
     )
+
+
+@pytest.mark.eval
+async def test_eval_suite_reports_graph_naive_recall_at_5() -> None:
+    """run_eval_suite on MuSiQue fixture produces non-None graph_naive_recall_at_5."""
+    report = await run_eval_suite(
+        corpus_root=CORPUS_ROOT,
+        runtime_config_path=RUNTIME_CONFIG_PATH,
+        backend="deterministic",
+    )
+
+    assert report.metrics.graph_naive_recall_at_5 is not None
+    assert isinstance(report.metrics.graph_naive_recall_at_5, float)
+    assert 0.0 <= report.metrics.graph_naive_recall_at_5 <= 1.0

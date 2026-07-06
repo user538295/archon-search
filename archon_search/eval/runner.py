@@ -36,6 +36,11 @@ _REQUIRED_QUALITY_KEYS = (
     "ndcg_at_10",
 )
 
+# Collections whose queries count toward graph_naive/local/global_recall_at_5.
+# Standard "graph" collection queries are excluded — they use stub documents,
+# not real multi-hop chains.
+_MULTIHOP_COLLECTIONS = frozenset(("multihop-musique", "multihop-2wiki"))
+
 
 @dataclass
 class EvalQualityFloors:
@@ -936,6 +941,18 @@ async def run_eval_suite(
         compute_mrr(global_graph_traces, corpus.labels) if global_graph_traces else None
     )
 
+    # graph_naive_recall_at_5 measures naive-mode recall on multi-hop collections only.
+    # graph_mrr above covers ALL naive-mode traces; this partitions to _MULTIHOP_COLLECTIONS
+    # so the gate measures real multi-hop retrieval, not the graph collection's stub results.
+    naive_multihop_traces = [
+        t for t in naive_graph_traces
+        if t.collection in _MULTIHOP_COLLECTIONS
+    ]
+    graph_naive_recall_at_5: float | None = (
+        compute_recall_at_k(naive_multihop_traces, corpus.labels, 5)
+        if naive_multihop_traces else None
+    )
+
     # Graph-mode traces are excluded from latency percentiles: the 2-document
     # graph fixture corpus is too small to produce meaningful latency samples,
     # and graph expansion latency will be tracked separately when the fixture
@@ -961,6 +978,7 @@ async def run_eval_suite(
         graph_mrr=graph_mrr,
         graph_local_mrr=graph_local_mrr,
         graph_global_mrr=graph_global_mrr,
+        graph_naive_recall_at_5=graph_naive_recall_at_5,
     )
 
     current_eval_hash = compute_eval_hash(corpus_root)

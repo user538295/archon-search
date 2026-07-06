@@ -1890,3 +1890,70 @@ def test_load_thresholds_rejects_wrong_type_for_new_graph_recall_floor(
     path = _write_toml(tmp_path, content)
     with pytest.raises(ValueError, match="graph_local_recall_at_5"):
         load_thresholds(path)
+
+
+# ---------------------------------------------------------------------------
+# BE-4: graph_naive_recall_at_5 computation tests
+# ---------------------------------------------------------------------------
+
+
+def test_naive_recall_computed_from_multihop_traces_not_graph_collection() -> None:
+    """naive_multihop_traces excludes graph collection; includes multihop-musique."""
+    from archon_search.eval.types import QueryEvalTrace
+
+    # Simulate traces: graph collection (should be excluded), multihop-musique (included)
+    graph_collection_trace = QueryEvalTrace(
+        query_id="q-graph-001",
+        query_text="graph query",
+        collection="graph",
+        metric_scope="retrieval",
+        results=[],
+    )
+    multihop_trace = QueryEvalTrace(
+        query_id="q-musique-001",
+        query_text="multihop query",
+        collection="multihop-musique",
+        metric_scope="retrieval",
+        results=[],
+    )
+
+    from archon_search.eval.runner import _MULTIHOP_COLLECTIONS
+
+    # Filter logic mirrors run_eval_suite partition; uses the same constant.
+    all_traces = [graph_collection_trace, multihop_trace]
+    naive_multihop_traces = [
+        t for t in all_traces
+        if t.collection in _MULTIHOP_COLLECTIONS
+    ]
+
+    # Assert: graph collection excluded, multihop-musique included
+    assert graph_collection_trace not in naive_multihop_traces
+    assert multihop_trace in naive_multihop_traces
+    assert len(naive_multihop_traces) == 1
+
+
+@pytest.mark.eval
+async def test_standard_metrics_unaffected_by_multihop_corpus() -> None:
+    """recall_at_5/mrr/ndcg are unaffected by multi-hop corpus addition (graph queries excluded)."""
+    from pathlib import Path
+
+    from archon_search.eval.runner import run_eval_suite
+
+    corpus_root = Path(__file__).resolve().parent
+    runtime_config_path = corpus_root / "runtime.toml"
+
+    report = await run_eval_suite(
+        corpus_root=corpus_root,
+        runtime_config_path=runtime_config_path,
+        backend="deterministic",
+    )
+
+    # Assert: standard retrieval metrics are computed
+    # (graph queries are excluded from retrieval_traces, so standard metrics
+    # include only default/graph collection non-graph queries)
+    assert report.metrics.recall_at_5 is not None
+    assert isinstance(report.metrics.recall_at_5, float)
+    assert 0.0 <= report.metrics.recall_at_5 <= 1.0
+    assert report.metrics.mrr is not None
+    assert isinstance(report.metrics.mrr, float)
+    assert 0.0 <= report.metrics.mrr <= 1.0

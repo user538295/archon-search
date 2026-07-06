@@ -397,7 +397,7 @@ graph LR
         - #unit_test — `test_license_datasets_file_exists` — `tests/eval/corpus/LICENSE-DATASETS` exists and contains "MuSiQue" and "CC BY 4.0"
         - #unit_test — `test_all_graph_queries_have_labels` — every query entry with `collection` in multi-hop collections (`multihop-musique`, `multihop-2wiki`, `hotpotqa`) has ≥1 positive label in `labels.jsonl`; silently scoring over an empty label set causes `compute_recall_at_k` to return `0.0` with no error
 
-- [ ] **BE-4** — Update `run_eval_suite` to partition naive-mode traces by collection: `multihop-musique` → `naive_multihop_traces`; compute `graph_naive_recall_at_5 = compute_recall_at_k(naive_multihop_traces, labels, k=5)` #backend-role
+- [x] **BE-4** — Update `run_eval_suite` to partition naive-mode traces by collection: `multihop-musique` → `naive_multihop_traces`; compute `graph_naive_recall_at_5 = compute_recall_at_k(naive_multihop_traces, labels, k=5)` #backend-role
     - Use Cases · 2.0h
     - needs BE-2, BE-3 · completes S1, S10 (partial)
     - Note: `compute_recall_at_k` filters `RelevanceLabel` objects by `query_id` from the passed traces, so passing the full `corpus.labels` is safe — unmatched labels are ignored.
