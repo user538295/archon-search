@@ -115,6 +115,39 @@ def test_ensure_graph_tables_idempotent() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _make_empty_nodes_arrow_for_preservation():
+    """Return an empty PyArrow table with id + name_embedding columns for the embedding-preservation query."""
+    import pyarrow as pa
+
+    return pa.table(
+        {"id": [], "name_embedding": pa.array([], type=pa.list_(pa.float32()))},
+        schema=pa.schema([pa.field("id", pa.utf8()), pa.field("name_embedding", pa.list_(pa.float32()), nullable=True)]),
+    )
+
+
+def _add_preservation_query_mock(mock_table) -> None:
+    """Wire mock_table.query() and schema() for the embedding-preservation pre-read path.
+
+    The pre-read now calls:
+      1. ``await nodes_table.schema()`` — returns a schema with name_embedding column
+      2. ``nodes_table.query().where().select().to_arrow()`` — returns an empty table
+    """
+    import pyarrow as pa
+
+    # Mock schema() coroutine to return a schema that includes name_embedding
+    pres_schema = pa.schema([
+        pa.field("id", pa.utf8()),
+        pa.field("name_embedding", pa.list_(pa.float32()), nullable=True),
+    ])
+    mock_table.schema = AsyncMock(return_value=pres_schema)
+
+    pres_query = MagicMock()
+    pres_query.where.return_value = pres_query
+    pres_query.select.return_value = pres_query
+    pres_query.to_arrow = AsyncMock(return_value=_make_empty_nodes_arrow_for_preservation())
+    mock_table.query.return_value = pres_query
+
+
 def test_write_graph_upserts_by_stable_id() -> None:
     """Re-writing the same node ID must not duplicate rows."""
     import asyncio
@@ -133,6 +166,8 @@ def test_write_graph_upserts_by_stable_id() -> None:
     # Use MagicMock for table (merge_insert is synchronous in real lancedb)
     mock_table = MagicMock()
     mock_table.merge_insert.return_value = merge_builder
+    # Wire the embedding-preservation query chain (node has no embedding → triggers pre-read)
+    _add_preservation_query_mock(mock_table)
 
     mock_db = AsyncMock()
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -173,6 +208,8 @@ def test_write_graph_upserts_edges_by_stable_id() -> None:
     # Use MagicMock for table (merge_insert is synchronous in real lancedb)
     mock_table = MagicMock()
     mock_table.merge_insert.return_value = merge_builder
+    # Wire the embedding-preservation query chain (nodes have no embedding → triggers pre-read)
+    _add_preservation_query_mock(mock_table)
 
     mock_db = AsyncMock()
     mock_db.open_table = AsyncMock(return_value=mock_table)
@@ -834,7 +871,15 @@ def _build_nodes_arrow(nodes: list[GraphNode]):  # type: ignore[return]
     node_schema = GraphStore._nodes_schema()
     if not nodes:
         return pa.table(
-            {"id": [], "entity_name": [], "entity_type": [], "source_doc_id": [], "collection_name": [], "entity_subtype": []},
+            {
+                "id": [],
+                "entity_name": [],
+                "entity_type": [],
+                "source_doc_id": [],
+                "collection_name": [],
+                "entity_subtype": [],
+                "name_embedding": pa.array([], type=pa.list_(pa.float32())),
+            },
             schema=node_schema,
         )
     return pa.table(
@@ -845,6 +890,9 @@ def _build_nodes_arrow(nodes: list[GraphNode]):  # type: ignore[return]
             "source_doc_id": [n.source_doc_id for n in nodes],
             "collection_name": [n.collection_name for n in nodes],
             "entity_subtype": [n.entity_subtype for n in nodes],
+            "name_embedding": pa.array(
+                [n.name_embedding for n in nodes], type=pa.list_(pa.float32())
+            ),
         },
         schema=node_schema,
     )
@@ -1493,3 +1541,218 @@ def test_new_pattern_re_matches_all_table_name_helper_outputs() -> None:
     assert not _NEW_PATTERN_RE.match("_archon_graph_mycol_nodes"), (
         "_NEW_PATTERN_RE must NOT match legacy-pattern names"
     )
+
+
+# ---------------------------------------------------------------------------
+# BE-2 — name_embedding column in nodes schema
+# ---------------------------------------------------------------------------
+
+
+def test_nodes_schema_has_name_embedding_column() -> None:
+    """_nodes_schema() includes a nullable list<float32> name_embedding field."""
+    import pyarrow as pa
+
+    from archon_search.graph_store import GraphStore
+
+    schema = GraphStore._nodes_schema()
+    assert isinstance(schema, pa.Schema)
+    assert "name_embedding" in schema.names, "name_embedding field must be present in _nodes_schema()"
+
+    field = schema.field("name_embedding")
+    assert pa.types.is_list(field.type), f"name_embedding must be list type, got {field.type}"
+    assert pa.types.is_float32(field.type.value_type), (
+        f"name_embedding list element must be float32, got {field.type.value_type}"
+    )
+    assert field.nullable is True, "name_embedding field must be nullable"
+
+
+def test_arrow_to_nodes_handles_absent_name_embedding_column() -> None:
+    """Tables without name_embedding column deserialize without error; name_embedding is None."""
+    import pyarrow as pa
+
+    from archon_search.graph_store import GraphStore
+
+    # Simulate a pre-E2f nodes table: no name_embedding column
+    pre_e2f_schema = pa.schema([
+        pa.field("id", pa.utf8()),
+        pa.field("entity_name", pa.utf8()),
+        pa.field("entity_type", pa.utf8()),
+        pa.field("source_doc_id", pa.utf8()),
+        pa.field("collection_name", pa.utf8()),
+        pa.field("entity_subtype", pa.utf8()),
+    ])
+    arrow_table = pa.table(
+        {
+            "id": ["abc"],
+            "entity_name": ["Alpha"],
+            "entity_type": ["concept"],
+            "source_doc_id": ["doc-1"],
+            "collection_name": ["col1"],
+            "entity_subtype": [None],
+        },
+        schema=pre_e2f_schema,
+    )
+
+    nodes = GraphStore._arrow_to_nodes(arrow_table)
+    assert len(nodes) == 1
+    assert nodes[0].entity_name == "Alpha"
+    assert nodes[0].name_embedding is None, (
+        "name_embedding must be None when column is absent from the Arrow table"
+    )
+
+
+def test_graph_store_creates_cosine_index_on_name_embedding() -> None:
+    """Cosine index creation is idempotent: second call raises no exception and doesn't duplicate index."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-cosine-index")
+
+    # Simulate table with no existing indices (first call creates the index)
+    index_info_empty: list = []
+
+    mock_table = MagicMock()
+    mock_table.list_indices = AsyncMock(return_value=index_info_empty)
+    mock_table.create_index = AsyncMock(return_value=None)
+
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+
+    async def _run_first() -> None:
+        store._db = mock_db
+        await store._ensure_cosine_index("test-col", ns="default")
+
+    asyncio.run(_run_first())
+    # First call: create_index must be called once
+    assert mock_table.create_index.call_count == 1
+
+    # Simulate table now has the index (second call must be a no-op).
+    # Use a plain object so .columns is a real list, not a MagicMock attribute.
+    class _FakeIndex:
+        columns = ["name_embedding"]
+        name = "name_embedding_idx"
+
+    index_info_with_index = [_FakeIndex()]
+    mock_table_indexed = MagicMock()
+    mock_table_indexed.list_indices = AsyncMock(return_value=index_info_with_index)
+    mock_table_indexed.create_index = AsyncMock(return_value=None)
+
+    mock_db2 = AsyncMock()
+    mock_db2.open_table = AsyncMock(return_value=mock_table_indexed)
+
+    async def _run_second() -> None:
+        store._db = mock_db2
+        await store._ensure_cosine_index("test-col", ns="default")
+
+    asyncio.run(_run_second())
+    # Second call: create_index must NOT be called (index already exists)
+    assert mock_table_indexed.create_index.call_count == 0
+
+
+def test_graph_store_vector_search_nodes_returns_nearest_nodes() -> None:
+    """vector_search_nodes returns nearest nodes ordered by cosine similarity."""
+    import asyncio
+
+    import pyarrow as pa
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-vector-search")
+
+    node_a = _node("Alpha", EntityType.concept)
+    node_b = _node("Beta", EntityType.concept)
+
+    # Build a nodes arrow table with name_embedding column
+    node_schema_with_emb = GraphStore._nodes_schema()
+    nodes_arrow = pa.table(
+        {
+            "id": [node_a.id, node_b.id],
+            "entity_name": [node_a.entity_name, node_b.entity_name],
+            "entity_type": [node_a.entity_type.value, node_b.entity_type.value],
+            "source_doc_id": [node_a.source_doc_id, node_b.source_doc_id],
+            "collection_name": [node_a.collection_name, node_b.collection_name],
+            "entity_subtype": [node_a.entity_subtype, node_b.entity_subtype],
+            "name_embedding": [[1.0, 0.0], [0.0, 1.0]],
+        },
+        schema=node_schema_with_emb,
+    )
+
+    # Mock the LanceDB vector search chain: .vector_search().distance_type().limit().to_arrow()
+    search_builder = MagicMock()
+    search_builder.distance_type.return_value = search_builder
+    search_builder.limit.return_value = search_builder
+    search_builder.where.return_value = search_builder
+    search_builder.to_arrow = AsyncMock(return_value=nodes_arrow)
+
+    mock_table = MagicMock()
+    mock_table.vector_search.return_value = search_builder
+
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+
+    async def _run() -> list:
+        store._db = mock_db
+        return await store.vector_search_nodes(
+            "test-col", [1.0, 0.0], entity_type=None, limit=2, ns="default"
+        )
+
+    results = asyncio.run(_run())
+    assert len(results) == 2
+    assert results[0].entity_name == node_a.entity_name
+    assert results[1].entity_name == node_b.entity_name
+    # Verify vector_search was called with the query embedding
+    mock_table.vector_search.assert_called_once_with([1.0, 0.0])
+
+
+def test_graph_store_vector_search_nodes_filters_by_entity_type() -> None:
+    """When entity_type is non-None, a SQL predicate is applied via .where()."""
+    import asyncio
+
+    import pyarrow as pa
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-vector-search-filter")
+
+    node_a = _node("Alpha", EntityType.concept)
+
+    node_schema_with_emb = GraphStore._nodes_schema()
+    nodes_arrow = pa.table(
+        {
+            "id": [node_a.id],
+            "entity_name": [node_a.entity_name],
+            "entity_type": [node_a.entity_type.value],
+            "source_doc_id": [node_a.source_doc_id],
+            "collection_name": [node_a.collection_name],
+            "entity_subtype": [node_a.entity_subtype],
+            "name_embedding": [[1.0, 0.0]],
+        },
+        schema=node_schema_with_emb,
+    )
+
+    search_builder = MagicMock()
+    search_builder.distance_type.return_value = search_builder
+    search_builder.limit.return_value = search_builder
+    search_builder.where.return_value = search_builder
+    search_builder.to_arrow = AsyncMock(return_value=nodes_arrow)
+
+    mock_table = MagicMock()
+    mock_table.vector_search.return_value = search_builder
+
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+
+    async def _run() -> list:
+        store._db = mock_db
+        return await store.vector_search_nodes(
+            "test-col", [1.0, 0.0], entity_type="concept", limit=2, ns="default"
+        )
+
+    asyncio.run(_run())
+
+    # Assert .where() was called (entity_type filter applied)
+    search_builder.where.assert_called_once()
+    # Assert the predicate contains the entity_type value
+    call_args = search_builder.where.call_args[0][0]
+    assert "concept" in call_args

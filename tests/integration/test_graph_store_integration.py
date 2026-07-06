@@ -411,3 +411,94 @@ def test_mentions_delete_by_doc_then_write_is_idempotent(tmp_path) -> None:
     assert count_1 == 2
     assert count_after_delete == 0
     assert count_2 == 2, f"Expected 2 after re-write, got {count_2} (idempotency violated)"
+
+
+# ---------------------------------------------------------------------------
+# BE-2 — name_embedding round-trip integration tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_write_graph_stores_and_retrieves_name_embedding(tmp_path) -> None:
+    """A GraphNode with a non-null embedding survives write_graph → get_all_nodes round-trip."""
+    from archon_search.graph_store import GraphStore
+
+    col = "embcol"
+    embedding = [0.1, 0.2, 0.3, 0.4]
+    node_with_emb = GraphNode(
+        id=make_stable_entity_id("concept", "EmbeddedEntity"),
+        entity_name="EmbeddedEntity",
+        entity_type=EntityType.concept,
+        source_doc_id="doc-emb",
+        collection_name=col,
+        name_embedding=embedding,
+    )
+
+    async def _run():
+        gs = GraphStore(str(tmp_path / "db"))
+        await gs.connect()
+        try:
+            await gs.ensure_graph_tables(col, ns="default")
+            await gs.write_graph(col, [node_with_emb], [], ns="default")
+            nodes = await gs.get_all_nodes(col, ns="default")
+            return nodes
+        finally:
+            await gs.disconnect()
+
+    nodes = asyncio.run(_run())
+    assert len(nodes) == 1
+    assert nodes[0].entity_name == "EmbeddedEntity"
+    assert nodes[0].name_embedding is not None, "name_embedding must be stored and retrieved"
+    assert list(nodes[0].name_embedding) == pytest.approx(embedding, abs=1e-5), (
+        f"Retrieved embedding {nodes[0].name_embedding} must match stored {embedding}"
+    )
+
+
+@pytest.mark.integration
+def test_write_graph_preserves_existing_name_embedding_on_node_update(tmp_path) -> None:
+    """Write a node with embedding, then write it again without embedding; original embedding preserved."""
+    from archon_search.graph_store import GraphStore
+
+    col = "preservecol"
+    embedding = [0.5, 0.6, 0.7, 0.8]
+    node_id = make_stable_entity_id("concept", "StableEntity")
+
+    node_with_emb = GraphNode(
+        id=node_id,
+        entity_name="StableEntity",
+        entity_type=EntityType.concept,
+        source_doc_id="doc-1",
+        collection_name=col,
+        name_embedding=embedding,
+    )
+    node_without_emb = GraphNode(
+        id=node_id,
+        entity_name="StableEntity",
+        entity_type=EntityType.concept,
+        source_doc_id="doc-2",  # different source doc (re-ingest)
+        collection_name=col,
+        name_embedding=None,   # no embedding in second write
+    )
+
+    async def _run():
+        gs = GraphStore(str(tmp_path / "db"))
+        await gs.connect()
+        try:
+            await gs.ensure_graph_tables(col, ns="default")
+            # First write: node with embedding
+            await gs.write_graph(col, [node_with_emb], [], ns="default")
+            # Second write: same node ID, no embedding — must NOT overwrite existing embedding
+            await gs.write_graph(col, [node_without_emb], [], ns="default")
+            nodes = await gs.get_all_nodes(col, ns="default")
+            return nodes
+        finally:
+            await gs.disconnect()
+
+    nodes = asyncio.run(_run())
+    assert len(nodes) == 1
+    assert nodes[0].name_embedding is not None, (
+        "Existing name_embedding must be preserved when a subsequent write supplies name_embedding=None"
+    )
+    assert list(nodes[0].name_embedding) == pytest.approx(embedding, abs=1e-5), (
+        f"Preserved embedding {nodes[0].name_embedding} must match original {embedding}"
+    )

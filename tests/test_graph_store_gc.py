@@ -73,6 +73,9 @@ def _nodes_arrow(nodes: list[GraphNode]):
             "source_doc_id": [n.source_doc_id for n in nodes],
             "collection_name": [n.collection_name for n in nodes],
             "entity_subtype": [n.entity_subtype for n in nodes],
+            "name_embedding": pa.array(
+                [n.name_embedding for n in nodes], type=pa.list_(pa.float32())
+            ),
         },
         schema=GraphStore._nodes_schema(),
     )

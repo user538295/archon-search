@@ -118,7 +118,12 @@ class GraphStore:
 
     @staticmethod
     def _nodes_schema():  # type: ignore[return]
-        """Return the PyArrow schema for the nodes table."""
+        """Return the PyArrow schema for the nodes table.
+
+        ``name_embedding`` is nullable ``list<float32>`` — added in BE-2 (E2f).
+        Pre-E2f tables lack this column; ``_arrow_to_nodes`` guards against its
+        absence with a ``has_name_embedding_col`` check.
+        """
         import pyarrow as pa  # noqa: PLC0415
 
         return pa.schema([
@@ -128,6 +133,7 @@ class GraphStore:
             pa.field("source_doc_id", pa.utf8()),
             pa.field("collection_name", pa.utf8()),
             pa.field("entity_subtype", pa.utf8()),
+            pa.field("name_embedding", pa.list_(pa.float32()), nullable=True),
         ])
 
     @staticmethod
@@ -251,17 +257,80 @@ class GraphStore:
 
         if nodes:
             nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
-            nodes_data = pa.table(
-                {
-                    "id": [n.id for n in nodes],
-                    "entity_name": [n.entity_name for n in nodes],
-                    "entity_type": [n.entity_type.value for n in nodes],
-                    "source_doc_id": [n.source_doc_id for n in nodes],
-                    "collection_name": [n.collection_name for n in nodes],
-                    "entity_subtype": [n.entity_subtype for n in nodes],
-                },
-                schema=self._nodes_schema(),
-            )
+
+            # Check the live table schema first — pre-E2f tables lack name_embedding.
+            # We must not include the column in nodes_data if the table doesn't have it,
+            # or LanceDB's merge_insert will reject the write with a schema mismatch.
+            live_nodes_schema = await nodes_table.schema()
+            table_has_emb_col = "name_embedding" in live_nodes_schema.names
+
+            existing_embeddings: dict[str, list[float] | None] = {}
+            if table_has_emb_col:
+                # Embedding preservation: LanceDB 0.30 only exposes when_matched_update_all()
+                # which would overwrite an existing embedding with null when the incoming node
+                # carries name_embedding=None.  To preserve existing embeddings we fetch the
+                # current embedding values for any node being updated without an embedding.
+                #
+                # ponytail: LanceDB when_matched_update column-list semantics assumed; verify
+                # against LanceDB version in requirements — if a future version adds
+                # when_matched_update(columns=[...]), use that instead to avoid this pre-read.
+                nodes_without_emb = [n for n in nodes if n.name_embedding is None]
+                if nodes_without_emb:
+                    node_ids_without_emb = [n.id for n in nodes_without_emb]
+                    id_pred = _where_in("id", node_ids_without_emb)
+                    existing_arrow = await (
+                        nodes_table.query()
+                        .where(id_pred)
+                        .select(["id", "name_embedding"])
+                        .to_arrow()
+                    )
+                    # Read back existing embeddings so we don't overwrite them with null
+                    existing_ids_list = existing_arrow["id"].to_pylist()
+                    existing_embs_list = existing_arrow["name_embedding"].to_pylist()
+                    existing_embeddings = dict(zip(existing_ids_list, existing_embs_list))
+
+            # Use the live schema as the target for nodes_data to avoid field-count mismatches.
+            # For pre-E2f tables (no name_embedding column) we use a schema that matches the
+            # existing table exactly; for E2f tables we use the full schema including the column.
+            if table_has_emb_col:
+                # Build the final embedding list: use supplied embedding when non-null,
+                # otherwise fall back to the preserved existing embedding (or null for new rows).
+                resolved_embeddings = [
+                    n.name_embedding if n.name_embedding is not None
+                    else existing_embeddings.get(n.id)
+                    for n in nodes
+                ]
+                nodes_data = pa.table(
+                    {
+                        "id": [n.id for n in nodes],
+                        "entity_name": [n.entity_name for n in nodes],
+                        "entity_type": [n.entity_type.value for n in nodes],
+                        "source_doc_id": [n.source_doc_id for n in nodes],
+                        "collection_name": [n.collection_name for n in nodes],
+                        "entity_subtype": [n.entity_subtype for n in nodes],
+                        "name_embedding": pa.array(
+                            resolved_embeddings,
+                            type=pa.list_(pa.float32()),
+                        ),
+                    },
+                    schema=self._nodes_schema(),
+                )
+            else:
+                # Pre-E2f table: omit name_embedding to avoid schema mismatch.
+                pre_e2f_schema = pa.schema([
+                    f for f in self._nodes_schema() if f.name != "name_embedding"
+                ])
+                nodes_data = pa.table(
+                    {
+                        "id": [n.id for n in nodes],
+                        "entity_name": [n.entity_name for n in nodes],
+                        "entity_type": [n.entity_type.value for n in nodes],
+                        "source_doc_id": [n.source_doc_id for n in nodes],
+                        "collection_name": [n.collection_name for n in nodes],
+                        "entity_subtype": [n.entity_subtype for n in nodes],
+                    },
+                    schema=pre_e2f_schema,
+                )
             await (
                 nodes_table.merge_insert("id")
                 .when_matched_update_all()
@@ -292,6 +361,101 @@ class GraphStore:
                 .when_not_matched_insert_all()
                 .execute(edges_data)
             )
+
+    async def _ensure_cosine_index(self, collection: str, ns: str) -> None:
+        """Attempt to create a cosine ANN index on ``name_embedding`` if one does not exist yet.
+
+        Idempotent: skips creation when ``table.list_indices()`` shows the column
+        is already indexed.  A ``FileNotFoundError`` on ``open_table`` is silently
+        swallowed (nodes table absent — index not applicable).
+
+        Index creation may fail if the column is a variable-length list (LanceDB
+        requires fixed-size lists for ANN indexes).  In that case a WARNING is logged
+        and the method returns normally — ``vector_search_nodes`` still works via
+        brute-force scan when no ANN index is present.
+
+        # ponytail: IvfFlat(distance_type="cosine") + idx.columns/idx.name reflection
+        # assume the installed LanceDB API; verify on upgrade.
+        """
+        from lancedb.index import IvfFlat  # noqa: PLC0415
+
+        self._validate_collection(collection)
+        _validate_namespace(ns)
+        db = self._require_db()
+
+        try:
+            nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
+        except (FileNotFoundError, ValueError):
+            return
+
+        existing_indices = await nodes_table.list_indices()
+        # Check if any existing index covers name_embedding; field-name check is
+        # table-specific so we compare the column name stored in the index metadata.
+        for idx in existing_indices:
+            # LanceDB IndexConfig objects expose .columns (list[str]); check that first.
+            idx_columns = getattr(idx, "columns", None)
+            if isinstance(idx_columns, list) and "name_embedding" in idx_columns:
+                return
+            # Fallback: index name convention used by LanceDB (e.g. "name_embedding_idx")
+            idx_name = getattr(idx, "name", None)
+            if isinstance(idx_name, str) and "name_embedding" in idx_name:
+                return
+
+        try:
+            await nodes_table.create_index(
+                "name_embedding",
+                config=IvfFlat(distance_type="cosine"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "_ensure_cosine_index: failed to create cosine index on name_embedding "
+                "for collection %r (ns=%r): %s — vector_search_nodes will use brute-force scan.",
+                collection,
+                ns,
+                exc,
+            )
+
+    async def vector_search_nodes(
+        self,
+        collection: str,
+        query_embedding: list[float],
+        entity_type: str | None,
+        limit: int,
+        metric: str = "cosine",
+        *,
+        ns: str,
+    ) -> list[GraphNode]:
+        """Return the *limit* nearest nodes by ANN search on ``name_embedding``.
+
+        Uses LanceDB's ``.vector_search(query_embedding).distance_type(metric).limit(limit)``
+        on the nodes table.  An optional ``entity_type`` filter is applied as a
+        SQL predicate when non-None.
+
+        ``ns`` is LAST per project invariant (see ``graph_store.py`` class docstring).
+
+        Forbidden path: for full-table cosine ranking without an ANN index, use
+        ``get_all_nodes`` and compute cosine similarity in Python — never call
+        this method with an unindexed column in production.
+
+        Returns an empty list when the nodes table is absent.
+        """
+        self._validate_collection(collection)
+        _validate_namespace(ns)
+        db = self._require_db()
+
+        try:
+            nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
+        except (FileNotFoundError, ValueError):
+            return []
+
+        search_query = nodes_table.vector_search(query_embedding).distance_type(metric).limit(limit)
+
+        if entity_type is not None:
+            predicate = _where_eq("entity_type", entity_type)
+            search_query = search_query.where(predicate)
+
+        arrow = await search_query.to_arrow()
+        return self._arrow_to_nodes(arrow)
 
     async def get_neighbours(
         self, collection: str, entity_ids: list[str], ns: str
@@ -738,7 +902,11 @@ class GraphStore:
 
     @staticmethod
     def _arrow_to_nodes(arrow_table) -> list[GraphNode]:  # type: ignore[return]
-        """Convert a PyArrow table of node rows into ``GraphNode`` dataclass objects."""
+        """Convert a PyArrow table of node rows into ``GraphNode`` dataclass objects.
+
+        Pre-E2f tables lack the ``name_embedding`` column; the ``has_name_embedding_col``
+        guard handles those gracefully by defaulting to ``None``.
+        """
         results: list[GraphNode] = []
         ids = arrow_table["id"].to_pylist()
         names = arrow_table["entity_name"].to_pylist()
@@ -747,8 +915,16 @@ class GraphStore:
         collections = arrow_table["collection_name"].to_pylist()
         subtypes = arrow_table["entity_subtype"].to_pylist()
 
-        for nid, name, etype, sdoc, col, subtype in zip(
-            ids, names, types, source_docs, collections, subtypes
+        # Guard: pre-E2f node tables lack the name_embedding column; default to None.
+        has_name_embedding_col = "name_embedding" in arrow_table.schema.names
+        embeddings = (
+            arrow_table["name_embedding"].to_pylist()
+            if has_name_embedding_col
+            else [None] * len(ids)
+        )
+
+        for nid, name, etype, sdoc, col, subtype, emb in zip(
+            ids, names, types, source_docs, collections, subtypes, embeddings
         ):
             results.append(
                 GraphNode(
@@ -758,6 +934,7 @@ class GraphStore:
                     source_doc_id=sdoc,
                     collection_name=col,
                     entity_subtype=subtype,
+                    name_embedding=emb,
                 )
             )
         return results

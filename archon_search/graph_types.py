@@ -142,6 +142,11 @@ class GraphNode:
     """Optional sub-label for ``code_symbol`` entities (from ``_symbol_subtype``).
     ``None`` for all other entity types.
     """
+    name_embedding: list[float] | None = None
+    """Dense embedding of ``entity_name`` for ANN similarity search — BE-2.
+    ``None`` for nodes whose embedding has not yet been computed (pre-E2f nodes
+    or nodes written without an embedding).
+    """
 
 
 @dataclass
