@@ -120,6 +120,7 @@ def _run_leiden_partition_sync(
     nodes: list["GraphNode"],
     edges: list["GraphEdge"],
     resolution: float,
+    seed: int | None = None,
 ) -> list[list[str]]:
     """Run the Leiden algorithm and return a list of entity_id groups.
 
@@ -133,6 +134,9 @@ def _run_leiden_partition_sync(
         nodes: All graph nodes for the collection.
         edges: All graph edges for the collection.
         resolution: Leiden resolution_parameter (higher → more communities).
+        seed: Random seed for deterministic Leiden partitioning. When None,
+            uses non-deterministic behaviour (existing default). When set to
+            an integer (e.g., 42), produces reproducible communities across runs.
 
     Returns:
         A list of groups, where each group is a list of entity IDs belonging
@@ -168,6 +172,7 @@ def _run_leiden_partition_sync(
         g,
         leidenalg.RBConfigurationVertexPartition,
         resolution_parameter=resolution,
+        seed=seed,
     )
 
     groups: list[list[str]] = []
@@ -186,6 +191,7 @@ def _split_oversized_communities(
     max_size: int,
     resolution: float,
     depth: int,
+    seed: int | None = None,
 ) -> list[list[str]]:
     """Recursively split communities that exceed *max_size*.
 
@@ -203,6 +209,8 @@ def _split_oversized_communities(
         max_size: Maximum allowed community size.
         resolution: Current resolution parameter.
         depth: Current recursion depth (0-indexed from the caller).
+        seed: Random seed for deterministic Leiden partitioning (forwarded to all
+            _run_leiden_partition_sync calls during recursion).
 
     Returns:
         Flattened list of groups, all with ``len <= max_size`` (or accepted
@@ -241,7 +249,7 @@ def _split_oversized_communities(
         ]
 
         new_resolution = resolution * _RESOLUTION_GROWTH_FACTOR
-        sub_groups = _run_leiden_partition_sync(sub_nodes, sub_edges, new_resolution)
+        sub_groups = _run_leiden_partition_sync(sub_nodes, sub_edges, new_resolution, seed=seed)
 
         if len(sub_groups) <= 1:
             # Cannot split further
@@ -258,7 +266,7 @@ def _split_oversized_communities(
         # Recurse on sub-groups
         result.extend(
             _split_oversized_communities(
-                sub_groups, nodes_by_id, edges, max_size, new_resolution, depth + 1
+                sub_groups, nodes_by_id, edges, max_size, new_resolution, depth + 1, seed=seed
             )
         )
 
@@ -270,6 +278,7 @@ def _cluster_with_size_limit(
     edges: list["GraphEdge"],
     resolution: float,
     max_size: int,
+    seed: int | None = None,
 ) -> list[list[str]]:
     """Run Leiden and split oversized communities as needed.
 
@@ -281,16 +290,18 @@ def _cluster_with_size_limit(
         edges: All graph edges for the collection.
         resolution: Initial Leiden resolution parameter.
         max_size: Maximum allowed community size.
+        seed: Random seed for deterministic Leiden partitioning (forwarded to
+            _run_leiden_partition_sync and _split_oversized_communities).
 
     Returns:
         List of entity_id groups with all sizes ``<= max_size`` (or accepted
         oversized when the recursion limit is reached).
     """
-    groups = _run_leiden_partition_sync(nodes, edges, resolution)
+    groups = _run_leiden_partition_sync(nodes, edges, resolution, seed=seed)
     if not any(len(g) > max_size for g in groups):
         return groups
     nodes_by_id = {n.id: n for n in nodes}
-    return _split_oversized_communities(groups, nodes_by_id, edges, max_size, resolution, depth=0)
+    return _split_oversized_communities(groups, nodes_by_id, edges, max_size, resolution, depth=0, seed=seed)
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +389,7 @@ class CommunityBuilder:
 
         return _mmr_select(candidate_chunks, self._config.community_summary_chunks), candidate_chunks
 
-    async def build(self, collection: str, ns: str) -> list["Community"]:
+    async def build(self, collection: str, ns: str, *, seed: int | None = None) -> list["Community"]:
         """Build Leiden communities for *collection*.
 
         Fills ``representative_chunk_ids`` via MMR when a ``search_store`` is
@@ -389,6 +400,10 @@ class CommunityBuilder:
 
         Args:
             collection: Name of the collection whose entity graph to cluster.
+            ns: Namespace for the collection.
+            seed: Random seed for deterministic Leiden partitioning. When None
+                (default), uses non-deterministic behaviour. When set to an integer
+                (e.g., 42), produces reproducible communities across runs.
 
         Returns:
             List of ``Community`` objects — one per detected community.
@@ -443,7 +458,7 @@ class CommunityBuilder:
         max_size = self._config.max_community_size
 
         groups = await asyncio.to_thread(
-            _cluster_with_size_limit, nodes, edges, resolution, max_size
+            _cluster_with_size_limit, nodes, edges, resolution, max_size, seed
         )
 
         final_communities: list[Community] = []

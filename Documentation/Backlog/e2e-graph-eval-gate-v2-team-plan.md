@@ -412,7 +412,7 @@ graph LR
 
 ### Slice 2: CI gates real community local/global recall
 
-- [ ] **BE-5** — Add `seed: int | None = None` to `CommunityBuilder.build()` (line 381) and `_run_leiden_partition_sync()` (line 119); pass `seed` through ALL call sites in `community_builder.py` including the `asyncio.to_thread` lambda at `:445`; in `_run_leiden_partition_sync`, pass `seed=seed` directly to `leidenalg.find_partition(...)` (Key decision §1; verified by K-1: `find_partition` accepts `seed=`) #backend-role
+- [x] **BE-5** — Add `seed: int | None = None` to `CommunityBuilder.build()` (line 381) and `_run_leiden_partition_sync()` (line 119); pass `seed` through ALL call sites in `community_builder.py` including the `asyncio.to_thread` lambda at `:445`; in `_run_leiden_partition_sync`, pass `seed=seed` directly to `leidenalg.find_partition(...)` (Key decision §1; verified by K-1: `find_partition` accepts `seed=`) #backend-role
     - Use Cases · 2.0h
     - needs BE-4, K-1 (K-1 must resolve Q3 before starting) · completes C3
     - Tests
