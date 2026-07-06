@@ -1852,3 +1852,41 @@ def test_assert_thresholds_gating_on_new_fields() -> None:
         thresholds=EvalThresholds(quality_floors=floors),
     )
     assert_thresholds(report_at_floor)  # Should not raise
+
+
+def test_assert_thresholds_fails_when_new_metric_is_none_with_floor() -> None:
+    """assert_thresholds raises when a new graph recall metric is None but a floor is set."""
+    from archon_search.eval.runner import assert_thresholds
+
+    # metric=None + floor configured = gate bypass; must fail
+    floors = _make_quality_floors(graph_naive_recall_at_5=0.70)
+    metrics = _make_metrics(graph_naive_recall_at_5=None)
+    report = _make_report(
+        metrics=metrics,
+        thresholds=EvalThresholds(quality_floors=floors),
+    )
+    with pytest.raises(AssertionError, match="graph_naive_recall_at_5"):
+        assert_thresholds(report)
+
+
+def test_rendered_quality_fields_includes_new_recall_fields() -> None:
+    """_RENDERED_QUALITY_FIELDS contains all 4 new field names."""
+    from archon_search.eval.runner import _RENDERED_QUALITY_FIELDS
+
+    expected = {
+        "graph_naive_recall_at_5",
+        "graph_local_recall_at_5",
+        "graph_global_recall_at_5",
+        "graph_negative_control_recall_at_5",
+    }
+    assert expected.issubset(set(_RENDERED_QUALITY_FIELDS))
+
+
+def test_load_thresholds_rejects_wrong_type_for_new_graph_recall_floor(
+    tmp_path: Path,
+) -> None:
+    """graph_local_recall_at_5 = 'high' (string) raises ValueError."""
+    content = _FULL_QUALITY + 'graph_local_recall_at_5 = "high"\n'
+    path = _write_toml(tmp_path, content)
+    with pytest.raises(ValueError, match="graph_local_recall_at_5"):
+        load_thresholds(path)
