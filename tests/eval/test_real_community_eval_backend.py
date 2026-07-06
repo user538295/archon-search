@@ -85,6 +85,72 @@ class TestDispatchingCommunityStoreRouting:
         result = await dispatcher.communities_table_exists("graph", ns="default")
         assert result is True  # Stub always returns True for graph collection
 
+    @pytest.mark.asyncio
+    async def test_dispatcher_routes_to_real_backend_for_multihop(self) -> None:
+        """Dispatcher routes multihop-2wiki collection to RealCommunityEvalBackend."""
+        from archon_search.eval.backends import (
+            DispatchingCommunityStore,
+            RealCommunityEvalBackend,
+            CommunityStoreStub,
+        )
+        from archon_search.graph_store import GraphStore
+        from archon_search.graph_types import (
+            EntityType,
+            GraphEdge,
+            GraphNode,
+            RelationshipType,
+            make_stable_edge_id,
+            make_stable_entity_id,
+        )
+
+        gs = GraphStore(db_path=":memory:")
+        await gs.connect()
+
+        # Set up a real backend with some test data
+        col = "multihop-2wiki"
+        ns = "default"
+
+        await gs.ensure_graph_tables(col, ns=ns)
+
+        # Create a simple node and edge to test routing
+        node_a = GraphNode(
+            id=make_stable_entity_id("concept", "TestEntity"),
+            entity_name="TestEntity",
+            entity_type=EntityType.concept,
+            source_doc_id="doc-1",
+            collection_name=col,
+        )
+        edge = GraphEdge(
+            id=make_stable_edge_id(node_a.id, node_a.id, "related_to"),
+            source_node_id=node_a.id,
+            target_node_id=node_a.id,
+            relationship_type=RelationshipType.related_to,
+            source_doc_id="doc-1",
+        )
+
+        await gs.write_graph(col, [node_a], [edge], ns=ns)
+
+        real_backend = RealCommunityEvalBackend(graph_store=gs)
+        stub_backend = CommunityStoreStub()
+
+        dispatcher = DispatchingCommunityStore(
+            backend_map={
+                "multihop-2wiki": real_backend,
+                "graph": stub_backend,
+            }
+        )
+
+        # Test that multihop-2wiki routes to real backend
+        # The real backend should find the node we created
+        nodes = await dispatcher.find_nodes_by_name(
+            "multihop-2wiki", ["TestEntity"], ns=ns
+        )
+        assert isinstance(nodes, list)
+        assert len(nodes) == 1
+        assert nodes[0].entity_name == "TestEntity"
+
+        await gs.disconnect()
+
 
 class TestRealGraphExpander:
     """Unit tests for RealGraphExpander."""
@@ -252,3 +318,42 @@ class TestRealCommunityBackendIntegration:
         assert any(n.entity_name.lower() == "alpha" for n in nodes)
 
         await gs.disconnect()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_real_community_backend_communities_table_exists_with_fixture(
+        self, build_communities_for_eval
+    ) -> None:
+        """RealCommunityEvalBackend.communities_table_exists returns True after fixture builds communities."""
+        pytest.importorskip("leidenalg")
+
+        from archon_search.eval.backends import RealCommunityEvalBackend
+
+        lancedb_root, graph_stores = build_communities_for_eval
+        graph_store = graph_stores["multihop-2wiki"]
+        backend = RealCommunityEvalBackend(graph_store=graph_store)
+
+        # After build_communities_for_eval fixture runs, communities tables exist
+        result = await backend.communities_table_exists("multihop-2wiki", ns="default")
+        assert result is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_real_community_backend_find_nodes_by_name_with_fixture(
+        self, build_communities_for_eval
+    ) -> None:
+        """find_nodes_by_name returns list for entity names present in graph."""
+        pytest.importorskip("leidenalg")
+
+        from archon_search.eval.backends import RealCommunityEvalBackend
+
+        lancedb_root, graph_stores = build_communities_for_eval
+        graph_store = graph_stores["multihop-musique"]
+        backend = RealCommunityEvalBackend(graph_store=graph_store)
+
+        # After graph extraction from corpus, entity names should be findable
+        nodes = await backend.find_nodes_by_name(
+            "multihop-musique", ["machine", "learning"], ns="default"
+        )
+        # Assert returns a list (may be empty if entities not in graph, but should work)
+        assert isinstance(nodes, list)

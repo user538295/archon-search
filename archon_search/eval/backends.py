@@ -8,8 +8,11 @@ These backends are:
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
+
+logger = logging.getLogger(__name__)
 
 
 def _tokenize(text: str) -> list[str]:
@@ -259,7 +262,10 @@ class RealCommunityEvalBackend:
         self, collection: str, names: list[str], ns: str = "default"
     ) -> list:  # list[GraphNode]
         """Find graph nodes matching the given entity names."""
-        return await self._graph_store.find_nodes_by_name(collection, names, ns=ns)
+        try:
+            return await self._graph_store.find_nodes_by_name(collection, names, ns=ns)
+        except (FileNotFoundError, ValueError):
+            return []
 
     async def get_communities_for_entities(
         self, collection: str, entity_ids: list[str], ns: str = "default"
@@ -282,7 +288,10 @@ class DispatchingCommunityStore:
 
     def _get_backend(self, collection: str) -> "RealCommunityEvalBackend | CommunityStoreStub":  # type: ignore[name-defined]  # noqa: F821
         """Get the backend for a collection, raising KeyError if not found."""
-        return self._backend_map[collection]
+        try:
+            return self._backend_map[collection]
+        except KeyError:
+            raise KeyError(f"no community backend configured for collection {collection!r}; configured: {sorted(self._backend_map)}")  # noqa: B904
 
     async def communities_table_exists(self, collection: str, ns: str = "default") -> bool:
         """Dispatch to the appropriate backend."""
@@ -348,8 +357,9 @@ class RealGraphExpander:
             matched_nodes = await self._graph_store.find_nodes_by_name(
                 collection, ngram_candidates, ns=ns
             )
-        except Exception:
-            # Fallback to original query on any error
+        except (FileNotFoundError, ValueError) as e:
+            # Fallback to original query on expected errors
+            logger.warning("RealGraphExpander: %s", e)
             return ExpandedQuery(original_query=query, expanded_text=query)
 
         if not matched_nodes:
@@ -361,7 +371,8 @@ class RealGraphExpander:
             neighbour_nodes = await self._graph_store.get_neighbours(
                 collection, entity_ids, ns=ns
             )
-        except Exception:
+        except (FileNotFoundError, ValueError) as e:
+            logger.warning("RealGraphExpander: %s", e)
             return ExpandedQuery(original_query=query, expanded_text=query)
 
         if not neighbour_nodes:

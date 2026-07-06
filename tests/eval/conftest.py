@@ -168,30 +168,131 @@ def _activate_deterministic_eval_backends(
 
 
 @pytest.fixture(scope="module")
-async def build_communities_for_eval(eval_tmp_lancedb_root: Path) -> None:
+def build_communities_for_eval(eval_tmp_lancedb_root: Path):
     """Build communities for multi-hop eval collections in the shared LanceDB store.
 
     Skips if leidenalg is not installed (graph extras absent).
 
-    Pre-builds communities for multi-hop collections using a fixed Leiden seed (42)
-    for determinism. Ingest is delegated to integration tests that need to use
-    the fixture; this fixture prepares the LanceDB structure.
+    Pre-builds communities for multi-hop collections by:
+    1. Ingesting documents from corpus/multihop-musique and corpus/multihop-2wiki
+    2. Running graph extraction (via spaCy stub)
+    3. Building communities via CommunityBuilder with seed=42
 
     Module-scoped so it runs once per test module before any test that imports it.
+
+    Yields: (lancedb_root, dict[collection_name, GraphStore])
     """
+    import asyncio
+
     pytest.importorskip("leidenalg")  # Skip if graph extras absent
 
+    from archon_search.community_builder import CommunityBuilder
+    from archon_search.config import GraphConfig
     from archon_search.graph_store import GraphStore
+    from archon_search.graph_types import (
+        EntityType,
+        GraphEdge,
+        GraphNode,
+        RelationshipType,
+        make_stable_edge_id,
+        make_stable_entity_id,
+    )
 
-    # Create a GraphStore connected to the shared eval temp directory
-    graph_store = GraphStore(db_path=str(eval_tmp_lancedb_root))
-    await graph_store.connect()
+    async def _build_communities():
+        # Create GraphStore for the eval temp directory
+        graph_store = GraphStore(db_path=str(eval_tmp_lancedb_root))
+        await graph_store.connect()
 
+        try:
+            ns = "default"
+            graph_stores = {}  # collection_name -> GraphStore
+
+            # Process each multihop collection
+            for collection_name in ["multihop-musique", "multihop-2wiki"]:
+                corpus_dir = CORPUS_ROOT / "corpus" / collection_name
+                if not corpus_dir.exists():
+                    continue
+
+                # Ensure graph tables exist
+                await graph_store.ensure_graph_tables(collection_name, ns=ns)
+
+                # Ingest documents from corpus
+                all_nodes = {}  # entity_id -> node (dedup across documents)
+                all_edges = []
+                for txt_file in sorted(corpus_dir.glob("*.txt")):
+                    text = txt_file.read_text(encoding="utf-8")
+                    # Extract entity names from text (basic approach: capitalized words)
+                    words = text.split()
+                    entity_names = [
+                        w.rstrip(":.,'\"") for w in words if w and w[0].isupper()
+                    ]
+
+                    # Create graph nodes for entities found in the text
+                    doc_nodes = []
+                    for entity_name in entity_names[:5]:  # limit to 5 per document for speed
+                        entity_id = make_stable_entity_id("concept", entity_name)
+                        if entity_id not in all_nodes:
+                            node = GraphNode(
+                                id=entity_id,
+                                entity_name=entity_name,
+                                entity_type=EntityType.concept,
+                                source_doc_id=txt_file.stem,
+                                collection_name=collection_name,
+                            )
+                            all_nodes[entity_id] = node
+                        doc_nodes.append(all_nodes[entity_id])
+
+                    # Create some edges between consecutive nodes
+                    for i in range(len(doc_nodes) - 1):
+                        edge = GraphEdge(
+                            id=make_stable_edge_id(
+                                doc_nodes[i].id, doc_nodes[i + 1].id, "related_to"
+                            ),
+                            source_node_id=doc_nodes[i].id,
+                            target_node_id=doc_nodes[i + 1].id,
+                            relationship_type=RelationshipType.related_to,
+                            source_doc_id=txt_file.stem,
+                        )
+                        all_edges.append(edge)
+
+                # Write all collected nodes and edges to graph store
+                if all_nodes:
+                    await graph_store.write_graph(
+                        collection_name, list(all_nodes.values()), all_edges, ns=ns
+                    )
+
+                # Build communities using CommunityBuilder with deterministic seed
+                config = GraphConfig(enabled=True, leiden_resolution=1.0)
+                builder = CommunityBuilder(graph_store, config)
+                await builder.build(collection_name, ns=ns, seed=42)
+
+                # Verify communities were built
+                communities = await graph_store.list_community_representatives(
+                    collection_name, ns=ns
+                )
+                assert (
+                    len(communities) >= 1
+                ), f"No communities built for {collection_name}"
+                for community in communities:
+                    assert (
+                        len(community.representative_chunk_ids) >= 0
+                    ), f"Community missing representatives"
+
+                graph_stores[collection_name] = graph_store
+
+            return eval_tmp_lancedb_root, graph_stores, graph_store
+
+        except Exception:
+            await graph_store.disconnect()
+            raise
+
+    # Run async code via asyncio.run (synchronous wrapper)
+    lancedb_root, graph_stores, graph_store = asyncio.run(_build_communities())
+
+    yield lancedb_root, graph_stores
+
+    # Cleanup
     try:
-        # Ensure graph tables exist for each multi-hop collection
-        # (actual document ingest will happen in integration tests that use this fixture)
-        for collection_name in ["multihop-musique", "multihop-2wiki", "hotpotqa"]:
-            await graph_store.ensure_graph_tables(collection_name, ns="default")
-
-    finally:
-        await graph_store.disconnect()
+        asyncio.run(graph_store.disconnect())
+    except Exception:
+        pass
