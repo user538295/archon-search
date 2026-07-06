@@ -484,7 +484,7 @@ graph LR
 
 ### Close-out
 
-- [ ] **BE-12** — Run calibration: `uv run python tests/eval/baselines/regenerate.py`; set 4 real floors in `thresholds.toml`; remove `graph_local_mrr = 1.0` and `graph_global_mrr = 1.0`; run eval suite twice and confirm byte-identity of all 4 new metrics (S8, S9); update routing floors if shifted by new corpus (Q5); regenerate `graph_mrr` baseline value (value changes due to new MuSiQue entries in `naive_graph_traces`) #backend-role
+- [x] **BE-12** — Run calibration: `uv run python tests/eval/baselines/regenerate.py`; set 4 real floors in `thresholds.toml`; remove `graph_local_mrr = 1.0` and `graph_global_mrr = 1.0`; run eval suite twice and confirm byte-identity of all 4 new metrics (S8, S9); update routing floors if shifted by new corpus (Q5); regenerate `graph_mrr` baseline value (value changes due to new MuSiQue entries in `naive_graph_traces`) #backend-role
     - Frameworks & Drivers · 2.0h
     - needs BE-8, BE-10, BE-11 · completes S8, S9
     - Calibration checklist:

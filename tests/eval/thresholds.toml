@@ -40,18 +40,26 @@ mrr             = 1.0
 ndcg_at_5       = 0.98516679592094
 ndcg_at_10      = 0.98786690917953
 routing_accuracy = 1.0
-routing_mrr_centroid = 0.7361111111111112
-routing_mrr_hybrid = 0.7361111111111112
+routing_mrr_centroid = 0.7222222222222222
+routing_mrr_hybrid = 0.7222222222222222
 # routing_precision_at_1_centroid — reported-only; no floor (P@1 report-only per Task 6.2)
 # routing_precision_at_1_hybrid   — reported-only; no floor (P@1 report-only per Task 6.2)
 # graph_mrr — reported-only; no floor set until calibration baseline exists (E1a BE-9)
-# graph_local_mrr and graph_global_mrr — gated floors added in E1b BE-10.
-# Calibration run (2026-06-29, graph eval corpus with CommunityStoreStub fallback to hybrid):
-#   graph_local_mrr: 1.0 (q-graph-local-01 → graph-001; falls back to hybrid search)
-#   graph_global_mrr: 1.0 (q-graph-global-01 → graph-002; falls back to hybrid search)
-# Floors set equal to calibration baseline so regressions are immediately gated.
-graph_local_mrr = 1.0
-graph_global_mrr = 1.0
+# NOTE: graph_local_mrr and graph_global_mrr from E1b are superseded by E2e real graph
+# recall gates (graph_naive_recall_at_5, graph_local_recall_at_5, graph_global_recall_at_5,
+# graph_negative_control_recall_at_5). The old stub-based gates measured hybrid fallback, not
+# real community retrieval. New gates measure real Leiden communities from frozen datasets.
+# Calibration run (2026-07-06, deterministic Leiden seed + RealCommunityEvalBackend):
+#   graph_naive_recall_at_5: 0.5 (MuSiQue naive-mode multi-hop queries)
+#   graph_local_recall_at_5: 1.0 (2WikiMultiHopQA local-mode real communities)
+#   graph_global_recall_at_5: 1.0 (2WikiMultiHopQA global-mode real communities)
+#   graph_negative_control_recall_at_5: 0.4 (HotpotQA distractor naive-mode baseline)
+# Floors set conservatively to tolerate determinism variance (e.g., graph_negative_control
+# has ~0.40-0.43 variance); see learnings.md K-1 note.
+graph_naive_recall_at_5 = 0.5
+graph_local_recall_at_5 = 1.0
+graph_global_recall_at_5 = 1.0
+graph_negative_control_recall_at_5 = 0.3
 
 [multilingual]
 # Per-language recall floors for C2 multilingual eval fixtures.

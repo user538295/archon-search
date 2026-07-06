@@ -1,5 +1,4 @@
-"""BE-10 + T-4: Tests for graph_mode eval fixtures, per-mode MRR partitioning,
-and the gated eval gate for graph_local_mrr and graph_global_mrr.
+"""BE-10 + E2e: Tests for graph_mode eval fixtures and per-mode MRR partitioning.
 
 Tests:
 - test_eval_fixture_graph_query_schema: all graph_mode queries have required
@@ -8,23 +7,56 @@ Tests:
 - test_eval_suite_graph_mode_smoke: full eval suite run without --thresholds-path
   produces graph_local_mrr and graph_global_mrr as separate metric keys (not merged
   into a single graph_mrr).
-- test_eval_gate_graph_local_mrr: gated; graph_local_mrr meets threshold (S16/T-4).
-- test_eval_gate_graph_global_mrr: gated; graph_global_mrr meets threshold (S16/T-4).
+- test_stub_floors_absent_from_thresholds: verifies old stub-based floor keys are
+  removed from thresholds.toml (replaced by E2e real graph recall floors).
+
+NOTE: The old gated tests for graph_local_mrr and graph_global_mrr have been
+removed (E1b BE-10); they are superseded by E2e real graph recall gates in
+test_e2e_graph_eval_gate_v2.py that measure real Leiden community retrieval
+rather than CommunityStoreStub fallback behavior. This file retains the fixture
+schema and smoke test for backwards-compatibility metric reporting only.
 """
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
 
-from archon_search.eval.runner import assert_thresholds, load_thresholds, render_report, run_eval_suite
+from archon_search.eval.runner import render_report, run_eval_suite
 
 
 CORPUS_ROOT = Path(__file__).resolve().parent
 RUNTIME_CONFIG_PATH = CORPUS_ROOT / "runtime.toml"
 
 _VALID_GRAPH_MODES = {"naive", "local", "global"}
+
+
+# ---------------------------------------------------------------------------
+# Unit: stub floor removal verification (BE-12 close-out check)
+# ---------------------------------------------------------------------------
+
+
+def test_stub_floors_absent_from_thresholds() -> None:
+    """Verifies graph_local_mrr and graph_global_mrr keys are absent from committed thresholds.toml.
+
+    These old E1b stub-based floors are superseded by E2e real graph recall gates.
+    """
+    thresholds_path = CORPUS_ROOT / "thresholds.toml"
+    with open(thresholds_path, "rb") as f:
+        data = tomllib.load(f)
+
+    quality_floors = data.get("quality_floors", {})
+
+    assert "graph_local_mrr" not in quality_floors, (
+        "graph_local_mrr stub floor should be removed from thresholds.toml; "
+        "replaced by E2e graph_local_recall_at_5"
+    )
+    assert "graph_global_mrr" not in quality_floors, (
+        "graph_global_mrr stub floor should be removed from thresholds.toml; "
+        "replaced by E2e graph_global_recall_at_5"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -135,75 +167,13 @@ async def test_eval_suite_graph_mode_smoke() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T-4: Gated eval gate — graph_local_mrr and graph_global_mrr (S16)
+# T-4: Gated eval gates superseded by E2e real graph recall gates
 # ---------------------------------------------------------------------------
-
-BASELINE_JSON = CORPUS_ROOT / "baselines" / "baseline.json"
-
-
-@pytest.mark.eval
-async def test_eval_gate_graph_local_mrr(thresholds_path: Path) -> None:
-    """Gated: graph_local_mrr meets the floor configured in thresholds.toml (S16).
-
-    Requires --thresholds-path; skips gracefully without it (non-CI).
-    """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-    )
-    # Enforce the full production gate contract first: staleness checks, floor-drop policy,
-    # calibration-only baseline rejection. The targeted assertion below then provides a
-    # more actionable message when graph_local_mrr specifically is the failing metric.
-    assert_thresholds(report)
-    thresholds = load_thresholds(thresholds_path)
-    floor = thresholds.quality_floors.graph_local_mrr
-    actual = report.metrics.graph_local_mrr
-
-    assert floor is not None, (
-        "graph_local_mrr floor is not set in thresholds.toml — "
-        "add [quality_floors] graph_local_mrr = <value>"
-    )
-    assert actual is not None, (
-        "graph_local_mrr metric is None — check that q-graph-local-01 is in "
-        "queries.jsonl and its label is in labels.jsonl"
-    )
-    assert actual >= floor, (
-        f"graph_local_mrr={actual:.4f} < floor={floor:.4f} "
-        f"(threshold not met — S16 eval gate failed)"
-    )
-
-
-@pytest.mark.eval
-async def test_eval_gate_graph_global_mrr(thresholds_path: Path) -> None:
-    """Gated: graph_global_mrr meets the floor configured in thresholds.toml (S16).
-
-    Requires --thresholds-path; skips gracefully without it (non-CI).
-    """
-    report = await run_eval_suite(
-        CORPUS_ROOT,
-        RUNTIME_CONFIG_PATH,
-        thresholds_path=thresholds_path,
-        baseline_path=BASELINE_JSON,
-    )
-    # Enforce the full production gate contract first: staleness checks, floor-drop policy,
-    # calibration-only baseline rejection. The targeted assertion below then provides a
-    # more actionable message when graph_global_mrr specifically is the failing metric.
-    assert_thresholds(report)
-    thresholds = load_thresholds(thresholds_path)
-    floor = thresholds.quality_floors.graph_global_mrr
-    actual = report.metrics.graph_global_mrr
-
-    assert floor is not None, (
-        "graph_global_mrr floor is not set in thresholds.toml — "
-        "add [quality_floors] graph_global_mrr = <value>"
-    )
-    assert actual is not None, (
-        "graph_global_mrr metric is None — check that q-graph-global-01 is in "
-        "queries.jsonl and its label is in labels.jsonl"
-    )
-    assert actual >= floor, (
-        f"graph_global_mrr={actual:.4f} < floor={floor:.4f} "
-        f"(threshold not met — S16 eval gate failed)"
-    )
+#
+# NOTE: The old graph_local_mrr and graph_global_mrr gated tests below are
+# superseded by E2e eval gates (test_e2e_graph_eval_gate_v2.py) that measure
+# real Leiden community retrieval. The old E1b tests measured stub fallback
+# to hybrid search (CommunityStoreStub always returned absent chunk IDs).
+# The old gated tests have been removed; smoke tests remain to verify
+# graph_local_mrr and graph_global_mrr fields still exist for backwards
+# compatibility and are reported in the eval suite output.
