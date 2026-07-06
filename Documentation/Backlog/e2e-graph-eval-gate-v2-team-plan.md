@@ -372,7 +372,7 @@ graph LR
 
 ### Slice 1: CI measures naive multi-hop recall
 
-- [ ] **BE-1** — Add 4 `float | None` fields to `EvalMetrics`; add 4 optional float fields to `EvalQualityFloors` #backend-role
+- [x] **BE-1** — Add 4 `float | None` fields to `EvalMetrics`; add 4 optional float fields to `EvalQualityFloors` #backend-role
     - Entities · 1.5h
     - needs K-1 · completes C1 (partial)
     - Tests

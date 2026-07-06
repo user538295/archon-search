@@ -55,6 +55,10 @@ class EvalQualityFloors:
     graph_mrr: float | None = None
     graph_local_mrr: float | None = None
     graph_global_mrr: float | None = None
+    graph_naive_recall_at_5: float | None = None
+    graph_local_recall_at_5: float | None = None
+    graph_global_recall_at_5: float | None = None
+    graph_negative_control_recall_at_5: float | None = None
 
 
 @dataclass
