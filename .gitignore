@@ -38,3 +38,8 @@ venv/
 # Generated PDF fixtures (not committed — created at test time via reportlab)
 tests/fixtures/pdfs/*.pdf
 tests/eval/corpus/pdf-fixtures/*.pdf
+
+# LanceDB :memory: leak — test_real_community_eval_backend.py passes ":memory:" as db_path,
+# which LanceDB materializes on disk as a real directory. Root cause is a pre-existing test
+# bug (LanceDB has no in-memory mode); this guard prevents accidental staging.
+:memory:/
