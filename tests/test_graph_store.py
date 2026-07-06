@@ -15,6 +15,9 @@ Tests verify:
 - check_and_warn_legacy_graph_tables returns [] and warns when list_tables raises (BE-1b)
 - check_and_warn_legacy_graph_tables handles empty table list (BE-1b)
 - check_and_warn_legacy_graph_tables does not flag ambiguous collection names (BE-1b)
+- compute_singleton_pct returns 50.0 for mixed topology (2 isolated / 4 total) (BE-7)
+- compute_singleton_pct returns 0.0 when all nodes are connected (BE-7)
+- compute_singleton_pct returns 100.0 when edges table is absent (BE-7)
 """
 from __future__ import annotations
 
@@ -1756,3 +1759,132 @@ def test_graph_store_vector_search_nodes_filters_by_entity_type() -> None:
     # Assert the predicate contains the entity_type value
     call_args = search_builder.where.call_args[0][0]
     assert "concept" in call_args
+
+
+# ---------------------------------------------------------------------------
+# compute_singleton_pct (BE-7 unit tests)
+# ---------------------------------------------------------------------------
+
+
+def _build_singleton_pct_mocks(
+    node_ids: list[str],
+    edges_source_ids: list[str],
+    edges_target_ids: list[str],
+    edges_table_missing: bool = False,
+) -> tuple:
+    """Return (mock_db, edges_present_flag) for compute_singleton_pct tests.
+
+    Builds an open_table side_effect that routes:
+    - *_nodes -> nodes table returning *node_ids*
+    - *_edges -> edges table returning source/target columns (or raises FileNotFoundError)
+    """
+    import pyarrow as pa
+
+    # Nodes table: query().select(["id"]).to_arrow()
+    nodes_arrow = pa.table({"id": node_ids}, schema=pa.schema([pa.field("id", pa.utf8())]))
+    nodes_query = MagicMock()
+    nodes_query.select.return_value = nodes_query
+    nodes_query.to_arrow = AsyncMock(return_value=nodes_arrow)
+    nodes_table = MagicMock()
+    nodes_table.query.return_value = nodes_query
+
+    # Edges table: query().select(["source_node_id", "target_node_id"]).to_arrow()
+    edges_arrow = pa.table(
+        {"source_node_id": edges_source_ids, "target_node_id": edges_target_ids},
+        schema=pa.schema([
+            pa.field("source_node_id", pa.utf8()),
+            pa.field("target_node_id", pa.utf8()),
+        ]),
+    )
+    edges_query = MagicMock()
+    edges_query.select.return_value = edges_query
+    edges_query.to_arrow = AsyncMock(return_value=edges_arrow)
+    edges_table = MagicMock()
+    edges_table.query.return_value = edges_query
+
+    async def _open_table(name: str):
+        if name.endswith("_nodes"):
+            return nodes_table
+        if name.endswith("_edges"):
+            if edges_table_missing:
+                raise FileNotFoundError("Table not found")
+            return edges_table
+        raise FileNotFoundError(f"Unknown table: {name}")
+
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(side_effect=_open_table)
+    return mock_db
+
+
+def test_compute_singleton_pct_mixed_topology() -> None:
+    """4 nodes, 2 connected by an edge, 2 isolated → 50.0%.
+
+    Node IDs: n0, n1, n2, n3.  Edge: n0→n1.  n2 and n3 have no edges.
+    Expected: singleton_count=2, total=4 → 50.0%.
+    """
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    n0, n1, n2, n3 = "node-0", "node-1", "node-2", "node-3"
+    mock_db = _build_singleton_pct_mocks(
+        node_ids=[n0, n1, n2, n3],
+        edges_source_ids=[n0],
+        edges_target_ids=[n1],
+    )
+
+    store = GraphStore("/tmp/fake-db-singleton-mixed")
+
+    async def _run() -> float:
+        store._db = mock_db
+        return await store.compute_singleton_pct("test-col", ns="default")
+
+    result = asyncio.run(_run())
+    assert result == 50.0, f"Expected 50.0% singletons (2/4), got {result}"
+
+
+def test_compute_singleton_pct_fully_connected() -> None:
+    """2 nodes connected by 1 edge → 0.0% singletons."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    n0, n1 = "node-0", "node-1"
+    mock_db = _build_singleton_pct_mocks(
+        node_ids=[n0, n1],
+        edges_source_ids=[n0],
+        edges_target_ids=[n1],
+    )
+
+    store = GraphStore("/tmp/fake-db-singleton-connected")
+
+    async def _run() -> float:
+        store._db = mock_db
+        return await store.compute_singleton_pct("test-col", ns="default")
+
+    result = asyncio.run(_run())
+    assert result == 0.0, f"Expected 0.0% singletons (all connected), got {result}"
+
+
+def test_compute_singleton_pct_no_edges_table_returns_100() -> None:
+    """Nodes exist but edges table is absent → all nodes are singletons → 100.0%."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    n0, n1 = "node-0", "node-1"
+    mock_db = _build_singleton_pct_mocks(
+        node_ids=[n0, n1],
+        edges_source_ids=[],
+        edges_target_ids=[],
+        edges_table_missing=True,
+    )
+
+    store = GraphStore("/tmp/fake-db-singleton-no-edges-table")
+
+    async def _run() -> float:
+        store._db = mock_db
+        return await store.compute_singleton_pct("test-col", ns="default")
+
+    result = asyncio.run(_run())
+    assert result == 100.0, f"Expected 100.0% when edges table is absent, got {result}"

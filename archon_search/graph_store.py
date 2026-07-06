@@ -562,6 +562,84 @@ class GraphStore:
             )
             return 0
 
+    async def count_synonym_edges(self, collection: str, ns: str) -> int:
+        """Count edges with relationship_type='synonym_of' in *collection*'s graph table.
+
+        Returns 0 if the edges table is absent or any unexpected error occurs.
+        ``ns`` is LAST per project invariant.
+        """
+        self._validate_collection(collection)
+        _validate_namespace(ns)
+        db = self._require_db()
+        try:
+            edges_table = await db.open_table(self._edges_table_name(collection, ns))
+            predicate = _where_eq("relationship_type", RelationshipType.synonym_of.value)
+            return await edges_table.count_rows(filter=predicate)
+        except (FileNotFoundError, ValueError):
+            return 0
+        except Exception:
+            logger.warning(
+                "count_synonym_edges: unexpected error for collection %r; reporting 0",
+                collection,
+                exc_info=True,
+            )
+            return 0
+
+    async def compute_singleton_pct(self, collection: str, ns: str) -> float:
+        """Compute the percentage of nodes that have no edges (isolated/singleton nodes).
+
+        Returns 0.0 if the node or edge table is absent, or if there are zero nodes.
+        ``ns`` is LAST per project invariant.
+
+        Error-handling asymmetry (intentional):
+        - ``FileNotFoundError`` on the edges table returns ``100.0``: a missing edges
+          table means no edges exist, so every node is a singleton — this is accurate.
+        - An unexpected exception when *reading* the edges table returns ``0.0``: the
+          data state is unknown, so ``0.0`` is the neutral/conservative report (avoids
+          falsely signalling that all nodes are isolated when the truth is unknown).
+        """
+        self._validate_collection(collection)
+        _validate_namespace(ns)
+        db = self._require_db()
+        try:
+            nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
+            all_node_ids = (
+                await nodes_table.query().select(["id"]).to_arrow()
+            )["id"].to_pylist()
+        except (FileNotFoundError, ValueError):
+            return 0.0
+        except Exception:
+            logger.warning(
+                "compute_singleton_pct: error reading nodes for collection %r; returning 0.0",
+                collection,
+                exc_info=True,
+            )
+            return 0.0
+
+        total_nodes = len(all_node_ids)
+        if total_nodes == 0:
+            return 0.0
+
+        try:
+            edges_table = await db.open_table(self._edges_table_name(collection, ns))
+            edges_arrow = await edges_table.query().select(["source_node_id", "target_node_id"]).to_arrow()
+            source_ids = set(edges_arrow["source_node_id"].to_pylist())
+            target_ids = set(edges_arrow["target_node_id"].to_pylist())
+            connected_node_ids = source_ids | target_ids
+        except (FileNotFoundError, ValueError):
+            # No edges table — every node is a singleton
+            return 100.0
+        except Exception:
+            logger.warning(
+                "compute_singleton_pct: error reading edges for collection %r; returning 0.0",
+                collection,
+                exc_info=True,
+            )
+            return 0.0
+
+        singleton_count = sum(1 for nid in all_node_ids if nid not in connected_node_ids)
+        return (singleton_count / total_nodes) * 100.0
+
     async def find_nodes_by_name(
         self, collection: str, names: list[str], ns: str
     ) -> list[GraphNode]:

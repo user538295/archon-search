@@ -318,6 +318,12 @@ class GraphCollectionStats(BaseModel):
     ``_archon_graph_{col}_nodes`` / ``_archon_graph_{col}_edges`` tables.
     ``communities_invalidated`` is ``True`` when graph GC removed nodes/edges
     but communities have not yet been rebuilt for this collection (BE-8).
+
+    BE-7 health fields:
+    ``synonym_edge_count`` — number of edges with relationship_type='synonym_of'.
+    ``singleton_node_pct`` — percentage of nodes with no edges (isolated nodes, 0.0–100.0).
+    ``synonym_link_rate`` — fraction of edges that are synonym edges (0.0–1.0). Proxy for
+        enrichment coverage.
     """
 
     collection: str
@@ -325,6 +331,10 @@ class GraphCollectionStats(BaseModel):
     edge_count: int = Field(ge=0)
     # BE-8 — True when GC invalidated communities and rebuild is pending
     communities_invalidated: bool = False
+    # BE-7 — health metrics
+    synonym_edge_count: int = 0
+    singleton_node_pct: float = 0.0
+    synonym_link_rate: float = 0.0
 
 
 class GraphStatusDetail(BaseModel):
@@ -655,6 +665,8 @@ class GraphEdgeResponse(BaseModel):
     """Number of chunks where both endpoints are mentioned (co-occurrence count)."""
     source_chunk_ids: list[str]
     """Chunk IDs where both endpoints co-occur; sorted lexicographically, capped at 20."""
+    relationship_type: str = "related_to"
+    """Semantic relationship type (e.g. 'related_to', 'synonym_of'). BE-7."""
 
 
 class GraphInspectionResponse(BaseModel):

@@ -1296,7 +1296,7 @@
         "type": "object"
       },
       "GraphCollectionStats": {
-        "description": "Per-collection graph statistics (E1a FE-1 / C2).\n\nEach entry reports the number of nodes and edges in the collection's\n``_archon_graph_{col}_nodes`` / ``_archon_graph_{col}_edges`` tables.\n``communities_invalidated`` is ``True`` when graph GC removed nodes/edges\nbut communities have not yet been rebuilt for this collection (BE-8).",
+        "description": "Per-collection graph statistics (E1a FE-1 / C2).\n\nEach entry reports the number of nodes and edges in the collection's\n``_archon_graph_{col}_nodes`` / ``_archon_graph_{col}_edges`` tables.\n``communities_invalidated`` is ``True`` when graph GC removed nodes/edges\nbut communities have not yet been rebuilt for this collection (BE-8).\n\nBE-7 health fields:\n``synonym_edge_count`` \u2014 number of edges with relationship_type='synonym_of'.\n``singleton_node_pct`` \u2014 percentage of nodes with no edges (isolated nodes, 0.0\u2013100.0).\n``synonym_link_rate`` \u2014 fraction of edges that are synonym edges (0.0\u20131.0). Proxy for\n    enrichment coverage.",
         "properties": {
           "collection": {
             "title": "Collection",
@@ -1316,6 +1316,21 @@
             "minimum": 0.0,
             "title": "Node Count",
             "type": "integer"
+          },
+          "singleton_node_pct": {
+            "default": 0.0,
+            "title": "Singleton Node Pct",
+            "type": "number"
+          },
+          "synonym_edge_count": {
+            "default": 0,
+            "title": "Synonym Edge Count",
+            "type": "integer"
+          },
+          "synonym_link_rate": {
+            "default": 0.0,
+            "title": "Synonym Link Rate",
+            "type": "number"
           }
         },
         "required": [
@@ -1331,6 +1346,11 @@
         "properties": {
           "edge_id": {
             "title": "Edge Id",
+            "type": "string"
+          },
+          "relationship_type": {
+            "default": "related_to",
+            "title": "Relationship Type",
             "type": "string"
           },
           "source_chunk_ids": {

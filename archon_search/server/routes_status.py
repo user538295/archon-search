@@ -371,12 +371,38 @@ async def _build_graph_status(
         col_key = f"{ns}/{col}"
         col_health_entry: dict = collection_health.get(col_key, {})
         communities_invalidated: bool = bool(col_health_entry.get("communities_invalidated", False))
+
+        # BE-7 health metrics — swallow errors per post-persist contract
+        synonym_edge_count = 0
+        singleton_node_pct = 0.0
+        try:
+            synonym_edge_count = await graph_store.count_synonym_edges(col, ns=ns)
+        except Exception:
+            logger.warning(
+                "synonym_edge_count unavailable for collection %r; using 0", col, exc_info=True
+            )
+        try:
+            singleton_node_pct = await graph_store.compute_singleton_pct(col, ns=ns)
+        except Exception:
+            logger.warning(
+                "singleton_node_pct unavailable for collection %r; using 0.0", col, exc_info=True
+            )
+
+        # synonym_link_rate: fraction of edges that are synonym edges (0.0–1.0)
+        if edge_count > 0:
+            synonym_link_rate = synonym_edge_count / edge_count
+        else:
+            synonym_link_rate = 0.0
+
         collection_stats.append(
             GraphCollectionStats(
                 collection=col,
                 node_count=node_count,
                 edge_count=edge_count,
                 communities_invalidated=communities_invalidated,
+                synonym_edge_count=synonym_edge_count,
+                singleton_node_pct=singleton_node_pct,
+                synonym_link_rate=synonym_link_rate,
             )
         )
 

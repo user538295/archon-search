@@ -243,6 +243,7 @@ def _cross_collection_view_to_response(
             target_entity_id=edge.target_entity_id,
             weight=edge.weight,
             source_chunk_ids=edge.source_chunk_ids,
+            relationship_type=edge.relationship_type,
         )
         for edge in view.edges
     ]
@@ -275,6 +276,7 @@ def _view_to_response(view: CollectionGraphView) -> GraphInspectionResponse:
             target_entity_id=edge.target_entity_id,
             weight=edge.weight,
             source_chunk_ids=edge.source_chunk_ids,
+            relationship_type=edge.relationship_type,
         )
         for edge in view.edges
     ]

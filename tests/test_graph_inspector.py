@@ -2360,3 +2360,170 @@ async def test_apply_tfidf_clamps_negative_idf_to_zero(
     warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warning_records) == 1
     assert "IDF clamped to 0.0" in warning_records[0].message
+
+
+# ============================================================================
+# BE-7: GraphEdgeInspection.relationship_type and synonym edge truncation tests
+# ============================================================================
+
+
+def test_graph_edge_inspection_has_relationship_type_field() -> None:
+    """GraphEdgeInspection dataclass has a relationship_type field defaulting to 'related_to'."""
+    edge = GraphEdgeInspection(
+        edge_id="e1",
+        source_entity_id="src",
+        target_entity_id="tgt",
+        weight=1,
+        source_chunk_ids=[],
+    )
+    assert edge.relationship_type == "related_to"
+
+
+def test_graph_edge_inspection_relationship_type_passthrough() -> None:
+    """GraphEdgeInspection.relationship_type is populated from the value passed in."""
+    edge = GraphEdgeInspection(
+        edge_id="e1",
+        source_entity_id="src",
+        target_entity_id="tgt",
+        weight=1,
+        source_chunk_ids=[],
+        relationship_type="synonym_of",
+    )
+    assert edge.relationship_type == "synonym_of"
+
+
+def test_graph_inspector_includes_zero_weight_synonym_edges() -> None:
+    """Synonym edges (relationship_type='synonym_of') appear in inspection output even with weight=0.
+
+    The node-survival filter (truncation) must not drop synonym endpoint nodes.
+    """
+    # 3 nodes: node-a (high salience), node-b (low salience), node-syn (medium)
+    nodes = [
+        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0),
+        GraphNodeInspection("id-b", "B", chunk_count=5, salience=0.5),
+        GraphNodeInspection("id-syn", "Syn", chunk_count=3, salience=0.3),
+    ]
+    # Regular edge between id-a and id-b; synonym edge between id-a and id-syn
+    edges = [
+        GraphEdgeInspection("edge-ab", "id-a", "id-b", weight=2, source_chunk_ids=[]),
+        GraphEdgeInspection("edge-syn", "id-a", "id-syn", weight=0, source_chunk_ids=[], relationship_type="synonym_of"),
+    ]
+    # No truncation — all nodes survive
+    out_nodes, out_edges, _ = _truncate_graph(nodes, edges, max_nodes=10, max_edges=10)
+    syn_edges = [e for e in out_edges if e.relationship_type == "synonym_of"]
+    assert len(syn_edges) == 1
+    assert syn_edges[0].edge_id == "edge-syn"
+
+
+def test_graph_inspector_synonym_edges_not_truncated_by_cap() -> None:
+    """Synonym edge endpoint nodes are exempt from node cap truncation.
+
+    With max_nodes=2, only the top-2 salience nodes survive normally.
+    But synonym edge endpoints must be added to the surviving set, so
+    the synonym edge survives and its endpoint appears in nodes_out.
+
+    Truncation semantics:
+    - node_truncated is computed against original full node list size vs max_nodes (unchanged).
+    - edge_count includes synonym edges.
+    - synonym endpoint nodes ARE added to nodes_out (they appear in the returned node list).
+    """
+    nodes = [
+        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0),
+        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8),
+        GraphNodeInspection("id-c", "C", chunk_count=2, salience=0.2),  # low salience, normally truncated
+        GraphNodeInspection("id-d", "D", chunk_count=1, salience=0.1),  # low salience, normally truncated
+    ]
+    # Synonym edge connects id-a (surviving) → id-c (would be truncated)
+    edges = [
+        GraphEdgeInspection("edge-ab", "id-a", "id-b", weight=5, source_chunk_ids=[]),
+        GraphEdgeInspection("edge-syn", "id-a", "id-c", weight=0, source_chunk_ids=[], relationship_type="synonym_of"),
+    ]
+    # With max_nodes=2, id-c would normally be truncated
+    out_nodes, out_edges, truncated = _truncate_graph(nodes, edges, max_nodes=2, max_edges=10)
+
+    # node_truncated fires (4 nodes > 2 cap), so truncated=True
+    assert truncated is True
+
+    # Synonym endpoint id-c MUST survive in nodes_out
+    node_ids = {n.entity_id for n in out_nodes}
+    assert "id-c" in node_ids, "Synonym endpoint node id-c must survive truncation"
+
+    # Synonym edge must survive
+    syn_edges = [e for e in out_edges if e.relationship_type == "synonym_of"]
+    assert len(syn_edges) == 1
+    assert syn_edges[0].edge_id == "edge-syn"
+
+    # id-d (not a synonym endpoint) must NOT be in out_nodes unless extra room
+    # (With id-a, id-b from top-2, plus id-c from synonym exemption, id-d is excluded)
+    assert "id-d" not in node_ids
+
+
+def test_graph_inspector_synonym_edges_not_truncated_by_edge_cap() -> None:
+    """Synonym edges are exempt from max_edges truncation.
+
+    Build scenario where synonym edges + non-synonym edges exceed max_edges.
+    All synonym edges must survive the edge cap.
+    """
+    nodes = [
+        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0),
+        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8),
+        GraphNodeInspection("id-c", "C", chunk_count=6, salience=0.6),
+        GraphNodeInspection("id-d", "D", chunk_count=4, salience=0.4),
+    ]
+    # 3 non-synonym edges + 2 synonym edges; set max_edges=2 (only 2 non-synonyms survive)
+    edges = [
+        GraphEdgeInspection("edge-ab", "id-a", "id-b", weight=10, source_chunk_ids=[]),
+        GraphEdgeInspection("edge-ac", "id-a", "id-c", weight=9, source_chunk_ids=[]),
+        GraphEdgeInspection("edge-ad", "id-a", "id-d", weight=8, source_chunk_ids=[]),
+        GraphEdgeInspection("syn-1", "id-a", "id-b", weight=0, source_chunk_ids=[], relationship_type="synonym_of"),
+        GraphEdgeInspection("syn-2", "id-c", "id-d", weight=0, source_chunk_ids=[], relationship_type="synonym_of"),
+    ]
+    out_nodes, out_edges, truncated = _truncate_graph(nodes, edges, max_nodes=10, max_edges=2)
+
+    # truncated=True because more than 2 non-synonym edges
+    assert truncated is True
+
+    # Both synonym edges must survive
+    syn_edges = [e for e in out_edges if e.relationship_type == "synonym_of"]
+    assert len(syn_edges) == 2
+    syn_edge_ids = {e.edge_id for e in syn_edges}
+    assert "syn-1" in syn_edge_ids
+    assert "syn-2" in syn_edge_ids
+
+    # Only 2 non-synonym edges survive (highest weight first)
+    regular_edges = [e for e in out_edges if e.relationship_type != "synonym_of"]
+    assert len(regular_edges) == 2
+    regular_edge_ids = {e.edge_id for e in regular_edges}
+    assert "edge-ab" in regular_edge_ids
+    assert "edge-ac" in regular_edge_ids
+    assert "edge-ad" not in regular_edge_ids
+
+
+@pytest.mark.asyncio
+async def test_graph_inspector_relationship_type_passthrough_in_inspect_collection(mock_graph_store: MockGraphStore) -> None:
+    """GraphEdgeInspection.relationship_type is populated from GraphEdge.relationship_type."""
+    entity_a = "entity-a"
+    entity_b = "entity-b"
+    node_a = GraphNode(id=entity_a, entity_name="A", entity_type=EntityType.concept, source_doc_id="doc1", collection_name="col")
+    node_b = GraphNode(id=entity_b, entity_name="B", entity_type=EntityType.concept, source_doc_id="doc1", collection_name="col")
+    edge = GraphEdge(
+        id="edge-syn",
+        source_node_id=entity_a,
+        target_node_id=entity_b,
+        relationship_type=RelationshipType.synonym_of,
+        source_doc_id="doc1",
+    )
+
+    mock_graph_store.nodes["col"] = [node_a, node_b]
+    mock_graph_store.edges["col"] = [edge]
+    mock_graph_store.mentions["col"] = [
+        GraphMention(entity_id=entity_a, chunk_id="chunk-1", doc_id="doc1"),
+        GraphMention(entity_id=entity_b, chunk_id="chunk-1", doc_id="doc1"),
+    ]
+
+    view = await inspect_collection(
+        mock_graph_store, "col", total_chunk_count=10, max_nodes=1000, max_edges=1000, ns="default"
+    )
+
+    assert len(view.edges) == 1
+    assert view.edges[0].relationship_type == "synonym_of"

@@ -21,6 +21,8 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from archon_search.graph_types import RelationshipType
+
 if TYPE_CHECKING:
     from archon_search.graph_store import GraphStore
 
@@ -64,6 +66,8 @@ class GraphEdgeInspection:
     """Number of chunks where both endpoints are mentioned (co-occurrence count)."""
     source_chunk_ids: list[str]
     """Chunk IDs where both endpoints co-occur; sorted lexicographically, capped at 20."""
+    relationship_type: str = "related_to"
+    """Semantic relationship type (e.g. 'related_to', 'synonym_of'). BE-7."""
 
 
 @dataclass
@@ -129,14 +133,23 @@ def _truncate_graph(
 ) -> tuple[list[GraphNodeInspection], list[GraphEdgeInspection], bool]:
     """Apply deterministic truncation to nodes and edges.
 
+    Synonym edges (relationship_type='synonym_of') receive two exemptions:
+    1. Node cap exemption: synonym edge endpoint node IDs are added to the
+       surviving-nodes set unconditionally (before the node cap is applied to
+       non-synonym edges). This prevents synonym endpoints from being dropped.
+    2. Edge cap exemption: synonym edges are excluded from max_edges truncation
+       (max_edges applies only to non-synonym edges); synonym edges are appended
+       after the cap.
+
     Steps:
     1. Sort nodes by salience key (mode-dependent); cap at max_nodes.
        - frequency: sort by (-chunk_count, entity_id)
        - tfidf:     sort by (-salience, entity_id)
-    2. Build set of surviving entity IDs.
-    3. Filter edges to those where BOTH source and target are in surviving set.
-    4. Sort surviving edges by (weight desc, edge_id asc); cap at max_edges.
-    5. Return (nodes_out, edges_out, truncated) where truncated=True if either cap fired.
+    2. Collect synonym edge endpoint IDs; add them to surviving set unconditionally.
+    3. Filter non-synonym edges to survivors; sort and cap at max_edges.
+    4. Filter synonym edges to survivors; append after the cap (uncapped).
+    5. Return (nodes_out, edges_out, truncated) where truncated=True if the node cap fired
+       OR the non-synonym edge cap fired (synonym edges are never counted toward the edge cap).
 
     Args:
         nodes: List of GraphNodeInspection objects to truncate.
@@ -151,24 +164,56 @@ def _truncate_graph(
     """
     # Step 1: Sort and cap nodes — key depends on salience mode
     sorted_nodes = sorted(nodes, key=lambda n: _node_sort_key(n, salience_mode))
-    nodes_out = sorted_nodes[:max_nodes]
     node_truncated = len(sorted_nodes) > max_nodes
 
-    # Step 2: Build set of surviving entity IDs
-    surviving_entity_ids = {n.entity_id for n in nodes_out}
+    # Step 2: Collect synonym edge endpoint IDs for node-cap exemption
+    node_id_set = {n.entity_id for n in sorted_nodes}
+    synonym_edges = [e for e in edges if e.relationship_type == RelationshipType.synonym_of.value]
+    non_synonym_edges = [e for e in edges if e.relationship_type != RelationshipType.synonym_of.value]
 
-    # Step 3: Filter edges to survivors
-    surviving_edges = [
+    # Synonym endpoints that exist in the full node list are exempt from the cap
+    synonym_endpoint_ids: set[str] = set()
+    for e in synonym_edges:
+        if e.source_entity_id in node_id_set:
+            synonym_endpoint_ids.add(e.source_entity_id)
+        if e.target_entity_id in node_id_set:
+            synonym_endpoint_ids.add(e.target_entity_id)
+
+    # Build capped node list: top max_nodes from sorted list PLUS synonym endpoints
+    nodes_out_ids: set[str] = set()
+    nodes_out: list[GraphNodeInspection] = []
+    for n in sorted_nodes[:max_nodes]:
+        nodes_out.append(n)
+        nodes_out_ids.add(n.entity_id)
+
+    # Add synonym endpoint nodes that didn't make the cap
+    for n in sorted_nodes[max_nodes:]:
+        if n.entity_id in synonym_endpoint_ids:
+            nodes_out.append(n)
+            nodes_out_ids.add(n.entity_id)
+
+    surviving_entity_ids = nodes_out_ids
+
+    # Step 3: Filter non-synonym edges to survivors; sort and cap at max_edges
+    surviving_non_synonym = [
         e
-        for e in edges
+        for e in non_synonym_edges
+        if e.source_entity_id in surviving_entity_ids
+        and e.target_entity_id in surviving_entity_ids
+    ]
+    sorted_non_synonym = sorted(surviving_non_synonym, key=lambda e: (-e.weight, e.edge_id))
+    capped_non_synonym = sorted_non_synonym[:max_edges]
+    edge_truncated = len(sorted_non_synonym) > max_edges
+
+    # Step 4: Filter synonym edges to survivors and append (uncapped)
+    surviving_synonym = [
+        e
+        for e in synonym_edges
         if e.source_entity_id in surviving_entity_ids
         and e.target_entity_id in surviving_entity_ids
     ]
 
-    # Step 4: Sort and cap edges
-    sorted_edges = sorted(surviving_edges, key=lambda e: (-e.weight, e.edge_id))
-    edges_out = sorted_edges[:max_edges]
-    edge_truncated = len(sorted_edges) > max_edges
+    edges_out = capped_non_synonym + surviving_synonym
 
     truncated = node_truncated or edge_truncated
 
@@ -337,6 +382,7 @@ async def inspect_collection(
                 target_entity_id=edge.target_node_id,
                 weight=weight,
                 source_chunk_ids=source_chunk_ids,
+                relationship_type=edge.relationship_type.value,
             )
         )
 
@@ -498,6 +544,7 @@ async def inspect_cross_collection(
                     target_entity_id=edge.target_node_id,
                     weight=merged_weight,
                     source_chunk_ids=merged_chunk_ids,
+                    relationship_type=edge.relationship_type.value,
                 )
             else:
                 # First time seeing this edge
@@ -507,6 +554,7 @@ async def inspect_cross_collection(
                     target_entity_id=edge.target_node_id,
                     weight=weight,
                     source_chunk_ids=source_chunk_ids,
+                    relationship_type=edge.relationship_type.value,
                 )
 
     # Convert merged dicts to lists
