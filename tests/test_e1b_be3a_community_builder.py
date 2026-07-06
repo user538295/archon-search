@@ -121,7 +121,7 @@ def test_max_community_size_split():
 
     call_count = 0
 
-    def mock_leiden(nodes_arg, edges_arg, resolution):
+    def mock_leiden(nodes_arg, edges_arg, resolution, seed=None):
         nonlocal call_count
         call_count += 1
         if call_count == 1:

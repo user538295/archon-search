@@ -229,6 +229,158 @@ class CommunityStoreStub:
         ]
 
 
+class RealCommunityEvalBackend:
+    """Real eval backend wrapping a GraphStore for multi-hop eval collections.
+
+    Implements the four-method CommunityBackend protocol:
+    - communities_table_exists
+    - list_community_representatives
+    - find_nodes_by_name
+    - get_communities_for_entities
+
+    Used for multi-hop eval collections (multihop-musique, multihop-2wiki, hotpotqa)
+    where real community detection has pre-built communities.
+    """
+
+    def __init__(self, graph_store: "GraphStore") -> None:  # type: ignore[name-defined]  # noqa: F821
+        self._graph_store = graph_store
+
+    async def communities_table_exists(self, collection: str, ns: str = "default") -> bool:
+        """Check if communities table exists for the collection."""
+        return await self._graph_store.communities_table_exists(collection, ns=ns)
+
+    async def list_community_representatives(
+        self, collection: str, ns: str = "default"
+    ) -> list:  # list[Community]
+        """List all communities for the collection."""
+        return await self._graph_store.list_community_representatives(collection, ns=ns)
+
+    async def find_nodes_by_name(
+        self, collection: str, names: list[str], ns: str = "default"
+    ) -> list:  # list[GraphNode]
+        """Find graph nodes matching the given entity names."""
+        return await self._graph_store.find_nodes_by_name(collection, names, ns=ns)
+
+    async def get_communities_for_entities(
+        self, collection: str, entity_ids: list[str], ns: str = "default"
+    ) -> list:  # list[Community]
+        """Get communities containing the given entity IDs."""
+        return await self._graph_store.get_communities_for_entities(
+            collection, entity_ids, ns=ns
+        )
+
+
+class DispatchingCommunityStore:
+    """Proxy that dispatches community backend calls by collection name.
+
+    Implements the four-method CommunityBackend protocol by routing each call
+    to the appropriate backend based on collection name.
+    """
+
+    def __init__(self, backend_map: dict[str, "RealCommunityEvalBackend | CommunityStoreStub"]) -> None:  # type: ignore[name-defined]  # noqa: F821
+        self._backend_map = backend_map
+
+    def _get_backend(self, collection: str) -> "RealCommunityEvalBackend | CommunityStoreStub":  # type: ignore[name-defined]  # noqa: F821
+        """Get the backend for a collection, raising KeyError if not found."""
+        return self._backend_map[collection]
+
+    async def communities_table_exists(self, collection: str, ns: str = "default") -> bool:
+        """Dispatch to the appropriate backend."""
+        backend = self._get_backend(collection)
+        return await backend.communities_table_exists(collection, ns=ns)
+
+    async def list_community_representatives(
+        self, collection: str, ns: str = "default"
+    ) -> list:  # list[Community]
+        """Dispatch to the appropriate backend."""
+        backend = self._get_backend(collection)
+        return await backend.list_community_representatives(collection, ns=ns)
+
+    async def find_nodes_by_name(
+        self, collection: str, names: list[str], ns: str = "default"
+    ) -> list:  # list[GraphNode]
+        """Dispatch to the appropriate backend."""
+        backend = self._get_backend(collection)
+        return await backend.find_nodes_by_name(collection, names, ns=ns)
+
+    async def get_communities_for_entities(
+        self, collection: str, entity_ids: list[str], ns: str = "default"
+    ) -> list:  # list[Community]
+        """Dispatch to the appropriate backend."""
+        backend = self._get_backend(collection)
+        return await backend.get_communities_for_entities(collection, entity_ids, ns=ns)
+
+
+class RealGraphExpander:
+    """Real GraphExpander for eval harness that reads entity names from GraphStore.
+
+    Implements the GraphExpander protocol by querying real graph nodes
+    from a GraphStore (as opposed to the stub which uses a fixed dictionary).
+    """
+
+    def __init__(self, graph_store: "GraphStore") -> None:  # type: ignore[name-defined]  # noqa: F821
+        self._graph_store = graph_store
+
+    async def expand(self, query: str, collection: str, ns: str = "default") -> "ExpandedQuery":  # type: ignore[name-defined]  # noqa: F821
+        """Expand query with first-degree graph-neighbour entity names.
+
+        Reads entity names from the eval GraphStore's node table and
+        retrieves their neighbors (same protocol as production GraphExpander).
+        """
+        import asyncio
+
+        from archon_search.graph_expander import (
+            ExpandedQuery,
+            build_expanded_text,
+            tokenize_and_generate_ngrams,
+        )
+
+        # Step 1: tokenise and generate N-gram candidates
+        ngram_candidates: list[str] = await asyncio.to_thread(
+            tokenize_and_generate_ngrams, query, 3
+        )
+
+        if not ngram_candidates:
+            return ExpandedQuery(original_query=query, expanded_text=query)
+
+        # Step 2: look up matched graph nodes
+        try:
+            matched_nodes = await self._graph_store.find_nodes_by_name(
+                collection, ngram_candidates, ns=ns
+            )
+        except Exception:
+            # Fallback to original query on any error
+            return ExpandedQuery(original_query=query, expanded_text=query)
+
+        if not matched_nodes:
+            return ExpandedQuery(original_query=query, expanded_text=query)
+
+        # Step 3: retrieve neighbours for matched nodes
+        entity_ids = [node.id for node in matched_nodes]
+        try:
+            neighbour_nodes = await self._graph_store.get_neighbours(
+                collection, entity_ids, ns=ns
+            )
+        except Exception:
+            return ExpandedQuery(original_query=query, expanded_text=query)
+
+        if not neighbour_nodes:
+            return ExpandedQuery(original_query=query, expanded_text=query)
+
+        # Step 4: build expanded text
+        neighbour_names = [node.entity_name for node in neighbour_nodes]
+        entity_names_found = [node.entity_name for node in matched_nodes]
+        expanded, appended = build_expanded_text(query, neighbour_names)
+
+        return ExpandedQuery(
+            original_query=query,
+            expanded_text=expanded,
+            expansion_applied=bool(appended),
+            entity_names_found=entity_names_found,
+            neighbour_names_added=appended,
+        )
+
+
 class EvalRerankerBackend:
     """BM25-inspired lexical reranker for eval harness use only.
 

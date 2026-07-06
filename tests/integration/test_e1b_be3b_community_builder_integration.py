@@ -98,7 +98,7 @@ async def test_representative_chunk_ids_populated(tmp_path: Path):
     from archon_search.community_builder import CommunityBuilder
     builder = CommunityBuilder(graph_store, config, search_store=search_store)
 
-    communities = await builder.build(col)
+    communities = await builder.build(col, ns="default")
 
     await graph_store.disconnect()
     await search_store.disconnect()
@@ -146,7 +146,7 @@ async def test_llm_failure_still_writes_communities(tmp_path: Path):
         "archon_search.community_builder._run_leiden_partition_sync",
         return_value=[[node_a.id, node_b.id]],
     ):
-        communities = await builder.build(col)
+        communities = await builder.build(col, ns="default")
 
     await graph_store.disconnect()
     await search_store.disconnect()

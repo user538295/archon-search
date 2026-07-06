@@ -160,3 +160,38 @@ def _activate_deterministic_eval_backends(
     monkeypatch.setattr(
         backends_mod, "_ACTIVE_RERANKER", reranker, raising=False
     )
+
+
+# ---------------------------------------------------------------------------
+# Community builder fixture for multi-hop eval collections (BE-6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+async def build_communities_for_eval(eval_tmp_lancedb_root: Path) -> None:
+    """Build communities for multi-hop eval collections in the shared LanceDB store.
+
+    Skips if leidenalg is not installed (graph extras absent).
+
+    Pre-builds communities for multi-hop collections using a fixed Leiden seed (42)
+    for determinism. Ingest is delegated to integration tests that need to use
+    the fixture; this fixture prepares the LanceDB structure.
+
+    Module-scoped so it runs once per test module before any test that imports it.
+    """
+    pytest.importorskip("leidenalg")  # Skip if graph extras absent
+
+    from archon_search.graph_store import GraphStore
+
+    # Create a GraphStore connected to the shared eval temp directory
+    graph_store = GraphStore(db_path=str(eval_tmp_lancedb_root))
+    await graph_store.connect()
+
+    try:
+        # Ensure graph tables exist for each multi-hop collection
+        # (actual document ingest will happen in integration tests that use this fixture)
+        for collection_name in ["multihop-musique", "multihop-2wiki", "hotpotqa"]:
+            await graph_store.ensure_graph_tables(collection_name, ns="default")
+
+    finally:
+        await graph_store.disconnect()

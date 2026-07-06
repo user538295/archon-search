@@ -74,7 +74,7 @@ async def test_max_community_size_split_real_leiden(tmp_path: Path):
         max_community_size=2,
     )
     builder = CommunityBuilder(store, config)
-    communities = await builder.build(col)
+    communities = await builder.build(col, ns="default")
     await store.disconnect()
 
     assert len(communities) >= 1

@@ -1,10 +1,14 @@
 {
   "command": "pytest -m eval tests/eval/test_eval_suite.py::test_eval_suite_report_only_smoke",
-  "eval_hash": "4f018f30c8c0e2ff7583cbf945c0f0f5dedaff0793cc69a5dfdf9e1175cd2159",
+  "eval_hash": "2e91da45d15672a50e06efa00a1e3ee9a985e2c90d87d6ae15c942d3fbade285",
   "metrics": {
     "graph_global_mrr": 1.0,
+    "graph_global_recall_at_5": null,
     "graph_local_mrr": 1.0,
+    "graph_local_recall_at_5": null,
     "graph_mrr": 1.0,
+    "graph_naive_recall_at_5": 0.5,
+    "graph_negative_control_recall_at_5": null,
     "latency_p50_ms": null,
     "latency_p95_ms": null,
     "mrr": 1.0,
