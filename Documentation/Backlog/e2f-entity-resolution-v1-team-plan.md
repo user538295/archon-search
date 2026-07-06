@@ -462,11 +462,11 @@ regen OpenAPI snapshot with `uv run --python 3.12 pytest tests/server/test_opena
         - [x] #integration_test — `test_graph_inspection_shows_relationship_type_on_edges` — `GET /graph/{collection}` edge responses include `relationship_type` populated from the edges table — asserts against the HTTP response body (not just the inspector view), verifying the route layer correctly passes relationship_type through to the JSON response
         - [x] #integration_test — `test_cross_collection_inspection_preserves_synonym_relationship_type` — GET /graph/{collection} via the cross-collection path returns synonym edges with relationship_type="synonym_of" (not the default "related_to")
 
-- [ ] **T-3** — e2e: after synonym detection runs, GET /status shows `synonym_edge_count > 0`; GET /graph/{collection} shows `relationship_type: "synonym_of"` on synonym edges #tester-role
+- [x] **T-3** — e2e: after synonym detection runs, GET /status shows `synonym_edge_count > 0`; GET /graph/{collection} shows `relationship_type: "synonym_of"` on synonym edges #tester-role
     - — · 2.0h
     - needs BE-7 · completes S6, S7
     - Tests
-        - #e2e_test — `test_e2e_health_metrics_reflect_synonym_activity` — ingest → enrich → GET /status → assert synonym_edge_count; GET /graph/{col} → assert edge relationship_type present
+        - [x] #e2e_test — `test_e2e_health_metrics_reflect_synonym_activity` — ingest → enrich → GET /status → assert synonym_edge_count; GET /graph/{col} → assert edge relationship_type present
 
 ### Phase 4 · Eval gate confirms bridge recall improvement
 

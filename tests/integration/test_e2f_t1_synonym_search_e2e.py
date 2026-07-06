@@ -20,70 +20,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import sys
-import types
 from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.integration
-
-# ---------------------------------------------------------------------------
-# Content-dependent spaCy stub
-# ---------------------------------------------------------------------------
-
-def _install_content_dependent_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Install a spaCy stub that returns entity based on text content.
-
-    Returns "K8s" with label "ORG" (→ EntityType.system) only when "K8s" appears in text.
-    Returns "Kubernetes" with label "ORG" (→ EntityType.system) only when "Kubernetes" appears.
-
-    Uses "ORG" label because graph_extractor._LABEL_TO_ENTITY_TYPE maps "ORG" → system;
-    "CONCEPT" is not in that map and would be silently discarded.
-
-    Must be called BEFORE make_real_app(graph_enabled=True).
-    """
-
-    class _FakeEnt:
-        def __init__(self, text: str, label: str) -> None:
-            self.text = text
-            self.label_ = label
-
-    class _FakeDoc:
-        def __init__(self, ents: list) -> None:
-            self.ents = ents
-
-    # Use "ORG" — graph_extractor.py _LABEL_TO_ENTITY_TYPE maps ORG → EntityType.system.
-    # "CONCEPT" is NOT in that map and would be silently discarded.
-    _ENTITY_MAP = [
-        ("K8s", "ORG"),
-        ("Kubernetes", "ORG"),
-    ]
-
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            ents = [
-                _FakeEnt(name, label)
-                for name, label in _ENTITY_MAP
-                if name in text
-            ]
-            return _FakeDoc(ents)
-
-    nlp_instance = _FakeNLP()
-
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
-
 
 # ---------------------------------------------------------------------------
 # Mock embedder (not used for synonym detection — stored embeddings take precedence)
@@ -219,10 +160,10 @@ def test_e2e_search_traverses_synonym_edges(tmp_path: Path, monkeypatch) -> None
     8. POST /search with graph_mode="naive" and query "K8s".
     9. Assert search results contain text from the Kubernetes document.
     """
-    from tests.integration.conftest import ingest_file_via_path, make_real_app
+    from tests.integration.conftest import ingest_file_via_path, install_k8s_synonym_spacy_stub, make_real_app
 
     # Step 1: install content-dependent spaCy stub BEFORE make_real_app
-    _install_content_dependent_spacy_stub(monkeypatch)
+    install_k8s_synonym_spacy_stub(monkeypatch)
 
     col = "synonymdocs"
     ns = "default"

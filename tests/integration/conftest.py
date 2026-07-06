@@ -286,7 +286,7 @@ async def make_real_pipeline(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# spaCy stub helper — used by graph-related e2e tests (T-2, T-3, T-4).
+# spaCy stub helpers — used by graph-related e2e tests (T-1, T-2, T-3, T-4).
 # ---------------------------------------------------------------------------
 
 
@@ -319,6 +319,68 @@ def install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         ("Alice", "PERSON"),
         ("Bob", "PERSON"),
         ("Google", "ORG"),
+    ]
+
+    class _FakeNLP:
+        def __call__(self, text: str) -> _FakeDoc:
+            ents = [
+                _FakeEnt(name, label)
+                for name, label in _ENTITY_MAP
+                if name in text
+            ]
+            return _FakeDoc(ents)
+
+    nlp_instance = _FakeNLP()
+
+    fake_util = types.ModuleType("spacy.util")
+    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
+    fake_cli = types.ModuleType("spacy.cli")
+    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
+    fake_spacy = types.ModuleType("spacy")
+    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
+    fake_spacy.util = fake_util  # type: ignore[attr-defined]
+    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
+    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
+    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+
+
+def install_k8s_synonym_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Install a content-dependent spaCy stub for K8s/Kubernetes synonym e2e tests.
+
+    Returns "K8s" (label "ORG" → EntityType.system) only when "K8s" appears in text.
+    Returns "Kubernetes" (label "ORG" → EntityType.system) only when "Kubernetes" appears.
+    Both entities get the same entity_type so SynonymDetector groups them together.
+
+    Must be called BEFORE make_real_app(graph_enabled=True) because create_app
+    calls _check_graph_deps which imports spaCy synchronously.
+
+    Used by T-1 (synonym_search_e2e), T-2 (alias_file_manual_synonym_edge), and
+    T-3 (health_metrics_synonym_e2e).
+
+    Usage::
+        install_k8s_synonym_spacy_stub(monkeypatch)
+        with make_real_app(..., graph_enabled=True) as (client, cfg, api_key):
+            ...
+    """
+    import sys
+    import types
+
+    class _FakeEnt:
+        def __init__(self, text: str, label: str) -> None:
+            self.text = text
+            self.label_ = label
+
+    class _FakeDoc:
+        def __init__(self, ents: list) -> None:
+            self.ents = ents
+
+    # ORG → EntityType.system in graph_extractor._LABEL_TO_ENTITY_TYPE.
+    # Content-dependent: each document produces exactly the entity named in its text.
+    _ENTITY_MAP = [
+        ("K8s", "ORG"),
+        ("Kubernetes", "ORG"),
     ]
 
     class _FakeNLP:
