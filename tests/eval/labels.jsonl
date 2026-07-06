@@ -43,8 +43,6 @@
 {"query_id": "q-route-05", "doc_id": "code-012", "grade": 1}
 {"query_id": "q-route-06", "doc_id": "docs-005", "grade": 2}
 {"query_id": "q-route-06", "doc_id": "docs-003", "grade": 1}
-{"query_id": "q-alt-01", "doc_id": "alt-001", "grade": 2}
-{"query_id": "q-alt-02", "doc_id": "alt-002", "grade": 2}
 {"query_id": "q-fr-01", "doc_id": "fr-001", "grade": 2}
 {"query_id": "q-fr-01", "doc_id": "fr-004", "grade": 1}
 {"query_id": "q-fr-02", "doc_id": "fr-002", "grade": 2}
@@ -62,3 +60,7 @@
 {"query_id": "q-graph-global-01", "doc_id": "graph-001", "grade": 1}
 {"query_id": "q-musique-001", "doc_id": "musique-001", "grade": 2}
 {"query_id": "q-musique-001", "doc_id": "musique-004", "grade": 1}
+{"query_id": "q-2wiki-local-01", "doc_id": "2wiki-001", "grade": 2}
+{"query_id": "q-2wiki-local-01", "doc_id": "2wiki-002", "grade": 1}
+{"query_id": "q-2wiki-global-01", "doc_id": "2wiki-003", "grade": 2}
+{"query_id": "q-2wiki-global-01", "doc_id": "2wiki-004", "grade": 1}

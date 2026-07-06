@@ -431,14 +431,14 @@ graph LR
         - #integration_test — `test_real_community_backend_find_nodes_by_name` — `find_nodes_by_name` returns non-empty list for entity names present in 2WikiMultiHopQA graph ✓
         - #integration_test — `test_real_community_backend_retrieves_known_relevant_doc` (requires leidenalg, `pytest.importorskip`) — hand-constructed minimal 2WikiMultiHopQA case with a known-relevant doc; assert that doc appears in top-5 results via the community path (not hybrid fallback) — deferred to BE-8 (integration with full pipeline)
 
-- [ ] **BE-7** — Commit 2WikiMultiHopQA corpus: `tests/eval/corpus/multihop-2wiki/` (~100 questions, stratified ~50 bridge + ~50 comparison); add entries to `documents.jsonl` (collection: `multihop-2wiki`), `queries.jsonl` (local and global modes), `labels.jsonl`; update `LICENSE-DATASETS` #backend-role
+- [x] **BE-7** — Commit 2WikiMultiHopQA corpus: `tests/eval/corpus/multihop-2wiki/` (~100 questions, stratified ~50 bridge + ~50 comparison); add entries to `documents.jsonl` (collection: `multihop-2wiki`), `queries.jsonl` (local and global modes), `labels.jsonl`; update `LICENSE-DATASETS` #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-6 · completes S12 (partial)
     - Tests
-        - #unit_test — `test_corpus_contract_multihop_2wiki` — `load_eval_corpus` loads all 2Wiki documents; local and global query entries have correct schema; labels present
-        - #unit_test — `test_2wiki_queries_have_local_and_global_modes` — at least one `graph_mode="local"` and one `graph_mode="global"` entry present for `collection="multihop-2wiki"`
-        - #unit_test — `test_license_datasets_includes_2wiki` — `LICENSE-DATASETS` contains "2WikiMultiHopQA" and "Apache-2.0"
-        - #unit_test — `test_all_2wiki_queries_have_labels` — every `multihop-2wiki` query entry has ≥1 positive label in `labels.jsonl` (see corpus-contract rule from BE-3)
+        - [x] #unit_test — `test_corpus_contract_multihop_2wiki` — `load_eval_corpus` loads all 2Wiki documents; local and global query entries have correct schema; labels present
+        - [x] #unit_test — `test_2wiki_queries_have_local_and_global_modes` — at least one `graph_mode="local"` and one `graph_mode="global"` entry present for `collection="multihop-2wiki"`
+        - [x] #unit_test — `test_license_datasets_includes_2wiki` — `LICENSE-DATASETS` contains "2WikiMultiHopQA" and "Apache-2.0"
+        - [x] #unit_test — `test_all_2wiki_queries_have_labels` — every `multihop-2wiki` query entry has ≥1 positive label in `labels.jsonl` (see corpus-contract rule from BE-3)
 
 - [ ] **BE-8** — Update `run_eval_suite`: partition local/global traces by collection (multi-hop vs `graph`); compute `graph_local_recall_at_5` and `graph_global_recall_at_5`; add `lancedb_root: Path | None = None` parameter to `run_eval_suite`; skip the internal `TemporaryDirectory` when supplied; plumb it through to `_build_pipeline_with_eval_backends`; update `_build_pipeline_with_eval_backends` to accept `community_backend_map: dict[str, CommunityBackend]` (the four-method C2 protocol, not GraphStore) and wrap it in `DispatchingCommunityStore`, injecting `RealCommunityEvalBackend` for `multihop-*` collections and `CommunityStoreStub` for `graph` (Key decision §7) #backend-role
     - Use Cases · 2.5h

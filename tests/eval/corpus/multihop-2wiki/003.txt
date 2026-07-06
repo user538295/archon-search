@@ -1,0 +1,3 @@
+Bridge-type scenario 3:
+Alice is a scientist who works at MIT. MIT is located in Cambridge, Massachusetts. 
+This is variant 3 of the scenario, providing additional context about multi-hop relationships.

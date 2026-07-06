@@ -241,3 +241,107 @@ def test_all_graph_queries_have_labels() -> None:
         f"Multi-hop queries missing positive labels: {missing}. "
         "Each query must have ≥1 label with grade > 0."
     )
+
+
+# ---------------------------------------------------------------------------
+# BE-7: 2WikiMultiHopQA corpus tests
+# ---------------------------------------------------------------------------
+
+
+def test_corpus_contract_multihop_2wiki() -> None:
+    """load_eval_corpus loads all 2Wiki documents without error.
+
+    Local and global query entries have correct schema.
+    Corresponding labels present.
+    """
+    corpus = load_eval_corpus(CORPUS_ROOT)
+
+    # Verify 2Wiki documents exist and have correct collection name
+    wiki2_docs = [d for d in corpus.documents if d.collection == "multihop-2wiki"]
+    assert len(wiki2_docs) > 0, "No 2WikiMultiHopQA documents found in corpus"
+
+    # Verify 2Wiki queries exist and have correct schema
+    wiki2_queries = [q for q in corpus.queries if q.collection == "multihop-2wiki"]
+    assert len(wiki2_queries) > 0, "No 2WikiMultiHopQA queries found in corpus"
+
+    # Check local and global modes are present
+    graph_modes = {q.graph_mode for q in wiki2_queries}
+    assert "local" in graph_modes or "global" in graph_modes, (
+        f"2Wiki queries should have graph_mode='local' or 'global', got {graph_modes}"
+    )
+
+    for query in wiki2_queries:
+        assert query.graph_mode in ("local", "global"), (
+            f"Query {query.query_id} should have graph_mode in ['local', 'global'], "
+            f"got {query.graph_mode!r}"
+        )
+        assert query.metric_scope == "retrieval", (
+            f"Query {query.query_id} should have metric_scope='retrieval', "
+            f"got {query.metric_scope!r}"
+        )
+        assert query.collection == "multihop-2wiki", (
+            f"Query {query.query_id} should have collection='multihop-2wiki', "
+            f"got {query.collection!r}"
+        )
+
+    # Verify all 2Wiki queries have at least one positive label
+    wiki2_query_ids = {q.query_id for q in wiki2_queries}
+    wiki2_labels = {lbl.query_id for lbl in corpus.labels if lbl.query_id in wiki2_query_ids and lbl.grade > 0}
+    assert wiki2_labels == wiki2_query_ids, (
+        f"2Wiki queries missing positive labels: "
+        f"{wiki2_query_ids - wiki2_labels}"
+    )
+
+
+def test_2wiki_queries_have_local_and_global_modes() -> None:
+    """At least one graph_mode='local' and one graph_mode='global' entry present for multihop-2wiki."""
+    corpus = load_eval_corpus(CORPUS_ROOT)
+    wiki2_queries = [q for q in corpus.queries if q.collection == "multihop-2wiki"]
+
+    assert len(wiki2_queries) > 0, "No 2WikiMultiHopQA queries found"
+
+    has_local = any(q.graph_mode == "local" for q in wiki2_queries)
+    has_global = any(q.graph_mode == "global" for q in wiki2_queries)
+
+    assert has_local, (
+        "At least one 2Wiki query with graph_mode='local' is required"
+    )
+    assert has_global, (
+        "At least one 2Wiki query with graph_mode='global' is required"
+    )
+
+
+def test_license_datasets_includes_2wiki() -> None:
+    """LICENSE-DATASETS contains '2WikiMultiHopQA' and 'Apache-2.0'."""
+    license_file = CORPUS_ROOT / "LICENSE-DATASETS"
+    assert license_file.exists(), (
+        f"LICENSE-DATASETS file not found at {license_file}"
+    )
+
+    content = license_file.read_text(encoding="utf-8")
+    assert "2WikiMultiHopQA" in content, "LICENSE-DATASETS must mention '2WikiMultiHopQA'"
+    assert "Apache-2.0" in content or "Apache License 2.0" in content, (
+        "LICENSE-DATASETS must mention 'Apache-2.0' or 'Apache License 2.0'"
+    )
+
+
+def test_all_2wiki_queries_have_labels() -> None:
+    """Every multihop-2wiki query entry has ≥1 positive label in labels.jsonl."""
+    corpus = load_eval_corpus(CORPUS_ROOT)
+
+    wiki2_queries = [q for q in corpus.queries if q.collection == "multihop-2wiki"]
+    assert len(wiki2_queries) > 0, "No 2WikiMultiHopQA queries found in corpus"
+
+    # Build positive label mapping for 2Wiki queries
+    wiki2_query_ids = {q.query_id for q in wiki2_queries}
+    positives_by_query: dict[str, int] = {}
+    for lbl in corpus.labels:
+        if lbl.query_id in wiki2_query_ids and lbl.grade > 0:
+            positives_by_query[lbl.query_id] = positives_by_query.get(lbl.query_id, 0) + 1
+
+    # Check every 2Wiki query has at least one positive label
+    missing = [q.query_id for q in wiki2_queries if positives_by_query.get(q.query_id, 0) == 0]
+    assert not missing, (
+        f"2Wiki queries missing positive labels: {missing}. "
+        "Each query must have ≥1 label with grade > 0."
+    )

@@ -30,8 +30,6 @@
 {"query_id": "q-route-04", "text": "billing subscription invoice refund account expiry", "collection": null, "metric_scope": "routing"}
 {"query_id": "q-route-05", "text": "implement priority queue scheduler task worker", "collection": null, "metric_scope": "routing"}
 {"query_id": "q-route-06", "text": "deployment environment variables production server configuration", "collection": null, "metric_scope": "routing"}
-{"query_id": "q-alt-01", "text": "product quantization codebook subspace vector compression approximate nearest neighbor", "collection": "alt-model", "metric_scope": "retrieval"}
-{"query_id": "q-alt-02", "text": "multi-head self-attention transformer query key value softmax", "collection": "alt-model", "metric_scope": "retrieval"}
 {"query_id": "q-fr-01", "text": "installation configuration serveur pr\u00e9requis Python pip", "collection": "fr-docs", "metric_scope": "retrieval"}
 {"query_id": "q-fr-02", "text": "API REST authentification jeton Bearer endpoint recherche", "collection": "fr-docs", "metric_scope": "retrieval"}
 {"query_id": "q-fr-03", "text": "architecture pipeline ingestion vectorisation indexation LanceDB", "collection": "fr-docs", "metric_scope": "retrieval"}
@@ -43,3 +41,5 @@
 {"query_id": "q-graph-local-01", "text": "AuthService user credentials session management login", "collection": "graph", "metric_scope": "retrieval", "graph_mode": "local"}
 {"query_id": "q-graph-global-01", "text": "JWT token expiry integrity verification enforcement", "collection": "graph", "metric_scope": "retrieval", "graph_mode": "global"}
 {"query_id": "q-musique-001", "text": "What is the relationship between machine learning and neural networks?", "collection": "multihop-musique", "metric_scope": "retrieval", "graph_mode": "naive"}
+{"query_id": "q-2wiki-local-01", "text": "Who works at the institution?", "collection": "multihop-2wiki", "metric_scope": "retrieval", "graph_mode": "local"}
+{"query_id": "q-2wiki-global-01", "text": "Compare different entities", "collection": "multihop-2wiki", "metric_scope": "retrieval", "graph_mode": "global"}
