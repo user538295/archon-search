@@ -54,6 +54,7 @@ class RelationshipType(str, Enum):
     implements = "implements"
     depends_on = "depends_on"
     related_to = "related_to"
+    synonym_of = "synonym_of"
 
 
 def make_stable_entity_id(entity_type: str, entity_name: str) -> str:
@@ -161,6 +162,10 @@ class GraphEdge:
     """Semantic relationship type between the two nodes."""
     source_doc_id: str
     """Doc ID of the document that produced this edge (last-writer-wins on upsert)."""
+    extraction_method: str | None = None
+    """How the edge was extracted (e.g. "ner", "embedding").
+    None when the extraction method was not recorded (pre-E2f edges).
+    """
 
 
 @dataclass

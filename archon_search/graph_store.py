@@ -141,6 +141,7 @@ class GraphStore:
             pa.field("target_node_id", pa.utf8()),
             pa.field("relationship_type", pa.utf8()),
             pa.field("source_doc_id", pa.utf8()),
+            pa.field("extraction_method", pa.utf8(), nullable=True),
         ])
 
     @staticmethod
@@ -192,21 +193,43 @@ class GraphStore:
         _validate_namespace(ns)
         db = self._require_db()
 
-        await db.create_table(
-            self._nodes_table_name(collection, ns),
-            schema=self._nodes_schema(),
-            exist_ok=True,
-        )
-        await db.create_table(
-            self._edges_table_name(collection, ns),
-            schema=self._edges_schema(),
-            exist_ok=True,
-        )
-        await db.create_table(
-            self._mentions_table_name(collection, ns),
-            schema=self._mentions_schema(),
-            exist_ok=True,
-        )
+        existing_tables: set[str] = set((await db.list_tables()).tables)
+
+        if self._nodes_table_name(collection, ns) not in existing_tables:
+            await db.create_table(
+                self._nodes_table_name(collection, ns),
+                schema=self._nodes_schema(),
+            )
+
+        edges_name = self._edges_table_name(collection, ns)
+        if edges_name not in existing_tables:
+            await db.create_table(edges_name, schema=self._edges_schema())
+        else:
+            # BE-1 migration: pre-E2f edge tables lack extraction_method; add it if absent.
+            import pyarrow as pa  # noqa: PLC0415
+
+            edges_tbl = await db.open_table(edges_name)
+            edges_schema = await edges_tbl.schema()
+            if "extraction_method" not in edges_schema.names:
+                try:
+                    await edges_tbl.add_columns(pa.field("extraction_method", pa.utf8(), nullable=True))
+                    logger.info(
+                        "BE-1 migration: added extraction_method column to edge table %r",
+                        edges_name,
+                    )
+                except Exception as exc:
+                    if "already exists" in str(exc).lower():
+                        logger.warning(
+                            "Concurrent BE-1 migration: extraction_method already added — %s", exc
+                        )
+                    else:
+                        raise
+
+        if self._mentions_table_name(collection, ns) not in existing_tables:
+            await db.create_table(
+                self._mentions_table_name(collection, ns),
+                schema=self._mentions_schema(),
+            )
 
     async def write_graph(
         self,
@@ -247,6 +270,8 @@ class GraphStore:
             )
 
         if edges:
+            # extraction_method column is guaranteed present by ensure_graph_tables() migration.
+            # _arrow_to_edges() guard handles pre-migration tables gracefully on read.
             edges_table = await db.open_table(self._edges_table_name(collection, ns))
             edges_data = pa.table(
                 {
@@ -255,6 +280,9 @@ class GraphStore:
                     "target_node_id": [e.target_node_id for e in edges],
                     "relationship_type": [e.relationship_type.value for e in edges],
                     "source_doc_id": [e.source_doc_id for e in edges],
+                    "extraction_method": pa.array(
+                        [e.extraction_method for e in edges], type=pa.utf8()
+                    ),
                 },
                 schema=self._edges_schema(),
             )
@@ -744,8 +772,16 @@ class GraphStore:
         rel_types = arrow_table["relationship_type"].to_pylist()
         source_docs = arrow_table["source_doc_id"].to_pylist()
 
-        for eid, src_id, tgt_id, rtype, sdoc in zip(
-            ids, source_node_ids, target_node_ids, rel_types, source_docs
+        # Guard: pre-E2f edge tables lack the extraction_method column; default to None.
+        has_extraction_method_col = "extraction_method" in arrow_table.schema.names
+        extraction_methods = (
+            arrow_table["extraction_method"].to_pylist()
+            if has_extraction_method_col
+            else [None] * len(ids)
+        )
+
+        for eid, src_id, tgt_id, rtype, sdoc, em in zip(
+            ids, source_node_ids, target_node_ids, rel_types, source_docs, extraction_methods
         ):
             results.append(
                 GraphEdge(
@@ -754,6 +790,7 @@ class GraphStore:
                     target_node_id=tgt_id,
                     relationship_type=RelationshipType(rtype),
                     source_doc_id=sdoc,
+                    extraction_method=em,
                 )
             )
         return results

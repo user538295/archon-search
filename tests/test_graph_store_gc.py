@@ -87,6 +87,9 @@ def _edges_arrow(edges: list[GraphEdge]):
             "target_node_id": [e.target_node_id for e in edges],
             "relationship_type": [e.relationship_type.value for e in edges],
             "source_doc_id": [e.source_doc_id for e in edges],
+            "extraction_method": pa.array(
+                [e.extraction_method for e in edges], type=pa.utf8()
+            ),
         },
         schema=GraphStore._edges_schema(),
     )

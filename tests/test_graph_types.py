@@ -170,16 +170,17 @@ def test_entity_type_enum_complete() -> None:
 
 
 def test_relationship_type_enum_values() -> None:
-    """RelationshipType must contain all four expected members."""
+    """RelationshipType must contain all five expected members."""
     assert RelationshipType.uses.value == "uses"
     assert RelationshipType.implements.value == "implements"
     assert RelationshipType.depends_on.value == "depends_on"
     assert RelationshipType.related_to.value == "related_to"
+    assert RelationshipType.synonym_of.value == "synonym_of"
 
 
 def test_relationship_type_enum_complete() -> None:
-    """RelationshipType has exactly four members — no accidental extras."""
-    assert len(RelationshipType) == 4
+    """RelationshipType has exactly five members — no accidental extras."""
+    assert len(RelationshipType) == 5
 
 
 # ---------------------------------------------------------------------------

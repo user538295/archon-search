@@ -343,7 +343,7 @@ flowchart LR
 
 ### Phase 1 · Synonym edges detected and search traverses them *(walking skeleton: entity model + detector + post-ingest hook, end-to-end from ingest to synonym search)*
 
-- [ ] **BE-1** — Add `synonym_of` to `RelationshipType` union and `extraction_method: str | None` to `GraphEdge` dataclass and `_edges_schema()` in `graph_store.py` #backend-role
+- [x] **BE-1** — Add `synonym_of` to `RelationshipType` union and `extraction_method: str | None` to `GraphEdge` dataclass and `_edges_schema()` in `graph_store.py` #backend-role
     - Entities · 3.0h
     - needs K1 · completes C1
     - BE-1 also requires two companion edits in `graph_store.py`:

@@ -233,6 +233,7 @@ def test_arrow_to_edges_static():
             "target_node_id": [src_b, src_a],
             "relationship_type": ["related_to", "uses"],
             "source_doc_id": ["doc-1", "doc-2"],
+            "extraction_method": pa.array([None, None], type=pa.utf8()),
         },
         schema=GraphStore._edges_schema(),
     )
