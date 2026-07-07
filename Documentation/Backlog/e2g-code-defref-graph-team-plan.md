@@ -354,7 +354,7 @@ flowchart LR
 ```
 
 ### Phase 0 · Kickoff *(prerequisite; the one cross-cutting step)*
-- [ ] **K1** — Confirm the Contracts, Scenarios, and the eleven resolved open-question decisions with the team (PageRank persisted-with-trigger, unweighted edges, shared tree-sitter parse pass, soft-degrade design, two-corpus staged eval, no truncation exemption, re-ingest-only, extracted-over-inferred tag precedence) #team
+- [x] **K1** — Confirm the Contracts, Scenarios, and the eleven resolved open-question decisions with the team (PageRank persisted-with-trigger, unweighted edges, shared tree-sitter parse pass, soft-degrade design, two-corpus staged eval, no truncation exemption, re-ingest-only, extracted-over-inferred tag precedence) #team
     - — · 1.0h
     - completes C1, C2, C3, C4
     - Tests
