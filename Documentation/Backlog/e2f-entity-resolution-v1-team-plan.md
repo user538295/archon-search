@@ -266,15 +266,15 @@ N/A — no frontend work for this feature. archon-search has no web UI; all clie
 
 Docs the feature touches — close-out task T-5 works through this list.
 
-- [ ] `Documentation/Backlog/e2f-entity-resolution-v1-brief.md` — no changes needed (source brief)
-- [ ] `Documentation/Backlog/e2f-entity-resolution-v1-team-plan.md` — this file
-- [ ] `Documentation/Architecture/100_system_architecture_overview.md` — update graph pipeline section: add synonym edges to the pipeline flow description
-- [ ] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — add `synonym_detector.py` and `alias_loader.py` entries with their layers and key symbols
-- [ ] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `[graph] synonym_threshold`, `alias_file`, `enrichment_auto` config fields; add new `GraphCollectionStats` health fields; add `GraphEdgeResponse.relationship_type`
-- [ ] `CLAUDE.md` (project) — update graph subsystem section: add `synonym_detector.py` / `alias_loader.py` to module inventory; add enrichment job invariant (try/except, never propagates); add `enrichment_auto` to GraphConfig field list
-- [ ] `archon-search.toml.example` — add `synonym_threshold`, `alias_file`, `enrichment_auto` under `[graph]` with defaults and comments
-- [ ] `BREAKING.md` — record E2f additive changes: new `GraphCollectionStats` fields (`synonym_edge_count`, `singleton_node_pct`, `synonym_link_rate`, `connected_component_count`) and `GraphEdgeResponse.relationship_type` — annotate as additive, non-breaking
-- [ ] `learnings.md` — update with E2f observations after task completion
+- [x] `Documentation/Backlog/e2f-entity-resolution-v1-brief.md` — no changes needed (source brief)
+- [x] `Documentation/Backlog/e2f-entity-resolution-v1-team-plan.md` — this file
+- [x] `Documentation/Architecture/100_system_architecture_overview.md` — update graph pipeline section: add synonym edges to the pipeline flow description
+- [x] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — add `synonym_detector.py` and `alias_loader.py` entries with their layers and key symbols
+- [x] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `[graph] synonym_threshold`, `alias_file`, `enrichment_auto` config fields; add new `GraphCollectionStats` health fields; add `GraphEdgeResponse.relationship_type`
+- [x] `CLAUDE.md` (project) — update graph subsystem section: add `synonym_detector.py` / `alias_loader.py` to module inventory; add enrichment job invariant (try/except, never propagates); add `enrichment_auto` to GraphConfig field list
+- [x] `archon-search.toml.example` — add `synonym_threshold`, `alias_file`, `enrichment_auto` under `[graph]` with defaults and comments
+- [x] `BREAKING.md` — record E2f additive changes: new `GraphCollectionStats` fields (`synonym_edge_count`, `singleton_node_pct`, `synonym_link_rate`, `connected_component_count`) and `GraphEdgeResponse.relationship_type` — annotate as additive, non-breaking
+- [x] `learnings.md` — update with E2f observations after task completion
 
 ---
 
@@ -484,7 +484,7 @@ regen OpenAPI snapshot with `uv run --python 3.12 pytest tests/server/test_opena
         - [x] #e2e_test — `test_e2e_eval_gate_synonym_bridge_and_negative_control` — run `pytest tests/eval/test_e2e_graph_eval_gate_v2.py -m "not live_benchmark" --no-cov`; assert both new tests pass
 
 ### Phase 5 · Close-out
-- [ ] **T-5** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-5** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs T-1, T-2, T-3, T-4, BE-6, BE-7, BE-8 · completes (acceptance gate)
     - Tests

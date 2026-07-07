@@ -116,6 +116,16 @@ Implemented in `archon_search/server/routes_status.py` (`_build_search_status`) 
 | `edge_count` | `int` | Total relationship edge count across all collections in the caller's namespace. |
 | `collections` | `list[GraphCollectionStats]` | Per-collection breakdown. Each entry has `collection: str`, `node_count: int`, `edge_count: int`. |
 
+**E2f** — `GraphCollectionStats` gains three synonym health fields (all additive, zero defaults):
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `synonym_edge_count` | `int` | `0` | Number of edges with `relationship_type='synonym_of'` in this collection. |
+| `singleton_node_pct` | `float` | `0.0` | Percentage of entity nodes with no edges (isolated nodes), range 0.0–100.0. |
+| `synonym_link_rate` | `float` | `0.0` | Fraction of all edges that are synonym edges (synonym_edge_count / edge_count), range 0.0–1.0. `0.0` when edge_count is 0. |
+
+Note: `connected_component_count` was removed during BE-7 review (C1-B-1 fix) because it was always returned as 0 without being computed. It is NOT present in the schema.
+
 Implemented in `archon_search/server/routes_status.py` (`_build_graph_status`) and `archon_search/server/schemas.py` (`GraphStatusDetail`, `GraphCollectionStats`).
 
 **E1b** — `StatusCollectionEntry` (each entry in `StatusResponse.collections`) gains `community_count: int` (0 if communities have never been built for the collection) and `last_built_at: str | null` (ISO 8601 UTC timestamp of the last successful `graph build-communities` run; `null` if never built).
@@ -418,7 +428,7 @@ Graph inspection endpoints; only available when `[graph] enabled = true` in `arc
 
 | Method | Path | Purpose | Query params | Response schema |
 | --- | --- | --- | --- | --- |
-| GET | `/graph/{collection}` | Return node and edge list for a single collection, scored by the chosen salience mode. Returns `422` when `[graph] enabled = false`. Returns `404` when the collection does not exist in the caller's namespace. **E2c**: gains `?salience=` parameter. | `format?: "json" \| "graphml"` (default `"json"`); `salience?: "frequency" \| "tfidf"` (default `"frequency"`) — **E2c**: when `"tfidf"`, nodes are scored by TF-IDF; when omitted or `"frequency"`, nodes are ranked by raw chunk frequency (unchanged from E2b). `?salience=<other>` → `422`. | `GraphInspectionResponse` — `{nodes: [GraphNodeResponse{entity_id, entity_name, chunk_count, salience}], edges: [GraphEdgeResponse{edge_id, source_entity_id, target_entity_id, weight, source_chunk_ids}], node_count, edge_count, truncated: bool, salience_mode: "frequency" \| "tfidf"}`. **E2c**: `salience_mode` field always present, echoes the effective mode. When `format=graphml`, returns `application/xml`. `node.salience` in tfidf mode is ≥ 0.0 and unbounded above (TF × max(IDF, 0)); IDF is clamped to 0 if df > N+1 (a defensive floor; doesn't occur under normal input). In frequency mode, clamped `[0.0, 1.0]`. |
+| GET | `/graph/{collection}` | Return node and edge list for a single collection, scored by the chosen salience mode. Returns `422` when `[graph] enabled = false`. Returns `404` when the collection does not exist in the caller's namespace. **E2c**: gains `?salience=` parameter. | `format?: "json" \| "graphml"` (default `"json"`); `salience?: "frequency" \| "tfidf"` (default `"frequency"`) — **E2c**: when `"tfidf"`, nodes are scored by TF-IDF; when omitted or `"frequency"`, nodes are ranked by raw chunk frequency (unchanged from E2b). `?salience=<other>` → `422`. | `GraphInspectionResponse` — `{nodes: [GraphNodeResponse{entity_id, entity_name, chunk_count, salience}], edges: [GraphEdgeResponse{edge_id, source_entity_id, target_entity_id, weight, source_chunk_ids, relationship_type}], node_count, edge_count, truncated: bool, salience_mode: "frequency" \| "tfidf"}`. **E2c**: `salience_mode` field always present, echoes the effective mode. **E2f**: `GraphEdgeResponse` gains `relationship_type: str = "related_to"` — populated from the edge's `relationship_type` value in the graph store; synonym edges return `"synonym_of"`. Synonym edges and their endpoint nodes are exempt from truncation caps (`max_nodes`, `max_edges`). When `format=graphml`, returns `application/xml`. `node.salience` in tfidf mode is ≥ 0.0 and unbounded above (TF × max(IDF, 0)); IDF is clamped to 0 if df > N+1 (a defensive floor; doesn't occur under normal input). In frequency mode, clamped `[0.0, 1.0]`. |
 | GET | `/graph/cross-collection` | Return merged node and edge list across ≥2 collections. Requires `?collections=` with ≥2 comma-separated names. Returns `422` when `[graph] enabled = false` or fewer than 2 valid collection names are provided. **E2c**: gains `?salience=` parameter; IDF denominator is namespace-scoped (all collections in the authenticated namespace, not just the listed ones). | `collections: str` (required; comma-separated, ≥2 names); `format?: "json" \| "graphml"` (default `"json"`); `salience?: "frequency" \| "tfidf"` (default `"frequency"`) — **E2c**: same semantics as single-collection endpoint; IDF denominator uses all namespace collections (two-list pattern: listed collections for node merging, all namespace collections for IDF denominator). | `CrossCollectionGraphInspectionResponse` — `{collections: [str], nodes: [...], edges: [...], node_count, edge_count, truncated: bool, salience_mode: "frequency" \| "tfidf"}`. **E2c**: `salience_mode` field always present. |
 
 **`GraphNodeResponse` field semantics** (frequency vs. tfidf mode):
@@ -613,6 +623,16 @@ Controls correlation-ID propagation and stage-latency recording. Both fields hav
 |---|---|---|---|
 | `stage_timings_enabled` | `bool` | `true` | When `true`, every handled request binds a `StageRecorder`; per-stage wall times appear in structured log lines and in the `stage_timings_ms` field on `POST /explain` / MCP `explain` responses. When `false`, no `StageRecorder` is bound and `stage_timings_ms` is absent from all responses. |
 | `request_id_header` | `str` | `"X-Request-ID"` | Name of the HTTP header used to carry the correlation ID inbound and outbound. Both the inbound read and the response write use this name (lowercased for header matching). Must be a non-empty string. |
+
+## `[graph]` config section (E2f synonym fields)
+
+**E2f** — three new synonym-detection fields added to `GraphConfig`. All other `[graph]` fields (`enabled`, `max_nodes`, `max_edges`, `max_community_size`, `gc_rebuild_communities`, etc.) are documented inline in their respective route sections.
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `synonym_threshold` | `float` | `0.85` | Cosine similarity threshold for automatic synonym edge detection. Entity name-embedding pairs with cosine similarity ≥ this value within the same entity-type group are written as `synonym_of` edges. Must be in `(0.0, 1.0]`. |
+| `alias_file` | `str \| null` | `null` | Path to a TOML file of known synonym aliases (manual synonyms). Each entry: `"K8s" = "Kubernetes"`. When set, alias pairs are written as `synonym_of` edges with `extraction_method="manual"` before cosine comparison runs, and their entity-ID pairs are excluded from cosine scoring via `skip_pairs`. A missing, unreadable, or malformed file logs a WARNING and does not abort enrichment. Must be a non-empty string when set. |
+| `enrichment_auto` | `bool` | `true` | When `true`, synonym enrichment runs automatically in the background after every ingest (gated by `on_synonym_edges_written` callback; enrichment failure never propagates to the ingest caller). When `false`, no automatic enrichment is triggered after ingest — synonym edges must be created manually or via operator tooling. Follows the same `_coerce_bool` pattern as `gc_rebuild_communities`. |
 
 ## Authoritative contract
 

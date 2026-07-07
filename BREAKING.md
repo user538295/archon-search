@@ -792,3 +792,23 @@ For tolerant JSON consumers: fully additive — no client changes required. For 
 **Migration**: regenerate client types from `GET /openapi.json`. No behavior changes to existing job kinds.
 
 **Announced in**: this release.
+
+### [next release] — E2f synonym edges: additive `GraphCollectionStats` fields and `GraphEdgeResponse.relationship_type`
+
+**Surface**: REST `GET /status` (field `graph.collections[].synonym_edge_count`, `graph.collections[].singleton_node_pct`, `graph.collections[].synonym_link_rate`) and `GET /graph/{collection}` (field `edges[].relationship_type`).
+
+**Change**: fully additive — no existing fields are removed, renamed, or have their types changed.
+
+- `GraphCollectionStats` (each entry in `GET /status` → `graph.collections`) gains three new fields:
+  - `synonym_edge_count: int = 0` — number of edges with `relationship_type='synonym_of'` in the collection
+  - `singleton_node_pct: float = 0.0` — percentage of entity nodes with no edges (isolated nodes)
+  - `synonym_link_rate: float = 0.0` — fraction of all edges that are synonym edges (0.0–1.0)
+  - Note: `connected_component_count` was drafted but removed before release (never computed, always returned 0). It is NOT in the schema.
+- `GraphEdgeResponse` (each entry in `GET /graph/{collection}` and `GET /graph/cross-collection` → `edges[]`) gains:
+  - `relationship_type: str = "related_to"` — the edge's relationship type; `"synonym_of"` for synonym edges, `"related_to"` for all pre-E2f edges
+
+For tolerant JSON consumers: fully additive — no client changes required. For strict-validating REST clients (`extra="forbid"` schemas): the new keys are a true contract change — relax the client schema or regenerate from the updated OpenAPI snapshot.
+
+**Migration**: regenerate client types from `GET /openapi.json`. No behavior changes to existing graph traversal or search.
+
+**Announced in**: this release.
