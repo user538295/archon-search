@@ -55,6 +55,10 @@ class RelationshipType(str, Enum):
     depends_on = "depends_on"
     related_to = "related_to"
     synonym_of = "synonym_of"
+    calls = "calls"
+    imports = "imports"
+    defines = "defines"
+    inherits = "inherits"
 
 
 def make_stable_entity_id(entity_type: str, entity_name: str) -> str:
@@ -168,8 +172,16 @@ class GraphEdge:
     source_doc_id: str
     """Doc ID of the document that produced this edge (last-writer-wins on upsert)."""
     extraction_method: str | None = None
-    """How the edge was extracted (e.g. "ner", "embedding").
-    None when the extraction method was not recorded (pre-E2f edges).
+    """How the edge was extracted, when recorded. Currently-produced values:
+    ``"embedding"`` (E2f ``SynonymDetector`` cosine-similarity matches) and
+    ``"manual"`` (E2f ``alias_loader`` TOML-configured synonym pairs).
+    Reserved for E2g (not yet produced by any extractor): ``"extracted"``
+    (same-file code def/ref edges found by static parsing) and ``"inferred"``
+    (cross-file name-based best-guess matches). This is a plain string field,
+    not an enum — no validation is enforced on the value. ``None`` means the
+    extraction method was not recorded — this includes every edge produced by
+    the spaCy named-entity co-occurrence path (``graph_extractor.py``), which
+    never sets this field, as well as any pre-E2f edge.
     """
 
 

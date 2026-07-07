@@ -366,7 +366,7 @@ flowchart LR
     - Tests
         - #integration_test — `test_swiftGrammarSpike_installsAndParsesSample` — a minimal Swift file parses cleanly with the installed grammar and produces real, non-empty AST nodes (Critical #6 — reworded from an unfalsifiable either/or to a concrete happy-path assertion; the failure branch is exercised separately in BE-5's forced-failure test)
         - #integration_test — `test_cSharpGrammarSpike_installsAndParsesSample` — same for C#
-- [ ] **BE-1** — Add `calls`/`imports`/`defines`/`inherits` to `RelationshipType`; document `extraction_method` values `"extracted"`/`"inferred"` on the existing field #backend-role
+- [x] **BE-1** — Add `calls`/`imports`/`defines`/`inherits` to `RelationshipType`; document `extraction_method` values `"extracted"`/`"inferred"` on the existing field #backend-role
     - Entity · 2.0h
     - needs K1 · completes C3
     - Tests

@@ -170,17 +170,21 @@ def test_entity_type_enum_complete() -> None:
 
 
 def test_relationship_type_enum_values() -> None:
-    """RelationshipType must contain all five expected members."""
+    """RelationshipType must contain all nine expected members."""
     assert RelationshipType.uses.value == "uses"
     assert RelationshipType.implements.value == "implements"
     assert RelationshipType.depends_on.value == "depends_on"
     assert RelationshipType.related_to.value == "related_to"
     assert RelationshipType.synonym_of.value == "synonym_of"
+    assert RelationshipType.calls.value == "calls"
+    assert RelationshipType.imports.value == "imports"
+    assert RelationshipType.defines.value == "defines"
+    assert RelationshipType.inherits.value == "inherits"
 
 
-def test_relationship_type_enum_complete() -> None:
-    """RelationshipType has exactly five members — no accidental extras."""
-    assert len(RelationshipType) == 5
+def test_relationshipType_hasNineMembers() -> None:
+    """RelationshipType has exactly nine members — no accidental extras."""
+    assert len(RelationshipType) == 9
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +299,28 @@ def test_graph_edge_relationship_type_is_enum() -> None:
         source_doc_id="doc-001",
     )
     assert isinstance(edge.relationship_type, RelationshipType)
+
+
+def test_graphEdge_acceptsExtractedAndInferred() -> None:
+    """GraphEdge.extraction_method accepts and round-trips 'extracted' and 'inferred'."""
+    extracted_edge = GraphEdge(
+        id="edge-extracted",
+        source_node_id="src",
+        target_node_id="tgt",
+        relationship_type=RelationshipType.calls,
+        source_doc_id="doc-001",
+        extraction_method="extracted",
+    )
+    inferred_edge = GraphEdge(
+        id="edge-inferred",
+        source_node_id="src",
+        target_node_id="tgt",
+        relationship_type=RelationshipType.imports,
+        source_doc_id="doc-001",
+        extraction_method="inferred",
+    )
+    assert extracted_edge.extraction_method == "extracted"
+    assert inferred_edge.extraction_method == "inferred"
 
 
 # ---------------------------------------------------------------------------

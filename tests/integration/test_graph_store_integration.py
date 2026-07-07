@@ -502,3 +502,44 @@ def test_write_graph_preserves_existing_name_embedding_on_node_update(tmp_path) 
     assert list(nodes[0].name_embedding) == pytest.approx(embedding, abs=1e-5), (
         f"Preserved embedding {nodes[0].name_embedding} must match original {embedding}"
     )
+
+
+# ---------------------------------------------------------------------------
+# BE-1 — new RelationshipType members round-trip (E2g)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_write_graph_round_trips_new_defref_relationship_types(tmp_path) -> None:
+    """A GraphEdge with relationship_type=calls survives write_graph -> get_all_edges.
+
+    _arrow_to_edges reconstructs relationship_type via RelationshipType(rtype),
+    which raises ValueError for any string not a valid enum member. This proves
+    the new E2g members (calls/imports/defines/inherits) round-trip cleanly.
+    """
+    from archon_search.graph_store import GraphStore
+
+    col = "defrefcol"
+    node_a = _node("caller_fn", col)
+    node_b = _node("callee_fn", col)
+    edge_ab = GraphEdge(
+        id=make_stable_edge_id(node_a.id, node_b.id, RelationshipType.calls.value),
+        source_node_id=node_a.id,
+        target_node_id=node_b.id,
+        relationship_type=RelationshipType.calls,
+        source_doc_id="doc-a",
+    )
+
+    async def _run() -> list[GraphEdge]:
+        gs = GraphStore(str(tmp_path / "db"))
+        await gs.connect()
+        try:
+            await gs.ensure_graph_tables(col, ns="default")
+            await gs.write_graph(col, [node_a, node_b], [edge_ab], ns="default")
+            return await gs.get_all_edges(col, ns="default")
+        finally:
+            await gs.disconnect()
+
+    edges = asyncio.run(_run())
+    assert len(edges) == 1
+    assert edges[0].relationship_type == RelationshipType.calls
