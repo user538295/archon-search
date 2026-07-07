@@ -190,3 +190,15 @@
 {"doc_id": "hotpotqa-098", "collection": "hotpotqa", "relative_path": "hotpotqa/098.txt"}
 {"doc_id": "hotpotqa-099", "collection": "hotpotqa", "relative_path": "hotpotqa/099.txt"}
 {"doc_id": "hotpotqa-100", "collection": "hotpotqa", "relative_path": "hotpotqa/100.txt"}
+{"doc_id": "synonym-bridge-001", "collection": "synonym-bridge", "relative_path": "synonym-bridge/sql-database-indexing.txt"}
+{"doc_id": "synonym-bridge-002", "collection": "synonym-bridge", "relative_path": "synonym-bridge/python-packaging.txt"}
+{"doc_id": "synonym-bridge-003", "collection": "synonym-bridge", "relative_path": "synonym-bridge/docker-containers.txt"}
+{"doc_id": "synonym-bridge-004", "collection": "synonym-bridge", "relative_path": "synonym-bridge/react-state-management.txt"}
+{"doc_id": "synonym-bridge-005", "collection": "synonym-bridge", "relative_path": "synonym-bridge/git-branching-strategies.txt"}
+{"doc_id": "synonym-bridge-006", "collection": "synonym-bridge", "relative_path": "synonym-bridge/api-rate-limiting.txt"}
+{"doc_id": "synonym-bridge-007", "collection": "synonym-bridge", "relative_path": "synonym-bridge/rust-ownership-model.txt"}
+{"doc_id": "synonym-bridge-008", "collection": "synonym-bridge", "relative_path": "synonym-bridge/observability-tracing.txt"}
+{"doc_id": "synonym-bridge-k8s", "collection": "synonym-bridge", "relative_path": "synonym-bridge/k8s-cluster-setup.txt"}
+{"doc_id": "synonym-bridge-kubernetes", "collection": "synonym-bridge", "relative_path": "synonym-bridge/kubernetes-overview.txt"}
+{"doc_id": "synonym-bridge-machine-learning", "collection": "synonym-bridge", "relative_path": "synonym-bridge/ml-neural-networks.txt"}
+{"doc_id": "synonym-bridge-ml-abbrev", "collection": "synonym-bridge", "relative_path": "synonym-bridge/ml-abbreviation-guide.txt"}

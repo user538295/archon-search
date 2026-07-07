@@ -43,6 +43,7 @@ _QUALITY_FIELDS = (
     "graph_local_recall_at_5",
     "graph_global_recall_at_5",
     "graph_negative_control_recall_at_5",
+    "synonym_bridge_recall_at_5",
 )
 
 
@@ -107,13 +108,24 @@ def test_baseline_metadata_records_eval_hash_and_command() -> None:
 
 
 def test_quality_floors_never_exceed_baseline() -> None:
+    """Floors must not exceed the measured baseline.
+
+    Exception: a floor may intentionally exceed the baseline when a waiver exists in
+    baseline.json[waiver_ids] for that field.  This is used for context-dependent gates
+    (e.g. synonym_bridge_recall_at_5) where the floor is only reachable under specific
+    test conditions (lancedb_root active, synonym edges written).
+    """
     if not (THRESHOLDS_TOML.exists() and BASELINE_JSON.exists()):
         pytest.skip("thresholds + baseline not both committed yet")
     thresholds = _load_toml(THRESHOLDS_TOML).get("quality_floors", {})
-    metrics = _load_json(BASELINE_JSON)["metrics"]
+    baseline_data = _load_json(BASELINE_JSON)
+    metrics = baseline_data["metrics"]
+    waivers: set[str] = set(baseline_data.get("waiver_ids", {}).keys())
     for field in _QUALITY_FIELDS:
         if field not in thresholds:
             continue
+        if field in waivers:
+            continue  # waiver explicitly authorises a floor above the baseline
         baseline_v = metrics.get(field)
         if baseline_v is None:
             continue

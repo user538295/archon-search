@@ -65,6 +65,7 @@ class EvalQualityFloors:
     graph_local_recall_at_5: float | None = None
     graph_global_recall_at_5: float | None = None
     graph_negative_control_recall_at_5: float | None = None
+    synonym_bridge_recall_at_5: float | None = None
 
 
 @dataclass
@@ -181,6 +182,7 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
         "graph_local_recall_at_5",
         "graph_global_recall_at_5",
         "graph_negative_control_recall_at_5",
+        "synonym_bridge_recall_at_5",
     )
     optional_floats: dict[str, float | None] = {}
     for opt_key in _optional_float_fields:
@@ -211,6 +213,7 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
         graph_local_recall_at_5=optional_floats["graph_local_recall_at_5"],
         graph_global_recall_at_5=optional_floats["graph_global_recall_at_5"],
         graph_negative_control_recall_at_5=optional_floats["graph_negative_control_recall_at_5"],
+        synonym_bridge_recall_at_5=optional_floats["synonym_bridge_recall_at_5"],
     )
 
     # --- latency_ceilings section (optional) ----------------------------------
@@ -1087,6 +1090,19 @@ async def run_eval_suite(
         if negative_control_traces else None
     )
 
+    # Synonym bridge: naive-mode recall on the synonym-bridge collection.
+    # Measures whether synonym edges (relationship_type="synonym_of") allow
+    # queries using one term to retrieve documents that use the synonymous term.
+    _synonym_bridge_collection = "synonym-bridge"
+    synonym_bridge_traces = [
+        t for t in naive_graph_traces
+        if t.collection == _synonym_bridge_collection
+    ]
+    synonym_bridge_recall_at_5: float | None = (
+        compute_recall_at_k(synonym_bridge_traces, corpus.labels, 5)
+        if synonym_bridge_traces else None
+    )
+
     # Graph-mode traces are excluded from latency percentiles: the 2-document
     # graph fixture corpus is too small to produce meaningful latency samples,
     # and graph expansion latency will be tracked separately when the fixture
@@ -1116,6 +1132,7 @@ async def run_eval_suite(
         graph_local_recall_at_5=graph_local_recall_at_5,
         graph_global_recall_at_5=graph_global_recall_at_5,
         graph_negative_control_recall_at_5=graph_negative_control_recall_at_5,
+        synonym_bridge_recall_at_5=synonym_bridge_recall_at_5,
     )
 
     current_eval_hash = compute_eval_hash(corpus_root)
@@ -1167,6 +1184,7 @@ _QUALITY_FLOOR_FIELDS = (
     "graph_local_recall_at_5",
     "graph_global_recall_at_5",
     "graph_negative_control_recall_at_5",
+    "synonym_bridge_recall_at_5",
 )
 
 
@@ -1174,8 +1192,16 @@ def _fmt(value: float | None) -> str:
     return f"{value:.4f}" if isinstance(value, (int, float)) else "n/a"
 
 
-def assert_thresholds(report: EvalReport) -> None:
+def assert_thresholds(
+    report: EvalReport,
+    skip_fields: frozenset[str] | None = None,
+) -> None:
     """Gate an :class:`EvalReport` against its configured thresholds.
+
+    *skip_fields* — when provided, the named quality-floor fields are excluded
+    from enforcement.  Use this for metrics that are only meaningful under
+    specific test conditions (e.g. ``synonym_bridge_recall_at_5`` requires
+    ``lancedb_root`` to be active so synonym edges are visible to the expander).
 
     Raises :class:`AssertionError` on:
     - Missing thresholds (gating requires explicit thresholds).
@@ -1253,6 +1279,11 @@ def assert_thresholds(report: EvalReport) -> None:
 
     # Quality floors --------------------------------------------------------
     for field_name in _QUALITY_FLOOR_FIELDS:
+        if skip_fields and field_name in skip_fields:
+            report.notes.append(
+                f"{field_name}: skipped by caller (context-dependent gate)."
+            )
+            continue
         floor: float | None = getattr(floors, field_name)
         actual: float | None = getattr(metrics, field_name)
         baseline_value: float | None = (
@@ -1345,6 +1376,7 @@ _RENDERED_QUALITY_FIELDS = (
     "graph_local_recall_at_5",
     "graph_global_recall_at_5",
     "graph_negative_control_recall_at_5",
+    "synonym_bridge_recall_at_5",
 )
 
 _RENDERED_LATENCY_FIELDS = ("latency_p50_ms", "latency_p95_ms")

@@ -153,3 +153,7 @@
 {"query_id": "q-hotpotqa-098", "text": "How does botany and plant life relate to zoology and animal behavior?", "collection": "hotpotqa", "metric_scope": "retrieval", "graph_mode": "naive"}
 {"query_id": "q-hotpotqa-099", "text": "How does zoology and animal behavior relate to ecology and environmental systems?", "collection": "hotpotqa", "metric_scope": "retrieval", "graph_mode": "naive"}
 {"query_id": "q-hotpotqa-100", "text": "How does ecology and environmental systems relate to history and human events?", "collection": "hotpotqa", "metric_scope": "retrieval", "graph_mode": "naive"}
+{"query_id": "q-syn-bridge-001", "text": "Kubernetes declarative automation containerized deployment", "collection": "synonym-bridge", "metric_scope": "retrieval", "graph_mode": "naive"}
+{"query_id": "q-syn-bridge-002", "text": "K8s cluster etcd worker nodes RBAC", "collection": "synonym-bridge", "metric_scope": "retrieval", "graph_mode": "naive"}
+{"query_id": "q-syn-bridge-003", "text": "machine learning supervised reinforcement algorithms training", "collection": "synonym-bridge", "metric_scope": "retrieval", "graph_mode": "naive"}
+{"query_id": "q-syn-bridge-004", "text": "ML inference PyTorch TensorFlow prediction", "collection": "synonym-bridge", "metric_scope": "retrieval", "graph_mode": "naive"}

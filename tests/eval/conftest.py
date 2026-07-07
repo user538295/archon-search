@@ -169,14 +169,16 @@ def _activate_deterministic_eval_backends(
 
 @pytest.fixture(scope="module")
 def build_communities_for_eval(eval_tmp_lancedb_root: Path):
-    """Build communities for multi-hop eval collections in the shared LanceDB store.
+    """Build communities for multi-hop eval collections and synonym edges for synonym-bridge.
 
     Skips if leidenalg is not installed (graph extras absent).
 
-    Pre-builds communities for multi-hop collections by:
-    1. Ingesting documents from corpus/multihop-musique and corpus/multihop-2wiki
-    2. Running graph extraction (via spaCy stub)
-    3. Building communities via CommunityBuilder with seed=42
+    Pre-builds graph data for:
+    1. multihop-musique and multihop-2wiki: entity nodes + related_to edges for Leiden
+       community detection (deferred to run_eval_suite after corpus ingest).
+    2. synonym-bridge: explicit synonym_of edges connecting K8s↔Kubernetes and
+       ML↔machine learning. These edges are written before run_eval_suite ingests the
+       corpus so that RealGraphExpander can expand queries across synonym pairs.
 
     Module-scoped so it runs once per test module before any test that imports it.
 
@@ -272,6 +274,98 @@ def build_communities_for_eval(eval_tmp_lancedb_root: Path):
                 # building is deferred to run_eval_suite, after _ingest_corpus completes.
 
                 graph_stores[collection_name] = graph_store
+
+            # ------------------------------------------------------------------
+            # synonym-bridge: write synonym_of edges so RealGraphExpander can
+            # bridge queries that use one term to documents that use the other.
+            #
+            # Corpus design (BE-8) — 12 docs total (4 synonym pairs + 8 distractors):
+            #
+            #   Doc ID                          File                          Content term
+            #   synonym-bridge-kubernetes       kubernetes-overview.txt       "Kubernetes" only
+            #   synonym-bridge-k8s              k8s-cluster-setup.txt         "K8s" only
+            #   synonym-bridge-machine-learning ml-neural-networks.txt        "machine learning" only
+            #   synonym-bridge-ml-abbrev        ml-abbreviation-guide.txt     "ML" only
+            #
+            #   Distractor docs (numeric IDs, orthogonal topics):
+            #   synonym-bridge-001              sql-database-indexing.txt
+            #   synonym-bridge-002              python-packaging.txt
+            #   synonym-bridge-003              docker-containers.txt
+            #   synonym-bridge-004              react-state-management.txt
+            #   synonym-bridge-005              git-branching-strategies.txt
+            #   synonym-bridge-006              api-rate-limiting.txt
+            #   synonym-bridge-007              rust-ownership-model.txt
+            #   synonym-bridge-008              observability-tracing.txt
+            #
+            # Edges written here:
+            #   Kubernetes --synonym_of--> K8s   (bidirectional via two edges)
+            #   K8s --synonym_of--> Kubernetes
+            #   machine learning --synonym_of--> ML
+            #   ML --synonym_of--> machine learning
+            #
+            # RealGraphExpander.expand("Kubernetes container orchestration", collection):
+            #   1. tokenize_and_generate_ngrams → ["Kubernetes", "container", ...]
+            #   2. find_nodes_by_name → matches node "Kubernetes"
+            #   3. get_neighbours(kubernetes_node) → returns node "K8s"
+            #   4. expands query with "K8s" → K8s doc scores higher via lexical match
+            # ------------------------------------------------------------------
+            syn_collection = "synonym-bridge"
+            await graph_store.ensure_graph_tables(syn_collection, ns=ns)
+
+            # Use a stable dummy source_doc_id for the synonym nodes (they are
+            # not tied to a real ingested document — they represent vocabulary entries).
+            _SYN_SOURCE_DOC = "synonym-bridge-vocab-placeholder"
+
+            def _synonym_pair(
+                name_a: str,
+                name_b: str,
+                collection: str,
+                source_doc_id: str,
+            ) -> tuple[list[GraphNode], list[GraphEdge]]:
+                """Construct nodes and bidirectional synonym_of edges for one synonym pair."""
+                id_a = make_stable_entity_id("concept", name_a)
+                id_b = make_stable_entity_id("concept", name_b)
+                node_a = GraphNode(
+                    id=id_a,
+                    entity_name=name_a,
+                    entity_type=EntityType.concept,
+                    source_doc_id=source_doc_id,
+                    collection_name=collection,
+                )
+                node_b = GraphNode(
+                    id=id_b,
+                    entity_name=name_b,
+                    entity_type=EntityType.concept,
+                    source_doc_id=source_doc_id,
+                    collection_name=collection,
+                )
+                edge_a_b = GraphEdge(
+                    id=make_stable_edge_id(id_a, id_b, "synonym_of"),
+                    source_node_id=id_a,
+                    target_node_id=id_b,
+                    relationship_type=RelationshipType.synonym_of,
+                    source_doc_id=source_doc_id,
+                )
+                edge_b_a = GraphEdge(
+                    id=make_stable_edge_id(id_b, id_a, "synonym_of"),
+                    source_node_id=id_b,
+                    target_node_id=id_a,
+                    relationship_type=RelationshipType.synonym_of,
+                    source_doc_id=source_doc_id,
+                )
+                return [node_a, node_b], [edge_a_b, edge_b_a]
+
+            k8s_nodes, k8s_edges = _synonym_pair(
+                "K8s", "Kubernetes", syn_collection, _SYN_SOURCE_DOC
+            )
+            ml_nodes, ml_edges = _synonym_pair(
+                "ML", "machine learning", syn_collection, _SYN_SOURCE_DOC
+            )
+
+            syn_nodes = k8s_nodes + ml_nodes
+            syn_edges = k8s_edges + ml_edges
+            await graph_store.write_graph(syn_collection, syn_nodes, syn_edges, ns=ns)
+            graph_stores[syn_collection] = graph_store
 
             return eval_tmp_lancedb_root, graph_stores, graph_store
 

@@ -182,3 +182,11 @@
 {"query_id": "q-hotpotqa-098", "doc_id": "hotpotqa-098", "grade": 2}
 {"query_id": "q-hotpotqa-099", "doc_id": "hotpotqa-099", "grade": 2}
 {"query_id": "q-hotpotqa-100", "doc_id": "hotpotqa-100", "grade": 2}
+{"query_id": "q-syn-bridge-001", "doc_id": "synonym-bridge-kubernetes", "grade": 2}
+{"query_id": "q-syn-bridge-001", "doc_id": "synonym-bridge-k8s", "grade": 1}
+{"query_id": "q-syn-bridge-002", "doc_id": "synonym-bridge-k8s", "grade": 2}
+{"query_id": "q-syn-bridge-002", "doc_id": "synonym-bridge-kubernetes", "grade": 1}
+{"query_id": "q-syn-bridge-003", "doc_id": "synonym-bridge-machine-learning", "grade": 2}
+{"query_id": "q-syn-bridge-003", "doc_id": "synonym-bridge-ml-abbrev", "grade": 1}
+{"query_id": "q-syn-bridge-004", "doc_id": "synonym-bridge-ml-abbrev", "grade": 2}
+{"query_id": "q-syn-bridge-004", "doc_id": "synonym-bridge-machine-learning", "grade": 1}

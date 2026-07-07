@@ -79,5 +79,6 @@ def test_eval_metrics_field_set() -> None:
         "graph_mrr", "graph_local_mrr", "graph_global_mrr",
         "graph_naive_recall_at_5", "graph_local_recall_at_5",
         "graph_global_recall_at_5", "graph_negative_control_recall_at_5",
+        "synonym_bridge_recall_at_5",
     }
     assert field_names == expected

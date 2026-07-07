@@ -1,8 +1,8 @@
 === Archon Search Eval Report ===
-generated_at: 2026-07-06T10:30:32.754309+00:00
+generated_at: 2026-07-07T03:33:23.756158+00:00
 corpus_root:  /Users/manczg/Documents/development/archon-search/tests/eval
-queries:      155 (routing_disabled=0, routing_bypassed=0)
-documents:    192
+queries:      159 (routing_disabled=0, routing_bypassed=0)
+documents:    204
 
 Quality metrics:
   recall_at_1        = 0.8676
@@ -13,20 +13,21 @@ Quality metrics:
   ndcg_at_10         = 0.9879
   reranker_lift      = 0.0232
   routing_accuracy   = 1.0000
-  graph_mrr          = 0.2837
+  graph_mrr          = 0.3031
   graph_local_mrr    = 0.9167
   graph_global_mrr   = 0.6944
   graph_naive_recall_at_5 = 0.5000
   graph_local_recall_at_5 = 1.0000
   graph_global_recall_at_5 = 1.0000
-  graph_negative_control_recall_at_5 = 0.4100
-  routing_mrr_centroid     = 0.7222
+  graph_negative_control_recall_at_5 = 0.3900
+  synonym_bridge_recall_at_5 = 0.5000
+  routing_mrr_centroid     = 0.7183
   routing_p@1_centroid     = 0.6667
-  routing_mrr_hybrid       = 0.7222
+  routing_mrr_hybrid       = 0.7183
   routing_p@1_hybrid       = 0.6667
 
 Latency (ms):
-  latency_p50_ms     = 9.22
-  latency_p95_ms     = 11.60
+  latency_p50_ms     = 8.72
+  latency_p95_ms     = 10.82
 
 Note: latency was measured using deterministic eval backends (EvalEmbedderBackend, EvalRerankerBackend); values are not comparable to production runtime latency.

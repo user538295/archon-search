@@ -40,8 +40,8 @@ mrr             = 1.0
 ndcg_at_5       = 0.98516679592094
 ndcg_at_10      = 0.98786690917953
 routing_accuracy = 1.0
-routing_mrr_centroid = 0.7222222222222222
-routing_mrr_hybrid = 0.7222222222222222
+routing_mrr_centroid = 0.7182539682539683
+routing_mrr_hybrid = 0.7182539682539683
 # routing_precision_at_1_centroid — reported-only; no floor (P@1 report-only per Task 6.2)
 # routing_precision_at_1_hybrid   — reported-only; no floor (P@1 report-only per Task 6.2)
 # graph_mrr — reported-only; no floor set until calibration baseline exists (E1a BE-9)
@@ -67,6 +67,14 @@ graph_naive_recall_at_5 = 0.5
 graph_local_recall_at_5 = 1.0
 graph_global_recall_at_5 = 0.2
 graph_negative_control_recall_at_5 = 0.34
+# synonym_bridge_recall_at_5: calibrated 2026-07-07 (BE-8 C1 fix).
+# Corpus expanded to 12 docs (4 synonym pairs + 8 distractors) so top_k=10 can
+# discriminate. Synonym edges written by build_communities_for_eval fixture.
+# RealGraphExpander bridges K8s↔Kubernetes and ML↔machine learning via synonym_of edges.
+# Baseline (without expansion, stub expander) = 0.5; with expansion (RealGraphExpander
+# + synonym edges) = 1.0. Floor=0.75 sits above stub-path baseline, catches any
+# regression that disables synonym expansion. Waiver required (floor > baseline + 0.05).
+synonym_bridge_recall_at_5 = 0.75
 
 [multilingual]
 # Per-language recall floors for C2 multilingual eval fixtures.

@@ -37,6 +37,7 @@ _QUALITY_METRIC_FIELDS = (
     "graph_local_recall_at_5",
     "graph_global_recall_at_5",
     "graph_negative_control_recall_at_5",
+    "synonym_bridge_recall_at_5",
 )
 
 
@@ -184,7 +185,8 @@ async def test_eval_suite_gated_smoke(thresholds_path: Path) -> None:
         thresholds_path=thresholds_path,
         baseline_path=BASELINE_JSON,
     )
-    assert_thresholds(report)  # must not raise
+    # synonym_bridge_recall_at_5 requires lancedb_root (synonym edges visible); skip here.
+    assert_thresholds(report, skip_fields=frozenset({"synonym_bridge_recall_at_5"}))  # must not raise
 
 
 @pytest.mark.eval

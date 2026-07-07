@@ -112,6 +112,12 @@ class EvalMetrics:
             harm-vs-no-graph baseline.  A drop here signals graph-mode
             degradation on simple queries.  ``None`` until BE-5/BE-6 are
             implemented.
+        synonym_bridge_recall_at_5: Recall@5 over naive-mode graph queries on
+            the synonym-bridge collection.  Measures whether synonym edges
+            (``relationship_type="synonym_of"``) added to the graph allow
+            queries using one term to also retrieve documents that use the
+            synonymous term.  ``None`` when no synonym-bridge queries are
+            present in the corpus.
     """
 
     recall_at_1: float
@@ -135,3 +141,4 @@ class EvalMetrics:
     graph_local_recall_at_5: float | None = None
     graph_global_recall_at_5: float | None = None
     graph_negative_control_recall_at_5: float | None = None
+    synonym_bridge_recall_at_5: float | None = None
