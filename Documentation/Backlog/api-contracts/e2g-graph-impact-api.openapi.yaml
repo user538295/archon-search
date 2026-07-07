@@ -1,0 +1,112 @@
+openapi: 3.0.0
+info:
+  title: E2g Graph Impact API
+  version: 0.0.0
+tags: []
+paths:
+  /graph/{collection}/impact/{symbol}:
+    get:
+      operationId: GraphImpact_impact
+      parameters:
+        - name: collection
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: file_path
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+        - name: depth
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+          explode: false
+        - name: direction
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+        - name: extraction_method_filter
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphImpactResponse'
+components:
+  schemas:
+    GraphImpactResponse:
+      type: object
+      required:
+        - symbol
+        - callers
+        - callees
+        - depth_used
+      properties:
+        symbol:
+          type: string
+        callers:
+          $ref: '#/components/schemas/ImpactGroup'
+        callees:
+          $ref: '#/components/schemas/ImpactGroup'
+        depth_used:
+          type: integer
+          format: int32
+    ImpactEdge:
+      type: object
+      required:
+        - entity_id
+        - entity_name
+        - relationship_type
+        - extraction_method
+        - depth
+      properties:
+        entity_id:
+          type: string
+        entity_name:
+          type: string
+        relationship_type:
+          type: string
+        extraction_method:
+          type: string
+        depth:
+          type: integer
+          format: int32
+    ImpactGroup:
+      type: object
+      required:
+        - direct
+        - indirect
+        - truncated
+        - omitted_count
+      properties:
+        direct:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImpactEdge'
+        indirect:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImpactEdge'
+        truncated:
+          type: boolean
+        omitted_count:
+          type: integer
+          format: int32
