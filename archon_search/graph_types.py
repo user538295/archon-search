@@ -77,6 +77,20 @@ def make_stable_entity_id(entity_type: str, entity_name: str) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def make_code_symbol_qualified_name(name: str, source_path: str | None) -> str:
+    """Return the file-qualified string fed into ``make_stable_entity_id`` for ``code_symbol`` nodes.
+
+    Qualifies *name* with *source_path* so same-named symbols in different
+    files hash to distinct node IDs. Falls back to the bare *name* when
+    *source_path* is falsy (preserves pre-file-qualification IDs).
+
+    This is the **single source of truth** for the code-symbol qualification
+    formula — ``GraphExtractor`` and ``DefRefExtractor`` MUST call this
+    function — never inline the ``f"{name}::{source_path}"`` formula.
+    """
+    return f"{name}::{source_path}" if source_path else name
+
+
 def make_stable_edge_id(
     source_id: str, target_id: str, relationship_type: str
 ) -> str:

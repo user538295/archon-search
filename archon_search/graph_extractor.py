@@ -39,6 +39,7 @@ from archon_search.graph_types import (
     GraphMention,
     GraphNode,
     RelationshipType,
+    make_code_symbol_qualified_name,
     make_stable_edge_id,
     make_stable_entity_id,
 )
@@ -208,7 +209,14 @@ class GraphExtractor:
         # ------------------------------------------------------------------
         for chunk in code_chunks:
             name = self._code_symbol_name(chunk)
-            entity_id = make_stable_entity_id(EntityType.code_symbol.value, name)
+            # File-qualify the hash input only (E2g BE-2, Critical #2): two
+            # unrelated same-named symbols in different files must hash to
+            # distinct node IDs. ``entity_name`` below stays the bare `name`
+            # — never file-qualified (Critical #3). When `source_path` is
+            # absent the qualifier degrades to just `name`, preserving the
+            # pre-BE-2 ID for chunks with no path information.
+            qualified_name = make_code_symbol_qualified_name(name, chunk.source_path)
+            entity_id = make_stable_entity_id(EntityType.code_symbol.value, qualified_name)
             if entity_id not in nodes:
                 nodes[entity_id] = GraphNode(
                     id=entity_id,

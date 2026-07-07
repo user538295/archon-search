@@ -816,3 +816,59 @@ def test_extractor_early_exit_mentions_empty() -> None:
     # When extraction fails with fatal_error, mentions must be empty
     assert result.fatal_error is not None
     assert result.mentions == [], f"Expected empty mentions on fatal error, got {result.mentions}"
+
+
+# ---------------------------------------------------------------------------
+# E2g BE-2, Critical #2: code_symbol node identity is file-qualified
+# ---------------------------------------------------------------------------
+
+
+def test_sameNameDifferentFiles_produceDistinctNodes() -> None:
+    """Two unrelated same-named code symbols in different files get distinct node IDs.
+
+    Covers the graph_extractor.py:211 call site specifically (the DefRefExtractor
+    call site is covered separately in tests/test_defref_extractor.py). Both chunks
+    use ``containing_function="run"`` so ``entity_name`` is identical ("run"); only
+    ``source_path`` differs, which must be reflected in the hashed ID while
+    ``entity_name`` stays the bare, non-file-qualified name in both nodes.
+    """
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    config = GraphConfig()
+    extractor = GraphExtractor(config)
+
+    chunk_a = ChunkInput(
+        chunk_id="a-000000",
+        text="def run(): ...",
+        symbol_type="function",
+        symbol_subtype="python-function",
+        containing_function="run",
+        source_path="/repo/a.py",
+    )
+    chunk_b = ChunkInput(
+        chunk_id="b-000000",
+        text="def run(): ...",
+        symbol_type="function",
+        symbol_subtype="python-function",
+        containing_function="run",
+        source_path="/repo/b.py",
+    )
+
+    async def _run():
+        return await extractor.extract([chunk_a, chunk_b], "doc-1", "col")
+
+    result = asyncio.run(_run())
+
+    assert len(result.nodes) == 2, f"Expected 2 distinct nodes, got {len(result.nodes)}"
+    ids = {n.id for n in result.nodes}
+    assert len(ids) == 2, "Same-named symbols in different files must hash to distinct IDs"
+
+    for node in result.nodes:
+        assert node.entity_name == "run", (
+            f"entity_name must stay the bare symbol name, got {node.entity_name!r}"
+        )
+
+    expected_id_a = make_stable_entity_id(EntityType.code_symbol.value, "run::/repo/a.py")
+    expected_id_b = make_stable_entity_id(EntityType.code_symbol.value, "run::/repo/b.py")
+    assert ids == {expected_id_a, expected_id_b}
