@@ -36,6 +36,16 @@ _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 _ARCHON_PREFIX = "_archon_"
 _GC_DELETE_BATCH_SIZE = 500
 
+# E2g BE-3: def/ref edges (calls/imports/defines/inherits, produced by
+# DefRefExtractor/its future cross-file BE-4 sibling) are file-derived, not
+# mention-derived — DefRefExtractor.extract() always returns mentions=[] by
+# design (whole-file extraction has no chunk boundary to hang a mention on).
+# Orphan GC below is keyed on the mentions table, so these edges (and their
+# endpoint nodes) must be exempted from the orphan sweep or they get deleted
+# on the very first GC pass after ingest. See defref_extractor.py's
+# module/_build_result docstrings for the contract this exemption satisfies.
+_GC_EXEMPT_EXTRACTION_METHODS = frozenset({"extracted", "inferred"})
+
 # ---------------------------------------------------------------------------
 # SQL helpers (same pattern as store.py)
 # ---------------------------------------------------------------------------
@@ -1243,14 +1253,9 @@ class GraphStore:
         nodes_arrow = await nodes_table.query().select(["id"]).to_arrow()
         all_node_ids: list[str] = nodes_arrow["id"].to_pylist()
 
-        orphan_node_ids = [nid for nid in all_node_ids if nid not in mentioned_entity_ids]
-
-        if not orphan_node_ids:
-            return GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
-
-        # --- Step 3: find orphan edges (any endpoint is an orphan node) ---
-        orphan_node_ids_set = set(orphan_node_ids)
-        orphan_edge_ids: list[str] = []
+        # --- Step 2b: collect def/ref exemptions (BE-3) — nodes/edges whose
+        # extraction_method is in _GC_EXEMPT_EXTRACTION_METHODS are file-derived,
+        # not mention-derived, and must survive orphan GC regardless of mentions.
         edges_table = None
         try:
             edges_table = await db.open_table(self._edges_table_name(collection, ns))
@@ -1258,8 +1263,45 @@ class GraphStore:
             # edges table genuinely absent → skip edge collection, still delete orphan nodes
             pass
 
+        exempt_edge_ids: set[str] = set()
+        exempt_node_ids: set[str] = set()
+        edges_arrow = None
         if edges_table is not None:
-            edges_arrow = await edges_table.query().select(["id", "source_node_id", "target_node_id"]).to_arrow()
+            # Guard: pre-E2f edge tables lack extraction_method (same guard used
+            # by _arrow_to_edges / ensure_graph_tables' migration check).
+            edges_schema = await edges_table.schema()
+            has_extraction_method_col = "extraction_method" in edges_schema.names
+            select_cols = ["id", "source_node_id", "target_node_id"]
+            if has_extraction_method_col:
+                select_cols.append("extraction_method")
+            edges_arrow = await edges_table.query().select(select_cols).to_arrow()
+            if has_extraction_method_col:
+                for eid, src_id, tgt_id, method in zip(
+                    edges_arrow["id"].to_pylist(),
+                    edges_arrow["source_node_id"].to_pylist(),
+                    edges_arrow["target_node_id"].to_pylist(),
+                    edges_arrow["extraction_method"].to_pylist(),
+                ):
+                    if method in _GC_EXEMPT_EXTRACTION_METHODS:
+                        exempt_edge_ids.add(eid)
+                        exempt_node_ids.add(src_id)
+                        exempt_node_ids.add(tgt_id)
+
+        orphan_node_ids = [
+            nid
+            for nid in all_node_ids
+            if nid not in mentioned_entity_ids and nid not in exempt_node_ids
+        ]
+
+        if not orphan_node_ids:
+            return GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
+
+        # --- Step 3: find orphan edges (any endpoint is an orphan node, and the
+        # edge itself is not exempted per Step 2b) ---
+        orphan_node_ids_set = set(orphan_node_ids)
+        orphan_edge_ids: list[str] = []
+
+        if edges_arrow is not None:
             orphan_edge_ids = [
                 eid
                 for eid, src_id, tgt_id in zip(
@@ -1267,7 +1309,8 @@ class GraphStore:
                     edges_arrow["source_node_id"].to_pylist(),
                     edges_arrow["target_node_id"].to_pylist(),
                 )
-                if src_id in orphan_node_ids_set or tgt_id in orphan_node_ids_set
+                if eid not in exempt_edge_ids
+                and (src_id in orphan_node_ids_set or tgt_id in orphan_node_ids_set)
             ]
 
         # --- Step 4: delete orphan edges first, then orphan nodes ---

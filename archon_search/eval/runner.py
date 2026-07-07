@@ -657,6 +657,15 @@ async def _build_pipeline_with_eval_backends(
 
     chunker = DocumentChunker(chunk_size=256)
     parser = DocumentParser()
+    # E2g BE-3: DefRefExtractor intentionally NOT wired here. `graph_store=` above
+    # is a `CommunityStoreStub`/`DispatchingCommunityStore` (deterministic-backend
+    # stub), not a real `GraphStore`, and `graph_config=` is never passed to this
+    # constructor at all — the pipeline's `_defref_enabled`/`_graph_enabled` gates
+    # both require a real `GraphConfig.enabled`, so wiring DefRefExtractor against
+    # this stub would be dead code, not a functioning code lane. A later task
+    # (BE-10, the code-lane eval gate) needs real def/ref edges and should
+    # construct a real `GraphStore` + `GraphConfig(enabled=True)` for that harness
+    # rather than reusing this stub-backed builder.
     pipeline = SearchPipeline(
         store=store,
         embedder=embedder,

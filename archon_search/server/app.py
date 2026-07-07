@@ -507,13 +507,16 @@ def create_app(
         from archon_search.graph_store import GraphStore as _GraphStore  # noqa: PLC0415
         from archon_search.graph_extractor import GraphExtractor as _GraphExtractor  # noqa: PLC0415
         from archon_search.graph_expander import GraphExpander as _GraphExpander  # noqa: PLC0415
+        from archon_search.defref_extractor import DefRefExtractor as _DefRefExtractor  # noqa: PLC0415
         _graph_store = _GraphStore(config.db_path)
         _graph_extractor = _GraphExtractor(config.graph)
         _graph_expander = _GraphExpander(_graph_store)
+        _defref_extractor = _DefRefExtractor(_graph_store)
     else:
         _graph_store = None
         _graph_extractor = None
         _graph_expander = None
+        _defref_extractor = None
     app.state.graph_store = _graph_store
 
     app.state.pipeline = SearchPipeline(
@@ -535,6 +538,7 @@ def create_app(
         graph_store=_graph_store,
         graph_config=config.graph,
         graph_expander=_graph_expander,
+        defref_extractor=_defref_extractor,
     )
     from archon_search.hyde import HyDEGenerator  # noqa: PLC0415
     app.state.hyde_generator = HyDEGenerator(embedder=app.state.embedder, config=config.hyde)

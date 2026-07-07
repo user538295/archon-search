@@ -384,7 +384,7 @@ flowchart LR
         - [x] #unit_test — `test_typeScriptImportAndInherits_produceEdges` — the TypeScript path also produces `imports` and `inherits` edges, not just `calls` (Major #14 — S8's "generalizes past Python" claim was previously tested for `calls` only)
         - [x] #unit_test — `test_sameNameDifferentFiles_produceDistinctNodes` — two unrelated same-named functions in different files get distinct `code_symbol` node IDs because `source_path` qualifies the `make_stable_entity_id` hash input, AND both nodes' `entity_name` field stays the clean bare symbol name (not path-qualified) in both — asserts the ID/display-name divergence explicitly (Critical #3); groundwork for S4b, not a proof of `graph_impact`-level isolation (Major #6)
         - [x] #integration_test — `test_defrefExtractor_writesEdgesToGraphStore` — extracted edges round-trip through a real `GraphStore`
-- [ ] **BE-3** — Wire `DefRefExtractor` into the post-ingest pipeline hook, following the never-propagate contract #backend-role
+- [x] **BE-3** — Wire `DefRefExtractor` into the post-ingest pipeline hook, following the never-propagate contract #backend-role
     - Use Case · 6.0h
     - needs BE-2 · completes S17, S14
     - Tests

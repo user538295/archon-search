@@ -36,6 +36,7 @@ from archon_search.graph_expander import build_expanded_text, tokenize_and_gener
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig, RAGFusionConfig, SearchConfig
+    from archon_search.defref_extractor import DefRefExtractor
     from archon_search.graph_expander import ExpandedQuery, GraphExpander
     from archon_search.graph_extractor import GraphExtractor
     from archon_search.graph_store import GraphStore
@@ -323,6 +324,7 @@ class SearchPipeline:
         graph_store: GraphStore | None = None,
         graph_config: GraphConfig | None = None,
         graph_expander: "GraphExpander | None" = None,
+        defref_extractor: "DefRefExtractor | None" = None,
     ) -> None:
         self.store = store
         self._global_embedder = embedder
@@ -341,6 +343,10 @@ class SearchPipeline:
         self._graph_store = graph_store
         self._graph_config = graph_config
         self._graph_expander = graph_expander
+        # E2g BE-3: DefRefExtractor — additive def/ref edge extraction for code
+        # files, run alongside graph_extractor (which still produces the
+        # lone code_symbol node + zero co-occurrence edges per chunk).
+        self._defref_extractor = defref_extractor
         # E2f BE-5: post-ingest synonym enrichment callback.
         # Assigned by app.py lifespan after MaintenanceLoop is constructed.
         # CLI/eval paths that construct SearchPipeline without a MaintenanceLoop
@@ -660,6 +666,66 @@ class SearchPipeline:
                 )
                 acl_warnings.append(
                     f"Graph write failed for {doc_id!r}: graph data may be incomplete"
+                )
+
+        # E2g BE-3 / Finding 3: when graph_extractor AND defref_extractor are both
+        # wired (the real production configuration — see create_pipeline() and
+        # app.py), both extractors compute the SAME node ID for a chunk's primary
+        # code_symbol (both route through make_code_symbol_qualified_name(name,
+        # source_path) — graph_extractor.py:218-219 vs defref_extractor.py's
+        # _symbol_id()). write_graph()'s merge_insert().when_matched_update_all()
+        # means whichever extractor writes second — DefRefExtractor, since this
+        # block runs after the E1a graph-write block above — wins on ALL shared
+        # columns for that node row. entity_name/entity_type always agree (both
+        # write the bare symbol name + EntityType.code_symbol), so this is benign
+        # for identity/type; entity_subtype legitimately differs (chunk.symbol_subtype
+        # vs f"{lang}-{kind}") and DefRefExtractor's value is the one that survives.
+        # This is accepted as intentional and benign — see
+        # test_bothExtractorsWired_coexistWithoutClobberingIdentity in the BE-3
+        # integration test file.
+        #
+        # E2g BE-3: DefRefExtractor — post-persist def/ref edge extraction for
+        # code files. Unlike the E1a graph-write block above (whose extraction
+        # runs BEFORE persist and only its write runs after), BE-3 runs BOTH
+        # extraction and write after persist completes — a deliberate, simpler
+        # choice since DefRefExtractor needs only the whole-file text (already
+        # available via `markdown`) and no post-chunk-ID data. Both steps live
+        # inside one try/except that logs WARNING and never raises
+        # (never-propagate contract, same as E1a). Extraction is atomic —
+        # either extract() returns a full GraphExtractionResult or raises; a
+        # mid-parse failure never reaches write_graph, so no partial edges are
+        # ever persisted for the file.
+        _defref_enabled = (
+            self._defref_extractor is not None
+            and self._graph_store is not None
+            and self._graph_config is not None
+            and self._graph_config.enabled
+            and suffix in CODE_EXTENSIONS
+        )
+        if _defref_enabled:
+            try:
+                _defref_result = await self._defref_extractor.extract(
+                    file_text=markdown,
+                    file_path=str(path),
+                    doc_id=doc_id,
+                    collection=collection,
+                    ns=namespace,
+                )
+                if _defref_result.warnings:
+                    acl_warnings.extend(_defref_result.warnings)
+                if _defref_result.nodes or _defref_result.edges:
+                    await self._graph_store.ensure_graph_tables(collection, ns=namespace)
+                    await self._graph_store.write_graph(
+                        collection, _defref_result.nodes, _defref_result.edges, ns=namespace
+                    )
+            except Exception:
+                logger.warning(
+                    "DefRef extraction failed for %r in %r; def/ref edges may be incomplete",
+                    doc_id, collection,
+                    exc_info=True,
+                )
+                acl_warnings.append(
+                    f"DefRef extraction failed for {doc_id!r}: def/ref edges may be incomplete"
                 )
 
         # E2f BE-5: post-ingest synonym enrichment hook.
@@ -3079,13 +3145,16 @@ def create_pipeline(
     graph_extractor = None
     graph_store = None
     graph_expander = None
+    defref_extractor = None
     if cfg.graph.enabled:
+        from archon_search.defref_extractor import DefRefExtractor  # noqa: PLC0415
         from archon_search.graph_extractor import GraphExtractor  # noqa: PLC0415
         from archon_search.graph_store import GraphStore as _GraphStore  # noqa: PLC0415
         from archon_search.graph_expander import GraphExpander  # noqa: PLC0415
         graph_store = _GraphStore(cfg.db_path)
         graph_extractor = GraphExtractor(cfg.graph)
         graph_expander = GraphExpander(graph_store)
+        defref_extractor = DefRefExtractor(graph_store)
 
     return SearchPipeline(
         store=store,
@@ -3105,4 +3174,5 @@ def create_pipeline(
         graph_store=graph_store,
         graph_config=cfg.graph,
         graph_expander=graph_expander,
+        defref_extractor=defref_extractor,
     )

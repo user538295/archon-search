@@ -180,6 +180,7 @@ def test_delete_orphan_nodes_removes_zero_mention_nodes() -> None:
     edges_q.select = MagicMock(return_value=edges_q)
     mock_edges_table = MagicMock()
     mock_edges_table.query.return_value = edges_q
+    mock_edges_table.schema = AsyncMock(return_value=GraphStore._edges_schema())
     mock_edges_table.delete = AsyncMock(return_value=None)
 
     store = GraphStore.__new__(GraphStore)
@@ -236,6 +237,7 @@ def test_delete_orphan_edges_removed_with_nodes() -> None:
     edges_q.select = MagicMock(return_value=edges_q)
     mock_edges_table = MagicMock()
     mock_edges_table.query.return_value = edges_q
+    mock_edges_table.schema = AsyncMock(return_value=GraphStore._edges_schema())
     mock_edges_table.delete = AsyncMock(return_value=None)
 
     store = GraphStore.__new__(GraphStore)
@@ -292,6 +294,7 @@ def test_delete_orphan_nodes_preserves_nodes_with_remaining_mentions() -> None:
     edges_q.select = MagicMock(return_value=edges_q)
     mock_edges_table = MagicMock()
     mock_edges_table.query.return_value = edges_q
+    mock_edges_table.schema = AsyncMock(return_value=GraphStore._edges_schema())
     mock_edges_table.delete = AsyncMock(return_value=None)
 
     store = GraphStore.__new__(GraphStore)
@@ -346,6 +349,7 @@ def test_delete_orphan_edges_preserves_edges_between_live_nodes() -> None:
     edges_q.select = MagicMock(return_value=edges_q)
     mock_edges_table = MagicMock()
     mock_edges_table.query.return_value = edges_q
+    mock_edges_table.schema = AsyncMock(return_value=GraphStore._edges_schema())
     mock_edges_table.delete = AsyncMock(return_value=None)
 
     store = GraphStore.__new__(GraphStore)
@@ -1016,6 +1020,7 @@ def test_delete_orphan_nodes_aborts_on_corrupt_edges_read() -> None:
     corrupt_edges_q.select = MagicMock(return_value=corrupt_edges_q)
     mock_edges_table = MagicMock()
     mock_edges_table.query.return_value = corrupt_edges_q
+    mock_edges_table.schema = AsyncMock(return_value=GraphStore._edges_schema())
 
     store = GraphStore.__new__(GraphStore)
 
