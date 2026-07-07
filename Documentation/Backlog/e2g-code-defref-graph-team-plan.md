@@ -360,7 +360,7 @@ flowchart LR
     - Tests
 
 ### Phase 1 · Same-file edges *(the walking skeleton: Python calls/imports/inherits, extracted tier, end-to-end)*
-- [ ] **BE-0** — Spike: verify `tree-sitter-swift`/`tree-sitter-c-sharp` install and parse cleanly against the pinned `tree-sitter>=0.25,<0.26` core (Q7); runs in parallel with the walking skeleton — does not block the impact-tool critical path (BE-9/T-3), but does gate BE-5/Phase 6 (Major #24; its 1h estimate means it finishes long before BE-5 is ready to consume it) #backend-role
+- [x] **BE-0** — Spike: verify `tree-sitter-swift`/`tree-sitter-c-sharp` install and parse cleanly against the pinned `tree-sitter>=0.25,<0.26` core (Q7); runs in parallel with the walking skeleton — does not block the impact-tool critical path (BE-9/T-3), but does gate BE-5/Phase 6 (Major #24; its 1h estimate means it finishes long before BE-5 is ready to consume it) #backend-role
     - Frameworks & Drivers · 1.0h
     - needs K1 · completes (early risk signal for S18, formally completed by BE-5)
     - Tests
