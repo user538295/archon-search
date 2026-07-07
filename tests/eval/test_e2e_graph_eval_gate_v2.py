@@ -15,6 +15,8 @@ Non-leidenalg tests (naive-recall smoke, tuple-membership check) live in
 """
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -314,4 +316,99 @@ async def test_eval_gate_synonym_bridge_recall_at_5(
         f"synonym_of edges may be absent; without expansion recall@5 ≈ {_NO_EXPANSION_BASELINE:.2f})"
     )
 
+
+# ---------------------------------------------------------------------------
+# T-4: subprocess e2e — run all eval gates in this file and assert they pass
+# ---------------------------------------------------------------------------
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_THIS_MODULE = "tests/eval/test_e2e_graph_eval_gate_v2.py"
+
+
+@pytest.mark.integration
+@pytest.mark.xdist_group("benchmark")
+def test_e2e_eval_gate_synonym_bridge_and_negative_control() -> None:
+    """Subprocess e2e: run all eval gates in this file and assert both new tests pass (T-4).
+
+    Runs:
+        uv run pytest tests/eval/test_e2e_graph_eval_gate_v2.py \\
+            -k '<K_EXPR>' -p no:xdist -o addopts= --no-cov \\
+            --thresholds-path tests/eval/thresholds.toml
+
+    as a blocking subprocess (timeout=300s) from the project root.  Asserts
+    that exactly 2 tests passed (not skipped, not failed): specifically
+    ``test_eval_gate_synonym_bridge_recall_at_5`` (S8) and
+    ``test_eval_gate_hotpotqa_negative_control_unchanged`` (S9).
+
+    If the subprocess fails or times out, the captured output is included in
+    the assertion error so failures are immediately diagnosable without
+    re-running manually.
+
+    Serialised via ``xdist_group("benchmark")`` to avoid running concurrently
+    with other subprocess-heavy tests (memory / CPU contention).
+    """
+    # Recursion guard: if this test is already running inside a subprocess e2e
+    # run, skip to prevent infinite subprocess nesting.
+    if os.environ.get("_ARCHON_E2E_SUBPROCESS"):
+        pytest.skip("Running inside a subprocess e2e run — skipping to prevent recursion")
+
+    # Use -k to select only the two target gates.  This avoids a recursive loop:
+    # if the subprocess ran the full file it would include this test, which would
+    # spawn another subprocess, and so on indefinitely.
+    _K_EXPR = (
+        "test_eval_gate_synonym_bridge_recall_at_5"
+        " or test_eval_gate_hotpotqa_negative_control_unchanged"
+    )
+    child_env = {**os.environ, "_ARCHON_E2E_SUBPROCESS": "1", "PYTEST_ADDOPTS": ""}
+    try:
+        result = subprocess.run(
+            [
+                "uv",
+                "run",
+                "pytest",
+                _THIS_MODULE,
+                "-m",
+                "not live_benchmark",
+                "-k",
+                _K_EXPR,
+                "-p",
+                "no:xdist",
+                "-o",
+                "addopts=",
+                "--no-cov",
+                "--thresholds-path",
+                "tests/eval/thresholds.toml",
+            ],
+            cwd=_PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=child_env,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"Subprocess pytest run timed out after 300s.\n"
+            f"Command: uv run pytest {_THIS_MODULE} -k '{_K_EXPR}'"
+        )
+    combined_output = result.stdout + result.stderr
+    # Guard: verify the child did NOT spawn xdist workers (which would stack on the parent's
+    # worker pool and risk OOM — see CLAUDE.md and learnings.md [2026-07-05]).
+    assert "[gw" not in combined_output, (
+        "Child subprocess appears to have spawned xdist workers despite '-p no:xdist'. "
+        f"This is a critical OOM risk — check addopts override.\n"
+        f"--- stdout ---\n{result.stdout}\n"
+        f"--- stderr ---\n{result.stderr}"
+    )
+    assert result.returncode == 0, (
+        f"pytest {_THIS_MODULE} -k '{_K_EXPR}' failed with exit code {result.returncode}.\n"
+        f"--- stdout ---\n{result.stdout}\n"
+        f"--- stderr ---\n{result.stderr}"
+    )
+    # Confirm the two target gates ran and passed (not silently skipped).
+    assert "2 passed" in combined_output, (
+        f"Expected 2 tests to pass but the summary does not show '2 passed'.\n"
+        f"This may mean the tests were skipped (leidenalg not installed?) or failed.\n"
+        f"--- stdout ---\n{result.stdout}\n"
+        f"--- stderr ---\n{result.stderr}"
+    )
 

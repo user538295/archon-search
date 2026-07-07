@@ -477,11 +477,11 @@ regen OpenAPI snapshot with `uv run --python 3.12 pytest tests/server/test_opena
         - [x] #integration_test — `test_eval_gate_synonym_bridge_recall_at_5` — eval with real graph + synonym edges active meets floor; `lancedb_root` and `build_communities_for_eval` wired
         - [x] #integration_test — `test_eval_gate_hotpotqa_negative_control_unchanged` — negative control recall with synonym edges active does not fall below existing floor
 
-- [ ] **T-4** — e2e: run the new eval gates end-to-end; verify bridge recall floor is met; verify HotpotQA negative control does not regress #tester-role
+- [x] **T-4** — e2e: run the new eval gates end-to-end; verify bridge recall floor is met; verify HotpotQA negative control does not regress #tester-role
     - — · 3.0h
     - needs BE-8 · completes S8, S9
     - Tests
-        - #e2e_test — `test_e2e_eval_gate_synonym_bridge_and_negative_control` — run `pytest tests/eval/test_e2e_graph_eval_gate_v2.py -m "not live_benchmark" --no-cov`; assert both new tests pass
+        - [x] #e2e_test — `test_e2e_eval_gate_synonym_bridge_and_negative_control` — run `pytest tests/eval/test_e2e_graph_eval_gate_v2.py -m "not live_benchmark" --no-cov`; assert both new tests pass
 
 ### Phase 5 · Close-out
 - [ ] **T-5** — Project close-out & acceptance fact-check #tester-role
