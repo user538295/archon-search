@@ -46,6 +46,35 @@ _GC_DELETE_BATCH_SIZE = 500
 # module/_build_result docstrings for the contract this exemption satisfies.
 _GC_EXEMPT_EXTRACTION_METHODS = frozenset({"extracted", "inferred"})
 
+_DEFREF_RELATIONSHIP_TYPES = frozenset(
+    {
+        RelationshipType.calls.value,
+        RelationshipType.imports.value,
+        RelationshipType.defines.value,
+        RelationshipType.inherits.value,
+    }
+)
+
+
+def _edge_is_defref(extraction_method: str | None, relationship_type: str) -> bool:
+    """Return True when an edge row is def/ref tier (BE-3 GC exemption + doc delete)."""
+    if extraction_method in _GC_EXEMPT_EXTRACTION_METHODS:
+        return True
+    return relationship_type in _DEFREF_RELATIONSHIP_TYPES
+
+
+def _node_is_module_pseudo(entity_type: str, entity_subtype: str | None) -> bool:
+    """Return True for DefRefExtractor file-scoped module pseudo-nodes (GC-exempt).
+
+    Uses the ``-defref-module`` subtype suffix produced only by DefRefExtractor,
+    not the ``-module`` subtype from code_enricher/graph_extractor NER module chunks.
+    """
+    return (
+        entity_type == EntityType.code_symbol.value
+        and entity_subtype is not None
+        and str(entity_subtype).endswith("-defref-module")
+    )
+
 # ---------------------------------------------------------------------------
 # SQL helpers (same pattern as store.py)
 # ---------------------------------------------------------------------------
@@ -815,6 +844,136 @@ class GraphStore:
         predicate = _where_eq("doc_id", doc_id)
         await table.delete(predicate)
 
+    async def delete_graph_by_doc(
+        self,
+        collection: str,
+        doc_id: str,
+        ns: str,
+    ) -> None:
+        """Delete doc-scoped graph rows for *doc_id* without removing shared entity nodes.
+
+        Def/ref nodes/edges are removed via ``delete_defref_graph_by_doc``. Remaining
+        doc-scoped edges (e.g. NER co-occurrence) are deleted by ``source_doc_id``.
+        Shared entity nodes are left for mention-based orphan GC after mention prune.
+        """
+        await self.delete_defref_graph_by_doc(
+            collection, doc_id, ns, preserve_node_ids=frozenset()
+        )
+        self._validate_collection(collection)
+        _validate_namespace(ns)
+        db = self._require_db()
+        doc_predicate = _where_eq("source_doc_id", doc_id)
+
+        try:
+            edges_table = await db.open_table(self._edges_table_name(collection, ns))
+        except (FileNotFoundError, ValueError):
+            return
+
+        await edges_table.delete(doc_predicate)
+
+    async def delete_defref_graph_by_doc(
+        self,
+        collection: str,
+        doc_id: str,
+        ns: str,
+        *,
+        preserve_node_ids: frozenset[str] | None = None,
+    ) -> None:
+        """Delete def/ref nodes and edges for *doc_id* before a def/ref re-write."""
+        self._validate_collection(collection)
+        _validate_namespace(ns)
+        db = self._require_db()
+        preserve = preserve_node_ids or frozenset()
+
+        try:
+            edges_table = await db.open_table(self._edges_table_name(collection, ns))
+        except (FileNotFoundError, ValueError):
+            edges_table = None
+
+        defref_edge_ids: list[str] = []
+        endpoint_ids: set[str] = set()
+        if edges_table is not None:
+            edges_schema = await edges_table.schema()
+            has_extraction_method_col = "extraction_method" in edges_schema.names
+            select_cols = ["id", "source_node_id", "target_node_id", "relationship_type"]
+            if has_extraction_method_col:
+                select_cols.append("extraction_method")
+            edges_arrow = await (
+                edges_table.query()
+                .where(_where_eq("source_doc_id", doc_id))
+                .select(select_cols)
+                .to_arrow()
+            )
+            rel_types = edges_arrow["relationship_type"].to_pylist()
+            methods = (
+                edges_arrow["extraction_method"].to_pylist()
+                if has_extraction_method_col
+                else [None] * len(rel_types)
+            )
+            for eid, src_id, tgt_id, rel, method in zip(
+                edges_arrow["id"].to_pylist(),
+                edges_arrow["source_node_id"].to_pylist(),
+                edges_arrow["target_node_id"].to_pylist(),
+                rel_types,
+                methods,
+            ):
+                if _edge_is_defref(method, rel):
+                    defref_edge_ids.append(eid)
+                    endpoint_ids.add(src_id)
+                    endpoint_ids.add(tgt_id)
+
+        try:
+            nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
+        except (FileNotFoundError, ValueError):
+            nodes_table = None
+
+        node_ids_to_delete: list[str] = []
+        if nodes_table is not None:
+            nodes_arrow = await (
+                nodes_table.query()
+                .where(_where_eq("source_doc_id", doc_id))
+                .select(["id", "entity_type", "entity_subtype"])
+                .to_arrow()
+            )
+            for nid, etype, subtype in zip(
+                nodes_arrow["id"].to_pylist(),
+                nodes_arrow["entity_type"].to_pylist(),
+                nodes_arrow["entity_subtype"].to_pylist(),
+            ):
+                if nid in preserve:
+                    continue
+                if nid in endpoint_ids:
+                    node_ids_to_delete.append(nid)
+                    continue
+                if _node_is_module_pseudo(etype, subtype):
+                    node_ids_to_delete.append(nid)
+
+        nodes_to_delete_set = set(node_ids_to_delete)
+        incident_edge_ids: list[str] = []
+        if edges_table is not None and nodes_to_delete_set:
+            delete_list = list(nodes_to_delete_set)
+            for i in range(0, len(delete_list), _GC_DELETE_BATCH_SIZE):
+                batch = delete_list[i : i + _GC_DELETE_BATCH_SIZE]
+                for endpoint_col in ("source_node_id", "target_node_id"):
+                    incident_arrow = await (
+                        edges_table.query()
+                        .where(_where_in(endpoint_col, batch))
+                        .select(["id"])
+                        .to_arrow()
+                    )
+                    incident_edge_ids.extend(incident_arrow["id"].to_pylist())
+
+        edge_ids_to_delete = list(dict.fromkeys(defref_edge_ids + incident_edge_ids))
+        if edges_table is not None and edge_ids_to_delete:
+            for i in range(0, len(edge_ids_to_delete), _GC_DELETE_BATCH_SIZE):
+                batch = edge_ids_to_delete[i : i + _GC_DELETE_BATCH_SIZE]
+                await edges_table.delete(_where_in("id", batch))
+
+        if nodes_table is not None and node_ids_to_delete:
+            for i in range(0, len(node_ids_to_delete), _GC_DELETE_BATCH_SIZE):
+                batch = node_ids_to_delete[i : i + _GC_DELETE_BATCH_SIZE]
+                await nodes_table.delete(_where_in("id", batch))
+
     async def get_all_mentions(
         self,
         collection: str,
@@ -1250,8 +1409,26 @@ class GraphStore:
         except (FileNotFoundError, ValueError):
             return GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
 
-        nodes_arrow = await nodes_table.query().select(["id"]).to_arrow()
+        nodes_arrow = await nodes_table.query().select(["id", "entity_type", "entity_subtype"]).to_arrow()
         all_node_ids: list[str] = nodes_arrow["id"].to_pylist()
+        module_pseudo_node_ids: set[str] = {
+            nid
+            for nid, etype, subtype in zip(
+                all_node_ids,
+                nodes_arrow["entity_type"].to_pylist(),
+                nodes_arrow["entity_subtype"].to_pylist(),
+            )
+            if _node_is_module_pseudo(etype, subtype)
+        }
+
+        orphan_node_ids_pre_exempt = [
+            nid
+            for nid in all_node_ids
+            if nid not in mentioned_entity_ids and nid not in module_pseudo_node_ids
+        ]
+
+        if not orphan_node_ids_pre_exempt:
+            return GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
 
         # --- Step 2b: collect def/ref exemptions (BE-3) — nodes/edges whose
         # extraction_method is in _GC_EXEMPT_EXTRACTION_METHODS are file-derived,
@@ -1264,33 +1441,37 @@ class GraphStore:
             pass
 
         exempt_edge_ids: set[str] = set()
-        exempt_node_ids: set[str] = set()
+        exempt_node_ids: set[str] = set(module_pseudo_node_ids)
         edges_arrow = None
         if edges_table is not None:
             # Guard: pre-E2f edge tables lack extraction_method (same guard used
             # by _arrow_to_edges / ensure_graph_tables' migration check).
             edges_schema = await edges_table.schema()
             has_extraction_method_col = "extraction_method" in edges_schema.names
-            select_cols = ["id", "source_node_id", "target_node_id"]
+            select_cols = ["id", "source_node_id", "target_node_id", "relationship_type"]
             if has_extraction_method_col:
                 select_cols.append("extraction_method")
             edges_arrow = await edges_table.query().select(select_cols).to_arrow()
-            if has_extraction_method_col:
-                for eid, src_id, tgt_id, method in zip(
-                    edges_arrow["id"].to_pylist(),
-                    edges_arrow["source_node_id"].to_pylist(),
-                    edges_arrow["target_node_id"].to_pylist(),
-                    edges_arrow["extraction_method"].to_pylist(),
-                ):
-                    if method in _GC_EXEMPT_EXTRACTION_METHODS:
-                        exempt_edge_ids.add(eid)
-                        exempt_node_ids.add(src_id)
-                        exempt_node_ids.add(tgt_id)
+            rel_types = edges_arrow["relationship_type"].to_pylist()
+            methods = (
+                edges_arrow["extraction_method"].to_pylist()
+                if has_extraction_method_col
+                else [None] * len(rel_types)
+            )
+            for eid, src_id, tgt_id, rel, method in zip(
+                edges_arrow["id"].to_pylist(),
+                edges_arrow["source_node_id"].to_pylist(),
+                edges_arrow["target_node_id"].to_pylist(),
+                rel_types,
+                methods,
+            ):
+                if _edge_is_defref(method, rel):
+                    exempt_edge_ids.add(eid)
+                    exempt_node_ids.add(src_id)
+                    exempt_node_ids.add(tgt_id)
 
         orphan_node_ids = [
-            nid
-            for nid in all_node_ids
-            if nid not in mentioned_entity_ids and nid not in exempt_node_ids
+            nid for nid in orphan_node_ids_pre_exempt if nid not in exempt_node_ids
         ]
 
         if not orphan_node_ids:

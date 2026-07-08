@@ -3433,7 +3433,7 @@ def _make_mock_pipeline_with_ingest_file(tmp_path, existing_collections=None, ma
     pipeline.store.optimize_fts = AsyncMock()
     pipeline.store.get_dominant_language = AsyncMock(return_value="en")
     pipeline.store.supports_incremental_fts_delete = True
-    pipeline.store.delete_by_source_path = AsyncMock(return_value=1)
+    pipeline.delete_by_source_path = AsyncMock(return_value=1)
     pipeline.store.get_collection_meta = AsyncMock(return_value=None)
     pipeline.recompute_collection_meta = AsyncMock()
     return pipeline
@@ -3543,7 +3543,7 @@ class TestTask46:
         syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
-        pipeline.store.delete_by_source_path.assert_called_once_with("myproject", ghost_path, skip_fts_optimize=True)
+        pipeline.delete_by_source_path.assert_called_once_with("myproject", ghost_path, skip_fts_optimize=True)
         assert "myproject" in result.updated
         assert result.errors == []
 
@@ -3575,7 +3575,7 @@ class TestTask46:
         result = await syncer.sync([str(col_dir)])
 
         pipeline.ingest_file.assert_not_called()
-        pipeline.store.delete_by_source_path.assert_not_called()
+        pipeline.delete_by_source_path.assert_not_called()
         assert "myproject" in result.unchanged
         assert "myproject" not in result.updated
 
@@ -4081,7 +4081,7 @@ class TestTask46:
         assert pipeline.ingest_file.call_count == 2
 
         # delete_by_source_path called for deleted file
-        pipeline.store.delete_by_source_path.assert_called_once_with("myproject", deleted_key, skip_fts_optimize=True)
+        pipeline.delete_by_source_path.assert_called_once_with("myproject", deleted_key, skip_fts_optimize=True)
 
         # Final state should have correct file_mtimes
         state = state_store.read()
@@ -4778,7 +4778,7 @@ class TestSyncCollectionMethod:
 
         pipeline = make_mock_pipeline(tmp_path)
         pipeline.store.rebuild_fts_index = AsyncMock()
-        pipeline.store.delete_by_source_path = AsyncMock()
+        pipeline.delete_by_source_path = AsyncMock()
         pipeline.ingest_file = AsyncMock()
         pipeline.recompute_collection_meta = AsyncMock()
 

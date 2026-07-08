@@ -281,6 +281,182 @@ async def test_bothExtractorsWired_coexistWithoutClobberingIdentity(tmp_path: Pa
     helper_nodes = [n for n in all_nodes if n.entity_name == "helper"]
     assert helper_nodes, "expected a node for 'helper'"
     assert all(n.entity_type == EntityType.code_symbol for n in helper_nodes)
+    assert len(helper_nodes) == 1, "merge_insert must collapse to one node id for helper"
+    assert helper_nodes[0].entity_subtype is not None
+    assert helper_nodes[0].entity_subtype.endswith("-function"), (
+        "DefRefExtractor write runs second; its entity_subtype scheme must win"
+    )
+
+    await store.disconnect()
+    await graph_store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_bothExtractorsWired_nerModuleNodeSurvivesDefRefReconcile(tmp_path: Path):
+    """NER module-level code_symbol nodes must survive def/ref delete-before-write (C3-I-1)."""
+    from archon_search.graph_extractor import GraphExtractor
+    from archon_search.store import SearchStore
+
+    db_path = str(tmp_path / "search")
+    store = SearchStore(db_path)
+    await store.connect()
+
+    graph_store = GraphStore(db_path)
+    await graph_store.connect()
+
+    collection = "test_defref_ner_module"
+    graph_config = GraphConfig(enabled=True)
+    graph_extractor = GraphExtractor(GraphConfig(enabled=True))
+    defref_extractor = DefRefExtractor(graph_store=graph_store)
+    pipeline = _make_pipeline(
+        store,
+        defref_extractor=defref_extractor,
+        graph_store=graph_store,
+        graph_config=graph_config,
+        graph_extractor=graph_extractor,
+    )
+
+    py_file = tmp_path / "with_imports.py"
+    py_file.write_text(
+        '"""Module docstring."""\n'
+        "import os\n\n\n"
+        "def helper():\n"
+        "    return os.getcwd()\n"
+    )
+
+    result = await pipeline.ingest_file(py_file, collection, embedder=_make_embedder())
+    assert result.status == "ok", result.error
+
+    all_nodes = await graph_store.get_all_nodes(collection, ns="default")
+    ner_module_nodes = [
+        n
+        for n in all_nodes
+        if n.entity_type.value == "code_symbol"
+        and n.entity_subtype == "python-module"
+    ]
+    assert ner_module_nodes, "expected NER module-level code_symbol node from graph_extractor"
+
+    all_mentions = await graph_store.get_all_mentions(collection, ns="default")
+    node_ids = {n.id for n in all_nodes}
+    for mention in all_mentions:
+        assert mention.entity_id in node_ids, "every mention must resolve to a live node"
+
+    defref_module_nodes = [
+        n for n in all_nodes if n.entity_subtype and n.entity_subtype.endswith("-defref-module")
+    ]
+    assert defref_module_nodes, "expected DefRef module pseudo-node"
+
+    await store.disconnect()
+    await graph_store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_deleteDocument_removesDefRefGraphData(tmp_path: Path):
+    """Deleting a code document removes its graph nodes/edges (C1-B-1 lifecycle)."""
+    pytest.importorskip("tree_sitter")
+    pytest.importorskip("tree_sitter_python")
+
+    from archon_search.store import SearchStore
+
+    db_path = str(tmp_path / "search")
+    store = SearchStore(db_path)
+    await store.connect()
+
+    graph_store = GraphStore(db_path)
+    await graph_store.connect()
+
+    collection = "test_defref_delete"
+    graph_config = GraphConfig(enabled=True)
+    defref_extractor = DefRefExtractor(graph_store=graph_store)
+    pipeline = _make_pipeline(
+        store,
+        defref_extractor=defref_extractor,
+        graph_store=graph_store,
+        graph_config=graph_config,
+    )
+
+    py_file = tmp_path / "delete_me.py"
+    py_file.write_text(
+        "def helper():\n"
+        "    return 1\n\n\n"
+        "def main():\n"
+        "    return helper()\n"
+    )
+
+    result = await pipeline.ingest_file(py_file, collection, embedder=_make_embedder())
+    assert result.status == "ok", result.error
+    assert await graph_store.edge_count(collection, ns="default") > 0
+    assert await graph_store.node_count(collection, ns="default") > 0
+
+    deleted = await pipeline.delete_document(result.doc_id, collection)
+    assert deleted > 0
+    assert await graph_store.edge_count(collection, ns="default") == 0
+    assert await graph_store.node_count(collection, ns="default") == 0
+
+    await store.disconnect()
+    await graph_store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_reingestRenamedSymbol_removesStaleDefRefRows(tmp_path: Path):
+    """Re-ingest with renamed symbols removes stale nodes/edges (C2-I-2)."""
+    pytest.importorskip("tree_sitter")
+    pytest.importorskip("tree_sitter_python")
+
+    from archon_search.store import SearchStore
+
+    db_path = str(tmp_path / "search")
+    store = SearchStore(db_path)
+    await store.connect()
+
+    graph_store = GraphStore(db_path)
+    await graph_store.connect()
+
+    collection = "test_defref_reingest_rename"
+    graph_config = GraphConfig(enabled=True)
+    defref_extractor = DefRefExtractor(graph_store=graph_store)
+    pipeline = _make_pipeline(
+        store,
+        defref_extractor=defref_extractor,
+        graph_store=graph_store,
+        graph_config=graph_config,
+    )
+
+    py_file = tmp_path / "rename_me.py"
+    py_file.write_text(
+        "def helper():\n"
+        "    return 1\n\n\n"
+        "def main():\n"
+        "    return helper()\n"
+    )
+
+    first = await pipeline.ingest_file(py_file, collection, embedder=_make_embedder())
+    assert first.status == "ok", first.error
+
+    nodes_before = await graph_store.get_all_nodes(collection, ns="default")
+    helper_nodes_before = [n for n in nodes_before if n.entity_name == "helper"]
+    assert len(helper_nodes_before) == 1
+
+    py_file.write_text(
+        "def helper2():\n"
+        "    return 1\n\n\n"
+        "def main():\n"
+        "    return helper2()\n"
+    )
+    second = await pipeline.ingest_file(py_file, collection, embedder=_make_embedder())
+    assert second.status == "ok", second.error
+
+    nodes_after = await graph_store.get_all_nodes(collection, ns="default")
+    names = {n.entity_name for n in nodes_after}
+    assert "helper" not in names
+    assert "helper2" in names
+    assert "main" in names
+
+    all_edges = await graph_store.get_all_edges(collection, ns="default")
+    node_by_id = {n.id: n for n in nodes_after}
+    for edge in all_edges:
+        assert edge.source_node_id in node_by_id
+        assert edge.target_node_id in node_by_id
 
     await store.disconnect()
     await graph_store.disconnect()

@@ -262,7 +262,7 @@ def test_symbolNameMatchesModuleStem_staysDistinctFromModuleNode() -> None:
     src = "def main():\n    pass\n"
     result = _extract(src, "/repo/main.py")
 
-    module_node = next(n for n in result.nodes if n.entity_subtype == "python-module")
+    module_node = next(n for n in result.nodes if n.entity_subtype == "python-defref-module")
     func_node = next(n for n in result.nodes if n.entity_subtype == "python-function")
 
     assert module_node.id != func_node.id, "Module node and same-named symbol node must differ"
@@ -335,7 +335,7 @@ def test_emptyFile_producesOnlyModuleNodeAndNoEdges() -> None:
     result = _extract("", "/repo/mod.py")
 
     assert len(result.nodes) == 1
-    assert result.nodes[0].entity_subtype == "python-module"
+    assert result.nodes[0].entity_subtype == "python-defref-module"
     assert result.nodes[0].entity_name == "mod"
     assert result.edges == []
 

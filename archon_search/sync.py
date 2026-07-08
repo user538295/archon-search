@@ -650,7 +650,9 @@ class SearchCollectionSync:
             try:
                 # Deletions
                 for path in deleted_paths:
-                    await self._pipeline.store.delete_by_source_path(name, path, skip_fts_optimize=True)
+                    await self._pipeline.delete_by_source_path(
+                        name, path, skip_fts_optimize=True
+                    )
                     file_mtimes.pop(path, None)
                     if path in processed_paths:
                         processed_paths.remove(path)

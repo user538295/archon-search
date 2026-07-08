@@ -26,6 +26,7 @@ from archon_search.description_generator import MAX_SAMPLE_CHUNKS, _should_regen
 from archon_search.chunker import DocumentChunker
 from archon_search.embedder import Embedder, EmbedderBackend, ModelEmbedder
 from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher
+from archon_search.defref_extractor import DEFREF_SUPPORTED_EXTENSIONS
 from archon_search.enricher import MarkdownEnricher, is_docling_source, source_subtype_for
 from archon_search.parser import DocumentParser, ParseError
 from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
@@ -677,12 +678,11 @@ class SearchPipeline:
         # means whichever extractor writes second — DefRefExtractor, since this
         # block runs after the E1a graph-write block above — wins on ALL shared
         # columns for that node row. entity_name/entity_type always agree (both
-        # write the bare symbol name + EntityType.code_symbol), so this is benign
-        # for identity/type; entity_subtype legitimately differs (chunk.symbol_subtype
-        # vs f"{lang}-{kind}") and DefRefExtractor's value is the one that survives.
-        # This is accepted as intentional and benign — see
-        # test_bothExtractorsWired_coexistWithoutClobberingIdentity in the BE-3
-        # integration test file.
+        # write the bare symbol name + EntityType.code_symbol), so identity/type
+        # are stable; entity_subtype differs (chunk.symbol_subtype vs
+        # f"{lang}-{kind}") and DefRefExtractor's value wins because it writes
+        # last. That subtype is also read by def/ref GC exemption and
+        # delete_defref_graph_by_doc module-node classification.
         #
         # E2g BE-3: DefRefExtractor — post-persist def/ref edge extraction for
         # code files. Unlike the E1a graph-write block above (whose extraction
@@ -700,7 +700,7 @@ class SearchPipeline:
             and self._graph_store is not None
             and self._graph_config is not None
             and self._graph_config.enabled
-            and suffix in CODE_EXTENSIONS
+            and suffix in DEFREF_SUPPORTED_EXTENSIONS
         )
         if _defref_enabled:
             try:
@@ -713,8 +713,15 @@ class SearchPipeline:
                 )
                 if _defref_result.warnings:
                     acl_warnings.extend(_defref_result.warnings)
+                await self._graph_store.ensure_graph_tables(collection, ns=namespace)
+                preserve_ids = frozenset(n.id for n in _defref_result.nodes)
+                await self._graph_store.delete_defref_graph_by_doc(
+                    collection,
+                    doc_id,
+                    namespace,
+                    preserve_node_ids=preserve_ids,
+                )
                 if _defref_result.nodes or _defref_result.edges:
-                    await self._graph_store.ensure_graph_tables(collection, ns=namespace)
                     await self._graph_store.write_graph(
                         collection, _defref_result.nodes, _defref_result.edges, ns=namespace
                     )
@@ -2951,18 +2958,50 @@ class SearchPipeline:
         if meta is None:
             raise ValueError(f"collection {collection!r} not found in namespace {namespace!r}")
         deleted = await self.store.delete_document(collection, doc_id, namespace=namespace)
-        if self._graph_store is not None:
-            try:
-                await self._graph_store.delete_mentions_by_doc(collection, doc_id, ns=namespace)
-            except Exception:
-                logger.warning(
-                    "delete_document: graph mention cleanup failed for doc_id=%r collection=%r; "
-                    "stale mentions may persist until the next maintenance GC pass removes them",
-                    doc_id,
-                    collection,
-                    exc_info=True,
-                )
+        await self._cleanup_graph_for_doc(doc_id, collection, namespace)
         return deleted
+
+    async def delete_by_source_path(
+        self,
+        collection: str,
+        source_path: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        *,
+        skip_fts_optimize: bool = False,
+    ) -> int:
+        """Delete a source file and its graph rows (sync/watcher path)."""
+        doc_id = hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
+        deleted = await self.store.delete_document(
+            collection, doc_id, namespace=namespace, skip_fts_optimize=skip_fts_optimize
+        )
+        await self._cleanup_graph_for_doc(doc_id, collection, namespace)
+        return deleted
+
+    async def _cleanup_graph_for_doc(
+        self, doc_id: str, collection: str, namespace: str
+    ) -> None:
+        if self._graph_store is None:
+            return
+        try:
+            await self._graph_store.delete_mentions_by_doc(collection, doc_id, ns=namespace)
+        except Exception:
+            logger.warning(
+                "delete_document: graph mention cleanup failed for doc_id=%r collection=%r; "
+                "stale mentions may persist until the next maintenance GC pass removes them",
+                doc_id,
+                collection,
+                exc_info=True,
+            )
+        try:
+            await self._graph_store.delete_graph_by_doc(collection, doc_id, ns=namespace)
+        except Exception:
+            logger.warning(
+                "delete_document: graph node/edge cleanup failed for doc_id=%r collection=%r; "
+                "stale graph data may persist",
+                doc_id,
+                collection,
+                exc_info=True,
+            )
 
     async def list_collections(self) -> list[CollectionInfo]:
         return await self.store.list_collections()

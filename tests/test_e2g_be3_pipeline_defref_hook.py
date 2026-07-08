@@ -84,6 +84,7 @@ def _mock_graph_store() -> MagicMock:
     mock_store = MagicMock()
     mock_store.ensure_graph_tables = AsyncMock()
     mock_store.write_graph = AsyncMock()
+    mock_store.delete_defref_graph_by_doc = AsyncMock()
     return mock_store
 
 
@@ -293,6 +294,11 @@ async def test_defref_writes_edges_when_extraction_succeeds(
     assert result.status == "ok"
     mock_extractor.extract.assert_called_once()
     mock_store.ensure_graph_tables.assert_called_once()
+    mock_store.delete_defref_graph_by_doc.assert_called_once()
+    delete_kwargs = mock_store.delete_defref_graph_by_doc.call_args.kwargs
+    assert delete_kwargs["preserve_node_ids"] == frozenset({node_a.id, node_b.id})
+    call_names = [c[0] for c in mock_store.method_calls]
+    assert call_names.index("delete_defref_graph_by_doc") < call_names.index("write_graph")
     mock_store.write_graph.assert_called_once()
     written_nodes = mock_store.write_graph.call_args.args[1]
     written_edges = mock_store.write_graph.call_args.args[2]
@@ -304,10 +310,7 @@ async def test_defref_writes_edges_when_extraction_succeeds(
 async def test_defref_emptyExtractionResult_skipsWriteGraph(
     connected_store, col_name, sample_py_file
 ):
-    """Finding 8: extract() returning an empty GraphExtractionResult (no exception)
-    must skip write_graph/ensure_graph_tables entirely (the `if nodes or edges:`
-    guard) and still return status="ok".
-    """
+    """Empty extract() still reconciles stale def/ref rows but skips write_graph."""
     mock_extractor = MagicMock()
     mock_extractor.extract = AsyncMock(
         return_value=GraphExtractionResult(nodes=[], edges=[], mentions=[])
@@ -326,8 +329,9 @@ async def test_defref_emptyExtractionResult_skipsWriteGraph(
 
     assert result.status == "ok"
     mock_extractor.extract.assert_called_once()
+    mock_store.ensure_graph_tables.assert_called_once()
+    mock_store.delete_defref_graph_by_doc.assert_called_once()
     mock_store.write_graph.assert_not_called()
-    mock_store.ensure_graph_tables.assert_not_called()
 
 
 @pytest.mark.asyncio

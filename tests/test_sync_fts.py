@@ -32,7 +32,7 @@ def _make_pipeline(
     ])
     pipeline.store.drop_collection = AsyncMock()
     pipeline.store.rename_collection = AsyncMock()
-    pipeline.store.delete_by_source_path = AsyncMock(return_value=1)
+    pipeline.delete_by_source_path = AsyncMock(return_value=1)
     pipeline.store.get_dominant_language = AsyncMock(return_value="en")
     pipeline.store.optimize_fts = AsyncMock()
     pipeline.store.rebuild_fts_index = AsyncMock()
@@ -127,7 +127,7 @@ class TestSyncFtsPlanA:
         await _run_apply_changes(tmp_path, pipeline, deleted_paths=deleted)
 
         # Each delete call must use skip_fts_optimize=True
-        for c in pipeline.store.delete_by_source_path.call_args_list:
+        for c in pipeline.delete_by_source_path.call_args_list:
             assert c.kwargs.get("skip_fts_optimize") is True, (
                 f"delete_by_source_path called without skip_fts_optimize=True: {c}"
             )
@@ -190,7 +190,7 @@ class TestSyncFtsPlanB:
 
         await _run_apply_changes(tmp_path, pipeline, deleted_paths=deleted)
 
-        for c in pipeline.store.delete_by_source_path.call_args_list:
+        for c in pipeline.delete_by_source_path.call_args_list:
             assert c.kwargs.get("skip_fts_optimize") is True
 
         assert pipeline.store.rebuild_fts_index.call_count == 1

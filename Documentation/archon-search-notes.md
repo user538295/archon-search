@@ -2,6 +2,8 @@
 
 ## Feature ideas
 
+### One Major lifecycle gap remains: def/ref cleanup on TTL/maintenance-only chunk expiry (not on explicit delete or sync/watcher delete).
+
 ### Handle more file type without file size limit.
 
 **Resolved by E0d.** The 1 MB limitation no longer exists. Large files (PDF and all other supported formats) ingest at any size when no size guard is configured (`[ingest].max_file_mb = 0`, the default). Operators can set a size ceiling via `[ingest].max_file_mb` in `archon-search.toml`; exceeding it returns HTTP 413 / MCP `code="file_too_large"` with an actionable message. See `Documentation/Backlog/e0d-pdf-large-file-support-team-plan.md` for full details.

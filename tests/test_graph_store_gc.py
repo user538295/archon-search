@@ -1043,3 +1043,248 @@ def test_delete_orphan_nodes_aborts_on_corrupt_edges_read() -> None:
 
     # CRITICAL: nodes_table.delete must NOT have been called — GC aborted before deletion
     mock_nodes_table.delete.assert_not_called()
+
+
+def test_delete_orphan_nodes_skipsEdgesTableWhenAllNodesMentioned() -> None:
+    """Healthy graph (zero orphan candidates) must not open the edges table (C1-B-2)."""
+    node_a = _node("EntityA")
+    node_b = _node("EntityB")
+    mention_a = _mention(node_a.id, "chunk-1")
+    mention_b = _mention(node_b.id, "chunk-2")
+
+    mentions_q = AsyncMock()
+    mentions_q.to_arrow = AsyncMock(return_value=_mentions_arrow([mention_a, mention_b]))
+    mentions_q.select = MagicMock(return_value=mentions_q)
+    mock_mentions_table = MagicMock()
+    mock_mentions_table.query.return_value = mentions_q
+
+    nodes_q = AsyncMock()
+    nodes_q.to_arrow = AsyncMock(return_value=_nodes_arrow([node_a, node_b]))
+    nodes_q.select = MagicMock(return_value=nodes_q)
+    mock_nodes_table = MagicMock()
+    mock_nodes_table.query.return_value = nodes_q
+
+    store = GraphStore.__new__(GraphStore)
+    open_calls: list[str] = []
+
+    async def _open(name: str):
+        open_calls.append(name)
+        if "mentions" in name:
+            return mock_mentions_table
+        if "nodes" in name:
+            return mock_nodes_table
+        raise FileNotFoundError(name)
+
+    mock_db = AsyncMock()
+    mock_db.open_table.side_effect = _open
+    store._db = mock_db
+
+    result = asyncio.run(store.delete_orphan_nodes_and_edges(_COL, _NS))
+
+    assert result == GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
+    assert not any("edges" in name for name in open_calls)
+
+
+def test_delete_orphan_nodes_exemptsInferredDefRefEdges() -> None:
+    """Inferred-tier def/ref edges must survive orphan GC (BE-4 forward-compat)."""
+    hub = _node("hub", EntityType.code_symbol)
+    caller = _node("caller", EntityType.code_symbol)
+    inferred = GraphEdge(
+        id=make_stable_edge_id(caller.id, hub.id, RelationshipType.calls.value),
+        source_node_id=caller.id,
+        target_node_id=hub.id,
+        relationship_type=RelationshipType.calls,
+        source_doc_id="doc-abc",
+        extraction_method="inferred",
+    )
+
+    mention_unrelated = _mention("unrelated-entity-id", "chunk-1")
+
+    mentions_q = AsyncMock()
+    mentions_q.to_arrow = AsyncMock(return_value=_mentions_arrow([mention_unrelated]))
+    mentions_q.select = MagicMock(return_value=mentions_q)
+    mock_mentions_table = MagicMock()
+    mock_mentions_table.query.return_value = mentions_q
+
+    nodes_q = AsyncMock()
+    nodes_q.to_arrow = AsyncMock(return_value=_nodes_arrow([hub, caller]))
+    nodes_q.select = MagicMock(return_value=nodes_q)
+    mock_nodes_table = MagicMock()
+    mock_nodes_table.query.return_value = nodes_q
+    mock_nodes_table.delete = AsyncMock(return_value=None)
+
+    edges_q = AsyncMock()
+    edges_q.to_arrow = AsyncMock(return_value=_edges_arrow([inferred]))
+    edges_q.select = MagicMock(return_value=edges_q)
+    mock_edges_table = MagicMock()
+    mock_edges_table.query.return_value = edges_q
+    mock_edges_table.schema = AsyncMock(return_value=GraphStore._edges_schema())
+    mock_edges_table.delete = AsyncMock(return_value=None)
+
+    store = GraphStore.__new__(GraphStore)
+
+    async def _open(name: str):
+        if "mentions" in name:
+            return mock_mentions_table
+        if "nodes" in name:
+            return mock_nodes_table
+        if "edges" in name:
+            return mock_edges_table
+        raise FileNotFoundError(name)
+
+    mock_db = AsyncMock()
+    mock_db.open_table.side_effect = _open
+    store._db = mock_db
+
+    result = asyncio.run(store.delete_orphan_nodes_and_edges(_COL, _NS))
+
+    assert result.orphan_nodes_removed == 0
+    assert result.orphan_edges_removed == 0
+    mock_nodes_table.delete.assert_not_called()
+    mock_edges_table.delete.assert_not_called()
+
+
+def test_delete_defref_graph_by_doc_removesExtractedEdgesAndEndpoints(tmp_path: Path) -> None:
+    """delete_defref_graph_by_doc removes def/ref rows scoped to one doc_id."""
+    doc_id = "doc-target"
+    hub = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "hub::/a.py"),
+        entity_name="hub",
+        entity_type=EntityType.code_symbol,
+        source_doc_id=doc_id,
+        collection_name=_COL,
+        entity_subtype="python-function",
+    )
+    leaf = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "leaf::/a.py"),
+        entity_name="leaf",
+        entity_type=EntityType.code_symbol,
+        source_doc_id=doc_id,
+        collection_name=_COL,
+        entity_subtype="python-function",
+    )
+    other_doc_node = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "other::/b.py"),
+        entity_name="other",
+        entity_type=EntityType.code_symbol,
+        source_doc_id="other-doc",
+        collection_name=_COL,
+    )
+    defref_edge = GraphEdge(
+        id=make_stable_edge_id(hub.id, leaf.id, RelationshipType.calls.value),
+        source_node_id=hub.id,
+        target_node_id=leaf.id,
+        relationship_type=RelationshipType.calls,
+        source_doc_id=doc_id,
+        extraction_method="extracted",
+    )
+    cooc_edge = GraphEdge(
+        id=make_stable_edge_id(hub.id, other_doc_node.id, RelationshipType.related_to.value),
+        source_node_id=hub.id,
+        target_node_id=other_doc_node.id,
+        relationship_type=RelationshipType.related_to,
+        source_doc_id=doc_id,
+        extraction_method=None,
+    )
+
+    async def _run() -> None:
+        gs = GraphStore(str(tmp_path / "gc-defref-del"))
+        await gs.connect()
+        try:
+            await gs.ensure_graph_tables(_COL, ns=_NS)
+            await gs.write_graph(_COL, [hub, leaf, other_doc_node], [defref_edge, cooc_edge], ns=_NS)
+            await gs.delete_defref_graph_by_doc(_COL, doc_id, _NS)
+            edges = await gs.get_all_edges(_COL, ns=_NS)
+            nodes = await gs.get_all_nodes(_COL, ns=_NS)
+        finally:
+            await gs.disconnect()
+
+        assert {e.id for e in edges} == set()
+        assert {n.id for n in nodes} == {other_doc_node.id}
+
+    asyncio.run(_run())
+
+
+def test_delete_defref_graph_by_doc_respectsPreserveNodeIds(tmp_path: Path) -> None:
+    """preserve_node_ids must skip deletion of nodes about to be re-written (C2-I-1)."""
+    doc_id = "doc-target"
+    keep = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "keep::/a.py"),
+        entity_name="keep",
+        entity_type=EntityType.code_symbol,
+        source_doc_id=doc_id,
+        collection_name=_COL,
+        entity_subtype="python-function",
+    )
+    drop = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "drop::/a.py"),
+        entity_name="drop",
+        entity_type=EntityType.code_symbol,
+        source_doc_id=doc_id,
+        collection_name=_COL,
+        entity_subtype="python-function",
+    )
+    edge = GraphEdge(
+        id=make_stable_edge_id(keep.id, drop.id, RelationshipType.calls.value),
+        source_node_id=keep.id,
+        target_node_id=drop.id,
+        relationship_type=RelationshipType.calls,
+        source_doc_id=doc_id,
+        extraction_method="extracted",
+    )
+
+    async def _run() -> None:
+        gs = GraphStore(str(tmp_path / "gc-defref-preserve"))
+        await gs.connect()
+        try:
+            await gs.ensure_graph_tables(_COL, ns=_NS)
+            await gs.write_graph(_COL, [keep, drop], [edge], ns=_NS)
+            await gs.delete_defref_graph_by_doc(
+                _COL, doc_id, _NS, preserve_node_ids=frozenset({keep.id})
+            )
+            nodes = await gs.get_all_nodes(_COL, ns=_NS)
+            edges = await gs.get_all_edges(_COL, ns=_NS)
+        finally:
+            await gs.disconnect()
+
+        assert {n.id for n in nodes} == {keep.id}
+        assert edges == []
+
+    asyncio.run(_run())
+
+
+def test_delete_graph_by_doc_preservesSharedEntityNode(tmp_path: Path) -> None:
+    """delete_graph_by_doc must not remove shared nodes owned by another doc (C2-I-1)."""
+    shared_id = make_stable_entity_id(EntityType.person.value, "Alice")
+    shared = GraphNode(
+        id=shared_id,
+        entity_name="Alice",
+        entity_type=EntityType.person,
+        source_doc_id="doc-a",
+        collection_name=_COL,
+    )
+    edge_from_b = GraphEdge(
+        id=make_stable_edge_id(shared_id, "other-node", RelationshipType.related_to.value),
+        source_node_id=shared_id,
+        target_node_id="other-node",
+        relationship_type=RelationshipType.related_to,
+        source_doc_id="doc-b",
+        extraction_method=None,
+    )
+
+    async def _run() -> None:
+        gs = GraphStore(str(tmp_path / "gc-doc-del-shared"))
+        await gs.connect()
+        try:
+            await gs.ensure_graph_tables(_COL, ns=_NS)
+            await gs.write_graph(_COL, [shared], [edge_from_b], ns=_NS)
+            await gs.delete_graph_by_doc(_COL, "doc-a", _NS)
+            nodes = await gs.get_all_nodes(_COL, ns=_NS)
+            edges = await gs.get_all_edges(_COL, ns=_NS)
+        finally:
+            await gs.disconnect()
+
+        assert {n.id for n in nodes} == {shared_id}
+        assert {e.id for e in edges} == {edge_from_b.id}
+
+    asyncio.run(_run())

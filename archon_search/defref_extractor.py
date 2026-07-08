@@ -78,6 +78,9 @@ _EXTRACTION_METHOD = "extracted"
 _LANG_LABEL: dict[str, str] = {".py": "python", ".ts": "typescript"}
 """Extensions supported by BE-2. Remaining languages are BE-5's scope."""
 
+DEFREF_SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(_LANG_LABEL.keys())
+"""File extensions for which DefRefExtractor performs real extraction (BE-2 scope)."""
+
 # A definition record: (name, kind, enclosing_name).
 _DefRecord = tuple[str, str, str]
 # A call record: (caller_name, callee_name).
@@ -234,7 +237,7 @@ class DefRefExtractor:
                     entity_type=EntityType.code_symbol,
                     source_doc_id=doc_id,
                     collection_name=collection,
-                    entity_subtype=f"{lang_label}-module",
+                    entity_subtype=f"{lang_label}-defref-module",
                 )
             return nodes[node_id]
 

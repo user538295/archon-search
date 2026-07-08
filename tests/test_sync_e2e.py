@@ -647,7 +647,7 @@ class TestS15_10_LegacyHistoryPathMigration:
         mock_pipeline.store.optimize_fts = AsyncMock()
         mock_pipeline.store.get_dominant_language = AsyncMock(return_value="en")
         mock_pipeline.store.supports_incremental_fts_delete = True
-        mock_pipeline.store.delete_by_source_path = AsyncMock()
+        mock_pipeline.delete_by_source_path = AsyncMock()
         mock_pipeline.ingest_directory = AsyncMock(return_value=[])
         mock_pipeline.ingest_file = AsyncMock(return_value=MagicMock(status="ok"))
         mock_pipeline.recompute_collection_meta = AsyncMock()
@@ -701,7 +701,7 @@ class TestS15_10b_BothTablesExistNoMigration:
         mock_pipeline.store.optimize_fts = AsyncMock()
         mock_pipeline.store.get_dominant_language = AsyncMock(return_value="en")
         mock_pipeline.store.supports_incremental_fts_delete = True
-        mock_pipeline.store.delete_by_source_path = AsyncMock()
+        mock_pipeline.delete_by_source_path = AsyncMock()
         mock_pipeline.ingest_directory = AsyncMock(return_value=[])
         mock_pipeline.ingest_file = AsyncMock(return_value=MagicMock(status="ok"))
         mock_pipeline.recompute_collection_meta = AsyncMock()
