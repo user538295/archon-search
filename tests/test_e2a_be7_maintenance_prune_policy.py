@@ -65,6 +65,7 @@ def _make_loop(
     exclude: list[str] | None = None,
     job_store: Any = None,
     search_store: Any = None,
+    graph_store: Any = None,
 ) -> MaintenanceLoop:
     cfg = MaintenanceConfig(
         interval_hours=interval_hours,
@@ -78,7 +79,13 @@ def _make_loop(
     )
     js = job_store if job_store is not None else MagicMock()
     ss = search_store if search_store is not None else MagicMock()
-    return MaintenanceLoop(job_store=js, search_store=ss, config=cfg, data_dir=tmp_path)
+    return MaintenanceLoop(
+        job_store=js,
+        search_store=ss,
+        config=cfg,
+        data_dir=tmp_path,
+        graph_store=graph_store,
+    )
 
 
 def _make_health() -> dict[str, Any]:
@@ -191,6 +198,225 @@ async def test_run_expired_chunk_pruning_no_chunks_no_warning(
 
     warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert warning_records == [], f"Expected no WARNING when nothing was pruned; got: {warning_records}"
+
+
+@pytest.mark.asyncio
+async def test_run_expired_chunk_pruning_calls_delete_defref_graph_by_doc_per_pruned_doc_id(
+    tmp_path: Path,
+) -> None:
+    """BE-12: TTL pruning tears down doc-scoped def/ref graph rows per pruned doc."""
+    ss = AsyncMock()
+    ss.prune_expired_chunks = AsyncMock(return_value=["doc-a", "doc-b", "doc-a"])
+    graph_store = AsyncMock()
+    graph_store.delete_defref_graph_by_doc = AsyncMock()
+
+    loop = _make_loop(
+        tmp_path,
+        prune_expired_chunks=True,
+        search_store=ss,
+        graph_store=graph_store,
+    )
+
+    await loop._run_expired_chunk_pruning("col", "tenant-a")
+
+    graph_store.delete_defref_graph_by_doc.assert_any_await(
+        "col", "doc-a", "tenant-a", delete_doc_owned_code_symbols=True
+    )
+    graph_store.delete_defref_graph_by_doc.assert_any_await(
+        "col", "doc-b", "tenant-a", delete_doc_owned_code_symbols=True
+    )
+    assert graph_store.delete_defref_graph_by_doc.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_expired_chunk_pruning_defref_cleanup_failure_logs_warning_not_raise(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """BE-12: def/ref cleanup is best-effort and never fails chunk pruning."""
+    ss = AsyncMock()
+    ss.prune_expired_chunks = AsyncMock(return_value=["doc-a"])
+    graph_store = AsyncMock()
+    graph_store.delete_defref_graph_by_doc = AsyncMock(side_effect=RuntimeError("graph down"))
+
+    loop = _make_loop(
+        tmp_path,
+        prune_expired_chunks=True,
+        search_store=ss,
+        graph_store=graph_store,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.jobs.maintenance_loop"):
+        await loop._run_expired_chunk_pruning("col", "tenant-a")
+
+    graph_store.delete_defref_graph_by_doc.assert_awaited_once_with(
+        "col", "doc-a", "tenant-a", delete_doc_owned_code_symbols=True
+    )
+    combined = " ".join(record.getMessage() for record in caplog.records)
+    assert "def/ref graph cleanup failed" in combined
+    assert "doc-a" in combined
+
+
+@pytest.mark.asyncio
+async def test_ttl_prune_preserves_shared_defref_module_node_when_other_doc_references(
+    tmp_path: Path,
+) -> None:
+    """BE-12: doc-owned module pseudo-nodes survive when another doc still references them."""
+    from archon_search.graph_store import GraphStore
+    from archon_search.graph_types import (
+        EntityType,
+        GraphEdge,
+        GraphNode,
+        RelationshipType,
+        make_stable_edge_id,
+        make_stable_entity_id,
+    )
+
+    collection = "col"
+    namespace = "tenant-a"
+    expired_doc_id = "doc-expired"
+    other_doc_id = "doc-other"
+    module = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "__file_module__::/tmp/shared.py"),
+        entity_name="<module>",
+        entity_type=EntityType.code_symbol,
+        source_doc_id=expired_doc_id,
+        collection_name=collection,
+        entity_subtype="python-defref-module",
+    )
+    expired_func = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "expired::/tmp/shared.py"),
+        entity_name="expired",
+        entity_type=EntityType.code_symbol,
+        source_doc_id=expired_doc_id,
+        collection_name=collection,
+        entity_subtype="python-function",
+    )
+    other_func = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "other::/tmp/other.py"),
+        entity_name="other",
+        entity_type=EntityType.code_symbol,
+        source_doc_id=other_doc_id,
+        collection_name=collection,
+        entity_subtype="python-function",
+    )
+    expired_edge = GraphEdge(
+        id=make_stable_edge_id(module.id, expired_func.id, RelationshipType.defines.value),
+        source_node_id=module.id,
+        target_node_id=expired_func.id,
+        relationship_type=RelationshipType.defines,
+        source_doc_id=expired_doc_id,
+        extraction_method="extracted",
+    )
+    other_edge = GraphEdge(
+        id=make_stable_edge_id(other_func.id, module.id, RelationshipType.calls.value),
+        source_node_id=other_func.id,
+        target_node_id=module.id,
+        relationship_type=RelationshipType.calls,
+        source_doc_id=other_doc_id,
+        extraction_method="extracted",
+    )
+
+    ss = AsyncMock()
+    ss.prune_expired_chunks = AsyncMock(return_value=[expired_doc_id])
+    graph_store = GraphStore(str(tmp_path / "graph-shared-module"))
+    await graph_store.connect()
+    try:
+        await graph_store.ensure_graph_tables(collection, ns=namespace)
+        await graph_store.write_graph(
+            collection,
+            [module, expired_func, other_func],
+            [expired_edge, other_edge],
+            ns=namespace,
+        )
+
+        loop = _make_loop(
+            tmp_path,
+            prune_expired_chunks=True,
+            search_store=ss,
+            graph_store=graph_store,
+        )
+        await loop._run_expired_chunk_pruning(collection, namespace)
+
+        remaining_nodes = await graph_store.get_all_nodes(collection, ns=namespace)
+        remaining_edges = await graph_store.get_all_edges(collection, ns=namespace)
+        assert {node.id for node in remaining_nodes} == {module.id, other_func.id}
+        assert {edge.id for edge in remaining_edges} == {other_edge.id}
+    finally:
+        await graph_store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_ttl_prune_removes_cross_doc_edge_to_expired_non_module_symbol(
+    tmp_path: Path,
+) -> None:
+    """BE-12: only shared module pseudo-nodes are preserved across doc cleanup."""
+    from archon_search.graph_store import GraphStore
+    from archon_search.graph_types import (
+        EntityType,
+        GraphEdge,
+        GraphNode,
+        RelationshipType,
+        make_stable_edge_id,
+        make_stable_entity_id,
+    )
+
+    collection = "col"
+    namespace = "tenant-a"
+    expired_doc_id = "doc-expired"
+    other_doc_id = "doc-other"
+    expired_symbol = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "target::/tmp/expired.py"),
+        entity_name="target",
+        entity_type=EntityType.code_symbol,
+        source_doc_id=expired_doc_id,
+        collection_name=collection,
+        entity_subtype="python-function",
+    )
+    other_symbol = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "caller::/tmp/other.py"),
+        entity_name="caller",
+        entity_type=EntityType.code_symbol,
+        source_doc_id=other_doc_id,
+        collection_name=collection,
+        entity_subtype="python-function",
+    )
+    cross_doc_edge = GraphEdge(
+        id=make_stable_edge_id(other_symbol.id, expired_symbol.id, RelationshipType.calls.value),
+        source_node_id=other_symbol.id,
+        target_node_id=expired_symbol.id,
+        relationship_type=RelationshipType.calls,
+        source_doc_id=other_doc_id,
+        extraction_method="inferred",
+    )
+
+    ss = AsyncMock()
+    ss.prune_expired_chunks = AsyncMock(return_value=[expired_doc_id])
+    graph_store = GraphStore(str(tmp_path / "graph-expired-symbol"))
+    await graph_store.connect()
+    try:
+        await graph_store.ensure_graph_tables(collection, ns=namespace)
+        await graph_store.write_graph(
+            collection,
+            [expired_symbol, other_symbol],
+            [cross_doc_edge],
+            ns=namespace,
+        )
+
+        loop = _make_loop(
+            tmp_path,
+            prune_expired_chunks=True,
+            search_store=ss,
+            graph_store=graph_store,
+        )
+        await loop._run_expired_chunk_pruning(collection, namespace)
+
+        remaining_nodes = await graph_store.get_all_nodes(collection, ns=namespace)
+        remaining_edges = await graph_store.get_all_edges(collection, ns=namespace)
+        assert {node.id for node in remaining_nodes} == {other_symbol.id}
+        assert remaining_edges == []
+    finally:
+        await graph_store.disconnect()
 
 
 @pytest.mark.asyncio
@@ -470,4 +696,286 @@ async def test_maintenance_loop_prune_deletes_expired_and_updates_state(
             f"Expected expired_chunks_removed_last_run >= 1; got {col_health}"
         )
     finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_ttl_expiry_maintenance_prune_removes_defref_graph_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BE-12: maintenance TTL pruning removes def/ref rows for the expired doc."""
+    from datetime import timezone as _tz
+
+    from archon_search._types import normalize_iso_utc
+    from archon_search.graph_store import GraphStore
+    from archon_search.graph_types import (
+        EntityType,
+        GraphEdge,
+        GraphNode,
+        RelationshipType,
+        make_stable_edge_id,
+        make_stable_entity_id,
+    )
+    from archon_search.store import SearchStore
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+
+    collection = "col-defref-prune"
+    namespace = "default"
+    expired_doc_id = "d" * 64
+    alive_doc_id = "b" * 64
+    now = datetime.now(_tz.utc)
+    past_iso = normalize_iso_utc(now - timedelta(seconds=60))
+    future_iso = normalize_iso_utc(now + timedelta(hours=1))
+
+    store = SearchStore(tmp_path / "db")
+    graph_store = GraphStore(str(tmp_path / "graph"))
+    await store.connect()
+    await graph_store.connect()
+    try:
+        await store._run_startup_migrations()
+        await store.ensure_collection(collection, embedding_dim=4)
+        pending = await store.pending_migrations(collection, namespace)
+        if pending:
+            await store.apply_in_place_migrations(collection, namespace, pending)
+
+        db = store._require_connected()
+        table = await db.open_table(collection)
+        await table.add([
+            {
+                "doc_id": expired_doc_id,
+                "chunk_id": expired_doc_id + "-000000",
+                "text": "expired code chunk",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "source_path": "/tmp/expired.py",
+                "indexed_at": past_iso,
+                "file_type": ".py",
+                "language": "python",
+                "metadata": "{}",
+                "custom_score": None,
+                "ingested_by": "test",
+                "updated_at": past_iso,
+                "acl": None,
+                "expires_at": past_iso,
+                "scopes": None,
+            },
+            {
+                "doc_id": alive_doc_id,
+                "chunk_id": alive_doc_id + "-000000",
+                "text": "alive code chunk",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "source_path": "/tmp/alive.py",
+                "indexed_at": past_iso,
+                "file_type": ".py",
+                "language": "python",
+                "metadata": "{}",
+                "custom_score": None,
+                "ingested_by": "test",
+                "updated_at": past_iso,
+                "acl": None,
+                "expires_at": future_iso,
+                "scopes": None,
+            },
+        ])
+
+        await graph_store.ensure_graph_tables(collection, ns=namespace)
+        caller = GraphNode(
+            id=make_stable_entity_id(EntityType.code_symbol.value, "caller::/tmp/expired.py"),
+            entity_name="caller",
+            entity_type=EntityType.code_symbol,
+            source_doc_id=expired_doc_id,
+            collection_name=collection,
+            entity_subtype="python-function",
+        )
+        callee = GraphNode(
+            id=make_stable_entity_id(EntityType.code_symbol.value, "callee::/tmp/expired.py"),
+            entity_name="callee",
+            entity_type=EntityType.code_symbol,
+            source_doc_id=expired_doc_id,
+            collection_name=collection,
+            entity_subtype="python-function",
+        )
+        edge = GraphEdge(
+            id=make_stable_edge_id(caller.id, callee.id, RelationshipType.calls.value),
+            source_node_id=caller.id,
+            target_node_id=callee.id,
+            relationship_type=RelationshipType.calls,
+            source_doc_id=expired_doc_id,
+            extraction_method="extracted",
+        )
+        alive_caller = GraphNode(
+            id=make_stable_entity_id(EntityType.code_symbol.value, "alive_caller::/tmp/alive.py"),
+            entity_name="alive_caller",
+            entity_type=EntityType.code_symbol,
+            source_doc_id=alive_doc_id,
+            collection_name=collection,
+            entity_subtype="python-function",
+        )
+        alive_callee = GraphNode(
+            id=make_stable_entity_id(EntityType.code_symbol.value, "alive_callee::/tmp/alive.py"),
+            entity_name="alive_callee",
+            entity_type=EntityType.code_symbol,
+            source_doc_id=alive_doc_id,
+            collection_name=collection,
+            entity_subtype="python-function",
+        )
+        alive_edge = GraphEdge(
+            id=make_stable_edge_id(
+                alive_caller.id, alive_callee.id, RelationshipType.calls.value
+            ),
+            source_node_id=alive_caller.id,
+            target_node_id=alive_callee.id,
+            relationship_type=RelationshipType.calls,
+            source_doc_id=alive_doc_id,
+            extraction_method="extracted",
+        )
+        await graph_store.write_graph(
+            collection,
+            [caller, callee, alive_caller, alive_callee],
+            [edge, alive_edge],
+            ns=namespace,
+        )
+
+        loop = _make_loop(
+            tmp_path,
+            prune_expired_chunks=True,
+            search_store=store,
+            graph_store=graph_store,
+        )
+        await loop._run_one_pass()
+
+        assert await store.count_chunks(collection, namespace) == 1
+        remaining_edges = await graph_store.get_all_edges(collection, ns=namespace)
+        remaining_nodes = await graph_store.get_all_nodes(collection, ns=namespace)
+        assert {edge.id for edge in remaining_edges} == {alive_edge.id}
+        assert {node.id for node in remaining_nodes} == {alive_caller.id, alive_callee.id}
+    finally:
+        await graph_store.disconnect()
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_ttl_prune_keeps_defref_graph_when_doc_still_has_live_chunks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BE-12: doc-scoped def/ref cleanup is skipped while any chunk for that doc remains."""
+    from datetime import timezone as _tz
+
+    from archon_search._types import normalize_iso_utc
+    from archon_search.graph_store import GraphStore
+    from archon_search.graph_types import (
+        EntityType,
+        GraphEdge,
+        GraphNode,
+        RelationshipType,
+        make_stable_edge_id,
+        make_stable_entity_id,
+    )
+    from archon_search.store import SearchStore
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+
+    collection = "col-defref-mixed-prune"
+    namespace = "default"
+    doc_id = "c" * 64
+    now = datetime.now(_tz.utc)
+    past_iso = normalize_iso_utc(now - timedelta(seconds=60))
+    future_iso = normalize_iso_utc(now + timedelta(hours=1))
+
+    store = SearchStore(tmp_path / "db")
+    graph_store = GraphStore(str(tmp_path / "graph"))
+    await store.connect()
+    await graph_store.connect()
+    try:
+        await store._run_startup_migrations()
+        await store.ensure_collection(collection, embedding_dim=4)
+        pending = await store.pending_migrations(collection, namespace)
+        if pending:
+            await store.apply_in_place_migrations(collection, namespace, pending)
+
+        db = store._require_connected()
+        table = await db.open_table(collection)
+        await table.add([
+            {
+                "doc_id": doc_id,
+                "chunk_id": doc_id + "-000000",
+                "text": "expired code chunk",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "source_path": "/tmp/mixed.py",
+                "indexed_at": past_iso,
+                "file_type": ".py",
+                "language": "python",
+                "metadata": "{}",
+                "custom_score": None,
+                "ingested_by": "test",
+                "updated_at": past_iso,
+                "acl": None,
+                "expires_at": past_iso,
+                "scopes": None,
+            },
+            {
+                "doc_id": doc_id,
+                "chunk_id": doc_id + "-000001",
+                "text": "live code chunk",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "source_path": "/tmp/mixed.py",
+                "indexed_at": past_iso,
+                "file_type": ".py",
+                "language": "python",
+                "metadata": "{}",
+                "custom_score": None,
+                "ingested_by": "test",
+                "updated_at": past_iso,
+                "acl": None,
+                "expires_at": future_iso,
+                "scopes": None,
+            },
+        ])
+
+        await graph_store.ensure_graph_tables(collection, ns=namespace)
+        caller = GraphNode(
+            id=make_stable_entity_id(EntityType.code_symbol.value, "caller::/tmp/mixed.py"),
+            entity_name="caller",
+            entity_type=EntityType.code_symbol,
+            source_doc_id=doc_id,
+            collection_name=collection,
+            entity_subtype="python-function",
+        )
+        callee = GraphNode(
+            id=make_stable_entity_id(EntityType.code_symbol.value, "callee::/tmp/mixed.py"),
+            entity_name="callee",
+            entity_type=EntityType.code_symbol,
+            source_doc_id=doc_id,
+            collection_name=collection,
+            entity_subtype="python-function",
+        )
+        edge = GraphEdge(
+            id=make_stable_edge_id(caller.id, callee.id, RelationshipType.calls.value),
+            source_node_id=caller.id,
+            target_node_id=callee.id,
+            relationship_type=RelationshipType.calls,
+            source_doc_id=doc_id,
+            extraction_method="extracted",
+        )
+        await graph_store.write_graph(collection, [caller, callee], [edge], ns=namespace)
+
+        loop = _make_loop(
+            tmp_path,
+            prune_expired_chunks=True,
+            search_store=store,
+            graph_store=graph_store,
+        )
+        await loop._run_one_pass()
+
+        assert await store.count_chunks(collection, namespace) == 1
+        remaining_edges = await graph_store.get_all_edges(collection, ns=namespace)
+        remaining_nodes = await graph_store.get_all_nodes(collection, ns=namespace)
+        assert {item.id for item in remaining_edges} == {edge.id}
+        assert {item.id for item in remaining_nodes} == {caller.id, callee.id}
+    finally:
+        await graph_store.disconnect()
         await store.disconnect()

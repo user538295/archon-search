@@ -878,6 +878,7 @@ class GraphStore:
         ns: str,
         *,
         preserve_node_ids: frozenset[str] | None = None,
+        delete_doc_owned_code_symbols: bool = False,
     ) -> None:
         """Delete def/ref nodes and edges for *doc_id* before a def/ref re-write."""
         self._validate_collection(collection)
@@ -927,7 +928,8 @@ class GraphStore:
         except (FileNotFoundError, ValueError):
             nodes_table = None
 
-        node_ids_to_delete: list[str] = []
+        node_candidates: list[str] = []
+        module_candidate_ids: set[str] = set()
         if nodes_table is not None:
             nodes_arrow = await (
                 nodes_table.query()
@@ -942,12 +944,59 @@ class GraphStore:
             ):
                 if nid in preserve:
                     continue
-                if nid in endpoint_ids:
-                    node_ids_to_delete.append(nid)
-                    continue
-                if _node_is_module_pseudo(etype, subtype):
-                    node_ids_to_delete.append(nid)
+                is_module_pseudo = _node_is_module_pseudo(etype, subtype)
+                is_code_symbol = etype == EntityType.code_symbol.value
+                is_ordinary_code_module = (
+                    is_code_symbol
+                    and str(subtype).endswith("-module")
+                    and not is_module_pseudo
+                )
+                if is_module_pseudo:
+                    module_candidate_ids.add(nid)
+                if (
+                    (nid in endpoint_ids and not is_ordinary_code_module)
+                    or is_module_pseudo
+                    or (delete_doc_owned_code_symbols and is_code_symbol)
+                ):
+                    node_candidates.append(nid)
 
+        shared_node_ids: set[str] = set()
+        if edges_table is not None and node_candidates:
+            edges_schema = await edges_table.schema()
+            has_extraction_method_col = "extraction_method" in edges_schema.names
+            select_cols = ["source_node_id", "target_node_id", "relationship_type", "source_doc_id"]
+            if has_extraction_method_col:
+                select_cols.append("extraction_method")
+            for i in range(0, len(node_candidates), _GC_DELETE_BATCH_SIZE):
+                batch = node_candidates[i : i + _GC_DELETE_BATCH_SIZE]
+                for endpoint_col in ("source_node_id", "target_node_id"):
+                    incident_arrow = await (
+                        edges_table.query()
+                        .where(_where_in(endpoint_col, batch))
+                        .select(select_cols)
+                        .to_arrow()
+                    )
+                    rel_types = incident_arrow["relationship_type"].to_pylist()
+                    methods = (
+                        incident_arrow["extraction_method"].to_pylist()
+                        if has_extraction_method_col
+                        else [None] * len(rel_types)
+                    )
+                    for src_id, tgt_id, rel, edge_doc_id, method in zip(
+                        incident_arrow["source_node_id"].to_pylist(),
+                        incident_arrow["target_node_id"].to_pylist(),
+                        rel_types,
+                        incident_arrow["source_doc_id"].to_pylist(),
+                        methods,
+                    ):
+                        if edge_doc_id == doc_id or not _edge_is_defref(method, rel):
+                            continue
+                        if src_id in module_candidate_ids:
+                            shared_node_ids.add(src_id)
+                        if tgt_id in module_candidate_ids:
+                            shared_node_ids.add(tgt_id)
+
+        node_ids_to_delete = [nid for nid in node_candidates if nid not in shared_node_ids]
         nodes_to_delete_set = set(node_ids_to_delete)
         incident_edge_ids: list[str] = []
         if edges_table is not None and nodes_to_delete_set:

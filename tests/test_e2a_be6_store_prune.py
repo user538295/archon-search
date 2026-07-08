@@ -115,6 +115,208 @@ async def test_prune_expired_chunks_returns_doc_ids(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_prune_expired_chunks_returns_all_doc_ids_beyond_preview_ceiling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BE-12: returned doc_ids are complete because graph cleanup depends on them."""
+    import archon_search.store as store_module
+    from archon_search.store import SearchStore
+
+    monkeypatch.setattr(store_module, "_EXPIRING_SCAN_CEILING", 1)
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store._run_startup_migrations()
+        await store.ensure_collection("col", embedding_dim=4)
+        pending = await store.pending_migrations("col", "default")
+        if pending:
+            await store.apply_in_place_migrations("col", "default", pending)
+
+        now = datetime.now(UTC)
+        past_iso = normalize_iso_utc(now - timedelta(seconds=10))
+        now_iso = normalize_iso_utc(now)
+
+        db = store._require_connected()
+        table = await db.open_table("col")
+        doc_ids = [chr(ord("a") + i) * 64 for i in range(3)]
+        await table.add([
+            {
+                "doc_id": doc_id,
+                "chunk_id": doc_id + "-000000",
+                "text": f"expired chunk {i}",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "source_path": f"/tmp/f{i}.txt",
+                "indexed_at": now_iso,
+                "file_type": "",
+                "language": "",
+                "metadata": "{}",
+                "custom_score": None,
+                "ingested_by": "cli",
+                "updated_at": now_iso,
+                "acl": None,
+                "expires_at": past_iso,
+                "scopes": None,
+            }
+            for i, doc_id in enumerate(doc_ids)
+        ])
+
+        returned_doc_ids = await store.prune_expired_chunks("col", "default")
+
+        assert set(returned_doc_ids) == set(doc_ids)
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_prune_expired_chunks_omits_doc_id_when_live_chunks_remain(tmp_path: Path) -> None:
+    """BE-12: graph cleanup must only receive doc_ids whose chunks are all gone."""
+    from archon_search.store import SearchStore
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store._run_startup_migrations()
+        await store.ensure_collection("col", embedding_dim=4)
+        pending = await store.pending_migrations("col", "default")
+        if pending:
+            await store.apply_in_place_migrations("col", "default", pending)
+
+        now = datetime.now(UTC)
+        past_iso = normalize_iso_utc(now - timedelta(seconds=10))
+        future_iso = normalize_iso_utc(now + timedelta(hours=1))
+        now_iso = normalize_iso_utc(now)
+        doc_id = "m" * 64
+
+        db = store._require_connected()
+        table = await db.open_table("col")
+        await table.add([
+            {
+                "doc_id": doc_id,
+                "chunk_id": doc_id + "-000000",
+                "text": "expired chunk",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "source_path": "/tmp/mixed.txt",
+                "indexed_at": now_iso,
+                "file_type": "",
+                "language": "",
+                "metadata": "{}",
+                "custom_score": None,
+                "ingested_by": "cli",
+                "updated_at": now_iso,
+                "acl": None,
+                "expires_at": past_iso,
+                "scopes": None,
+            },
+            {
+                "doc_id": doc_id,
+                "chunk_id": doc_id + "-000001",
+                "text": "live chunk",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "source_path": "/tmp/mixed.txt",
+                "indexed_at": now_iso,
+                "file_type": "",
+                "language": "",
+                "metadata": "{}",
+                "custom_score": None,
+                "ingested_by": "cli",
+                "updated_at": now_iso,
+                "acl": None,
+                "expires_at": future_iso,
+                "scopes": None,
+            },
+        ])
+
+        returned_doc_ids = await store.prune_expired_chunks("col", "default")
+
+        assert returned_doc_ids == []
+        assert await store.count_chunks("col", "default") == 1
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_prune_expired_chunks_live_probe_handles_duplicate_remaining_doc_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BE-12: multiple live rows for one doc must not hide another live doc."""
+    import archon_search.store as store_module
+    from archon_search.store import SearchStore
+
+    monkeypatch.setattr(store_module, "_EXPIRING_SCAN_CEILING", 2)
+
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store._run_startup_migrations()
+        await store.ensure_collection("col", embedding_dim=4)
+        pending = await store.pending_migrations("col", "default")
+        if pending:
+            await store.apply_in_place_migrations("col", "default", pending)
+
+        now = datetime.now(UTC)
+        past_iso = normalize_iso_utc(now - timedelta(seconds=10))
+        future_iso = normalize_iso_utc(now + timedelta(hours=1))
+        now_iso = normalize_iso_utc(now)
+        doc_a = "x" * 64
+        doc_b = "y" * 64
+
+        rows = []
+        for doc_id, live_count in ((doc_a, 3), (doc_b, 1)):
+            rows.append({
+                "doc_id": doc_id,
+                "chunk_id": doc_id + "-expired",
+                "text": "expired chunk",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+                "source_path": f"/tmp/{doc_id[0]}.txt",
+                "indexed_at": now_iso,
+                "file_type": "",
+                "language": "",
+                "metadata": "{}",
+                "custom_score": None,
+                "ingested_by": "cli",
+                "updated_at": now_iso,
+                "acl": None,
+                "expires_at": past_iso,
+                "scopes": None,
+            })
+            for idx in range(live_count):
+                rows.append({
+                    "doc_id": doc_id,
+                    "chunk_id": f"{doc_id}-live-{idx}",
+                    "text": "live chunk",
+                    "vector": [0.1, 0.2, 0.3, 0.4],
+                    "source_path": f"/tmp/{doc_id[0]}.txt",
+                    "indexed_at": now_iso,
+                    "file_type": "",
+                    "language": "",
+                    "metadata": "{}",
+                    "custom_score": None,
+                    "ingested_by": "cli",
+                    "updated_at": now_iso,
+                    "acl": None,
+                    "expires_at": future_iso,
+                    "scopes": None,
+                })
+
+        db = store._require_connected()
+        table = await db.open_table("col")
+        await table.add(rows)
+
+        returned_doc_ids = await store.prune_expired_chunks("col", "default")
+
+        assert returned_doc_ids == []
+        assert await store.count_chunks("col", "default") == 4
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_prune_expired_chunks_does_not_delete_future_expires(tmp_path: Path) -> None:
     """prune_expired_chunks does not include chunks with future expires_at."""
     from archon_search.store import SearchStore

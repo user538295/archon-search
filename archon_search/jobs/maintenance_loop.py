@@ -356,6 +356,9 @@ class MaintenanceLoop:
         On success, logs WARNING with the count and doc_ids of deleted chunks
         (only when at least one chunk was pruned), then sets
         ``expired_chunks_removed_last_run`` in the current collection health dict.
+        This legacy field now records fully-pruned document IDs returned by
+        ``SearchStore.prune_expired_chunks``; live expired-chunk counts are exposed
+        separately by status via ``SearchStore.count_expired_chunks``.
         """
         if not self._config.prune_expired_chunks:
             return
@@ -364,13 +367,35 @@ class MaintenanceLoop:
         n = len(pruned_doc_ids)
 
         if n > 0:
+            preview_doc_ids = pruned_doc_ids[:20]
+            omitted_doc_ids = max(0, n - len(preview_doc_ids))
             logger.warning(
-                "MaintenanceLoop: pruned %d expired chunks from %s/%s — doc_ids: %s",
+                "MaintenanceLoop: pruned %d expired document(s) from %s/%s — "
+                "doc_ids_preview: %s omitted_doc_ids: %d",
                 n,
                 namespace,
                 collection,
-                pruned_doc_ids,
+                preview_doc_ids,
+                omitted_doc_ids,
             )
+
+        if self._graph_store is not None:
+            for doc_id in dict.fromkeys(pruned_doc_ids):
+                try:
+                    await self._graph_store.delete_defref_graph_by_doc(
+                        collection,
+                        doc_id,
+                        namespace,
+                        delete_doc_owned_code_symbols=True,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "MaintenanceLoop: def/ref graph cleanup failed for %s/%s doc_id=%s: %s",
+                        namespace,
+                        collection,
+                        doc_id,
+                        exc,
+                    )
 
         if hasattr(self, "_current_health"):
             self._current_health["expired_chunks_removed_last_run"] = n

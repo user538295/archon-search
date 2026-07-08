@@ -1253,6 +1253,54 @@ def test_delete_defref_graph_by_doc_respectsPreserveNodeIds(tmp_path: Path) -> N
     asyncio.run(_run())
 
 
+def test_delete_defref_graph_by_doc_preservesOrdinaryCodeSymbolByDefault(
+    tmp_path: Path,
+) -> None:
+    """Default re-ingest cleanup must not erase GraphExtractor-owned code symbols."""
+    doc_id = "doc-target"
+    ordinary = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "module_name"),
+        entity_name="module_name",
+        entity_type=EntityType.code_symbol,
+        source_doc_id=doc_id,
+        collection_name=_COL,
+        entity_subtype="python-module",
+    )
+    defref = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "drop::/a.py"),
+        entity_name="drop",
+        entity_type=EntityType.code_symbol,
+        source_doc_id=doc_id,
+        collection_name=_COL,
+        entity_subtype="python-function",
+    )
+    edge = GraphEdge(
+        id=make_stable_edge_id(defref.id, ordinary.id, RelationshipType.calls.value),
+        source_node_id=defref.id,
+        target_node_id=ordinary.id,
+        relationship_type=RelationshipType.calls,
+        source_doc_id=doc_id,
+        extraction_method="extracted",
+    )
+
+    async def _run() -> None:
+        gs = GraphStore(str(tmp_path / "gc-defref-code-symbol-default"))
+        await gs.connect()
+        try:
+            await gs.ensure_graph_tables(_COL, ns=_NS)
+            await gs.write_graph(_COL, [ordinary, defref], [edge], ns=_NS)
+            await gs.delete_defref_graph_by_doc(_COL, doc_id, _NS)
+            nodes = await gs.get_all_nodes(_COL, ns=_NS)
+            edges = await gs.get_all_edges(_COL, ns=_NS)
+        finally:
+            await gs.disconnect()
+
+        assert {n.id for n in nodes} == {ordinary.id}
+        assert edges == []
+
+    asyncio.run(_run())
+
+
 def test_delete_graph_by_doc_preservesSharedEntityNode(tmp_path: Path) -> None:
     """delete_graph_by_doc must not remove shared nodes owned by another doc (C2-I-1)."""
     shared_id = make_stable_entity_id(EntityType.person.value, "Alice")

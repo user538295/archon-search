@@ -2338,20 +2338,18 @@ class SearchStore:
         return items, next_cursor
 
     async def prune_expired_chunks(self, collection: str, namespace: str) -> list[str]:
-        """Delete all chunks whose ``expires_at`` is in the past and return their doc_ids.
+        """Delete expired chunks and return doc_ids whose chunks are all gone.
 
         Implementation:
-        1. SELECT snapshot — collect deduplicated ``doc_ids`` for the log (returned to
-           the caller).  At most ``_EXPIRING_SCAN_CEILING`` rows are scanned; the
-           returned doc_ids may therefore be a subset when more expired rows than the
-           ceiling exist.  The DELETE still removes ALL expired rows via the predicate.
-        2. DELETE — predicate-based delete of all rows where ``expires_at IS NOT NULL
-           AND expires_at < now_utc``.
+        1. SELECT bounded snapshots of expired rows and collect deduplicated ``doc_ids``.
+        2. DELETE expired rows for each selected doc-id batch.
+        3. Return only doc IDs with no remaining chunks after that delete.
+        4. Repeat until no expired rows remain.
 
-        The SELECT and DELETE share the same predicate string but are executed
-        sequentially; the returned doc_ids are from the SELECT snapshot and may
-        not exactly match what the DELETE removes (due to a race window), which
-        is acceptable — they are used for WARNING logs only.
+        Maintenance uses the returned IDs for best-effort doc-scoped graph cleanup, so
+        this method returns the complete set of fully-pruned doc IDs. The scan is
+        intentionally bounded per iteration to avoid materializing a large TTL backlog
+        at once.
 
         Returned doc_ids are deduplicated (one entry per document, not per chunk).
 
@@ -2361,6 +2359,9 @@ class SearchStore:
         The ``namespace`` parameter is accepted for API symmetry only.  The delete
         operates on the entire collection table — it is NOT scoped to a single
         namespace.  All namespaces sharing the collection lose their expired chunks.
+        Public collection metadata prevents a collection name from being registered
+        under multiple namespaces, so normal maintenance has one graph namespace per
+        physical chunk table.
         """
         self._validate_collection(collection)
         db = self._require_connected()
@@ -2374,22 +2375,34 @@ class SearchStore:
             return []
 
         now_utc_iso = normalize_iso_utc(datetime.now(timezone.utc))
-        pred = "expires_at IS NOT NULL AND expires_at < " + _sql_quote_str(now_utc_iso)
+        expired_pred = "expires_at IS NOT NULL AND expires_at < " + _sql_quote_str(now_utc_iso)
+        fully_pruned_doc_ids: dict[str, None] = {}
 
-        # SELECT snapshot for logging — collect doc_ids before the delete
-        raw_rows = (
-            await table.query()
-            .where(pred)
-            .select(["doc_id"])
-            .limit(_EXPIRING_SCAN_CEILING)
-            .to_list()
-        )
-        doc_ids = list(dict.fromkeys(r["doc_id"] for r in raw_rows))
+        while True:
+            raw_rows = (
+                await table.query()
+                .where(expired_pred)
+                .select(["doc_id"])
+                .limit(_EXPIRING_SCAN_CEILING)
+                .to_list()
+            )
+            batch_doc_ids = list(dict.fromkeys(r["doc_id"] for r in raw_rows))
+            if not batch_doc_ids:
+                break
 
-        if doc_ids:
-            await table.delete(pred)
+            await table.delete(f"({expired_pred}) AND {_where_in('doc_id', batch_doc_ids)}")
+            for doc_id in batch_doc_ids:
+                remaining_rows = (
+                    await table.query()
+                    .where(_where_eq("doc_id", doc_id))
+                    .select(["doc_id"])
+                    .limit(1)
+                    .to_list()
+                )
+                if not remaining_rows:
+                    fully_pruned_doc_ids[doc_id] = None
 
-        return doc_ids
+        return list(fully_pruned_doc_ids)
 
     async def count_expired_chunks(self, collection: str, namespace: str) -> int:
         """Return the live count of chunks where ``expires_at IS NOT NULL AND expires_at < now``.

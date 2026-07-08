@@ -84,6 +84,7 @@ After this ships: code is a connected graph (calls/imports/defines/inherits edge
 ## Known limitations / accepted trade-offs
 - Best-guess cross-file matching (not language-server-grade resolution) — common names (`run`, `get`, `init`) will produce false `inferred` **edges**; the honesty label plus a proven-only filter is the accepted mitigation, not elimination. This is separate from — and does not fix — the **node-identity** collision below: it only labels bad links between already-distinct nodes.
 - **`code_symbol` node identity is now file-qualified (Critical #2, fixed this revision; ID/display-name divergence made explicit this cycle — Critical #3).** Before this feature, `make_stable_entity_id(entity_type, name)` had no file/path component, so two unrelated same-named functions in different files already collapsed onto one graph node — a pre-existing bug this feature's `graph_impact` tool would otherwise inherit and amplify (a blast-radius answer for `run` in file A would silently include callers/callees of an unrelated `run` in file B). BE-2 qualifies the ID-hashing input only: it passes an ID-only qualified string (e.g. `f"{name}::{source_path}"`, or equivalent) into `make_stable_entity_id` for `code_symbol` nodes, so same-named symbols in different files hash to distinct node IDs. **`GraphNode.entity_name` is never file-qualified — it stays exactly the bare symbol name.** This is a deliberate divergence: `entity_name` is the display value surfaced directly in `graph_inspector.py` and in every impact contract's `ImpactEdge.entity_name` — file-qualifying it would pollute every `graph_impact` response and every graph-browsing result with e.g. `src/foo.py::run` instead of a clean `run`. `compute_impact`/`graph_impact`'s optional `file_path` param disambiguates which node a bare `symbol` string resolves to (default: highest-PageRank match) — see C1/C2/C4 and BE-2.
+- **TTL/maintenance-only chunk expiry does not yet tear down def/ref graph rows (BE-12, planned).** Explicit delete, sync/watcher delete, and re-ingest paths were hardened in b80209e (`delete_defref_graph_by_doc`, GC exemption for def/ref edges and `-defref-module` pseudo-nodes). When chunks expire via `maintenance_loop` `prune_expired_chunks` without an explicit document delete, those GC-exempt, mention-free def/ref rows can leak — see `Documentation/archon-search-notes.md`. BE-12 closes this lifecycle gap.
 - Cross-file inferred-edge matching is **order-dependent on ingest order** (distinct from the no-backfill decision below): if file A (caller, no local definition) is ingested before file B (which defines the function), BE-4's per-document extraction finds no target at A's ingest time and produces no edge — nothing re-scans A when B is later ingested. Documented, not fixed in v1; a lightweight "unresolved reference" backfill table is a candidate future iteration.
 - Ambiguous cross-file name matches (three files each defining `run`) resolve by linking the caller to **all** candidates, each tagged `inferred` — best-guess matching is the documented ceiling, not a single arbitrarily-chosen candidate.
 - Swift/C# may slip to a fast-follow if their tree-sitter grammars prove ABI-incompatible with the pinned `tree-sitter>=0.25,<0.26` core — the release proceeds with seven languages either way.
@@ -195,6 +196,7 @@ Behavioural only — step-level detail is produced by the tasks below. Cover hap
 | **S16** | **Given** chunking and edges both change in this release · **When** the eval gate measures impact · **Then** chunking-only and edges-only deltas are attributed separately, not conflated |
 | **S17** | **Given** a malformed or unparseable code file · **When** ingested · **Then** extraction failure is logged as WARNING and does not fail the ingest (never-propagate invariant, matching `pipeline.py:632-663`) |
 | **S18** | **Given** Swift or C# tree-sitter grammars prove ABI-incompatible with the pinned core · **When** the release ships · **Then** those two languages are excluded without blocking the other seven, and this is documented |
+| **S19** | **Given** a code file with def/ref edges ingested under a short chunk TTL · **When** chunks expire via maintenance `prune_expired_chunks` without an explicit document delete · **Then** def/ref graph rows for that document are removed (shared `-defref-module` pseudo-nodes preserved when still referenced by another document), closing the lifecycle gap noted in `Documentation/archon-search-notes.md` |
 
 ---
 
@@ -213,7 +215,7 @@ N/A — no frontend work for this feature. archon-search has no web UI, dashboar
 - Entities: BE-1 — `RelationshipType` + `extraction_method` extension
 - Presentation: BE-9 — `graph_impact` REST + MCP
 - Interface Adapters: BE-2 — Python/TS same-file `DefRefExtractor` (extracted tier) · BE-4 — cross-file inferred matching · BE-5 — remaining language rollout (JS/Go/Rust/Java/Bash, then Swift/C#) · BE-8 — `compute_impact` traversal
-- Use Cases: BE-3 — wire extractor into post-ingest pipeline hook · BE-7 — PageRank compute + scheduling · BE-10 — code-lane eval gate (staged A/B)
+- Use Cases: BE-3 — wire extractor into post-ingest pipeline hook · BE-12 — def/ref cleanup on TTL/maintenance chunk expiry · BE-7 — PageRank compute + scheduling · BE-10 — code-lane eval gate (staged A/B)
 - Frameworks & Drivers: BE-6 — AST (cAST) chunker (Major #13 — moved here from Interface Adapters; it has no protocol/port seam, structurally identical to `chunker.py`'s `DocumentChunker`) · BE-11 — code-parser-missing soft-degrade (health field + wizard `[code]`+`[graph]` auto-install; Swift/C# grammar wiring struck from BE-11's scope this cycle, Major #5 — see Scope)
 
 **Done when**
@@ -226,6 +228,7 @@ N/A — no frontend work for this feature. archon-search has no web UI, dashboar
 - [ ] Server degrades gracefully (not hard-fail) when code parsers are missing — S9
 - [ ] The code-lane eval gate passes with staged attribution and no regression elsewhere — S15, S16
 - [ ] Ingest failures never propagate — S17
+- [x] TTL/maintenance chunk expiry tears down def/ref graph rows without leaking GC-exempt edges — S19
 
 ---
 
@@ -249,6 +252,7 @@ N/A — no frontend work for this feature. archon-search has no web UI, dashboar
 | S16 | integration *(Major #19 — BE-10 has integration tests, `test_twoCorpora_attributeIndependently`/`test_twoCorpora_areDisjoint`; previously mis-claimed as eval-gate-e2e-cheapest)* | — *(C4-TEST-3, corrected this cycle — T-2's `test_e2e_codeDefrefEvalGate_subprocess` only asserts the gate runs cleanly with a non-vacuous pass count; it does not assert chunking-only vs. edges-only attribution independence, so it does not re-verify S16's distinguishing claim)* |
 | S15 | eval-gate subprocess e2e *(no cheaper level proves the end-to-end gate-passes claim)* | — |
 | S18 | integration *(new this cycle — Critical #4: BE-5's `test_swiftGrammar_forcedFailure_excludesLanguageOnly` / `test_cSharpGrammar_forcedFailure_excludesLanguageOnly`, both integration-level, `completes` S18)* | — |
+| S19 | integration *(BE-12 — TTL/maintenance prune path; no cheaper level proves end-to-end chunk expiry + def/ref teardown in one pass)* | — |
 
 ---
 
@@ -303,6 +307,7 @@ flowchart LR
     BE1["BE-1 enum+method"]
     BE2["BE-2 same-file extractor"]
     BE3["BE-3 pipeline hook"]
+    BE12["BE-12 TTL def/ref cleanup"]
   end
   subgraph P2["Phase 2 · Best-guess + second language"]
     BE4["BE-4 cross-file inferred"]
@@ -332,6 +337,7 @@ flowchart LR
   K1 --> BE0
   K1 --> BE1
   BE1 --> BE2 --> BE3
+  BE3 --> BE12
   BE0 --> BE5
   BE3 --> BE4
   BE3 --> BE6
@@ -351,6 +357,7 @@ flowchart LR
   T3 --> T4
   BE5 --> T4
   BE9 --> T4
+  BE12 --> T4
 ```
 
 ### Phase 0 · Kickoff *(prerequisite; the one cross-cutting step)*
@@ -392,6 +399,22 @@ flowchart LR
         - #unit_test — `test_midParseFailure_writesNoPartialEdges` — a file that parses partway before raising leaves zero edges written for that file (atomic per-file — Major #16, resolves whether partial edges survive a mid-parse failure, previously untested beyond a fully-mocked exception and the clean happy path)
         - #integration_test — `test_ingestCodeFile_producesEdgesEndToEnd` — ingesting a real Python file via the pipeline produces def/ref edges in the graph store
         - #integration_test — `test_preFeatureCollection_hasNoDefRefEdgesUntilReingest` — S14: seed a graph store representing a pre-feature ingest (a `code_symbol` node with zero `calls`/`imports`/`defines`/`inherits` edges, matching today's zero-edge state) and assert the def/ref edge count stays zero until the same file is re-ingested through the pipeline with `DefRefExtractor` wired, at which point the edges appear — proves re-ingest, not passive migration, is the only path to gaining edges
+
+### Phase 1b · Def/ref lifecycle hardening *(closes the TTL/maintenance expiry gap from iterative review on BE-3, b80209e)*
+- [x] **BE-12** — Wire def/ref graph cleanup into the TTL/maintenance chunk-expiry path: when `maintenance_loop._run_expired_chunk_pruning` / `SearchStore.prune_expired_chunks` removes expired chunks without an explicit document delete, invoke the same doc-scoped def/ref teardown as explicit delete/re-ingest (`GraphStore.delete_defref_graph_by_doc`), respecting shared `-defref-module` pseudo-node preservation and the GC-exempt def/ref semantics established in b80209e. Closes the lifecycle gap documented in `Documentation/archon-search-notes.md` (explicit delete, sync/watcher delete, and re-ingest were fixed there; maintenance/TTL-only expiry was not). #backend-role
+    - Use Case · 4.0h
+    - needs BE-3 · completes S19
+    - Acceptance criteria
+        - After maintenance prunes expired chunks for a document, no def/ref edges or doc-scoped `-defref-module` pseudo-nodes remain keyed to that document's `source_doc_id`.
+        - Shared module pseudo-nodes still referenced by another document's def/ref edges are preserved (same rule as b80209e explicit-delete path).
+        - Def/ref cleanup on this path is best-effort WARNING-swallowed (never-propagate invariant — a bad graph write must not fail chunk pruning).
+        - `prune_expired_chunks` returning deduplicated `doc_ids` is the hook surface; no new REST/MCP surface.
+    - Tests
+        - #unit_test — `test_runExpiredChunkPruning_callsDeleteDefrefGraphByDocPerPrunedDocId` — mock `prune_expired_chunks` to return two doc_ids; assert `delete_defref_graph_by_doc` is awaited once per id with the maintenance pass namespace
+        - #unit_test — `test_runExpiredChunkPruning_defrefCleanupFailure_logsWarningNotRaise` — `delete_defref_graph_by_doc` raises; assert maintenance pruning still completes and the exception is logged WARNING, not propagated
+        - #unit_test — `test_ttlPrune_preservesSharedDefrefModuleNodeWhenOtherDocReferences` — TTL prune of one doc does not remove a `-defref-module` pseudo-node still referenced by another document's def/ref edges (mirrors b80209e shared-node rule on the maintenance path)
+        - #integration_test — `test_ttlExpiry_maintenancePrune_removesDefrefGraphRows` — ingest a code file with short TTL, trigger maintenance (or force `expires_at` past + `POST /maintenance/trigger`), assert vector chunks are pruned AND def/ref edges for that doc are gone
+        - #integration_test — `test_ttlExpiry_thenGraphGc_noDefrefLeakForExpiredDoc` — after TTL prune + the normal graph GC pass in the same maintenance cycle, assert no def/ref edges remain with the expired doc's `source_doc_id` (proves GC exemption does not leave mention-free def/ref rows behind on this path)
 
 ### Phase 2 · Best-guess cross-file matching *(honesty labels, the second half of C3's promise)*
 - [ ] **BE-4** — Cross-file name-based matching (inferred tier); label all resulting edges `extraction_method: "inferred"`; implement the extracted/inferred tag-collision precedence (Q11, Critical #3) as a pre-read-and-override step before `GraphStore.write_graph`'s bulk `merge_insert` — read existing edges for the incoming batch's `id`s, and for any incoming `"inferred"` edge whose stored counterpart is `"extracted"`, override the incoming edge's `extraction_method` back to `"extracted"` in memory before the batch is upserted (mirrors the existing `name_embedding`-preservation pre-read at `graph_store.py:267-290`); `source_doc_id` always refreshes on this write regardless of tag preservation; resolve the ambiguous multi-candidate matching policy; document the ingest-order dependency of cross-file resolution #backend-role
