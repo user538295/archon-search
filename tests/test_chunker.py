@@ -1,6 +1,8 @@
 """packages/archon-search/tests/test_chunker.py — unit tests for DocumentChunker."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from archon_search._types import ChunkRecord
@@ -232,3 +234,174 @@ def test_chunk_offset_text_slice_matches() -> None:
                 f"text slice [{r.start_offset}:{r.end_offset}] = {sliced!r} "
                 f"does not match chunk.text = {r.text!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# BE-6 — ASTChunker (E2g task 5.1)
+# ---------------------------------------------------------------------------
+
+
+def test_astChunker_splitsOnFunctionBoundary() -> None:
+    """A function boundary becomes a chunk boundary — no chunk straddles two scopes."""
+    pytest.importorskip("tree_sitter")
+    pytest.importorskip("tree_sitter_python")
+
+    from archon_search.chunker import ASTChunker
+    from archon_search.code_enricher import CodeEnricher
+
+    source = (
+        "def foo():\n"
+        "    return 1\n"
+        "\n"
+        "\n"
+        "def bar():\n"
+        "    return 2\n"
+    )
+    scope_table = CodeEnricher().prepare(source, ".py", Path("/tmp/mod.py"), None)
+    assert scope_table, "tree-sitter grammar must be available for this test"
+    bar_scope = next(e for e in scope_table if e.fn_name == "bar")
+
+    chunker = ASTChunker(chunk_size=3)
+    records = chunker.chunk(
+        source, "doc1", "/tmp/mod.py", scope_table=scope_table, **_DEFAULT_KW
+    )
+    assert records
+    assert any(r.start_offset == bar_scope.start for r in records), (
+        "expected a chunk to start exactly at the second function's boundary"
+    )
+
+
+def test_astChunker_mergesSmallScopesToBudget() -> None:
+    """Small adjacent top-level scopes merge into one chunk under a generous budget."""
+    pytest.importorskip("tree_sitter")
+    pytest.importorskip("tree_sitter_python")
+
+    from archon_search.chunker import ASTChunker
+    from archon_search.code_enricher import CodeEnricher
+
+    source = "def a():\n    return 1\n\n\ndef b():\n    return 2\n"
+    scope_table = CodeEnricher().prepare(source, ".py", Path("/tmp/mod.py"), None)
+    assert scope_table, "tree-sitter grammar must be available for this test"
+
+    chunker = ASTChunker(chunk_size=512)
+    records = chunker.chunk(
+        source, "doc1", "/tmp/mod.py", scope_table=scope_table, **_DEFAULT_KW
+    )
+    assert len(records) == 1, "both tiny functions should merge into a single chunk"
+    assert "def a" in records[0].text
+    assert "def b" in records[0].text
+
+
+def test_astChunker_fallsBackWhenTreeSitterAbsent() -> None:
+    """An empty scope_table (tree-sitter unavailable/parse failed) falls back to token chunking."""
+    from archon_search.chunker import ASTChunker
+
+    chunker = ASTChunker(chunk_size=64)
+    records = chunker.chunk(
+        "def foo():\n    return 1\n",
+        "doc1",
+        "/tmp/mod.py",
+        scope_table=[],
+        **_DEFAULT_KW,
+    )
+    assert records
+    assert all(isinstance(r, ChunkRecord) for r in records)
+    assert all(r.chunk_id == "" for r in records)
+    assert all(r.vector == [] for r in records)
+
+
+def test_astChunker_mergeStopsAtBudgetCeiling() -> None:
+    """Merge loop merges under budget but flushes/starts a new segment on overflow.
+
+    Three small top-level functions with a chunk_size small enough that not
+    all three fit in one chunk, but large enough that at least two merge —
+    proves both halves of the merge loop: merge-when-under-budget and
+    flush-on-would-exceed-budget.
+    """
+    pytest.importorskip("tree_sitter")
+    pytest.importorskip("tree_sitter_python")
+
+    from archon_search.chunker import ASTChunker
+    from archon_search.code_enricher import CodeEnricher
+
+    source = (
+        "def a():\n    return 1\n\n\n"
+        "def b():\n    return 2\n\n\n"
+        "def c():\n    return 3\n"
+    )
+    scope_table = CodeEnricher().prepare(source, ".py", Path("/tmp/mod.py"), None)
+    assert scope_table, "tree-sitter grammar must be available for this test"
+
+    chunker = ASTChunker(chunk_size=8)
+    records = chunker.chunk(
+        source, "doc1", "/tmp/mod.py", scope_table=scope_table, **_DEFAULT_KW
+    )
+
+    assert len(records) > 1, "expected the overflow-flush branch to fire (not all merged into one)"
+    assert any(
+        sum(1 for marker in ("def a", "def b", "def c") if marker in r.text) > 1
+        for r in records
+    ), "expected at least one chunk to contain more than one function (merge did occur)"
+
+
+def test_astChunker_oversizedScope_subSplitsWithCorrectOffsets() -> None:
+    """A single scope whose body alone exceeds the budget sub-splits into multiple chunks.
+
+    Every returned record's start/end offsets must slice out exactly its own
+    text from the ORIGINAL source — proves the `b_start + sub.start_index`
+    re-offsetting math in the sub-split branch is correct.
+    """
+    pytest.importorskip("tree_sitter")
+    pytest.importorskip("tree_sitter_python")
+
+    from archon_search.chunker import ASTChunker
+    from archon_search.code_enricher import CodeEnricher
+
+    body_lines = "\n".join(f"    x{i} = {i}" for i in range(80))
+    source = f"def big():\n{body_lines}\n    return x0\n"
+    scope_table = CodeEnricher().prepare(source, ".py", Path("/tmp/mod.py"), None)
+    assert scope_table, "tree-sitter grammar must be available for this test"
+
+    chunker = ASTChunker(chunk_size=10)
+    records = chunker.chunk(
+        source, "doc1", "/tmp/mod.py", scope_table=scope_table, **_DEFAULT_KW
+    )
+
+    assert len(records) > 1, "expected the oversized single-scope sub-split branch to fire"
+    for r in records:
+        sliced = source[r.start_offset:r.end_offset]
+        assert sliced == r.text, (
+            f"text slice [{r.start_offset}:{r.end_offset}] = {sliced!r} "
+            f"does not match chunk.text = {r.text!r}"
+        )
+
+
+def test_astChunker_typeScriptSplitsOnFunctionBoundary() -> None:
+    """A non-Python language (TypeScript) also produces a boundary-aligned split."""
+    pytest.importorskip("tree_sitter")
+    pytest.importorskip("tree_sitter_typescript")
+
+    from archon_search.chunker import ASTChunker
+    from archon_search.code_enricher import CodeEnricher
+
+    source = (
+        "function topFn() {\n"
+        "    return 1;\n"
+        "}\n"
+        "\n"
+        "function otherFn() {\n"
+        "    return 2;\n"
+        "}\n"
+    )
+    scope_table = CodeEnricher().prepare(source, ".ts", Path("/tmp/mod.ts"), None)
+    assert scope_table, "tree-sitter-typescript grammar must be available for this test"
+    other_scope = next(e for e in scope_table if e.fn_name == "otherFn")
+
+    chunker = ASTChunker(chunk_size=3)
+    records = chunker.chunk(
+        source, "doc1", "/tmp/mod.ts", scope_table=scope_table, **_DEFAULT_KW
+    )
+    assert records
+    assert any(r.start_offset == other_scope.start for r in records), (
+        "expected a chunk to start exactly at the second function's boundary"
+    )

@@ -11,6 +11,8 @@ Tests are organized by task/phase matching the C3c plan:
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -1017,3 +1019,43 @@ class TestEnrichChunk:
         assert result["_symbol_subtype"] == "xyz-function"
         assert result["_symbol_type"] == "function"
         assert result["_containing_function"] == "foo"
+
+    def test_codeEnricher_reusesSharedScopeTable(self, monkeypatch):
+        """BE-6: ASTChunker and CodeEnricher.enrich_chunk() consume the SAME
+        ScopeTable object built by one prepare() call — one shared parse pass,
+        not two. Every chunk ASTChunker produces must resolve correctly against
+        that same scope_table, AND ASTChunker.chunk() must not trigger a second
+        internal parse (_build_scope_table) — proven via a call-count spy.
+        """
+        import archon_search.code_enricher as ce
+        from archon_search.chunker import ASTChunker
+
+        # The only expected parse: this call to _prepare_py_enricher() (via
+        # CodeEnricher.prepare()), executed BEFORE the spy is installed below.
+        enricher, scope_table = self._prepare_py_enricher()
+        assert scope_table, "tree-sitter grammar must be available for this test"
+
+        real_build_scope_table = ce._build_scope_table
+        spy = MagicMock(side_effect=real_build_scope_table)
+        monkeypatch.setattr(ce, "_build_scope_table", spy)
+
+        chunker = ASTChunker(chunk_size=5)
+        records = chunker.chunk(
+            self.py_source,
+            "doc1",
+            "/repo/pkg/mod.py",
+            scope_table=scope_table,
+            file_type="py",
+            updated_at="2024-01-01T00:00:00.000000Z",
+            ingested_by="cli",
+        )
+        assert records
+        spy.assert_not_called()  # no hidden second parse inside ASTChunker.chunk()
+
+        # A chunk starting exactly at top_fn's scope boundary must resolve via
+        # the SAME scope_table object the chunker consumed.
+        top_fn_scope = next(e for e in scope_table if e.fn_name == "top_fn")
+        target = next(r for r in records if r.start_offset == top_fn_scope.start)
+        result = enricher.enrich_chunk(target, scope_table)
+        assert result["_symbol_type"] == "function"
+        assert result["_containing_function"] == "top_fn"

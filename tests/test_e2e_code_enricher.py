@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
-from archon_search.chunker import DocumentChunker
+from archon_search.chunker import ASTChunker, DocumentChunker
 from archon_search.embedder import Embedder
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import SearchPipeline
@@ -77,11 +77,16 @@ class _MockRerankerBackend:
 
 
 def _make_pipeline(store) -> SearchPipeline:  # type: ignore[no-untyped-def]
+    # BE-6: code files now dispatch through ASTChunker (not DocumentChunker) in
+    # ingest_file(). Give it the same small chunk_size=7 budget so boundaries
+    # still land at least one chunk inside each named scope in the fixtures —
+    # otherwise the whole small fixture merges into a single module-level chunk.
     return SearchPipeline(
         store=store,
         embedder=Embedder(_MockEmbedderBackend()),
         reranker=Reranker(_MockRerankerBackend()),
         chunker=DocumentChunker(chunk_size=_CHUNK_SIZE),
+        ast_chunker=ASTChunker(chunk_size=_CHUNK_SIZE),
         parser=DocumentParser(),
         top_k_retrieve=10,
         top_k_return=5,

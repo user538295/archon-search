@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
-from archon_search.chunker import DocumentChunker
+from archon_search.chunker import ASTChunker, DocumentChunker
 from archon_search.config import ConfigError, SearchConfig, warn_gc_cpu_priority
 from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, get_fasttext_models_dir
 from archon_search.embedder import Embedder, ModelEmbedder
@@ -528,6 +528,7 @@ def create_app(
             else None
         ),
         chunker=DocumentChunker(config.chunk_size),
+        ast_chunker=ASTChunker(config.chunk_size),
         parser=DocumentParser(),
         top_k_retrieve=config.top_k_retrieve,
         top_k_return=config.top_k_return,

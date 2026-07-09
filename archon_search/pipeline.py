@@ -23,7 +23,7 @@ from archon_search.filters import SearchFilters
 from archon_search.constants import DEFAULT_NAMESPACE, _INGEST_CHUNK_BATCH_SIZE
 from archon_search.collection_meta import CollectionMeta
 from archon_search.description_generator import MAX_SAMPLE_CHUNKS, _should_regenerate, generate_description
-from archon_search.chunker import DocumentChunker
+from archon_search.chunker import ASTChunker, DocumentChunker
 from archon_search.embedder import Embedder, EmbedderBackend, ModelEmbedder
 from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher
 from archon_search.defref_extractor import DEFREF_SUPPORTED_EXTENSIONS
@@ -326,11 +326,23 @@ class SearchPipeline:
         graph_config: GraphConfig | None = None,
         graph_expander: "GraphExpander | None" = None,
         defref_extractor: "DefRefExtractor | None" = None,
+        ast_chunker: ASTChunker | None = None,
     ) -> None:
         self.store = store
         self._global_embedder = embedder
         self._reranker = reranker
         self._chunker = chunker
+        # BE-6: AST/cAST chunker for code files — splits/merges on the shared
+        # ScopeTable's boundaries built by CodeEnricher.prepare(). Defaults to
+        # a chunk_size derived from the injected `chunker` (DocumentChunker),
+        # so callers that only pass `chunker=` (with a non-default chunk_size)
+        # don't silently get mismatched chunk sizes between code and non-code
+        # files. Falls back to DocumentChunker's own default (512) when
+        # `chunker` doesn't carry a real int `_chunk_size` (e.g. a test double).
+        _default_chunk_size = getattr(chunker, "_chunk_size", 512)
+        if not isinstance(_default_chunk_size, int):
+            _default_chunk_size = 512
+        self._ast_chunker = ast_chunker if ast_chunker is not None else ASTChunker(_default_chunk_size)
         self._parser = parser
         self._top_k_retrieve = top_k_retrieve
         self._top_k_return = top_k_return
@@ -483,15 +495,30 @@ class SearchPipeline:
         else:
             lang = ""
 
-        records = self._chunker.chunk(
-            markdown,
-            doc_id,
-            str(path),
-            file_type=file_type,
-            updated_at=updated_at,
-            ingested_by=ingested_by,
-            language=lang,
-        )
+        # BE-6: code files chunk via the AST chunker, aligned to the scope_table
+        # boundaries already built above by CodeEnricher.prepare() (one shared
+        # parse pass). Non-code files chunk via DocumentChunker unchanged.
+        if suffix in CODE_EXTENSIONS:
+            records = self._ast_chunker.chunk(
+                markdown,
+                doc_id,
+                str(path),
+                file_type=file_type,
+                updated_at=updated_at,
+                ingested_by=ingested_by,
+                scope_table=scope_table,
+                language=lang,
+            )
+        else:
+            records = self._chunker.chunk(
+                markdown,
+                doc_id,
+                str(path),
+                file_type=file_type,
+                updated_at=updated_at,
+                ingested_by=ingested_by,
+                language=lang,
+            )
         if not records:
             return IngestResult(doc_id=doc_id, chunks_created=0, status="ok", warnings=acl_warnings)
 
@@ -3174,6 +3201,7 @@ def create_pipeline(
         reranker = None
     embedder = Embedder(_embedder_backend)
     chunker = DocumentChunker(cfg.chunk_size)
+    ast_chunker = ASTChunker(cfg.chunk_size)
     parser = DocumentParser()
 
     language_detector: LanguageDetector | None = None
@@ -3214,4 +3242,5 @@ def create_pipeline(
         graph_config=cfg.graph,
         graph_expander=graph_expander,
         defref_extractor=defref_extractor,
+        ast_chunker=ast_chunker,
     )

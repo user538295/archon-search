@@ -38,6 +38,76 @@ async def test_pipeline_ingest_file_ok(connected_store, col_name, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_pipeline_ingest_codeFile_routesThroughAstChunker(connected_store, col_name, tmp_path):
+    """BE-6: a code-extension (.py) ingest routes chunking through `_ast_chunker.chunk(...)`,
+    not `_chunker.chunk(...)`, with the built `scope_table` passed through as a kwarg.
+    """
+    pipeline = make_pipeline(connected_store)
+
+    source = "def foo():\n    return 1\n"
+    mock_record = ChunkRecord(
+        doc_id="doc1",
+        chunk_id="",
+        text=source,
+        vector=[],
+        source_path="/tmp/mod.py",
+        indexed_at="2024-01-01T00:00:00.000000Z",
+        file_type="py",
+        start_offset=0,
+        end_offset=len(source),
+    )
+    pipeline._ast_chunker = MagicMock()
+    pipeline._ast_chunker.chunk.return_value = [mock_record]
+    pipeline._chunker = MagicMock()
+    pipeline._chunker.chunk.return_value = []
+
+    py_file = tmp_path / "mod.py"
+    py_file.write_text(source)
+
+    result = await pipeline.ingest_file(py_file, col_name, embedder=pipeline._global_embedder)
+
+    assert result.status == "ok"
+    pipeline._ast_chunker.chunk.assert_called_once()
+    _, kwargs = pipeline._ast_chunker.chunk.call_args
+    assert "scope_table" in kwargs
+    pipeline._chunker.chunk.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_ingest_nonCodeFile_routesThroughChunker(connected_store, col_name, tmp_path):
+    """BE-6: a non-code-extension (.md) ingest routes chunking through `_chunker.chunk(...)`,
+    not `_ast_chunker.chunk(...)`.
+    """
+    pipeline = make_pipeline(connected_store)
+
+    source = "# Hello\n\nSome content.\n"
+    mock_record = ChunkRecord(
+        doc_id="doc1",
+        chunk_id="",
+        text=source,
+        vector=[],
+        source_path="/tmp/doc.md",
+        indexed_at="2024-01-01T00:00:00.000000Z",
+        file_type="md",
+        start_offset=0,
+        end_offset=len(source),
+    )
+    pipeline._chunker = MagicMock()
+    pipeline._chunker.chunk.return_value = [mock_record]
+    pipeline._ast_chunker = MagicMock()
+    pipeline._ast_chunker.chunk.return_value = []
+
+    md_file = tmp_path / "doc.md"
+    md_file.write_text(source)
+
+    result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
+
+    assert result.status == "ok"
+    pipeline._chunker.chunk.assert_called_once()
+    pipeline._ast_chunker.chunk.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_pipeline_ingest_file_parse_error(connected_store, col_name, tmp_path):
     from archon_search.parser import ParseError
 
@@ -862,12 +932,14 @@ async def test_create_pipeline_wires_all_components():
         patch("archon_search.pipeline.ModelEmbedder") as MockME,
         patch("archon_search.pipeline.ModelReranker") as MockMR,
         patch("archon_search.pipeline.DocumentChunker") as MockChunker,
+        patch("archon_search.pipeline.ASTChunker") as MockASTChunker,
         patch("archon_search.pipeline.DocumentParser") as MockParser,
         patch("archon_search.pipeline.SearchStore") as MockStore,
     ):
         MockME.return_value = MockEmbedderBackend()
         MockMR.return_value = MockRerankerBackend()
         MockChunker.return_value = MagicMock()
+        MockASTChunker.return_value = MagicMock()
         MockParser.return_value = MagicMock()
         MockStore.return_value = MagicMock()
 
@@ -966,6 +1038,7 @@ async def test_create_pipeline_does_not_auto_connect():
         patch("archon_search.pipeline.ModelEmbedder") as MockME,
         patch("archon_search.pipeline.ModelReranker") as MockMR,
         patch("archon_search.pipeline.DocumentChunker"),
+        patch("archon_search.pipeline.ASTChunker"),
         patch("archon_search.pipeline.DocumentParser"),
         patch("archon_search.pipeline.SearchStore") as MockStore,
     ):
@@ -1088,6 +1161,7 @@ def test_create_pipeline_uses_expanded_db_path() -> None:
     cfg.multilingual = False  # Prevent LanguageDetector instantiation
     with (
         patch("archon_search.pipeline.DocumentChunker"),
+        patch("archon_search.pipeline.ASTChunker"),
         patch("archon_search.pipeline.DocumentParser"),
     ):
         pipeline = create_pipeline(cfg, embedder_backend=MagicMock(), reranker_backend=MagicMock())
