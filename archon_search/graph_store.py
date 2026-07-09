@@ -378,9 +378,55 @@ class GraphStore:
             )
 
         if edges:
-            # extraction_method column is guaranteed present by ensure_graph_tables() migration.
-            # _arrow_to_edges() guard handles pre-migration tables gracefully on read.
+            # extraction_method column is guaranteed present on every table write_graph
+            # can reach in production: pipeline.py:644 (NER hook) and pipeline.py:716
+            # (defref hook) both call ensure_graph_tables() immediately before
+            # write_graph(), and ensure_graph_tables()'s BE-1 migration branch
+            # (graph_store.py, in this method's class, "BE-1 migration: pre-E2f edge
+            # tables lack extraction_method" above) adds the column to any pre-existing
+            # table that lacks it. _arrow_to_edges() guard handles pre-migration tables
+            # gracefully on read regardless.
             edges_table = await db.open_table(self._edges_table_name(collection, ns))
+
+            # Q11 tag-collision precedence (E2g BE-4): make_stable_edge_id does NOT
+            # include extraction_method in its hash, so the same pair+type discovered
+            # first as "extracted" (same-file, proven) and later re-discovered as
+            # "inferred" (cross-file, best-guess) collide on `id`. A plain
+            # merge_insert().when_matched_update_all() would silently downgrade the
+            # stored tag from "extracted" to "inferred". Mirrors the name_embedding
+            # preservation pre-read above (guarded the same way — only pay for the
+            # pre-read when it can actually matter): only when the incoming batch
+            # contains at least one "inferred" edge do we fetch existing
+            # extraction_method values for the incoming batch's ids, and for any
+            # incoming "inferred" edge whose stored counterpart is "extracted",
+            # override the incoming value back to "extracted" in memory (not on the
+            # GraphEdge objects — a local resolved list) before building edges_data.
+            # source_doc_id always takes the incoming value regardless of tag
+            # preservation.
+            if any(e.extraction_method == "inferred" for e in edges):
+                edge_ids = [e.id for e in edges]
+                existing_edges_arrow = await (
+                    edges_table.query()
+                    .where(_where_in("id", edge_ids))
+                    .select(["id", "extraction_method"])
+                    .to_arrow()
+                )
+                existing_methods_by_id: dict[str, str | None] = dict(
+                    zip(
+                        existing_edges_arrow["id"].to_pylist(),
+                        existing_edges_arrow["extraction_method"].to_pylist(),
+                    )
+                )
+                resolved_extraction_methods = [
+                    "extracted"
+                    if e.extraction_method == "inferred"
+                    and existing_methods_by_id.get(e.id) == "extracted"
+                    else e.extraction_method
+                    for e in edges
+                ]
+            else:
+                resolved_extraction_methods = [e.extraction_method for e in edges]
+
             edges_data = pa.table(
                 {
                     "id": [e.id for e in edges],
@@ -389,7 +435,7 @@ class GraphStore:
                     "relationship_type": [e.relationship_type.value for e in edges],
                     "source_doc_id": [e.source_doc_id for e in edges],
                     "extraction_method": pa.array(
-                        [e.extraction_method for e in edges], type=pa.utf8()
+                        resolved_extraction_methods, type=pa.utf8()
                     ),
                 },
                 schema=self._edges_schema(),
@@ -1268,10 +1314,15 @@ class GraphStore:
             )
         return results
 
-    async def _load_all_from_table(self, table_name: str, context_label: str):  # type: ignore[return]
-        """Open *table_name* and fetch all rows as an Arrow table.
+    async def _load_all_from_table(
+        self, table_name: str, context_label: str, predicate: str | None = None
+    ):  # type: ignore[return]
+        """Open *table_name* and fetch rows as an Arrow table.
 
         *context_label* is used only in log/error messages for diagnostics.
+        *predicate* is an optional SQL ``WHERE`` clause (built via ``_where_eq``/
+        ``_where_in``, never an f-string) pushed into the query; omitted, all rows
+        are returned.
 
         Returns ``None`` if the table does not exist (``FileNotFoundError`` /
         ``ValueError``). Raises ``RuntimeError`` (chaining the original exception)
@@ -1280,7 +1331,10 @@ class GraphStore:
         db = self._require_db()
         try:
             table = await db.open_table(table_name)
-            return await table.query().to_arrow()
+            query = table.query()
+            if predicate is not None:
+                query = query.where(predicate)
+            return await query.to_arrow()
         except (FileNotFoundError, ValueError):
             return None
         except Exception as exc:
@@ -1650,8 +1704,21 @@ class GraphStore:
         _validate_namespace(ns)
         return len(await self._fetch_stale_chunk_ids(collection, live_chunk_ids, ns))
 
-    async def get_all_edges(self, collection: str, ns: str) -> list[GraphEdge]:
+    async def get_all_edges(
+        self, collection: str, ns: str, extraction_method_filter: str | None = None
+    ) -> list[GraphEdge]:
         """Return all edges for *collection*; empty list if table absent.
+
+        Args:
+            collection: Collection name.
+            ns: Namespace string (LAST positional per project invariant).
+            extraction_method_filter: When non-None, only edges whose
+                ``extraction_method`` equals this value exactly are returned
+                (e.g. ``"extracted"`` or ``"inferred"``). Exact-string equality
+                naturally excludes the synonym-detection axis's ``"manual"``/
+                ``"embedding"`` tags — ``extraction_method`` conflates two
+                independent axes (extraction mechanism vs. def/ref confidence
+                tier) but exact matching never confuses them.
 
         Raises:
             RuntimeError: On unexpected storage / I/O errors (table absent
@@ -1659,8 +1726,15 @@ class GraphStore:
         """
         self._validate_collection(collection)
         _validate_namespace(ns)
+        predicate = (
+            _where_eq("extraction_method", extraction_method_filter)
+            if extraction_method_filter is not None
+            else None
+        )
         arrow = await self._load_all_from_table(
-            self._edges_table_name(collection, ns), f"collection={collection!r} ns={ns!r}"
+            self._edges_table_name(collection, ns),
+            f"collection={collection!r} ns={ns!r}",
+            predicate=predicate,
         )
         if arrow is None:
             return []

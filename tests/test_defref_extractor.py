@@ -28,17 +28,46 @@ pytest.importorskip("tree_sitter_typescript")
 from archon_search.defref_extractor import DefRefExtractor  # noqa: E402
 from archon_search.graph_types import (  # noqa: E402
     EntityType,
+    GraphNode,
     RelationshipType,
     make_stable_entity_id,
 )
 
 
 class _FakeGraphStore:
-    """Minimal GraphStoreProtocol stand-in — BE-2's same-file scope never calls it."""
+    """Minimal GraphStoreProtocol stand-in — no cross-file matches by default.
+
+    ``find_nodes_by_name`` returns ``[]`` so BE-4's cross-file resolution is a
+    guaranteed no-op for tests that don't care about it (same-file-only
+    scenarios), mirroring a graph store with nothing cross-file to find yet.
+    """
+
+    async def find_nodes_by_name(self, collection: str, names: list[str], ns: str) -> list:
+        del collection, names, ns
+        return []
 
 
-def _extract(file_text: str, file_path: str) -> object:
-    extractor = DefRefExtractor(graph_store=_FakeGraphStore())  # type: ignore[arg-type]
+class _FakeGraphStoreWithNodes:
+    """GraphStoreProtocol stand-in with a preset name -> candidate nodes mapping.
+
+    Used by BE-4 cross-file resolution tests to control exactly what
+    ``find_nodes_by_name`` returns, independent of any real GraphStore.
+    """
+
+    def __init__(self, nodes_by_lower_name: dict[str, list]) -> None:
+        self._nodes_by_lower_name = nodes_by_lower_name
+        self.calls: list[tuple[str, list[str], str]] = []
+
+    async def find_nodes_by_name(self, collection: str, names: list[str], ns: str) -> list:
+        self.calls.append((collection, list(names), ns))
+        result = []
+        for name in names:
+            result.extend(self._nodes_by_lower_name.get(name.lower(), []))
+        return result
+
+
+def _extract(file_text: str, file_path: str, graph_store: object | None = None) -> object:
+    extractor = DefRefExtractor(graph_store=graph_store or _FakeGraphStore())  # type: ignore[arg-type]
 
     async def _run():
         return await extractor.extract(
@@ -387,3 +416,227 @@ def test_caseDifferingSameFileSymbols_collapseToOneNode_knownLimitation() -> Non
 
     matching_nodes = [n for n in result.nodes if n.id == foo_class_id]
     assert len(matching_nodes) == 1, "Both symbols collapse onto exactly one node"
+
+
+# ---------------------------------------------------------------------------
+# BE-4 — cross-file name-based matching (inferred tier)
+# ---------------------------------------------------------------------------
+
+
+def _foreign_node(name: str, file_path: str) -> GraphNode:
+    """Build a GraphNode as if it were already persisted from a different file."""
+    return GraphNode(
+        id=_node_id(name, file_path),
+        entity_name=name,
+        entity_type=EntityType.code_symbol,
+        source_doc_id="doc-other",
+        collection_name="col",
+        entity_subtype="python-function",
+    )
+
+
+def test_crossFileSameNameCall_producesInferredEdge() -> None:
+    """A call to a name not defined in this file, but found cross-file, is inferred."""
+    helper_node = _foreign_node("helper", "/repo/other.py")
+    store = _FakeGraphStoreWithNodes({"helper": [helper_node]})
+
+    src = "def foo():\n    return helper()\n"
+    result = _extract(src, "/repo/mod.py", graph_store=store)
+
+    calls = _edges_of_type(result, RelationshipType.calls)
+    assert len(calls) == 1, f"Expected exactly 1 inferred calls edge, got {len(calls)}"
+    edge = calls[0]
+    assert edge.extraction_method == "inferred"
+    assert edge.source_node_id == _node_id("foo", "/repo/mod.py")
+    assert edge.target_node_id == helper_node.id
+
+    # The lookup must be scoped to the unresolved name only.
+    assert store.calls == [("col", ["helper"], "default")]
+
+
+def test_sameFileMatch_neverTaggedInferred() -> None:
+    """A same-file match always resolves through the extracted path, never inferred.
+
+    The fake store is seeded with a DECOY node for "bar" to prove that even
+    when a cross-file candidate technically exists, a same-file match takes
+    precedence and cross-file lookup is never consulted for that name.
+    """
+    decoy_node = _foreign_node("bar", "/repo/decoy.py")
+    store = _FakeGraphStoreWithNodes({"bar": [decoy_node]})
+
+    src = "def bar():\n    return 1\n\ndef foo():\n    return bar()\n"
+    result = _extract(src, "/repo/mod.py", graph_store=store)
+
+    calls = _edges_of_type(result, RelationshipType.calls)
+    assert len(calls) == 1, f"Expected exactly 1 calls edge, got {len(calls)}"
+    edge = calls[0]
+    assert edge.extraction_method == "extracted"
+    assert edge.target_node_id == _node_id("bar", "/repo/mod.py")
+    assert edge.target_node_id != decoy_node.id
+
+    # "bar" was resolved same-file — never looked up cross-file.
+    assert store.calls == []
+
+
+def test_crossFileAmbiguousName_resolvesPerDocumentedPolicy() -> None:
+    """Three files each define the same-named function; caller links to ALL candidates.
+
+    Documented policy: best-guess cross-file matching is the ceiling, not a
+    single arbitrarily-chosen candidate — every ambiguous match gets an
+    "inferred" edge.
+    """
+    candidates = [
+        _foreign_node("process", "/repo/a.py"),
+        _foreign_node("process", "/repo/b.py"),
+        _foreign_node("process", "/repo/c.py"),
+    ]
+    store = _FakeGraphStoreWithNodes({"process": candidates})
+
+    src = "def foo():\n    return process()\n"
+    result = _extract(src, "/repo/caller.py", graph_store=store)
+
+    calls = _edges_of_type(result, RelationshipType.calls)
+    assert len(calls) == 3, f"Expected 1 inferred edge per ambiguous candidate, got {len(calls)}"
+    for edge in calls:
+        assert edge.extraction_method == "inferred"
+        assert edge.source_node_id == _node_id("foo", "/repo/caller.py")
+
+    target_ids = {e.target_node_id for e in calls}
+    assert target_ids == {c.id for c in candidates}, "Every candidate must receive its own edge"
+
+
+# ---------------------------------------------------------------------------
+# Fix review follow-ups: cross-file inherits, import isolation, entity_type
+# filter, and case-sensitive matching (see task tracking BE-4 review fixes).
+# ---------------------------------------------------------------------------
+
+
+def test_crossFileInherits_addsInferredEdgeAdditively() -> None:
+    """An unresolved base class gets a same-file placeholder edge AND an
+    additive cross-file inferred edge to the foreign candidate — the
+    same-file edge is never replaced.
+    """
+    base_node = _foreign_node("Base", "/repo/base.py")
+    store = _FakeGraphStoreWithNodes({"base": [base_node]})
+
+    src = "class Foo(Base):\n    pass\n"
+    result = _extract(src, "/repo/mod.py", graph_store=store)
+
+    inherits = _edges_of_type(result, RelationshipType.inherits)
+    assert len(inherits) == 2, f"Expected 1 extracted + 1 inferred edge, got {len(inherits)}"
+
+    extracted = [e for e in inherits if e.extraction_method == "extracted"]
+    inferred = [e for e in inherits if e.extraction_method == "inferred"]
+    assert len(extracted) == 1
+    assert extracted[0].source_node_id == _node_id("Foo", "/repo/mod.py")
+    assert extracted[0].target_node_id == _node_id("Base", "/repo/mod.py")
+
+    assert len(inferred) == 1
+    assert inferred[0].source_node_id == _node_id("Foo", "/repo/mod.py")
+    assert inferred[0].target_node_id == base_node.id
+
+
+def test_crossFileInherits_noCandidates_keepsOnlySameFileEdge() -> None:
+    """An unresolved base with zero cross-file candidates keeps only the
+    same-file "extracted" edge; no "inferred" edge is added.
+    """
+    store = _FakeGraphStoreWithNodes({})
+
+    src = "class Foo(Base):\n    pass\n"
+    result = _extract(src, "/repo/mod.py", graph_store=store)
+
+    inherits = _edges_of_type(result, RelationshipType.inherits)
+    assert len(inherits) == 1, f"Expected exactly 1 (extracted-only) edge, got {len(inherits)}"
+    assert inherits[0].extraction_method == "extracted"
+    assert inherits[0].target_node_id == _node_id("Base", "/repo/mod.py")
+
+
+def test_importName_neverResolvedCrossFile() -> None:
+    """Imports are always same-file: a name collision with a foreign node
+    must never produce an "inferred" imports edge, and the import name must
+    never be sent to the cross-file lookup at all.
+    """
+    foreign_os_node = _foreign_node("os", "/repo/other.py")
+    store = _FakeGraphStoreWithNodes({"os": [foreign_os_node]})
+
+    src = "import os\n"
+    result = _extract(src, "/repo/mod.py", graph_store=store)
+
+    imports = _edges_of_type(result, RelationshipType.imports)
+    assert len(imports) == 1
+    assert imports[0].extraction_method == "extracted"
+    assert all(e.extraction_method != "inferred" for e in result.edges)
+
+    # "os" must never appear in any batch of names sent to find_nodes_by_name.
+    for _collection, names, _ns in store.calls:
+        assert "os" not in names, "import names must never enter cross-file resolution"
+
+
+def test_crossFileCall_entityTypeFilter_excludesNonCodeSymbolCandidates() -> None:
+    """A cross-file candidate that matches by name but is not a code_symbol
+    (e.g. an NER concept/person node) must never receive an inferred edge.
+    """
+    non_code_node = GraphNode(
+        id=_node_id("helper", "/repo/other.py") + "-concept",
+        entity_name="helper",
+        entity_type=EntityType.concept,
+        source_doc_id="doc-other",
+        collection_name="col",
+        entity_subtype="ner-concept",
+    )
+    store = _FakeGraphStoreWithNodes({"helper": [non_code_node]})
+
+    src = "def foo():\n    return helper()\n"
+    result = _extract(src, "/repo/mod.py", graph_store=store)
+
+    calls = _edges_of_type(result, RelationshipType.calls)
+    assert calls == [], "A non-code_symbol candidate must never produce an inferred edge"
+
+
+def test_crossFileCall_entitySubtypeFilter_excludesForeignPseudoNodes() -> None:
+    """A foreign candidate that IS entity_type == code_symbol but is one of
+    DefRefExtractor's own import/module pseudo-nodes (entity_subtype ending
+    in "-import" or "-defref-module") must never receive an inferred edge —
+    an import statement or a file's module node is not a real definition.
+    """
+    foreign_import_node = GraphNode(
+        id=_node_id("os", "/repo/other.py") + "-import",
+        entity_name="os",
+        entity_type=EntityType.code_symbol,
+        source_doc_id="doc-other",
+        collection_name="col",
+        entity_subtype="python-import",
+    )
+    foreign_module_node = GraphNode(
+        id=_node_id("other", "/repo/other.py") + "-module",
+        entity_name="other",
+        entity_type=EntityType.code_symbol,
+        source_doc_id="doc-other",
+        collection_name="col",
+        entity_subtype="python-defref-module",
+    )
+    store = _FakeGraphStoreWithNodes(
+        {"os": [foreign_import_node], "other": [foreign_module_node]}
+    )
+
+    src = "def foo():\n    os()\n    other()\n"
+    result = _extract(src, "/repo/mod.py", graph_store=store)
+
+    calls = _edges_of_type(result, RelationshipType.calls)
+    assert calls == [], (
+        "Foreign import/module pseudo-node candidates must never produce an inferred edge"
+    )
+
+
+def test_crossFileCall_caseSensitive_neverCrossesCaseBoundary() -> None:
+    """Python/TypeScript are case-sensitive: an unresolved callee `config`
+    must never match a foreign candidate named `Config`.
+    """
+    differently_cased_node = _foreign_node("Config", "/repo/other.py")
+    store = _FakeGraphStoreWithNodes({"config": [differently_cased_node]})
+
+    src = "def foo():\n    return config()\n"
+    result = _extract(src, "/repo/mod.py", graph_store=store)
+
+    calls = _edges_of_type(result, RelationshipType.calls)
+    assert calls == [], "A case-differing candidate must never produce a cross-file inferred edge"

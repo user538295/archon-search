@@ -51,7 +51,14 @@ class GraphStoreProtocol(Protocol):
         edges: list[GraphEdge],
         ns: str,
     ) -> None:
-        """Upsert *nodes* and *edges* into the collection's graph tables."""
+        """Upsert *nodes* and *edges* into the collection's graph tables.
+
+        Precedence contract (Q11, E2g BE-4): an incoming edge tagged
+        ``extraction_method="inferred"`` must never downgrade an existing stored
+        edge with the same ``id`` that is already tagged ``"extracted"`` — the
+        stored ``"extracted"`` tag is preserved. ``source_doc_id`` always refreshes
+        to the incoming value regardless of whether the tag was preserved.
+        """
         ...
 
     async def find_nodes_by_name(

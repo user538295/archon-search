@@ -119,21 +119,38 @@ def test_ensure_graph_tables_idempotent() -> None:
 
 
 def _make_empty_nodes_arrow_for_preservation():
-    """Return an empty PyArrow table with id + name_embedding columns for the embedding-preservation query."""
+    """Return an empty PyArrow table with id + name_embedding + extraction_method columns.
+
+    Shared by both the node embedding-preservation pre-read AND the edge
+    extraction_method tag-precedence pre-read (BE-4) — the same mock query
+    chain services both preservation pre-reads in these unit tests, so the
+    returned arrow must carry every column either pre-read might select.
+    """
     import pyarrow as pa
 
     return pa.table(
-        {"id": [], "name_embedding": pa.array([], type=pa.list_(pa.float32()))},
-        schema=pa.schema([pa.field("id", pa.utf8()), pa.field("name_embedding", pa.list_(pa.float32()), nullable=True)]),
+        {
+            "id": [],
+            "name_embedding": pa.array([], type=pa.list_(pa.float32())),
+            "extraction_method": pa.array([], type=pa.utf8()),
+        },
+        schema=pa.schema(
+            [
+                pa.field("id", pa.utf8()),
+                pa.field("name_embedding", pa.list_(pa.float32()), nullable=True),
+                pa.field("extraction_method", pa.utf8(), nullable=True),
+            ]
+        ),
     )
 
 
 def _add_preservation_query_mock(mock_table) -> None:
-    """Wire mock_table.query() and schema() for the embedding-preservation pre-read path.
+    """Wire mock_table.query() and schema() for the preservation pre-read paths.
 
     The pre-read now calls:
       1. ``await nodes_table.schema()`` — returns a schema with name_embedding column
       2. ``nodes_table.query().where().select().to_arrow()`` — returns an empty table
+    (and, for edges, the analogous extraction_method tag-precedence pre-read.)
     """
     import pyarrow as pa
 
@@ -225,6 +242,170 @@ def test_write_graph_upserts_edges_by_stable_id() -> None:
         assert mock_table.merge_insert.call_count == 4
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# BE-4 — write_graph edge extraction_method tag-collision precedence (Q11)
+# ---------------------------------------------------------------------------
+
+
+def test_writeGraph_preservesExtractedOverInferred_onMergeInsert() -> None:
+    """A direct unit test against write_graph's pre-read-and-override step.
+
+    Seed an existing "extracted" edge (same id as the incoming edge), then
+    call write_graph with an incoming "inferred" edge. The pre-read-and-
+    override step must fire and the data handed to merge_insert().execute()
+    must carry extraction_method="extracted" (preserved), while
+    source_doc_id is the INCOMING value (source_doc_id always refreshes,
+    regardless of tag preservation).
+    """
+    import asyncio
+
+    import pyarrow as pa
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-tag-precedence")
+    node_a = _node("A", EntityType.concept)
+    node_b = _node("B", EntityType.concept)
+    incoming_edge = GraphEdge(
+        id=make_stable_edge_id(node_a.id, node_b.id, RelationshipType.calls.value),
+        source_node_id=node_a.id,
+        target_node_id=node_b.id,
+        relationship_type=RelationshipType.calls,
+        source_doc_id="doc-incoming",
+        extraction_method="inferred",
+    )
+
+    # Pre-read returns the EXISTING stored row: same id, tagged "extracted".
+    existing_arrow = pa.table(
+        {"id": [incoming_edge.id], "extraction_method": ["extracted"]},
+        schema=pa.schema(
+            [pa.field("id", pa.utf8()), pa.field("extraction_method", pa.utf8(), nullable=True)]
+        ),
+    )
+
+    pre_read_query = MagicMock()
+    pre_read_query.where.return_value = pre_read_query
+    pre_read_query.select.return_value = pre_read_query
+    pre_read_query.to_arrow = AsyncMock(return_value=existing_arrow)
+
+    merge_builder = MagicMock()
+    merge_builder.when_matched_update_all.return_value = merge_builder
+    merge_builder.when_not_matched_insert_all.return_value = merge_builder
+    merge_builder.execute = AsyncMock(return_value=None)
+
+    mock_edges_table = MagicMock()
+    mock_edges_table.query.return_value = pre_read_query
+    mock_edges_table.merge_insert.return_value = merge_builder
+
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(return_value=mock_edges_table)
+
+    async def _run() -> None:
+        store._db = mock_db
+        await store.write_graph("test-col", [], [incoming_edge], ns="default")
+
+    asyncio.run(_run())
+
+    merge_builder.execute.assert_called_once()
+    written_edges_data = merge_builder.execute.call_args[0][0]
+    assert written_edges_data["extraction_method"].to_pylist() == ["extracted"], (
+        "Pre-existing 'extracted' tag must be preserved over an incoming 'inferred' edge"
+    )
+    assert written_edges_data["source_doc_id"].to_pylist() == ["doc-incoming"], (
+        "source_doc_id must always refresh to the incoming value, even when the tag is preserved"
+    )
+
+
+def test_extractionMethodFilter_neverMatchesSynonymAxis() -> None:
+    """extraction_method_filter="extracted" never accidentally matches manual/embedding synonym edges.
+
+    extraction_method conflates two independent axes: extraction mechanism
+    (manual/embedding/extracted/inferred) vs. def/ref confidence tier
+    (extracted/inferred). Exact-string-equality filtering must naturally
+    exclude the synonym-detection axis's "manual"/"embedding" tags when
+    filtering for "extracted" or "inferred".
+    """
+    import asyncio
+
+    import pyarrow as pa
+
+    from archon_search.graph_store import GraphStore
+
+    node_a = _node("A", EntityType.concept)
+    node_b = _node("B", EntityType.concept)
+    node_c = _node("C", EntityType.concept)
+
+    extracted_edge = GraphEdge(
+        id=make_stable_edge_id(node_a.id, node_b.id, RelationshipType.calls.value),
+        source_node_id=node_a.id,
+        target_node_id=node_b.id,
+        relationship_type=RelationshipType.calls,
+        source_doc_id="doc-1",
+        extraction_method="extracted",
+    )
+    manual_synonym_edge = GraphEdge(
+        id=make_stable_edge_id(node_a.id, node_c.id, RelationshipType.synonym_of.value),
+        source_node_id=node_a.id,
+        target_node_id=node_c.id,
+        relationship_type=RelationshipType.synonym_of,
+        source_doc_id="doc-1",
+        extraction_method="manual",
+    )
+    embedding_synonym_edge = GraphEdge(
+        id=make_stable_edge_id(node_b.id, node_c.id, RelationshipType.synonym_of.value),
+        source_node_id=node_b.id,
+        target_node_id=node_c.id,
+        relationship_type=RelationshipType.synonym_of,
+        source_doc_id="doc-1",
+        extraction_method="embedding",
+    )
+    all_edges = [extracted_edge, manual_synonym_edge, embedding_synonym_edge]
+
+    # extraction_method_filter is now pushed into the LanceDB query's .where(...)
+    # (SQL pushdown, not Python-side post-filtering). Simulate the DB applying the
+    # predicate: .where(...) receives the exact predicate string and, in this fake,
+    # actually filters `all_edges` down by extraction_method before .to_arrow() is
+    # called — this exercises the real exclusion of the manual/embedding tags
+    # rather than trivially asserting a pre-filtered mock return value.
+    def _where_side_effect(predicate: str):
+        assert predicate == "extraction_method = 'extracted'"
+        matching = [e for e in all_edges if e.extraction_method == "extracted"]
+        filtered_arrow = pa.table(
+            {
+                "id": [e.id for e in matching],
+                "source_node_id": [e.source_node_id for e in matching],
+                "target_node_id": [e.target_node_id for e in matching],
+                "relationship_type": [e.relationship_type.value for e in matching],
+                "source_doc_id": [e.source_doc_id for e in matching],
+                "extraction_method": [e.extraction_method for e in matching],
+            },
+            schema=GraphStore._edges_schema(),
+        )
+        where_result = MagicMock()
+        where_result.to_arrow = AsyncMock(return_value=filtered_arrow)
+        return where_result
+
+    mock_table = MagicMock()
+    mock_table.query.return_value.where.side_effect = _where_side_effect
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+
+    store = GraphStore("/tmp/fake-db-extraction-filter")
+
+    async def _run():
+        store._db = mock_db
+        return await store.get_all_edges("test-col", ns="default", extraction_method_filter="extracted")
+
+    result = asyncio.run(_run())
+
+    assert len(result) == 1, f"Expected exactly 1 'extracted' edge, got {len(result)}"
+    assert result[0].id == extracted_edge.id
+    assert result[0].extraction_method == "extracted"
+    returned_methods = {e.extraction_method for e in result}
+    assert "manual" not in returned_methods
+    assert "embedding" not in returned_methods
 
 
 # ---------------------------------------------------------------------------

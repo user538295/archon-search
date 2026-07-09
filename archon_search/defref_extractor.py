@@ -13,9 +13,26 @@ Design notes
   from the whole file's AST. ``extract()`` therefore takes the raw file text
   and path, not a list of already-chunked ``ChunkInput`` objects. Wiring
   chunk-vs-file data through the ingest pipeline is BE-3's job, not this one.
-- DI'd against ``GraphStoreProtocol`` (forward compatible with BE-4, which
-  will extend this class to resolve cross-file matches by reading the store);
-  this task's same-file-only scope does not read the store.
+- DI'd against ``GraphStoreProtocol``. BE-4 extends this class to resolve
+  cross-file matches: ``calls``/``inherits`` targets not found among this
+  file's own definitions are looked up via ``find_nodes_by_name`` against the
+  graph store's existing ``code_symbol`` nodes, filtered to ``entity_type ==
+  code_symbol`` and matched by exact (case-sensitive) name — Python/TypeScript
+  are case-sensitive languages, so a call to ``config`` never matches a class
+  named ``Config``. Every
+  match found there becomes an edge tagged ``extraction_method="inferred"``
+  (the "best-guess, cross-file" tier — as opposed to same-file
+  ``"extracted"``). Ambiguous multi-candidate matching policy (Q11): when
+  ``find_nodes_by_name`` returns multiple candidates for one name (the same
+  name defined in several files), link to **all** of them, each tagged
+  ``inferred`` — there is no "best" candidate to pick, so best-guess matching
+  is the ceiling, not a single arbitrarily-chosen candidate. Ingest-order
+  dependency: cross-file resolution only finds symbols that were already
+  written to the graph store by a prior ``write_graph`` call (i.e. a prior
+  ingest of the defining file) — if the defining file has not been ingested
+  yet, the reference is simply dropped (same as any other unresolved name),
+  and will only be resolved retroactively if/when that file is later
+  re-ingested and its ``DefRefExtractor.extract()`` is re-run.
 - ``code_symbol`` node identity: the ID fed into ``make_stable_entity_id`` is
   the qualified string ``f"{name}::{file_path}"`` (see ``_symbol_id()``, which
   now routes through the shared ``make_code_symbol_qualified_name()`` helper
@@ -40,13 +57,25 @@ Design notes
   still reasonably defensive (grammar-missing / parse-failure warnings are
   returned via ``GraphExtractionResult.warnings``, not raised) since BE-3
   will consume this same result shape unchanged.
-- ``calls`` edges are same-file only by construction: a call is only
-  recorded when its callee name matches a symbol defined somewhere in this
-  same file. Calls to unresolved (out-of-file) names are deliberately
-  dropped here — cross-file "inferred" matching is BE-4's job.
-- ``imports``/``inherits`` edges are recorded regardless of whether the
-  target is itself defined in this file (an import target or a base class
-  is very often external) — only ``calls`` is filtered to same-file defs.
+- ``calls`` edges: a call whose callee name matches a symbol defined
+  somewhere in this same file is recorded immediately, tagged ``"extracted"``
+  (same-file match always wins — cross-file lookup is never attempted for a
+  name already resolved same-file). A call to a name NOT defined in this
+  file is looked up cross-file via ``find_nodes_by_name`` (BE-4); every match
+  found becomes an ``"inferred"`` edge. A call with no same-file AND no
+  cross-file match is dropped (nothing to link to yet — see the ingest-order
+  dependency note above).
+- ``imports`` edges are recorded regardless of whether the target is itself
+  defined in this file (an import target is very often external) and are
+  ALWAYS same-file — imports name modules, not this project's cross-file
+  ``code_symbol`` graph, so no cross-file resolution is attempted for them.
+- ``inherits`` edges: the base class always gets a same-file ``"extracted"``
+  edge to a (possibly placeholder) same-file node, exactly as before BE-4
+  (an inherited base is very often external and this local edge is cheap
+  provenance). Additionally, when the base name is not defined anywhere in
+  this file, BE-4 also looks it up cross-file via ``find_nodes_by_name`` and
+  adds one additional ``"inferred"`` edge per match found — additive, never
+  replacing the pre-existing same-file edge.
 """
 
 from __future__ import annotations
@@ -74,6 +103,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _EXTRACTION_METHOD = "extracted"
+_INFERRED_EXTRACTION_METHOD = "inferred"
 
 _LANG_LABEL: dict[str, str] = {".py": "python", ".ts": "typescript"}
 """Extensions supported by BE-2. Remaining languages are BE-5's scope."""
@@ -132,10 +162,9 @@ class DefRefExtractor:
             doc_id: Document ID that produced this extraction; stamped on
                 every ``GraphNode``/``GraphEdge`` as ``source_doc_id``.
             collection: Collection name; stamped on every ``GraphNode``.
-            ns: Namespace. Unused by this same-file-only slice (kept for
-                signature symmetry with the rest of the graph subsystem and
-                for BE-4's future cross-file store reads) — last per the
-                project's ``ns``-last invariant.
+            ns: Namespace, passed through to ``find_nodes_by_name`` for BE-4's
+                cross-file lookups — last per the project's ``ns``-last
+                invariant.
 
         Returns:
             A ``GraphExtractionResult`` with ``nodes``/``edges`` populated.
@@ -148,8 +177,6 @@ class DefRefExtractor:
             the ``except Exception`` branch below — this is intentional and
             defensive, not an oversight).
         """
-        del ns  # unused in this same-file-only slice; kept for signature symmetry
-
         ext = Path(file_path).suffix.lower()
         if ext not in _LANG_LABEL:
             # Out of BE-2's scope (JS/Go/Rust/Java/Bash/Swift/C# are BE-5).
@@ -176,7 +203,7 @@ class DefRefExtractor:
             logger.warning(warning)
             return GraphExtractionResult(nodes=[], edges=[], mentions=[], warnings=[warning])
 
-        return self._build_result(
+        return await self._build_result(
             module_name=module_name,
             file_path=file_path,
             lang_label=lang_label,
@@ -186,13 +213,14 @@ class DefRefExtractor:
             inherits=inherits,
             doc_id=doc_id,
             collection=collection,
+            ns=ns,
         )
 
     # ------------------------------------------------------------------
     # Result assembly
     # ------------------------------------------------------------------
 
-    def _build_result(
+    async def _build_result(
         self,
         *,
         module_name: str,
@@ -204,6 +232,7 @@ class DefRefExtractor:
         inherits: list[_InheritsRecord],
         doc_id: str,
         collection: str,
+        ns: str,
     ) -> GraphExtractionResult:
         nodes: dict[str, GraphNode] = {}
         edges: dict[str, GraphEdge] = {}
@@ -252,7 +281,12 @@ class DefRefExtractor:
                 return module_node_for()
             return node_for(scope_name, subtype)
 
-        def add_edge(source_id: str, target_id: str, rel: RelationshipType) -> None:
+        def add_edge(
+            source_id: str,
+            target_id: str,
+            rel: RelationshipType,
+            extraction_method: str = _EXTRACTION_METHOD,
+        ) -> None:
             edge_id = make_stable_edge_id(source_id, target_id, rel.value)
             edges[edge_id] = GraphEdge(
                 id=edge_id,
@@ -260,7 +294,7 @@ class DefRefExtractor:
                 target_node_id=target_id,
                 relationship_type=rel,
                 source_doc_id=doc_id,
-                extraction_method=_EXTRACTION_METHOD,
+                extraction_method=extraction_method,
             )
 
         # Always register the module node — it participates in defines/imports
@@ -275,24 +309,104 @@ class DefRefExtractor:
             defined_node = node_for(name, f"{lang_label}-{kind}")
             add_edge(enclosing_node.id, defined_node.id, RelationshipType.defines)
 
-        # calls: caller -> callee, only when the callee is defined in this file.
+        # calls: caller -> callee. Same-file match wins immediately and is
+        # tagged "extracted"; unresolved (out-of-file) callees are queued for
+        # BE-4's cross-file lookup below and NEVER get a same-file placeholder
+        # edge (a call to a genuinely unresolved name has nothing to link to).
+        unresolved_calls: list[tuple[str, str]] = []  # (caller_node_id, callee_name)
         for caller_name, callee_name in calls:
-            if callee_name not in defined_names:
-                continue
-            caller_node = scoped_node_for(caller_name, f"{lang_label}-symbol")
-            callee_node = node_for(callee_name, f"{lang_label}-symbol")
-            add_edge(caller_node.id, callee_node.id, RelationshipType.calls)
+            if callee_name in defined_names:
+                caller_node = scoped_node_for(caller_name, f"{lang_label}-symbol")
+                callee_node = node_for(callee_name, f"{lang_label}-symbol")
+                add_edge(caller_node.id, callee_node.id, RelationshipType.calls)
+            else:
+                caller_node = scoped_node_for(caller_name, f"{lang_label}-symbol")
+                unresolved_calls.append((caller_node.id, callee_name))
 
-        # imports: module -> imported name.
+        # imports: module -> imported name. Always same-file — imports name
+        # modules, not this project's code_symbol graph, so no cross-file
+        # lookup is attempted for them (BE-4 scope note in module docstring).
         for imported_name in imports:
             imported_node = node_for(imported_name, f"{lang_label}-import")
             add_edge(module_node.id, imported_node.id, RelationshipType.imports)
 
-        # inherits: class -> base.
+        # inherits: class -> base. The same-file "extracted" edge is always
+        # recorded (unchanged pre-BE-4 behavior — an external base is common
+        # and this local edge is cheap provenance). When the base isn't
+        # defined in this file, it is ALSO queued for BE-4's cross-file
+        # lookup below, which adds additional "inferred" edges per match.
+        unresolved_inherits: list[tuple[str, str]] = []  # (class_node_id, base_name)
         for class_name, base_name in inherits:
             class_node = node_for(class_name, f"{lang_label}-class")
             base_node = node_for(base_name, f"{lang_label}-symbol")
             add_edge(class_node.id, base_node.id, RelationshipType.inherits)
+            if base_name not in defined_names:
+                unresolved_inherits.append((class_node.id, base_name))
+
+        # BE-4 cross-file resolution (Q11 ambiguous multi-candidate policy):
+        # look up every unresolved callee/base name against the graph store's
+        # existing code_symbol nodes in one batched call. Every match found
+        # becomes an "inferred" edge; when a name has multiple candidates
+        # (same name defined in several files), link to ALL of them — there
+        # is no single "best" candidate to pick (best-guess matching is the
+        # ceiling, not an arbitrary choice). A name with zero matches yields
+        # no edge (see the ingest-order dependency note in the module
+        # docstring: the defining file may simply not be ingested yet).
+        names_needed = sorted(
+            {callee for _caller_id, callee in unresolved_calls}
+            | {base for _class_id, base in unresolved_inherits}
+        )
+        if names_needed:
+            # find_nodes_by_name queries the whole nodes table (shared with
+            # graph_expander/alias_loader/pipeline local-mode, which intentionally
+            # match all entity types case-insensitively) — it returns PERSON/ORG/GPE
+            # NER nodes, synonym nodes, and defref's own import/module pseudo-nodes
+            # alongside real code_symbol nodes. The entity_type check below excludes
+            # the non-code_symbol NER/synonym/concept nodes, but import/module
+            # pseudo-nodes (created by node_for(..., f"{lang_label}-import") and
+            # module_node_for()) are THEMSELVES entity_type == code_symbol, so they
+            # survive that check — an import statement or a file's module node is not
+            # a real definition you can meaningfully call/inherit from, so the
+            # entity_subtype suffix check below additionally excludes any foreign
+            # candidate whose subtype ends in "-import" or "-defref-module" (these
+            # suffixes are language-agnostic — always f"{lang_label}-import" /
+            # f"{lang_label}-defref-module" regardless of the candidate's own
+            # language). Matching is also exact-case (not lowercased): Python/
+            # TypeScript are case-sensitive languages, so `config` must never link to
+            # a class named `Config` in another file. find_nodes_by_name's own
+            # case-insensitive over-fetch is fine — it's this exact-name +
+            # entity_type + entity_subtype filter that narrows it back down.
+            candidate_nodes = await self._graph_store.find_nodes_by_name(
+                collection, names_needed, ns
+            )
+            candidates_by_name: dict[str, list[GraphNode]] = {}
+            for candidate in candidate_nodes:
+                if candidate.entity_type != EntityType.code_symbol:
+                    continue
+                if candidate.entity_subtype is not None and (
+                    candidate.entity_subtype.endswith("-import")
+                    or candidate.entity_subtype.endswith("-defref-module")
+                ):
+                    continue
+                candidates_by_name.setdefault(candidate.entity_name, []).append(candidate)
+
+            for caller_node_id, callee_name in unresolved_calls:
+                for candidate in candidates_by_name.get(callee_name, []):
+                    add_edge(
+                        caller_node_id,
+                        candidate.id,
+                        RelationshipType.calls,
+                        _INFERRED_EXTRACTION_METHOD,
+                    )
+
+            for class_node_id, base_name in unresolved_inherits:
+                for candidate in candidates_by_name.get(base_name, []):
+                    add_edge(
+                        class_node_id,
+                        candidate.id,
+                        RelationshipType.inherits,
+                        _INFERRED_EXTRACTION_METHOD,
+                    )
 
         # KNOWN CONTRACT GAP (documentation only — not this task's fix): `mentions`
         # is always empty because mentions are chunk-scoped incidence records and
