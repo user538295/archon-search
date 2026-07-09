@@ -145,6 +145,7 @@ class WizardFeatures:
     """Carries optional-feature choices from wizard prompt functions to config writer."""
 
     install_code_extra: bool = False
+    install_graph_extra: bool = False
     disable_reranker: bool = False
     enable_watch: bool = False
     enable_telemetry: bool = False
@@ -222,8 +223,10 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
 
     Only fields that differ from WizardFeatures defaults are written, to avoid
     TOML clutter for basic installs. Missing sections are created via tomlkit.table().
-    ``install_code_extra`` is intentionally NOT written — it controls a subprocess
-    install, not a config key.
+    ``install_code_extra`` itself is intentionally NOT written — it controls a
+    subprocess install, not a config key. ``install_graph_extra`` also controls a
+    subprocess install, but additionally writes ``graph.enabled = true`` (BE-11):
+    without it, the auto-installed ``[graph]`` extras are inert (C1-I-1).
     """
 
     def _ensure_section(name: str) -> None:
@@ -292,6 +295,12 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
     if features.enable_rag_fusion:
         _ensure_section("rag_fusion")
         doc["rag_fusion"]["enabled"] = True
+
+    # BE-11: [graph] enabled must be written whenever the [graph] extras were
+    # auto-installed, or the install is inert — see C1-I-1 / C1-A-4.
+    if features.install_graph_extra:
+        _ensure_section("graph")
+        doc["graph"]["enabled"] = True
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +667,8 @@ def _render_summary(
         feature_bullets: list[str] = []
         if features.install_code_extra:
             feature_bullets.append("• Code enrichment (tree-sitter)")
+        if features.install_graph_extra:
+            feature_bullets.append("• Graph enrichment (code graphing)")
         if features.disable_reranker:
             feature_bullets.append("• Reranker disabled")
         if features.enable_watch:
@@ -944,19 +955,27 @@ def _prompt_optional_features(
                 print(f"Invalid value {raw!r}. Valid options: {sorted(valid)}")
         return default
 
-    # --- install_code_extra ---
+    # --- install_code_extra + install_graph_extra (BE-11: bundled auto-install) ---
     print(
-        "\nCode enrichment (tree-sitter):\n"
+        "\nCode enrichment (tree-sitter) + code graphing:\n"
         "  Parses and indexes code files structurally — functions, classes, docstrings.\n"
-        "  Installs tree-sitter and language parsers (~50 MB). Recommended if your corpus\n"
-        "  includes source code. Default: disabled."
+        "  Installs tree-sitter language parsers (~50 MB) and graph enrichment (spaCy),\n"
+        "  and enables graph.enabled in the generated config. Both are set up together\n"
+        "  automatically so code graphing works out of the box. Recommended if your\n"
+        "  corpus includes source code. Default: disabled."
     )
     if install_code is not None:
         _install_code_extra_val = install_code
     elif non_interactive:
         _install_code_extra_val = False
     else:
-        _install_code_extra_val = _ask_yn("Index code files (installs tree-sitter enrichment)? [y/N]: ")
+        _install_code_extra_val = _ask_yn(
+            "Index code files (installs tree-sitter + graph enrichment, enables graph)? [y/N]: "
+        )
+    # [code] and [graph] are installed as a bundle — opting into code indexing
+    # automatically includes graph enrichment, so guided (wizard) users never hit
+    # the degraded-startup path (S9).
+    _install_graph_extra_val = _install_code_extra_val
 
     # --- disable_reranker (skipped when profile has no reranker) ---
     if profile.reranker is not None:
@@ -1100,6 +1119,7 @@ def _prompt_optional_features(
 
     return WizardFeatures(
         install_code_extra=_install_code_extra_val,
+        install_graph_extra=_install_graph_extra_val,
         disable_reranker=_disable_reranker_val,
         enable_watch=_enable_watch_val,
         enable_telemetry=_enable_telemetry_val,
@@ -1203,6 +1223,39 @@ def _install_code_extra(dry_run: bool = False) -> None:
     Thin wrapper around :func:`_install_extra`.  Public interface unchanged.
     """
     _install_extra("archon-search[code]", "code enrichment", dry_run)
+
+
+def _install_graph_extra(dry_run: bool = False) -> None:
+    """Install ``archon-search[graph]`` (spaCy graph enrichment packages).
+
+    Thin wrapper around :func:`_install_extra` (BE-11).
+    """
+    _install_extra("archon-search[graph]", "graph enrichment", dry_run)
+
+
+def _revert_graph_enabled_flag(config_path: Path, dry_run: bool) -> None:
+    """Revert ``graph.enabled`` to false in the written config.
+
+    ``run()`` writes ``graph.enabled=true`` early (config-write branches)
+    whenever ``features.install_graph_extra`` is set, before the ``[graph]``
+    extras are actually installed. If a later step aborts or fails before
+    that install succeeds, leaving ``graph.enabled=true`` on disk would
+    hard-fail the next server start via app.py's ``_check_graph_deps`` (spaCy
+    absent) — strictly worse than BE-11's soft-degrade goal. Call this at
+    every such early-return point (C3-A-1 fix).
+    """
+    if dry_run or not config_path.exists():
+        return
+    doc = tomlkit.parse(config_path.read_text())
+    if "graph" in doc and "enabled" in doc["graph"]:
+        doc["graph"]["enabled"] = False
+        atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
+        print(
+            "Warning: graph.enabled has been reverted to false because "
+            "the install did not complete; re-run the wizard or install "
+            "archon-search[graph] manually to enable code/prose graphing.",
+            file=sys.stderr,
+        )
 
 
 def _create_secrets_env(secrets_path: Path, *, dry_run: bool = False) -> bool:
@@ -1772,6 +1825,8 @@ class SearchInstaller:
                 _check_disk_space(prof)
             except InstallError as exc:
                 print(str(exc))
+                if features.install_graph_extra:
+                    _revert_graph_enabled_flag(config_path, self.dry_run)
                 return 1
 
             # Step 12: summary display
@@ -1790,6 +1845,8 @@ class SearchInstaller:
                 answer = input("Proceed? [Y/n]: ").strip().lower()
                 if answer not in ("y", ""):
                     print("Installation aborted.")
+                    if features.install_graph_extra:
+                        _revert_graph_enabled_flag(config_path, self.dry_run)
                     return 1
 
             # Before Step 14: install code enrichment packages if requested
@@ -1799,6 +1856,16 @@ class SearchInstaller:
                 except InstallError as exc:
                     print(f"Warning: code enrichment install failed: {exc}", file=sys.stderr)
                     # Non-fatal — continue
+
+            # Before Step 14: install graph enrichment packages if requested (BE-11)
+            if features.install_graph_extra:
+                try:
+                    _install_graph_extra(dry_run=self.dry_run)
+                except InstallError as exc:
+                    print(f"Warning: graph enrichment install failed: {exc}", file=sys.stderr)
+                    # Non-fatal — continue, but roll back the already-written
+                    # graph.enabled=true config flag (C2-A / C3-A-1 fix).
+                    _revert_graph_enabled_flag(config_path, self.dry_run)
 
             # Before Step 14b: create .secrets.env when AI query expansion is enabled
             if features.enable_hyde or features.enable_rag_fusion:

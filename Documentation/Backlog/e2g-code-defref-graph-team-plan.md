@@ -439,13 +439,13 @@ flowchart LR
         - #unit_test — `test_astChunker_fallsBackWhenTreeSitterAbsent` — missing tree-sitter falls back to token chunking without raising
         - #unit_test — `test_codeEnricher_reusesSharedScopeTable` — the metadata enricher consumes the same `ScopeTable` the chunker built, confirming only one parse pass ran
         - #integration_test — `test_codeFileIngest_usesAstChunkBoundaries` — ingesting a real code file produces chunks aligned to tree-sitter scopes end-to-end, with enrichment metadata still correctly attached
-- [ ] **BE-11** — Soft-degrade code-parser-missing check (health/status field, one-time WARNING) + wizard auto-install for `[code]`+`[graph]` bundles #backend-role
+- [x] **BE-11** — Soft-degrade code-parser-missing check (health/status field, one-time WARNING) + wizard auto-install for `[code]`+`[graph]` bundles #backend-role
     - Frameworks & Drivers · 8.0h
     - needs BE-6 · completes S9
     - Tests
-        - #unit_test — `test_codeParsersMissing_logsWarningOnce` — ingest two **distinct files sharing the same extension**; the missing-parser warning logs exactly once across both, not once per file (Moderate #28 — the likely precedent, `test_grammar_info_logged_once`, only calls the same function twice for the same extension, which doesn't prove "not per file"; this test uses two distinct files to actually prove it)
-        - #integration_test — `test_serverStarts_whenCodeParsersMissing_graphEnabled` — the server starts, `/status` reports the degraded field, and prose graphing still works via `TestClient`
-        - #integration_test — `test_wizard_autoInstallsCodeAndGraphBundles` — running the wizard installs both the `[code]` and `[graph]` extras bundles automatically, and the resulting environment does not hit the degraded-startup path (Major #20 — BE-11 previously bundled three deliverables under one task with tests covering only the degrade path; wizard auto-install was untested)
+        - [x] #unit_test — `test_codeParsersMissing_logsWarningOnce` — ingest two **distinct files sharing the same extension**; the missing-parser warning logs exactly once across both, not once per file (Moderate #28 — the likely precedent, `test_grammar_info_logged_once`, only calls the same function twice for the same extension, which doesn't prove "not per file"; this test uses two distinct files to actually prove it)
+        - [x] #integration_test — `test_serverStarts_whenCodeParsersMissing_graphEnabled` — the server starts, `/status` reports the degraded field, and prose graphing still works via `TestClient`
+        - [x] #integration_test — `test_wizard_autoInstallsCodeAndGraphBundles` — running the wizard installs both the `[code]` and `[graph]` extras bundles automatically, and the resulting environment does not hit the degraded-startup path (Major #20 — BE-11 previously bundled three deliverables under one task with tests covering only the degrade path; wizard auto-install was untested)
 - [ ] **T-1** — e2e: server starts and prose graphing works when code parsers are missing; health/status names the fix #tester-role
     - — · 2.0h
     - needs BE-11 · completes S9

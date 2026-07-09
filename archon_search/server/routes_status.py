@@ -9,12 +9,14 @@ from pathlib import Path
 
 from fastapi import APIRouter, Request
 
+from archon_search import code_enricher
 from archon_search.config import SearchConfig
 from archon_search.jobs.model import IngestJob, JobStatus
 from archon_search.progress import compute_eta_seconds
 from archon_search.server.readiness import collect_readiness
 from archon_search.server.schemas import (
     BackupStatusDetail,
+    CodeParsersStatusDetail,
     CollectionBackupStatus,
     CollectionHealthEntry,
     ErrorDetail,
@@ -149,6 +151,7 @@ async def status(request: Request) -> StatusResponse:
     failed_expired_count = _count_failed_expired_ingest_jobs(request, ns)
     search_detail = _build_search_status(config)
     graph_detail = await _build_graph_status(request, config, sorted(ns_names))
+    code_parsers_detail = _build_code_parsers_status(config)
     return StatusResponse(
         running=True,
         pid=pid,
@@ -167,6 +170,7 @@ async def status(request: Request) -> StatusResponse:
         rag_fusion=rag_fusion_detail,
         failed_expired_ingest_count=failed_expired_count,
         graph=graph_detail,
+        code_parsers=code_parsers_detail,
     )
 
 
@@ -411,6 +415,31 @@ async def _build_graph_status(
         backend_threshold_edges=config.graph.backend_threshold_edges,
         collections=collection_stats,
         stale_mention_count=stale_mention_count,
+    )
+
+
+def _build_code_parsers_status(config: SearchConfig) -> CodeParsersStatusDetail | None:
+    """Return the code-parsers status sub-object when ``graph.enabled = true`` (E2g BE-11 / S9).
+
+    Reuses ``code_enricher.has_missing_code_parsers()`` — a lazy, process-global
+    per-extension cache populated the first time ``_get_grammar(ext)`` is called
+    for a code file and finds no available tree-sitter grammar. Returns ``None``
+    when graph is disabled (this soft-degrade check is only meaningful alongside
+    code graphing).
+    """
+    if not config.graph.enabled:
+        return None
+    missing_extensions = code_enricher.missing_code_parser_extensions()
+    degraded = code_enricher.has_missing_code_parsers()
+    return CodeParsersStatusDetail(
+        degraded=degraded,
+        missing_extensions=missing_extensions,
+        message=(
+            "tree-sitter grammar missing for one or more code extensions; "
+            "install archon-search[code] to enable code graphing"
+            if degraded
+            else ""
+        ),
     )
 
 

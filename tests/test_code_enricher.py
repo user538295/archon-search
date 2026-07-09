@@ -182,7 +182,7 @@ class TestGrammarRegistry:
         assert result is None
 
     def test_grammar_returns_none_when_import_fails(self, monkeypatch, caplog):
-        """When tree_sitter_python is absent, _get_grammar('.py') returns None and logs INFO."""
+        """When tree_sitter_python is absent, _get_grammar('.py') returns None and logs WARNING."""
         import logging
         import sys
 
@@ -200,8 +200,8 @@ class TestGrammarRegistry:
             for r in caplog.records
         )
 
-    def test_grammar_info_logged_once(self, monkeypatch, caplog):
-        """INFO is emitted exactly once for a missing grammar, even on repeated calls."""
+    def test_grammar_warning_logged_once(self, monkeypatch, caplog):
+        """WARNING is emitted exactly once for a missing grammar, even on repeated calls."""
         import logging
         import sys
 
@@ -209,17 +209,58 @@ class TestGrammarRegistry:
 
         monkeypatch.setitem(sys.modules, "tree_sitter_python", None)
 
-        with caplog.at_level(logging.INFO, logger="archon_search.code_enricher"):
+        with caplog.at_level(logging.WARNING, logger="archon_search.code_enricher"):
             ce._get_grammar(".py")
             ce._get_grammar(".py")  # second call should hit cache, no new log
 
-        info_msgs = [
+        warning_msgs = [
             r
             for r in caplog.records
-            if r.levelno == logging.INFO
+            if r.levelno == logging.WARNING
             and "tree-sitter grammar not available for .py" in r.message
         ]
-        assert len(info_msgs) == 1
+        assert len(warning_msgs) == 1
+
+    def test_codeParsersMissing_logsWarningOnce(self, monkeypatch, caplog):
+        """The missing-parser WARNING logs exactly once across two distinct files
+        sharing the same extension — not once per file.
+
+        This is a stronger version of test_grammar_warning_logged_once: that test
+        only calls _get_grammar(".py") twice for the SAME extension in the same
+        context, which doesn't prove "not per file". This test simulates two
+        distinct source files (different content/paths) both hitting the
+        missing-grammar path via CodeEnricher.prepare(), proving the warning is
+        keyed on extension, not on file identity.
+        """
+        import logging
+        import sys
+        from pathlib import Path
+
+        import archon_search.code_enricher as ce
+        from archon_search.code_enricher import CodeEnricher
+
+        monkeypatch.setitem(sys.modules, "tree_sitter_python", None)
+
+        file_a = Path("/repo/module_a.py")
+        file_b = Path("/repo/module_b.py")
+        source_a = "def foo():\n    pass\n"
+        source_b = "class Bar:\n    pass\n"
+
+        with caplog.at_level(logging.WARNING, logger="archon_search.code_enricher"):
+            enricher_a = CodeEnricher()
+            enricher_a.prepare(source_a, ".py", file_a, None)
+
+            enricher_b = CodeEnricher()
+            enricher_b.prepare(source_b, ".py", file_b, None)
+
+        warning_msgs = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING
+            and "tree-sitter grammar not available for .py" in r.message
+        ]
+        assert len(warning_msgs) == 1
+        assert ce.has_missing_code_parsers() is True
 
     def test_grammar_result_cached(self, monkeypatch):
         """Calling _get_grammar twice returns the same object from cache (no re-import)."""

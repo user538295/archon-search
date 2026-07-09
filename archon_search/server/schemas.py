@@ -357,6 +357,25 @@ class GraphStatusDetail(BaseModel):
     stale_mention_count: int = 0
 
 
+class CodeParsersStatusDetail(BaseModel):
+    """Code parser (tree-sitter) status sub-object for GET /status (E2g BE-11).
+
+    Present when ``[graph] enabled = true``; the parent ``code_parsers`` field
+    being ``null`` signals that graph is disabled (this check is only
+    meaningful alongside code graphing).
+
+    ``degraded`` is ``True`` once any file extension has hit the missing-grammar
+    branch in ``code_enricher._get_grammar`` (lazy, per-extension cache —
+    reflects extensions actually attempted during this process's lifetime, not
+    an eager scan of installed packages). ``missing_extensions`` lists the
+    extensions with no available grammar so far. ``message`` names the fix.
+    """
+
+    degraded: bool
+    missing_extensions: list[str] = []
+    message: str = ""
+
+
 class StatusResponse(BaseModel):
     running: bool
     pid: int
@@ -386,6 +405,9 @@ class StatusResponse(BaseModel):
     failed_expired_ingest_count: int = 0
     # E1a FE-1 — graph feature status (additive, nullable); null when graph.enabled=false
     graph: GraphStatusDetail | None = None
+    # E2g BE-11 — code parser (tree-sitter) soft-degrade status (additive, nullable);
+    # null when graph.enabled=false
+    code_parsers: CodeParsersStatusDetail | None = None
 
 
 class IndexingStateCollectionEntry(BaseModel):

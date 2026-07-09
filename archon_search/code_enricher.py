@@ -63,7 +63,7 @@ _GRAMMAR_CACHE: dict[str, Any | None] = {}
 """Extension → Language object (or None if unavailable). Populated lazily."""
 
 _GRAMMAR_LOGGED: set[str] = set()
-"""Extensions for which a one-time INFO "grammar not available" was emitted."""
+"""Extensions for which a one-time WARNING "grammar not available" was emitted."""
 
 _parse_failure_count: dict[str, int] = {}
 """Per-process per-extension WARNING cap (K=10). After 10 failures for an
@@ -134,7 +134,7 @@ def _module_path(file_path: Path, collection_root: Path | None) -> str:
 def _get_grammar(ext: str) -> Any | None:
     """Return the tree-sitter Language for *ext*, or None if unavailable.
 
-    Results are cached in :data:`_GRAMMAR_CACHE`. A one-time INFO log is
+    Results are cached in :data:`_GRAMMAR_CACHE`. A one-time WARNING log is
     emitted the first time a grammar is found missing.
     """
     if ext in _GRAMMAR_CACHE:
@@ -179,7 +179,7 @@ def _get_grammar(ext: str) -> Any | None:
         pass
 
     if lang is None and ext not in _GRAMMAR_LOGGED:
-        logger.info(
+        logger.warning(
             "tree-sitter grammar not available for %s; code enrichment skipped",
             ext,
         )
@@ -187,6 +187,22 @@ def _get_grammar(ext: str) -> Any | None:
 
     _GRAMMAR_CACHE[ext] = lang
     return lang
+
+
+def missing_code_parser_extensions() -> list[str]:
+    """Return the sorted list of extensions that have hit the missing-grammar branch.
+
+    Reuses :data:`_GRAMMAR_LOGGED` as the source of truth — it is a
+    process-global cache of extensions for which no tree-sitter grammar
+    could be loaded. This is the single public accessor for that state;
+    callers must not read :data:`_GRAMMAR_LOGGED` directly.
+    """
+    return sorted(_GRAMMAR_LOGGED)
+
+
+def has_missing_code_parsers() -> bool:
+    """Return True if any file extension has hit the missing-grammar branch."""
+    return bool(missing_code_parser_extensions())
 
 
 # ---------------------------------------------------------------------------

@@ -65,6 +65,13 @@ def _patched_wizard(**extra_module_patches: Any) -> Generator[None, None, None]:
         "_legacy_service_path": MagicMock(return_value=Path("/nonexistent")),
         "_remove_legacy_service": MagicMock(),
         "_acquire_install_lock": _noop_install_lock,
+        # C3-I-1: mock the real subprocess-shelling install functions by
+        # default so every test using this fixture is hermetic, not just the
+        # ones that individually patched these in cycles 1-2. Per-test
+        # overrides passed via extra_module_patches below still take
+        # precedence (merged after base_patches).
+        "_install_code_extra": MagicMock(),
+        "_install_graph_extra": MagicMock(),
     }
 
     # Merge extra patches (using short names for consistency)
@@ -339,8 +346,14 @@ def test_e2e_code_extra_install_triggered(runner: CliRunner, tmp_path: Path) -> 
     """wizard --non-interactive --code → _install_code_extra called exactly once."""
     config_path = tmp_path / "archon-search.toml"
     install_code_mock = MagicMock()
+    # --code auto-triggers install_graph_extra too (BE-11 bundling) — mock it as
+    # well so this test never shells out to a real `pip install archon-search[graph]`.
+    install_graph_mock = MagicMock()
 
-    with _patched_wizard(**{"archon_search.install._install_code_extra": install_code_mock}):
+    with _patched_wizard(**{
+        "archon_search.install._install_code_extra": install_code_mock,
+        "archon_search.install._install_graph_extra": install_graph_mock,
+    }):
         result = runner.invoke(main, [
             "wizard",
             "--non-interactive",
@@ -354,6 +367,74 @@ def test_e2e_code_extra_install_triggered(runner: CliRunner, tmp_path: Path) -> 
     install_code_mock.assert_called_once()
 
 
+@pytest.mark.integration
+def test_wizard_autoInstallsCodeAndGraphBundles(runner: CliRunner, tmp_path: Path) -> None:
+    """wizard --non-interactive --code auto-installs BOTH [code] and [graph] bundles.
+
+    BE-11: opting into code indexing must not leave a guided user in the
+    degraded-startup path (S9) — both extras install together automatically,
+    with no separate y/n for graph.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    install_code_mock = MagicMock()
+    install_graph_mock = MagicMock()
+
+    with _patched_wizard(
+        **{
+            "archon_search.install._install_code_extra": install_code_mock,
+            "archon_search.install._install_graph_extra": install_graph_mock,
+        }
+    ):
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+            "--code",
+        ])
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    install_code_mock.assert_called_once()
+    install_graph_mock.assert_called_once()
+
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["graph"]["enabled"] is True, (
+        "graph.enabled must be true in the written config — otherwise the "
+        "auto-installed [graph] extras are inert (C1-I-1)"
+    )
+
+
+@pytest.mark.integration
+def test_wizard_declinesCode_doesNotWriteGraphEnabled(runner: CliRunner, tmp_path: Path) -> None:
+    """wizard --non-interactive WITHOUT --code must not write graph.enabled=true.
+
+    Negative case for the C1-I-1 fix: declining code indexing must not
+    auto-enable graph, since ``install_graph_extra`` mirrors
+    ``install_code_extra`` and defaults to False. ``_default_toml()`` (the
+    base template) has no ``[graph]`` section at all, so the written config
+    should have no ``[graph]`` section either.
+    """
+    config_path = tmp_path / "archon-search.toml"
+
+    with _patched_wizard():
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+        ])
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+
+    doc = tomlkit.parse(config_path.read_text())
+    assert "graph" not in doc, (
+        "graph.enabled must not be written when --code was declined — "
+        "install_graph_extra mirrors install_code_extra and defaults to False"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Use case 8: Code extra install failure is non-fatal
 # ---------------------------------------------------------------------------
@@ -361,11 +442,23 @@ def test_e2e_code_extra_install_triggered(runner: CliRunner, tmp_path: Path) -> 
 
 @pytest.mark.integration
 def test_e2e_code_extra_install_failure_non_fatal(runner: CliRunner, tmp_path: Path) -> None:
-    """_install_code_extra raising InstallError → wizard exits 0, config is intact."""
+    """_install_code_extra raising InstallError → wizard exits 0, config is intact.
+
+    Both sibling install functions are mocked: ``--code`` triggers BOTH
+    ``install_code_extra`` and ``install_graph_extra`` (mirrored bundle, BE-11),
+    so the non-failing sibling must also be mocked or it would run a real
+    subprocess install (C2-M-2).
+    """
     config_path = tmp_path / "archon-search.toml"
     install_code_mock = MagicMock(side_effect=InstallError("pip failed"))
+    install_graph_mock = MagicMock()
 
-    with _patched_wizard(**{"archon_search.install._install_code_extra": install_code_mock}):
+    with _patched_wizard(
+        **{
+            "archon_search.install._install_code_extra": install_code_mock,
+            "archon_search.install._install_graph_extra": install_graph_mock,
+        }
+    ):
         result = runner.invoke(main, [
             "wizard",
             "--non-interactive",
@@ -377,6 +470,155 @@ def test_e2e_code_extra_install_failure_non_fatal(runner: CliRunner, tmp_path: P
 
     assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
     assert config_path.exists(), "Config file should still exist after non-fatal failure"
+    install_graph_mock.assert_called_once()
+
+
+@pytest.mark.integration
+def test_e2e_graph_extra_install_failure_non_fatal(runner: CliRunner, tmp_path: Path) -> None:
+    """_install_graph_extra raising InstallError → wizard exits 0, config is intact (C1-T-3).
+
+    Both sibling install functions are mocked — see docstring on
+    ``test_e2e_code_extra_install_failure_non_fatal`` above (C2-M-2). Also
+    asserts the config-rollback behavior added for Fix A: a failed
+    ``[graph]`` install must revert ``graph.enabled`` to ``False`` so the next
+    server start doesn't hard-fail on the missing spaCy dependency.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    install_code_mock = MagicMock()
+    install_graph_mock = MagicMock(side_effect=InstallError("pip failed"))
+
+    with _patched_wizard(
+        **{
+            "archon_search.install._install_code_extra": install_code_mock,
+            "archon_search.install._install_graph_extra": install_graph_mock,
+        }
+    ):
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+            "--code",
+        ])
+
+    assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
+    assert config_path.exists(), "Config file should still exist after non-fatal failure"
+    install_code_mock.assert_called_once()
+
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["graph"]["enabled"] is False, (
+        "graph.enabled must be reverted to false when [graph] extras failed to "
+        "install — otherwise the next server start hard-fails on missing spaCy"
+    )
+
+
+@pytest.mark.integration
+def test_wizard_diskSpaceFailure_revertsGraphEnabled(runner: CliRunner, tmp_path: Path) -> None:
+    """Disk-space check failure after config write must revert graph.enabled (C3-A-1).
+
+    ``run()`` writes ``graph.enabled=true`` early (config-write branches, Step
+    6/7/8) whenever ``--code`` is passed, but the disk-space check (Step 11)
+    happens later and can raise ``InstallError``. Before this fix, that early
+    return skipped the rollback entirely, leaving ``graph.enabled=true`` on
+    disk with ``[graph]`` extras never installed — a hard ``ConfigError`` at
+    the next server start.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    install_code_mock = MagicMock()
+    install_graph_mock = MagicMock()
+    disk_space_mock = MagicMock(side_effect=InstallError("not enough disk space"))
+
+    with _patched_wizard(
+        **{
+            "archon_search.install._install_code_extra": install_code_mock,
+            "archon_search.install._install_graph_extra": install_graph_mock,
+            "archon_search.install._check_disk_space": disk_space_mock,
+        }
+    ):
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+            "--code",
+        ])
+
+    assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}: {result.output}"
+    # The install calls are unreachable from this early-return path — they
+    # must never fire.
+    install_code_mock.assert_not_called()
+    install_graph_mock.assert_not_called()
+
+    assert config_path.exists(), "Config should have been written before the disk-space check"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["graph"]["enabled"] is False, (
+        "graph.enabled must be reverted to false when the disk-space check "
+        "fails after the config write — otherwise the next server start "
+        "hard-fails on missing spaCy"
+    )
+
+
+@pytest.mark.integration
+def test_wizard_declineProceedPrompt_revertsGraphEnabled(runner: CliRunner, tmp_path: Path) -> None:
+    """Declining the final 'Proceed?' prompt must revert graph.enabled (C3-A-1).
+
+    Interactive-mode equivalent of the disk-space-failure test above: the
+    config is written with ``graph.enabled=true`` early (config-write
+    branches), but if the user declines the confirmation prompt (Step 13,
+    which only exists in interactive mode), the function returned early
+    without rolling back the flag — an ordinary user action (declining a
+    prompt), not an edge case.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    install_code_mock = MagicMock()
+    install_graph_mock = MagicMock()
+
+    # Input queue (minimal profile HAS a reranker, so reranker question IS shown):
+    #  1. multilingual: "n"
+    #  2. code enrichment: "y"   (triggers install_graph_extra bundling too)
+    #  3. disable reranker: "n"
+    #  4. watch: "n"
+    #  5. telemetry: "n"
+    #  6. eager load: "n"
+    #  7. routing strategy: "" (default)
+    #  8. log format: "" (default)
+    #  9. "Proceed?": "n"  ← decline
+    # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire.
+    stdin_responses = "\n".join(["n", "y", "n", "n", "n", "n", "", "", "n"]) + "\n"
+
+    with _no_anthropic_key():
+        with _patched_wizard(
+            **{
+                "archon_search.install._install_code_extra": install_code_mock,
+                "archon_search.install._install_graph_extra": install_graph_mock,
+            }
+        ):
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "minimal",
+                    "--config", str(config_path),
+                    "--skip-preload",
+                ],
+                input=stdin_responses,
+            )
+
+    assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}:\nOUT: {result.output}"
+    # The install calls are unreachable from this early-return path — they
+    # must never fire.
+    install_code_mock.assert_not_called()
+    install_graph_mock.assert_not_called()
+
+    assert config_path.exists(), "Config should have been written before the Proceed? prompt"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["graph"]["enabled"] is False, (
+        "graph.enabled must be reverted to false when the user declines the "
+        "Proceed? prompt after the config write — otherwise the next server "
+        "start hard-fails on missing spaCy"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -118,6 +118,33 @@
         "title": "CheckStatus",
         "type": "string"
       },
+      "CodeParsersStatusDetail": {
+        "description": "Code parser (tree-sitter) status sub-object for GET /status (E2g BE-11).\n\nPresent when ``[graph] enabled = true``; the parent ``code_parsers`` field\nbeing ``null`` signals that graph is disabled (this check is only\nmeaningful alongside code graphing).\n\n``degraded`` is ``True`` once any file extension has hit the missing-grammar\nbranch in ``code_enricher._get_grammar`` (lazy, per-extension cache \u2014\nreflects extensions actually attempted during this process's lifetime, not\nan eager scan of installed packages). ``missing_extensions`` lists the\nextensions with no available grammar so far. ``message`` names the fix.",
+        "properties": {
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "message": {
+            "default": "",
+            "title": "Message",
+            "type": "string"
+          },
+          "missing_extensions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Extensions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "degraded"
+        ],
+        "title": "CodeParsersStatusDetail",
+        "type": "object"
+      },
       "CollectionBackupStatus": {
         "description": "Per-collection backup state surfaced under StatusResponse.backup (D2 Task 4.2).",
         "properties": {
@@ -3416,6 +3443,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/BackupStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "code_parsers": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CodeParsersStatusDetail"
               },
               {
                 "type": "null"
