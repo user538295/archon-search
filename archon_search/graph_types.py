@@ -255,6 +255,95 @@ class GraphExtractionResult:
     """
 
 
+class ImpactDirection(str, Enum):
+    """Traversal direction for ``GraphStore.compute_impact`` — E2g BE-8."""
+
+    callers = "callers"
+    callees = "callees"
+    both = "both"
+
+
+DEFAULT_IMPACT_DEPTH = 2
+"""Default ripple distance for a ``compute_impact`` blast-radius answer when the
+caller (BE-9's Presentation layer) omits ``depth``."""
+
+MAX_IMPACT_DEPTH = 5
+"""Hard cap on ``compute_impact`` traversal depth, enforced regardless of what
+was requested — see ``Documentation/Backlog/e2g-graph-traversal.tsp``."""
+
+MAX_IMPACT_GROUP_SIZE = 50
+"""Per-group (``direct`` + ``indirect`` combined) cap on ``ImpactGroup`` population.
+
+A fixed, deliberate product choice — not sourced from ``[graph]`` TOML config
+and not operator-configurable, unlike ``graph_inspector.py``'s ``_truncate_graph``
+caps (``max_nodes``/``max_edges``, both config-driven full-graph-browsing
+limits). This constant only mirrors that convention's *shape* — a boolean
+``truncated`` flag plus an ``omitted_count`` — not its configurability. A
+single blast-radius answer is read directly by a human or an agent deciding
+what to touch next, not paged through like a graph browse — 50 keeps a hub
+symbol's answer legible while ``truncated``/``omitted_count`` make any overflow
+explicit rather than silently dropping entries.
+"""
+
+
+@dataclass
+class ImpactEdge:
+    """One caller/callee entry in an ``ImpactGroup`` — E2g BE-8."""
+
+    entity_id: str
+    """ID of the neighbouring ``GraphNode`` reached by this traversal step."""
+    entity_name: str
+    """Display name of the neighbouring entity (``GraphNode.entity_name``)."""
+    relationship_type: str
+    """``RelationshipType`` value of the edge connecting this hop."""
+    extraction_method: str | None
+    """``GraphEdge.extraction_method`` of the edge connecting this hop."""
+    depth: int
+    """Hop distance from the resolved root symbol (1 = direct, 2+ = indirect)."""
+
+
+@dataclass
+class ImpactGroup:
+    """Direct vs. indirect callers/callees with truncation visibility — E2g BE-8."""
+
+    direct: list[ImpactEdge]
+    """Hop-1 neighbours, ordered by PageRank descending (nulls-last)."""
+    indirect: list[ImpactEdge]
+    """Hop 2..depth neighbours, deduped by node ID, excluding anything already
+    in ``direct``. Ordered by PageRank descending (nulls-last)."""
+    truncated: bool
+    """``True`` when this group's combined ``direct``+``indirect`` population
+    exceeded ``MAX_IMPACT_GROUP_SIZE`` and had to be capped."""
+    omitted_count: int
+    """Number of entries excluded by the ``MAX_IMPACT_GROUP_SIZE`` cap; ``0``
+    when ``truncated`` is ``False``. Reflects only what ``GraphStore`` actually
+    explored: when an intermediate hop's fan-out exceeds
+    ``MAX_IMPACT_GROUP_SIZE``, only that hop's highest-PageRank subset is
+    expanded further, so descendants reachable exclusively through the
+    un-expanded remainder are never discovered and are not counted here."""
+
+
+@dataclass
+class ImpactResult:
+    """Result of ``GraphStore.compute_impact`` — E2g BE-8."""
+
+    symbol: str
+    """The requested symbol name (as passed by the caller, not normalized)."""
+    callers: ImpactGroup
+    """Callers-side blast radius; empty ``ImpactGroup`` when ``direction`` did
+    not request it, or the symbol could not be resolved."""
+    callees: ImpactGroup
+    """Callees-side blast radius; empty ``ImpactGroup`` when ``direction`` did
+    not request it, or the symbol could not be resolved."""
+    depth_used: int
+    """Actual max hop reached (``<= min(depth, MAX_IMPACT_DEPTH)``); ``0`` when
+    the symbol could not be resolved or no neighbours were reachable.
+    Reflects traversal reach only — the deepest hop where new nodes were
+    found — not necessarily the deepest hop still present in a group after
+    ``MAX_IMPACT_GROUP_SIZE`` truncation: it can be nonzero even when every
+    entry at that hop was truncated away."""
+
+
 @dataclass
 class Community:
     """A Leiden-detected community of related graph entities — E1b.

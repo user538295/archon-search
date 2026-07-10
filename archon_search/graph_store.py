@@ -19,7 +19,23 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from archon_search.constants import _validate_namespace, _validate_segment_safe
-from archon_search.graph_types import Community, EntityType, GcPassResult, GraphEdge, GraphMention, GraphNode, RelationshipType
+from archon_search.graph_types import (
+    Community,
+    EntityType,
+    GcPassResult,
+    GraphEdge,
+    GraphMention,
+    GraphNode,
+    ImpactDirection,
+    ImpactEdge,
+    ImpactGroup,
+    ImpactResult,
+    MAX_IMPACT_DEPTH,
+    MAX_IMPACT_GROUP_SIZE,
+    RelationshipType,
+    make_code_symbol_qualified_name,
+    make_stable_entity_id,
+)
 from archon_search.store_filters import _sql_quote_str
 
 if TYPE_CHECKING:
@@ -568,6 +584,249 @@ class GraphStore:
         if not values:
             return None
         return values[0]
+
+    async def compute_impact(
+        self,
+        collection: str,
+        symbol: str,
+        depth: int,
+        direction: ImpactDirection,
+        extraction_method_filter: str | None,
+        file_path: str | None,
+        ns: str,
+    ) -> ImpactResult:
+        """Return the callers/callees blast radius for *symbol* — E2g BE-8.
+
+        Resolves *symbol* to a single root node via ``find_nodes_by_name``
+        (case-insensitive), restricted to ``EntityType.code_symbol`` candidates
+        only — a same-named non-code-symbol node (e.g. a ``person``/``concept``
+        entity) is never eligible to become the root: when more than one
+        code-symbol node shares that name, *file_path* (if given) disambiguates
+        via the file-qualified stable ID (``make_stable_entity_id`` +
+        ``make_code_symbol_qualified_name``); when *file_path* is absent, or
+        does not match any candidate, resolution falls back to the highest
+        ``pagerank_score`` (nulls-last, ``id`` tiebreak — mirrors
+        ``graph_inspector._node_sort_key``'s importance-mode idiom exactly,
+        including its ``entity_id`` tiebreak for determinism).
+        Returns an empty ``ImpactResult`` (``depth_used=0``) when no
+        code-symbol node named *symbol* exists.
+
+        BFS-traverses outward from the root, hop by hop, via
+        ``get_edges_for_nodes`` on the current frontier — forward
+        (``source_node_id``) for ``callees``, backward (``target_node_id``) for
+        ``callers`` — capped at ``min(depth, MAX_IMPACT_DEPTH)`` regardless of
+        what *depth* requests. Only the group(s) implied by *direction* are
+        computed; the other side is an empty ``ImpactGroup``.
+
+        *extraction_method_filter*, when not ``None``, is a PRE-filter on
+        traversal: edges whose ``extraction_method`` does not match are never
+        followed, so a filtered-out edge at an intermediate hop blocks traversal
+        past it, and ``depth_used``/``omitted_count`` stay honest relative to the
+        filtered graph only — never the unfiltered one.
+
+        Each group's ``direct`` (hop-1) and ``indirect`` (hop 2+, deduped by node
+        ID, excluding anything already in ``direct``) lists are ordered by
+        PageRank descending, nulls-last. When a group's combined population
+        exceeds ``MAX_IMPACT_GROUP_SIZE``, it is capped (highest-PageRank entries
+        kept first, ``direct`` before ``indirect``) and ``truncated``/
+        ``omitted_count`` report the overflow — never a silently partial answer.
+
+        Caveat when an intermediate hop's fan-out is itself large: when a hop's
+        newly-discovered neighbour set exceeds ``MAX_IMPACT_GROUP_SIZE``, only
+        the highest-PageRank subset of that hop is expanded into the next hop
+        (bounds per-hop query cost for hub symbols); every discovered neighbour
+        at that hop is still reported, but ``omitted_count``/``depth_used``
+        reflect only what was actually explored — deeper descendants reachable
+        exclusively through the un-expanded remainder of that hop are not
+        discovered and are therefore not counted anywhere in the result.
+        """
+        self._validate_collection(collection)
+        _validate_namespace(ns)
+
+        empty_group = ImpactGroup(direct=[], indirect=[], truncated=False, omitted_count=0)
+
+        candidates = await self.find_nodes_by_name(collection, [symbol], ns)
+        code_symbol_candidates = [c for c in candidates if c.entity_type == EntityType.code_symbol]
+        if not code_symbol_candidates:
+            return ImpactResult(
+                symbol=symbol, callers=empty_group, callees=empty_group, depth_used=0
+            )
+
+        root = self._resolve_impact_root(code_symbol_candidates, symbol, file_path)
+        effective_depth = min(depth, MAX_IMPACT_DEPTH)
+
+        want_callers = direction in (ImpactDirection.callers, ImpactDirection.both)
+        want_callees = direction in (ImpactDirection.callees, ImpactDirection.both)
+
+        callers_group = empty_group
+        callees_group = empty_group
+        depth_used = 0
+
+        if want_callers:
+            callers_group, callers_depth = await self._traverse_impact(
+                collection, root.id, effective_depth, "callers", extraction_method_filter, ns
+            )
+            depth_used = max(depth_used, callers_depth)
+        if want_callees:
+            callees_group, callees_depth = await self._traverse_impact(
+                collection, root.id, effective_depth, "callees", extraction_method_filter, ns
+            )
+            depth_used = max(depth_used, callees_depth)
+
+        return ImpactResult(
+            symbol=symbol, callers=callers_group, callees=callees_group, depth_used=depth_used
+        )
+
+    def _resolve_impact_root(
+        self, candidates: list[GraphNode], symbol: str, file_path: str | None
+    ) -> GraphNode:
+        """Pick the single root node for ``compute_impact`` from *candidates*.
+
+        See ``compute_impact``'s docstring for the resolution order.
+        """
+        if len(candidates) == 1:
+            return candidates[0]
+        if file_path is not None:
+            expected_id = make_stable_entity_id(
+                EntityType.code_symbol.value,
+                make_code_symbol_qualified_name(symbol, file_path),
+            )
+            for candidate in candidates:
+                if candidate.id == expected_id:
+                    return candidate
+        return self._highest_pagerank_node(candidates)
+
+    @staticmethod
+    def _highest_pagerank_node(nodes: list[GraphNode]) -> GraphNode:
+        """Return the node with the highest ``pagerank_score`` (nulls-last, ``id`` tiebreak).
+
+        Mirrors ``graph_inspector._node_sort_key``'s importance-mode idiom
+        exactly: ``(score is None, -(score or 0.0), id)`` — the trailing ``id``
+        tiebreak makes resolution deterministic when candidates share a
+        PageRank score (including when all are null), instead of depending on
+        arbitrary Arrow row order.
+        """
+        return min(
+            nodes,
+            key=lambda n: (n.pagerank_score is None, -(n.pagerank_score or 0.0), n.id),
+        )
+
+    async def _fetch_nodes_by_ids(
+        self, collection: str, entity_ids: list[str], ns: str
+    ) -> dict[str, GraphNode]:
+        """Return a ``{id: GraphNode}`` map for *entity_ids*; empty dict for empty input."""
+        if not entity_ids:
+            return {}
+        db = self._require_db()
+        nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
+        arrow = await nodes_table.query().where(_where_in("id", entity_ids)).to_arrow()
+        return {node.id: node for node in self._arrow_to_nodes(arrow)}
+
+    async def _traverse_impact(
+        self,
+        collection: str,
+        root_id: str,
+        effective_depth: int,
+        direction: str,
+        extraction_method_filter: str | None,
+        ns: str,
+    ) -> tuple[ImpactGroup, int]:
+        """BFS outward from *root_id* one *direction* ("callers" or "callees").
+
+        Returns the resulting ``ImpactGroup`` (already ordered and capped) plus
+        the actual max hop reached (0 if the root has no neighbours in this
+        direction, or the graph runs dry before ``effective_depth``).
+        """
+        direct: list[ImpactEdge] = []
+        indirect: list[ImpactEdge] = []
+        visited = {root_id}
+        frontier = {root_id}
+        depth_used = 0
+        # Accumulated across every hop — GraphNode already carries
+        # pagerank_score, so this doubles as the final sort-key lookup below
+        # (MOD1: avoids a redundant terminal _fetch_nodes_by_ids over the
+        # whole direct+indirect result set).
+        node_by_id: dict[str, GraphNode] = {}
+
+        def _pagerank_sort_key(entity_id: str) -> tuple[bool, float, str]:
+            node = node_by_id.get(entity_id)
+            score = node.pagerank_score if node else None
+            return (score is None, -(score or 0.0), entity_id)
+
+        for hop in range(1, effective_depth + 1):
+            if not frontier:
+                break
+            edges = await self.get_edges_for_nodes(collection, list(frontier), ns)
+            if extraction_method_filter is not None:
+                edges = [e for e in edges if e.extraction_method == extraction_method_filter]
+
+            next_hop: dict[str, GraphEdge] = {}
+            for edge in edges:
+                if direction == "callees":
+                    neighbour_id, frontier_id = edge.target_node_id, edge.source_node_id
+                else:
+                    neighbour_id, frontier_id = edge.source_node_id, edge.target_node_id
+                if frontier_id in frontier and neighbour_id not in visited:
+                    # MOD2: when multiple edges from this hop's frontier reach the
+                    # same neighbour, LanceDB row order is not guaranteed — keep
+                    # the edge with the lexicographically smallest `id` (a stable
+                    # SHA-256 hex string) so the reported relationship_type/
+                    # extraction_method is deterministic across runs.
+                    existing = next_hop.get(neighbour_id)
+                    if existing is None or edge.id < existing.id:
+                        next_hop[neighbour_id] = edge
+
+            if not next_hop:
+                break
+
+            depth_used = hop
+            hop_nodes = await self._fetch_nodes_by_ids(collection, list(next_hop.keys()), ns)
+            node_by_id.update(hop_nodes)
+            for neighbour_id, edge in next_hop.items():
+                node = hop_nodes.get(neighbour_id)
+                impact_edge = ImpactEdge(
+                    entity_id=neighbour_id,
+                    entity_name=node.entity_name if node else neighbour_id,
+                    relationship_type=edge.relationship_type.value,
+                    extraction_method=edge.extraction_method,
+                    depth=hop,
+                )
+                if hop == 1:
+                    direct.append(impact_edge)
+                else:
+                    indirect.append(impact_edge)
+
+            visited.update(next_hop.keys())
+            # MOD7: when this hop's fan-out exceeds MAX_IMPACT_GROUP_SIZE, cap
+            # the frontier carried into the NEXT hop's expansion to the
+            # highest-PageRank subset (nulls-last, id tiebreak — same idiom as
+            # _highest_pagerank_node / the post-loop sort below), not an
+            # arbitrary/lexicographic-by-id subset. Every node discovered this
+            # hop is still recorded in direct/indirect above regardless of this
+            # cap — only further expansion past this hop is bounded. See the
+            # compute_impact docstring caveat for the resulting incompleteness.
+            if len(next_hop) > MAX_IMPACT_GROUP_SIZE:
+                frontier = set(
+                    sorted(next_hop.keys(), key=_pagerank_sort_key)[:MAX_IMPACT_GROUP_SIZE]
+                )
+            else:
+                frontier = set(next_hop.keys())
+
+        direct.sort(key=lambda edge: _pagerank_sort_key(edge.entity_id))
+        indirect.sort(key=lambda edge: _pagerank_sort_key(edge.entity_id))
+
+        total = len(direct) + len(indirect)
+        if total > MAX_IMPACT_GROUP_SIZE:
+            kept_direct = direct[:MAX_IMPACT_GROUP_SIZE]
+            kept_indirect = indirect[: max(MAX_IMPACT_GROUP_SIZE - len(kept_direct), 0)]
+            omitted_count = total - (len(kept_direct) + len(kept_indirect))
+            group = ImpactGroup(
+                direct=kept_direct, indirect=kept_indirect, truncated=True, omitted_count=omitted_count
+            )
+        else:
+            group = ImpactGroup(direct=direct, indirect=indirect, truncated=False, omitted_count=0)
+
+        return group, depth_used
 
     async def _ensure_cosine_index(self, collection: str, ns: str) -> None:
         """Attempt to create a cosine ANN index on ``name_embedding`` if one does not exist yet.
