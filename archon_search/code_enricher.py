@@ -52,7 +52,9 @@ so the backward walk in :func:`_resolve_scope` finds them first.
 # Code extension set — used for pipeline dispatch
 # ---------------------------------------------------------------------------
 
-CODE_EXTENSIONS: frozenset[str] = frozenset({".py", ".ts", ".js", ".go", ".rs", ".java", ".sh"})
+CODE_EXTENSIONS: frozenset[str] = frozenset(
+    {".py", ".ts", ".js", ".go", ".rs", ".java", ".sh", ".swift", ".cs"}
+)
 """File extensions routed to :class:`CodeEnricher` during ingest."""
 
 # ---------------------------------------------------------------------------
@@ -172,6 +174,14 @@ def _get_grammar(ext: str) -> Any | None:
             import tree_sitter_bash  # type: ignore[import-untyped]  # noqa: PLC0415
 
             lang = Language(tree_sitter_bash.language())
+        elif ext == ".swift":
+            import tree_sitter_swift  # type: ignore[import-untyped]  # noqa: PLC0415
+
+            lang = Language(tree_sitter_swift.language())
+        elif ext == ".cs":
+            import tree_sitter_c_sharp  # type: ignore[import-untyped]  # noqa: PLC0415
+
+            lang = Language(tree_sitter_c_sharp.language())
         else:
             # Unknown extension — cache None silently
             pass
@@ -492,6 +502,8 @@ def _lang_label(ext: str) -> str:
         ".rs": "rust",
         ".java": "java",
         ".sh": "bash",
+        ".swift": "swift",
+        ".cs": "csharp",
     }
     return _MAP[ext]
 

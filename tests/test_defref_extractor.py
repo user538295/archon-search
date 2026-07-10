@@ -18,12 +18,32 @@ following the skip-guard pattern used elsewhere for optional graph/code extras.
 from __future__ import annotations
 
 import asyncio
+import importlib
 
 import pytest
 
 pytest.importorskip("tree_sitter")
 pytest.importorskip("tree_sitter_python")
 pytest.importorskip("tree_sitter_typescript")
+
+
+def _has_module(name: str) -> bool:
+    try:
+        importlib.import_module(name)
+    except ImportError:
+        return False
+    return True
+
+
+# Per-language skip guards (not module-level importorskip) — a missing grammar
+# for one BE-5 language must only skip that language's own tests, never the
+# whole module (which would silently drop the always-required BE-2 python/TS
+# coverage above too).
+_HAS_JAVASCRIPT = _has_module("tree_sitter_javascript")
+_HAS_GO = _has_module("tree_sitter_go")
+_HAS_RUST = _has_module("tree_sitter_rust")
+_HAS_JAVA = _has_module("tree_sitter_java")
+_HAS_BASH = _has_module("tree_sitter_bash")
 
 from archon_search.defref_extractor import DefRefExtractor  # noqa: E402
 from archon_search.graph_types import (  # noqa: E402
@@ -240,6 +260,256 @@ def test_typeScriptImportAndInherits_produceEdges() -> None:
 
 
 # ---------------------------------------------------------------------------
+# BE-5 — JavaScript same-file call
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _HAS_JAVASCRIPT, reason="tree-sitter-javascript not installed")
+def test_javaScriptSameFileCall_producesCallsEdge() -> None:
+    src = "function bar() {\n  return 1;\n}\n\nfunction foo() {\n  return bar();\n}\n"
+    result = _extract(src, "/repo/mod.js")
+
+    calls = _edges_of_type(result, RelationshipType.calls)
+    assert len(calls) == 1, f"Expected exactly 1 calls edge, got {len(calls)}"
+    edge = calls[0]
+    assert edge.extraction_method == "extracted"
+    assert edge.source_node_id == _node_id("foo", "/repo/mod.js")
+    assert edge.target_node_id == _node_id("bar", "/repo/mod.js")
+
+
+# ---------------------------------------------------------------------------
+# BE-5 — Go same-file call
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _HAS_GO, reason="tree-sitter-go not installed")
+def test_goSameFileCall_producesCallsEdge() -> None:
+    src = "package main\n\nfunc bar() int {\n\treturn 1\n}\n\nfunc foo() int {\n\treturn bar()\n}\n"
+    result = _extract(src, "/repo/mod.go")
+
+    calls = _edges_of_type(result, RelationshipType.calls)
+    assert len(calls) == 1, f"Expected exactly 1 calls edge, got {len(calls)}"
+    edge = calls[0]
+    assert edge.extraction_method == "extracted"
+    assert edge.source_node_id == _node_id("foo", "/repo/mod.go")
+    assert edge.target_node_id == _node_id("bar", "/repo/mod.go")
+
+
+# ---------------------------------------------------------------------------
+# BE-5 — Rust same-file call
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _HAS_RUST, reason="tree-sitter-rust not installed")
+def test_rustSameFileCall_producesCallsEdge() -> None:
+    src = "fn bar() -> i32 {\n    1\n}\n\nfn foo() -> i32 {\n    bar()\n}\n"
+    result = _extract(src, "/repo/mod.rs")
+
+    calls = _edges_of_type(result, RelationshipType.calls)
+    assert len(calls) == 1, f"Expected exactly 1 calls edge, got {len(calls)}"
+    edge = calls[0]
+    assert edge.extraction_method == "extracted"
+    assert edge.source_node_id == _node_id("foo", "/repo/mod.rs")
+    assert edge.target_node_id == _node_id("bar", "/repo/mod.rs")
+
+
+# ---------------------------------------------------------------------------
+# BE-5 — Java same-file call
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _HAS_JAVA, reason="tree-sitter-java not installed")
+def test_javaSameFileCall_producesCallsEdge() -> None:
+    src = (
+        "class Foo {\n"
+        "    int bar() {\n"
+        "        return baz();\n"
+        "    }\n\n"
+        "    int baz() {\n"
+        "        return 1;\n"
+        "    }\n"
+        "}\n"
+    )
+    result = _extract(src, "/repo/Foo.java")
+
+    calls = _edges_of_type(result, RelationshipType.calls)
+    assert len(calls) == 1, f"Expected exactly 1 calls edge, got {len(calls)}"
+    edge = calls[0]
+    assert edge.extraction_method == "extracted"
+    assert edge.source_node_id == _node_id("bar", "/repo/Foo.java")
+    assert edge.target_node_id == _node_id("baz", "/repo/Foo.java")
+
+
+# ---------------------------------------------------------------------------
+# BE-5 — Bash same-file call
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _HAS_BASH, reason="tree-sitter-bash not installed")
+def test_bashSameFileCall_producesCallsEdge() -> None:
+    src = 'bar() {\n  echo "bar"\n}\n\nfoo() {\n  bar\n}\n'
+    result = _extract(src, "/repo/mod.sh")
+
+    calls = _edges_of_type(result, RelationshipType.calls)
+    assert len(calls) == 1, f"Expected exactly 1 calls edge, got {len(calls)}"
+    edge = calls[0]
+    assert edge.extraction_method == "extracted"
+    assert edge.source_node_id == _node_id("foo", "/repo/mod.sh")
+    assert edge.target_node_id == _node_id("bar", "/repo/mod.sh")
+
+
+# ---------------------------------------------------------------------------
+# BE-5 — JavaScript imports + inherits + defines (calls-only was S8's original
+# gap for the other new languages too — this closes it for JS specifically)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _HAS_JAVASCRIPT, reason="tree-sitter-javascript not installed")
+def test_javaScriptImportAndInherits_produceEdges() -> None:
+    src = (
+        'import { Base } from "./base";\n\n'
+        "class Foo extends Base {\n"
+        "  bar() {\n"
+        "    return 1;\n"
+        "  }\n"
+        "}\n"
+    )
+    result = _extract(src, "/repo/mod.js")
+
+    imports = _edges_of_type(result, RelationshipType.imports)
+    assert len(imports) == 1, f"Expected exactly 1 imports edge, got {len(imports)}"
+    assert imports[0].extraction_method == "extracted"
+    assert imports[0].source_node_id == _module_node_id("/repo/mod.js")
+    assert imports[0].target_node_id == _node_id("Base", "/repo/mod.js")
+
+    inherits = _edges_of_type(result, RelationshipType.inherits)
+    assert len(inherits) == 1, f"Expected exactly 1 inherits edge, got {len(inherits)}"
+    assert inherits[0].extraction_method == "extracted"
+    assert inherits[0].source_node_id == _node_id("Foo", "/repo/mod.js")
+    assert inherits[0].target_node_id == _node_id("Base", "/repo/mod.js")
+
+    defines = _edges_of_type(result, RelationshipType.defines)
+    assert any(
+        e.source_node_id == _module_node_id("/repo/mod.js")
+        and e.target_node_id == _node_id("Foo", "/repo/mod.js")
+        for e in defines
+    ), "Expected module -> Foo (class) defines edge"
+    assert any(
+        e.source_node_id == _node_id("Foo", "/repo/mod.js")
+        and e.target_node_id == _node_id("bar", "/repo/mod.js")
+        for e in defines
+    ), "Expected Foo -> bar (method) defines edge"
+
+
+# ---------------------------------------------------------------------------
+# BE-5 — Go imports + defines (Go has no classes, so no inherits case; the
+# method's receiver type — not a module — scopes the defines edge)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _HAS_GO, reason="tree-sitter-go not installed")
+def test_goImportAndMethodDefines_produceEdges() -> None:
+    src = (
+        "package main\n\n"
+        'import "fmt"\n\n'
+        "type Handler struct {\n"
+        "}\n\n"
+        "func (h *Handler) Process() int {\n"
+        "\treturn 1\n"
+        "}\n"
+    )
+    result = _extract(src, "/repo/mod.go")
+
+    imports = _edges_of_type(result, RelationshipType.imports)
+    assert len(imports) == 1, f"Expected exactly 1 imports edge, got {len(imports)}"
+    assert imports[0].extraction_method == "extracted"
+    assert imports[0].source_node_id == _module_node_id("/repo/mod.go")
+    assert imports[0].target_node_id == _node_id("fmt", "/repo/mod.go")
+
+    defines = _edges_of_type(result, RelationshipType.defines)
+    assert len(defines) == 1, f"Expected exactly 1 defines edge, got {len(defines)}"
+    edge = defines[0]
+    assert edge.extraction_method == "extracted"
+    # Go has no class defs; the pointer-receiver type "Handler" scopes the method.
+    assert edge.source_node_id == _node_id("Handler", "/repo/mod.go")
+    assert edge.target_node_id == _node_id("Process", "/repo/mod.go")
+
+
+# ---------------------------------------------------------------------------
+# BE-5 — Rust imports + defines (Rust has no inheritance either; `impl` scopes
+# a function to the struct it implements)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _HAS_RUST, reason="tree-sitter-rust not installed")
+def test_rustImportAndImplDefines_produceEdges() -> None:
+    src = "use HashMap;\n\nstruct Handler;\n\nimpl Handler {\n    fn process(&self) -> i32 {\n        1\n    }\n}\n"
+    result = _extract(src, "/repo/mod.rs")
+
+    imports = _edges_of_type(result, RelationshipType.imports)
+    assert len(imports) == 1, f"Expected exactly 1 imports edge, got {len(imports)}"
+    assert imports[0].extraction_method == "extracted"
+    assert imports[0].source_node_id == _module_node_id("/repo/mod.rs")
+    assert imports[0].target_node_id == _node_id("HashMap", "/repo/mod.rs")
+
+    defines = _edges_of_type(result, RelationshipType.defines)
+    assert any(
+        e.source_node_id == _module_node_id("/repo/mod.rs")
+        and e.target_node_id == _node_id("Handler", "/repo/mod.rs")
+        for e in defines
+    ), "Expected module -> Handler (struct) defines edge"
+    assert any(
+        e.source_node_id == _node_id("Handler", "/repo/mod.rs")
+        and e.target_node_id == _node_id("process", "/repo/mod.rs")
+        for e in defines
+    ), "Expected Handler -> process (method via impl) defines edge"
+
+
+# ---------------------------------------------------------------------------
+# BE-5 — Java imports + inherits + defines
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _HAS_JAVA, reason="tree-sitter-java not installed")
+def test_javaImportAndInherits_produceEdges() -> None:
+    src = (
+        "import java.util.List;\n\n"
+        "class Base {\n"
+        "}\n\n"
+        "class Foo extends Base {\n"
+        "    int bar() {\n"
+        "        return 1;\n"
+        "    }\n"
+        "}\n"
+    )
+    result = _extract(src, "/repo/Foo.java")
+
+    imports = _edges_of_type(result, RelationshipType.imports)
+    assert len(imports) == 1, f"Expected exactly 1 imports edge, got {len(imports)}"
+    assert imports[0].extraction_method == "extracted"
+    assert imports[0].source_node_id == _module_node_id("/repo/Foo.java")
+    assert imports[0].target_node_id == _node_id("List", "/repo/Foo.java")
+
+    inherits = _edges_of_type(result, RelationshipType.inherits)
+    assert len(inherits) == 1, f"Expected exactly 1 inherits edge, got {len(inherits)}"
+    assert inherits[0].extraction_method == "extracted"
+    assert inherits[0].source_node_id == _node_id("Foo", "/repo/Foo.java")
+    assert inherits[0].target_node_id == _node_id("Base", "/repo/Foo.java")
+
+    defines = _edges_of_type(result, RelationshipType.defines)
+    assert any(
+        e.source_node_id == _module_node_id("/repo/Foo.java")
+        and e.target_node_id == _node_id("Foo", "/repo/Foo.java")
+        for e in defines
+    ), "Expected module -> Foo (class) defines edge"
+    assert any(
+        e.source_node_id == _node_id("Foo", "/repo/Foo.java")
+        and e.target_node_id == _node_id("bar", "/repo/Foo.java")
+        for e in defines
+    ), "Expected Foo -> bar (method) defines edge"
+
+
+# ---------------------------------------------------------------------------
 # Critical #2/#3 — file-qualified node identity, bare entity_name
 # ---------------------------------------------------------------------------
 
@@ -269,7 +539,9 @@ def test_sameNameDifferentFiles_produceDistinctNodes() -> None:
 
 
 def test_unsupportedExtension_returnsEmptyResultWithoutError() -> None:
-    result = _extract("package main\n", "/repo/main.go")
+    # .rb has no DefRefExtractor dispatch entry at all (unlike .go, which is
+    # BE-5 in-scope) — a genuinely unsupported extension.
+    result = _extract("puts 'hi'\n", "/repo/main.rb")
     assert result.nodes == []
     assert result.edges == []
     assert result.fatal_error is None

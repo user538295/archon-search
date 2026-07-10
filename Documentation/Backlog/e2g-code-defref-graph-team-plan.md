@@ -495,7 +495,7 @@ flowchart LR
         - #e2e_test — `test_e2e_graphImpact_httpAndMcp_agree` — ingest a small multi-file fixture, query `graph_impact` over both HTTP and MCP for a hub symbol, confirm both report the same callers/callees/omitted-counts and PageRank order
 
 ### Phase 6 · Full language rollout *(remaining seven, Swift/C# may slip)*
-- [ ] **BE-5** — Extend `DefRefExtractor` per-language dispatch: JavaScript, Go, Rust, Java, Bash; then Swift, C# (new grammars — may slip to fast-follow per Q7) #backend-role
+- [x] **BE-5** — Extend `DefRefExtractor` per-language dispatch: JavaScript, Go, Rust, Java, Bash; then Swift, C# (new grammars — may slip to fast-follow per Q7) #backend-role
     - Interface Adapter · 18.0h
     - needs BE-4, BE-6 · completes S1, S2, S3, S18 (generalized across languages)
     - Tests

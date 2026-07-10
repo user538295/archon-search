@@ -1,6 +1,7 @@
 """DefRefExtractor — same-file code def/ref edge extraction (E2g BE-2).
 
-Walks a whole file's tree-sitter AST (Python and TypeScript) and extracts
+Walks a whole file's tree-sitter AST (Python, TypeScript, JavaScript, Go,
+Rust, Java, Bash, Swift, C#) and extracts
 ``calls``/``imports``/``defines``/``inherits`` graph edges between
 ``code_symbol`` nodes, all tagged ``extraction_method="extracted"`` (the
 "proven from this file's own text" tier — as opposed to BE-4's future
@@ -105,11 +106,21 @@ logger = logging.getLogger(__name__)
 _EXTRACTION_METHOD = "extracted"
 _INFERRED_EXTRACTION_METHOD = "inferred"
 
-_LANG_LABEL: dict[str, str] = {".py": "python", ".ts": "typescript"}
-"""Extensions supported by BE-2. Remaining languages are BE-5's scope."""
+_LANG_LABEL: dict[str, str] = {
+    ".py": "python",
+    ".ts": "typescript",
+    ".js": "javascript",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".sh": "bash",
+    ".swift": "swift",
+    ".cs": "csharp",
+}
+"""Extensions supported by BE-2 (python/typescript) and BE-5 (the rest)."""
 
 DEFREF_SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(_LANG_LABEL.keys())
-"""File extensions for which DefRefExtractor performs real extraction (BE-2 scope)."""
+"""File extensions for which DefRefExtractor performs real extraction (BE-2's python/typescript plus BE-5's remaining seven languages)."""
 
 # A definition record: (name, kind, enclosing_name).
 _DefRecord = tuple[str, str, str]
@@ -179,7 +190,7 @@ class DefRefExtractor:
         """
         ext = Path(file_path).suffix.lower()
         if ext not in _LANG_LABEL:
-            # Out of BE-2's scope (JS/Go/Rust/Java/Bash/Swift/C# are BE-5).
+            # Out of DefRefExtractor's scope entirely (no grammar dispatch exists).
             return GraphExtractionResult(nodes=[], edges=[], mentions=[])
 
         lang = _get_grammar(ext)
@@ -452,10 +463,11 @@ def _parse_and_walk(
     imports: list[str] = []
     inherits: list[_InheritsRecord] = []
 
-    if ext == ".py":
-        _walk_python(tree.root_node, module_name, "", "", defs, calls, imports, inherits)
-    else:
-        _walk_typescript(tree.root_node, module_name, "", "", defs, calls, imports, inherits)
+    # `extract()` already rejects any ext not in `_LANG_LABEL` (same keys as
+    # `_WALKERS`) before calling this function, so a fallback default here
+    # would only mask a future dispatch-table bug.
+    walker = _WALKERS[ext]
+    walker(tree.root_node, module_name, "", "", defs, calls, imports, inherits)
 
     return defs, calls, imports, inherits
 
@@ -686,3 +698,613 @@ def _collect_typescript_import_names(import_clause: Any, imports: list[str]) -> 
             for grandchild in child.children:
                 if grandchild.type == "identifier":
                     imports.append(grandchild.text.decode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# JavaScript AST walker (BE-5)
+# ---------------------------------------------------------------------------
+
+
+def _walk_javascript(
+    node: Any,
+    module_name: str,
+    current_class: str,
+    current_func: str,
+    defs: list[_DefRecord],
+    calls: list[_CallRecord],
+    imports: list[str],
+    inherits: list[_InheritsRecord],
+) -> None:
+    """Recursively walk a JavaScript tree-sitter AST, populating the record lists.
+
+    Structurally close to ``_walk_typescript`` (identical ``import_clause``
+    shape, reused via ``_collect_typescript_import_names``) except
+    ``class_heritage`` has no ``extends_clause`` wrapper — the base class is a
+    direct ``identifier`` child of ``class_heritage`` in this grammar.
+    """
+    node_type = node.type
+
+    if node_type == "import_statement":
+        for child in node.children:
+            if child.type == "import_clause":
+                _collect_typescript_import_names(child, imports)
+        return
+
+    if node_type == "class_declaration":
+        name_node = node.child_by_field_name("name")
+        name = name_node.text.decode("utf-8") if name_node is not None else ""
+        enclosing = current_class
+        if name:
+            defs.append((name, "class", enclosing))
+            for child in node.children:
+                if child.type == "class_heritage":
+                    for heritage_child in child.children:
+                        if heritage_child.type == "identifier":
+                            inherits.append((name, heritage_child.text.decode("utf-8")))
+        body = node.child_by_field_name("body")
+        if body is not None:
+            for child in body.children:
+                _walk_javascript(child, module_name, name, "", defs, calls, imports, inherits)
+        return
+
+    if node_type in {"function_declaration", "method_definition"}:
+        name_node = node.child_by_field_name("name")
+        name = name_node.text.decode("utf-8") if name_node is not None else ""
+        enclosing = current_class
+        if name:
+            kind = "method" if (node_type == "method_definition" or current_class) else "function"
+            defs.append((name, kind, enclosing))
+        body = node.child_by_field_name("body")
+        if body is not None:
+            for child in body.children:
+                _walk_javascript(child, module_name, "", name, defs, calls, imports, inherits)
+        return
+
+    if node_type == "call_expression":
+        func_node = node.child_by_field_name("function")
+        callee: str | None = None
+        if func_node is not None:
+            if func_node.type == "identifier":
+                callee = func_node.text.decode("utf-8")
+            elif func_node.type == "member_expression":
+                prop = func_node.child_by_field_name("property")
+                if prop is not None:
+                    callee = prop.text.decode("utf-8")
+        if callee:
+            caller = current_func or current_class
+            calls.append((caller, callee))
+        # fall through — recurse into children (e.g. nested calls in arguments)
+
+    for child in node.children:
+        _walk_javascript(child, module_name, current_class, current_func, defs, calls, imports, inherits)
+
+
+# ---------------------------------------------------------------------------
+# Go AST walker (BE-5)
+# ---------------------------------------------------------------------------
+
+
+def _go_import_spec_names(node: Any, imports: list[str]) -> None:
+    """Recursively collect Go import package names from an ``import_declaration``.
+
+    Handles both the single-import form (``import "fmt"`` — an ``import_spec``
+    directly under the declaration) and the parenthesized form (``import (
+    "fmt"\\n"os" )`` — ``import_spec`` nodes nested inside an
+    ``import_spec_list``). The imported name used is the last path segment
+    (Go's own package-name convention), taken from the ``path`` field's
+    ``interpreted_string_literal_content`` child (the string with quotes
+    stripped).
+    """
+    if node.type == "import_spec":
+        path_node = node.child_by_field_name("path")
+        if path_node is not None:
+            for child in path_node.children:
+                if child.type == "interpreted_string_literal_content":
+                    content = child.text.decode("utf-8")
+                    imports.append(content.rsplit("/", 1)[-1])
+        return
+    for child in node.children:
+        _go_import_spec_names(child, imports)
+
+
+def _walk_go(
+    node: Any,
+    module_name: str,
+    current_class: str,
+    current_func: str,
+    defs: list[_DefRecord],
+    calls: list[_CallRecord],
+    imports: list[str],
+    inherits: list[_InheritsRecord],
+) -> None:
+    """Recursively walk a Go tree-sitter AST, populating the record lists.
+
+    Go has no classes, so ``inherits`` always stays empty (expected, not a
+    gap — Go has no inheritance to extract). Methods are scoped by receiver
+    type (``current_class`` slot repurposed to hold the receiver type name)
+    so a ``defines`` edge links the receiver type to its method, mirroring
+    class-scoped methods in other languages.
+    """
+    node_type = node.type
+
+    if node_type == "import_declaration":
+        _go_import_spec_names(node, imports)
+        return
+
+    if node_type == "function_declaration":
+        name_node = node.child_by_field_name("name")
+        name = name_node.text.decode("utf-8") if name_node is not None else ""
+        if name:
+            defs.append((name, "function", ""))
+        body = node.child_by_field_name("body")
+        if body is not None:
+            for child in body.children:
+                _walk_go(child, module_name, "", name, defs, calls, imports, inherits)
+        return
+
+    if node_type == "method_declaration":
+        name_node = node.child_by_field_name("name")
+        name = name_node.text.decode("utf-8") if name_node is not None else ""
+        receiver_node = node.child_by_field_name("receiver")
+        receiver_type = ""
+        if receiver_node is not None:
+            for child in receiver_node.children:
+                if child.type == "parameter_declaration":
+                    type_node = child.child_by_field_name("type")
+                    if type_node is not None:
+                        # Strip pointer-receiver "*" prefix so `(h *Handler)` and
+                        # `(h Handler)` scope to the same receiver type name.
+                        receiver_type = type_node.text.decode("utf-8").lstrip("*")
+        if name:
+            defs.append((name, "method", receiver_type))
+        body = node.child_by_field_name("body")
+        if body is not None:
+            for child in body.children:
+                _walk_go(child, module_name, receiver_type, name, defs, calls, imports, inherits)
+        return
+
+    if node_type == "call_expression":
+        func_node = node.child_by_field_name("function")
+        callee: str | None = None
+        if func_node is not None:
+            if func_node.type == "identifier":
+                callee = func_node.text.decode("utf-8")
+            elif func_node.type == "selector_expression":
+                field = func_node.child_by_field_name("field")
+                if field is not None:
+                    callee = field.text.decode("utf-8")
+        if callee:
+            caller = current_func or current_class
+            calls.append((caller, callee))
+
+    for child in node.children:
+        _walk_go(child, module_name, current_class, current_func, defs, calls, imports, inherits)
+
+
+# ---------------------------------------------------------------------------
+# Rust AST walker (BE-5)
+# ---------------------------------------------------------------------------
+
+
+def _rust_collect_use_names(node: Any, imports: list[str]) -> None:
+    """Recursively collect imported symbol names from a Rust ``use`` argument.
+
+    Handles ``use a::b::C;`` (``scoped_identifier`` — take the ``name`` field,
+    the last path segment), ``use a::b::{C, D};`` (``scoped_use_list`` wrapping
+    a ``use_list`` of bare identifiers), and a bare ``use name;`` (a plain
+    ``identifier``).
+    """
+    if node.type == "scoped_identifier":
+        name_node = node.child_by_field_name("name")
+        if name_node is not None:
+            imports.append(name_node.text.decode("utf-8"))
+        return
+    if node.type == "identifier":
+        imports.append(node.text.decode("utf-8"))
+        return
+    if node.type == "scoped_use_list":
+        list_node = node.child_by_field_name("list")
+        if list_node is not None:
+            _rust_collect_use_names(list_node, imports)
+        return
+    if node.type == "use_list":
+        for child in node.children:
+            if child.type == "identifier":
+                imports.append(child.text.decode("utf-8"))
+            elif child.type in {"scoped_identifier", "use_list", "scoped_use_list"}:
+                _rust_collect_use_names(child, imports)
+        return
+
+
+def _walk_rust(
+    node: Any,
+    module_name: str,
+    current_class: str,
+    current_func: str,
+    defs: list[_DefRecord],
+    calls: list[_CallRecord],
+    imports: list[str],
+    inherits: list[_InheritsRecord],
+) -> None:
+    """Recursively walk a Rust tree-sitter AST, populating the record lists.
+
+    Rust has no class inheritance, so ``inherits`` always stays empty
+    (expected, not a gap). ``struct_item`` defines a "class"-kind symbol;
+    ``impl_item`` scopes its ``function_item`` children as methods of that
+    struct's name (``current_class`` slot repurposed to hold the ``impl``
+    target type name).
+    """
+    node_type = node.type
+
+    if node_type == "use_declaration":
+        arg_node = node.child_by_field_name("argument")
+        if arg_node is not None:
+            _rust_collect_use_names(arg_node, imports)
+        return
+
+    if node_type == "struct_item":
+        name_node = node.child_by_field_name("name")
+        name = name_node.text.decode("utf-8") if name_node is not None else ""
+        if name:
+            defs.append((name, "class", ""))
+        return
+
+    if node_type == "impl_item":
+        type_node = node.child_by_field_name("type")
+        impl_type = type_node.text.decode("utf-8") if type_node is not None else ""
+        body = node.child_by_field_name("body")
+        if body is not None:
+            for child in body.children:
+                _walk_rust(child, module_name, impl_type, "", defs, calls, imports, inherits)
+        return
+
+    if node_type == "function_item":
+        name_node = node.child_by_field_name("name")
+        name = name_node.text.decode("utf-8") if name_node is not None else ""
+        enclosing = current_class
+        if name:
+            kind = "method" if current_class else "function"
+            defs.append((name, kind, enclosing))
+        body = node.child_by_field_name("body")
+        if body is not None:
+            for child in body.children:
+                _walk_rust(child, module_name, "", name, defs, calls, imports, inherits)
+        return
+
+    if node_type == "call_expression":
+        func_node = node.child_by_field_name("function")
+        callee: str | None = None
+        if func_node is not None:
+            if func_node.type == "identifier":
+                callee = func_node.text.decode("utf-8")
+            elif func_node.type == "field_expression":
+                field = func_node.child_by_field_name("field")
+                if field is not None:
+                    callee = field.text.decode("utf-8")
+        if callee:
+            caller = current_func or current_class
+            calls.append((caller, callee))
+
+    for child in node.children:
+        _walk_rust(child, module_name, current_class, current_func, defs, calls, imports, inherits)
+
+
+# ---------------------------------------------------------------------------
+# Java AST walker (BE-5)
+# ---------------------------------------------------------------------------
+
+
+def _java_import_name(node: Any) -> str | None:
+    """Return the last-segment identifier text from a Java import's target node."""
+    if node.type == "scoped_identifier":
+        name_node = node.child_by_field_name("name")
+        return name_node.text.decode("utf-8") if name_node is not None else None
+    if node.type == "identifier":
+        return node.text.decode("utf-8")
+    return None
+
+
+def _walk_java(
+    node: Any,
+    module_name: str,
+    current_class: str,
+    current_func: str,
+    defs: list[_DefRecord],
+    calls: list[_CallRecord],
+    imports: list[str],
+    inherits: list[_InheritsRecord],
+) -> None:
+    """Recursively walk a Java tree-sitter AST, populating the record lists."""
+    node_type = node.type
+
+    if node_type == "import_declaration":
+        for child in node.children:
+            imported_name = _java_import_name(child)
+            if imported_name:
+                imports.append(imported_name)
+        return
+
+    if node_type == "class_declaration":
+        name_node = node.child_by_field_name("name")
+        name = name_node.text.decode("utf-8") if name_node is not None else ""
+        enclosing = current_class
+        if name:
+            defs.append((name, "class", enclosing))
+            superclass_node = node.child_by_field_name("superclass")
+            if superclass_node is not None:
+                for child in superclass_node.children:
+                    if child.type == "type_identifier":
+                        inherits.append((name, child.text.decode("utf-8")))
+        body = node.child_by_field_name("body")
+        if body is not None:
+            for child in body.children:
+                _walk_java(child, module_name, name, "", defs, calls, imports, inherits)
+        return
+
+    if node_type == "method_declaration":
+        name_node = node.child_by_field_name("name")
+        name = name_node.text.decode("utf-8") if name_node is not None else ""
+        enclosing = current_class
+        if name:
+            defs.append((name, "method", enclosing))
+        body = node.child_by_field_name("body")
+        if body is not None:
+            for child in body.children:
+                _walk_java(child, module_name, "", name, defs, calls, imports, inherits)
+        return
+
+    if node_type == "method_invocation":
+        name_node = node.child_by_field_name("name")
+        callee = name_node.text.decode("utf-8") if name_node is not None else None
+        if callee:
+            caller = current_func or current_class
+            calls.append((caller, callee))
+        # fall through — recurse into children (e.g. nested calls in arguments)
+
+    for child in node.children:
+        _walk_java(child, module_name, current_class, current_func, defs, calls, imports, inherits)
+
+
+# ---------------------------------------------------------------------------
+# Bash AST walker (BE-5)
+# ---------------------------------------------------------------------------
+
+
+def _walk_bash(
+    node: Any,
+    module_name: str,
+    current_class: str,
+    current_func: str,
+    defs: list[_DefRecord],
+    calls: list[_CallRecord],
+    imports: list[str],
+    inherits: list[_InheritsRecord],
+) -> None:
+    """Recursively walk a Bash tree-sitter AST, populating the record lists.
+
+    Bash has no classes or imports in the traditional sense, so ``inherits``
+    and ``imports`` always stay empty (expected, not a gap). Function
+    definitions map to ``defs``; every command invocation (builtin, external
+    binary, or user-defined function — tree-sitter-bash makes no distinction
+    at parse time) maps to ``calls``; a call to a name not defined in this
+    file (e.g. ``echo``, ``ls``) is dropped downstream by the same
+    same-file-only resolution every other language goes through.
+    """
+    node_type = node.type
+
+    if node_type == "function_definition":
+        name_node = node.child_by_field_name("name")
+        name = name_node.text.decode("utf-8") if name_node is not None else ""
+        if name:
+            defs.append((name, "function", ""))
+        body = node.child_by_field_name("body")
+        if body is not None:
+            for child in body.children:
+                _walk_bash(child, module_name, "", name, defs, calls, imports, inherits)
+        return
+
+    if node_type == "command":
+        name_node = node.child_by_field_name("name")
+        callee: str | None = None
+        if name_node is not None:
+            for child in name_node.children:
+                if child.type == "word":
+                    callee = child.text.decode("utf-8")
+        if callee:
+            caller = current_func or current_class
+            calls.append((caller, callee))
+        # fall through — recurse into children (e.g. command substitution)
+
+    for child in node.children:
+        _walk_bash(child, module_name, current_class, current_func, defs, calls, imports, inherits)
+
+
+# ---------------------------------------------------------------------------
+# Swift AST walker (BE-5 — new grammar, per Q7)
+# ---------------------------------------------------------------------------
+
+
+def _swift_import_name(node: Any) -> str | None:
+    """Return the imported module name from a Swift ``import_declaration`` target node."""
+    if node.type == "identifier":
+        for child in node.children:
+            if child.type == "simple_identifier":
+                return child.text.decode("utf-8")
+        return node.text.decode("utf-8")
+    return None
+
+
+def _walk_swift(
+    node: Any,
+    module_name: str,
+    current_class: str,
+    current_func: str,
+    defs: list[_DefRecord],
+    calls: list[_CallRecord],
+    imports: list[str],
+    inherits: list[_InheritsRecord],
+) -> None:
+    """Recursively walk a Swift tree-sitter AST, populating the record lists."""
+    node_type = node.type
+
+    if node_type == "import_declaration":
+        for child in node.children:
+            imported_name = _swift_import_name(child)
+            if imported_name:
+                imports.append(imported_name)
+        return
+
+    if node_type == "class_declaration":
+        name_node = node.child_by_field_name("name")
+        name = name_node.text.decode("utf-8") if name_node is not None else ""
+        enclosing = current_class
+        if name:
+            defs.append((name, "class", enclosing))
+            for child in node.children:
+                if child.type == "inheritance_specifier":
+                    for spec_child in child.children:
+                        if spec_child.type == "user_type":
+                            for type_child in spec_child.children:
+                                if type_child.type == "type_identifier":
+                                    inherits.append((name, type_child.text.decode("utf-8")))
+        body = node.child_by_field_name("body")
+        if body is not None:
+            for child in body.children:
+                _walk_swift(child, module_name, name, "", defs, calls, imports, inherits)
+        return
+
+    if node_type == "function_declaration":
+        # NOTE: this grammar labels BOTH the function name and its return type
+        # "name" (a return type is `name=user_type`) — child_by_field_name
+        # returns the FIRST match, which is the function's own name (verified
+        # against the installed grammar; the name node always precedes the
+        # return-type node positionally).
+        name_node = node.child_by_field_name("name")
+        name = name_node.text.decode("utf-8") if name_node is not None else ""
+        enclosing = current_class
+        if name:
+            kind = "method" if current_class else "function"
+            defs.append((name, kind, enclosing))
+        body = node.child_by_field_name("body")
+        if body is not None:
+            for child in body.children:
+                _walk_swift(child, module_name, "", name, defs, calls, imports, inherits)
+        return
+
+    if node_type == "call_expression":
+        callee: str | None = None
+        if node.children:
+            first = node.children[0]
+            if first.type == "simple_identifier":
+                callee = first.text.decode("utf-8")
+            elif first.type == "navigation_expression":
+                # Member/navigation call (e.g. `self.baz()`, `x.baz()`): the
+                # callee name is the `simple_identifier` inside the
+                # `navigation_suffix` child, not the receiver expression.
+                for suffix_child in first.children:
+                    if suffix_child.type == "navigation_suffix":
+                        for name_child in suffix_child.children:
+                            if name_child.type == "simple_identifier":
+                                callee = name_child.text.decode("utf-8")
+        if callee:
+            caller = current_func or current_class
+            calls.append((caller, callee))
+
+    for child in node.children:
+        _walk_swift(child, module_name, current_class, current_func, defs, calls, imports, inherits)
+
+
+# ---------------------------------------------------------------------------
+# C# AST walker (BE-5 — new grammar, per Q7)
+# ---------------------------------------------------------------------------
+
+
+def _csharp_using_name(node: Any) -> str | None:
+    """Return the last-segment identifier text from a C# ``using_directive`` target node."""
+    if node.type == "qualified_name":
+        name_node = node.child_by_field_name("name")
+        return name_node.text.decode("utf-8") if name_node is not None else None
+    if node.type == "identifier":
+        return node.text.decode("utf-8")
+    return None
+
+
+def _walk_csharp(
+    node: Any,
+    module_name: str,
+    current_class: str,
+    current_func: str,
+    defs: list[_DefRecord],
+    calls: list[_CallRecord],
+    imports: list[str],
+    inherits: list[_InheritsRecord],
+) -> None:
+    """Recursively walk a C# tree-sitter AST, populating the record lists."""
+    node_type = node.type
+
+    if node_type == "using_directive":
+        for child in node.children:
+            imported_name = _csharp_using_name(child)
+            if imported_name:
+                imports.append(imported_name)
+        return
+
+    if node_type == "class_declaration":
+        name_node = node.child_by_field_name("name")
+        name = name_node.text.decode("utf-8") if name_node is not None else ""
+        enclosing = current_class
+        if name:
+            defs.append((name, "class", enclosing))
+            for child in node.children:
+                if child.type == "base_list":
+                    for base_child in child.children:
+                        if base_child.type == "identifier":
+                            inherits.append((name, base_child.text.decode("utf-8")))
+        body = node.child_by_field_name("body")
+        if body is not None:
+            for child in body.children:
+                _walk_csharp(child, module_name, name, "", defs, calls, imports, inherits)
+        return
+
+    if node_type == "method_declaration":
+        name_node = node.child_by_field_name("name")
+        name = name_node.text.decode("utf-8") if name_node is not None else ""
+        enclosing = current_class
+        if name:
+            defs.append((name, "method", enclosing))
+        body = node.child_by_field_name("body")
+        if body is not None:
+            for child in body.children:
+                _walk_csharp(child, module_name, "", name, defs, calls, imports, inherits)
+        return
+
+    if node_type == "invocation_expression":
+        func_node = node.child_by_field_name("function")
+        callee: str | None = None
+        if func_node is not None:
+            if func_node.type == "identifier":
+                callee = func_node.text.decode("utf-8")
+            elif func_node.type == "member_access_expression":
+                name_node = func_node.child_by_field_name("name")
+                if name_node is not None:
+                    callee = name_node.text.decode("utf-8")
+        if callee:
+            caller = current_func or current_class
+            calls.append((caller, callee))
+
+    for child in node.children:
+        _walk_csharp(child, module_name, current_class, current_func, defs, calls, imports, inherits)
+
+
+_WALKERS: dict[str, Any] = {
+    ".py": _walk_python,
+    ".ts": _walk_typescript,
+    ".js": _walk_javascript,
+    ".go": _walk_go,
+    ".rs": _walk_rust,
+    ".java": _walk_java,
+    ".sh": _walk_bash,
+    ".swift": _walk_swift,
+    ".cs": _walk_csharp,
+}
+"""Extension -> walker function. ``_parse_and_walk`` dispatches through this."""
