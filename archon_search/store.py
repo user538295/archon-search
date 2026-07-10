@@ -2390,7 +2390,7 @@ class SearchStore:
             if not batch_doc_ids:
                 break
 
-            await table.delete(f"({expired_pred}) AND {_where_in('doc_id', batch_doc_ids)}")
+            await table.delete("(" + expired_pred + ") AND " + _where_in("doc_id", batch_doc_ids))
             for doc_id in batch_doc_ids:
                 remaining_rows = (
                     await table.query()
