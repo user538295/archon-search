@@ -121,6 +121,7 @@ _SEARCH_RESPONSE_PUBLIC_FIELDS = {
     "expansion_used",
     "expansion_warning",
     "graph_expansion_applied",
+    "ppr_entities_matched",
 }
 
 _COLLECTION_LIST_PUBLIC_FIELDS = {

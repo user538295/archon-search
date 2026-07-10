@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 _VALID_METRIC_SCOPES = ("retrieval", "routing")
-_VALID_GRAPH_MODES = (None, "naive", "local", "global")
+_VALID_GRAPH_MODES = (None, "naive", "local", "global", "ppr")
 
 # Same pattern as archon_search.store._COLLECTION_RE
 _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")

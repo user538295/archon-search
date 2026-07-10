@@ -112,7 +112,7 @@ class ExplainPipelineResult:
     rag_fusion_attempted: bool = False
     rag_fusion_failure_reason: str | None = None
     rag_fusion_sub_query_results: list[RagFusionSubQueryInfo] | None = None
-    graph_mode_applied: Literal["naive", "local", "global"] | None = None
+    graph_mode_applied: Literal["naive", "local", "global", "ppr"] | None = None
 
 
 class ExplainMultiCollectionNoRerankError(Exception):
@@ -1539,7 +1539,7 @@ class SearchPipeline:
         rag_fusion: bool = False,
         rag_fusion_generator: "RAGFusionGenerator | None" = None,
         rag_fusion_config: "RAGFusionConfig | None" = None,
-        graph_mode: Literal["naive", "local", "global"] | None = None,
+        graph_mode: Literal["naive", "local", "global", "ppr"] | None = None,
         scope_filter: str | None = None,
     ) -> ExplainPipelineResult:
         """Fetch an amplified pool (``max(top_k_retrieve*3, 20)`` candidates) and, when
@@ -1988,7 +1988,7 @@ class SearchPipeline:
         namespace: str,
         query_vector: list[float] | None,
         embedder: "Embedder",
-        graph_mode: Literal["naive", "local", "global"],
+        graph_mode: Literal["naive", "local", "global", "ppr"],
         scope_filter: str | None = None,
     ) -> ExplainPipelineResult:
         """Merge winning graph candidates with hybrid baseline, ACL filter, rerank, and return ExplainPipelineResult."""

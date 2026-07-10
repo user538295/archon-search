@@ -88,6 +88,7 @@ class McpSearchResponse(BaseModel):
     expansion_used: bool = False
     expansion_warning: str | None = None
     graph_expansion_applied: bool = False
+    ppr_entities_matched: int | None = None
 
 
 # ---------------------------------------------------------------------------

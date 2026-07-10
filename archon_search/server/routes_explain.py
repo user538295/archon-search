@@ -252,7 +252,7 @@ class ExplainRequest(BaseModel):
     rerank: bool = True
     hyde: bool = False
     rag_fusion: bool = False
-    graph_mode: Literal["naive", "local", "global"] | None = None
+    graph_mode: Literal["naive", "local", "global", "ppr"] | None = None
     scope_filter: str | None = None
 
     @field_validator("query")
@@ -319,7 +319,9 @@ class ExplainResponse(BaseModel):
     rag_fusion_attempted: bool = False
     rag_fusion_failure_reason: str | None = None
     rag_fusion_sub_queries: list[RagFusionSubQueryResult] | None = None
-    graph_mode_applied: Literal["naive", "local", "global"] | None = None
+    graph_mode_applied: Literal["naive", "local", "global", "ppr"] | None = None
+    # BE-2 — PPR retrieval: count of seed entities matched during PPR graph walk
+    ppr_entities_matched: int | None = None
 
     @classmethod
     def from_pipeline_result(
@@ -337,7 +339,8 @@ class ExplainResponse(BaseModel):
         rag_fusion_attempted: bool = False,
         rag_fusion_failure_reason: str | None = None,
         rag_fusion_sub_query_results: list | None = None,
-        graph_mode_applied: Literal["naive", "local", "global"] | None = None,
+        graph_mode_applied: Literal["naive", "local", "global", "ppr"] | None = None,
+        ppr_entities_matched: int | None = None,
     ) -> ExplainResponse:
         sub_queries: list[RagFusionSubQueryResult] | None = None
         if rag_fusion_sub_query_results is not None:
@@ -369,6 +372,7 @@ class ExplainResponse(BaseModel):
             rag_fusion_failure_reason=rag_fusion_failure_reason,
             rag_fusion_sub_queries=sub_queries,
             graph_mode_applied=graph_mode_applied,
+            ppr_entities_matched=ppr_entities_matched,
         )
 
 

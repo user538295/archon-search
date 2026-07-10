@@ -107,6 +107,7 @@ def test_mcp_search_response_fields():
         "expansion_used",
         "expansion_warning",
         "graph_expansion_applied",
+        "ppr_entities_matched",
     }
 
 

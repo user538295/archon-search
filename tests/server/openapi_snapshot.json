@@ -918,7 +918,8 @@
                 "enum": [
                   "naive",
                   "local",
-                  "global"
+                  "global",
+                  "ppr"
                 ],
                 "type": "string"
               },
@@ -1001,7 +1002,8 @@
                 "enum": [
                   "naive",
                   "local",
-                  "global"
+                  "global",
+                  "ppr"
                 ],
                 "type": "string"
               },
@@ -1022,6 +1024,17 @@
             },
             "title": "Near Misses",
             "type": "array"
+          },
+          "ppr_entities_matched": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ppr Entities Matched"
           },
           "rag_fusion_applied": {
             "default": false,
@@ -3096,7 +3109,8 @@
                 "enum": [
                   "naive",
                   "local",
-                  "global"
+                  "global",
+                  "ppr"
                 ],
                 "type": "string"
               },
@@ -3197,6 +3211,17 @@
             "default": false,
             "title": "Hyde Applied",
             "type": "boolean"
+          },
+          "ppr_entities_matched": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ppr Entities Matched"
           },
           "rag_fusion_applied": {
             "default": false,

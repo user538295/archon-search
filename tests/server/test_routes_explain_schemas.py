@@ -250,6 +250,7 @@ def test_explain_response_round_trips_brief_example() -> None:
         "rag_fusion_failure_reason": None,
         "rag_fusion_sub_queries": None,
         "graph_mode_applied": None,
+        "ppr_entities_matched": None,
     }
     resp = ExplainResponse.model_validate(payload)
     dumped = resp.model_dump(mode="json", exclude_none=False)

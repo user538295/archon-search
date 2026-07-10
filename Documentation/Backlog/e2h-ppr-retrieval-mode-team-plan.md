@@ -392,19 +392,19 @@ graph LR
         - [x] #integration_test — `test_config_pprFields_loadedFromToml` — toml with [graph] ppr_damping=0.9 reaches GraphConfig.ppr_damping; run after update to tests/path_home_allowlist.txt for new dataclass fields
         - [x] #integration_test — `test_config_pprDamping_outOfRange_rejectsAtStartup` — write a TOML with [graph] ppr_damping=1.5 to tmp_path; call `load_config(serve=False)` with ARCHON_SEARCH_DATA_DIR pointed at tmp_path → raises ConfigError at config-load time, not at first PPR request. This proves the guard catches bad values before the server starts (versus the unit test which only tests the dataclass constructor in isolation).
 
-- [ ] **BE-2** — Widen `graph_mode` Literal to include `"ppr"` and add `ppr_entities_matched` to all schemas #backend-role
+- [x] **BE-2** — Widen `graph_mode` Literal to include `"ppr"` and add `ppr_entities_matched` to all schemas #backend-role
     - Frameworks & Drivers · 3.0h
     - needs K-1 · completes C1
     - Tests
-        - #unit_test — `test_searchRequest_pprMode_acceptedByPydantic` — SearchRequest(query="q", graph_mode="ppr") validates without error
-        - #unit_test — `test_explainRequest_pprMode_acceptedByPydantic` — ExplainRequest(query="q", graph_mode="ppr") validates
-        - #unit_test — `test_searchResponse_pprEntitiesMatched_field_isOptionalInt` — SearchResponse.model_fields includes ppr_entities_matched
-        - #unit_test — `test_explainResponse_pprEntitiesMatched_field_isOptionalInt` — ExplainResponse has ppr_entities_matched
-        - #unit_test — `test_mcpValidModes_includesPpr` — "ppr" in _VALID_GRAPH_MODES
-        - #unit_test — `test_openApiSnapshot_updated` — regen openapi snapshot: `uv run --python 3.12 pytest tests/server/test_openapi_snapshot.py --update-openapi-snapshot`
+        - [x] #unit_test — `test_searchRequest_pprMode_acceptedByPydantic` — SearchRequest(query="q", graph_mode="ppr") validates without error
+        - [x] #unit_test — `test_explainRequest_pprMode_acceptedByPydantic` — ExplainRequest(query="q", graph_mode="ppr") validates
+        - [x] #unit_test — `test_searchResponse_pprEntitiesMatched_field_isOptionalInt` — SearchResponse.model_fields includes ppr_entities_matched
+        - [x] #unit_test — `test_explainResponse_pprEntitiesMatched_field_isOptionalInt` — ExplainResponse has ppr_entities_matched
+        - [x] #unit_test — `test_mcpValidModes_includesPpr` — "ppr" in _VALID_GRAPH_MODES
+        - [x] #unit_test — `test_openApiSnapshot_updated` — regen openapi snapshot: `uv run --python 3.12 pytest tests/server/test_openapi_snapshot.py --update-openapi-snapshot`
     - Duties
         - Run `npx tsp compile api-contracts/e2h-ppr-http-api.tsp` to emit the OpenAPI schema before the snapshot test.
-        - Update MCP `search_with_context` rejection message to include 'ppr' in the list of modes that are not supported, e.g. change '(naive, local, global)' to '(naive, local, global, ppr)'.
+        - [x] Update MCP `search_with_context` rejection message to include 'ppr' in the list of modes that are not supported, e.g. change '(naive, local, global)' to '(naive, local, global, ppr)'.
 
 - [ ] **BE-3** — Add `"ppr"` dispatch stub to pipeline: fallback to hybrid, propagate `ppr_entities_matched=0` #backend-role
     - Use Cases · 2.0h

@@ -120,7 +120,7 @@ class McpErrorResponse(TypedDict):
 
 
 _ERR_SCHEMA = "schema_validation_error"
-_VALID_GRAPH_MODES: tuple[None | str, ...] = (None, "naive", "local", "global")
+_VALID_GRAPH_MODES: tuple[None | str, ...] = (None, "naive", "local", "global", "ppr")
 # E2a — ingest TTL and scope validation limits (same constraints as routes_jobs.py IngestRequest validators)
 _INT32_MAX: int = 2**31 - 1
 _MAX_SCOPE_LIST_ITEMS: int = 100
@@ -629,7 +629,7 @@ def create_app(
         # graph_mode on search_with_context is not supported; use the search tool instead.
         if graph_mode is not None:
             return McpErrorResponse(
-                error="graph_mode (naive, local, global) on search_with_context is not supported; use the search tool instead",
+                error="graph_mode (naive, local, global, ppr) on search_with_context is not supported; use the search tool instead",
                 code="graph_mode_not_supported",
             )
 

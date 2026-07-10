@@ -45,7 +45,7 @@ class SearchRequest(BaseModel):
     filters: SearchFilters | None = None
     hyde: bool = False
     rag_fusion: bool = False
-    graph_mode: Literal["naive", "local", "global"] | None = None
+    graph_mode: Literal["naive", "local", "global", "ppr"] | None = None
     scope_filter: str | None = None
 
     @field_validator("collection")
@@ -136,6 +136,8 @@ class SearchResponse(BaseModel):
     expansion_used: bool = False
     expansion_warning: str | None = None
     applied_filters: SearchFilters | None = None
+    # BE-2 — PPR retrieval: count of seed entities matched during PPR graph walk
+    ppr_entities_matched: int | None = None
 
 
 @router.post("/search", response_model=SearchResponse)

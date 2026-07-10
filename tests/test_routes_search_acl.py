@@ -37,6 +37,7 @@ def test_search_response_schema_fields() -> None:
         "expansion_used": False,
         "expansion_warning": None,
         "applied_filters": None,
+        "ppr_entities_matched": None,
     }
 
 
