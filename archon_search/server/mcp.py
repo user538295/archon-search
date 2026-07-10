@@ -1833,6 +1833,7 @@ def create_app(
     # -----------------------------------------------------------------------
 
     from archon_search.graph_inspector import inspect_collection, inspect_cross_collection  # noqa: PLC0415
+    from archon_search.graph_types import DEFAULT_IMPACT_DEPTH, ImpactDirection  # noqa: PLC0415
 
     async def _resolve_salience_context(
         resolved_salience_mode: str,
@@ -2062,6 +2063,94 @@ def create_app(
             }
         except Exception as exc:
             logger.exception("get_graph_cross_collection failed")
+            return McpErrorResponse(error=str(exc), code="internal_error")
+
+    def _impact_edge_to_dict(e: Any) -> dict[str, Any]:
+        """Convert one impact-traversal edge entry to a dict — E2g BE-9."""
+        return {
+            "entity_id": e.entity_id,
+            "entity_name": e.entity_name,
+            "relationship_type": e.relationship_type,
+            "extraction_method": e.extraction_method,
+            "depth": e.depth,
+        }
+
+    def _impact_group_to_dict(group: Any) -> dict[str, Any]:
+        """Convert an ``ImpactGroup`` to a dict, mirroring the REST response shape — E2g BE-9."""
+        return {
+            "direct": [_impact_edge_to_dict(e) for e in group.direct],
+            "indirect": [_impact_edge_to_dict(e) for e in group.indirect],
+            "truncated": group.truncated,
+            "omitted_count": group.omitted_count,
+        }
+
+    @app.tool()
+    async def graph_impact(
+        collection: str,
+        symbol: str,
+        file_path: str | None = None,
+        depth: int | None = None,
+        direction: str | None = None,
+        extraction_method_filter: str | None = None,
+    ) -> dict[str, Any]:
+        """Blast-radius (caller/callee) impact analysis for a code symbol — E2g BE-9.
+
+        ``file_path`` disambiguates same-named symbols to the one defined in that file.
+        ``depth`` (default 2, hard-capped server-side at MAX_IMPACT_DEPTH) and
+        ``direction`` ("callers", "callees", or "both"; default "both") are optional.
+        ``extraction_method_filter`` restricts traversal to edges with that extraction method.
+
+        Returns a dict mirroring GraphStore.compute_impact's ImpactResult 1:1
+        (symbol, callers, callees, depth_used), or an McpErrorResponse.
+        """
+        # Guard: graph must be enabled and graph_store must be available
+        _gi_config = getattr(config, "graph", None)
+        _gi_enabled = getattr(_gi_config, "enabled", False) if _gi_config is not None else False
+        if not _gi_enabled or graph_store is None:
+            return McpErrorResponse(
+                error="graph inspection requires [graph] enabled=true in server config",
+                code="graph_disabled",
+            )
+
+        ns = _get_request_namespace()
+        try:
+            meta = await pipeline.get_collection_meta(collection, namespace=ns)
+            if meta is None:
+                return McpErrorResponse(error=f"collection {collection!r} not found", code="not_found")
+
+            if depth is not None and depth < 1:
+                return McpErrorResponse(error="depth must be >= 1", code="validation_error")
+
+            # BE-9 fills depth/direction defaults at this surface's Presentation->Adapter boundary
+            effective_depth = depth if depth is not None else DEFAULT_IMPACT_DEPTH
+            try:
+                effective_direction = (
+                    ImpactDirection(direction) if direction is not None else ImpactDirection.both
+                )
+            except ValueError:
+                return McpErrorResponse(
+                    error=f"invalid direction {direction!r}; must be one of 'callers', 'callees', 'both'",
+                    code="validation_error",
+                )
+
+            result = await graph_store.compute_impact(
+                collection,
+                symbol,
+                effective_depth,
+                effective_direction,
+                extraction_method_filter,
+                file_path,
+                ns,
+            )
+
+            return {
+                "symbol": result.symbol,
+                "callers": _impact_group_to_dict(result.callers),
+                "callees": _impact_group_to_dict(result.callees),
+                "depth_used": result.depth_used,
+            }
+        except Exception as exc:
+            logger.exception("graph_impact failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
 
     @app.custom_route("/health", methods=["GET"])

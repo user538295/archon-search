@@ -728,3 +728,44 @@ class CrossCollectionGraphInspectionResponse(BaseModel):
     """Total merged edge count (after node survival filter, before edge cap)."""
     salience_mode: Literal["frequency", "tfidf", "importance"] = "frequency"
     """Salience scoring mode used: 'frequency' (chunk ratio, clamped), 'tfidf' (TF×IDF), or 'importance' (persisted PageRank over code-symbol edges, nulls-last)."""
+
+
+class ImpactEdgeResponse(BaseModel):
+    """One caller/callee entry in an ``ImpactGroupResponse`` — E2g BE-9."""
+
+    entity_id: str
+    """ID of the neighbouring graph node reached by this traversal step."""
+    entity_name: str
+    """Display name of the neighbouring entity."""
+    relationship_type: str
+    """Relationship type of the edge connecting this hop."""
+    extraction_method: str | None
+    """Extraction method of the edge connecting this hop."""
+    depth: int
+    """Hop distance from the resolved root symbol (1 = direct, 2+ = indirect)."""
+
+
+class ImpactGroupResponse(BaseModel):
+    """Direct vs. indirect callers/callees with truncation visibility — E2g BE-9."""
+
+    direct: list[ImpactEdgeResponse]
+    """Hop-1 neighbours, ordered by PageRank descending (nulls-last)."""
+    indirect: list[ImpactEdgeResponse]
+    """Hop 2..depth neighbours, deduped by node ID, excluding anything already in ``direct``."""
+    truncated: bool
+    """``True`` when this group's combined ``direct``+``indirect`` population was capped."""
+    omitted_count: int
+    """Number of entries excluded by the group-size cap; ``0`` when ``truncated`` is ``False``."""
+
+
+class GraphImpactResponse(BaseModel):
+    """Response body for GET /graph/{collection}/impact/{symbol} (E2g BE-9)."""
+
+    symbol: str
+    """The requested symbol name (as passed by the caller, not normalized)."""
+    callers: ImpactGroupResponse
+    """Callers-side blast radius; empty when not requested or the symbol could not be resolved."""
+    callees: ImpactGroupResponse
+    """Callees-side blast radius; empty when not requested or the symbol could not be resolved."""
+    depth_used: int
+    """Actual max hop reached (``<= min(depth, MAX_IMPACT_DEPTH)``); ``0`` when unresolved."""

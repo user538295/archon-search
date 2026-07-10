@@ -19,11 +19,15 @@ from archon_search.graph_inspector import (
     inspect_cross_collection,
     to_graphml,
 )
+from archon_search.graph_types import DEFAULT_IMPACT_DEPTH, ImpactDirection, ImpactResult
 from archon_search.server.schemas import (
     CrossCollectionGraphInspectionResponse,
     GraphEdgeResponse,
+    GraphImpactResponse,
     GraphInspectionResponse,
     GraphNodeResponse,
+    ImpactEdgeResponse,
+    ImpactGroupResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -225,6 +229,70 @@ async def get_graph(
         return _view_to_response(view)
 
 
+@router.get("/graph/{collection}/impact/{symbol}", name="get_graph_impact", response_model=GraphImpactResponse)
+async def get_graph_impact(
+    collection: str,
+    symbol: str,
+    file_path: str | None = Query(default=None),
+    depth: int | None = Query(default=None, ge=1),
+    direction: str | None = Query(default=None),
+    extraction_method_filter: str | None = Query(default=None),
+    request: Request = None,
+):
+    """Blast-radius (caller/callee) impact analysis for a code symbol — E2g BE-9.
+
+    Query parameters:
+    - `file_path`: disambiguates same-named symbols to the one defined in this file.
+    - `depth`: traversal depth (default 2, hard-capped at MAX_IMPACT_DEPTH server-side).
+    - `direction`: "callers", "callees", or "both" (default "both").
+    - `extraction_method_filter`: only traverse edges with this extraction method.
+
+    Returns:
+    - 200: GraphImpactResponse mirroring GraphStore.compute_impact's ImpactResult 1:1
+    - 404: Collection not found
+    - 422: graph.enabled=false or invalid direction value
+    """
+    pipeline = request.app.state.pipeline
+    graph_store = request.app.state.graph_store
+    config = request.app.state.config
+    ns = request.state.namespace
+
+    # Guard 1: Check if graph is enabled
+    if not config.graph.enabled:
+        raise HTTPException(
+            status_code=422,
+            detail="graph inspection requires [graph] enabled=true in server config",
+        )
+
+    # Guard 2: Check if collection exists in the caller's namespace
+    collection_meta = await pipeline.get_collection_meta(collection, namespace=ns)
+    if collection_meta is None:
+        raise HTTPException(status_code=404, detail="collection not found")
+
+    # BE-9 fills depth/direction defaults at this surface's Presentation->Adapter boundary
+    effective_depth = depth if depth is not None else DEFAULT_IMPACT_DEPTH
+    try:
+        effective_direction = (
+            ImpactDirection(direction) if direction is not None else ImpactDirection.both
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail=f"invalid direction {direction!r}; must be one of 'callers', 'callees', 'both'",
+        )
+
+    result = await graph_store.compute_impact(
+        collection,
+        symbol,
+        effective_depth,
+        effective_direction,
+        extraction_method_filter,
+        file_path,
+        ns,
+    )
+    return _impact_result_to_response(result)
+
+
 def _cross_collection_view_to_response(
     view: CrossCollectionGraphView,
 ) -> CrossCollectionGraphInspectionResponse:
@@ -293,4 +361,34 @@ def _view_to_response(view: CollectionGraphView) -> GraphInspectionResponse:
         salience_mode=view.salience_mode,
     )
 
+
+def _impact_edge_to_response(e) -> ImpactEdgeResponse:
+    """Convert one impact-traversal edge entry to an ``ImpactEdgeResponse`` — E2g BE-9."""
+    return ImpactEdgeResponse(
+        entity_id=e.entity_id,
+        entity_name=e.entity_name,
+        relationship_type=e.relationship_type,
+        extraction_method=e.extraction_method,
+        depth=e.depth,
+    )
+
+
+def _impact_group_to_response(group) -> ImpactGroupResponse:
+    """Convert an ``ImpactGroup`` to an ``ImpactGroupResponse`` — E2g BE-9."""
+    return ImpactGroupResponse(
+        direct=[_impact_edge_to_response(e) for e in group.direct],
+        indirect=[_impact_edge_to_response(e) for e in group.indirect],
+        truncated=group.truncated,
+        omitted_count=group.omitted_count,
+    )
+
+
+def _impact_result_to_response(result: ImpactResult) -> GraphImpactResponse:
+    """Convert an ``ImpactResult`` to a ``GraphImpactResponse`` 1:1 — E2g BE-9."""
+    return GraphImpactResponse(
+        symbol=result.symbol,
+        callers=_impact_group_to_response(result.callers),
+        callees=_impact_group_to_response(result.callees),
+        depth_used=result.depth_used,
+    )
 

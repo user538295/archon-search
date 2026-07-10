@@ -1411,6 +1411,33 @@
         "title": "GraphEdgeResponse",
         "type": "object"
       },
+      "GraphImpactResponse": {
+        "description": "Response body for GET /graph/{collection}/impact/{symbol} (E2g BE-9).",
+        "properties": {
+          "callees": {
+            "$ref": "#/components/schemas/ImpactGroupResponse"
+          },
+          "callers": {
+            "$ref": "#/components/schemas/ImpactGroupResponse"
+          },
+          "depth_used": {
+            "title": "Depth Used",
+            "type": "integer"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "callers",
+          "callees",
+          "depth_used"
+        ],
+        "title": "GraphImpactResponse",
+        "type": "object"
+      },
       "GraphInspectionResponse": {
         "description": "Response body for GET /graph/{collection} (E2b).",
         "properties": {
@@ -1604,6 +1631,82 @@
           "key_available"
         ],
         "title": "HydeStatusDetail",
+        "type": "object"
+      },
+      "ImpactEdgeResponse": {
+        "description": "One caller/callee entry in an ``ImpactGroupResponse`` \u2014 E2g BE-9.",
+        "properties": {
+          "depth": {
+            "title": "Depth",
+            "type": "integer"
+          },
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "entity_name": {
+            "title": "Entity Name",
+            "type": "string"
+          },
+          "extraction_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extraction Method"
+          },
+          "relationship_type": {
+            "title": "Relationship Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_id",
+          "entity_name",
+          "relationship_type",
+          "extraction_method",
+          "depth"
+        ],
+        "title": "ImpactEdgeResponse",
+        "type": "object"
+      },
+      "ImpactGroupResponse": {
+        "description": "Direct vs. indirect callers/callees with truncation visibility \u2014 E2g BE-9.",
+        "properties": {
+          "direct": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactEdgeResponse"
+            },
+            "title": "Direct",
+            "type": "array"
+          },
+          "indirect": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactEdgeResponse"
+            },
+            "title": "Indirect",
+            "type": "array"
+          },
+          "omitted_count": {
+            "title": "Omitted Count",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "direct",
+          "indirect",
+          "truncated",
+          "omitted_count"
+        ],
+        "title": "ImpactGroupResponse",
         "type": "object"
       },
       "ImportRequest": {
@@ -4925,6 +5028,125 @@
           }
         ],
         "summary": "Get Graph"
+      }
+    },
+    "/graph/{collection}/impact/{symbol}": {
+      "get": {
+        "description": "Blast-radius (caller/callee) impact analysis for a code symbol \u2014 E2g BE-9.\n\nQuery parameters:\n- `file_path`: disambiguates same-named symbols to the one defined in this file.\n- `depth`: traversal depth (default 2, hard-capped at MAX_IMPACT_DEPTH server-side).\n- `direction`: \"callers\", \"callees\", or \"both\" (default \"both\").\n- `extraction_method_filter`: only traverse edges with this extraction method.\n\nReturns:\n- 200: GraphImpactResponse mirroring GraphStore.compute_impact's ImpactResult 1:1\n- 404: Collection not found\n- 422: graph.enabled=false or invalid direction value",
+        "operationId": "get_graph_impact_graph__collection__impact__symbol__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "title": "Collection",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "file_path",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "File Path"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Depth"
+            }
+          },
+          {
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Direction"
+            }
+          },
+          {
+            "in": "query",
+            "name": "extraction_method_filter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Extraction Method Filter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphImpactResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Graph Impact"
       }
     },
     "/health": {

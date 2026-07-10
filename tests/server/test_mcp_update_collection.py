@@ -118,14 +118,14 @@ def _make_config(collections: list[str] | None = None) -> Any:
 
 
 def test_mcp_tool_count_is_15() -> None:
-    """create_app must register exactly 15 tools (13 base + 2 graph inspection E2b)."""
+    """create_app must register exactly 16 tools (13 base + 2 graph inspection E2b + 1 graph_impact E2g BE-9)."""
     pipeline = MagicMock()
     pipeline.store = MagicMock()
 
     job_store = MagicMock()
 
     app = _make_mcp_app(pipeline, job_store=job_store)
-    assert len(app.tools) == 15, f"Expected 15 tools, got {len(app.tools)}: {list(app.tools)}"
+    assert len(app.tools) == 16, f"Expected 16 tools, got {len(app.tools)}: {list(app.tools)}"
 
 
 # ---------------------------------------------------------------------------
