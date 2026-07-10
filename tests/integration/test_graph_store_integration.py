@@ -543,3 +543,53 @@ def test_write_graph_round_trips_new_defref_relationship_types(tmp_path) -> None
     edges = asyncio.run(_run())
     assert len(edges) == 1
     assert edges[0].relationship_type == RelationshipType.calls
+
+
+# ---------------------------------------------------------------------------
+# get_mentions_for_entity_ids (BE-4 Contract C4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_getMentionsForEntityIds_realStore_roundTrip(tmp_path) -> None:
+    """ensure_graph_tables + write_mentions + get_mentions_for_entity_ids → correct rows returned."""
+    from archon_search.graph_store import GraphStore
+    from archon_search.graph_types import GraphMention
+
+    col = "mentionscol"
+
+    entity_a = "entity-aa"
+    entity_b = "entity-bb"
+    entity_c = "entity-cc"
+
+    async def _run() -> list[GraphMention]:
+        gs = GraphStore(str(tmp_path / "db"))
+        await gs.connect()
+        try:
+            await gs.ensure_graph_tables(col, ns="default")
+            mentions = [
+                GraphMention(entity_id=entity_a, chunk_id="chunk-1", doc_id="doc-1"),
+                GraphMention(entity_id=entity_a, chunk_id="chunk-2", doc_id="doc-1"),
+                GraphMention(entity_id=entity_b, chunk_id="chunk-3", doc_id="doc-2"),
+                GraphMention(entity_id=entity_c, chunk_id="chunk-4", doc_id="doc-3"),
+            ]
+            await gs.write_mentions(col, mentions, ns="default")
+            return await gs.get_mentions_for_entity_ids(
+                col, [entity_a, entity_b], ns="default"
+            )
+        finally:
+            await gs.disconnect()
+
+    result = asyncio.run(_run())
+    # entity_a appears twice (two chunks), entity_b once — duplicates must NOT be removed
+    assert len(result) == 3
+    result_entity_ids = [m.entity_id for m in result]
+    assert result_entity_ids.count(entity_a) == 2
+    assert result_entity_ids.count(entity_b) == 1
+    # entity_c must not appear
+    assert entity_c not in result_entity_ids
+    # Field fidelity: verify chunk_id and doc_id are returned correctly (not swapped/zeroed)
+    result_tuples = {(m.entity_id, m.chunk_id, m.doc_id) for m in result}
+    assert (entity_a, "chunk-1", "doc-1") in result_tuples
+    assert (entity_a, "chunk-2", "doc-1") in result_tuples
+    assert (entity_b, "chunk-3", "doc-2") in result_tuples

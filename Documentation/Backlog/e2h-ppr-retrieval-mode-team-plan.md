@@ -429,14 +429,14 @@ graph LR
 
 *End-to-end behavior: a bridge query returns graph-enriched results with `ppr_entities_matched > 0` and entity-linked chunks in the top results.*
 
-- [ ] **BE-4** — Add `get_mentions_for_entity_ids` to `GraphStore` #backend-role
+- [x] **BE-4** — Add `get_mentions_for_entity_ids` to `GraphStore` #backend-role
     - Interface Adapters · 2.0h
     - needs BE-1 · completes C4
     - Tests
-        - #unit_test — `test_getMentionsForEntityIds_returnsOnlyRequestedEntities` — mock table; two entity IDs; only matching rows returned
-        - #unit_test — `test_getMentionsForEntityIds_emptyInput_returnsEmpty` — [] in → [] out; no table query fired
-        - #unit_test — `test_getMentionsForEntityIds_unknownEntityId_returnsEmpty` — entity_id not in table → []
-        - #integration_test — `test_getMentionsForEntityIds_realStore_roundTrip` — ensure_graph_tables + write mentions + get_mentions_for_entity_ids → correct rows returned
+        - [x] #unit_test — `test_getMentionsForEntityIds_returnsOnlyRequestedEntities` — mock table; two entity IDs; only matching rows returned
+        - [x] #unit_test — `test_getMentionsForEntityIds_emptyInput_returnsEmpty` — [] in → [] out; no table query fired
+        - [x] #unit_test — `test_getMentionsForEntityIds_unknownEntityId_returnsEmpty` — entity_id not in table → []
+        - [x] #integration_test — `test_getMentionsForEntityIds_realStore_roundTrip` — ensure_graph_tables + write mentions + get_mentions_for_entity_ids → correct rows returned
 
 - [ ] **BE-5** — Implement `PPRWalker` in new `archon_search/ppr_walker.py` #backend-role
     - Use Cases · 4.0h

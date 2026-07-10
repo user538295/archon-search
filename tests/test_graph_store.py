@@ -2075,3 +2075,154 @@ def test_compute_singleton_pct_no_edges_table_returns_100() -> None:
 
     result = asyncio.run(_run())
     assert result == 100.0, f"Expected 100.0% when edges table is absent, got {result}"
+
+
+# ---------------------------------------------------------------------------
+# get_mentions_for_entity_ids (BE-4 Contract C4)
+# ---------------------------------------------------------------------------
+
+
+def _build_mentions_arrow(mentions):  # type: ignore[return]
+    """Build a PyArrow table of mention rows for use in mocks."""
+    import pyarrow as pa
+
+    from archon_search.graph_store import GraphStore
+
+    schema = GraphStore._mentions_schema()
+    if not mentions:
+        return pa.table(
+            {"entity_id": [], "chunk_id": [], "doc_id": []},
+            schema=schema,
+        )
+    return pa.table(
+        {
+            "entity_id": [m.entity_id for m in mentions],
+            "chunk_id": [m.chunk_id for m in mentions],
+            "doc_id": [m.doc_id for m in mentions],
+        },
+        schema=schema,
+    )
+
+
+def test_getMentionsForEntityIds_returnsOnlyRequestedEntities() -> None:
+    """Mock table; two entity IDs; only matching rows returned."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+    from archon_search.graph_types import GraphMention
+
+    store = GraphStore("/tmp/fake-db-get-mentions")
+
+    entity_a = "entity-a"
+    entity_b = "entity-b"
+
+    all_mentions = [
+        GraphMention(entity_id=entity_a, chunk_id="chunk-1", doc_id="doc-1"),
+        GraphMention(entity_id=entity_b, chunk_id="chunk-2", doc_id="doc-1"),
+        GraphMention(entity_id="entity-c", chunk_id="chunk-3", doc_id="doc-2"),
+    ]
+    # The mock table returns all rows; WHERE filtering happens via the predicate
+    # passed to .where(). We return only rows matching entity_a and entity_b.
+    matching = [m for m in all_mentions if m.entity_id in (entity_a, entity_b)]
+    matching_arrow = _build_mentions_arrow(matching)
+
+    mock_query = MagicMock()
+    mock_query.where = MagicMock(return_value=mock_query)
+    mock_query.to_arrow = AsyncMock(return_value=matching_arrow)
+
+    mock_table = MagicMock()
+    mock_table.query = MagicMock(return_value=mock_query)
+
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+
+    async def _run() -> list[GraphMention]:
+        store._db = mock_db
+        return await store.get_mentions_for_entity_ids(
+            "test-col", [entity_a, entity_b], ns="default"
+        )
+
+    from archon_search.graph_store import _where_in as _gs_where_in  # noqa: PLC0415
+
+    result = asyncio.run(_run())
+    assert len(result) == 2
+    result_entity_ids = {m.entity_id for m in result}
+    assert result_entity_ids == {entity_a, entity_b}
+    # entity-c must not appear
+    assert all(m.entity_id != "entity-c" for m in result)
+    # Verify the predicate was actually passed to .where() — not a tautology
+    expected_predicate = _gs_where_in("entity_id", [entity_a, entity_b])
+    mock_query.where.assert_called_once_with(expected_predicate)
+
+
+def test_getMentionsForEntityIds_emptyInput_returnsEmpty() -> None:
+    """Empty entity_ids list → [] immediately; no table query fired."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-get-mentions-empty")
+
+    mock_db = AsyncMock()
+
+    async def _run() -> list:
+        store._db = mock_db
+        return await store.get_mentions_for_entity_ids("test-col", [], ns="default")
+
+    result = asyncio.run(_run())
+    assert result == []
+    # open_table must never be called when entity_ids is empty
+    mock_db.open_table.assert_not_called()
+
+
+def test_getMentionsForEntityIds_unknownEntityId_returnsEmpty() -> None:
+    """entity_id not in table → [] returned."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-get-mentions-unknown")
+
+    empty_arrow = _build_mentions_arrow([])
+
+    mock_query = MagicMock()
+    mock_query.where = MagicMock(return_value=mock_query)
+    mock_query.to_arrow = AsyncMock(return_value=empty_arrow)
+
+    mock_table = MagicMock()
+    mock_table.query = MagicMock(return_value=mock_query)
+
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(return_value=mock_table)
+
+    async def _run() -> list:
+        store._db = mock_db
+        return await store.get_mentions_for_entity_ids(
+            "test-col", ["unknown-entity-xyz"], ns="default"
+        )
+
+    result = asyncio.run(_run())
+    assert result == []
+
+
+def test_getMentionsForEntityIds_mentionsTableAbsent_returnsEmpty() -> None:
+    """FileNotFoundError from open_table (table doesn't exist) → [] returned."""
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-get-mentions-absent")
+
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(side_effect=FileNotFoundError("table not found"))
+
+    async def _run() -> list:
+        store._db = mock_db
+        return await store.get_mentions_for_entity_ids(
+            "test-col", ["entity-xyz"], ns="default"
+        )
+
+    result = asyncio.run(_run())
+    assert result == []
+    # open_table was called (entity_ids is non-empty, so no early return)
+    mock_db.open_table.assert_called_once()

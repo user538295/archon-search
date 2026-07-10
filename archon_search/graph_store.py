@@ -1450,6 +1450,46 @@ class GraphStore:
                 batch = node_ids_to_delete[i : i + _GC_DELETE_BATCH_SIZE]
                 await nodes_table.delete(_where_in("id", batch))
 
+    async def get_mentions_for_entity_ids(
+        self,
+        collection: str,
+        entity_ids: list[str],
+        ns: str,
+    ) -> list[GraphMention]:
+        """Return all mention rows for the given *entity_ids* — BE-4 Contract C4.
+
+        Empty *entity_ids* → returns ``[]`` immediately without querying the table.
+        Duplicate rows are preserved; callers must NOT deduplicate before counting —
+        row count per ``entity_id`` is used as its mention-occurrence weight in the
+        PPR personalization vector.
+
+        Returns ``[]`` when an ``entity_id`` is not present in the table, or when
+        the mentions table does not exist.
+        """
+        if not entity_ids:
+            return []
+
+        self._validate_collection(collection)
+        _validate_namespace(ns)
+        db = self._require_db()
+
+        try:
+            table = await db.open_table(self._mentions_table_name(collection, ns))
+        except (FileNotFoundError, ValueError):
+            return []
+
+        predicate = _where_in("entity_id", entity_ids)
+        arrow = await table.query().where(predicate).to_arrow()
+
+        entity_ids_col = arrow["entity_id"].to_pylist()
+        chunk_ids_col = arrow["chunk_id"].to_pylist()
+        doc_ids_col = arrow["doc_id"].to_pylist()
+
+        return [
+            GraphMention(entity_id=eid, chunk_id=cid, doc_id=did)
+            for eid, cid, did in zip(entity_ids_col, chunk_ids_col, doc_ids_col)
+        ]
+
     async def get_all_mentions(
         self,
         collection: str,
