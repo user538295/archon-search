@@ -365,6 +365,12 @@ class SearchPipeline:
         # CLI/eval paths that construct SearchPipeline without a MaintenanceLoop
         # leave this as None — synonym enrichment is not triggered there.
         self.on_synonym_edges_written: Callable[[str, str], None] | None = None
+        # E2g BE-7: post-ingest hook for code-symbol graph writes (fires only
+        # after the BE-3 def/ref write persists new code-symbol nodes/edges —
+        # never for the E1a co-occurrence/prose write). Assigned by app.py
+        # lifespan after MaintenanceLoop is constructed. CLI/eval paths without
+        # a MaintenanceLoop leave this None.
+        self.on_defref_edges_written: Callable[[str, str], None] | None = None
 
     # ------------------------------------------------------------------
     # Warm-status accessors (used by health/readiness route handlers)
@@ -663,6 +669,14 @@ class SearchPipeline:
                     dominant_lang = await self.store.get_dominant_language(collection)
                     await self.store.rebuild_fts_index(collection, language=dominant_lang)
 
+        # E2g BE-7: tracks whether this ingest wrote new code-symbol graph
+        # nodes/edges via the BE-3 def/ref write further down — drives the
+        # on_defref_edges_written hook. Deliberately NOT set by the E1a
+        # co-occurrence write above: that path also fires for prose-only
+        # ingests with no code-symbol (calls/imports/defines/inherits) edges,
+        # and a PageRank recompute over pure prose entities is wasted work.
+        _code_symbol_edges_written = False
+
         # E1a / BE-5: write graph extraction results after persist completes.
         if _graph_enabled and _extraction_result is not None:
             if _extraction_result.warnings:
@@ -752,6 +766,7 @@ class SearchPipeline:
                     await self._graph_store.write_graph(
                         collection, _defref_result.nodes, _defref_result.edges, ns=namespace
                     )
+                    _code_symbol_edges_written = True
             except Exception:
                 logger.warning(
                     "DefRef extraction failed for %r in %r; def/ref edges may be incomplete",
@@ -760,6 +775,23 @@ class SearchPipeline:
                 )
                 acl_warnings.append(
                     f"DefRef extraction failed for {doc_id!r}: def/ref edges may be incomplete"
+                )
+
+        # E2g BE-7: post-ingest PageRank recompute hook. Fires only after the
+        # BE-3 def/ref write persists new code-symbol nodes/edges — never for
+        # prose-only ingests that only wrote E1a co-occurrence edges — inside
+        # the same auxiliary-write safety pattern (try/except + WARNING +
+        # return normally, never-propagate invariant). pipeline.py holds only
+        # a Callable — no import of MaintenanceLoop.
+        if _code_symbol_edges_written and self.on_defref_edges_written is not None:
+            try:
+                self.on_defref_edges_written(collection, namespace)
+            except Exception:
+                logger.warning(
+                    "PageRank recompute callback failed for %r in %r; "
+                    "PageRank scores may be stale",
+                    doc_id, collection,
+                    exc_info=True,
                 )
 
         # E2f BE-5: post-ingest synonym enrichment hook.

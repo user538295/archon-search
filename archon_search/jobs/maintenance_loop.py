@@ -125,6 +125,10 @@ class MaintenanceLoop:
         # Producer: schedule_synonym_enrichment / _run_synonym_enrichment add to this set.
         # Consumer: _drain_communities_pending_rebuild (called in _run_one_pass) removes from it.
         self._communities_pending_rebuild: set[tuple[str, str]] = set()
+        # E2g BE-7: PageRank recompute state tracking (separate from _rebuild_state/
+        # _synonym_state). Maps (namespace, collection) → RebuildState for in-flight
+        # PageRank recompute tasks.
+        self._pagerank_state: dict[tuple[str, str], RebuildState] = {}
 
     # ------------------------------------------------------------------
     # Exclusion
@@ -761,6 +765,74 @@ class MaintenanceLoop:
                 "after synonym enrichment",
                 ns, collection,
             )
+
+    # ------------------------------------------------------------------
+    # E2g BE-7: PageRank recompute — scheduling, debounce, and run
+    # ------------------------------------------------------------------
+
+    def schedule_pagerank_recompute(self, collection: str, ns: str) -> None:
+        """Schedule a PageRank recompute for a (namespace, collection) pair.
+
+        Called by ``SearchPipeline.on_defref_edges_written`` after any ingest
+        that writes new code-symbol nodes/edges via the E2g BE-3 def/ref write
+        (never for prose-only ingests that only wrote E1a co-occurrence edges).
+
+        Debounce: mirrors ``schedule_synonym_enrichment`` exactly — if a
+        recompute task is already in-flight for this (ns, collection), set
+        ``pending = True`` and return without spawning a new task. The
+        done-callback on the in-flight task re-enqueues if pending is set.
+
+        ``pipeline.py`` calls this method via ``Callable`` only — no import of
+        ``MaintenanceLoop``.
+        """
+        key = (ns, collection)
+        if key in self._pagerank_state:
+            existing = self._pagerank_state[key]
+            if not existing.task.done():
+                existing.pending = True
+                return
+            del self._pagerank_state[key]
+
+        task = asyncio.create_task(
+            self._run_pagerank_recompute(collection, ns)
+        )
+        state = RebuildState(task=task, pending=False, completed=False)
+        self._pagerank_state[key] = state
+
+        def _on_pagerank_done(t: asyncio.Task[Any]) -> None:
+            try:
+                exc = t.exception()
+                if exc is not None:
+                    logger.error(
+                        "MaintenanceLoop: PageRank recompute failed for %s/%s: %s",
+                        ns, collection, exc,
+                    )
+            except asyncio.CancelledError:
+                pass
+
+            if key in self._pagerank_state:
+                current = self._pagerank_state[key]
+                if current.pending:
+                    current.pending = False
+                    self.schedule_pagerank_recompute(collection, ns)
+                else:
+                    del self._pagerank_state[key]
+
+        task.add_done_callback(_on_pagerank_done)
+
+    async def _run_pagerank_recompute(self, collection: str, ns: str) -> None:
+        """Compute and persist PageRank scores for a collection (E2g BE-7).
+
+        No-op when ``graph_store`` is absent. Errors propagate to the caller
+        (``schedule_pagerank_recompute``'s done-callback logs them as ERROR).
+        """
+        if self._graph_store is None:
+            return
+
+        from archon_search.pagerank_builder import PageRankBuilder  # noqa: PLC0415
+
+        builder = PageRankBuilder(self._graph_store)
+        await builder.build(collection, ns)
 
     async def _run_failed_ingest_retry(
         self, health: dict[str, Any], retry_counts: dict[str, int]

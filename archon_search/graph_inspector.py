@@ -50,6 +50,10 @@ class GraphNodeInspection:
     """Number of distinct chunks where this entity was mentioned."""
     salience: float
     """In frequency mode, clamped to [0.0, 1.0]. In tfidf mode, floored at 0 (TF × max(IDF, 0)); unbounded above."""
+    pagerank_score: float | None = None
+    """Persisted unweighted PageRank importance score over code-symbol edges — E2g BE-7.
+    ``None`` when not yet computed by the background recompute; sorts last in
+    ``salience_mode="importance"``."""
 
 
 @dataclass
@@ -87,8 +91,8 @@ class CollectionGraphView:
     (after node survival filter, before edge cap)."""
     truncated: bool
     """True if node cap or edge cap was reached, or if mention scan ceiling was hit."""
-    salience_mode: Literal["frequency", "tfidf"] = "frequency"
-    """Salience scoring mode used: 'frequency' (chunk ratio, clamped) or 'tfidf' (TF×IDF)."""
+    salience_mode: Literal["frequency", "tfidf", "importance"] = "frequency"
+    """Salience scoring mode used: 'frequency' (chunk ratio, clamped), 'tfidf' (TF×IDF), or 'importance' (persisted PageRank over code-symbol edges, nulls-last)."""
 
 
 @dataclass
@@ -107,8 +111,8 @@ class CrossCollectionGraphView:
     """Total merged edge count (after node survival filter, before edge cap)."""
     truncated: bool
     """True if node cap, edge cap, or mention scan ceiling was reached."""
-    salience_mode: Literal["frequency", "tfidf"] = "frequency"
-    """Salience scoring mode used: 'frequency' (chunk ratio, clamped) or 'tfidf' (TF×IDF)."""
+    salience_mode: Literal["frequency", "tfidf", "importance"] = "frequency"
+    """Salience scoring mode used: 'frequency' (chunk ratio, clamped), 'tfidf' (TF×IDF), or 'importance' (persisted PageRank over code-symbol edges, nulls-last)."""
 
 
 # Maximum number of source chunk IDs to include per edge
@@ -116,9 +120,12 @@ _MAX_SOURCE_CHUNK_IDS = 20
 
 
 def _node_sort_key(
-    n: "GraphNodeInspection", salience_mode: Literal["frequency", "tfidf"]
-) -> tuple[float, str]:
+    n: "GraphNodeInspection", salience_mode: Literal["frequency", "tfidf", "importance"]
+) -> tuple[bool, float, str] | tuple[float, str]:
     """Return the sort key for a node given the active salience mode."""
+    if salience_mode == "importance":
+        # Nulls-last: (True, ...) sorts after (False, ...) since False < True.
+        return (n.pagerank_score is None, -(n.pagerank_score or 0.0), n.entity_id)
     if salience_mode == "tfidf":
         return (-n.salience, n.entity_id)
     return (-n.chunk_count, n.entity_id)
@@ -129,7 +136,7 @@ def _truncate_graph(
     edges: list[GraphEdgeInspection],
     max_nodes: int,
     max_edges: int,
-    salience_mode: Literal["frequency", "tfidf"] = "frequency",
+    salience_mode: Literal["frequency", "tfidf", "importance"] = "frequency",
 ) -> tuple[list[GraphNodeInspection], list[GraphEdgeInspection], bool]:
     """Apply deterministic truncation to nodes and edges.
 
@@ -248,6 +255,7 @@ def _apply_tfidf(
             entity_name=node.entity_name,
             chunk_count=node.chunk_count,
             salience=node.salience * idf,
+            pagerank_score=node.pagerank_score,
         ))
     if missing_count > 0:
         logger.warning(
@@ -270,7 +278,7 @@ async def inspect_collection(
     total_chunk_count: int,
     max_nodes: int,
     max_edges: int,
-    salience_mode: Literal["frequency", "tfidf"] = "frequency",
+    salience_mode: Literal["frequency", "tfidf", "importance"] = "frequency",
     entity_presence: dict[str, int] | None = None,
     num_collections: int = 1,
     *,
@@ -357,6 +365,7 @@ async def inspect_collection(
                 entity_name=node.entity_name,
                 chunk_count=chunk_count,
                 salience=salience,
+                pagerank_score=node.pagerank_score,
             )
         )
 
@@ -421,7 +430,7 @@ async def inspect_cross_collection(
     total_chunk_counts: dict[str, int],
     max_nodes: int,
     max_edges: int,
-    salience_mode: Literal["frequency", "tfidf"] = "frequency",
+    salience_mode: Literal["frequency", "tfidf", "importance"] = "frequency",
     entity_presence: dict[str, int] | None = None,
     num_collections: int = 1,
     *,
@@ -506,11 +515,20 @@ async def inspect_cross_collection(
                     + chunk_count * salience
                 ) / max(merged_chunk_count, 1)
                 merged_salience = min(merged_salience, 1.0)
+                # pagerank_score is per-collection and not summed across
+                # collections, unlike chunk_count/weight — keep the first
+                # non-null value encountered.
+                merged_pagerank = (
+                    existing.pagerank_score
+                    if existing.pagerank_score is not None
+                    else node.pagerank_score
+                )
                 merged_nodes[node.id] = GraphNodeInspection(
                     entity_id=node.id,
                     entity_name=node.entity_name,
                     chunk_count=merged_chunk_count,
                     salience=merged_salience,
+                    pagerank_score=merged_pagerank,
                 )
             else:
                 # First time seeing this node
@@ -519,6 +537,7 @@ async def inspect_cross_collection(
                     entity_name=node.entity_name,
                     chunk_count=chunk_count,
                     salience=salience,
+                    pagerank_score=node.pagerank_score,
                 )
 
         # Merge edges

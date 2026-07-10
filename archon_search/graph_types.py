@@ -165,6 +165,10 @@ class GraphNode:
     ``None`` for nodes whose embedding has not yet been computed (pre-E2f nodes
     or nodes written without an embedding).
     """
+    pagerank_score: float | None = None
+    """Unweighted PageRank importance score over code-symbol edges — E2g BE-7.
+    ``None`` for nodes whose score has not yet been computed by the background
+    recompute (freshly-ingested symbols, or pre-BE-7 nodes)."""
 
 
 @dataclass

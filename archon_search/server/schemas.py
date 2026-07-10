@@ -672,6 +672,9 @@ class GraphNodeResponse(BaseModel):
     """Number of distinct chunks where this entity was mentioned."""
     salience: float
     """Salience score for this entity. In frequency mode: chunk ratio clamped to [0.0, 1.0]. In tfidf mode: TF×max(IDF, 0), ≥ 0.0 and unbounded above."""
+    pagerank_score: float | None = None
+    """Persisted unweighted PageRank importance score over code-symbol edges — E2g BE-7.
+    ``None`` when not yet computed by the background recompute."""
 
 
 class GraphEdgeResponse(BaseModel):
@@ -704,8 +707,8 @@ class GraphInspectionResponse(BaseModel):
     """Total number of nodes in the graph (before truncation)."""
     edge_count: int
     """Number of edges where BOTH endpoints exist (after node filter, before edge cap)."""
-    salience_mode: Literal["frequency", "tfidf"] = "frequency"
-    """Salience scoring mode used: 'frequency' (chunk ratio, clamped) or 'tfidf' (TF×IDF)."""
+    salience_mode: Literal["frequency", "tfidf", "importance"] = "frequency"
+    """Salience scoring mode used: 'frequency' (chunk ratio, clamped), 'tfidf' (TF×IDF), or 'importance' (persisted PageRank over code-symbol edges, nulls-last)."""
 
 
 class CrossCollectionGraphInspectionResponse(BaseModel):
@@ -723,5 +726,5 @@ class CrossCollectionGraphInspectionResponse(BaseModel):
     """Total merged node count (before edge survival filter and truncation)."""
     edge_count: int
     """Total merged edge count (after node survival filter, before edge cap)."""
-    salience_mode: Literal["frequency", "tfidf"] = "frequency"
-    """Salience scoring mode used: 'frequency' (chunk ratio, clamped) or 'tfidf' (TF×IDF)."""
+    salience_mode: Literal["frequency", "tfidf", "importance"] = "frequency"
+    """Salience scoring mode used: 'frequency' (chunk ratio, clamped), 'tfidf' (TF×IDF), or 'importance' (persisted PageRank over code-symbol edges, nulls-last)."""

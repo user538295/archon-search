@@ -35,7 +35,7 @@ router = APIRouter()
 async def get_graph_cross_collection(
     collections: str = Query(...),
     format: Literal["json", "graphml"] = Query(default="json"),
-    salience: Literal["frequency", "tfidf"] = Query(default="frequency"),
+    salience: Literal["frequency", "tfidf", "importance"] = Query(default="frequency"),
     request: Request = None,
 ):
     """Inspect and merge graph data across multiple collections.
@@ -44,7 +44,8 @@ async def get_graph_cross_collection(
     - `collections`: Comma-separated list of collection names (at least 2 required, deduped).
     - `format`: "json" (default) or "graphml" to export as GraphML XML.
     - `salience`: "frequency" (default, chunk ratio clamped to [0,1]) or
-      "tfidf" (TF×IDF across all namespace collections).
+      "tfidf" (TF×IDF across all namespace collections), or
+      "importance" (persisted PageRank score over code-symbol edges, nulls-last).
 
     Returns:
     - 200: Merged graph inspection response (JSON or GraphML)
@@ -141,7 +142,7 @@ async def get_graph_cross_collection(
 async def get_graph(
     collection: str,
     format: Literal["json", "graphml"] = Query(default="json"),
-    salience: Literal["frequency", "tfidf"] = Query(default="frequency"),
+    salience: Literal["frequency", "tfidf", "importance"] = Query(default="frequency"),
     request: Request = None,
 ):
     """Inspect a single collection's graph with derived metrics.
@@ -149,7 +150,8 @@ async def get_graph(
     Query parameters:
     - `format`: "json" (default) or "graphml" to export as GraphML XML.
     - `salience`: "frequency" (default, chunk ratio clamped to [0,1]) or
-      "tfidf" (TF×IDF across all namespace collections).
+      "tfidf" (TF×IDF across all namespace collections), or
+      "importance" (persisted PageRank score over code-symbol edges, nulls-last).
 
     Returns:
     - 200: Graph inspection response (JSON or GraphML)
@@ -233,6 +235,7 @@ def _cross_collection_view_to_response(
             entity_name=node.entity_name,
             chunk_count=node.chunk_count,
             salience=node.salience,
+            pagerank_score=node.pagerank_score,
         )
         for node in view.nodes
     ]
@@ -266,6 +269,7 @@ def _view_to_response(view: CollectionGraphView) -> GraphInspectionResponse:
             entity_name=node.entity_name,
             chunk_count=node.chunk_count,
             salience=node.salience,
+            pagerank_score=node.pagerank_score,
         )
         for node in view.nodes
     ]

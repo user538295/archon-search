@@ -8,7 +8,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from time import monotonic
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Annotated, Any, TypedDict
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
 
 from fastmcp import Context, FastMCP
 from pydantic import Field, ValidationError
@@ -1834,12 +1834,58 @@ def create_app(
 
     from archon_search.graph_inspector import inspect_collection, inspect_cross_collection  # noqa: PLC0415
 
+    async def _resolve_salience_context(
+        resolved_salience_mode: str,
+        ns: str,
+    ) -> tuple[dict[str, Any] | None, int]:
+        """Resolve tfidf entity-presence data and collection count for graph inspection tools.
+
+        Returns ``(entity_presence, num_collections)``. Only populates
+        ``entity_presence`` when ``resolved_salience_mode == "tfidf"`` (fetches
+        presence across every collection in *ns*); otherwise returns ``(None, 1)``.
+        """
+        if resolved_salience_mode != "tfidf":
+            return None, 1
+        all_meta = await pipeline.get_all_collections_meta(ns)
+        all_ns_collection_names = [m.name for m in all_meta]
+        entity_presence = await graph_store.get_entity_presence_across_collections(
+            all_ns_collection_names, ns=ns
+        )
+        return entity_presence, len(all_ns_collection_names)
+
+    def _build_top_nodes(view: Any) -> list[dict[str, Any]]:
+        """Build the top-20 node summaries for graph inspection tool responses.
+
+        ``view.nodes`` is already ordered by the active salience_mode (via
+        ``_truncate_graph``'s ``_node_sort_key``) — take the first 20 directly
+        rather than re-sorting by raw salience, which would be wrong for
+        ``salience_mode="importance"`` (ordering key is pagerank_score, not
+        salience).
+        """
+        return [
+            {
+                "entity_id": n.entity_id,
+                "entity_name": n.entity_name,
+                "chunk_count": n.chunk_count,
+                "salience": n.salience,
+                "pagerank_score": n.pagerank_score,
+            }
+            for n in view.nodes[:20]
+        ]
+
     @app.tool()
-    async def get_graph(collection: str) -> dict[str, Any]:
+    async def get_graph(
+        collection: str,
+        salience_mode: Literal["frequency", "tfidf", "importance"] | None = None,
+    ) -> dict[str, Any]:
         """Return a summary of the entity graph for a single collection.
 
         Returns node_count, edge_count, entity_type_distribution, and top-20
         nodes (by salience) and edges (by weight) for inspection and visualization.
+
+        ``salience_mode`` (default "frequency" when omitted): "frequency" (chunk
+        ratio), "tfidf" (TF×IDF across namespace collections), or "importance"
+        (persisted PageRank score over code-symbol edges — E2g BE-7, nulls-last).
         """
         # Guard: graph must be enabled and graph_store must be available
         _gg_config = getattr(config, "graph", None)
@@ -1851,6 +1897,7 @@ def create_app(
             )
 
         ns = _get_request_namespace()
+        resolved_salience_mode = salience_mode or "frequency"
         try:
             meta = await pipeline.get_collection_meta(collection, namespace=ns)
             if meta is None:
@@ -1860,12 +1907,17 @@ def create_app(
             max_nodes = getattr(_gg_config, "max_inspection_nodes", 5000)
             max_edges = getattr(_gg_config, "max_inspection_edges", 25000)
 
+            entity_presence, num_collections = await _resolve_salience_context(resolved_salience_mode, ns)
+
             view = await inspect_collection(
                 graph_store=graph_store,
                 collection=collection,
                 total_chunk_count=total_chunk_count,
                 max_nodes=max_nodes,
                 max_edges=max_edges,
+                salience_mode=resolved_salience_mode,
+                entity_presence=entity_presence,
+                num_collections=num_collections,
                 ns=ns,
             )
 
@@ -1881,17 +1933,7 @@ def create_app(
                     entity_type = "unknown"
                 entity_type_dist[entity_type] = entity_type_dist.get(entity_type, 0) + 1
 
-            # Top nodes: sorted by salience desc, take first 20
-            top_nodes_list = sorted(view.nodes, key=lambda n: (-n.salience, n.entity_id))[:20]
-            top_nodes = [
-                {
-                    "entity_id": n.entity_id,
-                    "entity_name": n.entity_name,
-                    "chunk_count": n.chunk_count,
-                    "salience": n.salience,
-                }
-                for n in top_nodes_list
-            ]
+            top_nodes = _build_top_nodes(view)
 
             # Top edges: sorted by weight desc, take first 20
             top_edges_list = sorted(view.edges, key=lambda e: (-e.weight, e.edge_id))[:20]
@@ -1917,11 +1959,18 @@ def create_app(
             return McpErrorResponse(error=str(exc), code="internal_error")
 
     @app.tool()
-    async def get_graph_cross_collection(collections: list[str]) -> dict[str, Any]:
+    async def get_graph_cross_collection(
+        collections: list[str],
+        salience_mode: Literal["frequency", "tfidf", "importance"] | None = None,
+    ) -> dict[str, Any]:
         """Return a summary of the merged entity graph across multiple collections.
 
         Returns the same fields as get_graph but for a merged view across collections.
         Requires at least 2 collections; same-named entities and edges are merged.
+
+        ``salience_mode`` (default "frequency" when omitted): "frequency" (chunk
+        ratio), "tfidf" (TF×IDF across namespace collections), or "importance"
+        (persisted PageRank score over code-symbol edges — E2g BE-7, nulls-last).
         """
         # Guard: graph must be enabled and graph_store must be available
         _ggc_config = getattr(config, "graph", None)
@@ -1933,6 +1982,7 @@ def create_app(
             )
 
         ns = _get_request_namespace()
+        resolved_salience_mode = salience_mode or "frequency"
         try:
             # Validate collections parameter: at least 2 required
             if not collections or len(collections) < 2:
@@ -1966,12 +2016,17 @@ def create_app(
             max_nodes = getattr(_ggc_config, "max_inspection_nodes", 5000)
             max_edges = getattr(_ggc_config, "max_inspection_edges", 25000)
 
+            entity_presence, num_collections = await _resolve_salience_context(resolved_salience_mode, ns)
+
             view = await inspect_cross_collection(
                 graph_store=graph_store,
                 collections=deduped_collections,
                 total_chunk_counts=total_chunk_counts,
                 max_nodes=max_nodes,
                 max_edges=max_edges,
+                salience_mode=resolved_salience_mode,
+                entity_presence=entity_presence,
+                num_collections=num_collections,
                 ns=ns,
             )
 
@@ -1984,17 +2039,7 @@ def create_app(
                     entity_type = "unknown"
                 entity_type_dist[entity_type] = entity_type_dist.get(entity_type, 0) + 1
 
-            # Top nodes: sorted by salience desc, take first 20
-            top_nodes_list = sorted(view.nodes, key=lambda n: (-n.salience, n.entity_id))[:20]
-            top_nodes = [
-                {
-                    "entity_id": n.entity_id,
-                    "entity_name": n.entity_name,
-                    "chunk_count": n.chunk_count,
-                    "salience": n.salience,
-                }
-                for n in top_nodes_list
-            ]
+            top_nodes = _build_top_nodes(view)
 
             # Top edges: sorted by weight desc, take first 20
             top_edges_list = sorted(view.edges, key=lambda e: (-e.weight, e.edge_id))[:20]

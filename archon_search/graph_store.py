@@ -160,8 +160,10 @@ class GraphStore:
         """Return the PyArrow schema for the nodes table.
 
         ``name_embedding`` is nullable ``list<float32>`` — added in BE-2 (E2f).
-        Pre-E2f tables lack this column; ``_arrow_to_nodes`` guards against its
-        absence with a ``has_name_embedding_col`` check.
+        ``pagerank_score`` is nullable ``float64`` — added in E2g BE-7.
+        Pre-BE-2/BE-7 tables lack these columns; ``_arrow_to_nodes`` guards
+        against their absence with ``has_name_embedding_col``/``has_pagerank_score_col``
+        checks.
         """
         import pyarrow as pa  # noqa: PLC0415
 
@@ -173,6 +175,7 @@ class GraphStore:
             pa.field("collection_name", pa.utf8()),
             pa.field("entity_subtype", pa.utf8()),
             pa.field("name_embedding", pa.list_(pa.float32()), nullable=True),
+            pa.field("pagerank_score", pa.float64(), nullable=True),
         ])
 
     @staticmethod
@@ -240,11 +243,32 @@ class GraphStore:
 
         existing_tables: set[str] = set((await db.list_tables()).tables)
 
-        if self._nodes_table_name(collection, ns) not in existing_tables:
+        nodes_name = self._nodes_table_name(collection, ns)
+        if nodes_name not in existing_tables:
             await db.create_table(
-                self._nodes_table_name(collection, ns),
+                nodes_name,
                 schema=self._nodes_schema(),
             )
+        else:
+            # BE-7 migration: pre-E2g node tables lack pagerank_score; add it if absent.
+            import pyarrow as pa  # noqa: PLC0415
+
+            nodes_tbl = await db.open_table(nodes_name)
+            nodes_schema = await nodes_tbl.schema()
+            if "pagerank_score" not in nodes_schema.names:
+                try:
+                    await nodes_tbl.add_columns(pa.field("pagerank_score", pa.float64(), nullable=True))
+                    logger.info(
+                        "BE-7 migration: added pagerank_score column to nodes table %r",
+                        nodes_name,
+                    )
+                except Exception as exc:
+                    if "already exists" in str(exc).lower():
+                        logger.warning(
+                            "Concurrent BE-7 migration: pagerank_score already added — %s", exc
+                        )
+                    else:
+                        raise
 
         edges_name = self._edges_table_name(collection, ns)
         if edges_name not in existing_tables:
@@ -297,22 +321,25 @@ class GraphStore:
         if nodes:
             nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
 
-            # Check the live table schema first — pre-E2f tables lack name_embedding.
-            # We must not include the column in nodes_data if the table doesn't have it,
-            # or LanceDB's merge_insert will reject the write with a schema mismatch.
+            # Check the live table schema first — pre-E2f/pre-BE-7 tables lack
+            # name_embedding/pagerank_score. We must not include a column in
+            # nodes_data if the table doesn't have it, or LanceDB's merge_insert
+            # will reject the write with a schema mismatch.
             live_nodes_schema = await nodes_table.schema()
             table_has_emb_col = "name_embedding" in live_nodes_schema.names
+            table_has_pagerank_col = "pagerank_score" in live_nodes_schema.names
 
+            # Value-preservation pre-read: LanceDB 0.30 only exposes
+            # when_matched_update_all() which would overwrite an existing value with
+            # null when the incoming node carries None. To preserve existing values
+            # we fetch the current column values for any node being updated without
+            # its own value.
+            #
+            # ponytail: LanceDB when_matched_update column-list semantics assumed; verify
+            # against LanceDB version in requirements — if a future version adds
+            # when_matched_update(columns=[...]), use that instead to avoid this pre-read.
             existing_embeddings: dict[str, list[float] | None] = {}
             if table_has_emb_col:
-                # Embedding preservation: LanceDB 0.30 only exposes when_matched_update_all()
-                # which would overwrite an existing embedding with null when the incoming node
-                # carries name_embedding=None.  To preserve existing embeddings we fetch the
-                # current embedding values for any node being updated without an embedding.
-                #
-                # ponytail: LanceDB when_matched_update column-list semantics assumed; verify
-                # against LanceDB version in requirements — if a future version adds
-                # when_matched_update(columns=[...]), use that instead to avoid this pre-read.
                 nodes_without_emb = [n for n in nodes if n.name_embedding is None]
                 if nodes_without_emb:
                     node_ids_without_emb = [n.id for n in nodes_without_emb]
@@ -323,53 +350,58 @@ class GraphStore:
                         .select(["id", "name_embedding"])
                         .to_arrow()
                     )
-                    # Read back existing embeddings so we don't overwrite them with null
                     existing_ids_list = existing_arrow["id"].to_pylist()
                     existing_embs_list = existing_arrow["name_embedding"].to_pylist()
                     existing_embeddings = dict(zip(existing_ids_list, existing_embs_list))
 
-            # Use the live schema as the target for nodes_data to avoid field-count mismatches.
-            # For pre-E2f tables (no name_embedding column) we use a schema that matches the
-            # existing table exactly; for E2f tables we use the full schema including the column.
+            existing_pageranks: dict[str, float | None] = {}
+            if table_has_pagerank_col:
+                nodes_without_pr = [n for n in nodes if n.pagerank_score is None]
+                if nodes_without_pr:
+                    node_ids_without_pr = [n.id for n in nodes_without_pr]
+                    id_pred = _where_in("id", node_ids_without_pr)
+                    existing_arrow = await (
+                        nodes_table.query()
+                        .where(id_pred)
+                        .select(["id", "pagerank_score"])
+                        .to_arrow()
+                    )
+                    existing_ids_list = existing_arrow["id"].to_pylist()
+                    existing_pr_list = existing_arrow["pagerank_score"].to_pylist()
+                    existing_pageranks = dict(zip(existing_ids_list, existing_pr_list))
+
+            # Use the live schema as the target for nodes_data to avoid field-count
+            # mismatches — build the base dict, then add each optional column only
+            # when the live table has it.
+            data: dict[str, list] = {
+                "id": [n.id for n in nodes],
+                "entity_name": [n.entity_name for n in nodes],
+                "entity_type": [n.entity_type.value for n in nodes],
+                "source_doc_id": [n.source_doc_id for n in nodes],
+                "collection_name": [n.collection_name for n in nodes],
+                "entity_subtype": [n.entity_subtype for n in nodes],
+            }
+            target_fields = [f for f in self._nodes_schema() if f.name in data]
+
             if table_has_emb_col:
-                # Build the final embedding list: use supplied embedding when non-null,
-                # otherwise fall back to the preserved existing embedding (or null for new rows).
                 resolved_embeddings = [
                     n.name_embedding if n.name_embedding is not None
                     else existing_embeddings.get(n.id)
                     for n in nodes
                 ]
-                nodes_data = pa.table(
-                    {
-                        "id": [n.id for n in nodes],
-                        "entity_name": [n.entity_name for n in nodes],
-                        "entity_type": [n.entity_type.value for n in nodes],
-                        "source_doc_id": [n.source_doc_id for n in nodes],
-                        "collection_name": [n.collection_name for n in nodes],
-                        "entity_subtype": [n.entity_subtype for n in nodes],
-                        "name_embedding": pa.array(
-                            resolved_embeddings,
-                            type=pa.list_(pa.float32()),
-                        ),
-                    },
-                    schema=self._nodes_schema(),
-                )
-            else:
-                # Pre-E2f table: omit name_embedding to avoid schema mismatch.
-                pre_e2f_schema = pa.schema([
-                    f for f in self._nodes_schema() if f.name != "name_embedding"
-                ])
-                nodes_data = pa.table(
-                    {
-                        "id": [n.id for n in nodes],
-                        "entity_name": [n.entity_name for n in nodes],
-                        "entity_type": [n.entity_type.value for n in nodes],
-                        "source_doc_id": [n.source_doc_id for n in nodes],
-                        "collection_name": [n.collection_name for n in nodes],
-                        "entity_subtype": [n.entity_subtype for n in nodes],
-                    },
-                    schema=pre_e2f_schema,
-                )
+                data["name_embedding"] = pa.array(resolved_embeddings, type=pa.list_(pa.float32()))
+                target_fields.append(self._nodes_schema().field("name_embedding"))
+
+            if table_has_pagerank_col:
+                resolved_pageranks = [
+                    n.pagerank_score if n.pagerank_score is not None
+                    else existing_pageranks.get(n.id)
+                    for n in nodes
+                ]
+                data["pagerank_score"] = pa.array(resolved_pageranks, type=pa.float64())
+                target_fields.append(self._nodes_schema().field("pagerank_score"))
+
+            nodes_data = pa.table(data, schema=pa.schema(target_fields))
             await (
                 nodes_table.merge_insert("id")
                 .when_matched_update_all()
@@ -446,6 +478,96 @@ class GraphStore:
                 .when_not_matched_insert_all()
                 .execute(edges_data)
             )
+
+    async def write_pagerank_scores(
+        self,
+        collection: str,
+        scores: dict[str, float],
+        ns: str,
+    ) -> None:
+        """Persist PageRank scores for existing nodes — E2g BE-7.
+
+        Batches the write into a single ``merge_insert("id").when_matched_update_all()``
+        call (the same pattern ``write_graph`` uses) instead of one
+        ``AsyncTable.update()`` round-trip per node — an O(N) sequential-update loop
+        would dominate recompute latency for large graphs. Reads only the ``id``
+        column (via a single batched query) to confirm which node ``id``s in
+        *scores* still exist, then builds a narrow two-column (``id``,
+        ``pagerank_score``) PyArrow table and merges that in. A
+        ``when_matched_update_all()`` merge whose source table carries only
+        ``id`` + ``pagerank_score`` updates just those two columns on match —
+        every other column's on-disk value is left untouched. This also avoids
+        the column-clobber race of reading+rewriting the full row (e.g.
+        ``name_embedding``), which could otherwise overwrite a concurrent
+        ``write_graph`` write with a stale snapshot.
+
+        *scores* maps node ``id`` → score. Node IDs not present in the table
+        are silently skipped (e.g. a node deleted between compute and persist).
+        No-op when *scores* is empty.
+        """
+        import pyarrow as pa  # noqa: PLC0415
+
+        self._validate_collection(collection)
+        _validate_namespace(ns)
+        if not scores:
+            return
+        await self.ensure_graph_tables(collection, ns=ns)
+        db = self._require_db()
+        nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
+
+        node_ids = list(scores.keys())
+        existing_arrow = await (
+            nodes_table.query()
+            .where(_where_in("id", node_ids))
+            .select(["id"])
+            .to_arrow()
+        )
+        if existing_arrow.num_rows == 0:
+            return
+
+        ids_in_table = existing_arrow["id"].to_pylist()
+        pagerank_data = pa.table(
+            {
+                "id": ids_in_table,
+                "pagerank_score": pa.array(
+                    [scores[node_id] for node_id in ids_in_table], type=pa.float64()
+                ),
+            },
+            schema=pa.schema(
+                [pa.field("id", pa.utf8()), pa.field("pagerank_score", pa.float64())]
+            ),
+        )
+
+        await (
+            nodes_table.merge_insert("id")
+            .when_matched_update_all()
+            .when_not_matched_insert_all()
+            .execute(pagerank_data)
+        )
+
+    async def pagerank_score(self, collection: str, entity_id: str, ns: str) -> float | None:
+        """Return the persisted PageRank score for *entity_id* — E2g BE-7.
+
+        Returns ``None`` when the node does not exist, the ``pagerank_score``
+        column is absent (pre-BE-7 table), or the stored value is null.
+        """
+        self._validate_collection(collection)
+        _validate_namespace(ns)
+        db = self._require_db()
+        nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
+        schema = await nodes_table.schema()
+        if "pagerank_score" not in schema.names:
+            return None
+        arrow = await (
+            nodes_table.query()
+            .where(_where_eq("id", entity_id))
+            .select(["pagerank_score"])
+            .to_arrow()
+        )
+        values = arrow["pagerank_score"].to_pylist()
+        if not values:
+            return None
+        return values[0]
 
     async def _ensure_cosine_index(self, collection: str, ns: str) -> None:
         """Attempt to create a cosine ANN index on ``name_embedding`` if one does not exist yet.
@@ -1247,7 +1369,8 @@ class GraphStore:
         """Convert a PyArrow table of node rows into ``GraphNode`` dataclass objects.
 
         Pre-E2f tables lack the ``name_embedding`` column; the ``has_name_embedding_col``
-        guard handles those gracefully by defaulting to ``None``.
+        guard handles those gracefully by defaulting to ``None``. Pre-BE-7 tables
+        lack ``pagerank_score``; ``has_pagerank_score_col`` guards the same way.
         """
         results: list[GraphNode] = []
         ids = arrow_table["id"].to_pylist()
@@ -1265,8 +1388,16 @@ class GraphStore:
             else [None] * len(ids)
         )
 
-        for nid, name, etype, sdoc, col, subtype, emb in zip(
-            ids, names, types, source_docs, collections, subtypes, embeddings
+        # Guard: pre-BE-7 node tables lack the pagerank_score column; default to None.
+        has_pagerank_score_col = "pagerank_score" in arrow_table.schema.names
+        pageranks = (
+            arrow_table["pagerank_score"].to_pylist()
+            if has_pagerank_score_col
+            else [None] * len(ids)
+        )
+
+        for nid, name, etype, sdoc, col, subtype, emb, pr in zip(
+            ids, names, types, source_docs, collections, subtypes, embeddings, pageranks
         ):
             results.append(
                 GraphNode(
@@ -1277,6 +1408,7 @@ class GraphStore:
                     collection_name=col,
                     entity_subtype=subtype,
                     name_embedding=emb,
+                    pagerank_score=pr,
                 )
             )
         return results

@@ -350,6 +350,13 @@ def create_app(
             maintenance_loop.schedule_synonym_enrichment
         )
 
+        # E2g BE-7: wire post-ingest PageRank recompute callback. Same
+        # sibling-construction-order rationale as the synonym-enrichment wiring
+        # above — both SearchPipeline and MaintenanceLoop already exist here.
+        app.state.pipeline.on_defref_edges_written = (
+            maintenance_loop.schedule_pagerank_recompute
+        )
+
         # Startup: initialise telemetry if enabled
         if config.telemetry.enabled:
             log_dir = Path(config.telemetry.log_dir).expanduser()
