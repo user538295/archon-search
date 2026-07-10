@@ -258,6 +258,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             expansion_used=hyde_applied or result.rag_fusion_applied or result.graph_expansion_applied,
             expansion_warning=_multi_expansion_warning,
             applied_filters=body.filters,
+            ppr_entities_matched=result.ppr_entities_matched,
         )
 
     try:
@@ -353,6 +354,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 expansion_used=hyde_applied or result.rag_fusion_applied or result.graph_expansion_applied,
                 expansion_warning=_expansion_warning,
                 applied_filters=body.filters,
+                ppr_entities_matched=result.ppr_entities_matched,
             )
         except RAGFusionDependencyError as exc:
             _emit_timings()

@@ -406,14 +406,14 @@ graph LR
         - Run `npx tsp compile api-contracts/e2h-ppr-http-api.tsp` to emit the OpenAPI schema before the snapshot test.
         - [x] Update MCP `search_with_context` rejection message to include 'ppr' in the list of modes that are not supported, e.g. change '(naive, local, global)' to '(naive, local, global, ppr)'.
 
-- [ ] **BE-3** — Add `"ppr"` dispatch stub to pipeline: fallback to hybrid, propagate `ppr_entities_matched=0` #backend-role
+- [x] **BE-3** — Add `"ppr"` dispatch stub to pipeline: fallback to hybrid, propagate `ppr_entities_matched=0` #backend-role
     - Use Cases · 2.0h
     - needs BE-1, BE-2 · completes S3, S5, S6
     - Tests
-        - #integration_test — `test_pprMode_noEntityMatch_fallsBackToHybrid` — make_real_app(graph_enabled=True) + POST /search graph_mode="ppr" with empty-entity spaCy stub → 200, ppr_entities_matched=0
-        - #integration_test — `test_pprMode_graphDisabled_returns422` — make_real_app(graph_enabled=False) → 422
-        - #integration_test — `test_pprMode_scopeFilterConflict_returns422` — scope_filter + graph_mode="ppr" → 422
-        - #integration_test — `test_pprMode_searchPipelineResult_carriesPprCount` — SearchPipelineResult.ppr_entities_matched=0 propagated to SearchResponse
+        - [x] #integration_test — `test_pprMode_noEntityMatch_fallsBackToHybrid` — make_real_app(graph_enabled=True) + POST /search graph_mode="ppr" with empty-entity spaCy stub → 200, ppr_entities_matched=0
+        - [x] #integration_test — `test_pprMode_graphDisabled_returns422` — make_real_app(graph_enabled=False) → 422
+        - [x] #integration_test — `test_pprMode_scopeFilterConflict_returns422` — scope_filter + graph_mode="ppr" → 422
+        - [x] #integration_test — `test_pprMode_searchPipelineResult_carriesPprCount` — SearchPipelineResult.ppr_entities_matched=0 propagated to SearchResponse
 
 - [ ] **T-1** — Integration e2e: PPR mode accepted; guard paths return correct errors #tester-role
     - — · 1.0h

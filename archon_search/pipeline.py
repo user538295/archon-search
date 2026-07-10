@@ -58,6 +58,7 @@ class SearchPipelineResult:
     rag_fusion_attempted: bool = False
     rag_fusion_warning: str | None = None
     graph_expansion_applied: bool = False
+    ppr_entities_matched: int | None = None
 
 
 @dataclass
@@ -974,6 +975,12 @@ class SearchPipeline:
         # is active the expanded text is used for both FTS and vector embedding.
         effective_query = query
         graph_expansion_applied = False
+        if graph_mode == "ppr":
+            return await self._search_ppr_mode(
+                collection, query, namespace,
+                filters=filters,
+                scope_filter=scope_filter,
+            )
         if graph_mode in ("local", "global"):
             return await self._search_graph_mode(  # type: ignore[return-value]
                 graph_mode, collection, query, namespace,
@@ -1239,6 +1246,32 @@ class SearchPipeline:
         return await self._search_standard(
             query, collection, namespace, embedder=self._global_embedder, filters=filters,
         )
+
+    async def _search_ppr_mode(
+        self,
+        collection: str,
+        query: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        *,
+        filters: "SearchFilters | None" = None,
+        scope_filter: "str | None" = None,
+    ) -> SearchPipelineResult:
+        """Stub for graph_mode='ppr' (E2h BE-3).
+
+        The real Personalized PageRank walk is implemented in BE-5.
+        This stub falls back to standard hybrid search and propagates
+        ppr_entities_matched=0 (S3: no entity match path).
+        """
+        assert scope_filter is None, (
+            "scope_filter must be None in graph-mode paths — check the 422 guard"
+        )
+        result = await self._search_standard(
+            query, collection, namespace,
+            embedder=self._global_embedder,
+            filters=filters,
+        )
+        result.ppr_entities_matched = 0
+        return result
 
     async def _search_local_mode(
         self,
@@ -2859,6 +2892,7 @@ class SearchPipeline:
             acl_filtered=acl_filtered,
             excluded_collections=excluded_collections,
             fanout_timings=fanout_timings,
+            ppr_entities_matched=0 if graph_mode == "ppr" else None,
         )
 
     async def _fanout_merge_acl(
