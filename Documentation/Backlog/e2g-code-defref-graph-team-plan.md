@@ -488,7 +488,7 @@ flowchart LR
         - #integration_test — `test_graphImpactMcpTool_realRequest_matchesRestShape` — the MCP tool's real response matches the REST route's shape for the same query
         - #integration_test — `test_graphImpactRoute_filePathParam_reachesComputeImpact` — the REST route's `file_path` query param and the MCP tool's `file_path` param both actually get passed through to the `compute_impact` call (asserted against a real ambiguous-symbol fixture, not dropped silently at the Presentation→Adapter boundary — Moderate #8)
         - #unit_test — `test_graphImpactRoute_omittedDepthDirection_appliesDefaults` — omitting `depth`/`direction` on the REST route, and separately on the MCP tool, results in `compute_impact` being called with `depth=2, direction="both"` (Major #5, new this cycle — BE-9's defining default-filling responsibility was previously untested)
-- [ ] **T-3** — e2e: `graph_impact` end-to-end via real MCP and real HTTP #tester-role
+- [x] **T-3** — e2e: `graph_impact` end-to-end via real MCP and real HTTP #tester-role
     - — · 4.0h
     - needs BE-9 · completes S5, S6, S7, S13
     - Tests

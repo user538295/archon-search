@@ -19,6 +19,7 @@ call async pipeline/store methods directly without going through TestClient.
 """
 from __future__ import annotations
 
+import json
 import time
 from contextlib import contextmanager
 from typing import Any, Iterator
@@ -344,6 +345,84 @@ def install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
     monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
     monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+
+
+# ---------------------------------------------------------------------------
+# MCP JSON-RPC test-client helpers — generic across fixtures/tool names, used
+# by graph-related e2e tests (e.g. T-3's graph_impact e2e test).
+# ---------------------------------------------------------------------------
+
+
+def mcp_headers(token: str, session_id: str | None = None) -> dict:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if session_id is not None:
+        headers["mcp-session-id"] = session_id
+    return headers
+
+
+def mcp_initialize(client: TestClient, token: str) -> str:
+    resp = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "integration-test", "version": "1.0"},
+            },
+        },
+        headers=mcp_headers(token),
+    )
+    assert resp.status_code == 200, f"MCP initialize failed: {resp.status_code} {resp.text[:300]}"
+    session_id = resp.headers.get("mcp-session-id")
+    assert session_id is not None, "MCP initialize did not return mcp-session-id header"
+
+    resp = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+        headers=mcp_headers(token, session_id),
+    )
+    assert resp.status_code in (200, 202), (
+        f"MCP notifications/initialized failed: {resp.status_code} {resp.text[:300]}"
+    )
+    return session_id
+
+
+def mcp_tool_call(
+    client: TestClient, token: str, session_id: str, tool_name: str, arguments: dict
+) -> dict:
+    resp = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": arguments},
+        },
+        headers=mcp_headers(token, session_id),
+    )
+    assert resp.status_code == 200, (
+        f"MCP tools/call {tool_name} failed: {resp.status_code} {resp.text[:300]}"
+    )
+    data_lines = [
+        line[5:].strip() for line in resp.text.split("\n") if line.startswith("data:")
+    ]
+    assert data_lines, f"No data: line in SSE response for {tool_name}: {resp.text[:300]!r}"
+    body = json.loads(data_lines[-1])
+    assert body.get("jsonrpc") == "2.0"
+
+    rpc_result = body.get("result", {})
+    content = rpc_result.get("content", [])
+    assert content, f"Tool '{tool_name}' returned empty content list: {rpc_result!r}"
+    text = content[0].get("text", "")
+    assert text, f"Tool '{tool_name}' returned empty text: {content!r}"
+    return json.loads(text)
 
 
 def install_k8s_synonym_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
