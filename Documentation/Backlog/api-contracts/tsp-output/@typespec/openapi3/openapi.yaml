@@ -1,54 +1,7 @@
 openapi: 3.0.0
 info:
-  title: Status API — maintenance TTL pruning fields (E2a)
+  title: (title)
   version: 0.0.0
 tags: []
-paths:
-  /status:
-    get:
-      operationId: Status_status
-      parameters: []
-      responses:
-        '200':
-          description: The request has succeeded.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusResponseE2aExtension'
-components:
-  schemas:
-    MaintenanceStatusE2aExtension:
-      type: object
-      required:
-        - expired_chunk_count
-        - last_expired_pruned_at
-      properties:
-        expired_chunk_count:
-          type: integer
-          format: int32
-          description: |-
-            Point-in-time count of chunks with expires_at < now_utc across all collections in the
-            caller's namespace. Computed at GET /status call time — not the count from the last prune run.
-            Always a non-null integer (0 or more); returns 0 when no expired chunks exist.
-        last_expired_pruned_at:
-          type: string
-          nullable: true
-          description: |-
-            ISO 8601 UTC timestamp of the most recent successful prune_expired_chunks completion.
-            Null before the first successful prune run.
-      description: |-
-        E2a additions to MaintenanceStatusDetail (nested under GET /status → maintenance field).
-        Partial model — only the fields added by E2a are shown.
-        The full MaintenanceStatusDetail lives in archon_search/server/schemas.py.
-        Existing fields (enabled, interval_hours, last_run_at, next_run_at, collection_health) are unchanged.
-    StatusResponseE2aExtension:
-      type: object
-      required:
-        - maintenance
-      properties:
-        maintenance:
-          type: object
-          allOf:
-            - $ref: '#/components/schemas/MaintenanceStatusE2aExtension'
-          nullable: true
-      description: Stub for GET /status top-level shape. Only the maintenance-related E2a extension is shown.
+paths: {}
+components: {}

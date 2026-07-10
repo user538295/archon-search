@@ -165,7 +165,7 @@ Contract between `pipeline.py` and `ppr_walker.py`:
 - Output: `PPRWalkResult { entityIds, chunkIds, entitiesMatched }`
 - `entitiesMatched = 0` → silent fallback; caller uses hybrid results.
 - Must run in `asyncio.to_thread`.
-- Dependencies: `GraphStore` (constructor-injected as concrete `GraphStore`; mirrors `GraphExpander.__init__(graph_store: "GraphStore")` at `graph_expander.py:144`). **Note:** `GraphStoreProtocol` (`graph_store_protocol.py`) exists but only exposes `get_all_nodes`, `vector_search_nodes`, `write_graph`, `find_nodes_by_name` — it lacks `get_all_edges` (C5) and the new `get_mentions_for_entity_ids` (C4). PPRWalker must take concrete `GraphStore`, or BE-5 must extend the protocol with these two methods. Pick one and state it at K-1.
+- Dependencies: `GraphStore` (constructor-injected as concrete `GraphStore`; mirrors `GraphExpander.__init__(graph_store: "GraphStore")` at `graph_expander.py:144`). **Resolved at K-1:** use concrete `GraphStore` — same as `GraphExpander`. `GraphStoreProtocol` (`graph_store_protocol.py`) exists but only exposes `get_all_nodes`, `vector_search_nodes`, `write_graph`, `find_nodes_by_name` — it lacks `get_all_edges` (C5) and the new `get_mentions_for_entity_ids` (C4). Extending the protocol would touch E2f consumers with no benefit in v1; concrete injection is the correct choice.
 - Zero-vector guard: if no matched entities have any mention rows, the personalization vector would be all-zero — `networkx.pagerank` falls back to uniform distribution over all nodes. In this case the walk proceeds but `entitiesMatched` is set to `0` and the result is treated as a silent fallback (caller uses hybrid results only).
 
 TypeSpec: [`e2h-ppr-walker.tsp`](e2h-ppr-walker.tsp) (extend existing C3 TypeSpec to document the graph-load steps from C5)
@@ -215,7 +215,7 @@ TypeSpec: included in `e2h-ppr-walker.tsp` (extend existing C3 TypeSpec to docum
 | S11 | `/explain` multi-collection request | `POST /explain` with `collections: ["a","b"]` + `graph_mode: "ppr"` | 422 "graph_mode is not supported with multi-collection fanout" | integration |
 | S12 | Eval corpus with multihop-musique/multihop-2wiki PPR queries | Eval suite runs `graph_ppr_bridge_recall_at_5` | `graph_ppr_bridge_recall_at_5 ≥ floor` (improves on no-graph baseline) | subprocess eval |
 | S13 | Eval corpus with HotpotQA PPR-mode queries | Eval suite runs `graph_ppr_negative_control_recall_at_5` | `graph_ppr_negative_control_recall_at_5 ≥ floor` (PPR-specific floor, separate from naive-mode bucket) | subprocess eval |
-| S14 | PPR mode; CPU-bound networkx walk | Concurrent `/search` requests with `graph_mode: "ppr"` | networkx `pagerank()` runs in `asyncio.to_thread`; no event-loop blocking | integration |
+| S14 | PPR mode; CPU-bound networkx walk | `/search` requests with `graph_mode: "ppr"` | networkx `pagerank()` is offloaded via `asyncio.to_thread`; the event loop is not blocked during the walk | integration |
 
 ---
 
@@ -297,6 +297,7 @@ TypeSpec: included in `e2h-ppr-walker.tsp` (extend existing C3 TypeSpec to docum
 - **Q2 — Naive cap config key:** Resolved → **separate `[graph] naive_max_expansion_terms: int = 20`**. Decoupled from `ppr_top_entities` (different concepts); explicit naming mirrors `max_global_candidates`/`community_summary_chunks` conventions.
 - **Q3 — `ppr_entities_matched` placement:** Resolved → **both `SearchResponse` and `ExplainResponse`** as `int | None = None`. Callers see the count without hitting `/explain`; field is `None` (not `0`) when PPR was not the active mode.
 - **Q4 — Eval gate threshold:** Resolved → **two new independent rows**: `graph_ppr_bridge_recall_at_5` (bridge multi-hop) and `graph_ppr_negative_control_recall_at_5` (PPR-mode HotpotQA). PPR queries feed their own PPR-specific negative-control floor — not merged into the existing `graph_negative_control_recall_at_5` naive-mode bucket. This means a PPR regression on simple queries is caught specifically, not masked by the combined metric.
+- **Q5 — PPRWalker dependency injection:** Resolved at K-1 → **concrete `GraphStore`** (same pattern as `GraphExpander`). `GraphStoreProtocol` lacks `get_all_edges` and `get_mentions_for_entity_ids`; extending it would add protocol surface that touches E2f consumers with no testability benefit in v1. BE-5 injects concrete `GraphStore` directly.
 
 **Remaining open questions:** None. `status: planned`.
 
@@ -362,14 +363,15 @@ graph LR
 
 ### Kickoff
 
-- [ ] **K-1** — Confirm open-question resolutions with team before implementation starts #backend-role
+- [x] **K-1** — Confirm open-question resolutions with team before implementation starts #backend-role
     - — · 1.0h
     - needs — · completes —
     - Duties
         - Confirm prepend-then-rerank blending (not third-stream RRF)
         - Confirm `naive_max_expansion_terms` as the separate naive cap key
         - Confirm `ppr_entities_matched` in both SearchResponse and ExplainResponse
-        - Confirm eval gate adds `graph_ppr_bridge_recall_at_5` row
+        - Confirm eval gate adds two independent rows: `graph_ppr_bridge_recall_at_5` (bridge multi-hop) and `graph_ppr_negative_control_recall_at_5` (PPR-mode HotpotQA)
+        - Confirm PPRWalker dependency injection resolution (concrete `GraphStore`, per Q5) with the team before BE-5 starts.
     - Tests
 
 ---
@@ -451,7 +453,7 @@ graph LR
         - #unit_test — `test_pprWalker_substringQuery_doesNotMatchExactEntity` — query "kubernetesish" (superstring of entity "kubernetes") → entitiesMatched=0. Verifies the exact-match contract: `find_nodes_by_name` is not a substring or LIKE search.
         - #unit_test — `test_pprWalker_ngramDedup_duplicateTokensLookedUpOnce` — query with repeated word ("go go lang") → dedup n-grams before calling `find_nodes_by_name` (assert it is called once per distinct n-gram, not once per occurrence)
         - #unit_test — `test_pprWalker_personalizationWeightedByRawMentionRowCount` — entity A with 3 mention rows (even if same chunk) vs entity B with 1 → A has weight 3, B has weight 1 in the reset vector
-        - #unit_test — `test_pprWalker_mentionCountFlipsEntityOrdering` — two entities: A(3 mention rows) connected to chunk-A, B(1 mention row) connected to chunk-B; PPR on a graph where both are equally connected → chunk-A appears before chunk-B in chunkIds. Then flip counts (B→3, A→1) and assert ordering flips. **This is the critical output test** — it proves mention-count weight actually changes networkx's result, not just the input vector. Without it, a uniform-weight implementation passes all other mention tests.
+        - #unit_test — `test_pprWalker_mentionCountFlipsEntityOrdering` — two entities: A(3 mention rows) connected to chunk-A, B(1 mention row) connected to chunk-B; use a **symmetric graph topology** (A and B have identical neighbour structure — e.g., both connected to the same hub node with equal-weight edges — so the ONLY asymmetry is the personalization weight). Assert chunk-A appears before chunk-B in chunkIds. Then flip counts (B→3, A→1) and assert ordering flips. **This is the critical output test** — the symmetric topology is required so the flip is caused by mention-count weight alone, not by graph structure; a non-symmetric graph could pass with a uniform-weight implementation via topology bias.
         - #unit_test — `test_pprWalker_noEntityMatch_returnsEmptyResult` — query matches no node names → PPRWalkResult(entityIds=[], chunkIds=[], entitiesMatched=0)
         - #unit_test — `test_pprWalker_topKRespectsPprTopEntities` — graph with 10 entities; ppr_top_entities=3 → len(chunkIds) covers at most 3 entities
         - #unit_test — `test_pprWalker_networkxRunsInToThread` — verify asyncio.to_thread is called (mock to_thread, assert called once)
@@ -469,6 +471,7 @@ graph LR
         - #integration_test — `test_pprMode_pprTopEntities_config_applied` — ppr_top_entities=2 in TOML → at most 2 distinct entity IDs in PPRWalkResult
         - #integration_test — `test_pprMode_mcpSearch_pprEntitiesMatchedInResponse` — mcp_tool_call search graph_mode="ppr" → ppr_entities_matched present in response dict
         - #integration_test — `test_searchMany_pprMode_dispatchCorrect` — search_many with graph_mode="ppr" routes to PPR branch (not naive/local/global)
+        - #integration_test — `test_pprMode_chunkOrdering_pprChunksPrependedBeforeHybrid` — make_real_app + seed graph with entity chunk that hybrid alone would rank low; POST /search graph_mode="ppr" → entity-linked chunk appears at a higher position than it would in plain hybrid baseline (verifies prepend semantics, not just presence)
 
 - [ ] **T-2** — Integration e2e: PPR walk retrieves bridge docs #tester-role
     - — · 2.0h
@@ -488,7 +491,7 @@ graph LR
     - needs BE-6 · completes S2
     - Tests
         - #unit_test — `test_explainPipelineResult_pprLiteral_acceptsPpr` — ExplainPipelineResult(graph_mode_applied="ppr") validates without error
-        - #unit_test — `test_explainPipelineResult_pprEntitiesMatched_field_present` — dataclass has ppr_entities_matched: int = 0
+        - #unit_test — `test_explainPipelineResult_pprEntitiesMatched_field_present` — dataclass has ppr_entities_matched: int | None = None
         - #unit_test — `test_explainResponse_fromPipelineResult_pprFieldsPopulated` — ExplainResponse.from_pipeline_result() with ppr count → response has ppr_entities_matched
         - #integration_test — `test_explainEndpoint_pprMode_returnsGraphModeApplied` — POST /explain graph_mode="ppr" → graph_mode_applied="ppr", ppr_entities_matched >= 0, graph_provenance present on entity-matched chunks
 
@@ -496,10 +499,10 @@ graph LR
     - Use Cases · 2.0h
     - needs BE-1 · completes S9
     - Duties
-        - Cap is applied to the neighbour list BEFORE deduplication in `build_expanded_text`. This means at most `naive_max_expansion_terms` candidate names enter the dedup step; the final expanded count may be lower after dedup.
+        - Cap the assembled neighbour-name list inside `GraphExpander.expand()` BEFORE the `build_expanded_text(...)` call. Store the limit as `self._naive_max_expansion_terms` in `__init__` so `expand()` can apply it. This means at most `naive_max_expansion_terms` candidate names enter `build_expanded_text`; the final expanded count may be lower after dedup inside that function.
         - BE-8 also threads `GraphConfig.naive_max_expansion_terms` into `GraphExpander.__init__` — this is an unlisted but required signature change. `pipeline.py` constructs `GraphExpander` and must pass the config value.
     - Tests
-        - #unit_test — `test_naiveCap_50Neighbours_cappedAtLimit` — GraphExpander stub with 50 neighbours; naive_max_expansion_terms=20 → at most 20 names in expanded text
+        - #unit_test — `test_naiveCap_50Neighbours_cappedAtLimit` — GraphExpander stub with 50 **distinct** neighbour names (none appearing in the query, so dedup cannot reduce the count); naive_max_expansion_terms=20 → assert **exactly 20** names in expanded text (not merely ≤20), proving the cap — not dedup — is the binding constraint
         - #unit_test — `test_naiveCap_fewNeighbours_allReturned` — 5 neighbours; cap=20 → all 5 appended
         - #unit_test — `test_naiveCap_graphExpander_acceptsConfig_inConstructor` — `GraphExpander(graph_store, naive_max_expansion_terms=5)` stores the limit
         - #integration_test — `test_naiveCap_endToEnd_expandedQueryBounded` — make_real_app + high-degree entity seeded in graph + POST /search graph_mode="naive" → expansion_used=True, expanded query bounded to ≤ naive_max_expansion_terms terms
