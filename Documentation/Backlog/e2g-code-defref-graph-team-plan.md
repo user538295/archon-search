@@ -519,7 +519,7 @@ flowchart LR
         - #integration_test — `test_twoCorpora_areDisjoint` — the chunking-sensitive and connection-sensitive fixture corpora share no document IDs and no query IDs (Major #18 — a prerequisite for the attribution claim below, not itself proven by it)
         - #integration_test — `test_twoCorpora_attributeIndependently` — the chunking-corpus and connection-corpus results are computed and reported independently, with no shared metric conflating the two
         - #integration_test — `test_existingQualityFloors_holdWithDefrefEdges` — no pre-existing eval floor regresses with the new edges and chunking enabled
-- [ ] **T-2** — e2e subprocess gate: the code-lane eval gate is independently selectable and passes cleanly in a fresh process #tester-role
+- [x] **T-2** — e2e subprocess gate: the code-lane eval gate is independently selectable and passes cleanly in a fresh process #tester-role
     - — · 3.0h
     - needs BE-10 · completes S15, S16
     - Tests
