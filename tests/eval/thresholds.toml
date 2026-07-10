@@ -40,8 +40,14 @@ mrr             = 1.0
 ndcg_at_5       = 0.98516679592094
 ndcg_at_10      = 0.98786690917953
 routing_accuracy = 1.0
-routing_mrr_centroid = 0.7182539682539683
-routing_mrr_hybrid = 0.7182539682539683
+# routing_mrr_centroid/hybrid: recalibrated 2026-07-10 (BE-10 code-lane corpora).
+# Adding code-chunking (6 docs) and code-defref (7 docs) collections shifts
+# router centroids: 0.7183 -> 0.7113 (DELTA -0.0069, within max_floor_drop_
+# without_waiver=0.05; no waiver required). Retrieval metrics unaffected —
+# code-lane collections use graph_mode=naive retrieval queries, same pattern
+# as the E1a graph fixtures noted above.
+routing_mrr_centroid = 0.7113095238095238
+routing_mrr_hybrid = 0.7113095238095238
 # routing_precision_at_1_centroid — reported-only; no floor (P@1 report-only per Task 6.2)
 # routing_precision_at_1_hybrid   — reported-only; no floor (P@1 report-only per Task 6.2)
 # graph_mrr — reported-only; no floor set until calibration baseline exists (E1a BE-9)
@@ -75,6 +81,52 @@ graph_negative_control_recall_at_5 = 0.34
 # + synonym edges) = 1.0. Floor=0.75 sits above stub-path baseline, catches any
 # regression that disables synonym expansion. Waiver required (floor > baseline + 0.05).
 synonym_bridge_recall_at_5 = 0.75
+# code_chunking_recall_at_5 / code_defref_recall_at_5: calibrated 2026-07-10 (BE-10),
+# corpus recalibrated 2026-07-10 (Cycle 2 fix, C2-1/C2-7). Two independent
+# code-lane corpora added: code-chunking (6 docs, chunk-boundary-sensitive) and
+# code-defref (7 docs, connection-sensitive real calls/inherits edges). Both
+# metrics are Recall@5 on naive-mode graph queries scoped to their own
+# collection, computed by the GATED run_eval_suite path (lancedb_root active):
+# code-chunking/code-defref are ingested through a SEPARATE real pipeline with
+# the calibrated ASTChunker(chunk_size=65) + real DefRefExtractor + GraphStore
+# wired (see runner.py's _build_code_lane_ingest_pipeline), not the
+# stub/default-chunker path used by every other eval collection.
+#
+# Config-lint non-vacuity (mirrors BE-8's synonym_bridge_recall_at_5 pattern):
+# code_defref_recall_at_5's floor=1.0 sits strictly above the measured
+# no-feature baseline of 0.6667 (the DEFAULT, non-code-lane eval path — no
+# lancedb_root, so code-defref is ingested via the plain stub pipeline instead
+# of the real code-lane pipeline — i.e. no AST chunker, no DefRefExtractor, no
+# graph edges). The no-feature baseline misses the lexically-weak grade-2 gold
+# doc (code-defref-notification-service) and only recovers the two
+# lexically-trivial grade-1 docs (2/3 = 0.6667); the real-feature run recovers
+# all three (3/3 = 1.0) via the calls edge (NotificationService.send ->
+# validate_token). A regression that disables DefRefExtractor wiring on this
+# path reproduces the 0.6667 baseline and fails this floor. See
+# tests/eval/test_e2e_graph_eval_gate_v2.py's test_eval_gate_code_defref_recall_at_5
+# for the enforced assertion. NOTE: this floor>baseline comparison is a
+# config-lint guard only, not the primary non-vacuity proof — the true proof is
+# the targeted weak-doc presence/absence assertion in that same test (C1-5),
+# which isolates the one gold doc that genuinely requires the calls edge.
+#
+# code_chunking_recall_at_5 is REPORT-ONLY (no gated floor) — Cycle 2 finding
+# C2-1/C2-7: on the committed corpus, at the calibrated chunk_size=65, the
+# real-feature gated path (AST chunker) and the no-feature default path
+# (chunk_size=256, plain Chonkie chunker) BOTH retrieve order_pipeline.py in
+# the top-5 (1.0 vs 1.0) — the two arms differ in more than just chunking
+# strategy (different chunk_size, different pipeline construction entirely),
+# so a floor comparing them cannot discriminate an AST-chunker regression.
+# Recalibrating the committed corpus text (now mirroring the mini-fixture
+# design used by the non-vacuity unit test, verified empirically to diverge
+# 1.0 AST vs 0.0 fixed-window when both arms use chunk_size=65 head-to-head)
+# does not fix this: the gated-vs-no-feature comparison is structurally
+# apples-to-oranges regardless of corpus content. AST-vs-fixed-window
+# non-vacuity is proven instead by test_codeChunkingRecall_nonVacuous, which
+# runs both arms through the SAME chunk_size=65 pipeline construction (only
+# the chunker differs) — the only comparison that actually isolates the
+# chunking-strategy signal. See that test's docstring and the metric's
+# docstring in archon_search/eval/types.py for details.
+code_defref_recall_at_5 = 1.0
 
 [multilingual]
 # Per-language recall floors for C2 multilingual eval fixtures.

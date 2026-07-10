@@ -34,17 +34,20 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def test_eval_corpus_document_count_range() -> None:
-    """Corpus must contain between 50 and 210 documents (inclusive).
+    """Corpus must contain between 50 and 220 documents (inclusive).
 
-    Upper bound raised to 200 in E2e BE-9 to accommodate 100 new HotpotQA
-    distractor corpus documents for the negative control eval gate.
-    Upper bound raised to 210 in BE-8 to accommodate 8 new synonym-bridge
-    distractor documents (synonym-bridge collection expanded from 4 to 12 docs).
+    Upper bound raised from 100 to 200 in E2e BE-9 to accommodate 100 new
+    HotpotQA distractor corpus documents for the negative control eval gate.
+    Upper bound raised from 200 to 210 in BE-8 to accommodate 8 new
+    synonym-bridge distractor documents (synonym-bridge collection expanded
+    from 4 to 12 docs).
+    Upper bound raised from 210 to 220 in E2g BE-10 to accommodate the
+    code-chunking (6 docs) and code-defref (7 docs) fixture corpora.
     """
     corpus = load_eval_corpus(CORPUS_ROOT)
     count = len(corpus.documents)
-    assert 50 <= count <= 210, (
-        f"Expected 50–210 documents, got {count}. "
+    assert 50 <= count <= 220, (
+        f"Expected 50–220 documents, got {count}. "
         "Add or remove documents to satisfy the corpus size requirement."
     )
 

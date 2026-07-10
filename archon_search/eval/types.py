@@ -118,6 +118,49 @@ class EvalMetrics:
             queries using one term to also retrieve documents that use the
             synonymous term.  ``None`` when no synonym-bridge queries are
             present in the corpus.
+        code_chunking_recall_at_5: Recall@5 over naive-mode graph queries on
+            the code-chunking collection.  ``None`` when no code-chunking
+            queries are present in the corpus.  When ``run_eval_suite`` is
+            called with ``lancedb_root`` set (the gated CI path), this
+            collection is ingested through a real
+            :class:`~archon_search.chunker.ASTChunker` at the calibrated
+            ``chunk_size=65`` via a dedicated code-lane pipeline — not the
+            stub/default-chunker path used by every other eval collection.
+            Without ``lancedb_root`` (report-only calibration runs), this
+            collection is ingested through the plain default chunker instead
+            (a different ``chunk_size`` and pipeline construction entirely).
+            REPORT-ONLY — no gated floor in ``thresholds.toml`` (Cycle 2
+            finding C2-1/C2-7): the gated-vs-no-feature comparison for this
+            metric is structurally apples-to-oranges (different chunk_size,
+            different pipeline), so a floor comparing the two cannot
+            discriminate an AST-chunker regression regardless of corpus
+            calibration. The real AST-vs-fixed-window non-vacuity proof is
+            ``test_codeChunkingRecall_nonVacuous`` in
+            ``tests/eval/test_code_lane_eval_gate.py``, which runs both arms
+            through the identical ``chunk_size=65`` pipeline construction
+            (only the chunker differs).
+        code_defref_recall_at_5: Recall@5 over naive-mode graph queries on
+            the code-defref collection.  ``None`` when no code-defref queries
+            are present in the corpus.  When ``run_eval_suite`` is called
+            with ``lancedb_root`` set (the gated CI path), this collection is
+            ingested through a real
+            :class:`~archon_search.defref_extractor.DefRefExtractor` and
+            :class:`~archon_search.graph_store.GraphStore` wired (real
+            ``calls``/``imports``/``defines``/``inherits`` edges) via a
+            dedicated code-lane pipeline. Without ``lancedb_root`` (the
+            DEFAULT, non-code-lane eval path — report-only calibration
+            runs), no graph store is wired for this collection at all — the
+            no-feature control (see ``thresholds.toml``'s
+            ``code_defref_recall_at_5`` comment for the measured
+            0.6667-vs-1.0 delta between the two paths). That floor>baseline
+            comparison is a config-lint guard only; the primary non-vacuity
+            proof is the targeted weak-doc (``code-defref-notification-service``)
+            presence/absence assertion in
+            ``test_eval_gate_code_defref_recall_at_5``
+            (``tests/eval/test_e2e_graph_eval_gate_v2.py``), which isolates
+            the one gold doc that genuinely requires the ``calls`` edge —
+            aggregate recall alone cannot prove this (2 of 3 gold docs are
+            lexically trivial to retrieve without the graph feature).
     """
 
     recall_at_1: float
@@ -142,3 +185,5 @@ class EvalMetrics:
     graph_global_recall_at_5: float | None = None
     graph_negative_control_recall_at_5: float | None = None
     synonym_bridge_recall_at_5: float | None = None
+    code_chunking_recall_at_5: float | None = None
+    code_defref_recall_at_5: float | None = None

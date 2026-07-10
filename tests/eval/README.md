@@ -448,3 +448,41 @@ Deterministic Leiden seed (`42`) ensures byte-identical representative chunk lis
 ### Graph extras requirement
 
 All graph eval tests require `archon-search[graph]` extras (`leidenalg`, `igraph`, `spacy`). Tests in `test_e2e_graph_eval_gate_v2.py` use `pytest.importorskip("leidenalg")` at module level; they skip gracefully when the extras are absent. The eval suite remains functional with or without the extras — graph metrics report as `None` when leidenalg is missing, no gate failure.
+
+## Code-lane eval gate (BE-10)
+
+BE-10 introduces two small, independent fixture corpora that each isolate one code-intelligence feature — AST-aware chunking, and def/ref (`calls`/`imports`/`defines`/`inherits`) graph edges — so a regression in either feature fails a dedicated gate, not just the general retrieval floors.
+
+### Fixture datasets
+
+Two new collections committed to `tests/eval/corpus/`:
+
+- **`code-chunking`** (`corpus/code-chunking/`) — 6 Python files, chunk-boundary-sensitive. `order_pipeline.py`'s target function shares heavy vocabulary overlap with 5 distractor files; only chunking that keeps the function's docstring and code body in one chunk (the real AST chunker) reliably surfaces it.
+- **`code-defref`** (`corpus/code-defref/`) — 7 Python files, connection-sensitive. `token_service.py` defines `validate_token`; `auth_gateway.py`, `audit_logger.py`, and `notification_service.py` call it (directly or via inheritance from `base_service.py`). Two distractor files (`rate_limiter.py`, `session_cache.py`) mention the word "token" without ever calling `validate_token`, so a co-occurrence-only graph would produce false positives that a directed `calls` edge does not.
+
+Zero shared document IDs and zero shared query IDs between the two collections (`test_twoCorpora_areDisjoint`).
+
+### Fixture layout
+
+- `documents.jsonl` — entries with `"collection": "code-chunking" | "code-defref"`
+- `queries.jsonl` — one query per collection (`q-code-chunking-001`, `q-code-defref-001`), both with `"graph_mode": "naive"`
+- `labels.jsonl` — `code-defref`'s query has 3 gold docs at two grades: grade=2 for the lexically-weak target (`notification_service.py`, which only surfaces via the `calls` edge), grade=1 for the two lexically-trivial callers (both literally contain the string `"validate_token"`). Aggregate `recall_at_5` alone cannot isolate whether the grade-2 target was found — `test_code_lane_eval_gate.py` and the gated tests in `test_e2e_graph_eval_gate_v2.py` additionally assert its presence/absence directly.
+
+### Real feature wiring on the gated path
+
+Unlike the general eval collections (ingested through a stub/default-chunker pipeline), `code-chunking`/`code-defref` are ingested through a **separate real pipeline** when `run_eval_suite` is called with `lancedb_root` set (the gated CI path): a real `ASTChunker` at the calibrated `chunk_size=65` and a real `DefRefExtractor` + `GraphStore` + `RealGraphExpander`, sharing the same on-disk LanceDB directory as the rest of the suite. See `archon_search/eval/runner.py`'s `_build_code_lane_ingest_pipeline` and the BE-10 comment on `_build_pipeline_with_eval_backends` for why this collection-scoped routing is necessary (a single pipeline-wide `ASTChunker(chunk_size=65)` regressed the pre-existing `code` collection's retrieval quality — chunking is file-extension-gated, not collection-gated, in `pipeline.py`).
+
+Without `lancedb_root` (report-only calibration runs, `regenerate.py`), both collections are ingested through the plain stub pipeline — the "no-feature" control measured in `baselines/baseline.json`.
+
+### Code-lane eval metrics and gates
+
+Two new recall metrics in `EvalMetrics`; only one is gated in `thresholds.toml` (Cycle 2 fix, C2-1/C2-7):
+
+- **`code_chunking_recall_at_5`** — Recall@5 on the code-chunking collection's naive-mode query. **Report-only, no gated floor.** The gated-vs-no-feature comparison is structurally apples-to-oranges: the gated path uses `chunk_size=65` + real `ASTChunker`, the no-feature (default) path uses `chunk_size=256` + the stub chunker — a floor comparing the two cannot discriminate an AST-chunker regression regardless of corpus calibration, since both retrieve the target document (1.0 vs 1.0) even after recalibrating the committed corpus to be chunk-boundary-sensitive. The real AST-vs-fixed-window non-vacuity proof is `test_codeChunkingRecall_nonVacuous` in `tests/eval/test_code_lane_eval_gate.py`, which runs both arms through the identical `chunk_size=65` pipeline construction (only the chunker differs) and asserts a strict inequality.
+- **`code_defref_recall_at_5`** — Recall@5 on the code-defref collection's naive-mode query. Floor (`1.0`) is set strictly above the measured no-feature baseline (`0.6667`, recorded in `baselines/baseline.json` — the DEFAULT, non-code-lane path, not the same gated path with the feature toggled off) — mirroring the `synonym_bridge_recall_at_5` non-vacuity pattern — so a regression that disables `DefRefExtractor` wiring reproduces the 0.6667 baseline and fails the gate. That floor>baseline comparison is a config-lint guard only; the primary non-vacuity proof is a targeted presence/absence assertion on the one gold doc (`code-defref-notification-service`) that can only be retrieved via the real `calls` edge — aggregate recall alone can pass (2/3) without ever finding it.
+
+The `code_defref_recall_at_5` gate additionally asserts a non-zero edge count for `code-defref` before trusting the recall comparison (`test_eval_gate_code_defref_recall_at_5` in `test_e2e_graph_eval_gate_v2.py`) — a silently-failed graph extraction (post-persist hooks never propagate errors, per the project's error-handling invariant) would otherwise surface as a confusing recall mismatch instead of a clear "fixture no longer discriminates" failure. `test_defrefExtractorFailure_leavesZeroEdges_C16GuardWouldCatchIt` in `test_code_lane_eval_gate.py` proves this guard actually catches a real `DefRefExtractor.extract` failure (monkeypatched to raise), not just that it passes when extraction succeeds.
+
+### Threshold-lowering notes
+
+If `code_defref_recall_at_5`'s floor is ever lowered, it must stay strictly above the no-feature baseline (`0.6667`) or the gate becomes vacuous — update the `_NO_FEATURE_BASELINE` constant in both `test_eval_gate_code_defref_recall_at_5` (`test_e2e_graph_eval_gate_v2.py`) and the `thresholds.toml` comment together with the new baseline value.

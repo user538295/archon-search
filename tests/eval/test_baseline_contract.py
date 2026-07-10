@@ -44,6 +44,8 @@ _QUALITY_FIELDS = (
     "graph_global_recall_at_5",
     "graph_negative_control_recall_at_5",
     "synonym_bridge_recall_at_5",
+    "code_chunking_recall_at_5",
+    "code_defref_recall_at_5",
 )
 
 

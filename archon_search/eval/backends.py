@@ -281,7 +281,21 @@ class DispatchingCommunityStore:
     """Proxy that dispatches community backend calls by collection name.
 
     Implements the four-method CommunityBackend protocol by routing each call
-    to the appropriate backend based on collection name.
+    to the appropriate backend based on collection name. Serves as the shared
+    eval ``pipeline``'s ``graph_store=`` for community-mode (local/global)
+    lookups on the multihop collections.
+
+    C2-5 (Cycle 2 fix): BE-10 originally added four DefRefExtractor-writing
+    proxy methods here (``ensure_graph_tables``, ``write_graph``,
+    ``delete_defref_graph_by_doc``, ``get_neighbours``), intending this class
+    to double as the code-lane collections' graph_store too. They were dead
+    code — unreachable on the gated path: ``_build_code_lane_ingest_pipeline``
+    (invoked from ``_ingest_corpus`` when ``lancedb_root`` is active) wires
+    the code-lane pipeline's ``graph_store=``/``RealGraphExpander`` directly
+    to the shared RAW ``GraphStore`` instance (``code_lane_graph_store`` /
+    ``_graph_store_for_communities``), never to this dispatcher. Removed;
+    if a future change genuinely routes code-lane DefRefExtractor writes
+    through this class, name the exact call site here when re-adding them.
     """
 
     def __init__(self, backend_map: dict[str, "RealCommunityEvalBackend | CommunityStoreStub"]) -> None:  # type: ignore[name-defined]  # noqa: F821
@@ -436,3 +450,46 @@ class EvalRerankerBackend:
             tf_norm = (tf * (k1 + 1)) / (tf + k1)
             score += tf_norm
         return score
+
+
+# ---------------------------------------------------------------------------
+# BE-10: fixed-window chunking control-arm adapter
+# ---------------------------------------------------------------------------
+
+
+class _FixedWindowChunkerAdapter:
+    """Adapts :class:`DocumentChunker` to the pipeline's ``ast_chunker=`` slot.
+
+    ``SearchPipeline.ingest_file`` always calls ``self._ast_chunker.chunk(...,
+    scope_table=scope_table, ...)`` for code files (see ``pipeline.py``'s BE-6
+    comment). To force plain fixed-window (Chonkie) chunking for the BE-10 A/B
+    comparison, this adapter accepts and discards ``scope_table`` and delegates
+    to a plain :class:`DocumentChunker` — the "AST disabled" control arm.
+    """
+
+    def __init__(self, chunk_size: int) -> None:
+        from archon_search.chunker import DocumentChunker as _DocumentChunker
+
+        self._inner = _DocumentChunker(chunk_size)
+
+    def chunk(
+        self,
+        text: str,
+        doc_id: str,
+        source_path: str,
+        *,
+        file_type: str,
+        updated_at: str,
+        ingested_by,
+        scope_table=None,
+        language: str = "",
+    ):
+        return self._inner.chunk(
+            text,
+            doc_id,
+            source_path,
+            file_type=file_type,
+            updated_at=updated_at,
+            ingested_by=ingested_by,
+            language=language,
+        )

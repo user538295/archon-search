@@ -202,3 +202,16 @@
 {"doc_id": "synonym-bridge-kubernetes", "collection": "synonym-bridge", "relative_path": "synonym-bridge/kubernetes-overview.txt"}
 {"doc_id": "synonym-bridge-machine-learning", "collection": "synonym-bridge", "relative_path": "synonym-bridge/ml-neural-networks.txt"}
 {"doc_id": "synonym-bridge-ml-abbrev", "collection": "synonym-bridge", "relative_path": "synonym-bridge/ml-abbreviation-guide.txt"}
+{"doc_id": "code-chunking-order-pipeline", "collection": "code-chunking", "relative_path": "code-chunking/order_pipeline.py"}
+{"doc_id": "code-chunking-vendor-settlement", "collection": "code-chunking", "relative_path": "code-chunking/vendor_settlement.py"}
+{"doc_id": "code-chunking-refund-chargeback-batch", "collection": "code-chunking", "relative_path": "code-chunking/refund_chargeback_batch.py"}
+{"doc_id": "code-chunking-refund-ledger-audit", "collection": "code-chunking", "relative_path": "code-chunking/refund_ledger_audit.py"}
+{"doc_id": "code-chunking-quorum-settlement-sync", "collection": "code-chunking", "relative_path": "code-chunking/quorum_settlement_sync.py"}
+{"doc_id": "code-chunking-settlement-quorum-ledger", "collection": "code-chunking", "relative_path": "code-chunking/settlement_quorum_ledger.py"}
+{"doc_id": "code-defref-token-service", "collection": "code-defref", "relative_path": "code-defref/token_service.py"}
+{"doc_id": "code-defref-base-service", "collection": "code-defref", "relative_path": "code-defref/base_service.py"}
+{"doc_id": "code-defref-rate-limiter", "collection": "code-defref", "relative_path": "code-defref/rate_limiter.py"}
+{"doc_id": "code-defref-session-cache", "collection": "code-defref", "relative_path": "code-defref/session_cache.py"}
+{"doc_id": "code-defref-auth-gateway", "collection": "code-defref", "relative_path": "code-defref/auth_gateway.py"}
+{"doc_id": "code-defref-audit-logger", "collection": "code-defref", "relative_path": "code-defref/audit_logger.py"}
+{"doc_id": "code-defref-notification-service", "collection": "code-defref", "relative_path": "code-defref/notification_service.py"}

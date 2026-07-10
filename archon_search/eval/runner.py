@@ -66,6 +66,8 @@ class EvalQualityFloors:
     graph_global_recall_at_5: float | None = None
     graph_negative_control_recall_at_5: float | None = None
     synonym_bridge_recall_at_5: float | None = None
+    code_chunking_recall_at_5: float | None = None
+    code_defref_recall_at_5: float | None = None
 
 
 @dataclass
@@ -183,6 +185,8 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
         "graph_global_recall_at_5",
         "graph_negative_control_recall_at_5",
         "synonym_bridge_recall_at_5",
+        "code_chunking_recall_at_5",
+        "code_defref_recall_at_5",
     )
     optional_floats: dict[str, float | None] = {}
     for opt_key in _optional_float_fields:
@@ -214,6 +218,8 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
         graph_global_recall_at_5=optional_floats["graph_global_recall_at_5"],
         graph_negative_control_recall_at_5=optional_floats["graph_negative_control_recall_at_5"],
         synonym_bridge_recall_at_5=optional_floats["synonym_bridge_recall_at_5"],
+        code_chunking_recall_at_5=optional_floats["code_chunking_recall_at_5"],
+        code_defref_recall_at_5=optional_floats["code_defref_recall_at_5"],
     )
 
     # --- latency_ceilings section (optional) ----------------------------------
@@ -657,15 +663,25 @@ async def _build_pipeline_with_eval_backends(
 
     chunker = DocumentChunker(chunk_size=256)
     parser = DocumentParser()
-    # E2g BE-3: DefRefExtractor intentionally NOT wired here. `graph_store=` above
-    # is a `CommunityStoreStub`/`DispatchingCommunityStore` (deterministic-backend
-    # stub), not a real `GraphStore`, and `graph_config=` is never passed to this
-    # constructor at all — the pipeline's `_defref_enabled`/`_graph_enabled` gates
-    # both require a real `GraphConfig.enabled`, so wiring DefRefExtractor against
-    # this stub would be dead code, not a functioning code lane. A later task
-    # (BE-10, the code-lane eval gate) needs real def/ref edges and should
-    # construct a real `GraphStore` + `GraphConfig(enabled=True)` for that harness
-    # rather than reusing this stub-backed builder.
+    # E2g BE-3: DefRefExtractor / calibrated ASTChunker intentionally NOT wired
+    # onto THIS shared pipeline — every non-code-lane eval collection
+    # (hotpotqa/multihop/synonym-bridge/graph, and the pre-existing `code`
+    # collection used by q-code-01..11's plain retrieval-quality gates) is
+    # ingested through this same instance, and both ASTChunker's chunk_size
+    # and DefRefExtractor's extraction are pipeline-wide, not collection-scoped
+    # (pipeline.py's `suffix in CODE_EXTENSIONS`/`DEFREF_SUPPORTED_EXTENSIONS`
+    # gates are file-extension-only). Wiring the BE-10-calibrated
+    # ASTChunker(chunk_size=65) here regressed the pre-existing `code`
+    # collection's recall (confirmed empirically: q-code-04 dropped below the
+    # under-depth diagnostic). BE-10 (the code-lane eval gate) therefore routes
+    # code-chunking/code-defref through a SEPARATE real pipeline
+    # (`_build_code_lane_ingest_pipeline`, invoked from `_ingest_corpus` when
+    # `lancedb_root` is supplied) sharing the same on-disk LanceDB path, so the
+    # real feature is exercised for exactly those two collections without
+    # perturbing any other collection's chunking or graph behavior.
+    # (`_build_code_lane_pipeline` is a SIBLING helper used only by
+    # tests/eval/test_code_lane_eval_gate.py's A/B non-vacuity unit tests —
+    # it is never called from this module's ingest path.)
     pipeline = SearchPipeline(
         store=store,
         embedder=embedder,
@@ -680,26 +696,252 @@ async def _build_pipeline_with_eval_backends(
     return pipeline
 
 
-async def _ingest_corpus(pipeline, corpus_root: Path, corpus: EvalCorpus) -> None:
-    """Ingest all corpus documents grouped by collection."""
+async def _build_code_lane_pipeline(
+    db_path: Path,
+    *,
+    chunking_mode: Literal["ast", "fixed_window"] = "ast",
+    defref_enabled: bool = False,
+    chunk_size: int = 65,
+    external_graph_store=None,
+):
+    """Build a pipeline for the BE-10 code-lane collections (A/B gates and the gated ingest path).
+
+    Unlike :func:`_build_pipeline_with_eval_backends` (whose deterministic
+    community-backend stub cannot support DefRefExtractor — see the comment
+    on that function), this helper constructs a REAL
+    :class:`~archon_search.graph_store.GraphStore` and
+    :class:`~archon_search.config.GraphConfig` when ``defref_enabled=True``, so
+    the def/ref eval gate exercises the actual code-symbol calls/inherits
+    graph, not a stub.
+
+    This single builder serves two callers (C2-4: previously duplicated ~90%
+    of this logic across two near-identical functions):
+
+    - ``tests/eval/test_code_lane_eval_gate.py``'s A/B non-vacuity unit tests
+      call it directly with ``external_graph_store=None`` — each arm gets its
+      own isolated ``GraphStore`` (or none, for the co-occurrence-free
+      control), created and owned by this function.
+    - ``_build_code_lane_ingest_pipeline`` (the gated production path invoked
+      from ``_ingest_corpus``) calls it with ``chunking_mode="ast"``,
+      ``defref_enabled=True``, and ``external_graph_store=`` the caller's
+      already-connected ``GraphStore``, so DefRefExtractor's writes land in
+      the SAME graph tables the main pipeline's ``RealGraphExpander``/
+      community backend reads from at query time — this function does not
+      construct or own that store.
+
+    Args:
+        db_path: LanceDB path for the ``SearchStore`` (and, when
+            ``defref_enabled`` and ``external_graph_store`` is ``None``, the
+            same path is reused for a freshly-constructed ``GraphStore`` —
+            both open the same on-disk LanceDB directory).
+        chunking_mode: ``"ast"`` (default) uses the real
+            :class:`~archon_search.chunker.ASTChunker`; ``"fixed_window"``
+            forces plain Chonkie fixed-window chunking via
+            :class:`~archon_search.eval.backends._FixedWindowChunkerAdapter`
+            — the control arm for the chunking non-vacuity gate.
+        chunk_size: Token/word budget passed to both chunkers. Default
+            ``65`` is calibrated against the process-local chunking
+            mini-fixture in ``tests/eval/test_code_lane_eval_gate.py``
+            (``_TARGET_DOC_SOURCE``) — at this size plain fixed-window
+            chunking's rolling window lands mid-function inside
+            ``process_refund``, splitting its docstring's query terms
+            ("refund", "settlement") from its code-body query terms
+            ("reconciliation", "ledger", "quorum", "chargeback") badly enough
+            that ``order_pipeline.py`` drops out of the eval embedder's
+            top-5, while the AST chunker's scope-aligned boundaries keep the
+            whole function (and both term groups) intact in one chunk,
+            keeping the document in the top-5. Empirically verified stable
+            for chunk_size in [60, 70]; values above ~72 or below ~58 either
+            invert the split direction or make neither arm discriminate
+            (both retrieve or both miss). The gated production path
+            (``_build_code_lane_ingest_pipeline``) always uses this default.
+        defref_enabled: When ``True``, wires a real ``GraphStore`` +
+            ``GraphConfig(enabled=True)`` + ``DefRefExtractor`` +
+            ``RealGraphExpander`` so ``graph_mode="naive"`` queries expand via
+            real ``calls``/``imports``/``defines``/``inherits`` edges. When
+            ``False`` (default), no graph store is wired at all — the
+            control arm for the def/ref non-vacuity gate (co-occurrence-free:
+            no graph edges of any kind, not even entity co-occurrence).
+        external_graph_store: When not ``None``, this already-connected
+            ``GraphStore`` is used instead of constructing a new one — the
+            caller owns its lifecycle (connect/disconnect). Only meaningful
+            when ``defref_enabled=True``; ignored otherwise. When ``None``
+            (default) and ``defref_enabled=True``, a fresh ``GraphStore`` is
+            constructed and connected against *db_path*, owned by this
+            function's caller via the returned tuple.
+
+    Returns:
+        A tuple of ``(pipeline, graph_store)``. ``graph_store`` is ``None``
+        when ``defref_enabled=False``. When ``external_graph_store`` was
+        supplied, ``graph_store`` echoes it back (the caller already owns
+        its lifecycle — do not call ``disconnect()`` on it via this return
+        value in that case). Otherwise the caller is responsible for calling
+        ``graph_store.disconnect()`` when non-``None``.
+    """
+    from archon_search.chunker import ASTChunker, DocumentChunker
+    from archon_search.embedder import Embedder
+    from archon_search.eval.backends import (
+        EvalEmbedderBackend,
+        EvalRerankerBackend,
+        RealGraphExpander,
+        _FixedWindowChunkerAdapter,
+    )
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.reranker import Reranker
+    from archon_search.store import SearchStore
+
+    store = SearchStore(db_path)
+    await store.connect()
+
+    embedder = Embedder(EvalEmbedderBackend())
+    reranker = Reranker(EvalRerankerBackend())
+    chunker = DocumentChunker(chunk_size=chunk_size)
+    ast_chunker = (
+        ASTChunker(chunk_size=chunk_size)
+        if chunking_mode == "ast"
+        else _FixedWindowChunkerAdapter(chunk_size)
+    )
+    parser = DocumentParser()
+
+    graph_store = None
+    graph_config = None
+    defref_extractor = None
+    graph_expander = None
+    if defref_enabled:
+        from archon_search.config import GraphConfig
+        from archon_search.graph_store import GraphStore
+        from archon_search.defref_extractor import DefRefExtractor
+
+        if external_graph_store is not None:
+            graph_store = external_graph_store
+        else:
+            graph_store = GraphStore(db_path=str(db_path))
+            await graph_store.connect()
+        graph_config = GraphConfig(enabled=True)
+        defref_extractor = DefRefExtractor(graph_store=graph_store)
+        graph_expander = RealGraphExpander(graph_store)
+
+    pipeline = SearchPipeline(
+        store=store,
+        embedder=embedder,
+        reranker=reranker,
+        chunker=chunker,
+        parser=parser,
+        top_k_retrieve=10,
+        top_k_return=10,
+        ast_chunker=ast_chunker,
+        graph_store=graph_store,
+        graph_config=graph_config,
+        defref_extractor=defref_extractor,
+        graph_expander=graph_expander,
+    )
+    return pipeline, graph_store
+
+
+async def _build_code_lane_ingest_pipeline(db_path: Path, graph_store) -> "SearchPipeline":  # type: ignore[name-defined]  # noqa: F821
+    """Build the real code-lane ingest pipeline for use FROM WITHIN ``run_eval_suite``.
+
+    Delegates to :func:`_build_code_lane_pipeline` (C2-4: single source of
+    truth for the calibrated ``chunk_size=65`` and pipeline-construction
+    logic) with ``chunking_mode="ast"``, ``defref_enabled=True``, and
+    ``external_graph_store=graph_store`` — *db_path* is a plain
+    ``SearchStore`` path (no ``/lancedb`` suffix — the caller's
+    ``pipeline.store._db_path`` already points at the LanceDB dir) and
+    *graph_store* is the caller's already-connected ``GraphStore`` (the same
+    ``RealCommunityEvalBackend``-backed store used for the multihop community
+    lookups), so DefRefExtractor's writes land in the SAME graph tables that
+    the main pipeline's ``RealGraphExpander``/community backend reads from at
+    query time. This is the gated production path, not an A/B control arm
+    (those are exercised directly via :func:`_build_code_lane_pipeline` by
+    ``tests/eval/test_code_lane_eval_gate.py``'s non-vacuity unit tests).
+    """
+    pipeline, _ = await _build_code_lane_pipeline(
+        db_path,
+        chunking_mode="ast",
+        defref_enabled=True,
+        chunk_size=65,
+        external_graph_store=graph_store,
+    )
+    return pipeline
+
+
+async def _ingest_corpus(
+    pipeline,
+    corpus_root: Path,
+    corpus: EvalCorpus,
+    *,
+    code_lane_graph_store=None,
+) -> None:
+    """Ingest all corpus documents grouped by collection.
+
+    Args:
+        pipeline: The shared eval pipeline (stub/default chunker) used for
+            every collection EXCEPT the BE-10 code-lane collections.
+        code_lane_graph_store: When not ``None`` (i.e. ``lancedb_root`` is
+            active in ``run_eval_suite``), ``code-chunking``/``code-defref``
+            are ingested through a SEPARATE real pipeline
+            (``_build_code_lane_ingest_pipeline``, real ``ASTChunker`` at the
+            calibrated ``chunk_size=65`` + real ``DefRefExtractor`` wired to
+            this ``GraphStore``) instead of ``pipeline``, so the real feature
+            is exercised for exactly those two collections without changing
+            chunking/graph behavior for every other collection sharing
+            ``pipeline`` (see the BE-10 comment on
+            ``_build_pipeline_with_eval_backends``). ``None`` (the default)
+            ingests them through ``pipeline`` like every other collection —
+            i.e. the stub/no-real-feature path.
+    """
     by_collection: dict[str, list[Path]] = {}
     for d in corpus.documents:
         by_collection.setdefault(d.collection, []).append(
             (corpus_root / "corpus" / d.relative_path).resolve()
         )
     corpus_dir = (corpus_root / "corpus").resolve()
-    for collection, paths in by_collection.items():
-        for p in paths:
-            result = await pipeline.ingest_file(p, collection, rebuild_fts=False, embedder=pipeline._global_embedder, collection_root=corpus_dir)
-            if result.status != "ok":
-                raise RuntimeError(
-                    f"failed to ingest {p}: {result.error}"
+
+    code_lane_pipeline = None
+    if code_lane_graph_store is not None and any(
+        col in by_collection for col in _CODE_LANE_EVAL_COLLECTIONS
+    ):
+        code_lane_pipeline = await _build_code_lane_ingest_pipeline(
+            pipeline.store._db_path, code_lane_graph_store
+        )
+        # DefRefExtractor's cross-file resolution (find_nodes_by_name) queries
+        # the nodes table unconditionally, with no missing-table guard — it
+        # raises ValueError on the very first ingested file in a fresh
+        # LanceDB dir, which pipeline.ingest_file swallows (WARNING, per the
+        # never-propagate contract) but silently drops that first file's
+        # def/ref edges. Pre-create the table (mirrors
+        # build_communities_for_eval's ensure_graph_tables calls for the
+        # multihop/synonym-bridge collections) so every code-lane document,
+        # including the first, is extracted successfully.
+        for _col in _CODE_LANE_EVAL_COLLECTIONS:
+            if _col in by_collection:
+                await code_lane_graph_store.ensure_graph_tables(_col, ns="default")
+
+    try:
+        for collection, paths in by_collection.items():
+            active_pipeline = (
+                code_lane_pipeline
+                if code_lane_pipeline is not None and collection in _CODE_LANE_EVAL_COLLECTIONS
+                else pipeline
+            )
+            for p in paths:
+                result = await active_pipeline.ingest_file(
+                    p, collection, rebuild_fts=False,
+                    embedder=active_pipeline._global_embedder, collection_root=corpus_dir,
                 )
-        await pipeline.store.rebuild_fts_index(collection)
-        # `ingest_file` does not persist a CollectionMeta (centroid, model). The
-        # router needs that meta to rank — recompute it once per collection
-        # after all files are ingested.
-        await pipeline.recompute_collection_meta(collection, pipeline._global_embedder)
+                if result.status != "ok":
+                    raise RuntimeError(
+                        f"failed to ingest {p}: {result.error}"
+                    )
+            await pipeline.store.rebuild_fts_index(collection)
+            # `ingest_file` does not persist a CollectionMeta (centroid, model). The
+            # router needs that meta to rank — recompute it once per collection
+            # after all files are ingested.
+            await pipeline.recompute_collection_meta(collection, pipeline._global_embedder)
+    finally:
+        if code_lane_pipeline is not None:
+            await code_lane_pipeline.store.disconnect()
 
 
 async def _run_router_for_query(
@@ -754,6 +996,13 @@ _MULTIHOP_EVAL_COLLECTIONS = ("multihop-musique", "multihop-2wiki", "hotpotqa")
 # Collections that require Leiden community detection (local/global graph modes).
 # hotpotqa uses naive mode only and has no pre-built graph nodes — excluded.
 _COMMUNITY_EVAL_COLLECTIONS = ("multihop-musique", "multihop-2wiki")
+# BE-10: code-lane collections routed to the real GraphStore (via
+# RealCommunityEvalBackend + DispatchingCommunityStore) so DefRefExtractor's
+# writes and naive-mode graph expansion both hit the same real backend, not
+# the CommunityStoreStub/EVAL_GRAPH_ENTITY_MAP fallback. See
+# _build_pipeline_with_eval_backends for the AST chunker / DefRefExtractor
+# wiring these collections require.
+_CODE_LANE_EVAL_COLLECTIONS = ("code-chunking", "code-defref")
 # Deterministic Leiden seed used by both the eval fixture and run_eval_suite.
 _EVAL_LEIDEN_SEED: int = 42
 
@@ -843,7 +1092,7 @@ async def run_eval_suite(
         await _graph_store_for_communities.connect()
         community_backend_map = {
             col: RealCommunityEvalBackend(_graph_store_for_communities)
-            for col in _MULTIHOP_EVAL_COLLECTIONS
+            for col in (*_MULTIHOP_EVAL_COLLECTIONS, *_CODE_LANE_EVAL_COLLECTIONS)
         }
 
     with _db_path_context(lancedb_root) as db_path:
@@ -852,7 +1101,10 @@ async def run_eval_suite(
             community_backend_map=community_backend_map,
         )
         try:
-            await _ingest_corpus(pipeline, corpus_root, corpus)
+            await _ingest_corpus(
+                pipeline, corpus_root, corpus,
+                code_lane_graph_store=_graph_store_for_communities,
+            )
 
             # Build communities for multihop eval collections AFTER corpus ingest.
             # CommunityBuilder._select_representative_chunk_ids requires chunks in the
@@ -1112,6 +1364,42 @@ async def run_eval_suite(
         if synonym_bridge_traces else None
     )
 
+    # Code-chunking / code-defref (BE-10): naive-mode recall on the two
+    # BE-10 code-lane collections. When `lancedb_root` is active (the gated
+    # CI path), these traces come from `naive_graph_traces`, which were
+    # produced by ingesting code-chunking/code-defref through the SEPARATE
+    # real code-lane pipeline (`_build_code_lane_ingest_pipeline` — real
+    # ASTChunker at chunk_size=65, real DefRefExtractor/GraphStore wiring),
+    # not `pipeline` (see `_ingest_corpus`'s `code_lane_graph_store` param).
+    # Without `lancedb_root` (report-only calibration runs), these
+    # collections are ingested through `pipeline` like every other
+    # collection — the stub/default-chunker (chunk_size=256), no-defref
+    # path (see `_build_pipeline_with_eval_backends`'s BE-10 comment). The
+    # non-vacuity A/B comparison against fixed-window chunking /
+    # co-occurrence-only graphs lives in
+    # tests/eval/test_code_lane_eval_gate.py, which constructs its OWN
+    # isolated pipelines via `_build_code_lane_pipeline()` (a sibling helper,
+    # never called from this ingest path).
+    _code_chunking_collection = "code-chunking"
+    code_chunking_traces = [
+        t for t in naive_graph_traces
+        if t.collection == _code_chunking_collection
+    ]
+    code_chunking_recall_at_5: float | None = (
+        compute_recall_at_k(code_chunking_traces, corpus.labels, 5)
+        if code_chunking_traces else None
+    )
+
+    _code_defref_collection = "code-defref"
+    code_defref_traces = [
+        t for t in naive_graph_traces
+        if t.collection == _code_defref_collection
+    ]
+    code_defref_recall_at_5: float | None = (
+        compute_recall_at_k(code_defref_traces, corpus.labels, 5)
+        if code_defref_traces else None
+    )
+
     # Graph-mode traces are excluded from latency percentiles: the 2-document
     # graph fixture corpus is too small to produce meaningful latency samples,
     # and graph expansion latency will be tracked separately when the fixture
@@ -1142,6 +1430,8 @@ async def run_eval_suite(
         graph_global_recall_at_5=graph_global_recall_at_5,
         graph_negative_control_recall_at_5=graph_negative_control_recall_at_5,
         synonym_bridge_recall_at_5=synonym_bridge_recall_at_5,
+        code_chunking_recall_at_5=code_chunking_recall_at_5,
+        code_defref_recall_at_5=code_defref_recall_at_5,
     )
 
     current_eval_hash = compute_eval_hash(corpus_root)
@@ -1194,6 +1484,8 @@ _QUALITY_FLOOR_FIELDS = (
     "graph_global_recall_at_5",
     "graph_negative_control_recall_at_5",
     "synonym_bridge_recall_at_5",
+    "code_chunking_recall_at_5",
+    "code_defref_recall_at_5",
 )
 
 
@@ -1386,6 +1678,8 @@ _RENDERED_QUALITY_FIELDS = (
     "graph_global_recall_at_5",
     "graph_negative_control_recall_at_5",
     "synonym_bridge_recall_at_5",
+    "code_chunking_recall_at_5",
+    "code_defref_recall_at_5",
 )
 
 _RENDERED_LATENCY_FIELDS = ("latency_p50_ms", "latency_p95_ms")

@@ -157,3 +157,5 @@
 {"query_id": "q-syn-bridge-002", "text": "K8s cluster etcd worker nodes RBAC", "collection": "synonym-bridge", "metric_scope": "retrieval", "graph_mode": "naive"}
 {"query_id": "q-syn-bridge-003", "text": "machine learning supervised reinforcement algorithms training", "collection": "synonym-bridge", "metric_scope": "retrieval", "graph_mode": "naive"}
 {"query_id": "q-syn-bridge-004", "text": "ML inference PyTorch TensorFlow prediction", "collection": "synonym-bridge", "metric_scope": "retrieval", "graph_mode": "naive"}
+{"query_id": "q-code-chunking-001", "text": "refund settlement reconciliation quorum chargeback ledger batch", "collection": "code-chunking", "metric_scope": "retrieval", "graph_mode": "naive"}
+{"query_id": "q-code-defref-001", "text": "who calls validate_token bearer authorization", "collection": "code-defref", "metric_scope": "retrieval", "graph_mode": "naive"}

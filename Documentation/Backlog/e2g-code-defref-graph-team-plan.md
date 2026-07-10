@@ -510,7 +510,7 @@ flowchart LR
         - #integration_test — `test_cSharpGrammar_forcedFailure_excludesLanguageOnly` — same for C#
 
 ### Phase 7 · Quality gate *(the two-sided bar: better AND no regression, staged)*
-- [ ] **BE-10** — Code-lane eval gate: two small independent fixture corpora — one chunk-boundary-sensitive (proves AST chunking alone), one connection-sensitive (proves def/ref edges alone vs. co-occurrence) — each with its own threshold, wired into `runner.py`/`thresholds.toml`/`baseline.json` per the BE-8 (`synonym_bridge_recall_at_5`) atomic-update pattern (Q6: two corpora, not config-toggled runs). Non-vacuity tests must compare against a real computed baseline metric, not a hardcoded constant (Major #17 — the `synonym_bridge_recall_at_5` precedent's own comment admits its constant-vs-constant comparison isn't the primary proof; this feature's gates must do better) #backend-role
+- [x] **BE-10** — Code-lane eval gate: two small independent fixture corpora — one chunk-boundary-sensitive (proves AST chunking alone), one connection-sensitive (proves def/ref edges alone vs. co-occurrence) — each with its own threshold, wired into `runner.py`/`thresholds.toml`/`baseline.json` per the BE-8 (`synonym_bridge_recall_at_5`) atomic-update pattern (Q6: two corpora, not config-toggled runs). Non-vacuity tests must compare against a real computed baseline metric, not a hardcoded constant (Major #17 — the `synonym_bridge_recall_at_5` precedent's own comment admits its constant-vs-constant comparison isn't the primary proof; this feature's gates must do better) #backend-role
     - Use Case · 15.0h
     - needs BE-3, BE-6 · completes S15, S16
     - Tests

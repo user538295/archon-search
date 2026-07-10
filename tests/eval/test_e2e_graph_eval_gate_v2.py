@@ -52,9 +52,12 @@ async def test_eval_gate_graph_naive_recall_at_5(thresholds_path: Path) -> None:
     )
     # Enforce the full production gate contract first: staleness checks, floor-drop policy,
     # calibration-only baseline rejection.
-    # synonym_bridge_recall_at_5 requires lancedb_root (synonym edges visible to expander);
-    # skip it here — enforced exclusively by test_eval_gate_synonym_bridge_recall_at_5.
-    assert_thresholds(report, skip_fields=frozenset({"synonym_bridge_recall_at_5"}))
+    # synonym_bridge_recall_at_5 and code_defref_recall_at_5 both require
+    # lancedb_root (synonym edges / real DefRefExtractor wiring visible to
+    # the expander); skip them here — enforced exclusively by
+    # test_eval_gate_synonym_bridge_recall_at_5 and
+    # test_eval_gate_code_defref_recall_at_5 respectively.
+    assert_thresholds(report, skip_fields=frozenset({"synonym_bridge_recall_at_5", "code_defref_recall_at_5"}))
 
     assert report.thresholds is not None
     floor = report.thresholds.quality_floors.graph_naive_recall_at_5
@@ -177,9 +180,12 @@ async def test_eval_gate_graph_negative_control_recall_at_5(thresholds_path: Pat
     )
     # Enforce the full production gate contract first: staleness checks, floor-drop policy,
     # calibration-only baseline rejection.
-    # synonym_bridge_recall_at_5 requires lancedb_root (synonym edges visible to expander);
-    # skip it here — enforced exclusively by test_eval_gate_synonym_bridge_recall_at_5.
-    assert_thresholds(report, skip_fields=frozenset({"synonym_bridge_recall_at_5"}))
+    # synonym_bridge_recall_at_5 and code_defref_recall_at_5 both require
+    # lancedb_root (synonym edges / real DefRefExtractor wiring visible to
+    # the expander); skip them here — enforced exclusively by
+    # test_eval_gate_synonym_bridge_recall_at_5 and
+    # test_eval_gate_code_defref_recall_at_5 respectively.
+    assert_thresholds(report, skip_fields=frozenset({"synonym_bridge_recall_at_5", "code_defref_recall_at_5"}))
 
     assert report.thresholds is not None
     floor = report.thresholds.quality_floors.graph_negative_control_recall_at_5
@@ -315,6 +321,174 @@ async def test_eval_gate_synonym_bridge_recall_at_5(
         f"(BE-8 / S8 eval gate failed — synonym expansion may have been disabled or "
         f"synonym_of edges may be absent; without expansion recall@5 ≈ {_NO_EXPANSION_BASELINE:.2f})"
     )
+
+
+@pytest.mark.eval
+async def test_eval_gate_code_chunking_recall_at_5_reportOnly(
+    thresholds_path: Path,
+    build_communities_for_eval: tuple,
+    eval_tmp_lancedb_root: Path,
+) -> None:
+    """Report-only: code_chunking_recall_at_5 computes on the gated code-lane path (BE-10).
+
+    Measures naive-mode recall on the code-chunking collection.  With
+    ``lancedb_root`` wired, ``run_eval_suite`` ingests this collection through
+    a dedicated real code-lane pipeline (real ``ASTChunker`` at the
+    calibrated ``chunk_size=65`` — see ``_build_code_lane_ingest_pipeline``),
+    not the stub/default-chunker path used by every other eval collection.
+
+    No floor is asserted here (Cycle 2 finding C2-1/C2-7): comparing this
+    gated value against the DEFAULT (non-code-lane) no-feature path is
+    apples-to-oranges — the two paths differ in chunk_size (65 vs 256) and
+    pipeline construction, not just chunking strategy, so a floor could never
+    discriminate an AST-chunker regression. The real AST-vs-fixed-window
+    non-vacuity proof is ``test_codeChunkingRecall_nonVacuous`` in
+    ``tests/eval/test_code_lane_eval_gate.py``, which runs both arms through
+    the identical ``chunk_size=65`` pipeline construction (only the chunker
+    differs) and asserts a strict inequality between them. See
+    ``thresholds.toml``'s ``code_chunking_recall_at_5`` comment for the full
+    rationale.
+    """
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=thresholds_path,
+        baseline_path=BASELINE_JSON,
+        lancedb_root=eval_tmp_lancedb_root,
+    )
+    # Enforce the full production gate contract first: staleness checks, floor-drop policy,
+    # calibration-only baseline rejection. code_chunking_recall_at_5 itself has
+    # no floor (report-only) so it is a no-op inside this call.
+    assert_thresholds(report)
+
+    actual = report.metrics.code_chunking_recall_at_5
+    assert actual is not None, (
+        "code_chunking_recall_at_5 metric is None — check that q-code-chunking-001 "
+        "is in queries.jsonl with graph_mode='naive' and collection='code-chunking'"
+    )
+
+
+@pytest.mark.eval
+async def test_eval_gate_code_defref_recall_at_5(
+    thresholds_path: Path,
+    build_communities_for_eval: tuple,
+    eval_tmp_lancedb_root: Path,
+) -> None:
+    """Gated: code_defref_recall_at_5 meets the floor configured in thresholds.toml (BE-10).
+
+    Measures naive-mode recall on the code-defref collection.  With
+    ``lancedb_root`` wired, ``run_eval_suite`` ingests this collection through
+    a dedicated real code-lane pipeline (real ``DefRefExtractor`` +
+    ``GraphStore`` + ``RealGraphExpander`` — see
+    ``_build_code_lane_ingest_pipeline``), not the stub/no-graph path used by
+    every other eval collection.
+
+    Non-vacuity: floor=1.0 (set in thresholds.toml) sits strictly above the
+    measured 0.6667 no-feature baseline recorded in baseline.json — that
+    baseline is the DEFAULT (non-code-lane, no ``lancedb_root``) eval path,
+    NOT the same gated path with the feature toggled off: without
+    ``lancedb_root``, code-defref is ingested through the plain stub pipeline
+    (no AST chunker, no DefRefExtractor, no graph edges) rather than through
+    ``_build_code_lane_ingest_pipeline``. Without the real ``calls`` edge
+    (``NotificationService.send -> validate_token``), naive-mode retrieval
+    recovers only the two lexically-trivial grade-1 gold docs (auth-gateway,
+    audit-logger — both literally contain "validate_token" in their text) and
+    misses the lexically-weak grade-2 target
+    (code-defref-notification-service), producing recall@5 = 2/3 = 0.6667.
+
+    The floor>baseline comparison above is a config-lint guard only — it
+    proves the floor isn't accidentally set at-or-below a trivially reachable
+    value, not that the gate genuinely requires the feature. The real
+    non-vacuity proof is the targeted weak-doc presence/absence assertion
+    below (C1-5): it isolates the one gold doc that can only be retrieved via
+    the real ``calls`` edge, since aggregate recall@5 alone can pass (2/3)
+    without ever finding it.
+    """
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=thresholds_path,
+        baseline_path=BASELINE_JSON,
+        lancedb_root=eval_tmp_lancedb_root,
+    )
+    # Enforce the full production gate contract first: staleness checks, floor-drop policy,
+    # calibration-only baseline rejection.
+    assert_thresholds(report)
+
+    assert report.thresholds is not None
+    floor = report.thresholds.quality_floors.code_defref_recall_at_5
+    actual = report.metrics.code_defref_recall_at_5
+
+    assert floor is not None, (
+        "code_defref_recall_at_5 floor is not set in thresholds.toml — "
+        "add [quality_floors] code_defref_recall_at_5 = <value>"
+    )
+    assert actual is not None, (
+        "code_defref_recall_at_5 metric is None — check that q-code-defref-001 "
+        "is in queries.jsonl with graph_mode='naive' and collection='code-defref'"
+    )
+    # Config-lint guard: prevents floor erosion below the no-feature baseline.
+    # This assertion compares two constants (floor from thresholds.toml vs. the
+    # measured 0.6667 baseline from baseline.json); it is NOT the primary
+    # non-vacuity proof. The true non-vacuity comes from ``actual >= floor``
+    # (line below) combined with the measured 0.6667 baseline in baseline.json.
+    # If the corpus is recalibrated, update _NO_FEATURE_BASELINE to match
+    # baseline.json (code_defref_recall_at_5 from the no-lancedb_root run).
+    _NO_FEATURE_BASELINE = 0.6667
+    assert floor > _NO_FEATURE_BASELINE, (
+        f"code_defref_recall_at_5 floor={floor:.4f} is not above the no-feature "
+        f"baseline={_NO_FEATURE_BASELINE:.4f} — the gate is vacuous; raise the "
+        "floor above the no-DefRefExtractor recall so the gate only passes "
+        "when real def/ref edges fire"
+    )
+    assert actual >= floor, (
+        f"code_defref_recall_at_5={actual:.4f} < floor={floor:.4f} "
+        f"(BE-10 eval gate failed — DefRefExtractor wiring may have been "
+        f"disabled or calls/inherits edges may be absent; without real "
+        f"def/ref edges recall@5 ≈ {_NO_FEATURE_BASELINE:.2f})"
+    )
+
+    # C1-5: aggregate recall@5 alone cannot isolate whether the
+    # lexically-weak grade-2 target (code-defref-notification-service) was
+    # retrieved — the other two gold docs (auth-gateway, audit-logger, both
+    # grade=1) literally contain "validate_token" in their text and are
+    # trivially retrievable via hybrid search alone. Assert its presence
+    # directly.
+    _WEAK_TARGET_DOC_ID = "code-defref-notification-service"
+    defref_trace = next(
+        t for t in report.traces if t.query_id == "q-code-defref-001"
+    )
+    top5_doc_ids: list[str] = []
+    for r in defref_trace.results:
+        if r.doc_id not in top5_doc_ids:
+            top5_doc_ids.append(r.doc_id)
+    top5_doc_ids = top5_doc_ids[:5]
+    assert _WEAK_TARGET_DOC_ID in top5_doc_ids, (
+        f"{_WEAK_TARGET_DOC_ID!r} must appear in the top-5 on the gated "
+        f"code-lane path — got top-5={top5_doc_ids}. If this fails, the real "
+        f"calls edge (NotificationService.send -> validate_token) is not "
+        f"reaching naive-mode query expansion even though aggregate recall "
+        f"may still pass via the two lexically-trivial grade-1 docs."
+    )
+
+    # C1-6: non-zero edge count guard — a silently-failed graph extraction
+    # (post-persist hooks swallow errors per CLAUDE.md's "never propagate"
+    # invariant) must fail loudly here rather than surface as a confusing
+    # recall mismatch below the floor.
+    from archon_search.graph_store import GraphStore
+
+    _defref_graph_store = GraphStore(db_path=str(eval_tmp_lancedb_root))
+    await _defref_graph_store.connect()
+    try:
+        edge_count = await _defref_graph_store.edge_count("code-defref", ns="default")
+        assert edge_count > 0, (
+            "code-defref graph has zero edges after ingest — DefRefExtractor "
+            "silently failed (post-persist hooks swallow errors per the "
+            "never-propagate contract); the fixture no longer discriminates "
+            "and the recall assertions above are not meaningful"
+        )
+    finally:
+        await _defref_graph_store.disconnect()
 
 
 # ---------------------------------------------------------------------------
