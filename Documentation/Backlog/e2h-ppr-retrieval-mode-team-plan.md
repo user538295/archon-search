@@ -438,28 +438,28 @@ graph LR
         - [x] #unit_test — `test_getMentionsForEntityIds_unknownEntityId_returnsEmpty` — entity_id not in table → []
         - [x] #integration_test — `test_getMentionsForEntityIds_realStore_roundTrip` — ensure_graph_tables + write mentions + get_mentions_for_entity_ids → correct rows returned
 
-- [ ] **BE-5** — Implement `PPRWalker` in new `archon_search/ppr_walker.py` #backend-role
+- [x] **BE-5** — Implement `PPRWalker` in new `archon_search/ppr_walker.py` #backend-role
     - Use Cases · 4.0h
     - needs BE-4 · completes C3, C5
     - Duties
-        - Load full node and edge set via `GraphStore.get_all_nodes` and `GraphStore.get_all_edges` before running the walk.
-        - Build `nx.Graph` with edge weights from loaded edges.
-        - Run `networkx.pagerank(G, personalization=..., alpha=damping)` with personalization vector derived from mention row counts.
-        - Map PPR scores back to entity IDs; select top-K entities by PPR score.
-        - Resolve top-K entities to chunk IDs via `get_mentions_for_entity_ids`; deduplicate across entities in entity PPR rank order.
-        - Return `PPRWalkResult`.
+        - [x] Load full node and edge set via `GraphStore.get_all_nodes` and `GraphStore.get_all_edges` before running the walk.
+        - [x] Build `nx.Graph` with edge weights from loaded edges.
+        - [x] Run `networkx.pagerank(G, personalization=..., alpha=damping)` with personalization vector derived from mention row counts.
+        - [x] Map PPR scores back to entity IDs; select top-K entities by PPR score.
+        - [x] Resolve top-K entities to chunk IDs via `get_mentions_for_entity_ids`; deduplicate across entities in entity PPR rank order.
+        - [x] Return `PPRWalkResult`.
     - Tests
-        - #unit_test — `test_pprWalker_seedsFromQueryNgrams_matchedEntityReturned` — query "kubernetes deployment" with entity "kubernetes" (exact 1-gram) in store → entitiesMatched=1; also covers bigram: entity "machine learning" found from query "machine learning inference" via 2-gram "machine learning". **Note:** `find_nodes_by_name` uses EXACT case-insensitive `lower(entity_name) IN (...)` — n-gram seeding works because the walker tokenizes the query into n-grams and passes each as an exact name to look up. A token that is not an exact entity name (e.g. "inference") returns nothing.
-        - #unit_test — `test_pprWalker_substringQuery_doesNotMatchExactEntity` — query "kubernetesish" (superstring of entity "kubernetes") → entitiesMatched=0. Verifies the exact-match contract: `find_nodes_by_name` is not a substring or LIKE search.
-        - #unit_test — `test_pprWalker_ngramDedup_duplicateTokensLookedUpOnce` — query with repeated word ("go go lang") → dedup n-grams before calling `find_nodes_by_name` (assert it is called once per distinct n-gram, not once per occurrence)
-        - #unit_test — `test_pprWalker_personalizationWeightedByRawMentionRowCount` — entity A with 3 mention rows (even if same chunk) vs entity B with 1 → A has weight 3, B has weight 1 in the reset vector
-        - #unit_test — `test_pprWalker_mentionCountFlipsEntityOrdering` — two entities: A(3 mention rows) connected to chunk-A, B(1 mention row) connected to chunk-B; use a **symmetric graph topology** (A and B have identical neighbour structure — e.g., both connected to the same hub node with equal-weight edges — so the ONLY asymmetry is the personalization weight). Assert chunk-A appears before chunk-B in chunkIds. Then flip counts (B→3, A→1) and assert ordering flips. **This is the critical output test** — the symmetric topology is required so the flip is caused by mention-count weight alone, not by graph structure; a non-symmetric graph could pass with a uniform-weight implementation via topology bias.
-        - #unit_test — `test_pprWalker_noEntityMatch_returnsEmptyResult` — query matches no node names → PPRWalkResult(entityIds=[], chunkIds=[], entitiesMatched=0)
-        - #unit_test — `test_pprWalker_topKRespectsPprTopEntities` — graph with 10 entities; ppr_top_entities=3 → len(chunkIds) covers at most 3 entities
-        - #unit_test — `test_pprWalker_networkxRunsInToThread` — verify asyncio.to_thread is called (mock to_thread, assert called once)
-        - #unit_test — `test_pprWalker_personalizationVectorSumsToOne` — reset vector passed to networkx.pagerank sums to 1.0 within float tolerance
-        - #unit_test — `test_pprWalker_zeroMentionEntities_fallsBackGracefully` — entity seeded but has zero mention rows → PPRWalkResult(entityIds=[], chunkIds=[], entitiesMatched=0)
-        - #integration_test — `test_pprWalker_realGraph_returnsTopKEntityChunks` — seed graph via GraphStore.write_graph + write_mentions + PPRWalker.walk → chunkIds non-empty, entitiesMatched > 0
+        - [x] #unit_test — `test_pprWalker_seedsFromQueryNgrams_matchedEntityReturned` — query "kubernetes deployment" with entity "kubernetes" (exact 1-gram) in store → entitiesMatched=1; also covers bigram: entity "machine learning" found from query "machine learning inference" via 2-gram "machine learning". **Note:** `find_nodes_by_name` uses EXACT case-insensitive `lower(entity_name) IN (...)` — n-gram seeding works because the walker tokenizes the query into n-grams and passes each as an exact name to look up. A token that is not an exact entity name (e.g. "inference") returns nothing.
+        - [x] #unit_test — `test_pprWalker_substringQuery_doesNotMatchExactEntity` — query "kubernetesish" (superstring of entity "kubernetes") → entitiesMatched=0. Verifies the exact-match contract: `find_nodes_by_name` is not a substring or LIKE search.
+        - [x] #unit_test — `test_pprWalker_ngramDedup_duplicateTokensLookedUpOnce` — query with repeated word ("go go lang") → dedup n-grams before calling `find_nodes_by_name` (assert it is called once per distinct n-gram, not once per occurrence)
+        - [x] #unit_test — `test_pprWalker_personalizationWeightedByRawMentionRowCount` — entity A with 3 mention rows (even if same chunk) vs entity B with 1 → A has weight 3, B has weight 1 in the reset vector
+        - [x] #unit_test — `test_pprWalker_mentionCountFlipsEntityOrdering` — two entities: A(3 mention rows) connected to chunk-A, B(1 mention row) connected to chunk-B; use a **symmetric graph topology** (A and B have identical neighbour structure — e.g., both connected to the same hub node with equal-weight edges — so the ONLY asymmetry is the personalization weight). Assert chunk-A appears before chunk-B in chunkIds. Then flip counts (B→3, A→1) and assert ordering flips. **This is the critical output test** — the symmetric topology is required so the flip is caused by mention-count weight alone, not by graph structure; a non-symmetric graph could pass with a uniform-weight implementation via topology bias.
+        - [x] #unit_test — `test_pprWalker_noEntityMatch_returnsEmptyResult` — query matches no node names → PPRWalkResult(entityIds=[], chunkIds=[], entitiesMatched=0)
+        - [x] #unit_test — `test_pprWalker_topKRespectsPprTopEntities` — graph with 10 entities; ppr_top_entities=3 → len(chunkIds) covers at most 3 entities
+        - [x] #unit_test — `test_pprWalker_networkxRunsInToThread` — verify asyncio.to_thread is called (mock to_thread, assert called once)
+        - [x] #unit_test — `test_pprWalker_personalizationVectorSumsToOne` — reset vector passed to networkx.pagerank sums to 1.0 within float tolerance
+        - [x] #unit_test — `test_pprWalker_zeroMentionEntities_fallsBackGracefully` — entity seeded but has zero mention rows → PPRWalkResult(entityIds=[], chunkIds=[], entitiesMatched=0)
+        - [x] #integration_test — `test_pprWalker_realGraph_returnsTopKEntityChunks` — seed graph via GraphStore.write_graph + write_mentions + PPRWalker.walk → chunkIds non-empty, entitiesMatched > 0
 
 - [ ] **BE-6** — Wire `PPRWalker` into `pipeline._search_graph_mode`; blend chunks prepend-then-rerank; propagate count #backend-role
     - Use Cases · 3.0h
