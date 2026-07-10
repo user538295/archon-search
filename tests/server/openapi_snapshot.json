@@ -1547,7 +1547,7 @@
         "type": "object"
       },
       "GraphStatusDetail": {
-        "description": "Graph feature status sub-object for GET /status (E1a FE-1 / C2).\n\nPresent when ``[graph] enabled = true``; the parent ``graph`` field\nbeing ``null`` signals that graph is disabled.\n\n``backend_threshold_edges`` mirrors the configured operator threshold\nfor the NetworkX backend \u2014 above this count a WARNING is emitted on\ningest and the hint to migrate to Kuzu (E1b) is surfaced.\n``stale_mention_count`` is the aggregate count of stale mention rows\ndetected during the last graph GC pass (BE-8); 0 before any GC pass.",
+        "description": "Graph feature status sub-object for GET /status (E1a FE-1 / C2).\n\nPresent when ``[graph] enabled = true``; the parent ``graph`` field\nbeing ``null`` signals that graph is disabled.\n\n``backend_threshold_edges`` mirrors the configured operator threshold\nfor the NetworkX backend \u2014 above this count a WARNING is emitted on\ningest and a hint to prune old documents or raise\n``backend_threshold_edges`` is surfaced.\n``stale_mention_count`` is the aggregate count of stale mention rows\ndetected during the last graph GC pass (BE-8); 0 before any GC pass.",
         "properties": {
           "backend_threshold_edges": {
             "title": "Backend Threshold Edges",

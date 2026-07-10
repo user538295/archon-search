@@ -260,17 +260,17 @@ N/A — no frontend work for this feature. archon-search has no web UI, dashboar
 
 Docs the feature touches — the close-out task (T-4) works through this list.
 
-- [ ] `e2g-code-defref-graph-brief.md` — no changes needed (source brief)
-- [ ] `e2g-code-defref-graph-team-plan.md` — this file
-- [ ] `Documentation/Architecture/130_data_architecture_and_persistence.md:156-158` — the graph-table schema section is already stale (wrong table-naming scheme, wrong edge column names — pre-dates this feature) and must additionally gain `calls`/`imports`/`defines`/`inherits`, the `extraction_method` values, and any new PageRank column
-- [ ] `Documentation/Architecture/600_api_reference_or_public_interface.md` — already stale (says 17 MCP tools, omits `get_graph`/`get_graph_cross_collection` — pre-dates this feature) and must additionally add `graph_impact` (MCP tool + REST route)
-- [ ] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md:73` — stale pre-namespacing table-name example; correct alongside the new def/ref components
-- [ ] `graph_extractor.py` docstring — stale Kuzu references (per brief Q11); correct while touching this file for def/ref extraction
-- [ ] `pipeline.py:651` `backend_threshold_edges` warning text — stale Kuzu reference (per brief Q11)
-- [ ] `tests/eval/README.md` — add the new code-lane gate's fixture schema and threshold-lowering notes
-- [ ] `archon-search.toml.example` — document any new `[graph]`/`[code]` config knobs (impact depth default/cap, PageRank scheduling)
-- [ ] `Documentation/Architecture/210_performance_and_scalability.md` — record the new `compute_impact` BFS traversal and the code-lane eval gate's fresh p50/p95 latency measurements as new latency regression guards (Minor #29)
-- [ ] `CLAUDE.md` — update the "Graph subsystem" section with the def/ref extractor, PageRank, and `graph_impact` additions
+- [x] `e2g-code-defref-graph-brief.md` — no changes needed (source brief)
+- [x] `e2g-code-defref-graph-team-plan.md` — this file
+- [x] `Documentation/Architecture/130_data_architecture_and_persistence.md:156-158` — the graph-table schema section is already stale (wrong table-naming scheme, wrong edge column names — pre-dates this feature) and must additionally gain `calls`/`imports`/`defines`/`inherits`, the `extraction_method` values, and any new PageRank column
+- [x] `Documentation/Architecture/600_api_reference_or_public_interface.md` — already stale (says 17 MCP tools, omits `get_graph`/`get_graph_cross_collection` — pre-dates this feature) and must additionally add `graph_impact` (MCP tool + REST route)
+- [x] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md:73` — stale pre-namespacing table-name example; correct alongside the new def/ref components
+- [x] `graph_extractor.py` docstring — stale Kuzu references (per brief Q11); correct while touching this file for def/ref extraction
+- [x] `pipeline.py:651` `backend_threshold_edges` warning text — stale Kuzu reference (per brief Q11)
+- [x] `tests/eval/README.md` — add the new code-lane gate's fixture schema and threshold-lowering notes
+- [x] `archon-search.toml.example` — document any new `[graph]`/`[code]` config knobs (impact depth default/cap, PageRank scheduling)
+- [x] `Documentation/Architecture/210_performance_and_scalability.md` — record the new `compute_impact` BFS traversal and the code-lane eval gate's fresh p50/p95 latency measurements as new latency regression guards (Minor #29)
+- [x] `CLAUDE.md` — update the "Graph subsystem" section with the def/ref extractor, PageRank, and `graph_impact` additions
 
 ---
 
@@ -526,7 +526,7 @@ flowchart LR
         - #e2e_test — `test_e2e_codeDefrefEvalGate_subprocess` — run the new gate by name in a blocking subprocess (mirroring `test_e2e_eval_gate_synonym_bridge_and_negative_control`), assert no nested xdist and non-vacuous pass count
 
 ### Phase 8 · Close-out
-- [ ] **T-4** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-4** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs all prior tasks · completes (acceptance gate), S14
     - Tests

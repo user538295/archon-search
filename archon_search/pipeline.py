@@ -696,7 +696,7 @@ class SearchPipeline:
                         f"Graph edge count ({edge_count:,}) has reached "
                         f"backend_threshold_edges ({self._graph_config.backend_threshold_edges:,}). "
                         "NetworkX in-memory traversal may become latency-noticeable. "
-                        "Consider migrating to the Kuzu backend (available in E1b)."
+                        "Consider pruning old documents or increasing backend_threshold_edges."
                     )
                     logger.warning(hint)
                     acl_warnings.append(hint)

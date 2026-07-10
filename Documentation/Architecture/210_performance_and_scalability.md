@@ -158,6 +158,26 @@ As of B5, centroid maintenance cost is no longer O(chunks) on every ingest:
 
 As of D4, the incremental path is unconditional — `centroid_incremental_enabled` has been removed. The B5 incremental path is always used. See `archon_search/store.py` and `CON-4` in `530_technical_debt_refactoring_roadmap.md` for the full rationale.
 
+### `compute_impact` BFS traversal cost (E2g)
+
+`GraphStore.compute_impact` is a depth-capped BFS over `_archon_graph_{ns}__{col}_edges`. Cost model:
+
+- **Per-hop fan-out**: each BFS frontier expansion reads `get_neighbours(collection, frontier_ids, ns)` and `get_edges_for_nodes(collection, frontier_ids, ns)` — two LanceDB scans per hop.
+- **Hard cap**: `MAX_IMPACT_DEPTH = 5` limits traversal to at most 5 hops regardless of the requested `depth`; `MAX_IMPACT_GROUP_SIZE = 50` caps the live frontier at each hop, so fan-out from a hub symbol never causes an unbounded scan.
+- **Result-set cap**: each `ImpactGroup` (direct + indirect) is capped at `MAX_IMPACT_GROUP_SIZE` entries total; excess entries are reported via `omitted_count` (never silently dropped).
+- **PageRank ordering**: results are sorted by persisted `pagerank_score` (nulls-last). No re-computation happens at query time — scores are pre-persisted by `PageRankBuilder`.
+
+No per-query `compute_impact` latency ceiling is enforced in v1; the BFS traversal cost is proportional to the graph size and depth cap, bounded by `MAX_IMPACT_DEPTH=5` and `MAX_IMPACT_GROUP_SIZE=50`.
+
+### Code-lane eval gate (E2g)
+
+The code-lane eval gate (`tests/eval/test_e2e_graph_eval_gate_v2.py`) adds two new fixture collections measured independently:
+
+- `code_chunking_recall_at_5` — Recall@5 on the chunk-boundary-sensitive corpus (`code-chunking/`). **Report-only, no gated floor** — see `tests/eval/README.md` for the rationale (the gated vs. no-feature comparison is apples-to-oranges at the aggregate level; non-vacuity is proved by `test_codeChunkingRecall_nonVacuous` comparing both arms at the same `chunk_size=65`).
+- `code_defref_recall_at_5` — Recall@5 on the connection-sensitive corpus (`code-defref/`). **Gated floor: 1.0** (strict above the measured no-feature baseline of 0.6667) — a regression that disables `DefRefExtractor` wiring reproduces the 0.6667 baseline and fails the gate.
+
+Latency p50/p95 for both code-lane collections are captured in `baselines/baseline.json` alongside the existing retrieval latency fields. No ceiling is enforced in v1.
+
 ## See also
 
 - `Architecture/100_system_architecture_overview.md` — the pipeline these knobs affect.

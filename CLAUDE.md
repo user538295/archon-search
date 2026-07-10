@@ -70,7 +70,7 @@ The runtime is a layered pipeline: `parser.py` → `chunker.py` → `embedder.py
 
 - `pipeline.py` — graph hooks: post-ingest entity extraction and `graph_mode` search paths (`"naive"` query expansion; `"local"`/`"global"` community retrieval, which require communities built via `CommunityBuilder`, else `GraphCommunitiesNotBuiltError`). TTL precedence at ingest: request `chunk_ttl_seconds` > collection `default_ttl_seconds` > null. `scope_filter` semantics: exact scopes are pushed into the SQL predicate; trailing-`*` wildcards are post-filtered Python-side on the top-k set. Post-persist auxiliary writes (graph extraction after ingest, mention cleanup on delete) never propagate errors — they log WARNING and return, so a bad graph write cannot fail an ingest or delete.
 - `collection_meta.py` / `description_generator.py` / `acl.py` — gotchas: description samples are non-deterministic (`sample_chunk_texts` shuffles in-process); `list_documents` cursor pagination is a Python-side `doc_id > cursor` filter, not a SQL predicate; `default_ttl_seconds` is forward-only (new chunks only); ACL sidecars > 64 KB are rejected with a warning surfaced via `IngestResult.warnings` (CLI prints warnings to stderr; async ingest exposes them in `GET /jobs/{id}`).
-- Graph subsystem — `graph_types.py` (dataclasses + deterministic stable-ID helpers), `graph_store.py` (per-collection LanceDB tables), `graph_extractor.py` (spaCy NER in `asyncio.to_thread`), `graph_expander.py` (naive expansion), `community_builder.py` (Leiden), `graph_inspector.py` (JSON/GraphML inspection), `synonym_detector.py` (E2f: embedding-based synonym edge detection, depends on `GraphStoreProtocol`), `alias_loader.py` (E2f: TOML alias file loader, produces manual `synonym_of` edges and a `skip_pairs` set for the detector). Rules: graph tables are named `_archon_graph_{ns}__{col}_nodes|edges|communities|mentions` (double `__` separator; pre-namespacing `_archon_graph_{col}_*` tables are orphans after upgrade — a startup WARNING lists them, delete manually); all `GraphStore` public methods take `ns` as the LAST parameter; graph extras are optional (`archon-search[graph]`) and `graph.enabled = true` without them raises `ConfigError` at startup. Enrichment invariant (E2f): the post-ingest synonym enrichment callback (`pipeline.on_synonym_edges_written`) is called inside a `try/except` block and NEVER propagates exceptions — enrichment failure logs WARNING and the ingest result is returned normally. `enrichment_auto = false` in `[graph]` config prevents automatic triggering. `GraphConfig` synonym fields: `synonym_threshold: float = 0.85`, `alias_file: str | None = None`, `enrichment_auto: bool = True`.
+- Graph subsystem — `graph_types.py` (dataclasses + deterministic stable-ID helpers; E2g adds `RelationshipType.calls/imports/defines/inherits`, `ImpactResult`/`ImpactGroup`/`ImpactEdge` for traversal results, `DEFAULT_IMPACT_DEPTH=2`/`MAX_IMPACT_DEPTH=5`/`MAX_IMPACT_GROUP_SIZE=50` constants), `graph_store.py` (per-collection LanceDB tables; E2g adds `compute_impact` BFS traversal, `write_pagerank_scores`, `pagerank_score`), `graph_extractor.py` (spaCy NER in `asyncio.to_thread`), `defref_extractor.py` (E2g: AST-aware def/ref extraction for 9 languages via tree-sitter; same-file edges = `"extracted"`, cross-file = `"inferred"`; `code_symbol` node IDs are file-qualified, `entity_name` stays bare), `pagerank_builder.py` (E2g: background PageRank over code-symbol edges; persisted to nodes table; debounce-triggered by `MaintenanceLoop`), `graph_expander.py` (naive expansion), `community_builder.py` (Leiden), `graph_inspector.py` (JSON/GraphML inspection; E2g adds `"importance"` sort mode ordered by persisted PageRank, nulls-last), `synonym_detector.py` (E2f: embedding-based synonym edge detection, depends on `GraphStoreProtocol`), `alias_loader.py` (E2f: TOML alias file loader, produces manual `synonym_of` edges and a `skip_pairs` set for the detector). Rules: graph tables are named `_archon_graph_{ns}__{col}_nodes|edges|communities|mentions` (double `__` separator; pre-namespacing `_archon_graph_{col}_*` tables are orphans after upgrade — a startup WARNING lists them, delete manually); all `GraphStore` public methods take `ns` as the LAST parameter; graph extras are optional (`archon-search[graph]`) and `graph.enabled = true` without them raises `ConfigError` at startup; code-parser extras (`archon-search[code]`) are separate — `graph.enabled = true` with code parsers absent causes a WARNING logged once per unsupported file extension by `code_enricher`, and `DefRefExtractor` additionally surfaces a per-file warning in `IngestResult.warnings` for each skipped code file; server still starts and prose graphing still works. Enrichment invariant (E2f): the post-ingest synonym enrichment callback (`pipeline.on_synonym_edges_written`) is called inside a `try/except` block and NEVER propagates exceptions — enrichment failure logs WARNING and the ingest result is returned normally. `enrichment_auto = false` in `[graph]` config prevents automatic triggering. `GraphConfig` synonym fields: `synonym_threshold: float = 0.85`, `alias_file: str | None = None`, `enrichment_auto: bool = True`. E2g def/ref invariant: `"extracted"` always wins over `"inferred"` (never downgraded) — a pre-read-and-override step in `write_graph` enforces this before the bulk `merge_insert`. Existing collections do not retroactively gain def/ref edges — re-ingest is the only path.
 - `jobs/` — async job store plus in-process `BackupLoop` and `MaintenanceLoop` (backup export/rotation; FTS optimize, orphan cleanup, expired-chunk pruning, graph GC + async community rebuild, failed-ingest retry). Rules: backup-sourced jobs always sort behind `source="user"` jobs; FAILED jobs that age out (`retry_max_age_hours`) or exhaust retries (`retry_max_attempts`) become terminal `FAILED_EXPIRED` — never re-enqueued, surfaced in `GET /jobs?status=FAILED_EXPIRED` and `/status`. Loop state persists in `.backup-state.json` / `.maintenance-state.json` under the data dir; `POST /maintenance/trigger` forces an immediate pass.
 - `key_manager.py` — key bootstrap (`ARCHON_SEARCH_API_KEY` overrides the key file; `ARCHON_SEARCH_KEY_FILE` redirects it) and `KeyStore` (`keys.json`). Invariant: raw bearer tokens are **never** persisted — only SHA-256 hashes. `active_keys()` re-reads disk on every call (no cache).
 - `model_validation.py` — background provider/model probe spawned by the app lifespan; never raises and never blocks startup; surfaces in `GET /status` and `GET /ready`.
@@ -148,15 +148,20 @@ When generating, refactoring, or reviewing code: open the relevant Architecture 
 **Before starting any task:**
 You MUST Read `learnings.md` in full. Apply all entries under "What Has Worked"
 and "Patterns and Preferences." Avoid all patterns listed under
-"What Has Failed."
+"What Has Failed." While working, note which entries you directly acted on
+(took a specific action, avoided a specific pattern, or made a specific code
+choice traceable to that entry) — you will increment their `N` at task close.
 
 **After completing any task:**
-You MUST Update `learnings.md` with new observations using this format:
+You MUST update `learnings.md`. Format for new entries:
 
-**[Date] — [Task type]**
-- Observation: [what you noticed]
-- Action: [what to do or avoid going forward]
-- Confidence: [high / medium / low]
+**[Date] (×N) — [Task type]**
+- [action-first observation]
+
+New entries start at `(×1)`. For each entry you acted on this session
+(see above), increment its `N`. Entries without `(×N)` (pre-migration) count
+as `(×1)` for eviction. If no new observations arose, skip adding — but still
+scan for entries you acted on and increment their `N`.
 
 Be specific. "Avoid relative imports in /utils — the build step
 resolves them incorrectly" is useful. "Be careful with imports" is not.
@@ -166,11 +171,12 @@ Do not add:
 - General best practices (only project-specific ones)
 - Redundant restatements of existing entries
 
-You MUST update `learnings.md` before ending the session. This is required even if nothing new was discovered. If existing patterns held, add a brief note confirming that.
-
 **Size cap — 150 lines, non-negotiable:**
-`learnings.md` must always stay **under 150 lines** and remain clear, concise, and compact. After every update you MUST review the whole file and re-compact it so it stays under the cap:
+`learnings.md` must always stay **under 150 lines**. If it is already at or
+above 150 lines when you open it, compact before adding anything. After every
+update review the whole file and re-compact so it stays under the cap:
 - Merge overlapping or same-theme entries into one dense entry.
 - Delete entries that are stale, superseded, or now enforced elsewhere (code guards, tests, this CLAUDE.md).
-- Compress kept entries — collapse Observation/Action/Confidence into a single action-first bullet (keep the date tag) when space demands it.
+- Compress kept entries — collapse to a single action-first bullet (keep the date + `(×N)` tag) when space demands it.
+- Only evict when the file would still exceed 150 lines after compression — never proactively. When eviction is needed, remove lowest `N` first; break ties by oldest date. Add new entries after eviction, not before.
 If an update would push the file past 150 lines, compress first, then add.

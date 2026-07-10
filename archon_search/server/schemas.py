@@ -345,7 +345,8 @@ class GraphStatusDetail(BaseModel):
 
     ``backend_threshold_edges`` mirrors the configured operator threshold
     for the NetworkX backend — above this count a WARNING is emitted on
-    ingest and the hint to migrate to Kuzu (E1b) is surfaced.
+    ingest and a hint to prune old documents or raise
+    ``backend_threshold_edges`` is surfaced.
     ``stale_mention_count`` is the aggregate count of stale mention rows
     detected during the last graph GC pass (BE-8); 0 before any GC pass.
     """

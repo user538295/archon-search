@@ -150,12 +150,14 @@ The per-field partition map (**system** / **filterable** / **ranking** / **audit
 
 The three B5 columns are additive and populated lazily: rows written by an older binary that lacks B5 will have `None` for all three fields, which the store treats identically to the `needs_recompute = True` state and triggers a full recompute on next access. See also `BREAKING.md` for mixed-version deployment caveats.
 
-### Per-collection graph tables (E1a / E1b / E2b / E2c)
+### Per-collection graph tables (E1a / E1b / E2b / E2c / E2g)
+
+**Table-naming scheme (E2b):** all graph tables follow the pattern `_archon_graph_{ns}__{col}_nodes|edges|communities|mentions` (double `__` separator between namespace and collection). Pre-namespacing tables (`_archon_graph_{col}_*`) are orphans after an upgrade — a startup WARNING lists them; delete manually.
 
 When `[graph].enabled = true`, `GraphStore` creates two auxiliary tables per collection on first ingest:
 
-- **`_archon_graph_{col}_nodes`** — one row per unique entity (`entity_id`, `entity_type`, `entity_name`, `source_chunk_ids`). Written by `GraphStore.write_graph` during ingest.
-- **`_archon_graph_{col}_edges`** — one row per relationship (`edge_id`, `src_id`, `rel`, `tgt_id`). Written by `GraphStore.write_graph` during ingest.
+- **`_archon_graph_{ns}__{col}_nodes`** — one row per unique entity. Key columns: `id` (stable SHA-256-derived entity ID), `entity_type` (e.g. `"concept"`, `"person"`, `"code_symbol"`), `entity_name` (bare display name — for `code_symbol` nodes, this is the unqualified symbol name only, never path-qualified), `chunk_count` (mention count), `name_embedding` (nullable `float64` list — set during synonym enrichment), `pagerank_score` (nullable `float64` — persisted by `GraphStore.write_pagerank_scores` after background `PageRankBuilder` pass; null until first recompute). Written by `GraphStore.write_graph` during ingest.
+- **`_archon_graph_{ns}__{col}_edges`** — one row per relationship. Key columns: `id` (stable SHA-256-derived edge ID), `source_node_id`, `target_node_id`, `relationship_type` (string from `RelationshipType` enum — values: `"related_to"`, `"synonym_of"`, `"calls"`, `"imports"`, `"defines"`, `"inherits"`), `extraction_method` (nullable string — `"ner"` for spaCy co-occurrence, `"manual"` for alias-file synonyms, `"embedding"` for ANN-detected synonyms, `"extracted"` for AST-proven def/ref edges, `"inferred"` for cross-file best-guess matches), `source_doc_id` (refreshes on every write — GC uses this to find orphans). Written by `GraphStore.write_graph` during ingest. Tag-collision precedence: `"extracted"` always wins over `"inferred"` and is never downgraded (Q11, E2g).
 
 **E1b** adds a third auxiliary table per collection, populated only by the explicit CLI command `archon-search graph build-communities <collection>` (via `CommunityBuilder`). It is **never** auto-populated during ingest:
 
