@@ -415,13 +415,13 @@ graph LR
         - [x] #integration_test — `test_pprMode_scopeFilterConflict_returns422` — scope_filter + graph_mode="ppr" → 422
         - [x] #integration_test — `test_pprMode_searchPipelineResult_carriesPprCount` — SearchPipelineResult.ppr_entities_matched=0 propagated to SearchResponse
 
-- [ ] **T-1** — Integration e2e: PPR mode accepted; guard paths return correct errors #tester-role
+- [x] **T-1** — Integration e2e: PPR mode accepted; guard paths return correct errors #tester-role
     - — · 1.0h
     - needs BE-3 · completes S3, S5, S6
     - Tests
-        - #e2e_test — `test_e2h_t1_pprMode_returns200_pprEntitiesMatchedPresent` — POST /search graph_mode="ppr" with real graph-enabled app + empty-entity stub → 200 + ppr_entities_matched in response (0 or None)
-        - #e2e_test — `test_e2h_t1_pprMode_graphDisabled_returns422` — POST /search graph_mode="ppr" + graph disabled → 422 with expected code
-        - #e2e_test — `test_e2h_t1_pprMode_scopeFilter_returns422` — POST /search scope_filter + graph_mode="ppr" → 422 (REST surface; MCP surfaces this as `error_code="scope_filter_graph_mode_incompatible"` not a 422 — MCP test is in T-2/T-3)
+        - [x] #e2e_test — `test_e2h_t1_pprMode_returns200_pprEntitiesMatchedPresent` — POST /search graph_mode="ppr" with real graph-enabled app + empty-entity stub → 200 + ppr_entities_matched in response (0 or None)
+        - [x] #e2e_test — `test_e2h_t1_pprMode_graphDisabled_returns422` — POST /search graph_mode="ppr" + graph disabled → 422 with expected code
+        - [x] #e2e_test — `test_e2h_t1_pprMode_scopeFilter_returns422` — POST /search scope_filter + graph_mode="ppr" → 422 (REST surface; MCP surfaces this as `error_code="scope_filter_graph_mode_incompatible"` not a 422 — MCP test is in T-2/T-3)
 
 ---
 
