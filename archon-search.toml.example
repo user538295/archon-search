@@ -420,6 +420,18 @@ num_queries = 2
 # after each ingest. When false, operators must trigger enrichment manually.
 # enrichment_auto = true
 
+# ppr_damping (float, default 0.85): Damping factor for Personalised PageRank (PPR) walk.
+# Must be strictly in (0.0, 1.0).
+# ppr_damping = 0.85
+
+# ppr_top_entities (int, default 20): Maximum top-ranked entities retrieved by PPR before
+# chunk lookup. Must be >= 1.
+# ppr_top_entities = 20
+
+# naive_max_expansion_terms (int, default 20): Maximum expansion terms appended by naive
+# graph-mode query rewriting. Must be >= 1.
+# naive_max_expansion_terms = 20
+
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.
 #

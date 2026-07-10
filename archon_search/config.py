@@ -155,6 +155,17 @@ class GraphConfig:
     enrichment_auto: bool = True
     """When True, synonym enrichment runs automatically after each ingest.
     When False, operators must trigger enrichment manually."""
+    # E2h PPR retrieval-mode fields
+    ppr_damping: float = 0.85
+    """Damping factor for Personalised PageRank (PPR) graph traversal.
+    Must be strictly in (0.0, 1.0). Higher values give more weight to the
+    graph structure; lower values stay closer to the seed entities."""
+    ppr_top_entities: int = 20
+    """Maximum number of top-ranked entities returned by PPR before
+    chunk retrieval. Must be >= 1."""
+    naive_max_expansion_terms: int = 20
+    """Maximum number of expansion terms added by the naive graph-expansion
+    query rewriter. Must be >= 1."""
 
 
 @dataclass
@@ -804,6 +815,24 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         graph.alias_file = raw_af.strip()
     if "enrichment_auto" in graph_cfg:
         graph.enrichment_auto = _coerce_bool(graph_cfg["enrichment_auto"], "[graph].enrichment_auto")
+    if "ppr_damping" in graph_cfg:
+        raw_pd = graph_cfg["ppr_damping"]
+        if isinstance(raw_pd, bool):
+            raise ConfigError("Expected float for '[graph].ppr_damping', got bool")
+        ppr_damping = _coerce_float(raw_pd, "[graph].ppr_damping")
+        if not (0.0 < ppr_damping < 1.0):
+            raise ConfigError(
+                f"[graph].ppr_damping must be in (0.0, 1.0) exclusive, got {ppr_damping}"
+            )
+        graph.ppr_damping = ppr_damping
+    if "ppr_top_entities" in graph_cfg:
+        graph.ppr_top_entities = _coerce_bounded_int(
+            graph_cfg["ppr_top_entities"], "[graph].ppr_top_entities", minimum=1
+        )
+    if "naive_max_expansion_terms" in graph_cfg:
+        graph.naive_max_expansion_terms = _coerce_bounded_int(
+            graph_cfg["naive_max_expansion_terms"], "[graph].naive_max_expansion_terms", minimum=1
+        )
     config.graph = graph
 
 

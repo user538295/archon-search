@@ -380,17 +380,17 @@ graph LR
 
 *Thinnest end-to-end behavior: a developer can call `/search` with `graph_mode: "ppr"` and receive a valid 200 response with `ppr_entities_matched` populated, exercising config, schema validation, pipeline dispatch, fallback, and response assembly.*
 
-- [ ] **BE-1** — Add `ppr_damping`, `ppr_top_entities`, `naive_max_expansion_terms` to `GraphConfig` #backend-role
+- [x] **BE-1** — Add `ppr_damping`, `ppr_top_entities`, `naive_max_expansion_terms` to `GraphConfig` #backend-role
     - Frameworks & Drivers · 2.0h
     - needs K-1 · completes C2, S10
     - Tests
-        - #unit_test — `test_graphConfig_pprDamping_default` — default 0.85 loaded from bare GraphConfig()
-        - #unit_test — `test_graphConfig_pprTopEntities_default` — default 20 loaded
-        - #unit_test — `test_graphConfig_naiveMaxExpansionTerms_default` — default 20 loaded
-        - #unit_test — `test_graphConfig_pprDamping_outOfRange_raisesConfigError` — damping ≤ 0 or ≥ 1 raises ConfigError (validation lives in `_parse_graph` in `config.py`, following the `synonym_threshold` validation pattern at the same location)
-        - #unit_test — `test_graphConfig_pprTopEntities_zero_raisesConfigError` — zero/negative raises ConfigError
-        - #integration_test — `test_config_pprFields_loadedFromToml` — toml with [graph] ppr_damping=0.9 reaches GraphConfig.ppr_damping; run after update to tests/path_home_allowlist.txt for new dataclass fields
-        - #integration_test — `test_config_pprDamping_outOfRange_rejectsAtStartup` — write a TOML with [graph] ppr_damping=1.5 to tmp_path; call `load_config(serve=False)` with ARCHON_SEARCH_DATA_DIR pointed at tmp_path → raises ConfigError at config-load time, not at first PPR request. This proves the guard catches bad values before the server starts (versus the unit test which only tests the dataclass constructor in isolation).
+        - [x] #unit_test — `test_graphConfig_pprDamping_default` — default 0.85 loaded from bare GraphConfig()
+        - [x] #unit_test — `test_graphConfig_pprTopEntities_default` — default 20 loaded
+        - [x] #unit_test — `test_graphConfig_naiveMaxExpansionTerms_default` — default 20 loaded
+        - [x] #unit_test — `test_graphConfig_pprDamping_outOfRange_raisesConfigError` — damping ≤ 0 or ≥ 1 raises ConfigError (validation lives in `_parse_graph` in `config.py`, following the `synonym_threshold` validation pattern at the same location)
+        - [x] #unit_test — `test_graphConfig_pprTopEntities_zero_raisesConfigError` — zero/negative raises ConfigError
+        - [x] #integration_test — `test_config_pprFields_loadedFromToml` — toml with [graph] ppr_damping=0.9 reaches GraphConfig.ppr_damping; run after update to tests/path_home_allowlist.txt for new dataclass fields
+        - [x] #integration_test — `test_config_pprDamping_outOfRange_rejectsAtStartup` — write a TOML with [graph] ppr_damping=1.5 to tmp_path; call `load_config(serve=False)` with ARCHON_SEARCH_DATA_DIR pointed at tmp_path → raises ConfigError at config-load time, not at first PPR request. This proves the guard catches bad values before the server starts (versus the unit test which only tests the dataclass constructor in isolation).
 
 - [ ] **BE-2** — Widen `graph_mode` Literal to include `"ppr"` and add `ppr_entities_matched` to all schemas #backend-role
     - Frameworks & Drivers · 3.0h

@@ -217,6 +217,9 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "synonym_threshold": 0.85,
             "alias_file": None,
             "enrichment_auto": True,
+            "ppr_damping": 0.85,
+            "ppr_top_entities": 20,
+            "naive_max_expansion_terms": 20,
         },
     }
 
