@@ -141,8 +141,13 @@ class GraphExpander:
     ``expand()`` is safe to call concurrently — it holds no mutable state.
     """
 
-    def __init__(self, graph_store: "GraphStore") -> None:
+    _DEFAULT_MAX_EXPANSION_TERMS: int = 20
+
+    def __init__(self, graph_store: "GraphStore", naive_max_expansion_terms: int = _DEFAULT_MAX_EXPANSION_TERMS) -> None:
         self._store = graph_store
+        self._naive_max_expansion_terms = naive_max_expansion_terms
+        if self._naive_max_expansion_terms < 1:
+            raise ValueError(f"naive_max_expansion_terms must be >= 1, got {naive_max_expansion_terms}")
 
     async def expand(self, query: str, collection: str, ns: str) -> ExpandedQuery:
         """Expand *query* with first-degree graph-neighbour entity names.
@@ -210,8 +215,9 @@ class GraphExpander:
                 entity_names_found=[n.entity_name for n in matched_nodes],
             )
 
-        # Step 4: build expanded text (CPU-bound, but trivially fast; no thread needed).
-        neighbour_names = [n.entity_name for n in neighbour_nodes]
+        # Step 4: cap the neighbour list before dedup/build so at most
+        # naive_max_expansion_terms candidates enter build_expanded_text.
+        neighbour_names = sorted(n.entity_name for n in neighbour_nodes)[: self._naive_max_expansion_terms]
         expanded, appended_names = build_expanded_text(query, neighbour_names)
 
         entity_names_found = [n.entity_name for n in matched_nodes]

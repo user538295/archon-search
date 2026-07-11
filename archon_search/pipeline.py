@@ -3509,7 +3509,7 @@ def create_pipeline(
         from archon_search.graph_expander import GraphExpander  # noqa: PLC0415
         graph_store = _GraphStore(cfg.db_path)
         graph_extractor = GraphExtractor(cfg.graph)
-        graph_expander = GraphExpander(graph_store)
+        graph_expander = GraphExpander(graph_store, naive_max_expansion_terms=cfg.graph.naive_max_expansion_terms)
         defref_extractor = DefRefExtractor(graph_store)
 
     return SearchPipeline(

@@ -518,7 +518,7 @@ def create_app(
         from archon_search.ppr_walker import PPRWalker as _PPRWalker  # noqa: PLC0415
         _graph_store = _GraphStore(config.db_path)
         _graph_extractor = _GraphExtractor(config.graph)
-        _graph_expander = _GraphExpander(_graph_store)
+        _graph_expander = _GraphExpander(_graph_store, naive_max_expansion_terms=config.graph.naive_max_expansion_terms)
         _defref_extractor = _DefRefExtractor(_graph_store)
         _ppr_walker = _PPRWalker(_graph_store)
     else:

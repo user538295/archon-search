@@ -8,6 +8,22 @@
 
 ## Changelog
 
+### [next release] — E2h BE-8: naive graph expansion is now capped at `naive_max_expansion_terms`
+
+**Surface**: `POST /search` with `graph_mode="naive"` (via `GraphExpander`).
+
+**Behaviour change**:
+
+- **Naive query expansion now caps the neighbour-name list** before deduplication.  Previously, all first-degree neighbours of matched entities were appended to the query (no upper bound).  After E2h BE-8, at most `[graph].naive_max_expansion_terms` (default `20`) candidate names are passed to the expansion builder.  Deduplication (names already present in the query) runs after the cap, so the final number of added terms may be lower.
+
+  Operators with very high-degree graph nodes (e.g. a "god" entity connected to hundreds of nodes) will observe shorter expanded queries.  This is intentional: unbounded expansion degrades FTS precision and increases query latency.
+
+- **`[graph].naive_max_expansion_terms: int = 20`** — added in E2h BE-1 as a `GraphConfig` field; BE-8 wires it into `GraphExpander` and enforces it.  To restore previous (uncapped) behaviour, set a very large value (e.g. `naive_max_expansion_terms = 10000`) in `archon-search.toml`.
+
+**Migration**: no action required for deployments where the highest-degree graph node has fewer than 20 neighbours.  For deployments with very high-degree nodes that rely on wide expansion, increase `[graph].naive_max_expansion_terms` in `archon-search.toml`.
+
+---
+
 ### [next release] — E2d: graph table names are now namespace-scoped (`_archon_graph_{ns}__{col}_*`)
 
 **Surface**: LanceDB internal graph tables (auxiliary storage); `archon-search graph build-communities` CLI; all `GET /graph/*` endpoints (read path).

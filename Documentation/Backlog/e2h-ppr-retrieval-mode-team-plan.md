@@ -495,17 +495,17 @@ graph LR
         - [x] #unit_test — `test_explainResponse_fromPipelineResult_pprFieldsPopulated` — ExplainResponse.from_pipeline_result() with ppr count → response has ppr_entities_matched
         - [x] #integration_test — `test_explainEndpoint_pprMode_returnsGraphModeApplied` — POST /explain graph_mode="ppr" → graph_mode_applied="ppr", ppr_entities_matched >= 0, graph_provenance present on entity-matched chunks
 
-- [ ] **BE-8** — Add naive expansion cap in `graph_expander.py`; update `BREAKING.md` #backend-role
+- [x] **BE-8** — Add naive expansion cap in `graph_expander.py`; update `BREAKING.md` #backend-role
     - Use Cases · 2.0h
     - needs BE-1 · completes S9
     - Duties
-        - Cap the assembled neighbour-name list inside `GraphExpander.expand()` BEFORE the `build_expanded_text(...)` call. Store the limit as `self._naive_max_expansion_terms` in `__init__` so `expand()` can apply it. This means at most `naive_max_expansion_terms` candidate names enter `build_expanded_text`; the final expanded count may be lower after dedup inside that function.
-        - BE-8 also threads `GraphConfig.naive_max_expansion_terms` into `GraphExpander.__init__` — this is an unlisted but required signature change. `pipeline.py` constructs `GraphExpander` and must pass the config value.
+        - [x] Cap the assembled neighbour-name list inside `GraphExpander.expand()` BEFORE the `build_expanded_text(...)` call. Store the limit as `self._naive_max_expansion_terms` in `__init__` so `expand()` can apply it. This means at most `naive_max_expansion_terms` candidate names enter `build_expanded_text`; the final expanded count may be lower after dedup inside that function.
+        - [x] BE-8 also threads `GraphConfig.naive_max_expansion_terms` into `GraphExpander.__init__` — this is an unlisted but required signature change. `pipeline.py` constructs `GraphExpander` and must pass the config value.
     - Tests
-        - #unit_test — `test_naiveCap_50Neighbours_cappedAtLimit` — GraphExpander stub with 50 **distinct** neighbour names (none appearing in the query, so dedup cannot reduce the count); naive_max_expansion_terms=20 → assert **exactly 20** names in expanded text (not merely ≤20), proving the cap — not dedup — is the binding constraint
-        - #unit_test — `test_naiveCap_fewNeighbours_allReturned` — 5 neighbours; cap=20 → all 5 appended
-        - #unit_test — `test_naiveCap_graphExpander_acceptsConfig_inConstructor` — `GraphExpander(graph_store, naive_max_expansion_terms=5)` stores the limit
-        - #integration_test — `test_naiveCap_endToEnd_expandedQueryBounded` — make_real_app + high-degree entity seeded in graph + POST /search graph_mode="naive" → expansion_used=True, expanded query bounded to ≤ naive_max_expansion_terms terms
+        - [x] #unit_test — `test_naiveCap_50Neighbours_cappedAtLimit` — GraphExpander stub with 50 **distinct** neighbour names (none appearing in the query, so dedup cannot reduce the count); naive_max_expansion_terms=20 → assert **exactly 20** names in expanded text (not merely ≤20), proving the cap — not dedup — is the binding constraint
+        - [x] #unit_test — `test_naiveCap_fewNeighbours_allReturned` — 5 neighbours; cap=20 → all 5 appended
+        - [x] #unit_test — `test_naiveCap_graphExpander_acceptsConfig_inConstructor` — `GraphExpander(graph_store, naive_max_expansion_terms=5)` stores the limit
+        - [x] #integration_test — `test_naiveCap_endToEnd_expandedQueryBounded` — make_real_app + high-degree entity seeded in graph + POST /search graph_mode="naive" → expansion_used=True, expanded query bounded to ≤ naive_max_expansion_terms terms
 
 - [ ] **T-3** — Integration e2e: explain provenance, MCP rejection, naive cap, multi-collection guard #tester-role
     - — · 1.0h

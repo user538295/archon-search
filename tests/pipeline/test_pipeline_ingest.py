@@ -927,6 +927,7 @@ async def test_create_pipeline_wires_all_components():
     cfg = MagicMock()
     cfg.db_path = "/tmp/test_rag_db"
     cfg.multilingual = False  # Prevent LanguageDetector instantiation
+    cfg.graph.naive_max_expansion_terms = 20
 
     with (
         patch("archon_search.pipeline.ModelEmbedder") as MockME,
@@ -1033,6 +1034,7 @@ async def test_create_pipeline_does_not_auto_connect():
     cfg = MagicMock()
     cfg.db_path = "/tmp/test_no_connect_rag"
     cfg.multilingual = False  # Prevent LanguageDetector instantiation
+    cfg.graph.naive_max_expansion_terms = 20
 
     with (
         patch("archon_search.pipeline.ModelEmbedder") as MockME,
@@ -1159,6 +1161,7 @@ def test_create_pipeline_uses_expanded_db_path() -> None:
     cfg = MagicMock()
     cfg.db_path = "~/.archon/search"
     cfg.multilingual = False  # Prevent LanguageDetector instantiation
+    cfg.graph.naive_max_expansion_terms = 20
     with (
         patch("archon_search.pipeline.DocumentChunker"),
         patch("archon_search.pipeline.ASTChunker"),
