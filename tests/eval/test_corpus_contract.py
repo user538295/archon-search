@@ -188,8 +188,8 @@ def test_corpus_contract_multihop_musique() -> None:
     assert len(musique_queries) > 0, "No MuSiQue queries found in corpus"
 
     for query in musique_queries:
-        assert query.graph_mode == "naive", (
-            f"Query {query.query_id} should have graph_mode='naive', "
+        assert query.graph_mode in ("naive", "ppr"), (
+            f"Query {query.query_id} should have graph_mode='naive' or 'ppr', "
             f"got {query.graph_mode!r}"
         )
         assert query.metric_scope == "retrieval", (
@@ -206,16 +206,19 @@ def test_corpus_contract_multihop_musique() -> None:
     )
 
 
-def test_musique_queries_are_naive_mode() -> None:
-    """All MuSiQue query entries have graph_mode='naive' and collection='multihop-musique'."""
+def test_musique_queries_are_graph_mode() -> None:
+    """All MuSiQue query entries have graph_mode in {'naive','ppr'} and collection='multihop-musique'.
+
+    Updated in BE-9 to allow 'ppr' graph_mode alongside 'naive' for PPR eval queries.
+    """
     corpus = load_eval_corpus(CORPUS_ROOT)
     musique_queries = [q for q in corpus.queries if q.collection == "multihop-musique"]
 
     assert len(musique_queries) > 0, "No MuSiQue queries found"
 
     for query in musique_queries:
-        assert query.graph_mode == "naive", (
-            f"Query {query.query_id}: expected graph_mode='naive', got {query.graph_mode!r}"
+        assert query.graph_mode in ("naive", "ppr"), (
+            f"Query {query.query_id}: expected graph_mode in ('naive','ppr'), got {query.graph_mode!r}"
         )
         assert query.collection == "multihop-musique", (
             f"Query {query.query_id}: expected collection='multihop-musique', got {query.collection!r}"
@@ -378,8 +381,8 @@ def test_corpus_contract_hotpotqa() -> None:
     assert len(hotpotqa_queries) > 0, "No HotpotQA queries found in corpus"
 
     for query in hotpotqa_queries:
-        assert query.graph_mode == "naive", (
-            f"Query {query.query_id} should have graph_mode='naive', "
+        assert query.graph_mode in ("naive", "ppr"), (
+            f"Query {query.query_id} should have graph_mode='naive' or 'ppr', "
             f"got {query.graph_mode!r}"
         )
         assert query.metric_scope == "retrieval", (

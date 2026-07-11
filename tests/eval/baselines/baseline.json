@@ -1,6 +1,6 @@
 {
   "command": "pytest -m eval tests/eval/test_eval_suite.py::test_eval_suite_report_only_smoke",
-  "eval_hash": "98d0ce44a89915dd5f9ec265f736106dc2e8f9e383ebef4cbabd8bdd06a7c5ea",
+  "eval_hash": "ddd118542176eec85da991a48416259a1a9217bd32a4882e4c40524a4bbbed63",
   "metrics": {
     "code_chunking_recall_at_5": 1.0,
     "code_defref_recall_at_5": 0.6666666666666666,
@@ -8,9 +8,11 @@
     "graph_global_recall_at_5": 1.0,
     "graph_local_mrr": 0.9166666666666666,
     "graph_local_recall_at_5": 1.0,
-    "graph_mrr": 0.3110819863113441,
+    "graph_mrr": 0.30718654434250764,
     "graph_naive_recall_at_5": 0.5,
-    "graph_negative_control_recall_at_5": 0.43,
+    "graph_negative_control_recall_at_5": 0.41,
+    "graph_ppr_bridge_recall_at_5": 1.0,
+    "graph_ppr_negative_control_recall_at_5": 1.0,
     "latency_p50_ms": null,
     "latency_p95_ms": null,
     "mrr": 1.0,
@@ -28,7 +30,7 @@
     "synonym_bridge_recall_at_5": 0.5
   },
   "runtime_config_hash": "71d933f9eeed1406f18cb6026d4c0d72e7a4287654100dd20a9d4385a1226589",
-  "thresholds_hash": "d02f4e125f6b870eb144dc7c418c43533f0d6c2280e56d2db34e75af84ad7834",
+  "thresholds_hash": "ca815bd16622184dceae73dfa4d75fdeaf9f3e6e9f8f291fffab03218221199a",
   "waiver_ids": {
     "code_defref_recall_at_5": "BE-10-code-defref-gate-above-baseline: floor=1.0 is intentionally above baseline=0.6667. The baseline measures the no-feature calibration run (regenerate.py, no lancedb_root \u2014 code-defref ingested through the plain stub pipeline, no DefRefExtractor). The gated test (test_eval_gate_code_defref_recall_at_5) passes lancedb_root, routing code-defref through a real GraphStore + DefRefExtractor + RealGraphExpander wired via _build_code_lane_ingest_pipeline, lifting recall from 0.6667 to 1.0. A regression that disables DefRefExtractor wiring reproduces 0.6667, failing the gate.",
     "graph_global_recall_at_5": "E2e-global-floor-below-stub-baseline: baseline=1.0 was measured via CommunityStoreStub hybrid fallback, not real Leiden community retrieval; real Leiden floor is 0.2 on the 5-query 2WikiMultiHopQA eval set",

@@ -30,7 +30,7 @@ from archon_search.eval.runner import render_report, run_eval_suite
 CORPUS_ROOT = Path(__file__).resolve().parent
 RUNTIME_CONFIG_PATH = CORPUS_ROOT / "runtime.toml"
 
-_VALID_GRAPH_MODES = {"naive", "local", "global"}
+_VALID_GRAPH_MODES = {"naive", "local", "global", "ppr"}  # ppr added in BE-9
 
 
 # ---------------------------------------------------------------------------

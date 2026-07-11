@@ -194,3 +194,5 @@
 {"query_id": "q-code-defref-001", "doc_id": "code-defref-notification-service", "grade": 2}
 {"query_id": "q-code-defref-001", "doc_id": "code-defref-auth-gateway", "grade": 1}
 {"query_id": "q-code-defref-001", "doc_id": "code-defref-audit-logger", "grade": 1}
+{"query_id": "q-ppr-bridge-001", "doc_id": "musique-001", "grade": 2}
+{"query_id": "q-ppr-nc-001", "doc_id": "hotpotqa-001", "grade": 2}

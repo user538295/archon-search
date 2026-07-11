@@ -46,6 +46,8 @@ _QUALITY_FIELDS = (
     "synonym_bridge_recall_at_5",
     "code_chunking_recall_at_5",
     "code_defref_recall_at_5",
+    "graph_ppr_bridge_recall_at_5",
+    "graph_ppr_negative_control_recall_at_5",
 )
 
 

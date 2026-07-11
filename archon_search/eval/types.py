@@ -161,6 +161,23 @@ class EvalMetrics:
             the one gold doc that genuinely requires the ``calls`` edge —
             aggregate recall alone cannot prove this (2 of 3 gold docs are
             lexically trivial to retrieve without the graph feature).
+        graph_ppr_bridge_recall_at_5: Recall@5 over PPR-mode (``graph_mode="ppr"``)
+            queries on multi-hop bridge collections (``multihop-musique``,
+            ``multihop-2wiki``).  Measures whether Personalised PageRank
+            retrieves bridge documents that are lexically absent from the
+            query — the primary signal for the PPR feature (E2h BE-9).
+            ``None`` when no PPR bridge queries are present in the corpus.
+            Non-vacuity is proven by
+            ``test_pprEvalGate_nonVacuous_pprOutperformsNoGraph``
+            (``tests/eval/test_ppr_eval_gate.py``), which asserts strict
+            inequality between the real PPR pipeline and a no-graph control
+            arm on a carefully chosen lexically-absent bridge document.
+        graph_ppr_negative_control_recall_at_5: Recall@5 over PPR-mode
+            (``graph_mode="ppr"``) queries on HotpotQA — a regression guard.
+            PPR on HotpotQA distractor questions should not degrade recall
+            relative to the naive-mode baseline.  A drop here signals PPR
+            graph interference on simple queries.  ``None`` when no PPR
+            HotpotQA queries are present in the corpus.
     """
 
     recall_at_1: float
@@ -187,3 +204,5 @@ class EvalMetrics:
     synonym_bridge_recall_at_5: float | None = None
     code_chunking_recall_at_5: float | None = None
     code_defref_recall_at_5: float | None = None
+    graph_ppr_bridge_recall_at_5: float | None = None
+    graph_ppr_negative_control_recall_at_5: float | None = None

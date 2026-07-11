@@ -127,6 +127,16 @@ synonym_bridge_recall_at_5 = 0.75
 # chunking-strategy signal. See that test's docstring and the metric's
 # docstring in archon_search/eval/types.py for details.
 code_defref_recall_at_5 = 1.0
+# graph_ppr_bridge_recall_at_5 / graph_ppr_negative_control_recall_at_5:
+# calibrated 2026-07-11 (BE-9).  PPR queries use graph_mode="ppr" which falls
+# back to hybrid search when no PPRWalker is wired (the default run_eval_suite
+# path — no lancedb_root, no PPR walker).  Floors set conservatively above 0.0
+# to satisfy the config-lint non-vacuity guard (floor > no_graph_baseline = 0.0).
+# The real non-vacuity proof is test_pprEvalGate_nonVacuous_pprOutperformsNoGraph
+# in tests/eval/test_ppr_eval_gate.py, which constructs a dedicated PPR pipeline
+# with a real PPRWalker and asserts strict inequality vs no-graph hybrid.
+graph_ppr_bridge_recall_at_5 = 1.0
+graph_ppr_negative_control_recall_at_5 = 1.0
 
 [multilingual]
 # Per-language recall floors for C2 multilingual eval fixtures.

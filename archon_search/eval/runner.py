@@ -68,6 +68,8 @@ class EvalQualityFloors:
     synonym_bridge_recall_at_5: float | None = None
     code_chunking_recall_at_5: float | None = None
     code_defref_recall_at_5: float | None = None
+    graph_ppr_bridge_recall_at_5: float | None = None
+    graph_ppr_negative_control_recall_at_5: float | None = None
 
 
 @dataclass
@@ -187,6 +189,8 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
         "synonym_bridge_recall_at_5",
         "code_chunking_recall_at_5",
         "code_defref_recall_at_5",
+        "graph_ppr_bridge_recall_at_5",
+        "graph_ppr_negative_control_recall_at_5",
     )
     optional_floats: dict[str, float | None] = {}
     for opt_key in _optional_float_fields:
@@ -220,6 +224,8 @@ def load_thresholds(config_path: Path) -> EvalThresholds:
         synonym_bridge_recall_at_5=optional_floats["synonym_bridge_recall_at_5"],
         code_chunking_recall_at_5=optional_floats["code_chunking_recall_at_5"],
         code_defref_recall_at_5=optional_floats["code_defref_recall_at_5"],
+        graph_ppr_bridge_recall_at_5=optional_floats["graph_ppr_bridge_recall_at_5"],
+        graph_ppr_negative_control_recall_at_5=optional_floats["graph_ppr_negative_control_recall_at_5"],
     )
 
     # --- latency_ceilings section (optional) ----------------------------------
@@ -1400,6 +1406,32 @@ async def run_eval_suite(
         if code_defref_traces else None
     )
 
+    # PPR bridge: ppr-mode recall on multi-hop bridge collections (multihop-musique,
+    # multihop-2wiki). The primary signal for the E2h PPR feature — measures whether
+    # PPR walks surface lexically-absent bridge documents.
+    ppr_graph_traces = [
+        t for t in graph_traces if graph_query_id_to_mode.get(t.query_id) == "ppr"
+    ]
+    ppr_bridge_traces = [
+        t for t in ppr_graph_traces
+        if t.collection in _MULTIHOP_COLLECTIONS
+    ]
+    graph_ppr_bridge_recall_at_5: float | None = (
+        compute_recall_at_k(ppr_bridge_traces, corpus.labels, 5)
+        if ppr_bridge_traces else None
+    )
+
+    # PPR negative control: ppr-mode recall on HotpotQA (distractor questions).
+    # Regression guard — a drop here signals PPR graph interference on simple queries.
+    ppr_negative_control_traces = [
+        t for t in ppr_graph_traces
+        if t.collection == hotpotqa_collection
+    ]
+    graph_ppr_negative_control_recall_at_5: float | None = (
+        compute_recall_at_k(ppr_negative_control_traces, corpus.labels, 5)
+        if ppr_negative_control_traces else None
+    )
+
     # Graph-mode traces are excluded from latency percentiles: the 2-document
     # graph fixture corpus is too small to produce meaningful latency samples,
     # and graph expansion latency will be tracked separately when the fixture
@@ -1432,6 +1464,8 @@ async def run_eval_suite(
         synonym_bridge_recall_at_5=synonym_bridge_recall_at_5,
         code_chunking_recall_at_5=code_chunking_recall_at_5,
         code_defref_recall_at_5=code_defref_recall_at_5,
+        graph_ppr_bridge_recall_at_5=graph_ppr_bridge_recall_at_5,
+        graph_ppr_negative_control_recall_at_5=graph_ppr_negative_control_recall_at_5,
     )
 
     current_eval_hash = compute_eval_hash(corpus_root)
@@ -1486,6 +1520,8 @@ _QUALITY_FLOOR_FIELDS = (
     "synonym_bridge_recall_at_5",
     "code_chunking_recall_at_5",
     "code_defref_recall_at_5",
+    "graph_ppr_bridge_recall_at_5",
+    "graph_ppr_negative_control_recall_at_5",
 )
 
 
@@ -1680,6 +1716,8 @@ _RENDERED_QUALITY_FIELDS = (
     "synonym_bridge_recall_at_5",
     "code_chunking_recall_at_5",
     "code_defref_recall_at_5",
+    "graph_ppr_bridge_recall_at_5",
+    "graph_ppr_negative_control_recall_at_5",
 )
 
 _RENDERED_LATENCY_FIELDS = ("latency_p50_ms", "latency_p95_ms")

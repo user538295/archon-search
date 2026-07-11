@@ -14,7 +14,9 @@ from pathlib import Path
 import pytest
 
 from archon_search.eval.fixtures import load_eval_corpus
-from archon_search.eval.runner import assert_thresholds, render_report, run_eval_suite
+from archon_search.eval.runner import assert_thresholds, load_thresholds, render_report, run_eval_suite
+from archon_search.eval.types import EvalMetrics
+from archon_search.eval.runner import EvalQualityFloors
 
 
 CORPUS_ROOT = Path(__file__).resolve().parent
@@ -40,6 +42,8 @@ _QUALITY_METRIC_FIELDS = (
     "synonym_bridge_recall_at_5",
     "code_chunking_recall_at_5",
     "code_defref_recall_at_5",
+    "graph_ppr_bridge_recall_at_5",
+    "graph_ppr_negative_control_recall_at_5",
 )
 
 
@@ -131,7 +135,12 @@ async def test_eval_suite_is_deterministic_except_latency() -> None:
     rendered2 = render_report(report2)
 
     # Fields excluded from determinism check (known non-deterministic behaviors)
-    _SKIP_DETERMINISM = {"graph_mrr", "graph_negative_control_recall_at_5"}
+    _SKIP_DETERMINISM = {
+        "graph_mrr",
+        "graph_negative_control_recall_at_5",
+        "graph_ppr_bridge_recall_at_5",
+        "graph_ppr_negative_control_recall_at_5",
+    }
 
     for field in _QUALITY_METRIC_FIELDS:
         if field in _SKIP_DETERMINISM:
@@ -1545,3 +1554,143 @@ async def test_eval_suite_reports_graph_naive_recall_at_5() -> None:
     )
 
     assert report.metrics.graph_naive_recall_at_5 == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# BE-9 — PPR eval metric unit tests (no networkx required)
+# ---------------------------------------------------------------------------
+
+
+def test_evalMetrics_graphPprBridgeRecall_isOptionalFloat() -> None:
+    """EvalMetrics has graph_ppr_bridge_recall_at_5: float | None = None."""
+    fields = EvalMetrics.__dataclass_fields__
+    assert "graph_ppr_bridge_recall_at_5" in fields, (
+        "EvalMetrics is missing field graph_ppr_bridge_recall_at_5 — add it to types.py"
+    )
+    # Default must be None
+    m = EvalMetrics(
+        recall_at_1=1.0, recall_at_3=1.0, recall_at_5=1.0,
+        mrr=1.0, ndcg_at_5=1.0, ndcg_at_10=1.0,
+        reranker_lift=None, routing_accuracy=None,
+        latency_p50_ms=0.0, latency_p95_ms=0.0,
+    )
+    assert m.graph_ppr_bridge_recall_at_5 is None
+    # Accepts float
+    m2 = EvalMetrics(
+        recall_at_1=1.0, recall_at_3=1.0, recall_at_5=1.0,
+        mrr=1.0, ndcg_at_5=1.0, ndcg_at_10=1.0,
+        reranker_lift=None, routing_accuracy=None,
+        latency_p50_ms=0.0, latency_p95_ms=0.0,
+        graph_ppr_bridge_recall_at_5=0.75,
+    )
+    assert m2.graph_ppr_bridge_recall_at_5 == 0.75
+
+
+def test_evalMetrics_graphPprNegativeControl_isOptionalFloat() -> None:
+    """EvalMetrics has graph_ppr_negative_control_recall_at_5: float | None = None."""
+    fields = EvalMetrics.__dataclass_fields__
+    assert "graph_ppr_negative_control_recall_at_5" in fields, (
+        "EvalMetrics is missing field graph_ppr_negative_control_recall_at_5 — add it to types.py"
+    )
+    m = EvalMetrics(
+        recall_at_1=1.0, recall_at_3=1.0, recall_at_5=1.0,
+        mrr=1.0, ndcg_at_5=1.0, ndcg_at_10=1.0,
+        reranker_lift=None, routing_accuracy=None,
+        latency_p50_ms=0.0, latency_p95_ms=0.0,
+    )
+    assert m.graph_ppr_negative_control_recall_at_5 is None
+    m2 = EvalMetrics(
+        recall_at_1=1.0, recall_at_3=1.0, recall_at_5=1.0,
+        mrr=1.0, ndcg_at_5=1.0, ndcg_at_10=1.0,
+        reranker_lift=None, routing_accuracy=None,
+        latency_p50_ms=0.0, latency_p95_ms=0.0,
+        graph_ppr_negative_control_recall_at_5=0.5,
+    )
+    assert m2.graph_ppr_negative_control_recall_at_5 == 0.5
+
+
+def test_evalQualityFloors_pprBridgeField_present() -> None:
+    """EvalQualityFloors has graph_ppr_bridge_recall_at_5."""
+    fields = EvalQualityFloors.__dataclass_fields__
+    assert "graph_ppr_bridge_recall_at_5" in fields, (
+        "EvalQualityFloors is missing field graph_ppr_bridge_recall_at_5 — add it to runner.py"
+    )
+
+
+def test_evalQualityFloors_pprNegativeControlField_present() -> None:
+    """EvalQualityFloors has graph_ppr_negative_control_recall_at_5."""
+    fields = EvalQualityFloors.__dataclass_fields__
+    assert "graph_ppr_negative_control_recall_at_5" in fields, (
+        "EvalQualityFloors is missing field graph_ppr_negative_control_recall_at_5 — add it to runner.py"
+    )
+
+
+def test_pprQueryFixture_bridgeQueriesPresentInQueriesJsonl() -> None:
+    """queries.jsonl contains at least one graph_mode='ppr' entry in multihop-musique or multihop-2wiki."""
+    corpus = load_eval_corpus(CORPUS_ROOT)
+    bridge_collections = {"multihop-musique", "multihop-2wiki"}
+    ppr_bridge_queries = [
+        q for q in corpus.queries
+        if q.graph_mode == "ppr" and q.collection in bridge_collections
+    ]
+    assert ppr_bridge_queries, (
+        "No PPR bridge queries found in queries.jsonl for multihop-musique or multihop-2wiki. "
+        "Add at least one query with graph_mode='ppr' targeting these collections."
+    )
+
+
+def test_pprQueryFixture_negativeControlQueriesPresentInQueriesJsonl() -> None:
+    """queries.jsonl contains at least one graph_mode='ppr' entry in hotpotqa collection."""
+    corpus = load_eval_corpus(CORPUS_ROOT)
+    ppr_nc_queries = [
+        q for q in corpus.queries
+        if q.graph_mode == "ppr" and q.collection == "hotpotqa"
+    ]
+    assert ppr_nc_queries, (
+        "No PPR negative-control queries found in queries.jsonl for hotpotqa. "
+        "Add at least one query with graph_mode='ppr' targeting the hotpotqa collection."
+    )
+
+
+def test_pprEvalConfigLint_floorAboveHybridBaseline() -> None:
+    """Config-lint: PPR floors in thresholds.toml are strictly above 0.0 (the no-PPR-walker baseline).
+
+    Mirrors the config-lint pattern at test_e2e_graph_eval_gate_v2.py:314,438.
+    Without this guard, a floor set to 0.0 is decorative — the gate passes
+    vacuously even when the PPR feature is completely broken.
+
+    _NO_GRAPH_BASELINE = 0.0 is the measured recall for PPR-mode queries run
+    through the default pipeline (no PPRWalker wired, hybrid fallback fires,
+    but on a query that matches the target via lexical overlap the hybrid path
+    still retrieves it).  Since we have no separate floor without PPR (the
+    baseline was 0.0 before PPR queries existed), any floor > 0.0 is non-vacuous.
+    """
+    thresholds_path = CORPUS_ROOT / "thresholds.toml"
+    thresholds = load_thresholds(thresholds_path)
+    floors = thresholds.quality_floors
+
+    _NO_GRAPH_BASELINE = 0.0  # No PPR walker = no prior measured value; 0.0 is the prior
+
+    bridge_floor = floors.graph_ppr_bridge_recall_at_5
+    assert bridge_floor is not None, (
+        "graph_ppr_bridge_recall_at_5 floor is not set in thresholds.toml — "
+        "add [quality_floors] graph_ppr_bridge_recall_at_5 = <value>"
+    )
+    assert bridge_floor > 0.0, (
+        f"graph_ppr_bridge_recall_at_5 floor={bridge_floor:.4f} must be > 0.0 "
+        "— a floor of 0.0 is vacuous (always passes)"
+    )
+    assert bridge_floor > _NO_GRAPH_BASELINE, (
+        f"graph_ppr_bridge_recall_at_5 floor={bridge_floor:.4f} is not above the "
+        f"no-graph baseline={_NO_GRAPH_BASELINE:.4f} — the gate is vacuous"
+    )
+
+    nc_floor = floors.graph_ppr_negative_control_recall_at_5
+    assert nc_floor is not None, (
+        "graph_ppr_negative_control_recall_at_5 floor is not set in thresholds.toml — "
+        "add [quality_floors] graph_ppr_negative_control_recall_at_5 = <value>"
+    )
+    assert nc_floor > 0.0, (
+        f"graph_ppr_negative_control_recall_at_5 floor={nc_floor:.4f} must be > 0.0 "
+        "— a floor of 0.0 is vacuous (always passes)"
+    )
