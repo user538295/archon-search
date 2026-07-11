@@ -507,14 +507,14 @@ graph LR
         - [x] #unit_test — `test_naiveCap_graphExpander_acceptsConfig_inConstructor` — `GraphExpander(graph_store, naive_max_expansion_terms=5)` stores the limit
         - [x] #integration_test — `test_naiveCap_endToEnd_expandedQueryBounded` — make_real_app + high-degree entity seeded in graph + POST /search graph_mode="naive" → expansion_used=True, expanded query bounded to ≤ naive_max_expansion_terms terms
 
-- [ ] **T-3** — Integration e2e: explain provenance, MCP rejection, naive cap, multi-collection guard #tester-role
+- [x] **T-3** — Integration e2e: explain provenance, MCP rejection, naive cap, multi-collection guard #tester-role
     - — · 1.0h
     - needs BE-7, BE-8 · completes S2, S8, S9, S11
     - Tests
-        - #e2e_test — `test_e2h_t3_explainPprMode_provenanceAndCount` — POST /explain graph_mode="ppr"; assert graph_mode_applied="ppr", ppr_entities_matched in [0, N], graph_provenance structure valid
-        - #e2e_test — `test_e2h_t3_mcpSearchWithContext_rejectsPprMode` — mcp_tool_call search_with_context graph_mode="ppr" → error code in response AND error message includes 'ppr' in the mode list (e.g. '(naive, local, global, ppr)')
-        - #e2e_test — `test_e2h_t3_naiveCap_highDegreeEntity_expansionBounded` — ingest + seed high-degree entity + POST /search graph_mode="naive" → response has expansion_used=True; request does not time out from unbounded expansion
-        - #e2e_test — `test_e2h_t3_explainMultiCollection_graphMode_returns422` — POST /explain collections=["a","b"] graph_mode="ppr" → 422
+        - [x] #e2e_test — `test_e2h_t3_explainPprMode_provenanceAndCount` — POST /explain graph_mode="ppr"; assert graph_mode_applied="ppr", ppr_entities_matched in [0, N], graph_provenance structure valid
+        - [x] #e2e_test — `test_e2h_t3_mcpSearchWithContext_rejectsPprMode` — mcp_tool_call search_with_context graph_mode="ppr" → error code in response AND error message includes 'ppr' in the mode list (e.g. '(naive, local, global, ppr)')
+        - [x] #e2e_test — `test_e2h_t3_naiveCap_highDegreeEntity_expansionBounded` — ingest + seed high-degree entity + POST /search graph_mode="naive" → response has expansion_used=True; request does not time out from unbounded expansion
+        - [x] #e2e_test — `test_e2h_t3_explainMultiCollection_graphMode_returns422` — POST /explain collections=["a","b"] graph_mode="ppr" → 422
 
 ---
 
