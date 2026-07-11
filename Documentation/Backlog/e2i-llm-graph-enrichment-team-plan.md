@@ -362,7 +362,7 @@ flowchart LR
 
 *Thinnest end-to-end path: set `extraction_model`, run `build-communities`, call `GET /graph/{col}`, see `communities_summarized > 0`. Carries the config + LLM client foundation.*
 
-- [ ] **BE-0** — Define `LLMEnrichmentClientProtocol` and `AnthropicEnrichmentClient` #backend-role
+- [x] **BE-0** — Define `LLMEnrichmentClientProtocol` and `AnthropicEnrichmentClient` #backend-role
     - Interface Adapters · 1.0h
     - needs K1 · completes C1
     - Description: Create `archon_search/graph_enrichment_protocol.py` defining `LLMEnrichmentClientProtocol` (Use Cases ↔ Interface Adapters boundary) with two methods: `async def summarize_community(self, chunk_texts: list[str], entity_names: list[str]) -> str | None` and `async def label_relationships(self, entity_pairs: list[tuple[str, str]], chunk_text: str) -> list[LabeledRelationship]`. Define `LabeledRelationship` dataclass. Create `archon_search/llm_enrichment_client.py` (Interface Adapters) with `AnthropicEnrichmentClient` implementing the protocol — lazy Anthropic import, in-process token bucket, `asyncio.wait_for`, raises on failure (callers catch). The concrete adapter lives in Interface Adapters, NOT inside `community_builder.py` (Use Cases).
