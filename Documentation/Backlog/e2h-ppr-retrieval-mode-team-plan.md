@@ -540,12 +540,12 @@ graph LR
         - [x] #integration_test — `test_pprNegativeControlGate_nonVacuous_independentFromNaiveBucket` — using `_build_ppr_eval_pipeline(tmp_path)`; PPR-mode HotpotQA recall computed separately from naive-mode queries; assert `ppr_negative_control_recall != naive_negative_control_recall` (independent buckets); guard with `pytest.importorskip("networkx")`
         - [x] #unit_test — `test_pprEvalConfigLint_floorAboveHybridBaseline` — assert `graph_ppr_bridge_recall_at_5` floor value in thresholds.toml > 0.0 AND > the no-graph hybrid baseline; assert `graph_ppr_negative_control_recall_at_5` floor > 0.0; mirrors config-lint pattern at `test_e2e_graph_eval_gate_v2.py:314,438`
 
-- [ ] **BE-10** — Subprocess eval gate: bridge + negative control #backend-role
+- [x] **BE-10** — Subprocess eval gate: bridge + negative control #backend-role
     - Frameworks & Drivers · 3.0h
     - needs BE-9 · completes S12, S13
     - Tests
-        - #integration_test — `test_e2h_pprBridgeRecall_subprocessGate` — `@pytest.mark.integration @pytest.mark.xdist_group("benchmark")` subprocess pytest of PPR bridge eval test; asserts `graph_ppr_bridge_recall_at_5 ≥ floor`, returncode=0, "passed" in output
-        - #integration_test — `test_e2h_pprNegativeControl_subprocessGate` — subprocess pytest of PPR-specific negative-control eval test; asserts `graph_ppr_negative_control_recall_at_5 ≥ floor`; independent of the existing naive-mode `graph_negative_control_recall_at_5` bucket (that test is not re-run here)
+        - [x] #integration_test — `test_e2h_pprBridgeRecall_subprocessGate` — `@pytest.mark.integration @pytest.mark.xdist_group("benchmark")` subprocess pytest of PPR bridge eval test; asserts `graph_ppr_bridge_recall_at_5 ≥ floor`, returncode=0, "passed" in output
+        - [x] #integration_test — `test_e2h_pprNegativeControl_subprocessGate` — subprocess pytest of PPR-specific negative-control eval test; asserts `graph_ppr_negative_control_recall_at_5 ≥ floor`; independent of the existing naive-mode `graph_negative_control_recall_at_5` bucket (that test is not re-run here)
 
 ---
 
