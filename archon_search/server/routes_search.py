@@ -176,6 +176,13 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             status_code=422,
         )
 
+    # ppr graph_mode + multi-collection fanout is not supported (search_many has no PPR branch)
+    if body.graph_mode == "ppr" and body.collections is not None:
+        return JSONResponse(
+            {"detail": "graph_mode is not supported with multi-collection fanout; use a single collection"},
+            status_code=422,
+        )
+
     # graph_mode guard: require [graph] enabled=true
     if body.graph_mode is not None and not config.graph.enabled:
         return JSONResponse(

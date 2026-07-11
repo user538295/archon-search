@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from archon_search.graph_extractor import GraphExtractor
     from archon_search.graph_store import GraphStore
     from archon_search.language_detector import LanguageDetector
+    from archon_search.ppr_walker import PPRWalker
     from archon_search.rag_fusion import RAGFusionGenerator
 
 logger = logging.getLogger(__name__)
@@ -328,6 +329,7 @@ class SearchPipeline:
         graph_expander: "GraphExpander | None" = None,
         defref_extractor: "DefRefExtractor | None" = None,
         ast_chunker: ASTChunker | None = None,
+        ppr_walker: "PPRWalker | None" = None,
     ) -> None:
         self.store = store
         self._global_embedder = embedder
@@ -361,6 +363,8 @@ class SearchPipeline:
         # files, run alongside graph_extractor (which still produces the
         # lone code_symbol node + zero co-occurrence edges per chunk).
         self._defref_extractor = defref_extractor
+        # E2h BE-6: PPRWalker for personalised PageRank retrieval.
+        self._ppr_walker = ppr_walker
         # E2f BE-5: post-ingest synonym enrichment callback.
         # Assigned by app.py lifespan after MaintenanceLoop is constructed.
         # CLI/eval paths that construct SearchPipeline without a MaintenanceLoop
@@ -1256,22 +1260,142 @@ class SearchPipeline:
         filters: "SearchFilters | None" = None,
         scope_filter: "str | None" = None,
     ) -> SearchPipelineResult:
-        """Stub for graph_mode='ppr' (E2h BE-3).
+        """Personalized PageRank retrieval mode (E2h BE-6).
 
-        The real Personalized PageRank walk is implemented in BE-5.
-        This stub falls back to standard hybrid search and propagates
-        ppr_entities_matched=0 (S3: no entity match path).
+        Flow:
+        S1. Walk the graph via PPRWalker to get top-K entity-linked chunk IDs.
+            No walker / no graph_store → fall back to hybrid (ppr_entities_matched=0).
+        S2. No entities matched → fall back to hybrid (ppr_entities_matched=0).
+        S3. Fetch PPR chunk rows from store.
+            No rows → fall back to hybrid (ppr_entities_matched=N).
+        S4. Apply ACL filter on PPR candidates.
+            All filtered → fall back to hybrid.
+        S5. Embed query; run hybrid search for merge candidates.
+        S6. Merge: PPR chunks first, then non-duplicate hybrid candidates.
+        S7. Rerank merged set; return top-k with graph_expansion_applied=True.
         """
         assert scope_filter is None, (
             "scope_filter must be None in graph-mode paths — check the 422 guard"
         )
-        result = await self._search_standard(
-            query, collection, namespace,
-            embedder=self._global_embedder,
+        fp = _query_fingerprint(query)
+
+        # S1: guard — walker and graph_store must be configured.
+        if self._ppr_walker is None or self._graph_store is None:
+            logger.debug("_search_ppr_mode: no ppr_walker/graph_store; falling back (fp=%s)", fp)
+            result = await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+            result.ppr_entities_matched = 0
+            return result
+
+        # Read PPR config (defaults match GraphConfig defaults when config absent).
+        damping = self._graph_config.ppr_damping if self._graph_config is not None else 0.85
+        top_entities = self._graph_config.ppr_top_entities if self._graph_config is not None else 20
+
+        try:
+            ppr_result = await self._ppr_walker.walk(
+                query, collection, damping=damping, top_entities=top_entities, ns=namespace,
+            )
+        except Exception:
+            logger.warning(
+                "_search_ppr_mode: PPRWalker.walk failed for collection %r (fp=%s); falling back",
+                collection, fp, exc_info=True,
+            )
+            result = await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+            result.ppr_entities_matched = 0
+            return result
+
+        # S2: no entities matched → standard hybrid fallback.
+        if ppr_result.entities_matched == 0:
+            logger.debug("_search_ppr_mode: no entities matched (fp=%s); falling back", fp)
+            result = await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+            result.ppr_entities_matched = 0
+            return result
+
+        entities_matched = ppr_result.entities_matched
+
+        # S3: fetch PPR chunk rows from store.
+        ppr_rows = await self.store.get_chunks_by_ids(collection, ppr_result.chunk_ids)
+        if not ppr_rows:
+            logger.debug(
+                "_search_ppr_mode: PPR chunk IDs not found in store for collection %r (fp=%s); falling back",
+                collection, fp,
+            )
+            result = await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+            result.ppr_entities_matched = entities_matched
+            return result
+
+        # S4: convert to candidates; apply ACL filter.
+        ppr_candidates = [_row_to_community_candidate(r, collection) for r in ppr_rows]
+        if filters and filters.source_path_glob:
+            glob_pattern = filters.source_path_glob
+            ppr_candidates = [
+                c for c in ppr_candidates if fnmatch.fnmatchcase(c.source_path, glob_pattern)
+            ]
+        ppr_candidates, acl_filtered_ppr = apply_acl_filter(
+            ppr_candidates, lambda c: c.acl, namespace
+        )
+
+        if not ppr_candidates:
+            logger.warning(
+                "_search_ppr_mode: all PPR chunks filtered by glob/ACL for collection %r (fp=%s); "
+                "falling back to standard search",
+                collection, fp,
+            )
+            result = await self._search_standard(
+                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            )
+            result.ppr_entities_matched = entities_matched
+            return result
+
+        # S5: embed query; run hybrid search for merge candidates.
+        vector = await self._global_embedder.embed_one(query)
+        hybrid_candidates = await self.store.hybrid_search_with_trace(
+            collection, vector, query,
+            candidate_depth=max(self._top_k_retrieve * 3, 20),
             filters=filters,
         )
-        result.ppr_entities_matched = 0
-        return result
+        if filters and filters.source_path_glob:
+            glob_pattern = filters.source_path_glob
+            hybrid_candidates = [
+                c for c in hybrid_candidates if fnmatch.fnmatchcase(c.source_path, glob_pattern)
+            ]
+        hybrid_candidates, acl_filtered_hybrid = apply_acl_filter(
+            hybrid_candidates, lambda c: c.acl, namespace
+        )
+
+        # S6: merge — PPR chunks first, then non-duplicate hybrid candidates.
+        seen_chunk_ids: set[str] = {c.chunk_id for c in ppr_candidates}
+        merged = list(ppr_candidates)
+        for c in hybrid_candidates:
+            if c.chunk_id not in seen_chunk_ids:
+                merged.append(c)
+                seen_chunk_ids.add(c.chunk_id)
+
+        acl_filtered = acl_filtered_ppr or acl_filtered_hybrid
+
+        # S7: rerank merged set; return top-k.
+        if self._reranker is not None:
+            final_candidates = await self._reranker.rerank_candidates(
+                query, merged, top_k=self._top_k_return
+            )
+        else:
+            final_candidates = sorted(
+                merged, key=lambda c: c.score_breakdown.rrf_score or 0.0, reverse=True
+            )[:self._top_k_return]
+
+        return SearchPipelineResult(
+            results=[self._candidate_to_search_result(c) for c in final_candidates],
+            acl_filtered=acl_filtered,
+            graph_expansion_applied=True,
+            ppr_entities_matched=entities_matched,
+        )
 
     async def _search_local_mode(
         self,

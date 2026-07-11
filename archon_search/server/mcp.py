@@ -483,6 +483,7 @@ def create_app(
                     expansion_used=hyde_applied or result_obj.rag_fusion_applied or _multi_graph_expansion_applied,
                     expansion_warning=_multi_expansion_warning,
                     graph_expansion_applied=_multi_graph_expansion_applied,
+                    ppr_entities_matched=result_obj.ppr_entities_matched,
                 )
                 return response.model_dump(mode="json")
             except ValidationError as exc:
@@ -569,6 +570,7 @@ def create_app(
                     expansion_used=hyde_applied or result_obj.rag_fusion_applied or _single_graph_expansion_applied,
                     expansion_warning=_single_expansion_warning,
                     graph_expansion_applied=_single_graph_expansion_applied,
+                    ppr_entities_matched=result_obj.ppr_entities_matched,
                 )
                 return response.model_dump(mode="json")
             except ValidationError as exc:

@@ -461,17 +461,17 @@ graph LR
         - [x] #unit_test — `test_pprWalker_zeroMentionEntities_fallsBackGracefully` — entity seeded but has zero mention rows → PPRWalkResult(entityIds=[], chunkIds=[], entitiesMatched=0)
         - [x] #integration_test — `test_pprWalker_realGraph_returnsTopKEntityChunks` — seed graph via GraphStore.write_graph + write_mentions + PPRWalker.walk → chunkIds non-empty, entitiesMatched > 0
 
-- [ ] **BE-6** — Wire `PPRWalker` into `pipeline._search_graph_mode`; blend chunks prepend-then-rerank; propagate count #backend-role
+- [x] **BE-6** — Wire `PPRWalker` into `pipeline._search_graph_mode`; blend chunks prepend-then-rerank; propagate count #backend-role
     - Use Cases · 3.0h
     - needs BE-3, BE-5 · completes S1, S4, S7, S10
     - **Dispatch note:** The early-return routing tuple at `pipeline.py:977` (`if graph_mode in ("local", "global"):`) must be extended to include `"ppr"` so PPR dispatches through `_search_graph_mode` and returns a `SearchPipelineResult`. This site is separate from the `Literal` widening in BE-2 — both must be updated.
     - Tests
-        - #integration_test — `test_pprMode_blendedResults_entityChunkInTopK` — make_real_app + seed graph with K8s synonyms + ingest + search → entity-linked chunk in results, ppr_entities_matched > 0
-        - #integration_test — `test_pprMode_emptyNodeTable_fallsBackToHybrid` — empty nodes table → 200, ppr_entities_matched=0
-        - #integration_test — `test_pprMode_pprTopEntities_config_applied` — ppr_top_entities=2 in TOML → at most 2 distinct entity IDs in PPRWalkResult
-        - #integration_test — `test_pprMode_mcpSearch_pprEntitiesMatchedInResponse` — mcp_tool_call search graph_mode="ppr" → ppr_entities_matched present in response dict
-        - #integration_test — `test_searchMany_pprMode_dispatchCorrect` — search_many with graph_mode="ppr" routes to PPR branch (not naive/local/global)
-        - #integration_test — `test_pprMode_chunkOrdering_pprChunksPrependedBeforeHybrid` — make_real_app + seed graph with entity chunk that hybrid alone would rank low; POST /search graph_mode="ppr" → entity-linked chunk appears at a higher position than it would in plain hybrid baseline (verifies prepend semantics, not just presence)
+        - [x] #integration_test — `test_pprMode_blendedResults_entityChunkInTopK` — make_real_app + seed graph with K8s synonyms + ingest + search → entity-linked chunk in results, ppr_entities_matched > 0
+        - [x] #integration_test — `test_pprMode_emptyNodeTable_fallsBackToHybrid` — empty nodes table → 200, ppr_entities_matched=0
+        - [x] #integration_test — `test_pprMode_pprTopEntities_config_applied` — ppr_top_entities=2 in TOML → at most 2 distinct entity IDs in PPRWalkResult
+        - [x] #integration_test — `test_pprMode_mcpSearch_pprEntitiesMatchedInResponse` — mcp_tool_call search graph_mode="ppr" → ppr_entities_matched present in response dict
+        - [x] #integration_test — `test_pprMode_multiCollection_returns422` — search_many with graph_mode="ppr" routes to 422 guard (multi-collection PPR not supported)
+        - [x] #integration_test — `test_pprMode_chunkOrdering_pprChunksPrependedBeforeHybrid` — make_real_app + seed graph with entity chunk that hybrid alone would rank low; POST /search graph_mode="ppr" → entity-linked chunk appears at a higher position than it would in plain hybrid baseline (verifies prepend semantics, not just presence)
 
 - [ ] **T-2** — Integration e2e: PPR walk retrieves bridge docs #tester-role
     - — · 2.0h
