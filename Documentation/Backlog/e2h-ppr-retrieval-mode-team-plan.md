@@ -473,12 +473,12 @@ graph LR
         - [x] #integration_test — `test_pprMode_multiCollection_returns422` — search_many with graph_mode="ppr" routes to 422 guard (multi-collection PPR not supported)
         - [x] #integration_test — `test_pprMode_chunkOrdering_pprChunksPrependedBeforeHybrid` — make_real_app + seed graph with entity chunk that hybrid alone would rank low; POST /search graph_mode="ppr" → entity-linked chunk appears at a higher position than it would in plain hybrid baseline (verifies prepend semantics, not just presence)
 
-- [ ] **T-2** — Integration e2e: PPR walk retrieves bridge docs #tester-role
+- [x] **T-2** — Integration e2e: PPR walk retrieves bridge docs #tester-role
     - — · 2.0h
     - needs BE-6 · completes S1, S4
     - Tests
-        - #e2e_test — `test_e2h_t2_pprMode_bridgeQuery_entityChunkInResults` — ingest two docs; seed graph with shared entity + co-occurrence edge; query bridges them; ppr_entities_matched > 0; entity-linked doc appears in top results AND that doc does not appear in plain hybrid baseline results (verifies PPR changed output)
-        - #e2e_test — `test_e2h_t2_pprMode_emptyGraph_hybrid_fallback` — graph tables exist but empty; POST /search graph_mode="ppr" → 200, ppr_entities_matched=0, results non-empty (from hybrid)
+        - [x] #e2e_test — `test_e2h_t2_pprMode_bridgeQuery_entityChunkInResults` — ingest two docs; seed graph with shared entity + co-occurrence edge; query bridges them; ppr_entities_matched > 0; entity-linked doc appears in top results AND that doc does not appear in plain hybrid baseline results (verifies PPR changed output)
+        - [x] #e2e_test — `test_e2h_t2_pprMode_emptyGraph_hybrid_fallback` — graph tables exist but empty; POST /search graph_mode="ppr" → 200, ppr_entities_matched=0, results non-empty (from hybrid)
 
 ---
 
