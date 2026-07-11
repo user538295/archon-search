@@ -8,6 +8,24 @@
 
 ## Changelog
 
+### [next release] — E2h: `graph_mode` extended to `"ppr"`; `SearchResponse` and `ExplainResponse` gain `ppr_entities_matched` (all additive)
+
+**Surface**: `POST /search` request and response; `POST /explain` request and response; MCP `search` and `explain` tools.
+
+**Additive changes** (non-breaking for tolerant JSON consumers; breaking for strict-schema validators with `extra="forbid"`):
+
+1. **`SearchRequest.graph_mode` and `ExplainRequest.graph_mode` extended to accept `"ppr"`** — the new literal `"ppr"` activates Personalised PageRank retrieval. Clients that already pass `graph_mode="naive"`, `"local"`, or `"global"`, or omit the field, are completely unaffected. Strict-schema validators that enumerate the allowed literals must add `"ppr"`. Mutually exclusive with `collections` (multi-collection fanout) and `scope_filter` — both combinations return `422`. Returns `422` when `[graph] enabled = false`.
+
+2. **`SearchResponse` gains `ppr_entities_matched: int | null`** — always present (default `null`). Non-null only when `graph_mode="ppr"` was used; contains the count of seed entities with ≥1 mention row (`0` = no match, fell back to hybrid). Strict-validating clients must add this nullable integer field to their `SearchResponse` type stubs. Tolerant clients are unaffected.
+
+3. **`ExplainResponse` gains `ppr_entities_matched: int | null`** — same semantics as (2) for the `/explain` path. Strict-validating clients must add this field to their `ExplainResponse` type stubs.
+
+4. **MCP `search` and `explain` tools now accept `graph_mode: "ppr"`** — additive extension of the existing `graph_mode` parameter. `ppr_entities_matched: int | null` is added to both tool return shapes. Existing callers that pass other `graph_mode` values or omit the field are unaffected.
+
+**Migration**: no action required for tolerant JSON consumers. Strict-schema validators should add `"ppr"` to the `graph_mode` literal union in `SearchRequest` and `ExplainRequest`, and add `ppr_entities_matched: int | null` to `SearchResponse` and `ExplainResponse` type stubs. Regenerate from `GET /openapi.json`. To use PPR mode: install `archon-search[graph]`, set `[graph] enabled = true`, and ensure entities and mention rows are populated via ingest with graph extraction enabled.
+
+---
+
 ### [next release] — E2h BE-8: naive graph expansion is now capped at `naive_max_expansion_terms`
 
 **Surface**: `POST /search` with `graph_mode="naive"` (via `GraphExpander`).

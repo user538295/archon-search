@@ -240,12 +240,12 @@ TypeSpec: included in `e2h-ppr-walker.tsp` (extend existing C3 TypeSpec to docum
 | Use Cases | BE-3 (pipeline stub), BE-5 (PPRWalker), BE-6 (pipeline wiring), BE-7 (explain provenance), BE-8 (naive cap) |
 
 **Done when:**
-- [ ] `graph_mode: "ppr"` accepted by REST and MCP schemas; all guard paths return correct 422s
-- [ ] PPRWalker runs `networkx.pagerank()` in `asyncio.to_thread`; top-K entity chunks retrieved and blended via prepend-then-rerank
-- [ ] `/explain` returns `graph_mode_applied: "ppr"`, `ppr_entities_matched`, and `graph_provenance` with PPR scores
-- [ ] Naive mode expansion capped at `naive_max_expansion_terms`; `BREAKING.md` updated
-- [ ] All 3 new `GraphConfig` fields load correctly from TOML; config error on invalid `ppr_damping`
-- [ ] `graph_ppr_bridge_recall_at_5` eval gate passes; `graph_negative_control_recall_at_5 ≥ 0.34` still passes (0.34 = current threshold from `tests/eval/thresholds.toml`; verify against the file at implementation time)
+- [x] `graph_mode: "ppr"` accepted by REST and MCP schemas; all guard paths return correct 422s
+- [x] PPRWalker runs `networkx.pagerank()` in `asyncio.to_thread`; top-K entity chunks retrieved and blended via prepend-then-rerank
+- [x] `/explain` returns `graph_mode_applied: "ppr"`, `ppr_entities_matched`, and `graph_provenance` with PPR scores
+- [x] Naive mode expansion capped at `naive_max_expansion_terms`; `BREAKING.md` updated
+- [x] All 3 new `GraphConfig` fields load correctly from TOML; config error on invalid `ppr_damping`
+- [x] `graph_ppr_bridge_recall_at_5` eval gate passes; `graph_negative_control_recall_at_5 ≥ 0.34` still passes (0.34 = current threshold from `tests/eval/thresholds.toml`; verify against the file at implementation time)
 
 ---
 
@@ -276,16 +276,16 @@ TypeSpec: included in `e2h-ppr-walker.tsp` (extend existing C3 TypeSpec to docum
 
 ## Documentation update
 
-- [ ] `Documentation/Backlog/e2h-ppr-retrieval-mode-brief.md` — source brief; no changes needed
-- [ ] `Documentation/Backlog/e2h-ppr-retrieval-mode-team-plan.md` — this file
-- [ ] `BREAKING.md` — add naive mode cap change under `[next release]` section
-- [ ] `archon-search.toml.example` — add `ppr_damping = 0.85`, `ppr_top_entities = 20`, `naive_max_expansion_terms = 20` under `[graph]` with comments
-- [ ] `CLAUDE.md` graph subsystem bullet — add `graph_mode: "ppr"` to the list of supported modes; add `ppr_damping`/`ppr_top_entities`/`naive_max_expansion_terms` to `GraphConfig` description
-- [ ] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `"ppr"` to graph_mode values table; document `ppr_entities_matched` in SearchResponse and ExplainResponse field tables
-- [ ] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — add `ppr_walker.py` to Use Cases layer; add `get_mentions_for_entity_ids` to GraphStore symbol list
-- [ ] `Documentation/Architecture/530_technical_debt_refactoring_roadmap.md` — add AND close the naive mode expansion cap defect item (no such item currently exists in 530; T-4 must add it first, then mark it resolved)
-- [ ] `tests/eval/README.md` — document PPR eval queries, corpus, and two-sided gate semantics
-- [ ] `Documentation/Architecture/100_system_architecture_overview.md` — brief mention of PPR as fourth graph mode
+- [x] `Documentation/Backlog/e2h-ppr-retrieval-mode-brief.md` — source brief; no changes needed
+- [x] `Documentation/Backlog/e2h-ppr-retrieval-mode-team-plan.md` — this file
+- [x] `BREAKING.md` — add naive mode cap change under `[next release]` section
+- [x] `archon-search.toml.example` — add `ppr_damping = 0.85`, `ppr_top_entities = 20`, `naive_max_expansion_terms = 20` under `[graph]` with comments
+- [x] `CLAUDE.md` graph subsystem bullet — add `graph_mode: "ppr"` to the list of supported modes; add `ppr_damping`/`ppr_top_entities`/`naive_max_expansion_terms` to `GraphConfig` description
+- [x] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `"ppr"` to graph_mode values table; document `ppr_entities_matched` in SearchResponse and ExplainResponse field tables
+- [x] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — add `ppr_walker.py` to Use Cases layer; add `get_mentions_for_entity_ids` to GraphStore symbol list
+- [x] `Documentation/Architecture/530_technical_debt_refactoring_roadmap.md` — add AND close the naive mode expansion cap defect item (no such item currently exists in 530; T-4 must add it first, then mark it resolved)
+- [x] `tests/eval/README.md` — document PPR eval queries, corpus, and two-sided gate semantics
+- [x] `Documentation/Architecture/100_system_architecture_overview.md` — brief mention of PPR as fourth graph mode
 
 ---
 
@@ -551,7 +551,7 @@ graph LR
 
 ### Close-out
 
-- [ ] **T-4** — Close-out: documentation, warnings, full suite, acceptance fact-check #tester-role
+- [x] **T-4** — Close-out: documentation, warnings, full suite, acceptance fact-check #tester-role
     - — · 2.0h
     - needs BE-10, T-3 · completes —
     - Duties

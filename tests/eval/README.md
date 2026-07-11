@@ -486,3 +486,53 @@ The `code_defref_recall_at_5` gate additionally asserts a non-zero edge count fo
 ### Threshold-lowering notes
 
 If `code_defref_recall_at_5`'s floor is ever lowered, it must stay strictly above the no-feature baseline (`0.6667`) or the gate becomes vacuous — update the `_NO_FEATURE_BASELINE` constant in both `test_eval_gate_code_defref_recall_at_5` (`test_e2e_graph_eval_gate_v2.py`) and the `thresholds.toml` comment together with the new baseline value.
+
+## PPR eval gate (E2h)
+
+E2h introduces two PPR-mode eval metrics gated in `thresholds.toml`, exercised by `tests/eval/test_ppr_eval_gate.py`.
+
+### Design: two-sided gate
+
+The PPR eval gate is two-sided:
+
+1. **Bridge gate** (`graph_ppr_bridge_recall_at_5`) — a *positive* gate: PPR with a seeded graph outperforms plain hybrid on bridge queries. Non-vacuity is enforced by `test_pprEvalGate_nonVacuous_pprOutperformsNoGraph` in `test_ppr_eval_gate.py`, which runs both arms (PPR-mode and hybrid-only on a synthetic corpus) and asserts `ppr_recall > no_graph_recall` as a strict inequality. A regression that disables PPR wiring reproduces the hybrid baseline and fails both the gate and the strict-inequality assertion.
+
+2. **Negative control gate** (`graph_ppr_negative_control_recall_at_5`) — a *regression guard*: PPR on simple HotpotQA questions must not degrade below the floor. This catches regressions where PPR incorrectly demotes correct chunks for queries that should not need graph traversal.
+
+### Fixture layout
+
+The two gate metrics are computed by `run_eval_suite` in `archon_search/eval/runner.py` from the **real** eval fixtures. PPR-mode queries in `queries.jsonl` carry `"graph_mode": "ppr"` and live across three existing collections (introduced in E2e):
+
+- **Bridge queries** (`multihop-musique`, `multihop-2wiki` entries with `graph_mode="ppr"`) — target docs are entity-linked via graph edges but not lexically adjacent to the query. These feed the `graph_ppr_bridge_recall_at_5` metric via the `ppr_graph_traces` bucket in `run_eval_suite`.
+- **Negative control queries** (`hotpotqa` entries with `graph_mode="ppr"`) — plain hybrid retrieval should suffice; PPR should not harm recall. These feed the `graph_ppr_negative_control_recall_at_5` metric via the same `ppr_graph_traces` bucket.
+
+### Gated eval metrics and gates
+
+Two recall metrics in `EvalMetrics`, computed by `run_eval_suite` from the real fixtures above:
+
+- **`graph_ppr_bridge_recall_at_5`** — Recall@5 on bridge queries with `graph_mode="ppr"`. **Important:** the default `run_eval_suite` path does not wire a `PPRWalker`, so `graph_mode="ppr"` falls back to hybrid search — the gated floor (`1.0`) measures the hybrid fallback path, not live PPR execution. The floor is set above `0.0` to satisfy the config-lint non-vacuity guard. The real PPR-wiring regression gate is the strict-inequality test in `test_ppr_eval_gate.py` (see "Non-vacuity integration tests" below).
+- **`graph_ppr_negative_control_recall_at_5`** — Recall@5 on HotpotQA queries with `graph_mode="ppr"`. Same caveat: `run_eval_suite` uses hybrid fallback for PPR queries. Floor is set above `0.0`; any drop flags a regression in the hybrid fallback path for PPR-tagged queries.
+
+### Non-vacuity integration tests (test_ppr_eval_gate.py)
+
+`tests/eval/test_ppr_eval_gate.py` contains two integration tests that prove PPR is not vacuously wired. These tests are **independent of `run_eval_suite`** and use a **synthetic corpus** built in `tmp_path` — they do not use the real eval fixtures. Both tests are guarded with `pytest.importorskip("networkx")` at the module level and skip on CI legs that run `uv sync --dev` without `--extra graph`.
+
+The shared helper is `_build_pipeline(db_path, *, with_ppr=True, top_k_return=5)` (at the top of the file), which constructs a full `SearchPipeline` with or without a `PPRWalker`. There is no `_build_ppr_pipeline` function.
+
+**Test 1: `test_pprEvalGate_nonVacuous_pprOutperformsNoGraph`**
+
+Builds a synthetic corpus of one anchor document, one bridge document (lexically absent from the query), and 10 distractor documents that fill hybrid top-5 results. Writes graph nodes and mentions manually so that a PPR walk from the anchor's entity traverses a `related_to` edge to the bridge entity and resolves the bridge chunk.
+
+- PPR pipeline (`_build_pipeline(... with_ppr=True)`) — retrieves the bridge chunk via the graph walk.
+- No-graph pipeline (`_build_pipeline(... with_ppr=False)`) — does NOT retrieve the bridge chunk (displaced by 10 distractors).
+- Asserts `ppr_recall > no_graph_recall` as a strict inequality (computed from presence/absence of the bridge chunk; there is no `_NO_PPR_BASELINE` constant).
+
+**Test 2: `test_pprNegativeControlGate_nonVacuous_independentFromNaiveBucket`**
+
+Runs the same query twice on a single-document synthetic corpus — once with `graph_mode="ppr"`, once with `graph_mode="naive"`. Asserts that `ppr_entities_matched` is non-None for the PPR result and None for the naive result, confirming that the two modes produce structurally distinct `SearchPipelineResult` objects that feed independent metric buckets (`ppr_graph_traces` vs `naive_graph_traces`) in `run_eval_suite`.
+
+### Threshold-lowering notes
+
+The `graph_ppr_bridge_recall_at_5` and `graph_ppr_negative_control_recall_at_5` floors in `thresholds.toml` measure the **hybrid fallback path** (see note above — `run_eval_suite` does not wire `PPRWalker`). These floors are **decoupled** from the strict-inequality assertion in `test_pprEvalGate_nonVacuous_pprOutperformsNoGraph`; lowering the toml floor does not weaken that assertion (they are independent code paths). When lowering a floor, update the `thresholds.toml` comment with the rationale; run `regenerate.py` to refresh `thresholds_hash`; apply a waiver in `baseline.json` if the new floor is more than 0.05 below the baseline.
+
+The two-sided gate is intentional: lowering `graph_ppr_negative_control_recall_at_5` requires documented rationale (PPR on non-graph-reliant queries must not silently regress) — apply the same waiver policy as other floor drops.
