@@ -574,6 +574,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 rag_fusion_failure_reason=result.rag_fusion_failure_reason,
                 rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
                 graph_mode_applied=result.graph_mode_applied,
+                ppr_entities_matched=result.ppr_entities_matched,
             )
             _emit_ok(
                 "",
@@ -704,6 +705,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
         rag_fusion_failure_reason=result.rag_fusion_failure_reason,
         rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
         graph_mode_applied=result.graph_mode_applied,
+        ppr_entities_matched=result.ppr_entities_matched,
     )
     _emit_ok(
         chosen,

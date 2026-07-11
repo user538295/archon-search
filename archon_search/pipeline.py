@@ -115,6 +115,7 @@ class ExplainPipelineResult:
     rag_fusion_failure_reason: str | None = None
     rag_fusion_sub_query_results: list[RagFusionSubQueryInfo] | None = None
     graph_mode_applied: Literal["naive", "local", "global", "ppr"] | None = None
+    ppr_entities_matched: int | None = None
 
 
 class ExplainMultiCollectionNoRerankError(Exception):
@@ -1825,6 +1826,33 @@ class SearchPipeline:
                     scope_filter=scope_filter,
                 )
 
+            if graph_mode == "ppr":
+                ppr_candidates, entities_matched = await self._explain_ppr_candidates(
+                    query, collection, namespace=namespace,
+                    scope_filter=scope_filter,
+                )
+                if not ppr_candidates:
+                    result = await self._explain_standard(
+                        query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
+                        query_vector=query_vector, embedder=_single_embedder,
+                        scope_filter=scope_filter,
+                    )
+                    result.graph_mode_applied = "ppr"
+                    result.ppr_entities_matched = entities_matched
+                    result.rag_fusion_applied = False
+                    result.rag_fusion_attempted = False
+                    return result
+                result = await self._explain_merge_and_rank(
+                    ppr_candidates,
+                    query, collection,
+                    top_k=top_k, rerank=rerank, namespace=namespace,
+                    query_vector=query_vector, embedder=_single_embedder,
+                    graph_mode="ppr",
+                    scope_filter=scope_filter,
+                )
+                result.ppr_entities_matched = entities_matched
+                return result
+
             # local/global: E1b community traversal wiring (BE-8).
             community_candidates = await self._explain_community_candidates(
                 query, collection, graph_mode,
@@ -2133,6 +2161,77 @@ class SearchPipeline:
             c.graph_provenance = GraphProvenance(steps=list(steps))
 
         return candidates
+
+    async def _explain_ppr_candidates(
+        self,
+        query: str,
+        collection: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        *,
+        scope_filter: str | None = None,
+    ) -> tuple[list[ScoredSearchCandidate], int]:
+        """PPR-mode graph retrieval for explain.
+
+        Returns (candidates, entities_matched) tuple.
+        Returns ([], 0) when no walker/graph_store, empty graph, or no entity match.
+        Returns ([], N) when entities matched but no chunk rows found.
+        """
+        assert scope_filter is None, "scope_filter must be None in graph-mode paths"
+
+        if self._ppr_walker is None or self._graph_store is None:
+            return [], 0
+
+        fp = _query_fingerprint(query)
+        damping = self._graph_config.ppr_damping if self._graph_config is not None else 0.85
+        top_entities = self._graph_config.ppr_top_entities if self._graph_config is not None else 20
+
+        try:
+            ppr_result = await self._ppr_walker.walk(
+                query, collection, damping=damping, top_entities=top_entities, ns=namespace,
+            )
+        except Exception:
+            logger.warning(
+                "_explain_ppr_candidates: PPRWalker.walk failed for collection %r (fp=%s)",
+                collection, fp, exc_info=True,
+            )
+            return [], 0
+
+        if ppr_result.entities_matched == 0:
+            return [], 0
+
+        rows = await self.store.get_chunks_by_ids(collection, ppr_result.chunk_ids)
+        if not rows:
+            return [], ppr_result.entities_matched
+
+        candidates = [_row_to_community_candidate(r, collection) for r in rows]
+
+        # Build provenance steps from matched entity IDs with names from the graph.
+        steps: list[TraversalStep] = []
+        try:
+            node_by_id = await self._graph_store.get_nodes_by_ids(
+                collection, ppr_result.entity_ids, ns=namespace
+            )
+            for entity_id in ppr_result.entity_ids:
+                node = node_by_id.get(entity_id)
+                if node is not None:
+                    steps.append(TraversalStep(
+                        entity=node.entity_name,
+                        entity_id=entity_id,
+                        relationship="ppr",
+                    ))
+        except Exception:
+            logger.warning(
+                "_explain_ppr_candidates: node lookup failed for provenance (fp=%s)",
+                fp, exc_info=True,
+            )
+            # Fallback: use entity IDs as names
+            for entity_id in ppr_result.entity_ids:
+                steps.append(TraversalStep(entity=entity_id, entity_id=entity_id, relationship="ppr"))
+
+        for c in candidates:
+            c.graph_provenance = GraphProvenance(steps=list(steps))
+
+        return candidates, ppr_result.entities_matched
 
     async def _explain_merge_and_rank(
         self,

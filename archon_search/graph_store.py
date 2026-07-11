@@ -722,6 +722,16 @@ class GraphStore:
         arrow = await nodes_table.query().where(_where_in("id", entity_ids)).to_arrow()
         return {node.id: node for node in self._arrow_to_nodes(arrow)}
 
+    async def get_nodes_by_ids(
+        self, collection: str, entity_ids: list[str], *, ns: str
+    ) -> dict[str, "GraphNode"]:
+        """Return a ``{id: GraphNode}`` map for *entity_ids*; empty dict for empty input.
+
+        Performs a targeted lookup by IDs rather than a full table scan — use this
+        instead of ``get_all_nodes`` when only a small set of IDs is needed.
+        """
+        return await self._fetch_nodes_by_ids(collection, entity_ids, ns)
+
     async def _traverse_impact(
         self,
         collection: str,

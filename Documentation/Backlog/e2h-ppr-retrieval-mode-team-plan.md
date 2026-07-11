@@ -486,14 +486,14 @@ graph LR
 
 *End-to-end behavior: `/explain` with `graph_mode: "ppr"` returns `graph_mode_applied: "ppr"`, `ppr_entities_matched`, and per-chunk `graph_provenance` with PPR-scored entity steps. Naive expansion is bounded.*
 
-- [ ] **BE-7** — Add PPR provenance to `/explain`: `ExplainPipelineResult` fields + `graph_provenance` steps #backend-role
+- [x] **BE-7** — Add PPR provenance to `/explain`: `ExplainPipelineResult` fields + `graph_provenance` steps #backend-role
     - Use Cases · 3.0h
     - needs BE-6 · completes S2
     - Tests
-        - #unit_test — `test_explainPipelineResult_pprLiteral_acceptsPpr` — ExplainPipelineResult(graph_mode_applied="ppr") validates without error
-        - #unit_test — `test_explainPipelineResult_pprEntitiesMatched_field_present` — dataclass has ppr_entities_matched: int | None = None
-        - #unit_test — `test_explainResponse_fromPipelineResult_pprFieldsPopulated` — ExplainResponse.from_pipeline_result() with ppr count → response has ppr_entities_matched
-        - #integration_test — `test_explainEndpoint_pprMode_returnsGraphModeApplied` — POST /explain graph_mode="ppr" → graph_mode_applied="ppr", ppr_entities_matched >= 0, graph_provenance present on entity-matched chunks
+        - [x] #unit_test — `test_explainPipelineResult_pprLiteral_acceptsPpr` — ExplainPipelineResult(graph_mode_applied="ppr") validates without error
+        - [x] #unit_test — `test_explainPipelineResult_pprEntitiesMatched_field_present` — dataclass has ppr_entities_matched: int | None = None
+        - [x] #unit_test — `test_explainResponse_fromPipelineResult_pprFieldsPopulated` — ExplainResponse.from_pipeline_result() with ppr count → response has ppr_entities_matched
+        - [x] #integration_test — `test_explainEndpoint_pprMode_returnsGraphModeApplied` — POST /explain graph_mode="ppr" → graph_mode_applied="ppr", ppr_entities_matched >= 0, graph_provenance present on entity-matched chunks
 
 - [ ] **BE-8** — Add naive expansion cap in `graph_expander.py`; update `BREAKING.md` #backend-role
     - Use Cases · 2.0h

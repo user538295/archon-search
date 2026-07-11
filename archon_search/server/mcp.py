@@ -948,6 +948,7 @@ def create_app(
                     rag_fusion_failure_reason=result.rag_fusion_failure_reason,
                     rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
                     graph_mode_applied=result.graph_mode_applied,
+                    ppr_entities_matched=result.ppr_entities_matched,
                 )
                 result_dict = response.model_dump(mode="json", exclude_none=False)
                 result_dict.pop("stage_timings_ms", None)
@@ -1058,6 +1059,7 @@ def create_app(
                     rag_fusion_failure_reason=result.rag_fusion_failure_reason,
                     rag_fusion_sub_query_results=result.rag_fusion_sub_query_results,
                     graph_mode_applied=result.graph_mode_applied,
+                    ppr_entities_matched=result.ppr_entities_matched,
                 )
                 if writer is not None:
                     try:
