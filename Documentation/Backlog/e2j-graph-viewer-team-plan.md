@@ -374,15 +374,15 @@ flowchart LR
         - #unit_test — `test_middleware_graph_view_token_param_is_exempt` — a request to `/graph/test-col/view?token=abc` bypasses the header-presence check; a request to `/graph/test-col/view` without `?token=` is NOT exempt (still requires Bearer header)
         - #unit_test — `test_middleware_exact_path_scope` — a request to `/other/view?token=abc` is NOT exempt (path pattern only matches `/graph/{collection}/view`)
 
-- [ ] **T-1** — integration: server HTTP contract for `GET /graph/{collection}/view` #tester-role
+- [x] **T-1** — integration: server HTTP contract for `GET /graph/{collection}/view` #tester-role
     - — · 3.0h
     - needs BE-2 · completes S1, S7, S8, S9, S10, S11, S12, S13
     - Tests
-        - #integration_test — `test_e2j_view_happy_path` — 200 + `text/html` + `api_key` in body + `<canvas` in body
-        - #integration_test — `test_e2j_view_graph_disabled_422` — 422 with exact detail string
-        - #integration_test — `test_e2j_view_no_auth_401` — no `Authorization` header → 401 + `WWW-Authenticate: Bearer`
-        - #integration_test — `test_e2j_view_collection_not_found_404` — unknown collection → 404
-        - #integration_test — `test_e2j_view_no_external_urls` — response body has no external URL patterns
+        - [x] #integration_test — `test_e2j_view_happy_path` — 200 + `text/html` + `api_key` in body + `<canvas` in body
+        - [x] #integration_test — `test_e2j_view_graph_disabled_422` — 422 with exact detail string
+        - [x] #integration_test — `test_e2j_view_no_auth_401` — no `Authorization` header → 401 + `WWW-Authenticate: Bearer`
+        - [x] #integration_test — `test_e2j_view_collection_not_found_404` — unknown collection → 404
+        - [x] #integration_test — `test_e2j_view_no_external_urls` — response body has no external URL patterns
 
 - [ ] **T-2** — Manual: JS interactive features in a real browser #tester-role
     - — · 2.0h
