@@ -384,17 +384,17 @@ flowchart LR
         - [x] #integration_test — `test_e2j_view_collection_not_found_404` — unknown collection → 404
         - [x] #integration_test — `test_e2j_view_no_external_urls` — response body has no external URL patterns
 
-- [ ] **T-2** — Manual: JS interactive features in a real browser #tester-role
+- [x] **T-2** — Manual: JS interactive features in a real browser #tester-role
     - — · 2.0h
     - needs FE-1 · completes S2, S3, S4, S5, S6, S14
     - Tests
         - #manual_test — Node click shows inspect panel — click a known node (pre-verified via `GET /graph/{collection}`) → panel shows entity_name, entity_type, chunk_count, and the union of source_chunk_ids from all incident edges
         - #manual_test — Edge hover shows relationship type — hover an edge → tooltip displays relationship_type value (e.g. "calls", "synonym_of")
         - #manual_test — Search filters nodes — type partial name in search box → only matching nodes visible; non-matching nodes hidden; incident edges hidden
-        - #manual_test — Truncation banner — **Setup:** ingest enough documents that `node_count` from `GET /graph/{collection}` exceeds `max_inspection_nodes` (check `archon-search.toml` or default value; if the default is 5000, ingest enough documents via `POST /ingest/{collection}` in a loop (see the CLI `archon-search ingest` command or use the HTTP API) to push entity count above the threshold). **Test:** open `/view` → banner reads "Showing [max] of [N] nodes and [A] of [B] edges" with values matching the API response.
+        - #manual_test — Truncation banner — **Setup:** set `max_inspection_nodes` to a small value (e.g. 3) in `archon-search.toml` and ingest a handful of documents so that `node_count` from `GET /graph/{collection}` exceeds it (this exercises the same code path as the 5000-node default without requiring a large corpus). **Test:** open `/view` → banner reads "Showing X of Y nodes and A of B edges" where X = `data.nodes.length` (number of nodes the API actually returned in the `nodes` array) and Y = `data.node_count` (total entity count from the API response).
         - #manual_test — Empty state message — open collection with no ingested documents → "No entities found — ingest some documents first" shown on canvas
         - #manual_test — Offline behavior — load page fully, disconnect server → graph remains interactive (pan, zoom, click, search)
-        - #manual_test — Fetch error state — load the page with a valid token, then revoke the token on the server; trigger a graph refresh (or reload) → page shows an error indicator (or graceful empty state) rather than a silent blank canvas
+        - #manual_test — Fetch error state (no scenario ID — bonus test) — load the page with a valid token, then revoke the token on the server; trigger a graph refresh (or reload) → page shows an error indicator (or graceful empty state) rather than a silent blank canvas
 
 ### Phase 2 · Close-out
 - [ ] **T-3** — Project close-out & acceptance fact-check #tester-role
