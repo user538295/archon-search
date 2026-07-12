@@ -1,13 +1,13 @@
 **Purpose**: Feature-level comparison of archon-search's knowledge-graph capabilities against the 2026 competitive field, with before/after capability scores and the roadmap item that closes each gap.
 **Audience**: Maintainers planning and reviewing the graph track (E2b–E2j).
 **Status**: Snapshot
-**Last reviewed**: 2026-07-06 / **Next review**: after E2f/E2g land or 2026-10-01, whichever is first
+**Last reviewed**: 2026-07-12 / **Next review**: 2026-10-01 (all E2f–E2j shipped)
 
 > Sources: 2026-07-03 multi-agent review — codebase audit (file:line-verified against `archon_search/`), deep-dives on 7 named competitor repos (DeusData/codebase-memory-mcp, moorcheh-ai/memanto, aksika/abmind, iternal blockify, colbymchenry/codegraph, Egonex-AI/Understand-Anything, safishamsi/graphify) plus ~15 established systems (Microsoft GraphRAG/LazyGraphRAG, LightRAG, Graphiti/Zep, Cognee, HippoRAG 1+2, KAG, Neo4j GraphRAG, R2R, Mem0, LlamaIndex PGI, txtai, MiniRAG, Youtu-GraphRAG, fast/nano-graphrag), and the 2024–2026 GraphRAG literature (arXiv IDs inline where load-bearing). Star counts and vendor benchmark numbers are self-reported by their projects and were retrieved 2026-07-03; treat as directional. Companion docs: [`01_competitive_analysis_field.md`](./01_competitive_analysis_field.md), [`02_competitive_analysis_marveen.md`](./02_competitive_analysis_marveen.md), [`03_world_class_roadmap.md`](./03_world_class_roadmap.md) (graph track), [`e2b-graph-inspection-brief.md`](../Completed/e2b-graph-inspection-brief.md).
 
 # Graph Competitive Matrix — archon-search vs. the field
 
-**Legend**: ✅ shipped · ⚠️ partial · ❌ missing · 🚫 deliberate non-goal (evidence says skip). **"After" = state once E2f–E2j land** (E2b–E2e shipped 2026-07; those rows now show ✓ in the Item column). Every row names the implementing roadmap item; "✓" marks already-shipped items.
+**Legend**: ✅ shipped · ⚠️ partial · ❌ missing · 🚫 deliberate non-goal (evidence says skip). **"After" = current state** (E2b–E2j all shipped 2026-07/07-12; every "After" column reflects the live codebase). Every row names the implementing roadmap item; "✓" marks already-shipped items.
 
 ## 1. Graph construction & extraction
 

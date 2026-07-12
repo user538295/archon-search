@@ -123,7 +123,7 @@ Security-focused documentation for security engineers, IT admins, and reviewers 
 | --- | --- |
 | [`Backlog/01_competitive_analysis_field.md`](../Backlog/01_competitive_analysis_field.md) | Competitive analysis (field-level). |
 | [`Backlog/02_competitive_analysis_marveen.md`](../Backlog/02_competitive_analysis_marveen.md) | Competitive analysis (Marveen). |
-| [`Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) | Long-form roadmap for reaching world-class retrieval quality. |
+| [`Backlog/03_world_class_roadmap.md`](../Backlog/03_world_class_roadmap.md) | Long-form roadmap for reaching world-class retrieval quality. Graph track E2b–E2j complete as of 2026-07-12. |
 | [`Backlog/e0-ux-limitations-and-file-type-gaps-brief.md`](../Backlog/e0-ux-limitations-and-file-type-gaps-brief.md) | E0 audit index: 14 user-facing limitations and 8 file-type gaps vs R2R. |
 | [`Backlog/e0a-file-type-completeness-brief.md`](../Backlog/e0a-file-type-completeness-brief.md) | E0a: markitdown core dep + 8 missing file extensions. |
 | [`Backlog/e0b-silent-failure-transparency-brief.md`](../Backlog/e0b-silent-failure-transparency-brief.md) | E0b: HyDE fallback signal, ANTHROPIC_API_KEY env, FAILED_EXPIRED state, telemetry truncation. |
