@@ -5179,6 +5179,67 @@
         "summary": "Get Graph Impact"
       }
     },
+    "/graph/{collection}/view": {
+      "get": {
+        "description": "Serve a self-contained graph viewer HTML page for a collection \u2014 E2j BE-2.\n\nQuery parameters:\n- ``token``: Optional Bearer token (used when no Authorization header is present).\n  The middleware exemption lets this request bypass the header-presence check.\n\nReturns:\n- 200: Self-contained HTML page with C4 placeholders substituted.\n- 401: Missing or invalid auth (WWW-Authenticate: Bearer header always present).\n- 404: Collection not found.\n- 422: graph.enabled=false.\n\nAuth resolution order (C3 precedence):\n1. Authorization header (middleware already validated; handler recovers token for embedding).\n2. ?token= query param (handler validates via validate_token_and_get_namespace).",
+        "operationId": "get_graph_view_graph__collection__view_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "title": "Collection",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Graph View"
+      }
+    },
     "/health": {
       "get": {
         "operationId": "health_health_get",

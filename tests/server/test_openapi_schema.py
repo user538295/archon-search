@@ -441,6 +441,10 @@ def test_no_empty_schemas_remain(app) -> None:  # type: ignore[no-untyped-def]
             if resp_200 is None:
                 continue
             content = resp_200.get("content", {})
+            # Non-JSON responses (e.g. text/html, application/xml) are exempt
+            # from this check — they do not need an application/json schema.
+            if "application/json" not in content:
+                continue
             json_schema = content.get("application/json", {}).get("schema", {})
             assert json_schema, (
                 f"{method.upper()} {path} 200 response has empty or missing schema"

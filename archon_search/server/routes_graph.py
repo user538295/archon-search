@@ -1,11 +1,13 @@
 """GET /graph endpoints for graph inspection — E2b."""
 from __future__ import annotations
 
+import importlib.resources
+import json
 import logging
 from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
 
 if TYPE_CHECKING:
     from archon_search.graph_store import GraphStore
@@ -29,10 +31,131 @@ from archon_search.server.schemas import (
     ImpactEdgeResponse,
     ImpactGroupResponse,
 )
+from archon_search.server.middleware_auth import (
+    INVALID_NAMESPACE_SENTINEL,
+    validate_token_and_get_namespace,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _load_viewer_html() -> bytes:
+    """Load graph_viewer.html as bytes from the package resource.
+
+    Extracted as a module-private helper so integration tests can monkeypatch
+    it to inject a stable stub without requiring ideal HTML file content.
+    """
+    pkg = importlib.resources.files("archon_search.server")
+    return pkg.joinpath("graph_viewer.html").read_bytes()
+
+
+def _js_safe_json(value: str) -> str:
+    """JSON-encode a string value safe for embedding inside <script> blocks.
+
+    json.dumps adds surrounding quotes and escapes JS string syntax, but leaves
+    <, > and & intact, which allows </script> breakout in HTML.
+    Unicode escapes are invisible to JS and are the canonical safe-embedding fix.
+    """
+    encoded = json.dumps(value)
+    return encoded.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
+@router.get("/graph/{collection}/view", name="get_graph_view", response_class=HTMLResponse)
+async def get_graph_view(
+    collection: str,
+    token: str | None = None,
+    *,
+    request: Request,
+) -> Response:
+    """Serve a self-contained graph viewer HTML page for a collection — E2j BE-2.
+
+    Query parameters:
+    - ``token``: Optional Bearer token (used when no Authorization header is present).
+      The middleware exemption lets this request bypass the header-presence check.
+
+    Returns:
+    - 200: Self-contained HTML page with C4 placeholders substituted.
+    - 401: Missing or invalid auth (WWW-Authenticate: Bearer header always present).
+    - 404: Collection not found.
+    - 422: graph.enabled=false.
+
+    Auth resolution order (C3 precedence):
+    1. Authorization header (middleware already validated; handler recovers token for embedding).
+    2. ?token= query param (handler validates via validate_token_and_get_namespace).
+    """
+    pipeline = request.app.state.pipeline
+    config = request.app.state.config
+
+    # --- Resolve the middleware state --- 
+    # Middleware runs before this handler. Two cases:
+    #   A. Authorization header present: middleware validated and set request.state.namespace.
+    #      The raw token is recovered from the header for embedding in HTML.
+    #   B. ?token= path: middleware exemption lets the request through; handler does full auth.
+    auth_header = request.headers.get("Authorization", "")
+    header_parts = auth_header.split(" ", 1)
+    has_bearer_header = len(header_parts) == 2 and header_parts[0] == "Bearer"
+
+    if has_bearer_header:
+        # Case A: middleware already validated. Namespace is on request.state.
+        raw_token = header_parts[1]
+        ns = request.state.namespace
+    else:
+        # Case B: ?token= path. Run the full auth cascade here.
+        if not token:
+            return Response(
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        result = await validate_token_and_get_namespace(
+            token,
+            api_key=request.app.state.api_key,
+            namespaces=request.app.state.namespaces,
+            key_store=request.app.state.key_store,
+        )
+
+        if result is INVALID_NAMESPACE_SENTINEL or result is None:
+            return Response(
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        raw_token = token
+        ns = result
+        request.state.namespace = ns
+
+    # --- Guard 1: graph enabled ---
+    if not config.graph.enabled:
+        raise HTTPException(
+            status_code=422,
+            detail="graph inspection requires [graph] enabled=true in server config",
+        )
+
+    # --- Guard 2: collection exists ---
+    collection_meta = await pipeline.get_collection_meta(collection, namespace=ns)
+    if collection_meta is None:
+        raise HTTPException(status_code=404, detail="collection not found")
+
+    # --- Build HTML with C4 placeholder substitution ---
+    html_bytes = _load_viewer_html()
+    html = html_bytes.decode("utf-8")
+
+    # String values: json.dumps adds surrounding quotes and escapes special chars.
+    # Integer values: str(int(value)) — bare number in JS.
+    html = html.replace("__ARCHON_COLLECTION__", _js_safe_json(collection))
+    html = html.replace("__ARCHON_TOKEN__", _js_safe_json(raw_token))
+    html = html.replace("__ARCHON_MAX_NODES__", str(int(config.graph.max_inspection_nodes)))
+    html = html.replace("__ARCHON_MAX_EDGES__", str(int(config.graph.max_inspection_edges)))
+
+    return Response(
+        content=html.encode("utf-8"),
+        media_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+        },
+    )
 
 
 @router.get("/graph/cross-collection", name="get_graph_cross_collection", response_model=CrossCollectionGraphInspectionResponse)

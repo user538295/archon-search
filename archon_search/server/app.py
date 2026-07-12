@@ -493,6 +493,8 @@ def create_app(
     # default key without re-reading .search.env.  The route handler updates
     # this in-process value after a successful rotation.
     app.state.api_key = api_key
+    # Stored for the graph-view route handler's validate_token_and_get_namespace call (BE-2).
+    app.state.namespaces = config.namespaces
     app.state.config = config
     app.state.job_store = job_store
     app.state.config_path = Path(config_path) if config_path is not None else None
