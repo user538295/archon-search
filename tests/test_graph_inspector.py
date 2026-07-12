@@ -30,9 +30,9 @@ from tests.conftest import MockGraphStore
 def test_truncate_graph_node_sort_order():
     """Truncation sorts nodes by (chunk_count desc, entity_id asc)."""
     nodes = [
-        GraphNodeInspection("id-c", "C", chunk_count=2, salience=0.1),
-        GraphNodeInspection("id-a", "A", chunk_count=3, salience=0.3),  # highest chunk_count
-        GraphNodeInspection("id-b", "B", chunk_count=3, salience=0.2),  # same as id-a
+        GraphNodeInspection("id-c", "C", chunk_count=2, salience=0.1, entity_type="concept"),
+        GraphNodeInspection("id-a", "A", chunk_count=3, salience=0.3, entity_type="concept"),  # highest chunk_count
+        GraphNodeInspection("id-b", "B", chunk_count=3, salience=0.2, entity_type="concept"),  # same as id-a
     ]
     edges = []
 
@@ -48,10 +48,10 @@ def test_truncate_graph_node_sort_order():
 def test_truncate_graph_node_cap_fires():
     """When node count exceeds max_nodes, truncated=True."""
     nodes = [
-        GraphNodeInspection("id-1", "N1", chunk_count=5, salience=0.5),
-        GraphNodeInspection("id-2", "N2", chunk_count=4, salience=0.4),
-        GraphNodeInspection("id-3", "N3", chunk_count=3, salience=0.3),
-        GraphNodeInspection("id-4", "N4", chunk_count=2, salience=0.2),
+        GraphNodeInspection("id-1", "N1", chunk_count=5, salience=0.5, entity_type="concept"),
+        GraphNodeInspection("id-2", "N2", chunk_count=4, salience=0.4, entity_type="concept"),
+        GraphNodeInspection("id-3", "N3", chunk_count=3, salience=0.3, entity_type="concept"),
+        GraphNodeInspection("id-4", "N4", chunk_count=2, salience=0.2, entity_type="concept"),
     ]
     edges = []
 
@@ -64,11 +64,11 @@ def test_truncate_graph_node_cap_fires():
 def test_truncate_graph_edge_filtering_removes_dangling_edges():
     """Edges where one endpoint was truncated are excluded."""
     nodes = [
-        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0),
-        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8),
-        GraphNodeInspection("id-c", "C", chunk_count=6, salience=0.6),
-        GraphNodeInspection("id-d", "D", chunk_count=4, salience=0.4),
-        GraphNodeInspection("id-e", "E", chunk_count=2, salience=0.2),
+        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0, entity_type="concept"),
+        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8, entity_type="concept"),
+        GraphNodeInspection("id-c", "C", chunk_count=6, salience=0.6, entity_type="concept"),
+        GraphNodeInspection("id-d", "D", chunk_count=4, salience=0.4, entity_type="concept"),
+        GraphNodeInspection("id-e", "E", chunk_count=2, salience=0.2, entity_type="concept"),
     ]
     edges = [
         GraphEdgeInspection("edge-ab", "id-a", "id-b", weight=5, source_chunk_ids=[]),
@@ -89,9 +89,9 @@ def test_truncate_graph_edge_filtering_removes_dangling_edges():
 def test_truncate_graph_edge_sort_order():
     """Surviving edges are sorted by (weight desc, edge_id asc)."""
     nodes = [
-        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0),
-        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8),
-        GraphNodeInspection("id-c", "C", chunk_count=6, salience=0.6),
+        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0, entity_type="concept"),
+        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8, entity_type="concept"),
+        GraphNodeInspection("id-c", "C", chunk_count=6, salience=0.6, entity_type="concept"),
     ]
     edges = [
         GraphEdgeInspection("edge-2", "id-a", "id-b", weight=2, source_chunk_ids=[]),
@@ -112,8 +112,8 @@ def test_truncate_graph_edge_sort_order():
 def test_truncate_graph_edge_cap_fires():
     """When edge count exceeds max_edges, truncated=True."""
     nodes = [
-        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0),
-        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8),
+        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0, entity_type="concept"),
+        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8, entity_type="concept"),
     ]
     edges = [
         GraphEdgeInspection("e1", "id-a", "id-b", weight=5, source_chunk_ids=[]),
@@ -129,8 +129,8 @@ def test_truncate_graph_edge_cap_fires():
 def test_truncate_graph_no_truncation():
     """When counts are within limits, truncated=False."""
     nodes = [
-        GraphNodeInspection("id-a", "A", chunk_count=5, salience=0.5),
-        GraphNodeInspection("id-b", "B", chunk_count=3, salience=0.3),
+        GraphNodeInspection("id-a", "A", chunk_count=5, salience=0.5, entity_type="concept"),
+        GraphNodeInspection("id-b", "B", chunk_count=3, salience=0.3, entity_type="concept"),
     ]
     edges = [GraphEdgeInspection("e1", "id-a", "id-b", weight=2, source_chunk_ids=[])]
 
@@ -775,8 +775,8 @@ def test_to_graphml_produces_valid_xml():
     import xml.etree.ElementTree as ET
 
     nodes = [
-        GraphNodeInspection("entity-1", "Entity One", chunk_count=5, salience=0.5),
-        GraphNodeInspection("entity-2", "Entity Two", chunk_count=3, salience=0.3),
+        GraphNodeInspection("entity-1", "Entity One", chunk_count=5, salience=0.5, entity_type="concept"),
+        GraphNodeInspection("entity-2", "Entity Two", chunk_count=3, salience=0.3, entity_type="concept"),
     ]
     edges = [
         GraphEdgeInspection(
@@ -801,7 +801,7 @@ def test_to_graphml_includes_truncated_attribute():
     """to_graphml() includes truncated flag as graph-level <data> element."""
     import xml.etree.ElementTree as ET
 
-    nodes = [GraphNodeInspection("entity-1", "Entity One", chunk_count=5, salience=0.5)]
+    nodes = [GraphNodeInspection("entity-1", "Entity One", chunk_count=5, salience=0.5, entity_type="concept")]
     edges = []
 
     # Test with truncated=True
@@ -856,7 +856,7 @@ def test_graphml_networkx_import_error_yields_clear_message():
     import sys
     from unittest.mock import patch
 
-    nodes = [GraphNodeInspection("entity-1", "Entity One", chunk_count=5, salience=0.5)]
+    nodes = [GraphNodeInspection("entity-1", "Entity One", chunk_count=5, salience=0.5, entity_type="concept")]
     edges = []
     view = CollectionGraphView(
         nodes=nodes, edges=edges, node_count=1, edge_count=0, truncated=False
@@ -2399,9 +2399,9 @@ def test_graph_inspector_includes_zero_weight_synonym_edges() -> None:
     """
     # 3 nodes: node-a (high salience), node-b (low salience), node-syn (medium)
     nodes = [
-        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0),
-        GraphNodeInspection("id-b", "B", chunk_count=5, salience=0.5),
-        GraphNodeInspection("id-syn", "Syn", chunk_count=3, salience=0.3),
+        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0, entity_type="concept"),
+        GraphNodeInspection("id-b", "B", chunk_count=5, salience=0.5, entity_type="concept"),
+        GraphNodeInspection("id-syn", "Syn", chunk_count=3, salience=0.3, entity_type="concept"),
     ]
     # Regular edge between id-a and id-b; synonym edge between id-a and id-syn
     edges = [
@@ -2428,10 +2428,10 @@ def test_graph_inspector_synonym_edges_not_truncated_by_cap() -> None:
     - synonym endpoint nodes ARE added to nodes_out (they appear in the returned node list).
     """
     nodes = [
-        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0),
-        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8),
-        GraphNodeInspection("id-c", "C", chunk_count=2, salience=0.2),  # low salience, normally truncated
-        GraphNodeInspection("id-d", "D", chunk_count=1, salience=0.1),  # low salience, normally truncated
+        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0, entity_type="concept"),
+        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8, entity_type="concept"),
+        GraphNodeInspection("id-c", "C", chunk_count=2, salience=0.2, entity_type="concept"),  # low salience, normally truncated
+        GraphNodeInspection("id-d", "D", chunk_count=1, salience=0.1, entity_type="concept"),  # low salience, normally truncated
     ]
     # Synonym edge connects id-a (surviving) → id-c (would be truncated)
     edges = [
@@ -2465,10 +2465,10 @@ def test_graph_inspector_synonym_edges_not_truncated_by_edge_cap() -> None:
     All synonym edges must survive the edge cap.
     """
     nodes = [
-        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0),
-        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8),
-        GraphNodeInspection("id-c", "C", chunk_count=6, salience=0.6),
-        GraphNodeInspection("id-d", "D", chunk_count=4, salience=0.4),
+        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0, entity_type="concept"),
+        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8, entity_type="concept"),
+        GraphNodeInspection("id-c", "C", chunk_count=6, salience=0.6, entity_type="concept"),
+        GraphNodeInspection("id-d", "D", chunk_count=4, salience=0.4, entity_type="concept"),
     ]
     # 3 non-synonym edges + 2 synonym edges; set max_edges=2 (only 2 non-synonyms survive)
     edges = [

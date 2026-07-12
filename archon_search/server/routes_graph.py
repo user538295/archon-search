@@ -303,6 +303,7 @@ def _cross_collection_view_to_response(
             entity_name=node.entity_name,
             chunk_count=node.chunk_count,
             salience=node.salience,
+            entity_type=node.entity_type,
             pagerank_score=node.pagerank_score,
         )
         for node in view.nodes
@@ -337,6 +338,7 @@ def _view_to_response(view: CollectionGraphView) -> GraphInspectionResponse:
             entity_name=node.entity_name,
             chunk_count=node.chunk_count,
             salience=node.salience,
+            entity_type=node.entity_type,
             pagerank_score=node.pagerank_score,
         )
         for node in view.nodes

@@ -8,6 +8,16 @@
 
 ## Changelog
 
+### [next release] — E2j BE-1: `GraphNodeResponse` gains required `entity_type: str` field
+
+**Surface**: `GET /graph/{collection}` response (`GraphNodeResponse` items in `nodes[]`); `GET /graph/cross-collection` response (same `GraphNodeResponse` items).
+
+**Change**: `entity_type: str` is added as a required (non-nullable, no default) field to `GraphNodeResponse`. The value is the string form of the entity's `EntityType` enum (e.g. `"person"`, `"concept"`, `"system"`, `"event"`, `"code_symbol"`). Strict-schema validators that enumerate allowed fields on `GraphNodeResponse` must add `entity_type: str` to their type stubs; consumers doing strict Pydantic deserialization with `extra="forbid"` must update their models.
+
+**Migration**: tolerant JSON consumers (those that ignore unknown fields) are unaffected. Strict-schema validators must add `entity_type: str` to their `GraphNodeResponse` type stubs. Regenerate from `GET /openapi.json`.
+
+---
+
 ### [next release] — E2h: `graph_mode` extended to `"ppr"`; `SearchResponse` and `ExplainResponse` gain `ppr_entities_matched` (all additive)
 
 **Surface**: `POST /search` request and response; `POST /explain` request and response; MCP `search` and `explain` tools.

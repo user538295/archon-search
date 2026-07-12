@@ -673,6 +673,8 @@ class GraphNodeResponse(BaseModel):
     """Number of distinct chunks where this entity was mentioned."""
     salience: float
     """Salience score for this entity. In frequency mode: chunk ratio clamped to [0.0, 1.0]. In tfidf mode: TF×max(IDF, 0), ≥ 0.0 and unbounded above."""
+    entity_type: str
+    """Entity type value from EntityType enum (e.g. 'person', 'concept', 'system', 'event', 'code_symbol') — E2j BE-1."""
     pagerank_score: float | None = None
     """Persisted unweighted PageRank importance score over code-symbol edges — E2g BE-7.
     ``None`` when not yet computed by the background recompute."""

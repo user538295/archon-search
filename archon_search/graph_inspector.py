@@ -50,6 +50,8 @@ class GraphNodeInspection:
     """Number of distinct chunks where this entity was mentioned."""
     salience: float
     """In frequency mode, clamped to [0.0, 1.0]. In tfidf mode, floored at 0 (TF × max(IDF, 0)); unbounded above."""
+    entity_type: str
+    """Entity type string value from EntityType enum (e.g. 'person', 'concept', 'system', 'event', 'code_symbol')."""
     pagerank_score: float | None = None
     """Persisted unweighted PageRank importance score over code-symbol edges — E2g BE-7.
     ``None`` when not yet computed by the background recompute; sorts last in
@@ -255,6 +257,7 @@ def _apply_tfidf(
             entity_name=node.entity_name,
             chunk_count=node.chunk_count,
             salience=node.salience * idf,
+            entity_type=node.entity_type,
             pagerank_score=node.pagerank_score,
         ))
     if missing_count > 0:
@@ -365,6 +368,7 @@ async def inspect_collection(
                 entity_name=node.entity_name,
                 chunk_count=chunk_count,
                 salience=salience,
+                entity_type=node.entity_type.value,
                 pagerank_score=node.pagerank_score,
             )
         )
@@ -523,11 +527,13 @@ async def inspect_cross_collection(
                     if existing.pagerank_score is not None
                     else node.pagerank_score
                 )
+                # entity_type is invariant for a given entity_id (entity_id is hash(type:name)), so any collection's value is correct.
                 merged_nodes[node.id] = GraphNodeInspection(
                     entity_id=node.id,
                     entity_name=node.entity_name,
                     chunk_count=merged_chunk_count,
                     salience=merged_salience,
+                    entity_type=node.entity_type.value,
                     pagerank_score=merged_pagerank,
                 )
             else:
@@ -537,6 +543,7 @@ async def inspect_cross_collection(
                     entity_name=node.entity_name,
                     chunk_count=chunk_count,
                     salience=salience,
+                    entity_type=node.entity_type.value,
                     pagerank_score=node.pagerank_score,
                 )
 
@@ -641,6 +648,7 @@ def to_graphml(view: CollectionGraphView | CrossCollectionGraphView) -> bytes:
             entity_name=node.entity_name,
             chunk_count=node.chunk_count,
             salience=node.salience,
+            entity_type=node.entity_type,
         )
 
     # Add edges with attributes

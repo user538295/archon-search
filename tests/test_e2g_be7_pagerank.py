@@ -200,13 +200,13 @@ def test_pageRank_nullScoresSortLast() -> None:
     from archon_search.graph_inspector import GraphNodeInspection, _node_sort_key
 
     scored_low = GraphNodeInspection(
-        entity_id="low", entity_name="low", chunk_count=1, salience=0.1, pagerank_score=0.01
+        entity_id="low", entity_name="low", chunk_count=1, salience=0.1, entity_type="concept", pagerank_score=0.01
     )
     scored_high = GraphNodeInspection(
-        entity_id="high", entity_name="high", chunk_count=1, salience=0.1, pagerank_score=0.9
+        entity_id="high", entity_name="high", chunk_count=1, salience=0.1, entity_type="concept", pagerank_score=0.9
     )
     unscored = GraphNodeInspection(
-        entity_id="none", entity_name="none", chunk_count=1, salience=0.1, pagerank_score=None
+        entity_id="none", entity_name="none", chunk_count=1, salience=0.1, entity_type="concept", pagerank_score=None
     )
 
     ordered = sorted(

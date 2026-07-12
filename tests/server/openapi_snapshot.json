@@ -1516,6 +1516,10 @@
             "title": "Entity Name",
             "type": "string"
           },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          },
           "pagerank_score": {
             "anyOf": [
               {
@@ -1536,7 +1540,8 @@
           "entity_id",
           "entity_name",
           "chunk_count",
-          "salience"
+          "salience",
+          "entity_type"
         ],
         "title": "GraphNodeResponse",
         "type": "object"
