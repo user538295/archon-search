@@ -260,14 +260,14 @@ The route handler substitutes four placeholder tokens into the HTML file before 
 
 ## Documentation update
 
-- [ ] `Documentation/Backlog/e2j-graph-viewer-brief.md` — no changes needed (source brief)
-- [ ] `Documentation/Backlog/e2j-graph-viewer-team-plan.md` — this file
-- [ ] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `GET /graph/{collection}/view` entry; update `GET /graph/{collection}` node-field table to include `entity_type`
-- [ ] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — add `graph_viewer.html` as a Presentation component
-- [ ] `Documentation/Architecture/100_system_architecture_overview.md` — one-line mention of graph viewer endpoint
-- [ ] `CLAUDE.md` — update graph subsystem bullet to mention the `/view` endpoint
-- [ ] `archon-search.toml.example` — no changes (no new config keys)
-- [ ] `BREAKING.md` — no entry needed (`entity_type` is additive; viewer is a new endpoint)
+- [x] `Documentation/Backlog/e2j-graph-viewer-brief.md` — no changes needed (source brief)
+- [x] `Documentation/Backlog/e2j-graph-viewer-team-plan.md` — this file
+- [x] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `GET /graph/{collection}/view` entry; update `GET /graph/{collection}` node-field table to include `entity_type`
+- [x] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — add `graph_viewer.html` as a Presentation component
+- [x] `Documentation/Architecture/100_system_architecture_overview.md` — one-line mention of graph viewer endpoint
+- [x] `CLAUDE.md` — update graph subsystem bullet to mention the `/view` endpoint
+- [x] `archon-search.toml.example` — no changes (no new config keys)
+- [x] `BREAKING.md` — no entry needed (`entity_type` is additive; viewer is a new endpoint)
 
 ---
 
@@ -397,7 +397,7 @@ flowchart LR
         - #manual_test — Fetch error state (no scenario ID — bonus test) — load the page with a valid token, then revoke the token on the server; trigger a graph refresh (or reload) → page shows an error indicator (or graceful empty state) rather than a silent blank canvas
 
 ### Phase 2 · Close-out
-- [ ] **T-3** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-3** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs BE-1, BE-2, FE-1, T-1, T-2 · completes (acceptance gate)
     - Tests
