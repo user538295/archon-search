@@ -23,8 +23,9 @@ from archon_search.server.schemas_openai import (
     ModelObject,
     OpenAIError,
     OpenAIErrorResponse,
-    _ERROR_TYPES,
 )
+
+_ERROR_TYPES = frozenset({"invalid_request_error", "authentication_error", "server_error"})
 
 
 # ---------------------------------------------------------------------------

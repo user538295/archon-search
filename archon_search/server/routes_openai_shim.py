@@ -18,22 +18,31 @@ Design:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from archon_search._types import SearchResult
 
 from fastapi import APIRouter
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.responses import Response, StreamingResponse
 
 from archon_search.pipeline import CollectionNotFoundError, FanoutTimeoutError, MetadataLookupError
 from archon_search.server.schemas_openai import (
     ChatCompletionChoice,
+    ChatCompletionChunk,
+    ChatCompletionChunkChoice,
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatMessage,
+    ChunkDelta,
     ModelList,
     ModelObject,
     OpenAIError,
@@ -62,7 +71,56 @@ def _openai_error(status: int, message: str, error_type: str) -> JSONResponse:
     return JSONResponse(status_code=status, content=body.model_dump())
 
 
-def _format_content(results, *, inject_citations: bool) -> str:
+def _format_chunk(r: SearchResult, *, inject_citations: bool) -> str:
+    """Return formatted text for a single SearchResult chunk."""
+    if inject_citations:
+        return f"\n\nContext:\n{r.text}\n[Source: {r.source_path}]"
+    return r.text
+
+
+async def _stream_completion(
+    results: list[SearchResult],
+    *,
+    completion_id: str,
+    model: str,
+    inject_citations: bool,
+) -> AsyncGenerator[str, None]:
+    """Async generator yielding SSE frames for a streaming chat completion.
+
+    Yields:
+    - One ``data: {...}`` frame per result chunk (role='assistant' on first frame only).
+    - One stop frame (delta={}, finish_reason='stop').
+    - ``data: [DONE]\\n\\n``.
+
+    Zero-result case: one assistant-role frame with empty content + stop frame + [DONE].
+    """
+    created = int(time.time())  # fixed for the lifetime of this stream
+
+    def _chunk_frame(delta: ChunkDelta, finish_reason: str | None) -> str:
+        chunk = ChatCompletionChunk(
+            id=completion_id,
+            created=created,
+            model=model,
+            choices=[ChatCompletionChunkChoice(delta=delta, finish_reason=finish_reason)],
+        )
+        data = chunk.model_dump()
+        # Serialize delta with exclude_none so stop-frame is {} and frames 2..N omit role.
+        data["choices"][0]["delta"] = delta.model_dump(exclude_none=True)
+        return f"data: {json.dumps(data)}\n\n"
+
+    if not results:
+        yield _chunk_frame(ChunkDelta(role="assistant", content=""), None)
+    else:
+        for i, r in enumerate(results):
+            text = _format_chunk(r, inject_citations=inject_citations)
+            role = "assistant" if i == 0 else None
+            yield _chunk_frame(ChunkDelta(role=role, content=text), None)
+
+    yield _chunk_frame(ChunkDelta(), "stop")
+    yield "data: [DONE]\n\n"
+
+
+def _format_content(results: list[SearchResult], *, inject_citations: bool) -> str:
     """Combine SearchResult items into assistant content string.
 
     When ``inject_citations`` is True each chunk is wrapped with a citation
@@ -73,10 +131,7 @@ def _format_content(results, *, inject_citations: bool) -> str:
         return ""
     parts: list[str] = []
     for r in results:
-        if inject_citations:
-            parts.append(f"\n\nContext:\n{r.text}\n[Source: {r.source_path}]")
-        else:
-            parts.append(r.text)
+        parts.append(_format_chunk(r, inject_citations=inject_citations))
     return "".join(parts)
 
 
@@ -85,9 +140,9 @@ def _format_content(results, *, inject_citations: bool) -> str:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/chat/completions")
-async def chat_completions(request: Request, body: ChatCompletionRequest) -> JSONResponse:
-    """Non-streaming retrieval path for POST /v1/chat/completions.
+@router.post("/chat/completions", response_model=ChatCompletionResponse)
+async def chat_completions(request: Request, body: ChatCompletionRequest) -> Response:
+    """POST /v1/chat/completions — supports both streaming and non-streaming retrieval.
 
     ``model`` routing:
     - ``archon-search`` — fan-out across all namespace collections (capped at
@@ -97,6 +152,10 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> JSO
 
     The last ``role="user"`` message is extracted as the search query.
     A 422 is returned when no user message is present.
+
+    When ``stream=True``: retrieval is materialized in full first (so errors return
+    JSON, not a broken SSE stream), then a ``StreamingResponse`` is returned that
+    yields one SSE ``data:`` frame per chunk.
     """
     pipeline = request.app.state.pipeline
     config = request.app.state.config
@@ -127,6 +186,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> JSO
     collection = parts[1] if len(parts) == 2 else None
 
     inject_citations: bool = config.openai_shim.inject_citations
+    content: str = ""
 
     # --- Resolve embedder (single-collection path) ---
     async def _resolve_embedder(meta):
@@ -175,7 +235,8 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> JSO
                 excl.reason,
             )
 
-        content = _format_content(result.results, inject_citations=inject_citations)
+        if not body.stream:
+            content = _format_content(result.results, inject_citations=inject_citations)
 
     # -------------------------------------------------------------------------
     # Direct single-collection path — model = "archon-search/{col}"
@@ -208,7 +269,21 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> JSO
             logger.error("chat_completions: search failed for collection %r: %s", collection, exc, exc_info=True)
             return _openai_error(503, "Service temporarily unavailable.", "server_error")
 
-        content = _format_content(result.results, inject_citations=inject_citations)
+        if not body.stream:
+            content = _format_content(result.results, inject_citations=inject_citations)
+
+    # Streaming path — results are already materialized above so errors (404/504)
+    # are returned as plain JSON before StreamingResponse is opened.
+    if body.stream:
+        return StreamingResponse(
+            _stream_completion(
+                result.results,
+                completion_id=f"chatcmpl-{uuid4()}",
+                model=model,
+                inject_citations=inject_citations,
+            ),
+            media_type="text/event-stream",
+        )
 
     # --- Build response ---
     response_obj = ChatCompletionResponse(

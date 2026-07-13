@@ -12,14 +12,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-# Known error type values (from scenarios S9–S19; the K1 contract types this as
-# bare string for forward-compat — Literal is intentionally NOT used here so
-# future error types added by OpenAI do not break handler construction).
-_ERROR_TYPES = frozenset(
-    {"invalid_request_error", "authentication_error", "server_error"}
-)
-
-
 class ModelObject(BaseModel):
     """One entry in the GET /v1/models response — mirrors OpenAI's Model object.
 
@@ -111,3 +103,37 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: list[ChatCompletionChoice]
     usage: ChatCompletionUsage = Field(default_factory=ChatCompletionUsage)
+
+
+# ---------------------------------------------------------------------------
+# Streaming chunk schemas (BE-7)
+# ---------------------------------------------------------------------------
+
+
+class ChunkDelta(BaseModel):
+    """Delta content for one SSE streaming frame.
+
+    Fields are optional so the stop frame serializes as ``{}`` via
+    ``model_dump(exclude_none=True)``, and frames 2..N omit ``role``.
+    """
+
+    role: str | None = None
+    content: str | None = None
+
+
+class ChatCompletionChunkChoice(BaseModel):
+    """One choice inside a ``ChatCompletionChunk``."""
+
+    index: int = 0
+    delta: ChunkDelta
+    finish_reason: str | None  # null on content frames, "stop" on stop frame
+
+
+class ChatCompletionChunk(BaseModel):
+    """One SSE data frame in a streaming ``POST /v1/chat/completions`` response."""
+
+    id: str  # format: "chatcmpl-{uuid4}", same across all frames of one completion
+    object: Literal["chat.completion.chunk"] = "chat.completion.chunk"
+    created: int  # Unix timestamp, fixed for the lifetime of the stream
+    model: str
+    choices: list[ChatCompletionChunkChoice]
