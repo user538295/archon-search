@@ -6,6 +6,7 @@ Exercises the full HTTP layer for:
 - HyDE dependency absent returns 4xx with clear message
 - RAG Fusion dependency absent returns 4xx with clear message (single-collection path)
 - RAG Fusion dependency absent returns 4xx with clear message (multi-collection path)
+- BE-1 refactor: HyDE behaviour unchanged after AnthropicQueryExpansionProvider extraction
 
 Run with:
     uv run pytest tests/integration/test_http_hyde_rag_fusion.py -v
@@ -170,7 +171,7 @@ def test_hyde_dependency_absent_returns_clear_error(
 
         # Patch via monkeypatch.setattr so any rename of the attribute causes a clear error.
         generator = client.app.state.hyde_generator
-        monkeypatch.setattr(generator, "_anthropic_available", False)
+        monkeypatch.setattr(generator, "_provider_available", False)
 
         resp = client.post(
             "/search",
@@ -220,7 +221,7 @@ def test_rag_fusion_dependency_absent_returns_error(
 
         # Patch via monkeypatch.setattr so any rename of the attribute causes a clear error.
         generator = client.app.state.rag_fusion_generator
-        monkeypatch.setattr(generator, "_anthropic_available", False)
+        monkeypatch.setattr(generator, "_provider_available", False)
 
         resp = client.post(
             "/search",
@@ -275,7 +276,7 @@ def test_rag_fusion_dependency_absent_returns_error_multi_collection(
 
         # Patch via monkeypatch.setattr so any rename of the attribute causes a clear error.
         generator = client.app.state.rag_fusion_generator
-        monkeypatch.setattr(generator, "_anthropic_available", False)
+        monkeypatch.setattr(generator, "_provider_available", False)
 
         resp = client.post(
             "/search",
@@ -295,4 +296,130 @@ def test_rag_fusion_dependency_absent_returns_error_multi_collection(
         # The error message must reference the missing dependency.
         assert "rag_fusion" in detail.lower() or "archon-search[rag" in detail, (
             f"expected error message referencing RAG Fusion dependency, got: {detail!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — BE-1: HyDE behaviour unchanged after AnthropicQueryExpansionProvider extraction
+# ---------------------------------------------------------------------------
+
+def test_hyde_anthropic_behaviour_unchanged_after_refactor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BE-1 regression: HyDE returns hyde_applied=True after adapter extraction.
+
+    After the BE-1 refactor, HyDEGenerator delegates text generation to
+    AnthropicQueryExpansionProvider.  This test verifies that:
+    1. The provider's generate_hypothetical_doc is called and returns text.
+    2. HyDEGenerator embeds the text and returns a vector.
+    3. resolve_hyde_vector returns hyde_applied=True.
+    4. The HTTP response carries hyde_applied=True.
+
+    The provider's _client is replaced with a mock AFTER app startup (inside the
+    with-block) so the session fixture's RuntimeError guard for AsyncAnthropic()
+    does not interfere — we replace the already-constructed client object.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    doc = tmp_path / "hyde_refactor_test.md"
+    doc.write_text(
+        "# Hypothetical Document Embeddings\n\n"
+        "HyDE generates a passage that would answer the query, then embeds it.\n" * 6
+    )
+
+    with make_real_app(tmp_path, monkeypatch, hyde_enabled=True) as (client, cfg, api_key):
+        assert cfg.hyde.enabled, "expected hyde.enabled=True for this test"
+
+        col = "hyde-refactor"
+        ingest_file_via_path(client, col, str(doc), api_key=api_key)
+
+        # Inject a mocked client into the already-constructed provider so
+        # generate_hypothetical_doc returns a fixed hypothesis text.
+        generator = client.app.state.hyde_generator
+        provider = generator._provider
+
+        mock_content = SimpleNamespace(text="A hypothetical passage about HyDE retrieval.")
+        mock_response = SimpleNamespace(content=[mock_content])
+        mock_messages = MagicMock()
+        mock_messages.create = AsyncMock(return_value=mock_response)
+        mock_client = MagicMock()
+        mock_client.messages = mock_messages
+
+        # Replace the provider's _client with our mock.
+        monkeypatch.setattr(provider, "_client", mock_client)
+        monkeypatch.setattr(provider, "_anthropic_available", True)
+        # Set API key so the key guard in the provider passes.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-integration-key")
+
+        resp = client.post(
+            "/search",
+            json={"collection": col, "query": "what is HyDE", "hyde": True},
+            headers=_auth(api_key),
+        )
+        assert resp.status_code == 200, (
+            f"expected 200 from HyDE search, got {resp.status_code}: {resp.text}"
+        )
+        data = resp.json()
+        assert data["hyde_applied"] is True, (
+            f"expected hyde_applied=True after BE-1 refactor, got: {data['hyde_applied']}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — BE-1: RAG Fusion behaviour unchanged after AnthropicQueryExpansionProvider extraction
+# ---------------------------------------------------------------------------
+
+def test_rag_fusion_anthropic_behaviour_unchanged_after_refactor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BE-1 regression: RAG Fusion returns rag_fusion_applied=True after adapter extraction.
+
+    After the BE-1 refactor, RAGFusionGenerator delegates text generation to
+    AnthropicQueryExpansionProvider.  This test verifies that:
+    1. The provider's decompose_query is called and returns variants.
+    2. RAGFusionGenerator uses the variants for multi-query search.
+    3. The HTTP response carries rag_fusion_applied=True.
+
+    The provider's _client is replaced with a mock AFTER app startup (inside the
+    with-block) so the session fixture's RuntimeError guard does not interfere.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    doc = tmp_path / "rag_fusion_refactor_test.md"
+    doc.write_text(
+        "# RAG Fusion Test\n\nRAG Fusion decomposes queries into variants.\n" * 6
+    )
+
+    with make_real_app(tmp_path, monkeypatch, rag_fusion_enabled=True) as (client, cfg, api_key):
+        col = "rag-fusion-refactor"
+        ingest_file_via_path(client, col, str(doc), api_key=api_key)
+
+        generator = client.app.state.rag_fusion_generator
+        provider = generator._provider
+
+        # Return 2 variants from the provider
+        mock_content = SimpleNamespace(text="variant one query\nvariant two query")
+        mock_response = SimpleNamespace(content=[mock_content])
+        mock_messages = MagicMock()
+        mock_messages.create = AsyncMock(return_value=mock_response)
+        mock_client = MagicMock()
+        mock_client.messages = mock_messages
+
+        monkeypatch.setattr(provider, "_client", mock_client)
+        monkeypatch.setattr(provider, "_anthropic_available", True)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-integration-key")
+
+        resp = client.post(
+            "/search",
+            json={"collection": col, "query": "rag fusion test", "rag_fusion": True},
+            headers=_auth(api_key),
+        )
+        assert resp.status_code == 200, (
+            f"expected 200 from RAG Fusion search, got {resp.status_code}: {resp.text}"
+        )
+        data = resp.json()
+        assert data["rag_fusion_applied"] is True, (
+            f"expected rag_fusion_applied=True after BE-1 refactor, got: {data['rag_fusion_applied']}"
         )

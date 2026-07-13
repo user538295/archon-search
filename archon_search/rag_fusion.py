@@ -1,14 +1,17 @@
 """RAG Fusion (Multi-Query Decomposition) query expansion for archon-search.
 
-Decomposes a user query into N semantic variants via an LLM, enabling
+Decomposes a user query into N semantic variants via an LLM provider, enabling
 downstream parallel search and second-pass RRF fusion.
 
-Module has no top-level ``import anthropic`` — all anthropic imports happen
-lazily inside ``__init__`` under a try/except guard to keep the package optional.
+The ``anthropic`` package is an optional dependency.  The default provider is
+``AnthropicQueryExpansionProvider`` (requires ``archon-search[rag_fusion]``).
+G10 adds ``OllamaQueryExpansionProvider`` and ``OpenAIQueryExpansionProvider``
+as alternatives (BE-3, BE-6).
 
-Privacy note: ``generate_variants`` sends the raw query text to Anthropic's API.
-Operators who cannot allow this must keep ``[rag_fusion] enabled = false``.
-No raw query text is ever written to logs — only fingerprints.
+Privacy note: ``generate_variants`` sends the raw query text to the configured
+LLM provider.  Operators who cannot allow this must keep
+``[rag_fusion] enabled = false``.  No raw query text is ever written to logs —
+only fingerprints.
 """
 from __future__ import annotations
 
@@ -17,6 +20,10 @@ import logging
 import os
 import re
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from archon_search.query_expansion_protocol import QueryExpansionProvider
 
 from archon_search._privacy import _query_fingerprint
 from archon_search.config import RAGFusionConfig
@@ -29,16 +36,6 @@ _CONTROL_CHARS_RE = re.compile(
     r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]"
 )
 
-_PROMPT_TEMPLATE = """\
-You are a search query decomposer. Given a user query, generate {num_queries} alternative \
-search queries that capture different facets of the same information need.
-Rules: each query on its own line, plain text, under 500 characters.
-Output exactly {num_queries} queries, one per line.
-
----
-{query}
----"""
-
 
 class RAGFusionDependencyError(RuntimeError):
     """Raised when the ``anthropic`` package is not installed.
@@ -50,26 +47,37 @@ class RAGFusionDependencyError(RuntimeError):
 class RAGFusionGenerator:
     """Generates semantic query variants for RAG Fusion.
 
-    The ``anthropic`` package is an optional dependency; the generator
-    initialises without raising even when it is absent.  Callers that
-    invoke ``generate_variants`` without the package receive a
+    Accepts any ``QueryExpansionProvider`` for text generation.  The default
+    provider is ``AnthropicQueryExpansionProvider`` (lazy-imported).  Callers
+    that invoke ``generate_variants`` without the provider package receive a
     ``RAGFusionDependencyError``.
     """
 
-    def __init__(self, config: RAGFusionConfig) -> None:
+    def __init__(
+        self,
+        config: RAGFusionConfig,
+        provider: "QueryExpansionProvider | None" = None,
+    ) -> None:
         self._config = config
-        self._anthropic_available: bool = False
-        self._client: object | None = None
+        self._provider_available: bool = False
 
-        try:
-            import anthropic  # noqa: PLC0415
+        if provider is not None:
+            self._provider = provider
+            self._provider_available = True
+        else:
+            # Default: construct AnthropicQueryExpansionProvider (lazy)
+            try:
+                from archon_search.providers.anthropic_provider import (  # noqa: PLC0415
+                    AnthropicQueryExpansionProvider,
+                )
 
-            self._anthropic_available = True
-            self._client = anthropic.AsyncAnthropic()
-            # Store the APIError class for except clauses in generate_variants()
-            self._APIError: type[Exception] = anthropic.APIError
-        except ImportError:
-            self._APIError = Exception  # fallback — never reached in generate_variants()
+                self._provider: "QueryExpansionProvider" = AnthropicQueryExpansionProvider(
+                    model=config.model
+                )
+                self._provider_available = True
+            except ImportError:
+                self._provider = None  # type: ignore[assignment]
+                self._provider_available = False
 
         # Token bucket state for rate limiting (per-process, in-memory)
         self._lock = asyncio.Lock()
@@ -115,7 +123,7 @@ class RAGFusionGenerator:
         Raises:
             RAGFusionDependencyError: if the ``anthropic`` package is not installed.
         """
-        if not self._anthropic_available:
+        if not self._provider_available:
             raise RAGFusionDependencyError(
                 "Install archon-search[rag_fusion] to use RAG Fusion "
                 "(pip install 'archon-search[rag_fusion]')"
@@ -142,68 +150,22 @@ class RAGFusionGenerator:
 
             self._rpm_tokens -= 1
 
-        # API key check (one-time warning)
-        if not self.is_key_available():
-            if not self._warned_no_key:
-                _logger.warning(
-                    "ANTHROPIC_API_KEY is not set; RAG Fusion will not run (fp=%s)",
-                    fp,
-                )
-                self._warned_no_key = True
-            return []
-
         truncated_query = query[:2000]
-        prompt = _PROMPT_TEMPLATE.format(
+
+        # Delegate text generation to the provider; validation stays here
+        raw_text = await self._provider.decompose_query(
+            truncated_query,
             num_queries=self._config.num_queries,
-            query=truncated_query,
+            max_tokens=150 * self._config.num_queries,
+            timeout_seconds=self._config.timeout_seconds,
         )
 
-        try:
-            response = await asyncio.wait_for(
-                self._client.messages.create(  # type: ignore[union-attr]
-                    model=self._config.model,
-                    max_tokens=150 * self._config.num_queries,
-                    messages=[{"role": "user", "content": prompt}],
-                ),
-                timeout=self._config.timeout_seconds,
-            )
-        except asyncio.TimeoutError:
-            _logger.warning(
-                "RAG Fusion: LLM call timed out after %.1fs (fp=%s)",
-                self._config.timeout_seconds,
-                fp,
-            )
-            raise
-        except Exception as exc:  # noqa: BLE001
-            if isinstance(exc, self._APIError):
-                _logger.warning(
-                    "RAG Fusion: Anthropic API error (fp=%s): %s",
-                    fp,
-                    type(exc).__name__,
-                )
-            else:
-                _logger.warning(
-                    "RAG Fusion: unexpected error during variant generation (fp=%s): %s",
-                    fp,
-                    type(exc).__name__,
-                )
-            raise
-
-        if not response.content:
-            _logger.warning("RAG Fusion: empty response content (fp=%s)", fp)
+        if not raw_text:
+            # Provider returned [] — either no key, timeout, or API error
+            # The provider already logged a fingerprinted warning
             return []
 
-        raw_text = response.content[0].text
-
-        # Parse: one variant per line, validate each, truncate to num_queries
-        lines = raw_text.split("\n")
-        variants: list[str] = []
-        for line in lines:
-            validated = self._validate_variant(line)
-            if validated is not None:
-                variants.append(validated)
-            if len(variants) >= self._config.num_queries:
-                break
+        variants = raw_text[: self._config.num_queries]
 
         if len(variants) < self._config.num_queries:
             _logger.warning(

@@ -84,7 +84,15 @@ def test_fingerprint_matches_sha256() -> None:
 
 def test_generator_init_without_anthropic_package() -> None:
     """If anthropic is not installed, HyDEGenerator initialises without raising."""
-    with patch.dict("sys.modules", {"anthropic": None}):  # type: ignore[dict-item]
+    # G10 BE-1: must also patch the provider module so the try/except ImportError
+    # in HyDEGenerator.__init__ fires (the provider is lazy-imported there).
+    with patch.dict(  # type: ignore[dict-item]
+        "sys.modules",
+        {
+            "anthropic": None,
+            "archon_search.providers.anthropic_provider": None,
+        },
+    ):
         # Re-import to pick up the patched sys.modules
         import importlib
 
@@ -92,13 +100,13 @@ def test_generator_init_without_anthropic_package() -> None:
 
         importlib.reload(hyde_mod)
         gen = hyde_mod.HyDEGenerator(_make_embedder(), _make_config())
-        assert gen._anthropic_available is False
+        assert gen._provider_available is False
         # Reset module to normal
         importlib.reload(hyde_mod)
 
 
 def test_generator_init_with_anthropic_package(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If anthropic is available, _anthropic_available is True."""
+    """If anthropic is available, _provider_available is True."""
     mock_anthropic = MagicMock()
     mock_anthropic.AsyncAnthropic = MagicMock(return_value=MagicMock())
     with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
@@ -108,7 +116,7 @@ def test_generator_init_with_anthropic_package(monkeypatch: pytest.MonkeyPatch) 
 
         importlib.reload(hyde_mod)
         gen = hyde_mod.HyDEGenerator(_make_embedder(), _make_config())
-        assert gen._anthropic_available is True
+        assert gen._provider_available is True
         importlib.reload(hyde_mod)
 
 
@@ -120,7 +128,15 @@ def test_generator_init_with_anthropic_package(monkeypatch: pytest.MonkeyPatch) 
 @pytest.mark.asyncio
 async def test_generate_package_not_installed() -> None:
     """generate() raises RuntimeError when anthropic is not installed."""
-    with patch.dict("sys.modules", {"anthropic": None}):  # type: ignore[dict-item]
+    # G10 BE-1: must also patch the provider module so the try/except ImportError
+    # in HyDEGenerator.__init__ fires (the provider is lazy-imported there).
+    with patch.dict(  # type: ignore[dict-item]
+        "sys.modules",
+        {
+            "anthropic": None,
+            "archon_search.providers.anthropic_provider": None,
+        },
+    ):
         import importlib
 
         import archon_search.hyde as hyde_mod

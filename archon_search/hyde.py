@@ -1,10 +1,12 @@
 """HyDE (Hypothetical Document Embeddings) query expansion for archon-search.
 
-Generates a short hypothetical answer passage via Claude and uses its embedding
-as the ANN lookup vector in place of the original query embedding.
+Generates a short hypothetical answer passage via an LLM provider and uses its
+embedding as the ANN lookup vector in place of the original query embedding.
 
-Module has no top-level ``import anthropic`` — all anthropic imports happen
-lazily inside ``__init__`` under a try/except guard to keep the package optional.
+The ``anthropic`` package is an optional dependency.  The default provider is
+``AnthropicQueryExpansionProvider`` (requires ``archon-search[hyde]``).  G10
+adds ``OllamaQueryExpansionProvider`` and ``OpenAIQueryExpansionProvider`` as
+alternatives (BE-3, BE-6).
 """
 from __future__ import annotations
 
@@ -16,44 +18,52 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from archon_search.embedder import Embedder
+    from archon_search.query_expansion_protocol import QueryExpansionProvider
 
 from archon_search._privacy import _query_fingerprint
 from archon_search.config import HyDEConfig
 
 _logger = logging.getLogger(__name__)
 
-_PROMPT_TEMPLATE = """\
-Write a short passage that would directly answer the following question.
-Output only the passage — no preamble, no explanation.
-
----
-{query}
----"""
-
 
 class HyDEGenerator:
     """Generates hypothetical document embeddings for HyDE query expansion.
 
-    The ``anthropic`` package is an optional dependency; the generator
-    initialises without raising even when it is absent.  Callers that
-    invoke ``generate()`` without the package receive a ``RuntimeError``.
+    Accepts any ``QueryExpansionProvider`` for text generation; the embedding
+    step stays inside this generator.  The default provider is
+    ``AnthropicQueryExpansionProvider`` (lazy-imported from
+    ``archon_search.providers.anthropic_provider``).
+
+    Callers that invoke ``generate()`` with a missing provider package receive
+    a ``RuntimeError``.
     """
 
-    def __init__(self, embedder: "Embedder", config: HyDEConfig) -> None:
+    def __init__(
+        self,
+        embedder: "Embedder",
+        config: HyDEConfig,
+        provider: "QueryExpansionProvider | None" = None,
+    ) -> None:
         self._hyde_embedder = embedder
         self._config = config
-        self._anthropic_available: bool = False
-        self._client: object | None = None
 
-        try:
-            import anthropic  # noqa: PLC0415
+        if provider is not None:
+            self._provider = provider
+            self._provider_available = True
+        else:
+            # Default: construct AnthropicQueryExpansionProvider (lazy)
+            try:
+                from archon_search.providers.anthropic_provider import (  # noqa: PLC0415
+                    AnthropicQueryExpansionProvider,
+                )
 
-            self._anthropic_available = True
-            self._client = anthropic.AsyncAnthropic()
-            # Store the APIError class for except clauses in generate()
-            self._APIError: type[Exception] = anthropic.APIError
-        except ImportError:
-            self._APIError = Exception  # fallback — never reached in generate()
+                self._provider: "QueryExpansionProvider" = AnthropicQueryExpansionProvider(
+                    model=config.model
+                )
+                self._provider_available: bool = True
+            except ImportError:
+                self._provider = None  # type: ignore[assignment]
+                self._provider_available = False
 
         # Token bucket state for rate limiting (per-process, in-memory)
         self._lock = asyncio.Lock()
@@ -61,7 +71,6 @@ class HyDEGenerator:
         self._rpm_refill_at: float = time.monotonic() + 60.0
 
         # One-time warning flags
-        self._warned_no_key: bool = False
         self._rate_limit_warned_at: float = 0.0
 
     def is_key_available(self) -> bool:
@@ -81,7 +90,7 @@ class HyDEGenerator:
         Raises:
             RuntimeError: if the ``anthropic`` package is not installed.
         """
-        if not self._anthropic_available:
+        if not self._provider_available:
             raise RuntimeError(
                 "Install archon-search[hyde] to use HyDE (pip install 'archon-search[hyde]')"
             )
@@ -105,64 +114,16 @@ class HyDEGenerator:
 
             self._rpm_tokens -= 1
 
-        # API key check (one-time warning)
-        if not self.is_key_available():
-            if not self._warned_no_key:
-                _logger.warning(
-                    "ANTHROPIC_API_KEY is not set; HyDE will not run (fp=%s)",
-                    _query_fingerprint(query),
-                )
-                self._warned_no_key = True
-            return None
-
         truncated_query = query[:2000]
-        prompt = _PROMPT_TEMPLATE.format(query=truncated_query)
 
-        try:
-            response = await asyncio.wait_for(
-                self._client.messages.create(  # type: ignore[union-attr]
-                    model=self._config.model,
-                    max_tokens=200,
-                    messages=[{"role": "user", "content": prompt}],
-                ),
-                timeout=self._config.timeout_seconds,
-            )
-        except asyncio.TimeoutError:
-            _logger.warning(
-                "HyDE: LLM call timed out after %.1fs (fp=%s)",
-                self._config.timeout_seconds,
-                _query_fingerprint(query),
-            )
-            return None
-        except Exception as exc:  # noqa: BLE001
-            # Catch anthropic.APIError (and anything else) without importing the class
-            # at module level.  We check against self._APIError when it is available.
-            if isinstance(exc, self._APIError):
-                _logger.warning(
-                    "HyDE: Anthropic API error (fp=%s): %s",
-                    _query_fingerprint(query),
-                    type(exc).__name__,
-                )
-            else:
-                _logger.warning(
-                    "HyDE: unexpected error during generation (fp=%s): %s",
-                    _query_fingerprint(query),
-                    type(exc).__name__,
-                )
-            return None
+        # Delegate text generation to the provider; embedding stays here
+        hypothesis_text = await self._provider.generate_hypothetical_doc(
+            truncated_query,
+            max_tokens=200,
+            timeout_seconds=self._config.timeout_seconds,
+        )
 
-        # Extract hypothesis text
-        if not response.content:
-            _logger.warning(
-                "HyDE: empty response content (fp=%s)", _query_fingerprint(query)
-            )
-            return None
-
-        hypothesis_text = response.content[0].text.strip()
-        if not hypothesis_text:
-            _logger.warning(
-                "HyDE: empty hypothesis text after strip (fp=%s)", _query_fingerprint(query)
-            )
+        if hypothesis_text is None:
             return None
 
         # Embed hypothesis and return vector

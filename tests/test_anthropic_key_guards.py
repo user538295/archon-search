@@ -53,8 +53,13 @@ _GUARD_PATTERN = re.compile(
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GUARD_FILES = [
     REPO_ROOT / "archon_search" / "description_generator.py",
-    REPO_ROOT / "archon_search" / "hyde.py",
-    REPO_ROOT / "archon_search" / "rag_fusion.py",
+    # G10 BE-1: Anthropic API-key guard moved to the provider adapter (Root-3).
+    # hyde.py and rag_fusion.py no longer contain the runtime if-guard in their
+    # generate() / generate_variants() methods — it lives in
+    # AnthropicQueryExpansionProvider.is_key_available() + generate_hypothetical_doc()
+    # / decompose_query() instead. hyde.py retains is_key_available() for the
+    # status endpoint but has no early-exit if-guard in generate().
+    REPO_ROOT / "archon_search" / "providers" / "anthropic_provider.py",
 ]
 
 # ---------------------------------------------------------------------------

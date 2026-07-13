@@ -335,7 +335,7 @@ flowchart LR
 
 ### Phase 1 · Operator can use Ollama for query expansion *(walking skeleton: thinnest end-to-end path; establishes protocol + data model foundation)*
 
-- [ ] **BE-1** — Define `QueryExpansionProvider` protocol; extract `AnthropicQueryExpansionProvider` from `HyDEGenerator`/`RAGFusionGenerator` (no behaviour change) #backend-role
+- [x] **BE-1** — Define `QueryExpansionProvider` protocol; extract `AnthropicQueryExpansionProvider` from `HyDEGenerator`/`RAGFusionGenerator` (no behaviour change) #backend-role
     - Entities + Use Cases · 3.0h
     - needs K1 · completes C1, S1
     - Note: verify the existing embedding step stays in `HyDEGenerator`, not in `AnthropicQueryExpansionProvider` — the adapter returns raw text only.

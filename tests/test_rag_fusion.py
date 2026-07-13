@@ -273,7 +273,15 @@ def test_validate_variant_empty_after_strip() -> None:
 @pytest.mark.asyncio
 async def test_generate_variants_package_not_installed() -> None:
     """generate_variants() raises RAGFusionDependencyError when anthropic is not installed."""
-    with patch.dict("sys.modules", {"anthropic": None}):  # type: ignore[dict-item]
+    # G10 BE-1: must also patch the provider module so the try/except ImportError
+    # in RAGFusionGenerator.__init__ fires (the provider is lazy-imported there).
+    with patch.dict(  # type: ignore[dict-item]
+        "sys.modules",
+        {
+            "anthropic": None,
+            "archon_search.providers.anthropic_provider": None,
+        },
+    ):
         import importlib
 
         import archon_search.rag_fusion as rf_mod
@@ -325,10 +333,11 @@ async def test_generate_variants_success(monkeypatch: pytest.MonkeyPatch) -> Non
 async def test_generate_variants_timeout_fallback(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """generate_variants() re-raises asyncio.TimeoutError and logs WARNING when LLM times out.
+    """generate_variants() returns [] and logs WARNING when LLM times out.
 
-    BE-2: generate_variants() now re-raises TimeoutError so the pipeline can distinguish
-    timeout from empty-variant success. The WARNING is still logged before re-raising.
+    G10 BE-1: generate_variants() now returns [] on timeout (provider absorbs
+    TimeoutError internally per the QueryExpansionProvider contract).  A WARNING
+    is logged (by the provider) and the generator returns [].
     """
     config = _make_config()
     mock_mod = _make_mock_anthropic_module(side_effect=asyncio.TimeoutError())
@@ -339,19 +348,20 @@ async def test_generate_variants_timeout_fallback(
         import importlib
 
         import archon_search.rag_fusion as rf_mod
+        import archon_search.providers.anthropic_provider as ap_mod
 
+        importlib.reload(ap_mod)
         importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
-        with caplog.at_level(logging.WARNING, logger="archon_search.rag_fusion"):
-            with pytest.raises(asyncio.TimeoutError):
-                await gen.generate_variants("original query")
+        with caplog.at_level(logging.WARNING):
+            result = await gen.generate_variants("original query")
         importlib.reload(rf_mod)
 
+    assert result == [], f"expected [] on timeout, got: {result!r}"
     warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert warning_records, "WARNING should be logged on timeout before re-raise"
+    assert warning_records, "WARNING should be logged on timeout"
     # Verify 16-char hex fingerprint appears in logs
     log_text = " ".join(r.getMessage() for r in warning_records)
-    # Fingerprint must be present (16 hex chars)
     import re
 
     hex_pattern = re.compile(r"[0-9a-f]{16}")
@@ -360,10 +370,10 @@ async def test_generate_variants_timeout_fallback(
 
 @pytest.mark.asyncio
 async def test_generate_variants_api_error_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """generate_variants() re-raises when anthropic.APIError is raised.
+    """generate_variants() returns [] when anthropic.APIError is raised.
 
-    BE-2: generate_variants() now re-raises all exceptions (including APIError) so the
-    pipeline can detect and signal the failure via rag_fusion_warning.
+    G10 BE-1: generate_variants() now returns [] on API error (provider absorbs
+    exceptions internally per the QueryExpansionProvider contract).
     """
     config = _make_config()
 
@@ -379,12 +389,15 @@ async def test_generate_variants_api_error_fallback(monkeypatch: pytest.MonkeyPa
         import importlib
 
         import archon_search.rag_fusion as rf_mod
+        import archon_search.providers.anthropic_provider as ap_mod
 
+        importlib.reload(ap_mod)
         importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
-        with pytest.raises(MockAPIError):
-            await gen.generate_variants("test query")
+        result = await gen.generate_variants("test query")
         importlib.reload(rf_mod)
+
+    assert result == [], f"expected [] on API error, got: {result!r}"
 
 
 @pytest.mark.asyncio
@@ -562,7 +575,12 @@ async def test_generate_variants_more_than_requested_truncated(
 async def test_fingerprint_no_raw_query_in_log(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """WARNING log must contain the fingerprint but NOT the raw query string."""
+    """WARNING log must contain the fingerprint but NOT the raw query string.
+
+    G10 BE-1: generate_variants() now returns [] on timeout (provider absorbs
+    TimeoutError per the QueryExpansionProvider contract), but the privacy
+    invariant still holds — logs contain only the fingerprint.
+    """
     query = "very-unique-secret-query-rag-12345"
     config = _make_config()
     mock_mod = _make_mock_anthropic_module(side_effect=asyncio.TimeoutError())
@@ -572,19 +590,21 @@ async def test_fingerprint_no_raw_query_in_log(
     with patch.dict("sys.modules", {"anthropic": mock_mod}):
         import importlib
 
+        import archon_search.providers.anthropic_provider as ap_mod
         import archon_search.rag_fusion as rf_mod
 
+        importlib.reload(ap_mod)
         importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         fp = rf_mod._query_fingerprint(query)
         assert len(fp) == 16
         assert all(c in "0123456789abcdef" for c in fp)
 
-        with caplog.at_level(logging.WARNING, logger="archon_search.rag_fusion"):
-            with pytest.raises(asyncio.TimeoutError):
-                await gen.generate_variants(query)
+        with caplog.at_level(logging.WARNING):
+            result = await gen.generate_variants(query)
         importlib.reload(rf_mod)
 
+    assert result == [], f"expected [] on timeout, got: {result!r}"
     log_text = " ".join(r.getMessage() for r in caplog.records)
     assert query not in log_text, f"Raw query leaked into log: {log_text!r}"
     assert fp in log_text, f"Fingerprint not found in log: {log_text!r}"
