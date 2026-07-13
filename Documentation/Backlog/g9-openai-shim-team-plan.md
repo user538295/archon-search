@@ -249,16 +249,16 @@ N/A — no frontend work for this feature. This is a purely server-side API addi
 
 ## Documentation update
 
-- [ ] `Documentation/Backlog/openai-shim-brief.md` — no changes needed (source brief)
-- [ ] `Documentation/Backlog/openai-shim-team-plan.md` — this file
-- [ ] `archon-search.toml.example` — add `[openai_shim]` section with `enabled`, `inject_citations`, `top_k` and comments
-- [ ] `Documentation/UserManual/02_configuration.md` — add `[openai_shim]` section to the TOML reference table
-- [ ] `Documentation/UserManual/03_running_the_server.md` — note `/v1` co-mounts on existing port (mirrors MCP note)
-- [ ] `Documentation/UserManual/05_searching.md` — cross-reference new `/v1/models` and `/v1/chat/completions` endpoints
-- [ ] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `GET /v1/models` and `POST /v1/chat/completions` to the REST route table
-- [ ] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — add `routes_openai_shim.py` and `schemas_openai.py`
-- [ ] `CLAUDE.md` — update server section to mention OpenAI shim mount and `openai_shim.enabled` flag
-- [ ] `BREAKING.md` — no breaking changes (new endpoints, disabled by default; note for awareness)
+- [x] `Documentation/Backlog/openai-shim-brief.md` — no changes needed (source brief)
+- [x] `Documentation/Backlog/openai-shim-team-plan.md` — this file
+- [x] `archon-search.toml.example` — add `[openai_shim]` section with `enabled`, `inject_citations`, `top_k` and comments
+- [x] `Documentation/UserManual/02_configuration.md` — add `[openai_shim]` section to the TOML reference table
+- [x] `Documentation/UserManual/03_running_the_server.md` — note `/v1` co-mounts on existing port (mirrors MCP note)
+- [x] `Documentation/UserManual/05_searching.md` — cross-reference new `/v1/models` and `/v1/chat/completions` endpoints
+- [x] `Documentation/Architecture/600_api_reference_or_public_interface.md` — add `GET /v1/models` and `POST /v1/chat/completions` to the REST route table
+- [x] `Documentation/Architecture/110_component_catalog_and_layer_breakdown.md` — add `routes_openai_shim.py` and `schemas_openai.py`
+- [x] `CLAUDE.md` — update server section to mention OpenAI shim mount and `openai_shim.enabled` flag
+- [x] `BREAKING.md` — no breaking changes (new endpoints, disabled by default; note for awareness)
 
 ---
 
@@ -442,7 +442,7 @@ flowchart LR
         - #manual_test — Continue.dev retrieval — asking a question returns Archon chunk text as context
 
 ### Phase 4 · Close-out
-- [ ] **T-3** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-3** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs BE-6, BE-8, T-1, T-2 · completes (acceptance gate)
     - Tests

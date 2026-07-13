@@ -461,6 +461,15 @@ For cross-collection inspection (`GET /graph/cross-collection`), entities presen
 
 **Truncation**: nodes are sorted and truncated by the mode-appropriate key before applying `max_inspection_nodes` / `max_inspection_edges` config ceilings. `truncated: true` signals that the cap was hit.
 
+### `routes_openai_shim.py` (G9)
+
+OpenAI-compatible shim endpoints, registered only when `[openai_shim] enabled = true` in `archon-search.toml`. When disabled, no `/v1` routes are registered — requesting `/v1/*` returns a plain FastAPI `404 {"detail": "Not Found"}`. All enabled endpoints require the same `Bearer` token as all other Archon routes. Error responses on `/v1/*` always use the OpenAI error envelope (`{"error": {"message": ..., "type": ...}}`); the `OpenAI401Middleware` rewrites bodyless 401 responses to this shape.
+
+| Method | Path | Purpose | Request schema | Response schema |
+| --- | --- | --- | --- | --- |
+| GET | `/v1/models` | Return one `ModelObject` per namespace-visible collection plus the `archon-search` catch-all. The response always contains at least the catch-all entry. | — | `ModelList` — `{object: "list", data: [ModelObject{id, object: "model", created: 0, owned_by: "archon-search"}, …]}`. Catch-all id is `"archon-search"`; per-collection ids are `"archon-search/{name}"`. `401` returns OpenAI error shape. |
+| POST | `/v1/chat/completions` | Extract last `role="user"` message as search query; route by `model` field; return top-k chunks as assistant reply. `model="archon-search"` fans out across all namespace collections (capped at `config.max_fanout`; excess silently omitted with WARNING). `model="archon-search/{col}"` targets one collection directly. Any other `model` value → 404. | `ChatCompletionRequest` (`schemas_openai.py`) — `{model: str, messages: [ChatMessage{role, content: str}], stream: bool = false, top_k?: int}`. `top_k` is accepted but has no effect (pipeline uses its construction-time setting). Array content in `messages[].content` is not supported (422). | Non-streaming: `ChatCompletionResponse` — `{id: "chatcmpl-{uuid4}", object: "chat.completion", created: int, model: str, choices: [{index: 0, message: {role: "assistant", content: str}, finish_reason: "stop"}], usage: {prompt_tokens: 0, completion_tokens: 0, total_tokens: 0}}`. Streaming (`stream=true`): `text/event-stream`; one `data: {...}` SSE frame per chunk with `object="chat.completion.chunk"`, `delta.role="assistant"` on first frame only; stop frame (`delta={}`, `finish_reason="stop"`); `data: [DONE]`. Citations (when `inject_citations=true`, the default): each chunk wrapped as `\n\nContext:\n{text}\n[Source: {source_path}]`. Zero results: `content=""`, `finish_reason="stop"`. Error shapes: `404` (unknown collection or model), `422` (no user message or schema error), `503` (pipeline / metadata error), `504` (timeout), `401` (auth failure — via `OpenAI401Middleware`). |
+
 ### `routes_telemetry.py`
 
 When telemetry is disabled, both endpoints return `DisabledResponse` (`schemas_telemetry.py`) — `{enabled: false}`.

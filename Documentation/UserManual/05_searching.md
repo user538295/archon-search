@@ -519,6 +519,37 @@ curl -X POST http://localhost:8765/explain \
 
 **MCP**: the `explain` tool accepts `graph_mode: str | null = null` with the same semantics. The result dict includes `graph_mode_applied` and per-result `graph_provenance`.
 
+## OpenAI-compatible search (G9 shim)
+
+When `[openai_shim] enabled = true` in `archon-search.toml`, the server exposes two additional endpoints on the same port that speak the OpenAI chat API protocol:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /v1/models` | Returns one model entry per namespace-visible collection (`archon-search/{name}`) plus a catch-all `archon-search` entry. |
+| `POST /v1/chat/completions` | Extracts the last `role="user"` message as a search query; retrieves top-k chunks; returns them as the assistant reply in OpenAI format. |
+
+Any tool that already speaks the OpenAI chat API (Cursor, Continue.dev, LangChain, LlamaIndex) can search Archon by pointing its `base_url` at `http://{host}:{port}/v1` and using `archon-search` or `archon-search/{collection}` as the model name — no custom integration code needed.
+
+```python
+# Python example using the openai SDK
+import openai
+
+client = openai.OpenAI(
+    base_url="http://127.0.0.1:8765/v1",
+    api_key="<your archon bearer token>",
+)
+
+response = client.chat.completions.create(
+    model="archon-search/docs",
+    messages=[{"role": "user", "content": "How does the router work?"}],
+)
+print(response.choices[0].message.content)
+```
+
+Pass `stream=True` to receive one SSE event per retrieved chunk. Citations (`[Source: …]`) are appended per chunk when `[openai_shim] inject_citations = true` (the default).
+
+Auth uses the same Bearer token as all other Archon endpoints. Error responses on `/v1/*` always use the OpenAI error envelope (`{"error": {"message": ..., "type": ...}}`). See [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) for the full schema.
+
 ## Related documents
 
 - [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) — full REST/MCP reference.

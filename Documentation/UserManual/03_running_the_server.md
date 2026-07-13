@@ -59,6 +59,10 @@ Prerequisite: the service must have been registered with `archon-search install`
 | `POST /ingest`, `GET/DELETE /jobs/{job_id}` | bearer | Async ingest jobs (`routes_jobs.py`) |
 | `GET /telemetry/stats`, `GET /telemetry/entries` | bearer | Telemetry read-back (`routes_telemetry.py`) |
 | `POST /mcp` (and `GET` for streamable HTTP transport) | bearer | MCP transport mounted via FastMCP `streamable_http_app()` (`mcp.py`) |
+| `GET /v1/models` | bearer | OpenAI-compatible model list (G9 shim — only when `[openai_shim] enabled = true`) |
+| `POST /v1/chat/completions` | bearer | OpenAI-compatible chat completions backed by Archon retrieval (G9 shim — only when `[openai_shim] enabled = true`) |
+
+Both `/v1` endpoints co-mount on the existing REST port — no second server process is required. When `[openai_shim] enabled = false` (the default), no `/v1` routes are registered.
 
 The full schema is `GET /openapi.json` — treat that as authoritative over any documentation snippet.
 

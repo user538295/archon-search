@@ -102,6 +102,18 @@ Opt-in only. See [`06_telemetry.md`](./06_telemetry.md) for the full surface.
 | `export_enabled` | bool | `false` | Reserved. **Setting to `true` is silently coerced to `false` with a warning log** (see `archon_search/config.py:209-217`). `archon-search.toml.example` documents this same behaviour. No external transmission occurs in v1. |
 | `hash_doc_ids` | bool | `false` | Apply HMAC-SHA256 to `result_doc_ids` before JSONL write; severs mapping to filesystem paths in exported logs. See [`06_telemetry.md`](./06_telemetry.md) for details. |
 
+### `[openai_shim]`
+
+OpenAI-compatible API shim (G9). Disabled by default — when `enabled = false`, no `/v1` routes are registered and the existing REST and MCP surfaces are unaffected.
+
+| Key | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `enabled` | bool | `false` | Master switch. When `false`, no `/v1` routes are registered. |
+| `inject_citations` | bool | `true` | Append `[Source: {source_path}]` per chunk in the assistant reply. |
+| `top_k` | int (>0) | `5` | Accepted and validated but not forwarded to the pipeline; reserved for a future release when `search()` and `search_many()` support a runtime `top_k` parameter. |
+
+When enabled, `GET /v1/models` lists available collections as selectable model IDs and `POST /v1/chat/completions` returns retrieval results in OpenAI chat-completion format. The same Bearer token used for all other endpoints is required. See [`05_searching.md`](./05_searching.md) for usage examples.
+
 ### `[namespaces]`
 
 Optional `string = string` mapping (`archon_search/config.py:225-233`). Entries must be string key / string value pairs or `ConfigError` is raised. See `Architecture/150_security_and_privacy_architecture.md` for namespace semantics.
