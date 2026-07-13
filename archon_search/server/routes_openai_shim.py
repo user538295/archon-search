@@ -1,4 +1,4 @@
-"""GET /v1/models handler and OpenAI401Middleware for the G9 OpenAI-compatible shim.
+"""GET /v1/models and POST /v1/chat/completions handlers for the G9 OpenAI-compatible shim.
 
 This module is conditionally registered in ``create_app()`` when
 ``config.openai_shim.enabled = true``.  When disabled, no routes or
@@ -7,6 +7,9 @@ middleware are added — the existing REST surface is untouched.
 Design:
 - ``GET /v1/models`` delegates entirely to ``SearchPipeline.get_all_collections_meta``
   (the Use Cases layer) and maps results to ``ModelList`` (Entities).
+- ``POST /v1/chat/completions`` implements the non-streaming retrieval path.
+  The ``model`` field drives collection routing: ``archon-search`` fans out
+  across all namespace collections; ``archon-search/{col}`` queries one.
 - ``OpenAI401Middleware`` is a thin Starlette middleware that rewrites any bodyless
   401 response on a ``/v1/*`` path to the OpenAI JSON error envelope.  It must
   be added AFTER ``APIKeyMiddleware`` in Starlette LIFO ordering so it wraps
@@ -14,7 +17,10 @@ Design:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
+from uuid import uuid4
 
 from fastapi import APIRouter
 from fastapi.requests import Request
@@ -22,7 +28,17 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
-from archon_search.server.schemas_openai import ModelList, ModelObject, OpenAIError, OpenAIErrorResponse
+from archon_search.pipeline import CollectionNotFoundError, FanoutTimeoutError, MetadataLookupError
+from archon_search.server.schemas_openai import (
+    ChatCompletionChoice,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ChatMessage,
+    ModelList,
+    ModelObject,
+    OpenAIError,
+    OpenAIErrorResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +47,183 @@ router = APIRouter()
 # The catch-all model ID — returned regardless of how many collections exist.
 _CATCH_ALL_MODEL_ID = "archon-search"
 
+# Mirror routes_search.py — single-collection search timeout in seconds.
+_SEARCH_TIMEOUT_SECONDS = 30.0
+
 
 # ---------------------------------------------------------------------------
-# Route handler
+# Private helpers
 # ---------------------------------------------------------------------------
+
+
+def _openai_error(status: int, message: str, error_type: str) -> JSONResponse:
+    """Return a JSON response in the OpenAI error envelope shape."""
+    body = OpenAIErrorResponse(error=OpenAIError(message=message, type=error_type))
+    return JSONResponse(status_code=status, content=body.model_dump())
+
+
+def _format_content(results, *, inject_citations: bool) -> str:
+    """Combine SearchResult items into assistant content string.
+
+    When ``inject_citations`` is True each chunk is wrapped with a citation
+    block: ``Context:\\n{text}\\n[Source: {path}]``.  When False only the
+    raw chunk text is included.
+    """
+    if not results:
+        return ""
+    parts: list[str] = []
+    for r in results:
+        if inject_citations:
+            parts.append(f"\n\nContext:\n{r.text}\n[Source: {r.source_path}]")
+        else:
+            parts.append(r.text)
+    return "".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# POST /chat/completions — non-streaming retrieval path (BE-5)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/chat/completions")
+async def chat_completions(request: Request, body: ChatCompletionRequest) -> JSONResponse:
+    """Non-streaming retrieval path for POST /v1/chat/completions.
+
+    ``model`` routing:
+    - ``archon-search`` — fan-out across all namespace collections (capped at
+      ``config.max_fanout``; truncation logs WARNING and degrades gracefully).
+    - ``archon-search/{col}`` — direct single-collection search.
+    - Any other value — 404 with OpenAI error shape.
+
+    The last ``role="user"`` message is extracted as the search query.
+    A 422 is returned when no user message is present.
+    """
+    pipeline = request.app.state.pipeline
+    config = request.app.state.config
+    ns: str = request.state.namespace
+
+    # --- Extract last user message as query ---
+    query: str | None = None
+    for msg in reversed(body.messages):
+        if msg.role == "user":
+            query = msg.content
+            break
+    if query is None:
+        return _openai_error(422, "messages must contain at least one user message", "invalid_request_error")
+
+    # --- Parse model field ---
+    model = body.model
+    parts = model.split("/", 1)
+    prefix = parts[0]
+
+    if prefix != _CATCH_ALL_MODEL_ID:
+        return _openai_error(
+            404,
+            f"The model '{model}' does not exist.",
+            "invalid_request_error",
+        )
+
+    is_fanout = len(parts) == 1  # exactly "archon-search"
+    collection = parts[1] if len(parts) == 2 else None
+
+    inject_citations: bool = config.openai_shim.inject_citations
+
+    # --- Resolve embedder (single-collection path) ---
+    async def _resolve_embedder(meta):
+        embedder_cache = getattr(request.app.state, "embedder_cache", None)
+        active_model = meta.active_embedding_model or config.embedding_model
+        if embedder_cache is not None:
+            return await embedder_cache.get_or_load(active_model)
+        logger.warning("chat_completions: embedder_cache absent from app.state — falling back to global embedder")
+        return pipeline._global_embedder
+
+    # -------------------------------------------------------------------------
+    # Fanout path — model = "archon-search"
+    # -------------------------------------------------------------------------
+    if is_fanout:
+        all_meta = await pipeline.get_all_collections_meta(ns)
+
+        col_names = [m.name for m in all_meta]
+
+        if not col_names:
+            return _openai_error(404, "No collections available.", "invalid_request_error")
+
+        if len(col_names) > config.max_fanout:
+            omitted = col_names[config.max_fanout:]
+            col_names = col_names[: config.max_fanout]
+            logger.warning(
+                "chat_completions: fanout exceeds max_fanout=%d; omitting collections: %s",
+                config.max_fanout,
+                omitted,
+            )
+
+        try:
+            result = await pipeline.search_many(query, col_names, namespace=ns)
+        except CollectionNotFoundError as exc:
+            logger.warning("chat_completions: collection not found during fanout: %s", exc)
+            return _openai_error(404, "Collection not found.", "invalid_request_error")
+        except FanoutTimeoutError:
+            return _openai_error(504, "Request timeout.", "server_error")
+        except MetadataLookupError as exc:
+            logger.error("chat_completions: metadata lookup failed during search: %s", exc)
+            return _openai_error(503, "Service temporarily unavailable.", "server_error")
+
+        for excl in result.excluded_collections:
+            logger.warning(
+                "chat_completions: collection '%s' excluded from fanout: %s",
+                excl.name,
+                excl.reason,
+            )
+
+        content = _format_content(result.results, inject_citations=inject_citations)
+
+    # -------------------------------------------------------------------------
+    # Direct single-collection path — model = "archon-search/{col}"
+    # -------------------------------------------------------------------------
+    else:
+        # Empty collection name (model="archon-search/") → treat as not found
+        try:
+            meta = await pipeline.get_collection_meta(collection, namespace=ns)
+        except Exception as exc:
+            logger.error("chat_completions: meta lookup failed for collection %r: %s", collection, exc, exc_info=True)
+            return _openai_error(503, "Service temporarily unavailable.", "server_error")
+
+        if meta is None:
+            return _openai_error(
+                404,
+                f"The model '{model}' does not exist.",
+                "invalid_request_error",
+            )
+
+        embedder = await _resolve_embedder(meta)
+
+        try:
+            result = await asyncio.wait_for(
+                pipeline.search(query, collection, namespace=ns, embedder=embedder),
+                timeout=_SEARCH_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            return _openai_error(504, "Request timeout.", "server_error")
+        except Exception as exc:
+            logger.error("chat_completions: search failed for collection %r: %s", collection, exc, exc_info=True)
+            return _openai_error(503, "Service temporarily unavailable.", "server_error")
+
+        content = _format_content(result.results, inject_citations=inject_citations)
+
+    # --- Build response ---
+    response_obj = ChatCompletionResponse(
+        id=f"chatcmpl-{uuid4()}",
+        created=int(time.time()),
+        model=model,
+        choices=[
+            ChatCompletionChoice(
+                index=0,
+                message=ChatMessage(role="assistant", content=content),
+                finish_reason="stop",
+            )
+        ],
+    )
+    return JSONResponse(content=response_obj.model_dump())
 
 
 @router.get("/models", response_model=ModelList)
