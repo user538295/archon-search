@@ -1,0 +1,73 @@
+openapi: 3.0.0
+info:
+  title: Archon OpenAI Shim — Models API
+  version: 0.0.0
+tags: []
+paths:
+  /v1/models:
+    get:
+      operationId: Models_list
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/ModelList'
+                  - $ref: '#/components/schemas/OpenAIErrorResponse'
+components:
+  schemas:
+    ModelList:
+      type: object
+      required:
+        - object
+        - data
+      properties:
+        object:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelObject'
+    ModelObject:
+      type: object
+      required:
+        - id
+        - object
+        - created
+        - owned_by
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+        created:
+          type: integer
+          format: int32
+        owned_by:
+          type: string
+    OpenAIError:
+      type: object
+      required:
+        - message
+        - type
+      properties:
+        message:
+          type: string
+        type:
+          type: string
+        param:
+          type: string
+          nullable: true
+        code:
+          type: string
+          nullable: true
+    OpenAIErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          $ref: '#/components/schemas/OpenAIError'
