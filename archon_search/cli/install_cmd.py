@@ -1,7 +1,6 @@
 """archon-search install and uninstall subcommands."""
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from shutil import rmtree
@@ -117,9 +116,9 @@ def _install_options(f: click.decorators.FC) -> click.decorators.FC:
 @click.option("--telemetry-retention-days", type=click.IntRange(min=1), default=None,
               help="Number of days to retain telemetry logs (requires --telemetry)")
 @click.option("--enable-hyde", is_flag=True, default=False,
-              help="Enable HyDE query expansion (requires ANTHROPIC_API_KEY)")
+              help="Enable HyDE query expansion")
 @click.option("--enable-rag-fusion", is_flag=True, default=False,
-              help="Enable RAG Fusion query expansion (requires ANTHROPIC_API_KEY)")
+              help="Enable RAG Fusion query expansion")
 @click.option("--server-key", type=_HexKeyParamType(), default=None,
               help="Custom server API key (lowercase hex, min 32 chars). Sets the archon-search Bearer token.")
 def wizard(
@@ -162,12 +161,6 @@ def wizard(
         )
         # Clear retention_days so it is not written to TOML
         telemetry_retention_days = None
-
-    # Validate --enable-hyde / --enable-rag-fusion require ANTHROPIC_API_KEY
-    if (enable_hyde or enable_rag_fusion) and not os.environ.get("ANTHROPIC_API_KEY"):
-        raise click.UsageError(
-            "--enable-hyde/--enable-rag-fusion requires ANTHROPIC_API_KEY to be set in the environment"
-        )
 
     sys.exit(
         SearchInstaller(

@@ -306,28 +306,33 @@ def test_wizard_summary_contains_next_steps_block(
 
 
 # ---------------------------------------------------------------------------
-# Test 6 — --enable-hyde/--enable-rag-fusion require ANTHROPIC_API_KEY
+# Test 6 — --enable-hyde/--enable-rag-fusion work WITHOUT ANTHROPIC_API_KEY (BE-8)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.xdist_group("install")
-def test_wizard_hyde_and_rag_fusion_require_anthropic_api_key(
+def test_wizard_hyde_and_rag_fusion_work_without_anthropic_api_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """wizard --enable-hyde/--enable-rag-fusion exit non-zero without ANTHROPIC_API_KEY.
+    """wizard --enable-hyde/--enable-rag-fusion succeed without ANTHROPIC_API_KEY (BE-8).
 
-    The wizard CLI guard raises UsageError when either LLM-backed feature flag is
-    requested but ANTHROPIC_API_KEY is absent from the environment.  Validates both
-    flags independently.
+    BE-8 removed the API key gate from these flags.  Both flags now work with
+    any provider (Anthropic, OpenAI, Ollama) — an absent key is not an error.
+    Validates both flags independently with dry_run=False so the TOML is written.
     """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     for flag in ("--enable-hyde", "--enable-rag-fusion"):
-        result = _run_wizard(tmp_path, extra_args=[flag], dry_run=True)
-        assert result.exit_code != 0, (
-            f"wizard {flag} should exit non-zero without ANTHROPIC_API_KEY, "
+        result = _run_wizard(tmp_path, extra_args=[flag], dry_run=False)
+        assert result.exit_code == 0, (
+            f"wizard {flag} should exit 0 without ANTHROPIC_API_KEY (no gate), "
             f"got {result.exit_code}.\nOutput:\n{result.output}"
         )
-        assert "ANTHROPIC_API_KEY" in result.output, (
-            f"Expected ANTHROPIC_API_KEY error message for {flag}, got:\n{result.output}"
-        )
+
+    import tomlkit
+    config_path = tmp_path / "archon-search.toml"
+    doc = tomlkit.parse(config_path.read_text())
+    # Both flags were passed in the last _run_wizard call (--enable-rag-fusion)
+    assert doc.get("rag_fusion", {}).get("enabled") is True, (
+        f"Expected [rag_fusion] enabled = true after --enable-rag-fusion without API key"
+    )

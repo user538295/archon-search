@@ -398,14 +398,14 @@ flowchart LR
         - [x] #integration_test — `test_status_ollama_key_available_is_true` — `provider="ollama"`, `key_available=True` regardless of `ANTHROPIC_API_KEY`
         - [x] #integration_test — `test_status_openai_key_available_checks_openai_api_key` — `provider="openai"`, `OPENAI_API_KEY` unset → `key_available=False`; `OPENAI_API_KEY` set → `key_available=True` (Root-2)
 
-- [ ] **BE-8** — Update install wizard: remove `ANTHROPIC_API_KEY` gate from HyDE/RAG Fusion prompt; add provider-selection step (Anthropic / OpenAI / Ollama), model input, and `ollama_base_url` input; write chosen values to `archon-search.toml` #backend-role
+- [x] **BE-8** — Update install wizard: remove `ANTHROPIC_API_KEY` gate from HyDE/RAG Fusion prompt; add provider-selection step (Anthropic / OpenAI / Ollama), model input, and `ollama_base_url` input; write chosen values to `archon-search.toml` #backend-role
     - Frameworks & Drivers · 3.0h
     - needs BE-2 · completes S9 (prevents startup with bad config)
     - Note (C1-I-4): After wizard rewrite, run `uv run pytest tests/test_no_hardcoded_path_home.py -n0 --no-cov` and update all 4 `install.py` line-number entries in `tests/path_home_allowlist.txt`.
     - Tests
-        - #unit_test — `test_wizard_ollama_writes_provider_and_model_to_toml` — mock wizard I/O selecting Ollama + model "llama3.2"; assert written TOML contains `provider = "ollama"` and `model = "llama3.2"` under `[hyde]`
-        - #unit_test — `test_wizard_no_api_key_gate_for_ollama` — wizard runs HyDE/RAG Fusion prompt without `ANTHROPIC_API_KEY` set; no `ConfigError` or early exit
-        - #unit_test — `test_wizard_anthropic_path_unchanged` — selecting Anthropic still writes correct TOML; existing behavior preserved
+        - [x] #unit_test — `test_wizard_ollama_writes_provider_and_model_to_toml` — mock wizard I/O selecting Ollama + model "llama3.2"; assert written TOML contains `provider = "ollama"` and `model = "llama3.2"` under `[hyde]`
+        - [x] #unit_test — `test_wizard_no_api_key_gate_for_ollama` — wizard runs HyDE/RAG Fusion prompt without `ANTHROPIC_API_KEY` set; no `ConfigError` or early exit
+        - [x] #unit_test — `test_wizard_anthropic_path_unchanged` — selecting Anthropic still writes correct TOML; existing behavior preserved
 
 - [ ] **T-1** — E2e: verify Ollama fallback (mocked) and `GET /status` shows correct provider #tester-role
     - — · 1.0h

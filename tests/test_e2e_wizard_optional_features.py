@@ -31,9 +31,10 @@ from archon_search.platform.types import GpuType
 def _no_anthropic_key() -> Generator[None, None, None]:
     """Clear ANTHROPIC_API_KEY from the env for the duration of the test.
 
-    The interactive HyDE/RAG Fusion prompt fires when ANTHROPIC_API_KEY is set.
-    Tests that were written before this prompt was added must clear the key so
-    they don't unexpectedly receive an extra input() call.
+    Used by tests that need a predictable environment without a real Anthropic
+    key.  The interactive HyDE/RAG Fusion prompt always fires in interactive
+    mode (no API key gate); tests must include a response for it in their
+    input sequences.
     """
     env_without_key = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
     with patch.dict("os.environ", env_without_key, clear=True):
@@ -219,9 +220,9 @@ def test_e2e_interactive_watch_and_telemetry(runner: CliRunner, tmp_path: Path) 
     #  6. eager load: "n"
     #  7. routing strategy: "" (default=centroid)
     #  8. log format: "" (default=text)
-    #  9. "Proceed?": "y"
-    # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire.
-    stdin_responses = "\n".join(["n", "n", "n", "y", "y", "n", "", "", "y"]) + "\n"
+    #  9. HyDE/RAG Fusion: "n"
+    # 10. "Proceed?": "y"
+    stdin_responses = "\n".join(["n", "n", "n", "y", "y", "n", "", "", "n", "y"]) + "\n"
 
     with _no_anthropic_key():
         with _patched_wizard():
@@ -264,9 +265,9 @@ def test_e2e_interactive_multilingual_yes(runner: CliRunner, tmp_path: Path) -> 
     # Input queue:
     #  1. multilingual: "y"
     #  All optional features: defaults (n / "" for choices)
+    #  9. HyDE/RAG Fusion: "n"
     #  confirmation: "y"
-    # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire.
-    stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "y"]) + "\n"
+    stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "n", "y"]) + "\n"
 
     with _no_anthropic_key():
         with _patched_wizard(
@@ -313,9 +314,9 @@ def test_e2e_interactive_invalid_routing_retries(runner: CliRunner, tmp_path: Pa
     #  7. routing (bad): "badval"  ← triggers retry
     #  8. routing (retry, valid): "hybrid"
     #  9. log format: ""
-    # 10. "Proceed?": "y"
-    # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire.
-    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "badval", "hybrid", "", "y"]) + "\n"
+    # 10. HyDE/RAG Fusion: "n"
+    # 11. "Proceed?": "y"
+    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "badval", "hybrid", "", "n", "y"]) + "\n"
 
     with _no_anthropic_key():
         with _patched_wizard():
@@ -584,9 +585,9 @@ def test_wizard_declineProceedPrompt_revertsGraphEnabled(runner: CliRunner, tmp_
     #  6. eager load: "n"
     #  7. routing strategy: "" (default)
     #  8. log format: "" (default)
-    #  9. "Proceed?": "n"  ← decline
-    # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire.
-    stdin_responses = "\n".join(["n", "y", "n", "n", "n", "n", "", "", "n"]) + "\n"
+    #  9. HyDE/RAG Fusion: "n"
+    # 10. "Proceed?": "n"  ← decline
+    stdin_responses = "\n".join(["n", "y", "n", "n", "n", "n", "", "", "n", "n"]) + "\n"
 
     with _no_anthropic_key():
         with _patched_wizard(
@@ -983,9 +984,8 @@ def test_wizard_explicit_default_value_writes_to_toml(runner: CliRunner, tmp_pat
 def test_wizard_log_format_json_prompts_log_to_stderr(runner: CliRunner, tmp_path: Path) -> None:
     """Interactive mode: log-format json triggers 'Log to stderr only?' follow-up prompt; y → log_file=''."""
     config_path = tmp_path / "archon-search.toml"
-    # Input order: multilingual, code, reranker, watch, telemetry, eager, routing, log-format=json, stderr=y, proceed
-    # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire between log-format and proceed.
-    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "json", "y", "y"]) + "\n"
+    # Input order: multilingual, code, reranker, watch, telemetry, eager, routing, log-format=json, stderr=y, HyDE/RAG Fusion=n, proceed
+    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "json", "y", "n", "y"]) + "\n"
     with _no_anthropic_key():
         with _patched_wizard():
             result = runner.invoke(
@@ -1007,8 +1007,8 @@ def test_wizard_log_format_json_prompts_log_to_stderr(runner: CliRunner, tmp_pat
 def test_wizard_log_format_text_does_not_prompt_log_to_stderr(runner: CliRunner, tmp_path: Path) -> None:
     """Interactive mode: log-format text does NOT show stderr follow-up prompt."""
     config_path = tmp_path / "archon-search.toml"
-    # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire.
-    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "text", "y"]) + "\n"
+    # Input order: multilingual, code, reranker, watch, telemetry, eager, routing, log-format=text, HyDE/RAG Fusion=n, proceed
+    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "text", "n", "y"]) + "\n"
     with _no_anthropic_key():
         with _patched_wizard():
             result = runner.invoke(
@@ -1075,32 +1075,32 @@ def test_wizard_success_output_contains_top_k_hint(runner: CliRunner, tmp_path: 
 
 
 @pytest.mark.integration
-def test_wizard_enable_hyde_requires_anthropic_key(runner: CliRunner, tmp_path: Path) -> None:
-    """--enable-hyde without ANTHROPIC_API_KEY exits non-zero with error message."""
+def test_wizard_enable_hyde_works_without_anthropic_key(runner: CliRunner, tmp_path: Path) -> None:
+    """--enable-hyde without ANTHROPIC_API_KEY succeeds (BE-8 removed the API key gate)."""
     config_path = tmp_path / "archon-search.toml"
-    import os
     env_without_key = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
     with _patched_wizard():
         with patch.dict("os.environ", env_without_key, clear=True):
             result = runner.invoke(main, _wizard_args(config_path, "--enable-hyde"))
-    assert result.exit_code != 0, f"Expected non-zero exit, got: {result.output}"
-    assert "ANTHROPIC_API_KEY" in result.output, (
-        f"Expected ANTHROPIC_API_KEY mention in output: {result.output}"
+    assert result.exit_code == 0, f"Expected exit 0 (no API key gate), got: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc.get("hyde", {}).get("enabled") is True, (
+        f"Expected [hyde] enabled = true in TOML: {dict(doc.get('hyde', {}))}"
     )
 
 
 @pytest.mark.integration
-def test_wizard_enable_rag_fusion_requires_anthropic_key(runner: CliRunner, tmp_path: Path) -> None:
-    """--enable-rag-fusion without ANTHROPIC_API_KEY exits non-zero with error message."""
+def test_wizard_enable_rag_fusion_works_without_anthropic_key(runner: CliRunner, tmp_path: Path) -> None:
+    """--enable-rag-fusion without ANTHROPIC_API_KEY succeeds (BE-8 removed the API key gate)."""
     config_path = tmp_path / "archon-search.toml"
-    import os
     env_without_key = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
     with _patched_wizard():
         with patch.dict("os.environ", env_without_key, clear=True):
             result = runner.invoke(main, _wizard_args(config_path, "--enable-rag-fusion"))
-    assert result.exit_code != 0, f"Expected non-zero exit, got: {result.output}"
-    assert "ANTHROPIC_API_KEY" in result.output, (
-        f"Expected ANTHROPIC_API_KEY mention in output: {result.output}"
+    assert result.exit_code == 0, f"Expected exit 0 (no API key gate), got: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc.get("rag_fusion", {}).get("enabled") is True, (
+        f"Expected [rag_fusion] enabled = true in TOML: {dict(doc.get('rag_fusion', {}))}"
     )
 
 

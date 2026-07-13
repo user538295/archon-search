@@ -1,23 +1,13 @@
 """Tests for WizardFeatures dataclass (Task 1.1) and prompt functions (Tasks 1.2+)."""
 from __future__ import annotations
 
-import contextlib
-from contextlib import contextmanager
-from collections.abc import Generator
 from unittest.mock import patch
 
-from archon_search.install import WizardFeatures, _prompt_gpu_confirm, _prompt_multilingual, _prompt_optional_features
+import tomlkit
+
+from archon_search.install import WizardFeatures, _apply_wizard_features_to_toml, _prompt_gpu_confirm, _prompt_multilingual, _prompt_optional_features
 from archon_search.platform.types import GpuType
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES
-
-
-@contextmanager
-def _no_anthropic_key() -> Generator[None, None, None]:
-    """Clear ANTHROPIC_API_KEY from env so HyDE/RAG Fusion prompt does not fire."""
-    import os
-    env_without_key = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-    with patch.dict("os.environ", env_without_key, clear=True):
-        yield
 
 
 class TestWizardFeaturesDefaults:
@@ -158,14 +148,15 @@ class TestPromptOptionalFeatures:
         """All 'y' inputs (and valid choices) produce all-enabled features."""
         # 8 questions: code(y), reranker(y), watch(y), telemetry(y), eager_load(y),
         # routing_strategy("hybrid"), log_format("json"), log_to_stderr(y)
-        # ANTHROPIC_API_KEY cleared so HyDE/RAG Fusion prompt does not fire.
+        # enable_hyde/enable_rag_fusion pre-answered False to isolate from HyDE prompt changes.
         responses = iter(["y", "y", "y", "y", "y", "hybrid", "json", "y"])
-        with _no_anthropic_key():
-            with patch("builtins.input", side_effect=responses):
-                features = _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile_with_reranker,
-                )
+        with patch("builtins.input", side_effect=responses):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
         assert features.install_code_extra is True
         assert features.disable_reranker is True
         assert features.enable_watch is True
@@ -180,45 +171,47 @@ class TestPromptOptionalFeatures:
         # 6 questions (no reranker question): code, watch, telemetry, eager_load,
         # routing_strategy, log_format
         responses = iter(["y", "y", "y", "y", "centroid", "text"])
-        with _no_anthropic_key():
-            with patch("builtins.input", side_effect=responses):
-                features = _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile_no_reranker,
-                )
+        with patch("builtins.input", side_effect=responses):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_no_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
         assert features.disable_reranker is False
 
     def test_invalid_routing_strategy_retries(self) -> None:
         """First 'bad' then 'hybrid' → routing_strategy='hybrid'."""
         # questions: code(n), reranker(n), watch(n), telemetry(n), eager(n), routing("bad","hybrid"), log("")
         responses = iter(["n", "n", "n", "n", "n", "bad", "hybrid", ""])
-        with _no_anthropic_key():
-            with patch("builtins.input", side_effect=responses):
-                features = _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile_with_reranker,
-                )
+        with patch("builtins.input", side_effect=responses):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
         assert features.routing_strategy == "hybrid"
 
     def test_invalid_routing_strategy_twice_uses_default(self) -> None:
         """Two bad routing values → routing_strategy='centroid' (default)."""
         responses = iter(["n", "n", "n", "n", "n", "bad", "worse", ""])
-        with _no_anthropic_key():
-            with patch("builtins.input", side_effect=responses):
-                features = _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile_with_reranker,
-                )
+        with patch("builtins.input", side_effect=responses):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
         assert features.routing_strategy == "centroid"
 
     def test_eof_uses_defaults(self) -> None:
         """EOFError on any question uses defaults for remaining questions; no raise."""
-        with _no_anthropic_key():
-            with patch("builtins.input", side_effect=EOFError):
-                features = _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile_with_reranker,
-                )
+        with patch("builtins.input", side_effect=EOFError):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+            )
         assert features == WizardFeatures()
 
     def test_invalid_log_format_retries(self) -> None:
@@ -226,39 +219,42 @@ class TestPromptOptionalFeatures:
         # n(code), n(reranker), n(watch), n(telemetry), n(eager), ""(routing), "bad"(log retry 1),
         # "json"(log retry 2), "n"(log_to_stderr follow-up triggered by json)
         responses = iter(["n", "n", "n", "n", "n", "", "bad", "json", "n"])
-        with _no_anthropic_key():
-            with patch("builtins.input", side_effect=responses):
-                features = _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile_with_reranker,
-                )
+        with patch("builtins.input", side_effect=responses):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
         assert features.log_format == "json"
 
     def test_invalid_log_format_twice_uses_default(self) -> None:
         """Two bad log_format values → log_format='text' (default)."""
         responses = iter(["n", "n", "n", "n", "n", "", "bad", "worse"])
-        with _no_anthropic_key():
-            with patch("builtins.input", side_effect=responses):
-                features = _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile_with_reranker,
-                )
+        with patch("builtins.input", side_effect=responses):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
         assert features.log_format == "text"
 
     def test_partial_flag_override_interactive_rest(self) -> None:
         """Some flags pre-answered; stdin only called for non-overridden questions."""
-        # install_code=True and enable_watch=True are pre-answered (non-None).
-        # Remaining interactive questions (with reranker profile, no ANTHROPIC_API_KEY):
+        # install_code=True, enable_watch=True, enable_hyde=False, enable_rag_fusion=False pre-answered.
+        # Remaining interactive questions (with reranker profile):
         #   reranker(n), telemetry(y), eager(n), routing(""), log("")
         responses = iter(["n", "y", "n", "", ""])
-        with _no_anthropic_key():
-            with patch("builtins.input", side_effect=responses) as mock_input:
-                features = _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile_with_reranker,
-                    install_code=True,
-                    enable_watch=True,
-                )
+        with patch("builtins.input", side_effect=responses) as mock_input:
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                install_code=True,
+                enable_watch=True,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
         assert features.install_code_extra is True
         assert features.enable_watch is True
         assert features.enable_telemetry is True
@@ -317,12 +313,13 @@ class TestPromptOptionalFeaturesExplanations:
     def test_explanation_printed_in_interactive_mode(self, capsys) -> None:
         """interactive run prints explanation text for at least 3 prompts."""
         responses = iter(["n", "n", "n", "n", "n", "", ""])
-        with _no_anthropic_key():
-            with patch("builtins.input", side_effect=responses):
-                _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile_with_reranker,
-                )
+        with patch("builtins.input", side_effect=responses):
+            _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
         captured = capsys.readouterr()
         out = captured.out
         assert "Code enrichment" in out
@@ -376,37 +373,42 @@ class TestPromptOptionalFeaturesExplanations:
         assert "cross-encoder" not in out.lower()
 
     def test_prompt_count_7_with_reranker(self, capsys) -> None:
-        """Interactive mode with reranker profile (no ANTHROPIC_API_KEY): exactly 7 input() calls."""
+        """Interactive mode with reranker profile (hyde/rag_fusion pre-answered): exactly 7 input() calls."""
         responses = iter(["n", "n", "n", "n", "n", "", ""])
-        with _no_anthropic_key():
-            with patch("builtins.input", side_effect=responses) as mock_input:
-                _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile_with_reranker,
-                )
+        with patch("builtins.input", side_effect=responses) as mock_input:
+            _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
         assert mock_input.call_count == 7
 
     def test_prompt_count_6_without_reranker(self, capsys) -> None:
-        """Interactive mode without reranker profile (no ANTHROPIC_API_KEY): exactly 6 input() calls."""
+        """Interactive mode without reranker profile (hyde/rag_fusion pre-answered): exactly 6 input() calls."""
         responses = iter(["n", "n", "n", "n", "", ""])
-        with _no_anthropic_key():
-            with patch("builtins.input", side_effect=responses) as mock_input:
-                _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile_no_reranker,
-                )
+        with patch("builtins.input", side_effect=responses) as mock_input:
+            _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_no_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
         assert mock_input.call_count == 6
 
-    def test_prompt_count_8_with_reranker_and_api_key(self, capsys) -> None:
-        """Interactive mode with reranker profile and ANTHROPIC_API_KEY: 8 input() calls (7 + hyde/rag_fusion)."""
-        # 7 standard questions + 1 HyDE/RAG Fusion question
+    def test_prompt_count_8_with_reranker_no_api_key_gate(self, capsys) -> None:
+        """Interactive mode with reranker profile: 8 input() calls (7 standard + 1 HyDE yn).
+
+        After G10 BE-8, HyDE/RAG Fusion prompt fires regardless of ANTHROPIC_API_KEY.
+        Answering 'n' to the enable question requires no further provider prompts.
+        """
+        # 7 standard + 1 HyDE yn (answered "n", so no provider/model prompts)
         responses = iter(["n", "n", "n", "n", "n", "", "", "n"])
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
-            with patch("builtins.input", side_effect=responses) as mock_input:
-                _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile_with_reranker,
-                )
+        with patch("builtins.input", side_effect=responses) as mock_input:
+            _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+            )
         assert mock_input.call_count == 8
 
 
@@ -477,11 +479,12 @@ class TestPromptOptionalFeaturesHydeRagFusion:
 
     _profile = ENGLISH_PROFILES["minimal"]  # reranker is not None
 
-    def test_hyde_rag_fusion_skipped_when_no_api_key(self) -> None:
-        """No ANTHROPIC_API_KEY in env → enable_hyde and enable_rag_fusion remain False."""
+    def test_hyde_rag_fusion_prompted_regardless_of_api_key(self) -> None:
+        """HyDE/RAG Fusion prompt fires without ANTHROPIC_API_KEY (G10 BE-8: no API key gate)."""
         env_without_key = {k: v for k, v in __import__("os").environ.items() if k != "ANTHROPIC_API_KEY"}
-        with patch("builtins.input", side_effect=AssertionError("should not prompt for hyde/rag_fusion")):
-            with patch.dict("os.environ", env_without_key, clear=True):
+        # Answer "n" to enable → no further provider prompts
+        with patch.dict("os.environ", env_without_key, clear=True):
+            with patch("builtins.input", side_effect=["n"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
                     profile=self._profile,
@@ -497,39 +500,38 @@ class TestPromptOptionalFeaturesHydeRagFusion:
         assert features.enable_rag_fusion is False
 
     def test_hyde_rag_fusion_prompted_when_api_key_present(self) -> None:
-        """ANTHROPIC_API_KEY set + interactive + answer 'y' → both enabled."""
-        # 1 extra input: the HyDE/RAG Fusion prompt
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
-            with patch("builtins.input", side_effect=["y"]):
-                features = _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile,
-                    install_code=False,
-                    disable_reranker=False,
-                    enable_watch=False,
-                    enable_telemetry=False,
-                    eager_load=False,
-                    routing_strategy="centroid",
-                    log_format="text",
-                )
+        """Interactive + answer 'y' + 'anthropic' for both → both enabled."""
+        # 3 inputs: enable=y, hyde_provider=anthropic, rag_fusion_provider=anthropic
+        # (no model prompt for anthropic)
+        with patch("builtins.input", side_effect=["y", "anthropic", "anthropic"]):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+            )
         assert features.enable_hyde is True
         assert features.enable_rag_fusion is True
 
     def test_hyde_rag_fusion_declined(self) -> None:
-        """ANTHROPIC_API_KEY set + interactive + answer 'n' → both remain False."""
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
-            with patch("builtins.input", side_effect=["n"]):
-                features = _prompt_optional_features(
-                    non_interactive=False,
-                    profile=self._profile,
-                    install_code=False,
-                    disable_reranker=False,
-                    enable_watch=False,
-                    enable_telemetry=False,
-                    eager_load=False,
-                    routing_strategy="centroid",
-                    log_format="text",
-                )
+        """Interactive + answer 'n' → both remain False; no provider prompt fired."""
+        with patch("builtins.input", side_effect=["n"]):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+            )
         assert features.enable_hyde is False
         assert features.enable_rag_fusion is False
 
@@ -643,3 +645,274 @@ class TestPromptGpuConfirm:
         with patch("builtins.input", side_effect=EOFError):
             result = _prompt_gpu_confirm(non_interactive=False, gpu=GpuType.METAL)
         assert result is True
+
+
+class TestWizardFeaturesG10:
+    """G10 BE-8 tests — provider-selection in HyDE/RAG Fusion wizard prompts."""
+
+    _profile = ENGLISH_PROFILES["minimal"]  # reranker is not None
+
+    # -------------------------------------------------------------------------
+    # WizardFeatures new provider fields
+    # -------------------------------------------------------------------------
+
+    def test_wizard_features_g10_provider_fields_defaults(self) -> None:
+        """G10 provider fields have correct defaults."""
+        f = WizardFeatures()
+        assert f.hyde_provider == "anthropic"
+        assert f.hyde_model == ""
+        assert f.hyde_ollama_base_url == ""
+        assert f.rag_fusion_provider == "anthropic"
+        assert f.rag_fusion_model == ""
+        assert f.rag_fusion_ollama_base_url == ""
+
+    # -------------------------------------------------------------------------
+    # _apply_wizard_features_to_toml — provider/model/base_url writing
+    # -------------------------------------------------------------------------
+
+    def test_wizard_ollama_writes_provider_and_model_to_toml(self) -> None:
+        """Ollama provider + model written under [hyde] when feature enabled."""
+        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
+
+        doc = tomlkit.parse(_default_toml())
+        features = WizardFeatures(
+            enable_hyde=True,
+            hyde_provider="ollama",
+            hyde_model="llama3.2",
+            hyde_ollama_base_url="http://localhost:11434",
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["hyde"]["enabled"] is True
+        assert doc["hyde"]["provider"] == "ollama"
+        assert doc["hyde"]["model"] == "llama3.2"
+        assert doc["hyde"]["ollama_base_url"] == "http://localhost:11434"
+
+    def test_wizard_anthropic_provider_not_written_to_toml(self) -> None:
+        """Anthropic provider is the default — no provider/model key written."""
+        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
+
+        doc = tomlkit.parse(_default_toml())
+        features = WizardFeatures(
+            enable_hyde=True,
+            hyde_provider="anthropic",
+            hyde_model="",
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["hyde"]["enabled"] is True
+        assert "provider" not in doc["hyde"]
+        assert "model" not in doc["hyde"]
+
+    def test_wizard_openai_writes_provider_and_model_to_toml(self) -> None:
+        """OpenAI provider + model written under [rag_fusion]."""
+        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
+
+        doc = tomlkit.parse(_default_toml())
+        features = WizardFeatures(
+            enable_rag_fusion=True,
+            rag_fusion_provider="openai",
+            rag_fusion_model="gpt-4o",
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["rag_fusion"]["enabled"] is True
+        assert doc["rag_fusion"]["provider"] == "openai"
+        assert doc["rag_fusion"]["model"] == "gpt-4o"
+        assert "ollama_base_url" not in doc["rag_fusion"]
+
+    def test_wizard_ollama_empty_base_url_not_written(self) -> None:
+        """Empty ollama_base_url is not written (default handled by config)."""
+        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
+
+        doc = tomlkit.parse(_default_toml())
+        features = WizardFeatures(
+            enable_hyde=True,
+            hyde_provider="ollama",
+            hyde_model="llama3.2",
+            hyde_ollama_base_url="",  # empty — not written
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert "ollama_base_url" not in doc["hyde"]
+
+    # -------------------------------------------------------------------------
+    # _prompt_optional_features — provider-selection step
+    # -------------------------------------------------------------------------
+
+    def test_wizard_no_api_key_gate_for_ollama(self) -> None:
+        """HyDE/RAG Fusion prompt fires without ANTHROPIC_API_KEY; Ollama selected."""
+        env_without_key = {k: v for k, v in __import__("os").environ.items() if k != "ANTHROPIC_API_KEY"}
+        # Inputs: enable=y, hyde_provider=ollama, hyde_model=llama3.2, hyde_base_url=""
+        #         rag_fusion_provider=ollama, rag_fusion_model=llama3.2, rag_fusion_base_url=""
+        with patch.dict("os.environ", env_without_key, clear=True):
+            with patch("builtins.input", side_effect=["y", "ollama", "llama3.2", "", "ollama", "llama3.2", ""]):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile,
+                    install_code=False,
+                    disable_reranker=False,
+                    enable_watch=False,
+                    enable_telemetry=False,
+                    eager_load=False,
+                    routing_strategy="centroid",
+                    log_format="text",
+                )
+        assert features.enable_hyde is True
+        assert features.hyde_provider == "ollama"
+        assert features.hyde_model == "llama3.2"
+
+    def test_wizard_anthropic_path_unchanged(self) -> None:
+        """Selecting Anthropic writes enabled=True but no provider/model to TOML."""
+        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
+
+        # Inputs: enable=y, hyde_provider=anthropic (no model prompt)
+        #         rag_fusion_provider=anthropic (no model prompt)
+        with patch("builtins.input", side_effect=["y", "anthropic", "anthropic"]):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+            )
+        assert features.enable_hyde is True
+        assert features.hyde_provider == "anthropic"
+
+        # Also verify TOML output does not contain provider key
+        doc = tomlkit.parse(_default_toml())
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["hyde"]["enabled"] is True
+        assert "provider" not in doc["hyde"]
+
+    def test_wizard_ollama_default_base_url_on_empty_input(self) -> None:
+        """Empty input for Ollama base URL stores empty string (config uses default)."""
+        # Inputs: enable=y, provider=ollama, model=llama3.2, base_url="" (use default)
+        # Same for rag_fusion
+        with patch("builtins.input", side_effect=["y", "ollama", "llama3.2", "", "ollama", "llama3.2", ""]):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+            )
+        assert features.hyde_ollama_base_url == ""
+        assert features.rag_fusion_ollama_base_url == ""
+
+    def test_wizard_eof_during_model_prompt_returns_empty_model(self) -> None:
+        """EOFError during model name prompt leaves model empty.
+
+        _apply_wizard_features_to_toml writes model="" explicitly for non-Anthropic
+        providers, so config.py raises ConfigError at startup when model is blank.
+        """
+        # "y" = enable, "ollama" = HyDE provider, then EOFError on model prompt and everything after
+        inputs = iter(["y", "ollama"])
+        call_count = 0
+
+        def mock_input(prompt: str = "") -> str:  # noqa: ARG001
+            nonlocal call_count
+            call_count += 1
+            try:
+                return next(inputs)
+            except StopIteration:
+                raise EOFError
+
+        with patch("builtins.input", side_effect=mock_input):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+            )
+        assert features.enable_hyde is True
+        assert features.hyde_provider == "ollama"
+        assert features.hyde_model == ""  # empty on EOFError
+
+    def test_wizard_invalid_provider_falls_back_to_anthropic(self) -> None:
+        """Two invalid provider choices fall back to default 'anthropic'."""
+        # "y" = enable, "foobar" = invalid (retry), "alsobad" = invalid (fall back to anthropic)
+        # Then RAG Fusion provider prompt fires — provide "anthropic"
+        with patch("builtins.input", side_effect=["y", "foobar", "alsobad", "anthropic"]):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+            )
+        assert features.hyde_provider == "anthropic"
+        assert features.hyde_model == ""  # anthropic path, no model prompt
+        assert features.rag_fusion_provider == "anthropic"
+
+    def test_wizard_model_retry_on_empty_then_valid(self) -> None:
+        """Empty model on first attempt triggers re-prompt; valid model on second attempt accepted."""
+        # "y"=enable, "ollama"=hyde provider, ""=empty model (retry), "llama3.2"=valid model
+        # ""=hyde base url, "ollama"=rag_fusion provider, "llama3.2"=rag_fusion model, ""=rag_fusion base url
+        with patch("builtins.input", side_effect=["y", "ollama", "", "llama3.2", "", "ollama", "llama3.2", ""]):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+            )
+        assert features.hyde_provider == "ollama"
+        assert features.hyde_model == "llama3.2"
+        assert features.rag_fusion_provider == "ollama"
+        assert features.rag_fusion_model == "llama3.2"
+
+    def test_wizard_rag_fusion_model_retry_on_empty_then_valid(self) -> None:
+        """RAG Fusion model re-prompts on empty; valid model accepted on second attempt."""
+        # "y"=enable, "ollama"=hyde provider, "llama3.2"=hyde model (first try ok)
+        # ""=hyde base url, "openai"=rag_fusion provider, ""=empty model (retry), "gpt-4o"=valid
+        with patch("builtins.input", side_effect=["y", "ollama", "llama3.2", "", "openai", "", "gpt-4o"]):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                install_code=False,
+                disable_reranker=False,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+                routing_strategy="centroid",
+                log_format="text",
+            )
+        assert features.rag_fusion_provider == "openai"
+        assert features.rag_fusion_model == "gpt-4o"
+
+    def test_wizard_non_anthropic_empty_model_writes_empty_to_toml(self) -> None:
+        """When model is empty for non-Anthropic provider, empty string is written to TOML.
+
+        This ensures config.py's 'if not model: raise ConfigError' guard fires at
+        server startup rather than silently running an Anthropic model against OpenAI/Ollama.
+        """
+        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
+
+        doc = tomlkit.parse(_default_toml())
+        features = WizardFeatures(
+            enable_hyde=True,
+            hyde_provider="openai",
+            hyde_model="",  # empty — both retries exhausted / EOF
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["hyde"]["provider"] == "openai"
+        # Empty model is written explicitly so config.py raises ConfigError at startup
+        assert doc["hyde"]["model"] == ""

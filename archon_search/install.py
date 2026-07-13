@@ -163,6 +163,13 @@ class WizardFeatures:
     # C15 Tier 2 AI query expansion flags
     enable_hyde: bool = False
     enable_rag_fusion: bool = False
+    # G10 BE-8: provider-selection for HyDE / RAG Fusion
+    hyde_provider: str = "anthropic"          # "anthropic" | "openai" | "ollama"
+    hyde_model: str = ""                      # empty = use provider default
+    hyde_ollama_base_url: str = ""            # empty = use config default
+    rag_fusion_provider: str = "anthropic"
+    rag_fusion_model: str = ""
+    rag_fusion_ollama_base_url: str = ""
 
 
 def _write_profile_config(
@@ -287,14 +294,29 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         _ensure_section("telemetry")
         doc["telemetry"]["retention_days"] = features.telemetry_retention_days
 
-    # C15 Tier 2 AI query expansion flags
+    # C15 Tier 2 AI query expansion flags (G10 BE-8: provider/model/base_url)
     if features.enable_hyde:
         _ensure_section("hyde")
         doc["hyde"]["enabled"] = True
+        if features.hyde_provider != "anthropic":
+            doc["hyde"]["provider"] = features.hyde_provider
+            # Always write model for non-Anthropic providers (even empty string) so
+            # config.py's "if not model: raise ConfigError" guard fires at startup
+            # when the operator left the model prompt blank.
+            doc["hyde"]["model"] = features.hyde_model
+            if features.hyde_provider == "ollama" and features.hyde_ollama_base_url:
+                doc["hyde"]["ollama_base_url"] = features.hyde_ollama_base_url
 
     if features.enable_rag_fusion:
         _ensure_section("rag_fusion")
         doc["rag_fusion"]["enabled"] = True
+        if features.rag_fusion_provider != "anthropic":
+            doc["rag_fusion"]["provider"] = features.rag_fusion_provider
+            # Always write model for non-Anthropic providers (even empty string) so
+            # config.py's "if not model: raise ConfigError" guard fires at startup.
+            doc["rag_fusion"]["model"] = features.rag_fusion_model
+            if features.rag_fusion_provider == "ollama" and features.rag_fusion_ollama_base_url:
+                doc["rag_fusion"]["ollama_base_url"] = features.rag_fusion_ollama_base_url
 
     # BE-11: [graph] enabled must be written whenever the [graph] extras were
     # auto-installed, or the install is inert — see C1-I-1 / C1-A-4.
@@ -1090,32 +1112,88 @@ def _prompt_optional_features(
     else:
         _log_to_stderr_val = False
 
-    # --- HyDE / RAG Fusion (C15 Tier 2) ---
-    # Prompt only when ANTHROPIC_API_KEY is set and interactive and not pre-answered.
+    # --- HyDE / RAG Fusion (C15 Tier 2 / G10 BE-8) ---
+    # No API key gate — prompt whenever interactive and not pre-answered.
+    _hyde_provider_val = "anthropic"
+    _hyde_model_val = ""
+    _hyde_ollama_base_url_val = ""
+    _rag_fusion_provider_val = "anthropic"
+    _rag_fusion_model_val = ""
+    _rag_fusion_ollama_base_url_val = ""
+
     if enable_hyde is not None or enable_rag_fusion is not None:
-        # One or both flags pre-answered — use them directly; no prompt.
+        # One or both flags pre-answered — use them directly; no provider prompts.
         _enable_hyde_val = enable_hyde if enable_hyde is not None else False
         _enable_rag_fusion_val = enable_rag_fusion if enable_rag_fusion is not None else False
     elif non_interactive:
         _enable_hyde_val = False
         _enable_rag_fusion_val = False
-    elif os.environ.get("ANTHROPIC_API_KEY"):
+    else:
         print(
             "\nAI query expansion (HyDE + RAG Fusion):\n"
             "  HyDE generates hypothetical answers to improve embedding recall.\n"
             "  RAG Fusion runs multiple query reformulations and merges results.\n"
-            "  Both require $ANTHROPIC_API_KEY and add per-query latency.\n"
+            "  Supports Anthropic, OpenAI, and Ollama providers.\n"
             "  Default: disabled."
         )
         if _ask_yn("Enable AI query expansion (HyDE + RAG Fusion)? [y/N]: "):
             _enable_hyde_val = True
             _enable_rag_fusion_val = True
+
+            # Provider selection for HyDE
+            _hyde_provider_val = _ask_choice(
+                "Which provider for HyDE? (anthropic/openai/ollama) [anthropic]: ",
+                valid={"anthropic", "openai", "ollama"},
+                default="anthropic",
+            )
+            if _hyde_provider_val != "anthropic":
+                for _attempt in range(2):
+                    try:
+                        _m = input("Model name for HyDE (required for non-Anthropic providers): ").strip()
+                    except EOFError:
+                        _m = ""
+                        break
+                    if _m:
+                        _hyde_model_val = _m
+                        break
+                    if _attempt == 0:
+                        print("  Model name is required for non-Anthropic providers.")
+            if _hyde_provider_val == "ollama":
+                try:
+                    _hyde_ollama_base_url_val = input(
+                        "Ollama base URL for HyDE [http://localhost:11434]: "
+                    ).strip()
+                except EOFError:
+                    _hyde_ollama_base_url_val = ""
+
+            # Provider selection for RAG Fusion
+            _rag_fusion_provider_val = _ask_choice(
+                "Which provider for RAG Fusion? (anthropic/openai/ollama) [anthropic]: ",
+                valid={"anthropic", "openai", "ollama"},
+                default="anthropic",
+            )
+            if _rag_fusion_provider_val != "anthropic":
+                for _attempt in range(2):
+                    try:
+                        _m = input("Model name for RAG Fusion (required for non-Anthropic providers): ").strip()
+                    except EOFError:
+                        _m = ""
+                        break
+                    if _m:
+                        _rag_fusion_model_val = _m
+                        break
+                    if _attempt == 0:
+                        print("  Model name is required for non-Anthropic providers.")
+            if _rag_fusion_provider_val == "ollama":
+                try:
+                    _rag_fusion_ollama_base_url_val = input(
+                        "Ollama base URL for RAG Fusion [http://localhost:11434]: "
+                    ).strip()
+                except EOFError:
+                    _rag_fusion_ollama_base_url_val = ""
         else:
             _enable_hyde_val = False
             _enable_rag_fusion_val = False
-    else:
-        _enable_hyde_val = False
-        _enable_rag_fusion_val = False
 
     return WizardFeatures(
         install_code_extra=_install_code_extra_val,
@@ -1129,6 +1207,12 @@ def _prompt_optional_features(
         log_to_stderr=_log_to_stderr_val,
         enable_hyde=_enable_hyde_val,
         enable_rag_fusion=_enable_rag_fusion_val,
+        hyde_provider=_hyde_provider_val,
+        hyde_model=_hyde_model_val,
+        hyde_ollama_base_url=_hyde_ollama_base_url_val,
+        rag_fusion_provider=_rag_fusion_provider_val,
+        rag_fusion_model=_rag_fusion_model_val,
+        rag_fusion_ollama_base_url=_rag_fusion_ollama_base_url_val,
     )
 
 
