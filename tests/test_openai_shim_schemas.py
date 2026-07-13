@@ -1,7 +1,9 @@
-"""BE-2 (G9 OpenAI shim): Unit tests for OpenAI-compatible schema models.
+"""BE-2 + BE-4 (G9 OpenAI shim): Unit tests for OpenAI-compatible schema models.
 
 TDD: these tests are written before the implementation and must fail first.
-Covers: ModelObject, ModelList, OpenAIError, OpenAIErrorResponse.
+Covers: ModelObject, ModelList, OpenAIError, OpenAIErrorResponse (BE-2);
+        ChatMessage, ChatCompletionRequest, ChatCompletionChoice,
+        ChatCompletionUsage, ChatCompletionResponse (BE-4).
 """
 
 from __future__ import annotations
@@ -12,6 +14,11 @@ import pytest
 from pydantic import ValidationError
 
 from archon_search.server.schemas_openai import (
+    ChatCompletionChoice,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ChatCompletionUsage,
+    ChatMessage,
     ModelList,
     ModelObject,
     OpenAIError,
@@ -138,3 +145,76 @@ def test_model_list_literal_rejection() -> None:
     """ModelList rejects object values other than 'list'."""
     with pytest.raises(ValidationError):
         ModelList(object="not-a-list", data=[])  # type: ignore[call-arg]
+
+
+# ---------------------------------------------------------------------------
+# BE-4: ChatMessage, ChatCompletionRequest, ChatCompletionChoice,
+#        ChatCompletionUsage, ChatCompletionResponse
+# ---------------------------------------------------------------------------
+
+
+def test_chat_completion_response_serialization() -> None:
+    """ChatCompletionResponse serialises with expected field values."""
+    msg = ChatMessage(role="assistant", content="hello")
+    choice = ChatCompletionChoice(index=0, message=msg, finish_reason="stop")
+    usage = ChatCompletionUsage()
+    resp = ChatCompletionResponse(
+        id="chatcmpl-abc123",
+        created=1700000000,
+        model="archon-search/docs",
+        choices=[choice],
+        usage=usage,
+    )
+    data = json.loads(resp.model_dump_json())
+
+    assert data["object"] == "chat.completion"
+    assert data["choices"][0]["message"]["role"] == "assistant"
+    # usage must have exactly these three zero fields
+    assert data["usage"]["prompt_tokens"] == 0
+    assert data["usage"]["completion_tokens"] == 0
+    assert data["usage"]["total_tokens"] == 0
+
+
+def test_chat_completion_request_validation() -> None:
+    """ChatCompletionRequest accepts empty messages list; missing messages raises ValidationError."""
+    # Valid: empty messages list is allowed at the schema level (validation happens in handler)
+    req = ChatCompletionRequest(model="archon-search", messages=[])
+    assert req.model == "archon-search"
+    assert req.messages == []
+
+    # Missing messages field raises ValidationError
+    with pytest.raises(ValidationError):
+        ChatCompletionRequest(model="archon-search")  # type: ignore[call-arg]
+
+
+def test_chat_message_content_string_only() -> None:
+    """ChatMessage.content must be typed as str (not str | list).
+
+    The OpenAI spec allows array content, but Archon's shim does not support it
+    (deliberate simplification). Passing a list must raise ValidationError.
+    """
+    # String content works
+    msg = ChatMessage(role="user", content="hello")
+    assert msg.content == "hello"
+
+    # List content raises ValidationError — Archon simplification
+    with pytest.raises(ValidationError):
+        ChatMessage(role="user", content=["part1", "part2"])  # type: ignore[arg-type]
+
+    # Confirm the annotation is str, not a union
+    annotation = ChatMessage.model_fields["content"].annotation
+    assert annotation is str
+
+
+def test_user_message_extraction_role_case() -> None:
+    """role is stored case-sensitively; 'user' != 'User'.
+
+    Documents that extraction logic must use exact ``role == "user"`` comparison.
+    """
+    lower = ChatMessage(role="user", content="hello")
+    upper = ChatMessage(role="User", content="hello")
+
+    assert lower.role == "user"
+    assert upper.role == "User"
+    # Prove case-sensitivity: these are not equal
+    assert lower.role != upper.role

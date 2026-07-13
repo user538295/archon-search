@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Known error type values (from scenarios S9–S19; the K1 contract types this as
 # bare string for forward-compat — Literal is intentionally NOT used here so
@@ -56,3 +56,58 @@ class OpenAIErrorResponse(BaseModel):
     """Top-level error envelope: ``{"error": {"message": ..., "type": ...}}``."""
 
     error: OpenAIError
+
+
+# ---------------------------------------------------------------------------
+# Chat completion schemas (G9 OpenAI shim — BE-4)
+# ---------------------------------------------------------------------------
+
+
+class ChatMessage(BaseModel):
+    """A single chat message with a role and text content.
+
+    ``content`` is deliberately typed as ``str`` — the OpenAI spec allows an
+    array of content parts, but the Archon shim does not support multipart
+    content (retrieval answers are always plain text).
+    """
+
+    role: str
+    content: str  # Archon simplification: str only, not str | list
+
+
+class ChatCompletionRequest(BaseModel):
+    """POST /v1/chat/completions request body (OpenAI-compatible subset)."""
+
+    model: str
+    messages: list[ChatMessage]
+    stream: bool = False
+    # ``top_k`` is accepted for forward-compatibility but has no effect at
+    # runtime — the pipeline uses its construction-time top_k setting.
+    top_k: int | None = None
+
+
+class ChatCompletionUsage(BaseModel):
+    """Token-usage envelope — always zero because Archon is retrieval-only."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+class ChatCompletionChoice(BaseModel):
+    """One candidate completion inside a ``ChatCompletionResponse``."""
+
+    index: int
+    message: ChatMessage
+    finish_reason: str  # typically "stop"
+
+
+class ChatCompletionResponse(BaseModel):
+    """POST /v1/chat/completions response envelope (OpenAI-compatible)."""
+
+    id: str  # format: "chatcmpl-{uuid4}"
+    object: Literal["chat.completion"] = "chat.completion"
+    created: int  # Unix timestamp
+    model: str
+    choices: list[ChatCompletionChoice]
+    usage: ChatCompletionUsage = Field(default_factory=ChatCompletionUsage)
