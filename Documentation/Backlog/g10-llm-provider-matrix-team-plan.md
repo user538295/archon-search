@@ -430,12 +430,12 @@ flowchart LR
         - [x] #unit_test — `test_openai_package_absent_raises_config_error` — S10: `monkeypatch.setitem(sys.modules, 'openai', None)`; `create_app()` with `provider="openai"` raises `ConfigError` (requires lazy import — DA-TEST-C1-I-4)
         - [x] #unit_test — `test_openai_error_path_uses_query_fingerprint` — S14: assert log contains `_query_fingerprint(query)` AND assert `query not in caplog.text` (both conditions required — DA-TEST-C1-I-5)
 
-- [ ] **BE-7** — Wire `OpenAIQueryExpansionProvider` into both generator factories; add `archon-search[openai-provider]` optional extra to `pyproject.toml`; update `key_available` for OpenAI (check `OPENAI_API_KEY`); confirm lazy import pattern (`import openai` inside `__init__`) is preserved end-to-end (DA-TEST-C1-I-4) #backend-role
+- [x] **BE-7** — Wire `OpenAIQueryExpansionProvider` into both generator factories; add `archon-search[openai-provider]` optional extra to `pyproject.toml`; update `key_available` for OpenAI (check `OPENAI_API_KEY`); confirm lazy import pattern (`import openai` inside `__init__`) is preserved end-to-end (DA-TEST-C1-I-4) #backend-role
     - Use Cases + Frameworks & Drivers · 2.0h
     - needs BE-2, BE-6 · completes C2 (OpenAI variant), S4, S5
     - Tests
-        - #integration_test — `test_search_hyde_openai_provider_mocked` — `make_real_app` with `provider="openai"`, `openai` already a dev dep; mock `AsyncOpenAI.chat.completions.create`; search with `hyde=true`; assert `hyde_applied=True`
-        - #integration_test — `test_search_rag_fusion_openai_provider_mocked` — same for RAG Fusion
+        - [x] #integration_test — `test_search_hyde_openai_provider_mocked` — `make_real_app` with `provider="openai"`, `openai` already a dev dep; mock `AsyncOpenAI.chat.completions.create`; search with `hyde=true`; assert `hyde_applied=True`
+        - [x] #integration_test — `test_search_rag_fusion_openai_provider_mocked` — same for RAG Fusion
 
 - [ ] **T-2** — Manual test checklist: live Ollama server + live OpenAI API #tester-role
     - — · 1.0h

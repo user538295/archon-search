@@ -3,14 +3,8 @@
 Tests:
   - test_e2e_hyde_ollama_timeout_fallback: HyDE with Ollama times out → hyde_applied=False,
     plain search result returned (status 200)
-  - test_e2e_status_both_providers_shown: hyde=ollama / rag_fusion=anthropic wired,
+  - test_e2e_status_both_providers_shown: hyde=ollama / rag_fusion=openai wired (BE-6/BE-7),
     GET /status shows both provider fields present and correct.
-
-    NOTE: The plan specifies "rag_fusion=openai" for the status test, but BE-6 (OpenAI adapter)
-    and BE-7 (OpenAI wiring) are not yet implemented — provider='openai' raises ConfigError at
-    startup (verified in test_g10_be4_provider_factory.py::test_openai_provider_raises_config_error_at_startup).
-    anthropic is substituted here to prove "both provider fields appear in /status" while
-    documenting the known limitation. Update to openai once BE-6/BE-7 land.
 
 Run with:
     uv run pytest tests/integration/test_g10_t1_e2e_provider.py --no-cov -v
@@ -136,14 +130,16 @@ def test_e2e_status_both_providers_shown(
 ) -> None:
     """S13: GET /status shows provider fields for both HyDE and RAG Fusion.
 
-    Wires hyde=ollama / rag_fusion=anthropic (anthropic used instead of openai
-    because BE-6/BE-7 are not yet implemented — see module docstring).
+    Wires hyde=ollama / rag_fusion=openai (BE-6/BE-7 implemented).
     Asserts that:
       - data["hyde"]["provider"] == "ollama"
-      - data["rag_fusion"]["provider"] is present (not None)
+      - data["rag_fusion"]["provider"] == "openai"
     """
     # Install ollama stub BEFORE entering make_real_app (needed for hyde path)
     _install_ollama_stub(monkeypatch)
+
+    # OPENAI_API_KEY needed so RAG Fusion key_available check passes in /status
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-t1-status")
 
     toml = (
         "[hyde]\n"
@@ -153,13 +149,13 @@ def test_e2e_status_both_providers_shown(
         "\n"
         "[rag_fusion]\n"
         "enabled = true\n"
-        'provider = "anthropic"\n'
-        'model = "claude-haiku-4-5"\n'
+        'provider = "openai"\n'
+        'model = "gpt-4o-mini"\n'
     )
 
     with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
         assert cfg.hyde.provider == "ollama", "expected hyde.provider=ollama"
-        assert cfg.rag_fusion.provider == "anthropic", "expected rag_fusion.provider=anthropic"
+        assert cfg.rag_fusion.provider == "openai", "expected rag_fusion.provider=openai"
 
         resp = client.get("/status", headers=_auth(api_key))
 
@@ -178,6 +174,9 @@ def test_e2e_status_both_providers_shown(
         rag_fusion = data["rag_fusion"]
         assert rag_fusion is not None, "'rag_fusion' must not be null when rag_fusion.enabled=True"
         assert "provider" in rag_fusion, "'rag_fusion' sub-object must contain 'provider'"
-        assert rag_fusion["provider"] == "anthropic", (
-            f"expected rag_fusion.provider='anthropic', got: {rag_fusion['provider']!r}"
+        assert rag_fusion["provider"] == "openai", (
+            f"expected rag_fusion.provider='openai', got: {rag_fusion['provider']!r}"
+        )
+        assert rag_fusion["key_available"] is True, (
+            f"expected rag_fusion.key_available=True (OPENAI_API_KEY is set), got: {rag_fusion.get('key_available')!r}"
         )

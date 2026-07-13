@@ -152,6 +152,9 @@ multilingual = [
 ollama = [
     { name = "ollama" },
 ]
+openai-provider = [
+    { name = "openai" },
+]
 rag-fusion = [
     { name = "anthropic" },
 ]
@@ -188,6 +191,7 @@ requires-dist = [
     { name = "markitdown", extras = ["docx", "outlook", "pptx", "xls", "xlsx"], specifier = ">=0.1.6,<0.2" },
     { name = "networkx", marker = "extra == 'graph'", specifier = ">=3.0" },
     { name = "ollama", marker = "extra == 'ollama'", specifier = ">=0.3" },
+    { name = "openai", marker = "extra == 'openai-provider'", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "python-json-logger", specifier = ">=2.0,<3" },
     { name = "spacy", marker = "extra == 'graph'", specifier = ">=3.8,<3.9" },
@@ -205,7 +209,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "watchdog", specifier = ">=3.0" },
 ]
-provides-extras = ["code", "graph", "hyde", "multilingual", "ollama", "rag-fusion"]
+provides-extras = ["code", "graph", "hyde", "multilingual", "ollama", "openai-provider", "rag-fusion"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -27,6 +27,7 @@ multilingual = ["fasttext-wheel>=0.9.2"]
 hyde = ["anthropic>=0.40"]
 rag_fusion = ["anthropic>=0.40"]
 ollama = ["ollama>=0.3"]
+openai-provider = ["openai>=1.0"]
 graph = [
     "spacy>=3.8,<3.9",
     "networkx>=3.0",

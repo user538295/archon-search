@@ -145,7 +145,7 @@ def _check_provider_deps(config: SearchConfig) -> None:
             except ImportError:
                 raise ConfigError(
                     f"[{label}] provider='openai' but the 'openai' package is not installed; "
-                    f"run: pip install archon-search[openai]"
+                    f"run: pip install archon-search[openai-provider]"
                 )
             # _apply_toml already rejects empty model via ConfigError for the TOML path;
             # this guard covers programmatic construction with model=''.
