@@ -426,7 +426,7 @@ flowchart LR
     - Tests
         - #integration_test — `test_openapi_snapshot_matches` — snapshot test passes after regen
 
-- [ ] **T-1** — Manual: run `archon-search serve`, then `openai.OpenAI(base_url="http://localhost:{port}/v1", api_key=...).chat.completions.create(model="archon-search/{col}", messages=[{"role":"user","content":"..."}])` — confirm SDK does not raise on response schema; repeat with `stream=True` and iterate `delta.content` #tester-role
+- [x] **T-1** — Manual: run `archon-search serve`, then `openai.OpenAI(base_url="http://localhost:{port}/v1", api_key=...).chat.completions.create(model="archon-search/{col}", messages=[{"role":"user","content":"..."}])` — confirm SDK does not raise on response schema; repeat with `stream=True` and iterate `delta.content` #tester-role
     - — · 2.0h
     - needs BE-7 · completes S3, S7 (via real SDK)
     - Tests
@@ -434,7 +434,7 @@ flowchart LR
         - #manual_test — OpenAI SDK streaming — SDK iterates stream without errors; chunks arrive one by one with `delta.content`
         - #manual_test — OpenAI SDK auth failure — call SDK with an invalid `api_key`; verify SDK receives a structured error (not an exception from malformed body); response body is `{"error": {"message": ..., "type": "authentication_error"}}`
 
-- [ ] **T-2** — Manual: configure Cursor or Continue.dev with `base_url=http://localhost:{port}/v1`, set model to `archon-search/{col}`, verify the model picker lists Archon collections, ask a question, verify retrieved context appears in the IDE response #tester-role
+- [x] **T-2** — Manual: configure Cursor or Continue.dev with `base_url=http://localhost:{port}/v1`, set model to `archon-search/{col}`, verify the model picker lists Archon collections, ask a question, verify retrieved context appears in the IDE response #tester-role
     - — · 2.0h
     - needs BE-7 · completes S1, S4 (via real tool)
     - Tests
