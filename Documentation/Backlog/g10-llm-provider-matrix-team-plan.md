@@ -407,12 +407,12 @@ flowchart LR
         - [x] #unit_test — `test_wizard_no_api_key_gate_for_ollama` — wizard runs HyDE/RAG Fusion prompt without `ANTHROPIC_API_KEY` set; no `ConfigError` or early exit
         - [x] #unit_test — `test_wizard_anthropic_path_unchanged` — selecting Anthropic still writes correct TOML; existing behavior preserved
 
-- [ ] **T-1** — E2e: verify Ollama fallback (mocked) and `GET /status` shows correct provider #tester-role
+- [x] **T-1** — E2e: verify Ollama fallback (mocked) and `GET /status` shows correct provider #tester-role
     - — · 1.0h
     - needs BE-4, BE-5, BE-8 · completes S7, S8, S13
     - Tests
-        - #e2e_test — `test_e2e_hyde_ollama_timeout_fallback` — `TestClient`, `provider="ollama"`, mock `ollama.AsyncClient.generate` raises `TimeoutError`, POST /search `hyde=true`, verify `hyde_applied=False` and plain search result returned
-        - #e2e_test — `test_e2e_status_both_providers_shown` — `TestClient`, hyde=ollama / rag_fusion=openai, `GET /status`, assert both `provider` fields present and correct
+        - [x] #e2e_test — `test_e2e_hyde_ollama_timeout_fallback` — `TestClient`, `provider="ollama"`, mock `ollama.AsyncClient.generate` raises `TimeoutError`, POST /search `hyde=true`, verify `hyde_applied=False` and plain search result returned
+        - [x] #e2e_test — `test_e2e_status_both_providers_shown` — `TestClient`, hyde=ollama / rag_fusion=openai, `GET /status`, assert both `provider` fields present and correct
 
 ---
 
