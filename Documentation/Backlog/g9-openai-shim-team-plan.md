@@ -189,6 +189,8 @@ See [`openai-shim-config.tsp`](openai-shim-config.tsp) (compiled clean with `tsp
 | **S15** | **Given** shim enabled, valid auth, `model="archon-search"`, namespace has collections but ALL use non-default embedding models (all excluded by model mismatch) · **When** `POST /v1/chat/completions` · **Then** 200, `choices[0].message.content=""`, `finish_reason="stop"`, WARNING logged naming each excluded collection *(S15 was previously unassigned — assigned in this revision to the all-collections-excluded scenario)* |
 | **S16** | **Given** `stream=true`, `inject_citations=false`, results present · **When** `POST /v1/chat/completions` · **Then** SSE delta events contain chunk text only — no `[Source: …]` lines in any event |
 | **S17** | **Given** `model="gpt-4"` (any value not exactly `"archon-search"` or starting with `"archon-search/"`) · **When** `POST /v1/chat/completions` · **Then** 404, `{"error": {"message": "The model 'gpt-4' does not exist.", "type": "invalid_request_error"}}` |
+| **S18** | **Given** shim enabled, valid auth, `model="archon-search"`, namespace has more than `max_fanout` (default 8) collections · **When** `POST /v1/chat/completions` · **Then** 200, only `max_fanout` collections searched, WARNING logged naming the omitted collections; client receives normal response with no indication of truncation |
+| **S19** | **Given** shim enabled, valid auth, valid model, pipeline raises an infra-level error (e.g. store exception or timeout) · **When** `POST /v1/chat/completions` · **Then** 503 or 504, `{"error": {"message": ..., "type": "server_error"}}` — OpenAI error envelope, not FastAPI's native `{"detail": ...}` |
 
 ---
 
@@ -210,9 +212,9 @@ N/A — no frontend work for this feature. This is a purely server-side API addi
 
 **Done when**
 - [ ] `GET /v1/models` returns namespace-scoped model list — S1, S2
-- [ ] `POST /v1/chat/completions` (non-streaming) returns retrieved chunks as assistant reply — S3, S4, S5, S6, S15
-- [ ] `POST /v1/chat/completions` (streaming) delivers one SSE event per chunk — S7, S8
-- [ ] All error conditions return OpenAI-shaped error envelopes — S9, S10, S11, S12, S13, S17
+- [ ] `POST /v1/chat/completions` (non-streaming) returns retrieved chunks as assistant reply — S3, S4, S5, S6, S15, S18
+- [ ] `POST /v1/chat/completions` (streaming) delivers one SSE event per chunk — S7, S8, S16
+- [ ] All error conditions return OpenAI-shaped error envelopes — S9, S10, S11, S12, S13, S17, S19
 - [ ] `[openai_shim] enabled = false` leaves no `/v1` routes registered — S14
 - [ ] OpenAPI snapshot regenerated; all tests pass
 
@@ -238,6 +240,8 @@ N/A — no frontend work for this feature. This is a purely server-side API addi
 | S11, S12 | integration — BE-6 tests |
 | S7, S8, S16 | integration — BE-7 tests (TestClient buffers full SSE body; parse `data:` lines) |
 | S17 | integration — BE-5 tests (unrecognized model prefix → 404) |
+| S18 | integration — BE-5 tests (fanout cap: >max_fanout collections → truncate + WARNING) |
+| S19 | integration — BE-5 tests (store error / timeout → 503/504 OpenAI error shape) |
 | S3, S4, S7 (real SDK) | manual — T-1 (OpenAI SDK schema validation not caught by TestClient) |
 | S1, S3 (real tool) | manual — T-2 (tool UI interaction not automatable) |
 
@@ -364,7 +368,7 @@ flowchart LR
 
 - [ ] **BE-5** — Implement `POST /v1/chat/completions` non-streaming path in `routes_openai_shim.py`: extract last `role="user"` message as query (422 if none found); parse `model` by splitting on the FIRST `/` only (`model.split('/', 1)`): `archon-search` (no slash) → fanout path; `archon-search/{col}` → extract collection as everything after the first slash (safe for collection names containing '/'); any model value that is neither exactly `'archon-search'` nor starts with `'archon-search/'` returns **404** with OpenAI error shape (message: "The model '{model}' does not exist.", type: "invalid_request_error"); for `model="archon-search/{col}"` call `pipeline.get_collection_meta` then `pipeline.search(query, col, namespace=ns, embedder=...)` (resolve embedder using the same pattern as `routes_search.py`: read `active_model = meta.active_embedding_model or config.embedding_model` (mirroring `routes_search.py`), call `embedder_cache.get_or_load(active_model)`, fall back to `pipeline._global_embedder` if cache absent); for the direct path (`model="archon-search/{col}"`), wrap `pipeline.search()` in `asyncio.wait_for(..., timeout=_SEARCH_TIMEOUT_SECONDS)` matching the pattern in `routes_search.py` — map `asyncio.TimeoutError` to 504 with OpenAI error shape (`{"error": {"message": "Request timeout.", "type": "server_error"}}`); for the fanout path, `search_many()` raises `FanoutTimeoutError` internally — catch it and map to 504 (do NOT wrap `search_many` in `asyncio.wait_for` — it manages its own timeout); `_SEARCH_TIMEOUT_SECONDS` is a private constant in `routes_search.py` — import it from there or define an equivalent constant locally in `routes_openai_shim.py`; also catch `MetadataLookupError` — map to OpenAI-shaped error envelope (503); for `model="archon-search"` call `pipeline.get_all_collections_meta(ns)` to obtain `col_names` (this fetch is needed for the fanout cap; note that `search_many` will re-fetch metadata internally — two fetches per request is expected), then before calling `search_many()`, if `len(col_names) > request.app.state.config.max_fanout` (root `SearchConfig.max_fanout`, NOT `openai_shim.max_fanout`), cap `col_names` to the first `max_fanout` items and log a WARNING listing the omitted collection names; call `pipeline.search_many(query, col_names, namespace=ns)` (second arg is positional; the parameter is named `collections` — do NOT use `col_names=` as a keyword); wrap the `search_many` call in a `try/except CollectionNotFoundError` and return a 404 OpenAI error if it fires (a collection may be deleted between the two metadata fetches); after `search_many()` returns, check `result.excluded_collections` — if non-empty, log a WARNING naming each excluded collection's `name` and `reason` (matches the existing pipeline pattern); return OpenAI 404 error when collection missing or collection list empty; format `SearchResult.text` and `source_path` into assistant content; `inject_citations` config gates citation appending; return `ChatCompletionResponse` with `id="chatcmpl-{uuid4}"`; also wrap the direct `pipeline.search()` call in a broad `except Exception` (matching `routes_search.py:273-275`) to catch any store-level exception and return a **503** OpenAI error shape (ensures ALL /v1/* error responses use the OpenAI envelope, not FastAPI's native `{"detail": ...}`; 503 aligns with how the existing search route maps generic store failures); the shim intentionally truncates (not rejects) at `max_fanout` — this differs from every other Archon route that caps fanout with a 422; the choice is deliberate to match OpenAI client expectations of graceful degradation #backend-role
     - Interface Adapters · 8.0h
-    - needs BE-3, BE-4 · completes S3, S4, S5, S6, S9, S10, S13, S15, S17, C2
+    - needs BE-3, BE-4 · completes S3, S4, S5, S6, S9, S10, S13, S15, S17, S18, S19, C2
     - Tests
         - #unit_test — `test_extract_last_user_message` — messages with mixed roles; last user message is extracted as query
         - #unit_test — `test_format_chunks_with_citations` — `inject_citations=True` wraps each chunk as `\n\nContext:\n{text}\n[Source: {path}]`

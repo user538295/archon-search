@@ -39,6 +39,43 @@ components:
           $ref: '#/components/schemas/ChatMessage'
         finish_reason:
           type: string
+    ChatCompletionChunk:
+      type: object
+      required:
+        - id
+        - object
+        - created
+        - model
+        - choices
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+        created:
+          type: integer
+          format: int32
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatCompletionChunkChoice'
+    ChatCompletionChunkChoice:
+      type: object
+      required:
+        - index
+        - delta
+        - finish_reason
+      properties:
+        index:
+          type: integer
+          format: int32
+        delta:
+          $ref: '#/components/schemas/ChunkDelta'
+        finish_reason:
+          type: string
+          nullable: true
     ChatCompletionRequest:
       type: object
       required:
@@ -59,6 +96,7 @@ components:
           type: integer
           format: int32
           nullable: true
+          description: Accepted for forward compatibility but has no effect — pipeline uses construction-time top_k. Reserved for a future release.
     ChatCompletionResponse:
       type: object
       required:
@@ -109,6 +147,14 @@ components:
       properties:
         role:
           type: string
+        content:
+          type: string
+    ChunkDelta:
+      type: object
+      properties:
+        role:
+          type: string
+          description: Only present on the first chunk
         content:
           type: string
     OpenAIError:

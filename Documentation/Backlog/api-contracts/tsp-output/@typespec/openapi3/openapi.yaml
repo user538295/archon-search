@@ -1,7 +1,182 @@
 openapi: 3.0.0
 info:
-  title: (title)
+  title: Archon OpenAI Shim — Chat Completions API
   version: 0.0.0
 tags: []
-paths: {}
-components: {}
+paths:
+  /v1/chat/completions:
+    post:
+      operationId: ChatCompletions_create
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/ChatCompletionResponse'
+                  - $ref: '#/components/schemas/OpenAIErrorResponse'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+components:
+  schemas:
+    ChatCompletionChoice:
+      type: object
+      required:
+        - index
+        - message
+        - finish_reason
+      properties:
+        index:
+          type: integer
+          format: int32
+        message:
+          $ref: '#/components/schemas/ChatMessage'
+        finish_reason:
+          type: string
+    ChatCompletionChunk:
+      type: object
+      required:
+        - id
+        - object
+        - created
+        - model
+        - choices
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+        created:
+          type: integer
+          format: int32
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatCompletionChunkChoice'
+    ChatCompletionChunkChoice:
+      type: object
+      required:
+        - index
+        - delta
+        - finish_reason
+      properties:
+        index:
+          type: integer
+          format: int32
+        delta:
+          $ref: '#/components/schemas/ChunkDelta'
+        finish_reason:
+          type: string
+          nullable: true
+    ChatCompletionRequest:
+      type: object
+      required:
+        - model
+        - messages
+      properties:
+        model:
+          type: string
+          description: OpenAI model name — "archon-search" or "archon-search/{collection}"
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+        stream:
+          type: boolean
+          nullable: true
+        top_k:
+          type: integer
+          format: int32
+          nullable: true
+          description: Accepted for forward compatibility but has no effect — pipeline uses construction-time top_k. Reserved for a future release.
+    ChatCompletionResponse:
+      type: object
+      required:
+        - id
+        - object
+        - created
+        - model
+        - choices
+        - usage
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+        created:
+          type: integer
+          format: int32
+        model:
+          type: string
+          description: Echoes the requested model name
+        choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatCompletionChoice'
+        usage:
+          $ref: '#/components/schemas/ChatCompletionUsage'
+    ChatCompletionUsage:
+      type: object
+      required:
+        - prompt_tokens
+        - completion_tokens
+        - total_tokens
+      properties:
+        prompt_tokens:
+          type: integer
+          format: int32
+        completion_tokens:
+          type: integer
+          format: int32
+        total_tokens:
+          type: integer
+          format: int32
+    ChatMessage:
+      type: object
+      required:
+        - role
+        - content
+      properties:
+        role:
+          type: string
+        content:
+          type: string
+    ChunkDelta:
+      type: object
+      properties:
+        role:
+          type: string
+          description: Only present on the first chunk
+        content:
+          type: string
+    OpenAIError:
+      type: object
+      required:
+        - message
+        - type
+      properties:
+        message:
+          type: string
+        type:
+          type: string
+        param:
+          type: string
+          nullable: true
+        code:
+          type: string
+          nullable: true
+    OpenAIErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          $ref: '#/components/schemas/OpenAIError'

@@ -16,6 +16,7 @@ model ChatCompletionRequest {
 
   messages: ChatMessage[];
   stream?: boolean | null;
+  /** Accepted for forward compatibility but has no effect — pipeline uses construction-time top_k. Reserved for a future release. */
   top_k?: int32 | null;
 }
 
@@ -42,6 +43,30 @@ model ChatCompletionResponse {
 
   choices: ChatCompletionChoice[];
   usage: ChatCompletionUsage;
+}
+
+// Streaming (stream=true): returns text/event-stream. Each SSE frame is a ChatCompletionChunk.
+// Final frame has delta={} and finish_reason='stop'. Terminal frame is `data: [DONE]`.
+
+model ChunkDelta {
+  /** Only present on the first chunk */
+  role?: string;
+  content?: string;
+}
+
+model ChatCompletionChunkChoice {
+  index: int32;
+  delta: ChunkDelta;
+  finish_reason: string | null;
+}
+
+model ChatCompletionChunk {
+  id: string;
+  object: string;
+  created: int32;
+  @encodedName("application/json", "model")
+  modelName: string;
+  choices: ChatCompletionChunkChoice[];
 }
 
 model OpenAIError {
