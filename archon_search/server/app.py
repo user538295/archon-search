@@ -8,7 +8,10 @@ import logging
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
+
+if TYPE_CHECKING:
+    from archon_search.query_expansion_protocol import QueryExpansionProvider
 
 import uvicorn
 from fastapi import FastAPI
@@ -151,6 +154,36 @@ def _check_provider_deps(config: SearchConfig) -> None:
                     f"[{label}] provider='openai' requires a non-empty model name; "
                     f"set [{label}].model in archon-search.toml"
                 )
+
+
+def _build_query_expansion_provider(
+    provider: str, model: str, ollama_base_url: str
+) -> "QueryExpansionProvider":
+    """Build and return the appropriate QueryExpansionProvider from config.
+
+    Returns an OllamaQueryExpansionProvider for provider='ollama',
+    an AnthropicQueryExpansionProvider for provider='anthropic'.
+    provider='openai' will be handled in BE-6.
+
+    The returned object is injected as the ``provider`` argument to
+    HyDEGenerator and RAGFusionGenerator so the generators do not
+    construct a default provider.
+    """
+    if provider == "ollama":
+        from archon_search.providers.ollama_provider import (  # noqa: PLC0415
+            OllamaQueryExpansionProvider,
+        )
+        return OllamaQueryExpansionProvider(model=model, base_url=ollama_base_url)
+    if provider == "openai":
+        raise ConfigError(
+            "provider='openai' is not yet supported in this release; "
+            "support is added in BE-6. Use provider='anthropic' or provider='ollama'."
+        )
+    # Default: anthropic
+    from archon_search.providers.anthropic_provider import (  # noqa: PLC0415
+        AnthropicQueryExpansionProvider,
+    )
+    return AnthropicQueryExpansionProvider(model=model)
 
 
 def _check_graph_deps(config: SearchConfig) -> None:
@@ -604,17 +637,23 @@ def create_app(
         ppr_walker=_ppr_walker,
     )
     from archon_search.hyde import HyDEGenerator  # noqa: PLC0415
-    app.state.hyde_generator = HyDEGenerator(embedder=app.state.embedder, config=config.hyde)
+    from archon_search.rag_fusion import RAGFusionGenerator  # noqa: PLC0415
+
+    _hyde_provider = _build_query_expansion_provider(config.hyde.provider, config.hyde.model, config.hyde.ollama_base_url)
+    app.state.hyde_generator = HyDEGenerator(embedder=app.state.embedder, config=config.hyde, provider=_hyde_provider)
     if config.hyde.enabled:
         logger.info(
-            "HyDE is enabled — search query text will be sent to Anthropic's API (model: %s)",
+            "HyDE is enabled — search query text will be sent to %s (model: %s)",
+            config.hyde.provider,
             config.hyde.model,
         )
-    from archon_search.rag_fusion import RAGFusionGenerator  # noqa: PLC0415
-    app.state.rag_fusion_generator = RAGFusionGenerator(config=config.rag_fusion)
+
+    _rag_fusion_provider = _build_query_expansion_provider(config.rag_fusion.provider, config.rag_fusion.model, config.rag_fusion.ollama_base_url)
+    app.state.rag_fusion_generator = RAGFusionGenerator(config=config.rag_fusion, provider=_rag_fusion_provider)
     if config.rag_fusion.enabled:
         logger.info(
-            "RAG Fusion is enabled — search query text will be sent to Anthropic's API (model: %s)",
+            "RAG Fusion is enabled — search query text will be sent to %s (model: %s)",
+            config.rag_fusion.provider,
             config.rag_fusion.model,
         )
     app.include_router(collections_router)

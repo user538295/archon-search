@@ -461,7 +461,7 @@ def test_hyde_optional_dep_in_pyproject() -> None:
 def test_app_startup_logs_info_when_hyde_enabled(
     tmp_path: Path, job_store: JobStore, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """When config.hyde.enabled=True, create_app must log an INFO about HyDE and Anthropic's API."""
+    """When config.hyde.enabled=True, create_app must log an INFO about HyDE and the provider."""
     import logging
 
     cfg = SearchConfig()
@@ -472,9 +472,9 @@ def test_app_startup_logs_info_when_hyde_enabled(
         create_app(cfg, job_store)
 
     messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
-    hyde_msgs = [m for m in messages if "HyDE" in m and "Anthropic" in m]
+    hyde_msgs = [m for m in messages if "HyDE" in m and cfg.hyde.provider in m]
     assert hyde_msgs, (
-        f"Expected INFO message about HyDE and Anthropic's API, got: {messages}"
+        f"Expected INFO message about HyDE and provider, got: {messages}"
     )
     # Must include the model name
     assert any(cfg.hyde.model in m for m in hyde_msgs)
@@ -531,7 +531,7 @@ def test_rag_fusion_optional_dep_in_pyproject() -> None:
 def test_app_startup_logs_info_when_rag_fusion_enabled(
     tmp_path: Path, job_store: JobStore, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """When config.rag_fusion.enabled=True, create_app must log an INFO about RAG Fusion and Anthropic's API."""
+    """When config.rag_fusion.enabled=True, create_app must log an INFO about RAG Fusion and the provider."""
     import logging
 
     cfg = SearchConfig()
@@ -542,9 +542,9 @@ def test_app_startup_logs_info_when_rag_fusion_enabled(
         create_app(cfg, job_store)
 
     messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
-    rag_fusion_msgs = [m for m in messages if "RAG Fusion" in m and "Anthropic" in m]
+    rag_fusion_msgs = [m for m in messages if "RAG Fusion" in m and cfg.rag_fusion.provider in m]
     assert rag_fusion_msgs, (
-        f"Expected INFO message about RAG Fusion and Anthropic's API, got: {messages}"
+        f"Expected INFO message about RAG Fusion and provider, got: {messages}"
     )
     # Must include the model name
     assert any(cfg.rag_fusion.model in m for m in rag_fusion_msgs)

@@ -131,24 +131,27 @@ class RAGFusionGenerator:
 
         fp = _query_fingerprint(query)
 
-        # Token bucket pre-flight (under lock)
-        async with self._lock:
-            now = time.monotonic()
-            if now >= self._rpm_refill_at:
-                self._rpm_tokens = self._config.max_requests_per_minute
-                self._rpm_refill_at = now + 60.0
+        # Token bucket pre-flight (under lock).
+        # Ollama is a local model with no API cap — skip rate limiting entirely.
+        _is_ollama = self._config.provider == "ollama"
+        if not _is_ollama:
+            async with self._lock:
+                now = time.monotonic()
+                if now >= self._rpm_refill_at:
+                    self._rpm_tokens = self._config.max_requests_per_minute
+                    self._rpm_refill_at = now + 60.0
 
-            if self._rpm_tokens <= 0:
-                # Rate limit warning at most once per minute
-                if now - self._rate_limit_warned_at >= 60.0:
-                    _logger.warning(
-                        "RAG Fusion rate limit exhausted (fp=%s); falling back to single-query search",
-                        fp,
-                    )
-                    self._rate_limit_warned_at = now
-                return []
+                if self._rpm_tokens <= 0:
+                    # Rate limit warning at most once per minute
+                    if now - self._rate_limit_warned_at >= 60.0:
+                        _logger.warning(
+                            "RAG Fusion rate limit exhausted (fp=%s); falling back to single-query search",
+                            fp,
+                        )
+                        self._rate_limit_warned_at = now
+                    return []
 
-            self._rpm_tokens -= 1
+                self._rpm_tokens -= 1
 
         truncated_query = query[:2000]
 

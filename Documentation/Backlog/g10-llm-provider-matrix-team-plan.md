@@ -378,15 +378,15 @@ flowchart LR
         - [x] #unit_test — `test_ollama_no_rate_limit_enforcement` — S11: after 100 calls in a tight loop, all succeed; `_rpm_tokens` never decremented
         - [x] #unit_test — `test_ollama_error_path_uses_query_fingerprint` — S14: assert log contains `_query_fingerprint(query)` AND assert `query not in caplog.text` (both conditions required — prevents a log line from containing both fingerprint and raw query) (DA-TEST-C1-I-5)
 
-- [ ] **BE-4** — Wire provider factory into `HyDEGenerator` and `RAGFusionGenerator`; update `create_app()` to construct the correct provider from config; update `app.py` lines 563–575 #backend-role
+- [x] **BE-4** — Wire provider factory into `HyDEGenerator` and `RAGFusionGenerator`; update `create_app()` to construct the correct provider from config; update `app.py` lines 563–575 #backend-role
     - Use Cases + Frameworks & Drivers · 3.0h
     - needs BE-2, BE-3 · completes S6
     - Tests
-        - #integration_test — `test_search_hyde_ollama_fallback_on_timeout` — S7: `make_real_app` with `provider="ollama"`; mock `ollama.AsyncClient.generate` raises `TimeoutError`; search with `hyde=true`; assert `hyde_applied=False` in response
-        - #integration_test — `test_search_rag_fusion_ollama_fallback_on_timeout` — S8: same pattern for RAG Fusion; assert fallback field (verify `rag_fusion_warning` or `rag_fusion_failure_reason` actual field name against `SearchResponse` in `schemas.py` before writing assertion — DA-TEST-C1-I-8)
-        - #integration_test — `test_search_hyde_ollama_rag_fusion_anthropic_independent` — S6: `provider="ollama"` for hyde, `provider="anthropic"` for rag_fusion; both work without interference; assert each uses its configured client
-        - #integration_test — `test_factory_injects_correct_provider_type` — assert `isinstance(app.state.hyde_generator._provider, QueryExpansionProvider)` (C1-B-8 conformance test)
-        - #integration_test — `test_search_mixed_providers_token_buckets_independent` — S6: mixed providers (ollama+anthropic); run rate-limit-count calls for each; assert rate limit fires only for Anthropic path, not Ollama path, with no cross-contamination between the two independent buckets (DA-TEST-C1-I-10)
+        - [x] #integration_test — `test_search_hyde_ollama_fallback_on_timeout` — S7: `make_real_app` with `provider="ollama"`; mock `ollama.AsyncClient.generate` raises `TimeoutError`; search with `hyde=true`; assert `hyde_applied=False` in response
+        - [x] #integration_test — `test_search_rag_fusion_ollama_fallback_on_timeout` — S8: same pattern for RAG Fusion; assert fallback field (verify `rag_fusion_warning` or `rag_fusion_failure_reason` actual field name against `SearchResponse` in `schemas.py` before writing assertion — DA-TEST-C1-I-8)
+        - [x] #integration_test — `test_search_hyde_ollama_rag_fusion_anthropic_independent` — S6: `provider="ollama"` for hyde, `provider="anthropic"` for rag_fusion; both work without interference; assert each uses its configured client
+        - [x] #integration_test — `test_factory_injects_correct_provider_type` — assert `isinstance(app.state.hyde_generator._provider, QueryExpansionProvider)` (C1-B-8 conformance test)
+        - [x] #integration_test — `test_search_mixed_providers_token_buckets_independent` — S6: mixed providers (ollama+anthropic); run rate-limit-count calls for each; assert rate limit fires only for Anthropic path, not Ollama path, with no cross-contamination between the two independent buckets (DA-TEST-C1-I-10)
 
 - [ ] **BE-5** — Add `provider: str` to `HydeStatusDetail` and `RagFusionStatusDetail`; update `_build_hyde_status` / `_build_rag_fusion_status` to read `config.hyde.provider`; update `key_available` to be provider-aware; regenerate `tests/server/openapi_snapshot.json` #backend-role
     - Interface Adapters · 2.0h
