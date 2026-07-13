@@ -334,13 +334,13 @@ flowchart LR
         - [x] #unit_test — `test_openai_shim_disabled_by_default` — `SearchConfig()` default has `openai_shim.enabled = False`
         - [x] #integration_test — `test_config_snapshot_includes_openai_shim` — `test_all_defaults_snapshot` passes after adding `"openai_shim"` key
 
-- [ ] **BE-2** — Create `archon_search/server/schemas_openai.py` with `ModelObject`, `ModelList`, `OpenAIError`, `OpenAIErrorResponse` #backend-role
+- [x] **BE-2** — Create `archon_search/server/schemas_openai.py` with `ModelObject`, `ModelList`, `OpenAIError`, `OpenAIErrorResponse` #backend-role
     - Entities · 2.0h
     - needs K1 · completes C1 (schema shapes)
     - Tests
-        - #unit_test — `test_model_object_serialization` — `ModelObject(id="archon-search/docs", ...)` serialises to the correct JSON keys
-        - #unit_test — `test_openai_error_response_shape` — `OpenAIErrorResponse` serialises as `{"error": {"message": ..., "type": ...}}`
-        - #unit_test — `test_model_object_created_is_zero` — `ModelObject` serialises with `created=0`; this is a deliberate trade-off (not a real timestamp)
+        - [x] #unit_test — `test_model_object_serialization` — `ModelObject(id="archon-search/docs", ...)` serialises to the correct JSON keys
+        - [x] #unit_test — `test_openai_error_response_shape` — `OpenAIErrorResponse` serialises as `{"error": {"message": ..., "type": ...}}`
+        - [x] #unit_test — `test_model_object_created_is_zero` — `ModelObject` serialises with `created=0`; this is a deliberate trade-off (not a real timestamp)
 
 - [ ] **BE-3** — Create `archon_search/server/routes_openai_shim.py` with `GET /models` handler; add thin `OpenAI401Middleware` that rewrites bodyless 401 responses to OpenAI error shape on `/v1/*` paths; wire router and middleware into `create_app()` — the `include_router` call and `add_middleware(OpenAI401Middleware)` are each inside their own `if config.openai_shim.enabled:` guard (two separate guards in different regions of `app.py`); `OpenAI401Middleware` is added AFTER `APIKeyMiddleware` (Starlette LIFO — last added is outermost, so it intercepts the 401 response before it reaches the client) #backend-role
     - Interface Adapters · 4.0h
