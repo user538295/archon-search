@@ -432,6 +432,26 @@ num_queries = 2
 # graph-mode query rewriting. Must be >= 1.
 # naive_max_expansion_terms = 20
 
+[openai_shim]
+# OpenAI-compatible shim endpoint (G9).
+# Disabled by default.
+#
+# When enabled, the server exposes POST /v1/chat/completions — an OpenAI-compatible
+# endpoint that routes the user message through archon-search retrieval and returns
+# a chat completion response. Clients configured with base_url pointing at this server
+# can drop in as-is without code changes.
+#
+# enabled = false
+
+# Append source citations to the assistant reply.
+# inject_citations = true
+
+# Number of retrieval results to feed into the response context.
+# Accepted and validated, but currently not forwarded to the pipeline
+# (reserved for a future release when search() and search_many() support
+# a runtime top_k parameter).
+# top_k = 5
+
 [telemetry]
 # Opt-in local query telemetry. Disabled by default.
 #

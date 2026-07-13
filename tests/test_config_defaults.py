@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.config import GraphConfig, HyDEConfig, RAGFusionConfig, SearchConfig, load_config
+from archon_search.config import GraphConfig, HyDEConfig, OpenAIShimConfig, RAGFusionConfig, SearchConfig, load_config
 from archon_search.constants import DEFAULT_FAST_MODEL, DEFAULT_ROUTING_DESCRIPTION_WEIGHT
 from archon_search.paths import get_data_dir
 
@@ -220,6 +220,12 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "ppr_damping": 0.85,
             "ppr_top_entities": 20,
             "naive_max_expansion_terms": 20,
+        },
+        # [openai_shim]
+        "openai_shim": {
+            "enabled": False,
+            "inject_citations": True,
+            "top_k": 5,
         },
     }
 

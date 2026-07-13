@@ -325,14 +325,14 @@ flowchart LR
 
 *A developer's tool calls `GET /v1/models` and receives a list of Archon collections as selectable model options. Carries the `OpenAIShimConfig` data foundation and all route registration infrastructure. Every later slice builds on this.*
 
-- [ ] **BE-1** — Add `OpenAIShimConfig` dataclass to `config.py`; add `openai_shim` field to `SearchConfig`; add `_apply_toml` block; update `tests/test_config_defaults.py` snapshot; update `tests/path_home_allowlist.txt` line number if shifted #backend-role
+- [x] **BE-1** — Add `OpenAIShimConfig` dataclass to `config.py`; add `openai_shim` field to `SearchConfig`; add `_apply_toml` block; update `tests/test_config_defaults.py` snapshot; update `tests/path_home_allowlist.txt` line number if shifted #backend-role
     - Frameworks & Drivers · 3.0h
     - needs K1 · completes C3
     - Tests
-        - #unit_test — `test_openai_shim_config_defaults` — `OpenAIShimConfig()` has `enabled=False`, `inject_citations=True`, `top_k=5`
-        - #unit_test — `test_openai_shim_toml_parse` — `[openai_shim]\nenabled = true\n...` is parsed correctly into `SearchConfig.openai_shim`
-        - #unit_test — `test_openai_shim_disabled_by_default` — `SearchConfig()` default has `openai_shim.enabled = False`
-        - #integration_test — `test_config_snapshot_includes_openai_shim` — `test_all_defaults_snapshot` passes after adding `"openai_shim"` key
+        - [x] #unit_test — `test_openai_shim_config_defaults` — `OpenAIShimConfig()` has `enabled=False`, `inject_citations=True`, `top_k=5`
+        - [x] #unit_test — `test_openai_shim_toml_parse` — `[openai_shim]\nenabled = true\n...` is parsed correctly into `SearchConfig.openai_shim`
+        - [x] #unit_test — `test_openai_shim_disabled_by_default` — `SearchConfig()` default has `openai_shim.enabled = False`
+        - [x] #integration_test — `test_config_snapshot_includes_openai_shim` — `test_all_defaults_snapshot` passes after adding `"openai_shim"` key
 
 - [ ] **BE-2** — Create `archon_search/server/schemas_openai.py` with `ModelObject`, `ModelList`, `OpenAIError`, `OpenAIErrorResponse` #backend-role
     - Entities · 2.0h

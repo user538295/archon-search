@@ -168,6 +168,24 @@ class GraphConfig:
     query rewriter. Must be >= 1."""
 
 
+_OPENAI_SHIM_TOP_K_DEFAULT: int = 5
+
+
+@dataclass
+class OpenAIShimConfig:
+    """Configuration for the OpenAI-compatible shim endpoint (G9).
+
+    enabled: expose the /v1/chat/completions shim route (default: False).
+    inject_citations: append source citations to the assistant reply (default: True).
+    top_k: number of retrieval results to feed into the response context (default: 5).
+        Accepted and validated but currently has no effect — not forwarded to the pipeline. Reserved for a future release when search() and search_many() support a runtime top_k parameter.
+    """
+
+    enabled: bool = False
+    inject_citations: bool = True
+    top_k: int = _OPENAI_SHIM_TOP_K_DEFAULT
+
+
 @dataclass
 class SearchConfig:
     # [server]
@@ -239,6 +257,8 @@ class SearchConfig:
     ingest: IngestConfig = field(default_factory=IngestConfig)
     # [graph]
     graph: GraphConfig = field(default_factory=GraphConfig)
+    # [openai_shim]
+    openai_shim: OpenAIShimConfig = field(default_factory=OpenAIShimConfig)
 
 
 def save_config(config: SearchConfig, path: Path | str) -> None:
@@ -834,6 +854,18 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             graph_cfg["naive_max_expansion_terms"], "[graph].naive_max_expansion_terms", minimum=1
         )
     config.graph = graph
+
+    openai_shim_cfg = doc.get("openai_shim", {})
+    openai_shim = OpenAIShimConfig()
+    if "enabled" in openai_shim_cfg:
+        openai_shim.enabled = _coerce_bool(openai_shim_cfg["enabled"], "[openai_shim].enabled")
+    if "inject_citations" in openai_shim_cfg:
+        openai_shim.inject_citations = _coerce_bool(
+            openai_shim_cfg["inject_citations"], "[openai_shim].inject_citations"
+        )
+    if "top_k" in openai_shim_cfg:
+        openai_shim.top_k = _coerce_bounded_int(openai_shim_cfg["top_k"], "[openai_shim].top_k", minimum=1)
+    config.openai_shim = openai_shim
 
 
 def _post_process_maintenance(config: SearchConfig) -> None:
