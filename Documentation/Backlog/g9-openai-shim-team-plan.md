@@ -342,16 +342,16 @@ flowchart LR
         - [x] #unit_test — `test_openai_error_response_shape` — `OpenAIErrorResponse` serialises as `{"error": {"message": ..., "type": ...}}`
         - [x] #unit_test — `test_model_object_created_is_zero` — `ModelObject` serialises with `created=0`; this is a deliberate trade-off (not a real timestamp)
 
-- [ ] **BE-3** — Create `archon_search/server/routes_openai_shim.py` with `GET /models` handler; add thin `OpenAI401Middleware` that rewrites bodyless 401 responses to OpenAI error shape on `/v1/*` paths; wire router and middleware into `create_app()` — the `include_router` call and `add_middleware(OpenAI401Middleware)` are each inside their own `if config.openai_shim.enabled:` guard (two separate guards in different regions of `app.py`); `OpenAI401Middleware` is added AFTER `APIKeyMiddleware` (Starlette LIFO — last added is outermost, so it intercepts the 401 response before it reaches the client) #backend-role
+- [x] **BE-3** — Create `archon_search/server/routes_openai_shim.py` with `GET /models` handler; add thin `OpenAI401Middleware` that rewrites bodyless 401 responses to OpenAI error shape on `/v1/*` paths; wire router and middleware into `create_app()` — the `include_router` call and `add_middleware(OpenAI401Middleware)` are each inside their own `if config.openai_shim.enabled:` guard (two separate guards in different regions of `app.py`); `OpenAI401Middleware` is added AFTER `APIKeyMiddleware` (Starlette LIFO — last added is outermost, so it intercepts the 401 response before it reaches the client) #backend-role
     - Interface Adapters · 4.0h
     - needs BE-1, BE-2 · completes S1, S2, S14, C1
     - Tests
         - Note for the implementing dev: the new test file (e.g., `tests/server/test_routes_openai_shim.py`) must declare `pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("openai_shim")]` at the top for correct xdist grouping.
-        - #unit_test — `test_get_models_disabled_returns_404` — when `openai_shim.enabled=False`, no `/v1` router is registered; `GET /v1/models` returns plain 404
-        - #unit_test — `test_get_models_returns_model_list_shape` — stub pipeline returns two collections; response shape matches `ModelList` with three entries (two per-collection + catch-all)
-        - #integration_test — `test_get_models_with_collections` — `make_real_app` + ingest into two collections; `GET /v1/models` returns `archon-search`, `archon-search/col-a`, `archon-search/col-b`
-        - #integration_test — `test_get_models_empty_namespace` — no ingest; `GET /v1/models` returns only `archon-search` catch-all entry
-        - #unit_test — `test_middleware_401_shape` — `OpenAI401Middleware` rewrites a plain 401 on a `/v1/*` path to `{"error": {"message": "Incorrect API key.", "type": "authentication_error"}}`; assert exact message text
+        - [x] #unit_test — `test_get_models_disabled_returns_404` — when `openai_shim.enabled=False`, no `/v1` router is registered; `GET /v1/models` returns plain 404
+        - [x] #unit_test — `test_get_models_returns_model_list_shape` — stub pipeline returns two collections; response shape matches `ModelList` with three entries (two per-collection + catch-all)
+        - [x] #integration_test — `test_get_models_with_collections` — `make_real_app` + ingest into two collections; `GET /v1/models` returns `archon-search`, `archon-search/col-a`, `archon-search/col-b`
+        - [x] #integration_test — `test_get_models_empty_namespace` — no ingest; `GET /v1/models` returns only `archon-search` catch-all entry
+        - [x] #unit_test — `test_middleware_401_shape` — `OpenAI401Middleware` rewrites a plain 401 on a `/v1/*` path to `{"error": {"message": "Incorrect API key.", "type": "authentication_error"}}`; assert exact message text
 
 ### Phase 2 · Retrieve docs as chat completion *(the core retrieval behavior: last user message → chunks as assistant reply)*
 

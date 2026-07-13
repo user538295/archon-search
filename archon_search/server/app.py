@@ -482,6 +482,12 @@ def create_app(
         namespaces=config.namespaces,
         key_store=key_store,
     )
+    # OpenAI401Middleware must be added AFTER APIKeyMiddleware (Starlette LIFO —
+    # last-added is outermost) so it wraps the 401 response before it leaves the
+    # server.  Guard: only registered when openai_shim.enabled = true.
+    if config.openai_shim.enabled:
+        from archon_search.server.routes_openai_shim import OpenAI401Middleware  # noqa: PLC0415
+        app.add_middleware(OpenAI401Middleware)
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.add_middleware(
         RequestContextMiddleware,
@@ -583,6 +589,13 @@ def create_app(
     app.include_router(backup_router)
     app.include_router(maintenance_router)
     app.include_router(keys_router)
+    # OpenAI-compatible shim routes — guarded separately from the middleware guard
+    # above (they live in different regions of create_app).  When disabled, no
+    # /v1/* routes are registered and the app behaves as if the feature does not
+    # exist.
+    if config.openai_shim.enabled:
+        from archon_search.server.routes_openai_shim import router as openai_shim_router  # noqa: PLC0415
+        app.include_router(openai_shim_router, prefix="/v1")
     _configure_openapi(app)
     return app
 

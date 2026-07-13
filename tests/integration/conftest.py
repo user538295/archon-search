@@ -45,6 +45,7 @@ def make_real_app(
     top_k_max: int | None = None,
     toml_content: str | None = None,
     graph_enabled: bool = False,
+    openai_shim_enabled: bool = False,
 ) -> Iterator[tuple[TestClient, Any, str]]:
     """Context manager yielding ``(TestClient, config, api_key)`` backed by real store+pipeline.
 
@@ -132,6 +133,9 @@ def make_real_app(
 
     if graph_enabled:
         cfg.graph.enabled = True
+
+    if openai_shim_enabled:
+        cfg.openai_shim.enabled = True
 
     job_store = JobStore(path=tmp_path / "jobs.json")
     scheduler = JobScheduler(
