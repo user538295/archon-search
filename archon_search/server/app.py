@@ -162,8 +162,8 @@ def _build_query_expansion_provider(
     """Build and return the appropriate QueryExpansionProvider from config.
 
     Returns an OllamaQueryExpansionProvider for provider='ollama',
-    an AnthropicQueryExpansionProvider for provider='anthropic'.
-    provider='openai' will be handled in BE-6.
+    an OpenAIQueryExpansionProvider for provider='openai',
+    or an AnthropicQueryExpansionProvider for provider='anthropic' (default).
 
     The returned object is injected as the ``provider`` argument to
     HyDEGenerator and RAGFusionGenerator so the generators do not
@@ -175,10 +175,10 @@ def _build_query_expansion_provider(
         )
         return OllamaQueryExpansionProvider(model=model, base_url=ollama_base_url)
     if provider == "openai":
-        raise ConfigError(
-            "provider='openai' is not yet supported in this release; "
-            "support is added in BE-6. Use provider='anthropic' or provider='ollama'."
+        from archon_search.providers.openai_provider import (  # noqa: PLC0415
+            OpenAIQueryExpansionProvider,
         )
+        return OpenAIQueryExpansionProvider(model=model)
     # Default: anthropic
     from archon_search.providers.anthropic_provider import (  # noqa: PLC0415
         AnthropicQueryExpansionProvider,

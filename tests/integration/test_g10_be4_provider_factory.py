@@ -421,21 +421,19 @@ def test_ollama_base_url_passthrough(
 
 
 # ---------------------------------------------------------------------------
-# C2-M-1 — provider='openai' raises ConfigError at startup
+# C2-M-1 — provider='openai' starts the app successfully (BE-6 implemented)
 # ---------------------------------------------------------------------------
 
 
-def test_openai_provider_raises_config_error_at_startup(
+def test_openai_provider_starts_app_successfully(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """C2-M-1: create_app() with provider='openai' raises ConfigError (not yet supported).
+    """C2-M-1 (updated BE-6): create_app() with provider='openai' and a valid model starts OK.
 
-    _build_query_expansion_provider raises ConfigError for provider='openai'
-    regardless of whether the openai package is installed. This guard must stay
-    in place — an untested guard is silently deletable by future refactors.
+    BE-6 implemented OpenAIQueryExpansionProvider; the old placeholder ConfigError
+    guard no longer applies when the openai package is installed (which it is as a
+    dev dependency). The app must start and respond to GET /health.
     """
-    from archon_search.config import ConfigError  # noqa: PLC0415
-
     toml = (
         "[hyde]\n"
         'provider = "openai"\n'
@@ -443,9 +441,9 @@ def test_openai_provider_raises_config_error_at_startup(
         'ollama_base_url = "http://localhost:11434"\n'
     )
 
-    with pytest.raises(ConfigError):
-        with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
-            pass
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
+        resp = client.get("/health")
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------

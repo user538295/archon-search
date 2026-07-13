@@ -418,17 +418,17 @@ flowchart LR
 
 ### Phase 2 · Operator can use OpenAI for query expansion
 
-- [ ] **BE-6** — Implement `OpenAIQueryExpansionProvider` (both methods); normalize OpenAI response shape (`choices[0].message.content`) to plain `str` (DA-ARCH-C1-I-8); silence errors internally; use lazy imports — `import openai` inside `OpenAIQueryExpansionProvider.__init__()`, not at module level (same pattern as existing Anthropic lazy-import guard in `hyde.py`) so `sys.modules['openai'] = None` at test time actually blocks the import (DA-TEST-C1-I-4); rate-limit bucket enforcement is handled in the generator's call site (not in the adapter) (Root-4) #backend-role
+- [x] **BE-6** — Implement `OpenAIQueryExpansionProvider` (both methods); normalize OpenAI response shape (`choices[0].message.content`) to plain `str` (DA-ARCH-C1-I-8); silence errors internally; use lazy imports — `import openai` inside `OpenAIQueryExpansionProvider.__init__()`, not at module level (same pattern as existing Anthropic lazy-import guard in `hyde.py`) so `sys.modules['openai'] = None` at test time actually blocks the import (DA-TEST-C1-I-4); rate-limit bucket enforcement is handled in the generator's call site (not in the adapter) (Root-4) #backend-role
     - Interface Adapters · 3.0h
     - needs BE-1 · completes S4, S5, S10, S12, S14
     - Tests
-        - #unit_test — `test_openai_generate_hypothetical_doc_returns_text` — `monkeypatch.setitem(sys.modules, 'openai', mock_openai)`; mock `AsyncOpenAI.chat.completions.create` → provider returns hypothesis text (DA-TEST-C1-I-3: use monkeypatch, not direct assignment)
-        - #unit_test — `test_openai_decompose_query_returns_variants` — mock client → list[str]
-        - #unit_test — `test_openai_generate_arbitrary_exception_returns_none` — mock `AsyncOpenAI.chat.completions.create` raises `RuntimeError` → returns `None` (DA-TEST-C1-I-6: proves "never raises" C1 contract beyond timeout)
-        - #unit_test — `test_openai_decompose_arbitrary_exception_returns_empty_list` — same for decompose → `[]` (DA-TEST-C1-I-6)
-        - #unit_test — `test_openai_rate_limit_honoured` — S12: token bucket fires after `max_requests_per_minute` calls; `generate_hypothetical_doc` returns `None` when exhausted
-        - #unit_test — `test_openai_package_absent_raises_config_error` — S10: `monkeypatch.setitem(sys.modules, 'openai', None)`; `create_app()` with `provider="openai"` raises `ConfigError` (requires lazy import — DA-TEST-C1-I-4)
-        - #unit_test — `test_openai_error_path_uses_query_fingerprint` — S14: assert log contains `_query_fingerprint(query)` AND assert `query not in caplog.text` (both conditions required — DA-TEST-C1-I-5)
+        - [x] #unit_test — `test_openai_generate_hypothetical_doc_returns_text` — `monkeypatch.setitem(sys.modules, 'openai', mock_openai)`; mock `AsyncOpenAI.chat.completions.create` → provider returns hypothesis text (DA-TEST-C1-I-3: use monkeypatch, not direct assignment)
+        - [x] #unit_test — `test_openai_decompose_query_returns_variants` — mock client → list[str]
+        - [x] #unit_test — `test_openai_generate_arbitrary_exception_returns_none` — mock `AsyncOpenAI.chat.completions.create` raises `RuntimeError` → returns `None` (DA-TEST-C1-I-6: proves "never raises" C1 contract beyond timeout)
+        - [x] #unit_test — `test_openai_decompose_arbitrary_exception_returns_empty_list` — same for decompose → `[]` (DA-TEST-C1-I-6)
+        - [x] #unit_test — `test_openai_adapter_has_no_rate_limiting` — S12 (adapter side): adapter has no `_rpm_tokens`; all calls succeed; rate limiting lives in generator (Root-4)
+        - [x] #unit_test — `test_openai_package_absent_raises_config_error` — S10: `monkeypatch.setitem(sys.modules, 'openai', None)`; `create_app()` with `provider="openai"` raises `ConfigError` (requires lazy import — DA-TEST-C1-I-4)
+        - [x] #unit_test — `test_openai_error_path_uses_query_fingerprint` — S14: assert log contains `_query_fingerprint(query)` AND assert `query not in caplog.text` (both conditions required — DA-TEST-C1-I-5)
 
 - [ ] **BE-7** — Wire `OpenAIQueryExpansionProvider` into both generator factories; add `archon-search[openai-provider]` optional extra to `pyproject.toml`; update `key_available` for OpenAI (check `OPENAI_API_KEY`); confirm lazy import pattern (`import openai` inside `__init__`) is preserved end-to-end (DA-TEST-C1-I-4) #backend-role
     - Use Cases + Frameworks & Drivers · 2.0h
