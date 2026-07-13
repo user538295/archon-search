@@ -1638,15 +1638,20 @@
         "type": "object"
       },
       "HydeStatusDetail": {
-        "description": "HyDE feature status sub-object for GET /status (E0b BE-8 / C2).\n\nPresent only when ``[hyde] enabled = true``; the parent ``hyde`` field\nbeing ``null`` signals that HyDE is not configured.\n\n``key_available`` is ``True`` when ``ANTHROPIC_API_KEY`` is set in the\nserver's environment at request time.",
+        "description": "HyDE feature status sub-object for GET /status (E0b BE-8 / C2, G10 BE-5).\n\nPresent only when ``[hyde] enabled = true``; the parent ``hyde`` field\nbeing ``null`` signals that HyDE is not configured.\n\n``key_available`` semantics are provider-aware: Anthropic \u2192 ``ANTHROPIC_API_KEY``\nset; OpenAI \u2192 ``OPENAI_API_KEY`` set; Ollama \u2192 always ``True``.",
         "properties": {
           "key_available": {
             "title": "Key Available",
             "type": "boolean"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
           }
         },
         "required": [
-          "key_available"
+          "key_available",
+          "provider"
         ],
         "title": "HydeStatusDetail",
         "type": "object"
@@ -2735,15 +2740,20 @@
         "type": "object"
       },
       "RagFusionStatusDetail": {
-        "description": "RAG Fusion feature status sub-object for GET /status (E0b BE-8 / C2).\n\nPresent only when ``[rag_fusion] enabled = true``; the parent ``rag_fusion``\nfield being ``null`` signals that RAG Fusion is not configured.\n\n``key_available`` is ``True`` when ``ANTHROPIC_API_KEY`` is set in the\nserver's environment at request time.",
+        "description": "RAG Fusion feature status sub-object for GET /status (E0b BE-8 / C2, G10 BE-5).\n\nPresent only when ``[rag_fusion] enabled = true``; the parent ``rag_fusion``\nfield being ``null`` signals that RAG Fusion is not configured.\n\n``key_available`` semantics are provider-aware: Anthropic \u2192 ``ANTHROPIC_API_KEY``\nset; OpenAI \u2192 ``OPENAI_API_KEY`` set; Ollama \u2192 always ``True``.",
         "properties": {
           "key_available": {
             "title": "Key Available",
             "type": "boolean"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
           }
         },
         "required": [
-          "key_available"
+          "key_available",
+          "provider"
         ],
         "title": "RagFusionStatusDetail",
         "type": "object"

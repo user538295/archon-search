@@ -244,7 +244,10 @@ def _build_hyde_status(request: Request, config: SearchConfig) -> HydeStatusDeta
     generator = getattr(request.app.state, "hyde_generator", None)
     if generator is None:
         return None
-    return HydeStatusDetail(key_available=generator.is_key_available())
+    return HydeStatusDetail(
+        key_available=generator.is_key_available(),
+        provider=config.hyde.provider,
+    )
 
 
 def _build_rag_fusion_status(request: Request, config: SearchConfig) -> RagFusionStatusDetail | None:
@@ -260,7 +263,10 @@ def _build_rag_fusion_status(request: Request, config: SearchConfig) -> RagFusio
     generator = getattr(request.app.state, "rag_fusion_generator", None)
     if generator is None:
         return None
-    return RagFusionStatusDetail(key_available=generator.is_key_available())
+    return RagFusionStatusDetail(
+        key_available=generator.is_key_available(),
+        provider=config.rag_fusion.provider,
+    )
 
 
 def _build_model_validation_status(request: Request) -> ModelValidationStatus | None:

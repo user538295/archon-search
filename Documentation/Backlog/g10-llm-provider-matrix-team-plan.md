@@ -388,15 +388,15 @@ flowchart LR
         - [x] #integration_test — `test_factory_injects_correct_provider_type` — assert `isinstance(app.state.hyde_generator._provider, QueryExpansionProvider)` (C1-B-8 conformance test)
         - [x] #integration_test — `test_search_mixed_providers_token_buckets_independent` — S6: mixed providers (ollama+anthropic); run rate-limit-count calls for each; assert rate limit fires only for Anthropic path, not Ollama path, with no cross-contamination between the two independent buckets (DA-TEST-C1-I-10)
 
-- [ ] **BE-5** — Add `provider: str` to `HydeStatusDetail` and `RagFusionStatusDetail`; update `_build_hyde_status` / `_build_rag_fusion_status` to read `config.hyde.provider`; update `key_available` to be provider-aware; regenerate `tests/server/openapi_snapshot.json` #backend-role
+- [x] **BE-5** — Add `provider: str` to `HydeStatusDetail` and `RagFusionStatusDetail`; update `_build_hyde_status` / `_build_rag_fusion_status` to read `config.hyde.provider`; update `key_available` to be provider-aware; regenerate `tests/server/openapi_snapshot.json` #backend-role
     - Interface Adapters · 2.0h
     - needs BE-2 · completes C3, S13
     - Note (Root-2): Update `HyDEGenerator.is_key_available()` / `RAGFusionGenerator.is_key_available()` to delegate to the provider (or read `config.provider` directly) so per-provider semantics are correct: Anthropic → `ANTHROPIC_API_KEY` set; OpenAI → `OPENAI_API_KEY` set; Ollama → always `True`.
     - Tests
-        - #integration_test — `test_status_shows_hyde_provider_ollama` — S13: `TestClient`, `config.hyde.provider = "ollama"`, `GET /status`, assert `data["hyde"]["provider"] == "ollama"`
-        - #integration_test — `test_status_shows_rag_fusion_provider_anthropic` — provider="anthropic", assert `data["rag_fusion"]["provider"] == "anthropic"`
-        - #integration_test — `test_status_ollama_key_available_is_true` — `provider="ollama"`, `key_available=True` regardless of `ANTHROPIC_API_KEY`
-        - #integration_test — `test_status_openai_key_available_checks_openai_api_key` — `provider="openai"`, `OPENAI_API_KEY` unset → `key_available=False`; `OPENAI_API_KEY` set → `key_available=True` (Root-2)
+        - [x] #integration_test — `test_status_shows_hyde_provider_ollama` — S13: `TestClient`, `config.hyde.provider = "ollama"`, `GET /status`, assert `data["hyde"]["provider"] == "ollama"`
+        - [x] #integration_test — `test_status_shows_rag_fusion_provider_anthropic` — provider="anthropic", assert `data["rag_fusion"]["provider"] == "anthropic"`
+        - [x] #integration_test — `test_status_ollama_key_available_is_true` — `provider="ollama"`, `key_available=True` regardless of `ANTHROPIC_API_KEY`
+        - [x] #integration_test — `test_status_openai_key_available_checks_openai_api_key` — `provider="openai"`, `OPENAI_API_KEY` unset → `key_available=False`; `OPENAI_API_KEY` set → `key_available=True` (Root-2)
 
 - [ ] **BE-8** — Update install wizard: remove `ANTHROPIC_API_KEY` gate from HyDE/RAG Fusion prompt; add provider-selection step (Anthropic / OpenAI / Ollama), model input, and `ollama_base_url` input; write chosen values to `archon-search.toml` #backend-role
     - Frameworks & Drivers · 3.0h

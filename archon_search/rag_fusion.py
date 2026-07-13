@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import time
 from typing import TYPE_CHECKING
@@ -27,6 +26,7 @@ if TYPE_CHECKING:
 
 from archon_search._privacy import _query_fingerprint
 from archon_search.config import RAGFusionConfig
+from archon_search.query_expansion_protocol import provider_key_available
 
 _logger = logging.getLogger(__name__)
 
@@ -89,12 +89,8 @@ class RAGFusionGenerator:
         self._rate_limit_warned_at: float = 0.0
 
     def is_key_available(self) -> bool:
-        """Return ``True`` when ``ANTHROPIC_API_KEY`` is set in the environment at call time.
-
-        Checked at call time (not at construction) so the status endpoint reflects
-        the live environment, not the state at startup.
-        """
-        return bool(os.environ.get("ANTHROPIC_API_KEY"))
+        """Return ``True`` when the provider's required API key is set at call time (G10 BE-5 Root-2)."""
+        return provider_key_available(self._config.provider)
 
     def _validate_variant(self, text: str) -> str | None:
         """Return stripped text if valid, else None.

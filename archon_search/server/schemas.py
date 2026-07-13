@@ -286,29 +286,31 @@ class DocumentListResponse(BaseModel):
 
 
 class HydeStatusDetail(BaseModel):
-    """HyDE feature status sub-object for GET /status (E0b BE-8 / C2).
+    """HyDE feature status sub-object for GET /status (E0b BE-8 / C2, G10 BE-5).
 
     Present only when ``[hyde] enabled = true``; the parent ``hyde`` field
     being ``null`` signals that HyDE is not configured.
 
-    ``key_available`` is ``True`` when ``ANTHROPIC_API_KEY`` is set in the
-    server's environment at request time.
+    ``key_available`` semantics are provider-aware: Anthropic → ``ANTHROPIC_API_KEY``
+    set; OpenAI → ``OPENAI_API_KEY`` set; Ollama → always ``True``.
     """
 
     key_available: bool
+    provider: str
 
 
 class RagFusionStatusDetail(BaseModel):
-    """RAG Fusion feature status sub-object for GET /status (E0b BE-8 / C2).
+    """RAG Fusion feature status sub-object for GET /status (E0b BE-8 / C2, G10 BE-5).
 
     Present only when ``[rag_fusion] enabled = true``; the parent ``rag_fusion``
     field being ``null`` signals that RAG Fusion is not configured.
 
-    ``key_available`` is ``True`` when ``ANTHROPIC_API_KEY`` is set in the
-    server's environment at request time.
+    ``key_available`` semantics are provider-aware: Anthropic → ``ANTHROPIC_API_KEY``
+    set; OpenAI → ``OPENAI_API_KEY`` set; Ollama → always ``True``.
     """
 
     key_available: bool
+    provider: str
 
 
 class GraphCollectionStats(BaseModel):
