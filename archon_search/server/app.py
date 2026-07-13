@@ -594,7 +594,24 @@ def create_app(
     # /v1/* routes are registered and the app behaves as if the feature does not
     # exist.
     if config.openai_shim.enabled:
-        from archon_search.server.routes_openai_shim import router as openai_shim_router  # noqa: PLC0415
+        from fastapi.exceptions import RequestValidationError  # noqa: PLC0415
+        from fastapi.exception_handlers import request_validation_exception_handler  # noqa: PLC0415
+        from fastapi.requests import Request  # noqa: PLC0415
+        from archon_search.server.routes_openai_shim import _openai_error, router as openai_shim_router  # noqa: PLC0415
+
+        @app.exception_handler(RequestValidationError)
+        async def _openai_validation_error_handler(request: Request, exc: RequestValidationError):
+            if not request.url.path.startswith("/v1/"):
+                return await request_validation_exception_handler(request, exc)
+            # RequestValidationError.errors() always returns at least one entry.
+            # Filter "body" from the loc tuple — body-validated fields carry it as a
+            # prefix; query/path/header params do not, so filtering by value (not position)
+            # is safe for all current /v1/* routes (body-only validation today).
+            errors = exc.errors()
+            loc = [str(x) for x in errors[0]["loc"] if x != "body"]
+            field = ".".join(loc) if loc else "unknown"
+            return _openai_error(422, f"Invalid value for field '{field}'.", "invalid_request_error")
+
         app.include_router(openai_shim_router, prefix="/v1")
     _configure_openapi(app)
     return app
