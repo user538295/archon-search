@@ -1,0 +1,67 @@
+openapi: 3.0.0
+info:
+  title: Archon Search — GET /status provider fields (G10)
+  version: 0.0.0
+tags: []
+paths:
+  /status:
+    get:
+      operationId: StatusRoutes_getStatus
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponseSlice'
+components:
+  schemas:
+    HydeStatusDetail:
+      type: object
+      required:
+        - key_available
+        - provider
+      properties:
+        key_available:
+          type: boolean
+          description: |-
+            True iff the configured provider's auth key is available.
+            anthropic → ANTHROPIC_API_KEY set in env.
+            openai → OPENAI_API_KEY set in env.
+            ollama → always True (no API key required).
+        provider:
+          type: string
+          description: 'Active provider for this feature: "anthropic" | "openai" | "ollama"'
+    RagFusionStatusDetail:
+      type: object
+      required:
+        - key_available
+        - provider
+      properties:
+        key_available:
+          type: boolean
+          description: |-
+            True iff the configured provider's auth key is available.
+            anthropic → ANTHROPIC_API_KEY set in env.
+            openai → OPENAI_API_KEY set in env.
+            ollama → always True (no API key required).
+        provider:
+          type: string
+          description: 'Active provider for this feature: "anthropic" | "openai" | "ollama"'
+    StatusResponseSlice:
+      type: object
+      properties:
+        hyde:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/HydeStatusDetail'
+          nullable: true
+          description: null when hyde.enabled = false
+        rag_fusion:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/RagFusionStatusDetail'
+          nullable: true
+          description: null when rag_fusion.enabled = false
+      description: Slice of StatusResponse showing G10-modified fields only.
