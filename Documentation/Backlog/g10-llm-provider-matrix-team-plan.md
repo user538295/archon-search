@@ -365,18 +365,18 @@ flowchart LR
         - [x] #unit_test — `test_path_home_allowlist_line_number_updated` — asserts allowlist file content has correct `config.py:305` entry (file-content check, no subprocess)
         - [x] Update the `HyDEConfig` and `RAGFusionConfig` snapshot dicts in `tests/test_config_defaults.py` to include the new `provider` and `ollama_base_url` fields (DA-TEST-C1-I-9)
 
-- [ ] **BE-3** — Implement `OllamaQueryExpansionProvider` (both methods); silence all errors internally (return `None`/`[]`); normalize Ollama response shape (`message.content`) to plain `str` (DA-ARCH-C1-I-8); `OllamaQueryExpansionProvider` does NOT implement rate limiting — bucket skip is handled in the generator's call site (Root-4) #backend-role
+- [x] **BE-3** — Implement `OllamaQueryExpansionProvider` (both methods); silence all errors internally (return `None`/`[]`); normalize Ollama response shape (`message.content`) to plain `str` (DA-ARCH-C1-I-8); `OllamaQueryExpansionProvider` does NOT implement rate limiting — bucket skip is handled in the generator's call site (Root-4) #backend-role
     - Interface Adapters · 3.0h
     - needs BE-1 · completes S2, S3, S7, S8, S11, S14
     - Tests
-        - #unit_test — `test_ollama_generate_hypothetical_doc_returns_text` — `sys.modules["ollama"] = mock_ollama`; mock `AsyncClient.generate` returns response → text extracted
-        - #unit_test — `test_ollama_decompose_query_returns_variants` — mock client returns multi-query response → list[str]
-        - #unit_test — `test_ollama_generate_timeout_returns_none` — mock `AsyncClient.generate` raises `asyncio.TimeoutError` → `generate_hypothetical_doc` returns `None` (does not raise)
-        - #unit_test — `test_ollama_generate_arbitrary_exception_returns_none` — mock `AsyncClient.generate` raises `RuntimeError("sdk error")` → returns `None`; proves the "never raises" C1 contract for non-timeout errors (DA-TEST-C1-I-6: `@runtime_checkable isinstance` checks method names only and cannot verify this)
-        - #unit_test — `test_ollama_decompose_timeout_returns_empty_list` — same pattern → `[]`
-        - #unit_test — `test_ollama_decompose_arbitrary_exception_returns_empty_list` — mock raises `ConnectionError` → `[]` (DA-TEST-C1-I-6)
-        - #unit_test — `test_ollama_no_rate_limit_enforcement` — S11: after 100 calls in a tight loop, all succeed; `_rpm_tokens` never decremented
-        - #unit_test — `test_ollama_error_path_uses_query_fingerprint` — S14: assert log contains `_query_fingerprint(query)` AND assert `query not in caplog.text` (both conditions required — prevents a log line from containing both fingerprint and raw query) (DA-TEST-C1-I-5)
+        - [x] #unit_test — `test_ollama_generate_hypothetical_doc_returns_text` — `sys.modules["ollama"] = mock_ollama`; mock `AsyncClient.generate` returns response → text extracted
+        - [x] #unit_test — `test_ollama_decompose_query_returns_variants` — mock client returns multi-query response → list[str]
+        - [x] #unit_test — `test_ollama_generate_timeout_returns_none` — mock `AsyncClient.generate` raises `asyncio.TimeoutError` → `generate_hypothetical_doc` returns `None` (does not raise)
+        - [x] #unit_test — `test_ollama_generate_arbitrary_exception_returns_none` — mock `AsyncClient.generate` raises `RuntimeError("sdk error")` → returns `None`; proves the "never raises" C1 contract for non-timeout errors (DA-TEST-C1-I-6: `@runtime_checkable isinstance` checks method names only and cannot verify this)
+        - [x] #unit_test — `test_ollama_decompose_timeout_returns_empty_list` — same pattern → `[]`
+        - [x] #unit_test — `test_ollama_decompose_arbitrary_exception_returns_empty_list` — mock raises `ConnectionError` → `[]` (DA-TEST-C1-I-6)
+        - [x] #unit_test — `test_ollama_no_rate_limit_enforcement` — S11: after 100 calls in a tight loop, all succeed; `_rpm_tokens` never decremented
+        - [x] #unit_test — `test_ollama_error_path_uses_query_fingerprint` — S14: assert log contains `_query_fingerprint(query)` AND assert `query not in caplog.text` (both conditions required — prevents a log line from containing both fingerprint and raw query) (DA-TEST-C1-I-5)
 
 - [ ] **BE-4** — Wire provider factory into `HyDEGenerator` and `RAGFusionGenerator`; update `create_app()` to construct the correct provider from config; update `app.py` lines 563–575 #backend-role
     - Use Cases + Frameworks & Drivers · 3.0h
