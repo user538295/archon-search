@@ -156,6 +156,8 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "model": DEFAULT_FAST_MODEL,
             "timeout_seconds": 10.0,
             "max_requests_per_minute": 60,
+            "provider": "anthropic",
+            "ollama_base_url": "http://localhost:11434",
         },
         # [rag_fusion]
         "rag_fusion": {
@@ -164,6 +166,8 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "timeout_seconds": 10.0,
             "max_requests_per_minute": 60,
             "num_queries": 2,
+            "provider": "anthropic",
+            "ollama_base_url": "http://localhost:11434",
         },
         # [jobs]
         "jobs": {

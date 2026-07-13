@@ -22,12 +22,18 @@ class ConfigError(Exception):
     """Raised on invalid configuration values."""
 
 
+_VALID_PROVIDERS: frozenset[str] = frozenset({"anthropic", "ollama", "openai"})
+_OLLAMA_BASE_URL_DEFAULT: str = "http://localhost:11434"
+
+
 @dataclass
 class HyDEConfig:
     enabled: bool = False
     model: str = field(default_factory=lambda: DEFAULT_FAST_MODEL)
     timeout_seconds: float = 10.0
     max_requests_per_minute: int = 60
+    provider: str = "anthropic"
+    ollama_base_url: str = _OLLAMA_BASE_URL_DEFAULT
 
 
 @dataclass
@@ -37,6 +43,8 @@ class RAGFusionConfig:
     timeout_seconds: float = 10.0
     max_requests_per_minute: int = 60
     num_queries: int = 2
+    provider: str = "anthropic"
+    ollama_base_url: str = _OLLAMA_BASE_URL_DEFAULT
 
 
 @dataclass
@@ -617,6 +625,18 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         if max_rpm < 1:
             raise ConfigError(f"[hyde].max_requests_per_minute must be >= 1, got {max_rpm}")
         hyde.max_requests_per_minute = max_rpm
+    if "provider" in hyde_cfg:
+        provider = _coerce_str(hyde_cfg["provider"], "[hyde].provider")
+        if provider not in _VALID_PROVIDERS:
+            raise ConfigError(
+                f"[hyde].provider must be one of {sorted(_VALID_PROVIDERS)}, got {provider!r}"
+            )
+        hyde.provider = provider
+    if "ollama_base_url" in hyde_cfg:
+        ollama_base_url = _coerce_str(hyde_cfg["ollama_base_url"], "[hyde].ollama_base_url").strip()
+        if not ollama_base_url:
+            raise ConfigError("[hyde].ollama_base_url must be a non-empty string")
+        hyde.ollama_base_url = ollama_base_url
     config.hyde = hyde
 
     rag_fusion_cfg = doc.get("rag_fusion", {})
@@ -647,6 +667,18 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
                 "[rag_fusion].num_queries = 1: LLM overhead rarely justifies a single variant; consider num_queries >= 2"
             )
         rag_fusion.num_queries = num_queries
+    if "provider" in rag_fusion_cfg:
+        provider = _coerce_str(rag_fusion_cfg["provider"], "[rag_fusion].provider")
+        if provider not in _VALID_PROVIDERS:
+            raise ConfigError(
+                f"[rag_fusion].provider must be one of {sorted(_VALID_PROVIDERS)}, got {provider!r}"
+            )
+        rag_fusion.provider = provider
+    if "ollama_base_url" in rag_fusion_cfg:
+        ollama_base_url = _coerce_str(rag_fusion_cfg["ollama_base_url"], "[rag_fusion].ollama_base_url").strip()
+        if not ollama_base_url:
+            raise ConfigError("[rag_fusion].ollama_base_url must be a non-empty string")
+        rag_fusion.ollama_base_url = ollama_base_url
     config.rag_fusion = rag_fusion
 
     jobs_cfg = doc.get("jobs", {})

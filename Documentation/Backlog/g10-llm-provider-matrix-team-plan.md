@@ -348,22 +348,22 @@ flowchart LR
         - #integration_test — `test_hyde_anthropic_behaviour_unchanged_after_refactor` — `make_real_app`, mocked Anthropic client injected via `monkeypatch`, assert `hyde_applied=True` and same embedding path as pre-G10
         - `test_anthropic_key_guards.py` — update `GUARD_FILES` to include `archon_search/providers/anthropic_provider.py`; remove the old `hyde.py`/`rag_fusion.py` paths if the guard logic has moved entirely (Root-3)
 
-- [ ] **BE-2** — Extend `HyDEConfig` and `RAGFusionConfig` with `provider` + `ollama_base_url`; add `_apply_toml` branches; add `archon-search[ollama]` optional extra; add startup `ConfigError` guard for `provider = "ollama"` with missing package #backend-role
+- [x] **BE-2** — Extend `HyDEConfig` and `RAGFusionConfig` with `provider` + `ollama_base_url`; add `_apply_toml` branches; add `archon-search[ollama]` optional extra; add startup `ConfigError` guard for `provider = "ollama"` with missing package #backend-role
     - Entities + Frameworks & Drivers · 3.0h
     - needs K1 · completes C2, S9
     - Note: The `ConfigError` guard for missing provider packages fires regardless of `enabled` state — if `provider='ollama'` is set and `archon-search[ollama]` is not installed, the server does not start even if `[hyde] enabled=false`. Config validation must catch misconfiguration at startup, not at first use (C1-B-4).
     - Note: After adding config fields, run `uv run pytest tests/test_no_hardcoded_path_home.py -n0 --no-cov`; update `tests/path_home_allowlist.txt` line numbers (sha unchanged) (C1-I-4).
     - Note (DA-TEST-C1-I-7): Add `ollama` to `[dependency-groups].dev` in `pyproject.toml` (test-only; the optional extra `archon-search[ollama]` remains for production use). This allows mocking `ollama.AsyncClient` in BE-3/BE-4/T-1 without installing the production extra.
     - Tests
-        - #unit_test — `test_config_defaults_provider_is_anthropic` — `HyDEConfig().provider == "anthropic"` and `RAGFusionConfig().provider == "anthropic"`
-        - #unit_test — `test_config_ollama_base_url_default` — `HyDEConfig().ollama_base_url == "http://localhost:11434"`
-        - #unit_test — `test_config_invalid_provider_raises_config_error` — `_apply_toml` with `provider = "foobar"` raises `ConfigError`
-        - #unit_test — `test_config_ollama_package_absent_raises_config_error` — use `monkeypatch.setitem(sys.modules, 'ollama', None)` (not direct assignment — monkeypatch auto-restores, preventing xdist worker poisoning) (DA-TEST-C1-I-3); `create_app()` with `provider="ollama"` raises `ConfigError`
-        - #unit_test — `test_config_empty_model_with_non_anthropic_provider_raises_config_error` — Q5: `provider="ollama"`, `model=''` (sentinel) → `ConfigError` at startup naming the field (C1-I-5)
-        - #unit_test — `test_config_non_anthropic_with_explicit_model_ok` — Q5 negative: `provider="ollama"`, `model="llama3.2"` (non-empty) → no `ConfigError` (DA-TEST-C1-I-11)
-        - #unit_test — `test_config_anthropic_with_empty_model_ok` — Q5 negative: `provider="anthropic"`, `model=''` → no `ConfigError` (sentinel only applies to non-Anthropic providers) (DA-TEST-C1-I-11)
-        - #unit_test — `test_path_home_allowlist_line_number_updated` — run `tests/test_no_hardcoded_path_home.py` via subprocess; confirm passes after allowlist update
-        - Update the `HyDEConfig` and `RAGFusionConfig` snapshot dicts in `tests/test_config_defaults.py` to include the new `provider` and `ollama_base_url` fields (DA-TEST-C1-I-9)
+        - [x] #unit_test — `test_config_defaults_provider_is_anthropic` — `HyDEConfig().provider == "anthropic"` and `RAGFusionConfig().provider == "anthropic"`
+        - [x] #unit_test — `test_config_ollama_base_url_default` — `HyDEConfig().ollama_base_url == "http://localhost:11434"`
+        - [x] #unit_test — `test_config_invalid_provider_raises_config_error` — `_apply_toml` with `provider = "foobar"` raises `ConfigError`
+        - [x] #unit_test — `test_config_ollama_package_absent_raises_config_error` — use `monkeypatch.setitem(sys.modules, 'ollama', None)` (not direct assignment — monkeypatch auto-restores, preventing xdist worker poisoning) (DA-TEST-C1-I-3); `create_app()` with `provider="ollama"` raises `ConfigError`
+        - [x] #unit_test — `test_config_empty_model_with_non_anthropic_provider_raises_config_error` — Q5: `provider="ollama"`, `model=''` (sentinel) → `ConfigError` at startup naming the field (C1-I-5)
+        - [x] #unit_test — `test_config_non_anthropic_with_explicit_model_ok` — Q5 negative: `provider="ollama"`, `model="llama3.2"` (non-empty) → no `ConfigError` (DA-TEST-C1-I-11)
+        - [x] #unit_test — `test_config_anthropic_with_empty_model_ok` — Q5 negative: `provider="anthropic"`, `model=''` → no `ConfigError` (sentinel only applies to non-Anthropic providers) (DA-TEST-C1-I-11)
+        - [x] #unit_test — `test_path_home_allowlist_line_number_updated` — asserts allowlist file content has correct `config.py:305` entry (file-content check, no subprocess)
+        - [x] Update the `HyDEConfig` and `RAGFusionConfig` snapshot dicts in `tests/test_config_defaults.py` to include the new `provider` and `ollama_base_url` fields (DA-TEST-C1-I-9)
 
 - [ ] **BE-3** — Implement `OllamaQueryExpansionProvider` (both methods); silence all errors internally (return `None`/`[]`); normalize Ollama response shape (`message.content`) to plain `str` (DA-ARCH-C1-I-8); `OllamaQueryExpansionProvider` does NOT implement rate limiting — bucket skip is handled in the generator's call site (Root-4) #backend-role
     - Interface Adapters · 3.0h

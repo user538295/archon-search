@@ -111,6 +111,48 @@ def _check_multilingual_deps(config: SearchConfig) -> None:
         )
 
 
+def _check_provider_deps(config: SearchConfig) -> None:
+    """Check that provider package deps are present regardless of enabled state.
+
+    ConfigError fires even when hyde.enabled=false or rag_fusion.enabled=false —
+    a mis-configured provider is always an operator error.
+    """
+    for label, provider, model in (
+        ("hyde", config.hyde.provider, config.hyde.model),
+        ("rag_fusion", config.rag_fusion.provider, config.rag_fusion.model),
+    ):
+        if provider == "ollama":
+            try:
+                import ollama  # type: ignore[import-untyped]  # noqa: PLC0415
+            except ImportError:
+                raise ConfigError(
+                    f"[{label}] provider='ollama' but the 'ollama' package is not installed; "
+                    f"run: pip install archon-search[ollama]"
+                )
+            # _apply_toml already rejects empty model via ConfigError for the TOML path;
+            # this guard covers programmatic construction with model=''.
+            if not model:
+                raise ConfigError(
+                    f"[{label}] provider='ollama' requires a non-empty model name; "
+                    f"set [{label}].model in archon-search.toml"
+                )
+        elif provider == "openai":
+            try:
+                import openai  # type: ignore[import-untyped]  # noqa: PLC0415
+            except ImportError:
+                raise ConfigError(
+                    f"[{label}] provider='openai' but the 'openai' package is not installed; "
+                    f"run: pip install archon-search[openai]"
+                )
+            # _apply_toml already rejects empty model via ConfigError for the TOML path;
+            # this guard covers programmatic construction with model=''.
+            if not model:
+                raise ConfigError(
+                    f"[{label}] provider='openai' requires a non-empty model name; "
+                    f"set [{label}].model in archon-search.toml"
+                )
+
+
 def _check_graph_deps(config: SearchConfig) -> None:
     """Check that graph dependencies are present when graph.enabled=True.
 
@@ -176,6 +218,7 @@ def create_app(
     """Create and configure the FastAPI application instance."""
     _check_multilingual_deps(config)
     _check_graph_deps(config)
+    _check_provider_deps(config)
     api_key, key_source = load_or_generate_key()
 
     @asynccontextmanager
