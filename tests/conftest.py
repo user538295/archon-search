@@ -223,6 +223,40 @@ def three_page_pdf(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return pdf_path
 
 
+@pytest.fixture(scope="session")
+def substantial_three_page_pdf(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Three-page PDF with enough content per page for docling to emit page breaks.
+
+    The sparse single-line fixture (three_page_pdf) can be merged by docling's
+    segmentation heuristics into one section with zero page-break markers. This
+    fixture uses paragraph-length text per page so the page boundary is reliably
+    detected. Use this fixture (not three_page_pdf) when testing PAGE_BREAK_MARKER
+    emission.
+    """
+    pytest.importorskip("reportlab")
+    from reportlab.pdfgen.canvas import Canvas  # noqa: PLC0415
+
+    _PARA = (
+        "This is a paragraph of text that provides enough content for the PDF parser "
+        "to treat each page as a structurally distinct section. "
+        "Adding several sentences ensures the page is not silently merged with adjacent "
+        "pages by the document segmentation heuristic. "
+        "The content on this page is unique so pages are distinguishable."
+    )
+    pages = [f"Page one. {_PARA}", f"Page two. {_PARA}", f"Page three. {_PARA}"]
+
+    pdf_path = tmp_path_factory.mktemp("pdfs") / "substantial_three_page.pdf"
+    c = Canvas(str(pdf_path), pagesize=(612, 792))
+    for text in pages:
+        y = 700
+        for line in [text[i : i + 80] for i in range(0, len(text), 80)]:
+            c.drawString(72, y, line)
+            y -= 15
+        c.showPage()
+    c.save()
+    return pdf_path
+
+
 # ---------------------------------------------------------------------------
 # MockGraphStore fixture for unit testing graph_inspector.py (E2b)
 # ---------------------------------------------------------------------------

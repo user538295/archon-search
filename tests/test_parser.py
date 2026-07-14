@@ -355,7 +355,7 @@ def test_parse_with_docling_kwarg_passes_page_break_marker(
 
 @pytest.mark.integration
 @pytest.mark.xdist_group("docling")
-def test_parse_with_docling_emits_page_marker(three_page_pdf: Path) -> None:
+def test_parse_with_docling_emits_page_marker(substantial_three_page_pdf: Path) -> None:
     """Integration: parser output from a real three-page PDF contains at least one PAGE_BREAK_MARKER.
 
     Requires the three_page_pdf fixture from Task 5.1.
@@ -374,7 +374,7 @@ def test_parse_with_docling_emits_page_marker(three_page_pdf: Path) -> None:
 
     parser = DocumentParser()
     try:
-        result = parser._parse_with_docling(three_page_pdf)
+        result = parser._parse_with_docling(substantial_three_page_pdf)
     except ParseError as exc:
         pytest.skip(f"docling not functional in this environment: {exc}")
 
