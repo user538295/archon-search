@@ -68,10 +68,11 @@ def _via_api(api_key: str) -> str:
 def _via_cli() -> str:
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
     result = subprocess.run(
-        ["claude", "-p", PROMPT],
+        ["claude", "--model", "claude-haiku-4-5-20251001", "-p", PROMPT],
         capture_output=True,
         text=True,
         env=env,
+        timeout=60,
         check=True,
     )
     return result.stdout
@@ -90,6 +91,9 @@ if api_key:
 
 try:
     print(_via_cli(), end="")
+except subprocess.TimeoutExpired:
+    print("claude CLI timed out", file=sys.stderr)
+    sys.exit(1)
 except (subprocess.CalledProcessError, FileNotFoundError) as e:
     msg = e.stderr if isinstance(e, subprocess.CalledProcessError) else str(e)
     print(f"claude CLI error: {msg}", file=sys.stderr)
