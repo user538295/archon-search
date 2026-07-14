@@ -280,28 +280,39 @@ If you answer `y`, archon-search sets `log_file = ""` in the config, which route
 
 #### 5h. AI query expansion (HyDE + RAG Fusion)
 
-This prompt is shown **only when `ANTHROPIC_API_KEY` is set in your environment**.
+This prompt is **always shown** (no API key precondition). **G10**
 
 ```
 AI query expansion (HyDE + RAG Fusion):
-  Uses Claude to generate a hypothetical answer passage (HyDE) and multiple
-  query variants (RAG Fusion) before searching. Improves recall for ambiguous
-  or short queries. Requires an Anthropic API key and sends query text to
-  Anthropic's API on every search request.
-  WARNING: do not enable in air-gapped deployments or where data residency
-  requirements apply.
-Enable AI query expansion? [y/N]:
+  HyDE generates hypothetical answers to improve embedding recall.
+  RAG Fusion runs multiple query reformulations and merges results.
+  Supports Anthropic, OpenAI, and Ollama providers.
+  Default: disabled.
+Enable AI query expansion (HyDE + RAG Fusion)? [y/N]:
 ```
 
 **Default**: No.
 
-If you answer `y`, the wizard:
+If you answer `y`, the wizard prompts for a provider for each feature independently:
+
+```
+Which provider for HyDE? (anthropic/openai/ollama) [anthropic]:
+Which provider for RAG Fusion? (anthropic/openai/ollama) [anthropic]:
+```
+
+For **Anthropic** (default): no further prompts. Add your API key to `~/.archon-search/.secrets.env` (`ANTHROPIC_API_KEY=<key>`) so the managed service can reach Anthropic's API. The managed service (launchd on macOS, systemd on Linux) sources this file at start time; existing files are left untouched.
+
+For **OpenAI**: the wizard prompts for a model name (required). Add `OPENAI_API_KEY=<key>` to `~/.archon-search/.secrets.env`. Query text is sent to OpenAI's API on every request — do not enable in air-gapped deployments or where data residency requirements apply.
+
+For **Ollama**: the wizard prompts for a model name (required) and an optional base URL (default `http://localhost:11434`). No API key is needed. Query text never leaves your host — safe for air-gapped deployments.
+
+After answering, the wizard:
 
 - Enables both `[hyde].enabled = true` and `[rag_fusion].enabled = true` in your config.
-- Installs the `archon-search[hyde,rag_fusion]` optional packages if not already present.
-- Creates `~/.archon-search/.secrets.env` (mode 600, empty) if it does not already exist; existing files are left untouched. The managed service (launchd on macOS, systemd on Linux) sources this file at start time. Add `ANTHROPIC_API_KEY=<key>` to it so the service can reach Anthropic's API without requiring the variable in the shell environment. (If you have set `ARCHON_SEARCH_DATA_DIR` to a custom path, note that the managed service still sources the key from `~/.archon-search/.secrets.env`.)
+- Writes `[hyde].provider` / `[rag_fusion].provider` (and `model`, `ollama_base_url` where applicable) for non-Anthropic providers.
+- Creates `~/.archon-search/.secrets.env` (mode 600, empty) if it does not already exist and the selected provider requires an API key.
 
-If `ANTHROPIC_API_KEY` is not set, this prompt is skipped entirely. You can enable HyDE and RAG Fusion later by passing `--enable-hyde --enable-rag-fusion` to the wizard (with the key set), or by editing `archon-search.toml` manually.
+To configure providers manually after the wizard, edit `archon-search.toml` directly: set `[hyde].provider` and `[rag_fusion].provider` to `"anthropic"`, `"openai"`, or `"ollama"`, and set the corresponding `model` and `ollama_base_url` fields as needed. You can also re-run the wizard with `--enable-hyde --enable-rag-fusion` to reconfigure.
 
 ### Step 6 — Summary screen
 
@@ -422,8 +433,8 @@ All flags for the `wizard` command:
 | `--top-k INTEGER` | Not set (uses `5`) | Number of results returned per query (`top_k_return`). Valid range: 1–100. Values > 100 are rejected with a message to edit TOML directly. The wizard also sets `top_k_retrieve = max(15, 3 × top_k)` automatically. This flag is flags-only; no interactive prompt. A hint appears in the "Next steps" block. |
 | `--telemetry-retention-days INTEGER` | Not set (uses `30`) | Days before telemetry log files are pruned. Must be ≥ 1. Only written to TOML when `--telemetry` is also passed; passing it without `--telemetry` prints a warning on stderr and writes nothing. |
 | **Tier 2 AI flags** | | |
-| `--enable-hyde` | False (flag) | Enable HyDE (Hypothetical Document Embeddings) query expansion. Requires `ANTHROPIC_API_KEY` to be set; fails with an error otherwise. Sends query text to Anthropic's API on every request — do not enable in air-gapped deployments. |
-| `--enable-rag-fusion` | False (flag) | Enable RAG Fusion multi-query expansion. Same requirements and privacy caution as `--enable-hyde`. |
+| `--enable-hyde` | False (flag) | Enable HyDE (Hypothetical Document Embeddings) query expansion. Provider defaults to `"anthropic"` but can be changed by setting `[hyde].provider` in `archon-search.toml` (supported values: `"anthropic"`, `"openai"`, `"ollama"`). For Anthropic or OpenAI, the corresponding API key must be set; for Ollama, no API key is needed and query text stays on-host. |
+| `--enable-rag-fusion` | False (flag) | Enable RAG Fusion multi-query expansion. Same provider options and privacy considerations as `--enable-hyde`; provider controlled by `[rag_fusion].provider` in config. |
 | **Tier 2 security** | | |
 | `--server-key HEX_KEY` | Not set | Set a custom Bearer token for the server. Must be a lowercase hex string of at least 32 characters (e.g., generated with `python -c "import secrets; print(secrets.token_hex(32))"`). Writes `ARCHON_SEARCH_API_KEY=<key>` to `~/.archon-search/.search.env` (mode 600). A shell-history warning and restart note are always printed. If `ARCHON_SEARCH_API_KEY` env var is set, it takes priority over the file; an additional warning is printed in that case. |
 
@@ -449,7 +460,7 @@ Pass `--non-interactive` to run the wizard without any prompts. Combined with fe
 | Routing strategy | `centroid` |
 | Log format | `text` |
 | Log to stderr follow-up | Skipped (use `--log-to-stderr` flag) |
-| AI query expansion (HyDE/RAG Fusion) | Skipped even if `ANTHROPIC_API_KEY` is set (use `--enable-hyde --enable-rag-fusion`) |
+| AI query expansion (HyDE/RAG Fusion) | Skipped (use `--enable-hyde --enable-rag-fusion` to enable; configure provider in TOML or re-run the interactive wizard) |
 | GPU acceleration | Auto-enabled if detected |
 | Jina license | Declined (install aborts for multilingual balanced/max unless `--accept-jina-license` is passed) |
 | fasttext license | Declined (install aborts for multilingual installs unless `--accept-fasttext-license` is passed) |

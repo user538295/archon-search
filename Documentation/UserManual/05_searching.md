@@ -214,16 +214,18 @@ The `language` filter is a strict equality match — `language=fr` does not matc
 
 ## HyDE query expansion (C4)
 
-HyDE (Hypothetical Document Embeddings) improves recall for vocabulary-mismatch queries — cases where the query phrasing is far from the document phrasing in embedding space. When enabled, the server asks Claude to write a short hypothetical answer passage, embeds that passage, and uses the resulting vector for ANN lookup instead of the original query embedding.
+HyDE (Hypothetical Document Embeddings) improves recall for vocabulary-mismatch queries — cases where the query phrasing is far from the document phrasing in embedding space. When enabled, the server asks an LLM to write a short hypothetical answer passage, embeds that passage, and uses the resulting vector for ANN lookup instead of the original query embedding.
 
-> **Privacy notice**: `hyde=true` sends the user's raw query to Anthropic's API servers. Do not enable HyDE in air-gapped deployments or where data residency requirements apply. See `Documentation/ADRs/C4-hyde-external-llm-dependency.md` for the full privacy trade-off.
+> **Privacy notice**: `hyde=true` sends the user's raw query to the configured LLM provider. With `provider = "anthropic"` (default) or `"openai"`, the query is transmitted to an external API server — do not enable in air-gapped deployments or where data residency requirements apply. With `provider = "ollama"`, the query stays on-premise (zero-transmission). See `Documentation/ADRs/C4-hyde-external-llm-dependency.md` for the full privacy trade-off. **G10**: set `[hyde].provider` to `"ollama"` or `"openai"` to use a local or alternative LLM.
 
 ### Installation
 
-HyDE requires the optional `anthropic` package. Install it alongside `archon-search`:
+HyDE requires the optional `anthropic` package for the default Anthropic provider. Install it alongside `archon-search`:
 
 ```bash
-pip install archon-search[hyde]
+pip install archon-search[hyde]   # Anthropic (default)
+# pip install archon-search[ollama]          # Ollama (local, zero-transmission)
+# pip install archon-search[openai-provider] # OpenAI
 ```
 
 ### Configuration
@@ -232,17 +234,21 @@ Add or edit the `[hyde]` section in `~/.archon-search/archon-search.toml`:
 
 ```toml
 [hyde]
-# WARNING: enabled = true sends query text to Anthropic's API.
+# WARNING: enabled = true sends query text to the configured provider's API (Anthropic/OpenAI).
+# Use provider = "ollama" for fully air-gapped deployments.
 enabled = true
+# provider = "anthropic"  # "anthropic" (default), "ollama", or "openai" — G10
 model = "claude-haiku-4-5-20251001"
+# ollama_base_url = "http://localhost:11434"  # only used when provider = "ollama"
 timeout_seconds = 10.0
 max_requests_per_minute = 60
 ```
 
-Set `ANTHROPIC_API_KEY` in the server's environment before starting:
+For the default Anthropic provider, set `ANTHROPIC_API_KEY` in the server's environment before starting. For OpenAI, set `OPENAI_API_KEY`. For Ollama, no API key is needed — just run an Ollama server:
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+export ANTHROPIC_API_KEY="sk-ant-..."   # Anthropic (default)
+# export OPENAI_API_KEY="sk-..."        # OpenAI
 archon-search start
 ```
 
@@ -281,30 +287,33 @@ A non-null `expansion_warning` means search results were computed from the origi
 HyDE is designed to **never degrade availability**. It falls back silently (returning `hyde_applied: false`) when:
 
 - `[hyde] enabled = false` in config (the kill-switch).
-- `hyde=true` in the request but the `anthropic` package is not installed — in this case a `422` is returned (configuration error, not a runtime fallback).
-- `ANTHROPIC_API_KEY` is absent from the environment (WARNING logged once).
-- The Anthropic API call times out (after `timeout_seconds`).
-- The Anthropic API returns an error.
-- The per-process rate limit (`max_requests_per_minute`) is exhausted.
+- `hyde=true` in the request but the required provider package is not installed — in this case a `422` is returned (configuration error, not a runtime fallback).
+- The provider's required API key is absent from the environment (`ANTHROPIC_API_KEY` for `"anthropic"`, `OPENAI_API_KEY` for `"openai"`; not applicable for `"ollama"`). WARNING logged once.
+- The LLM provider API call times out (after `timeout_seconds`). For `provider = "ollama"`: check that your Ollama server is running at `ollama_base_url` (default `http://localhost:11434`).
+- The provider returns an error.
+- The per-process rate limit (`max_requests_per_minute`) is exhausted (not enforced for `provider = "ollama"`).
 
 ### Operator notes
 
-- **Multi-worker deployments**: the rate limit is per-process. With N workers the effective call rate can be up to `N * max_requests_per_minute`.
+- **Multi-worker deployments**: the rate limit is per-process. With N workers the effective call rate can be up to `N * max_requests_per_minute`. Not enforced for `provider = "ollama"`.
 - **API key rotation**: use `archon-search key rotate` (or `POST /keys/rotate`) for live rotation without restart. For legacy single-key deployments (env var / key file only), restart the server after changing the file.
-- **Model choice**: `claude-haiku-4-5-20251001` (the default) is fast and cheap. Larger models may produce better hypotheses at higher latency and cost.
+- **Model choice**: `claude-haiku-4-5-20251001` (the Anthropic default) is fast and cheap. For Ollama, use `model = "llama3.2"` or another locally available model tag. For OpenAI, `gpt-4o-mini` is a cost-effective choice. **G10**: set `[hyde].provider` to change provider; `model` is required for `"ollama"` and `"openai"`.
+- **Provider selection (G10)**: change `[hyde].provider` in TOML to `"ollama"` (local, no API cost) or `"openai"`. Run the wizard (`archon-search wizard`) for guided provider configuration.
 
 ## RAG Fusion multi-query recall (C5)
 
-RAG Fusion improves recall for multi-faceted queries — cases where the user's query can be expressed in several ways and the best documents only surface with different phrasings. When enabled, the server asks Claude to generate N semantic variants of the original query, searches with all N+1 queries in parallel, and fuses the result sets via second-pass Reciprocal Rank Fusion (RRF).
+RAG Fusion improves recall for multi-faceted queries — cases where the user's query can be expressed in several ways and the best documents only surface with different phrasings. When enabled, the server asks an LLM to generate N semantic variants of the original query, searches with all N+1 queries in parallel, and fuses the result sets via second-pass Reciprocal Rank Fusion (RRF).
 
-> **Privacy notice**: `rag_fusion=true` sends the user's raw query to Anthropic's API servers to generate variants. Do not enable RAG Fusion in air-gapped deployments or where data residency requirements apply. See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md` for the full privacy trade-off.
+> **Privacy notice**: `rag_fusion=true` sends the user's raw query to the configured LLM provider to generate variants. With `provider = "anthropic"` (default) or `"openai"`, the query is transmitted externally — do not enable in air-gapped deployments or where data residency requirements apply. With `provider = "ollama"`, the query stays on-premise (zero-transmission). See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md` for the full privacy trade-off. **G10**: set `[rag_fusion].provider` to `"ollama"` or `"openai"` to use a local or alternative LLM.
 
 ### Installation
 
-RAG Fusion requires the optional `anthropic` package:
+RAG Fusion requires the optional `anthropic` package for the default Anthropic provider:
 
 ```bash
-pip install archon-search[rag_fusion]
+pip install archon-search[rag_fusion]  # Anthropic (default)
+# pip install archon-search[ollama]          # Ollama (local, zero-transmission)
+# pip install archon-search[openai-provider] # OpenAI
 ```
 
 ### Configuration
@@ -313,9 +322,12 @@ Add or edit the `[rag_fusion]` section in `~/.archon-search/archon-search.toml`:
 
 ```toml
 [rag_fusion]
-# WARNING: enabled = true sends query text to Anthropic's API.
+# WARNING: enabled = true sends query text to the configured provider's API (Anthropic/OpenAI).
+# Use provider = "ollama" for fully air-gapped deployments.
 enabled = true
+# provider = "anthropic"  # "anthropic" (default), "ollama", or "openai" — G10
 model = "claude-haiku-4-5-20251001"
+# ollama_base_url = "http://localhost:11434"  # only used when provider = "ollama"
 timeout_seconds = 10.0
 max_requests_per_minute = 60
 num_queries = 2   # LLM-generated variants; total searches = num_queries + 1
@@ -324,15 +336,18 @@ num_queries = 2   # LLM-generated variants; total searches = num_queries + 1
 | Key | Type | Default | Constraints | Description |
 |---|---|---|---|---|
 | `enabled` | `bool` | `false` | — | Kill-switch. When `false`, `rag_fusion=true` in requests is silently ignored. |
-| `model` | `str` | `"claude-haiku-4-5-20251001"` | Non-empty | Claude model used for query variant generation. |
-| `timeout_seconds` | `float` | `10.0` | `> 0` | Per-request Anthropic API timeout. |
-| `max_requests_per_minute` | `int` | `60` | `>= 1` | Per-process token-bucket rate limit. |
+| `provider` | `str` | `"anthropic"` | `"anthropic"`, `"ollama"`, `"openai"` | LLM provider for query variant generation. **G10** |
+| `model` | `str` | `"claude-haiku-4-5-20251001"` | Non-empty (required for `"ollama"`/`"openai"`) | Model used for query variant generation. |
+| `ollama_base_url` | `str` | `"http://localhost:11434"` | — | Ollama server URL. Only used when `provider = "ollama"`. **G10** |
+| `timeout_seconds` | `float` | `10.0` | `> 0` | Per-request LLM API timeout. |
+| `max_requests_per_minute` | `int` | `60` | `>= 1` | Per-process token-bucket rate limit. Not enforced for `provider = "ollama"`. |
 | `num_queries` | `int` | `2` | `1–5` | Number of LLM-generated variants (not counting original). `num_queries=1` logs a WARNING. |
 
-Set `ANTHROPIC_API_KEY` in the server's environment before starting:
+For the default Anthropic provider, set `ANTHROPIC_API_KEY` in the server's environment. For OpenAI, set `OPENAI_API_KEY`. For Ollama, no API key is needed:
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+export ANTHROPIC_API_KEY="sk-ant-..."   # Anthropic (default)
+# export OPENAI_API_KEY="sk-..."        # OpenAI
 archon-search start
 ```
 
@@ -379,19 +394,20 @@ The `/explain` response additionally includes:
 RAG Fusion is designed to **never degrade availability**. It falls back silently (`rag_fusion_applied: false`) when:
 
 - `[rag_fusion] enabled = false` in config (the kill-switch).
-- `rag_fusion=true` in the request but the `anthropic` package is not installed — in this case a `422` is returned (configuration error, not a runtime fallback).
-- `ANTHROPIC_API_KEY` is absent from the environment (WARNING logged once).
-- The Anthropic API call times out (after `timeout_seconds`).
-- The Anthropic API returns an error.
-- The per-process rate limit (`max_requests_per_minute`) is exhausted.
+- `rag_fusion=true` in the request but the required provider package is not installed — in this case a `422` is returned (configuration error, not a runtime fallback).
+- The provider's required API key is absent from the environment (`ANTHROPIC_API_KEY` for `"anthropic"`, `OPENAI_API_KEY` for `"openai"`; not applicable for `"ollama"`). WARNING logged once.
+- The LLM provider API call times out (after `timeout_seconds`). For `provider = "ollama"`: check that your Ollama server is running at `ollama_base_url` (default `http://localhost:11434`).
+- The provider returns an error.
+- The per-process rate limit (`max_requests_per_minute`) is exhausted (not enforced for `provider = "ollama"`).
 - The collection has no vector index (FTS-only mode).
 
 When the generator returns no variants (all failure paths), the original query is still searched normally.
 
 ### Operator notes
 
-- **Multi-worker deployments**: the rate limit is per-process. With N workers the effective call rate can be up to `N × max_requests_per_minute`. For deployments with both HyDE and RAG Fusion enabled, the combined limit applies: `N × (hyde.max_requests_per_minute + rag_fusion.max_requests_per_minute)` must not exceed your Anthropic account rate limit.
-- **Shared API key with HyDE**: both features use `ANTHROPIC_API_KEY`. Tune both `max_requests_per_minute` values together to stay within your account limit.
+- **Multi-worker deployments**: the rate limit is per-process. With N workers the effective call rate can be up to `N × max_requests_per_minute`. For deployments with both HyDE and RAG Fusion enabled using Anthropic or OpenAI, the combined limit applies: `N × (hyde.max_requests_per_minute + rag_fusion.max_requests_per_minute)` must not exceed your account rate limit. Not enforced for `provider = "ollama"`.
+- **Shared API key with HyDE**: when both features use the same provider, they share the same API key (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`). Tune both `max_requests_per_minute` values together to stay within your account limit.
+- **Provider selection (G10)**: change `[rag_fusion].provider` in TOML to `"ollama"` (local, no API cost, no key required) or `"openai"`. Run the wizard (`archon-search wizard`) for guided provider configuration.
 - **FTS-only collections**: `rag_fusion=true` is silently ignored (`rag_fusion_applied: false`) for collections without a vector index.
 - **`rag_fusion_queries_used` semantics**: counts only successful LLM-generated variant searches — does not count the original query search. The `rag_fusion_sub_queries` list (in `/explain` responses) will have `rag_fusion_queries_used + 1` entries.
 

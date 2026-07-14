@@ -8,6 +8,20 @@
 
 ## Changelog
 
+### [next release] — G10: `HydeStatusDetail` and `RagFusionStatusDetail` gain `provider: str` field
+
+**Surface**: `GET /status` response — `hyde: HydeStatusDetail | null` and `rag_fusion: RagFusionStatusDetail | null` sub-objects.
+
+**Additive change** (non-breaking for tolerant JSON consumers; breaking for strict-schema validators with `extra="forbid"`):
+
+- `HydeStatusDetail` gains `provider: str` — the active LLM provider name (`"anthropic"`, `"ollama"`, or `"openai"`), mirroring `[hyde].provider` from config. Default value when no provider is set: `"anthropic"`.
+- `RagFusionStatusDetail` gains `provider: str` — the active LLM provider name for RAG Fusion, mirroring `[rag_fusion].provider`. Default value: `"anthropic"`.
+- `key_available` semantics updated: was Anthropic-only (`ANTHROPIC_API_KEY`); now provider-aware — `false` for `"openai"` when `OPENAI_API_KEY` is unset; always `true` for `"ollama"`.
+
+**Migration**: tolerant JSON consumers are unaffected. Strict-schema validators must add `provider: str` to `HydeStatusDetail` and `RagFusionStatusDetail` type stubs. Regenerate from `GET /openapi.json`.
+
+---
+
 ### [next release] — E2j BE-1: `GraphNodeResponse` gains required `entity_type: str` field
 
 **Surface**: `GET /graph/{collection}` response (`GraphNodeResponse` items in `nodes[]`); `GET /graph/cross-collection` response (same `GraphNodeResponse` items).

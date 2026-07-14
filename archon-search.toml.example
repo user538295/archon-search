@@ -185,24 +185,47 @@ request_id_header = "X-Request-ID"
 # HyDE (Hypothetical Document Embeddings) — optional dense-retrieval recall booster.
 # Disabled by default.
 #
-# WARNING: setting enabled = true causes the raw query text to be sent to Anthropic's
-# API servers on every request that includes hyde=true. Do not enable in air-gapped
-# deployments or where data residency requirements apply.
+# Provider options (G10): "anthropic" (default), "ollama" (local; zero-transmission),
+# "openai". Set provider = "ollama" for fully air-gapped deployments — query text
+# stays on-premise and is never sent to an external API.
 #
-# Prerequisites:
+# WARNING (Anthropic/OpenAI): setting enabled = true with provider = "anthropic" or
+# "openai" causes the raw query text to be sent to the respective API servers on every
+# request that includes hyde=true. Do not enable in air-gapped deployments or where
+# data residency requirements apply.
+#
+# Prerequisites (Anthropic — default):
 #   1. Install the optional dependency: pip install archon-search[hyde]
 #   2. Set ANTHROPIC_API_KEY in the server's environment.
+#
+# Prerequisites (Ollama):
+#   1. Install the optional dependency: pip install archon-search[ollama]
+#   2. Run an Ollama server (default: http://localhost:11434).
+#   3. Set provider = "ollama" and model = "<your-ollama-model>" below.
+#
+# Prerequisites (OpenAI):
+#   1. Install the optional dependency: pip install archon-search[openai-provider]
+#   2. Set OPENAI_API_KEY in the server's environment.
+#   3. Set provider = "openai" and model = "<openai-model>" below.
 #
 # When enabled = false (the default), hyde=true in a request is silently ignored and
 # the standard query embedding is used (hyde_applied: false in the response).
 enabled = false
-# Claude model used to generate the hypothetical answer passage.
+# LLM provider for HyDE generation: "anthropic" (default), "ollama", or "openai".
+# provider = "anthropic"
+# Model used to generate the hypothetical answer passage.
+# For "anthropic" (default): a Claude model name (e.g. "claude-haiku-4-5-20251001").
+# For "ollama": the Ollama model tag (e.g. "llama3.2:3b"). REQUIRED for ollama/openai.
+# For "openai": an OpenAI model name (e.g. "gpt-4o-mini").
 model = "claude-haiku-4-5-20251001"
-# Per-request timeout (seconds) for the Anthropic API call. On timeout, the server
+# Base URL for the Ollama server. Only used when provider = "ollama".
+# ollama_base_url = "http://localhost:11434"
+# Per-request timeout (seconds) for the LLM API call. On timeout, the server
 # falls back silently to the original query embedding (hyde_applied: false).
 timeout_seconds = 10.0
-# Per-process rate limit (requests per minute) for the Anthropic API. Requests that
-# exceed this limit are answered with the fallback embedding (hyde_applied: false).
+# Per-process rate limit (requests per minute). Requests that exceed this limit
+# are answered with the fallback embedding (hyde_applied: false).
+# NOTE: this limit is NOT enforced when provider = "ollama" (local; no API cap).
 # In multi-worker deployments the effective rate is multiplied by worker count.
 max_requests_per_minute = 60
 
@@ -210,28 +233,52 @@ max_requests_per_minute = 60
 # RAG Fusion — optional multi-query recall booster using LLM-generated query variants.
 # Disabled by default.
 #
-# WARNING: setting enabled = true causes the raw query text to be sent to Anthropic's
-# API servers on every request that includes rag_fusion=true. Do not enable in air-gapped
-# deployments or where data residency requirements apply.
+# Provider options (G10): "anthropic" (default), "ollama" (local; zero-transmission),
+# "openai". Set provider = "ollama" for fully air-gapped deployments — query text
+# stays on-premise and is never sent to an external API.
 #
-# Prerequisites:
+# WARNING (Anthropic/OpenAI): setting enabled = true with provider = "anthropic" or
+# "openai" causes the raw query text to be sent to the respective API servers on every
+# request that includes rag_fusion=true. Do not enable in air-gapped deployments or
+# where data residency requirements apply.
+#
+# Prerequisites (Anthropic — default):
 #   1. Install the optional dependency: pip install archon-search[rag_fusion]
 #   2. Set ANTHROPIC_API_KEY in the server's environment.
+#
+# Prerequisites (Ollama):
+#   1. Install the optional dependency: pip install archon-search[ollama]
+#   2. Run an Ollama server (default: http://localhost:11434).
+#   3. Set provider = "ollama" and model = "<your-ollama-model>" below.
+#
+# Prerequisites (OpenAI):
+#   1. Install the optional dependency: pip install archon-search[openai-provider]
+#   2. Set OPENAI_API_KEY in the server's environment.
+#   3. Set provider = "openai" and model = "<openai-model>" below.
 #
 # When enabled = false (the default), rag_fusion=true in a request is silently ignored and
 # standard single-query search is used (rag_fusion_applied: false in the response).
 #
-# RATE LIMIT WARNING: [hyde].max_requests_per_minute + [rag_fusion].max_requests_per_minute
-# must not exceed your Anthropic account rate limit — both features share the same API key.
+# RATE LIMIT WARNING (Anthropic/OpenAI): [hyde].max_requests_per_minute +
+# [rag_fusion].max_requests_per_minute must not exceed your account's rate limit when
+# both features share the same provider. Rate limits are NOT enforced for Ollama.
 # In multi-worker deployments, the effective rate per feature is multiplied by worker count.
 enabled = false
-# Claude model used to generate query variants.
+# LLM provider for RAG Fusion generation: "anthropic" (default), "ollama", or "openai".
+# provider = "anthropic"
+# Model used to generate query variants.
+# For "anthropic" (default): a Claude model name (e.g. "claude-haiku-4-5-20251001").
+# For "ollama": the Ollama model tag (e.g. "llama3.2:3b"). REQUIRED for ollama/openai.
+# For "openai": an OpenAI model name (e.g. "gpt-4o-mini").
 model = "claude-haiku-4-5-20251001"
-# Per-request timeout (seconds) for the Anthropic API call. On timeout, the server
+# Base URL for the Ollama server. Only used when provider = "ollama".
+# ollama_base_url = "http://localhost:11434"
+# Per-request timeout (seconds) for the LLM API call. On timeout, the server
 # falls back silently to single-query search (rag_fusion_applied: false).
 timeout_seconds = 10.0
-# Per-process rate limit (requests per minute) for the Anthropic API. Requests that
-# exceed this limit fall back to single-query search (rag_fusion_applied: false).
+# Per-process rate limit (requests per minute). Requests that exceed this limit fall
+# back to single-query search (rag_fusion_applied: false).
+# NOTE: this limit is NOT enforced when provider = "ollama" (local; no API cap).
 # In multi-worker deployments the effective rate is multiplied by worker count.
 max_requests_per_minute = 60
 # Number of LLM-generated query variants (not counting the original query).
