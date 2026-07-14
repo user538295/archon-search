@@ -128,6 +128,7 @@ markers = [
     "docker: tests that require a running Docker daemon and perform a real image build; excluded from default run, opt in with `-m docker`",
     "archon_unset_data_dir: opt out of the autouse ARCHON_SEARCH_DATA_DIR isolation; the test exercises the Path.home() default-fallback path. Apply to the pinned MARKER_ALLOWLIST in tests/test_no_hardcoded_path_home.py only.",
     "live_benchmark: real-model latency benchmark; requires fastembed model cache; serialised via xdist_group('live_benchmark'); excluded from default suite",
+    "unit: plain unit tests with no infrastructure dependencies",
 ]
 
 [tool.uv]
