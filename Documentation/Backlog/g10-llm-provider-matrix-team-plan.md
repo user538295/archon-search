@@ -437,7 +437,7 @@ flowchart LR
         - [x] #integration_test — `test_search_hyde_openai_provider_mocked` — `make_real_app` with `provider="openai"`, `openai` already a dev dep; mock `AsyncOpenAI.chat.completions.create`; search with `hyde=true`; assert `hyde_applied=True`
         - [x] #integration_test — `test_search_rag_fusion_openai_provider_mocked` — same for RAG Fusion
 
-- [ ] **T-2** — Manual test checklist: live Ollama server + live OpenAI API #tester-role
+- [x] **T-2** — Manual test checklist: live Ollama server + live OpenAI API #tester-role
     - — · 1.0h
     - needs T-1, BE-7 · completes S2, S3, S4, S5
     - Tests
