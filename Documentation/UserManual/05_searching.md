@@ -417,10 +417,11 @@ Graph-mode search expands the query with first-degree graph-neighbour entity nam
 
 ### Prerequisites
 
-1. Install the `archon-search[graph]` optional extras:
+1. Install the `archon-search[graph]` optional extras and the spaCy model:
 
    ```bash
    pip install archon-search[graph]
+   python -m spacy download en_core_web_sm
    ```
 
 2. Enable graph extraction in `~/.archon-search/archon-search.toml`:
