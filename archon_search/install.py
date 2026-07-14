@@ -1310,11 +1310,26 @@ def _install_code_extra(dry_run: bool = False) -> None:
 
 
 def _install_graph_extra(dry_run: bool = False) -> None:
-    """Install ``archon-search[graph]`` (spaCy graph enrichment packages).
+    """Install ``archon-search[graph]`` and the spaCy model.
 
-    Thin wrapper around :func:`_install_extra` (BE-11).
+    PyPI prohibits direct URL dependencies, so ``en_core_web_sm`` cannot be
+    declared in the package extras. It must be downloaded separately via
+    ``python -m spacy download`` after the extras are installed.
     """
     _install_extra("archon-search[graph]", "graph enrichment", dry_run)
+    if dry_run:
+        click.echo("[dry-run] Would run: python -m spacy download en_core_web_sm")
+        return
+    click.echo("Downloading spaCy model en_core_web_sm...")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "spacy", "download", "en_core_web_sm"],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or b"").decode(errors="replace")
+        raise InstallError(f"Failed to download spaCy model: {stderr}") from exc
 
 
 def _revert_graph_enabled_flag(config_path: Path, dry_run: bool) -> None:
