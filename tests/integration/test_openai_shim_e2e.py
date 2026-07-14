@@ -351,6 +351,32 @@ def test_citation_format_in_response_content(tmp_path, monkeypatch):
     assert "[Source: architecture.md]" in content
 
 
+def test_streaming_citation_appears_in_assembled_chunks(tmp_path, monkeypatch):
+    """Streaming + inject_citations=True: [Source: ...] appears in assembled SSE content."""
+    app = _make_stub_app(tmp_path, monkeypatch, collections=["docs"], inject_citations=True)
+    pr = _make_pipeline_result([_make_search_result("vector internals", "arch.md")])
+    app.state.pipeline.get_collection_meta = AsyncMock(return_value=_make_collection_meta("docs"))
+    app.state.pipeline.search = AsyncMock(return_value=pr)
+
+    async def _run():
+        client = await _openai_client(app)
+        parts: list[str] = []
+        response = await client.chat.completions.create(
+            model="archon-search/docs",
+            messages=[{"role": "user", "content": "how does it work?"}],
+            stream=True,
+        )
+        async for chunk in response:
+            for choice in chunk.choices:
+                if choice.delta.content:
+                    parts.append(choice.delta.content)
+        return "".join(parts)
+
+    assembled = asyncio.run(_run())
+    assert "vector internals" in assembled
+    assert "[Source: arch.md]" in assembled
+
+
 def test_no_citations_when_disabled(tmp_path, monkeypatch):
     """With inject_citations=False the response contains only raw chunk text, no [Source:] line."""
     app = _make_stub_app(tmp_path, monkeypatch, collections=["docs"], inject_citations=False)
