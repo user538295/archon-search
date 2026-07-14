@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from archon_search.install import InstallError, _install_code_extra, _install_extra
+from archon_search.install import InstallError, _install_code_extra, _install_extra, _install_graph_extra
 
 
 class TestInstallCodeExtra:
@@ -172,3 +172,58 @@ class TestInstallExtra:
         with patch("archon_search.install._install_extra") as mock_extra:
             _install_code_extra(dry_run=True)
             mock_extra.assert_called_once_with("archon-search[code]", "code enrichment", True)
+
+
+class TestInstallGraphExtra:
+    """Unit tests for _install_graph_extra() — spaCy download logic."""
+
+    def test_install_graph_extra_spacy_download_called(self):
+        """On success: subprocess.run is called with the spaCy download command."""
+        with patch("archon_search.install._install_extra"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            _install_graph_extra(dry_run=False)
+            mock_run.assert_called_once()
+            cmd = mock_run.call_args[0][0]
+            assert cmd[0] == sys.executable
+            assert cmd[1] == "-m"
+            assert cmd[2] == "spacy"
+            assert cmd[3] == "download"
+            assert cmd[4] == "en_core_web_sm"
+            assert mock_run.call_args[1].get("check") is True
+            assert mock_run.call_args[1].get("capture_output") is True
+
+    def test_install_graph_extra_spacy_download_failure_is_nonfatal(self, capsys):
+        """CalledProcessError from spaCy subprocess must not raise; a warning is printed to stderr."""
+        spacy_error = subprocess.CalledProcessError(1, "spacy", stderr=b"model not found")
+        with patch("archon_search.install._install_extra"), \
+             patch("subprocess.run", side_effect=spacy_error):
+            _install_graph_extra(dry_run=False)  # must not raise
+        captured = capsys.readouterr()
+        assert "warning" in captured.err.lower() or "spacy" in captured.err.lower()
+
+    def test_install_graph_extra_dry_run_no_subprocess(self):
+        """dry_run=True must not call subprocess.run at all."""
+        with patch("archon_search.install._install_extra"), \
+             patch("subprocess.run") as mock_run:
+            _install_graph_extra(dry_run=True)
+            mock_run.assert_not_called()
+
+    def test_install_graph_extra_dry_run_prints_message(self, capsys):
+        """dry_run=True should print a message indicating what would be run."""
+        with patch("archon_search.install._install_extra"), \
+             patch("subprocess.run"):
+            _install_graph_extra(dry_run=True)
+        captured = capsys.readouterr()
+        assert "spacy" in captured.out.lower() or "dry" in captured.out.lower()
+
+    def test_install_graph_extra_partial_failure_extras_succeed_spacy_fails(self):
+        """When _install_extra succeeds but spaCy download fails, InstallError is NOT raised."""
+        spacy_error = subprocess.CalledProcessError(1, "spacy", stderr=b"download failed")
+        with patch("archon_search.install._install_extra"), \
+             patch("subprocess.run", side_effect=spacy_error):
+            # Must not raise InstallError — caller's except InstallError block must NOT trigger
+            try:
+                _install_graph_extra(dry_run=False)
+            except InstallError:
+                pytest.fail("_install_graph_extra raised InstallError on spaCy download failure")

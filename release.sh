@@ -145,7 +145,7 @@ fi
 # Falls back to git-cliff output silently if both paths fail.
 # Set NO_SYNTHESIS=1 to skip and use git-cliff output directly.
 NOTES="$CLIFF_NOTES"
-if [ "${NO_SYNTHESIS:-0}" != "1" ]; then
+if [ "${NO_SYNTHESIS:-0}" != "1" ] && [ "${DRY_RUN:-0}" != "1" ]; then
     echo "Synthesizing release notes with Claude..."
     PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
     if [ -n "$PREV_TAG" ]; then
@@ -155,7 +155,7 @@ if [ "${NO_SYNTHESIS:-0}" != "1" ]; then
     fi
     # Keep the ## [version] - date header from cliff; replace only the body.
     CLIFF_HEADER=$(printf '%s\n' "$CLIFF_NOTES" | head -2)
-    if BODY=$(printf '%s' "$RAW_COMMITS" | python3 .github/scripts/synthesize_release_notes.py "$TAG" 2>&1); then
+    if BODY=$(printf '%s' "$RAW_COMMITS" | python3 .github/scripts/synthesize_release_notes.py "$TAG"); then
         NOTES=$(printf '%s\n\n%s' "$CLIFF_HEADER" "$BODY")
     else
         echo "release.sh: Claude synthesis failed — using git-cliff output" >&2

@@ -1327,9 +1327,15 @@ def _install_graph_extra(dry_run: bool = False) -> None:
             check=True,
             capture_output=True,
         )
-    except subprocess.CalledProcessError as exc:
-        stderr = (exc.stderr or b"").decode(errors="replace")
-        raise InstallError(f"Failed to download spaCy model: {stderr}") from exc
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        detail = ""
+        if isinstance(exc, subprocess.CalledProcessError):
+            detail = ": " + (exc.stderr or b"").decode(errors="replace").strip()
+        print(
+            f"Warning: spaCy model download failed{detail}. "
+            "The model will be downloaded automatically on first graph ingest.",
+            file=sys.stderr,
+        )
 
 
 def _revert_graph_enabled_flag(config_path: Path, dry_run: bool) -> None:

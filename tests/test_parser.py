@@ -356,16 +356,13 @@ def test_parse_with_docling_kwarg_passes_page_break_marker(
 @pytest.mark.integration
 @pytest.mark.xdist_group("docling")
 def test_parse_with_docling_emits_page_marker(substantial_three_page_pdf: Path) -> None:
-    """Integration: parser output from a real three-page PDF contains at least one PAGE_BREAK_MARKER.
+    """Integration: parser output from a substantial three-page PDF contains at least one PAGE_BREAK_MARKER.
 
-    Requires the three_page_pdf fixture from Task 5.1.
+    Uses the substantial_three_page_pdf fixture (paragraph-rich content per page).
     Skipped if docling is unavailable or non-functional in the test environment.
 
-    NOTE: The fixture PDF has 3 pages. Docling may emit 1 or 2 page break markers
-    depending on how it segments the very short page content — short pages may be
-    merged into a single section, resulting in fewer markers than (pages - 1). We
-    assert >= 1 (at least one page boundary detected) rather than == 2 to avoid
-    tying the test to docling's internal segmentation heuristics.
+    NOTE: Docling may emit 1 or 2 page break markers depending on its segmentation
+    heuristics. We assert >= 1 (at least one page boundary detected) rather than == 2.
     """
     pytest.importorskip("docling")
 
