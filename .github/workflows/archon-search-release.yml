@@ -27,17 +27,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v6
 
       - name: Clean install (uv sync --dev)
         run: uv sync --dev
@@ -74,7 +74,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout (at the tag)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # Need full history so hatch-vcs / setuptools-scm can resolve the
           # version from the tag we are currently on.
@@ -98,12 +98,12 @@ jobs:
           echo "Releasing tag: $TAG"
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v6
 
       - name: Install hatch
         run: uv tool install hatch
@@ -181,7 +181,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout (at the tag)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # `COPY .` in the Dockerfile picks up sources at the tagged commit.
           # Full history is fetched so hatch-vcs can derive the version.
@@ -258,7 +258,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout (at tag)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.ref }}
           fetch-depth: 1
@@ -284,7 +284,7 @@ jobs:
           chmod +x /usr/local/bin/git-cliff
 
       - name: Checkout (full history for git-cliff)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
