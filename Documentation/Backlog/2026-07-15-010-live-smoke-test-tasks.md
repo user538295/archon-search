@@ -96,7 +96,7 @@ flowchart LR
 
 ### Phase 2 · CLI commands print human-readable output
 
-- [ ] **BE-4** — `tests/smoke/test_cli.py` — complete remaining CLI tests: `collection list` (S3), `collection info` xfail (S4), `config show` (S5), `maintenance run` error path (S6), `key list` (S7) #backend-role
+- [x] **BE-4** — `tests/smoke/test_cli.py` — complete remaining CLI tests: `collection list` (S3), `collection info` xfail (S4), `config show` (S5), `maintenance run` error path (S6), `key list` (S7) #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-2 · completes S3, S4, S5, S6, S7, S16
     - Tests
