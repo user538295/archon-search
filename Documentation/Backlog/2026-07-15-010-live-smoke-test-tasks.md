@@ -127,7 +127,7 @@ flowchart LR
         - `POST /search` requires exactly one of `collection` or `collections` (validator at `routes_search.py:69`). Minimum body: `{"query": "test", "collection": "smoke"}`.
         - `GET /status` requires `Authorization: Bearer {api_key}` (`middleware_auth.py`). Use the `api_key` from the session fixture.
 
-- [ ] **T-1** — e2e: run full smoke suite on a real developer machine, confirm all tests pass or xfail correctly #tester-role
+- [x] **T-1** — e2e: run full smoke suite on a real developer machine, confirm all tests pass or xfail correctly #tester-role
     - — · 2.0h
     - needs BE-3, BE-4, BE-5 · completes S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13, S14, S15, S16, S17
     - Tests
