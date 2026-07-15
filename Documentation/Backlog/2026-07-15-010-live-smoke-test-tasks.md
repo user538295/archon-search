@@ -58,14 +58,14 @@ flowchart LR
 
 ### Phase 1 · Smoke infrastructure — server starts and core assertions pass *(walking skeleton: fixture spawns a real server, one CLI test and one REST test pass, teardown is clean)*
 
-- [ ] **BE-1** — `pyproject.toml` + `tests/smoke/__init__.py` + stub `tests/smoke/test_cli.py` with always-on guard `test_smoke_marker_in_pyproject` #backend-role
+- [x] **BE-1** — `pyproject.toml` + `tests/smoke/__init__.py` + stub `tests/smoke/test_cli.py` with always-on guard `test_smoke_marker_in_pyproject` #backend-role
     - Frameworks & Drivers · 1.0h
     - needs K1 · completes C1
     - Tests
         - #unit_test — `test_smoke_marker_in_pyproject` — reads `pyproject.toml` via `tomllib`; asserts `any(m.startswith("smoke:") or m.startswith("smoke ") for m in markers)`, `"tests/smoke"` in `norecursedirs`, and `"not smoke"` in the addopts `-m` value; no `@pytest.mark.smoke` gate — always runs
     - Implementation note: mirror `tests/test_docker_smoke.py::test_docker_marker_in_pyproject` (lines 120–131) exactly for the marker guard pattern.
 
-- [ ] **BE-2** — `tests/smoke/conftest.py` session fixture: free-port binding, `secrets.token_hex(32)` API key, `subprocess.Popen` server spawn, health+ready poll (30 s), corpus pre-seed + job poll (60 s) + `doc_count > 0` assert, SIGTERM+SIGKILL teardown #backend-role
+- [x] **BE-2** — `tests/smoke/conftest.py` session fixture: free-port binding, `secrets.token_hex(32)` API key, `subprocess.Popen` server spawn, health+ready poll (30 s), corpus pre-seed + job poll (60 s) + `doc_count > 0` assert, SIGTERM+SIGKILL teardown #backend-role
     - Frameworks & Drivers · 6.0h
     - needs BE-1 · completes S1, S14, S15, C1
     - Tests
