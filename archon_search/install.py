@@ -1014,7 +1014,7 @@ def _prompt_optional_features(
     elif non_interactive:
         _disable_reranker_val = False
     else:
-        _disable_reranker_val = _ask_yn("Disable reranker for lower latency? [y/N]: ")
+        _disable_reranker_val = not _ask_yn("Keep reranker enabled? [Y/n]: ", default=True)
 
     # --- enable_watch ---
     print(

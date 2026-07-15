@@ -146,7 +146,7 @@ class TestPromptOptionalFeatures:
 
     def test_interactive_all_yes(self) -> None:
         """All 'y' inputs (and valid choices) produce all-enabled features."""
-        # 8 questions: code(y), reranker(y), watch(y), telemetry(y), eager_load(y),
+        # 8 questions: code(y), reranker(y=keep enabled), watch(y), telemetry(y), eager_load(y),
         # routing_strategy("hybrid"), log_format("json"), log_to_stderr(y)
         # enable_hyde/enable_rag_fusion pre-answered False to isolate from HyDE prompt changes.
         responses = iter(["y", "y", "y", "y", "y", "hybrid", "json", "y"])
@@ -158,7 +158,7 @@ class TestPromptOptionalFeatures:
                 enable_rag_fusion=False,
             )
         assert features.install_code_extra is True
-        assert features.disable_reranker is True
+        assert features.disable_reranker is False
         assert features.enable_watch is True
         assert features.enable_telemetry is True
         assert features.eager_load_embedders is True
@@ -244,8 +244,8 @@ class TestPromptOptionalFeatures:
         """Some flags pre-answered; stdin only called for non-overridden questions."""
         # install_code=True, enable_watch=True, enable_hyde=False, enable_rag_fusion=False pre-answered.
         # Remaining interactive questions (with reranker profile):
-        #   reranker(n), telemetry(y), eager(n), routing(""), log("")
-        responses = iter(["n", "y", "n", "", ""])
+        #   reranker(y=keep enabled), telemetry(y), eager(n), routing(""), log("")
+        responses = iter(["y", "y", "n", "", ""])
         with patch("builtins.input", side_effect=responses) as mock_input:
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -263,7 +263,7 @@ class TestPromptOptionalFeatures:
 
     def test_eof_midway_preserves_prior_answers(self) -> None:
         """EOF after 2 questions answered → first 2 preserved, remaining use defaults."""
-        # code=y, reranker=y → then EOFError for all remaining questions
+        # code=y, reranker=y (keep enabled) → then EOFError for all remaining questions
         responses = ["y", "y"]
 
         call_count = 0
@@ -283,7 +283,7 @@ class TestPromptOptionalFeatures:
                 profile=self._profile_with_reranker,
             )
         assert features.install_code_extra is True
-        assert features.disable_reranker is True
+        assert features.disable_reranker is False
         # remaining questions use defaults due to EOFError
         assert features.enable_watch is False
         assert features.enable_telemetry is False
