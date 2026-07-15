@@ -112,7 +112,7 @@ flowchart LR
 
 ### Phase 3 · REST endpoints return correctly shaped responses within timing budgets
 
-- [ ] **BE-5** — `tests/smoke/test_rest.py` — complete remaining REST tests: `GET /ready` (S9), `GET /status` (S10), `GET /collections/` (S11), `GET /collections/smoke` (S12), `POST /search` (S13, S16) #backend-role
+- [x] **BE-5** — `tests/smoke/test_rest.py` — complete remaining REST tests: `GET /ready` (S9), `GET /status` (S10), `GET /collections/` (S11), `GET /collections/smoke` (S12), `POST /search` (S13, S16) #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-2 · completes S9, S10, S11, S12, S13, S16
     - Tests
