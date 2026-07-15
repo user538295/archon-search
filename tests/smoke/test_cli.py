@@ -15,6 +15,9 @@ all smoke tests share the single session-scoped server subprocess.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import time
 import tomllib
 from pathlib import Path
 
@@ -64,3 +67,37 @@ def test_smoke_marker_in_pyproject() -> None:
         "pyproject.toml [tool.pytest.ini_options].addopts must contain "
         "'not smoke' in its -m filter (dual guard: norecursedirs + -m filter)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Walking-skeleton CLI test (S2) — no server dependency
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    os.environ.get("SMOKE_NO_TIMING") == "1", reason="timing disabled"
+)
+def test_help_completes_within_2s() -> None:
+    """``archon-search --help`` is a pure CLI invocation (no server, no
+    LanceDB, no fastembed model load) and must complete within 2 seconds.
+
+    Also asserts the output is human-readable: no ``CollectionMeta(`` repr
+    and no raw embedding-vector reprs (heuristic ``"[0."`` guard, S16 partial).
+    """
+    start = time.monotonic()
+    result = subprocess.run(
+        ["uv", "run", "archon-search", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 2.0, f"archon-search --help took {elapsed:.2f}s, expected < 2.0s"
+    assert result.returncode == 0
+    assert "CollectionMeta(" not in result.stdout
+    # Low-value heuristic guard: --help output is click's static option
+    # listing, so it structurally cannot contain a leaked embedding-vector
+    # repr. Kept per spec / cross-command consistency with other CLI smoke
+    # tests (S16 partial), not because it can meaningfully fail here.
+    assert "[0." not in result.stdout

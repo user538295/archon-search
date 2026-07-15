@@ -94,6 +94,10 @@ def test_serve_command_with_real_app_responds_to_ready(
     not break routing or app startup when using TestClient.
     """
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    # Point at a non-existent path so load_config uses defaults instead of the
+    # developer's real ~/.archon-search/archon-search.toml (test-isolation guard;
+    # same pattern as tests/smoke/conftest.py).
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(tmp_path / "archon-search.toml"))
 
     from archon_search.config import load_config
     from archon_search.jobs.scheduler import JobScheduler

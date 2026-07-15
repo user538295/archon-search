@@ -86,7 +86,7 @@ flowchart LR
         - Module-level `pytestmark = pytest.mark.xdist_group("smoke_e2e")` in every test file.
         - `scope="session"` + `tmp_path_factory` (not `tmp_path`) — function-scoped `tmp_path` causes `ScopeMismatch` in a session fixture.
 
-- [ ] **BE-3** — Walking-skeleton test assertions: `tests/smoke/test_cli.py` — `--help` timing (S2); `tests/smoke/test_rest.py` — `GET /health` (S8) + S17 exclusion check #backend-role
+- [x] **BE-3** — Walking-skeleton test assertions: `tests/smoke/test_cli.py` — `--help` timing (S2); `tests/smoke/test_rest.py` — `GET /health` (S8) + S17 exclusion check #backend-role
     - Frameworks & Drivers · 2.0h
     - needs BE-2 · completes S2, S8, S17
     - Tests
