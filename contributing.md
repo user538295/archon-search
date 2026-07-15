@@ -60,13 +60,20 @@ uv run pytest -n0 -x       # stop on first failure (xdist workers don't support 
 uv run pytest -n0 -s       # show stdout (suppressed by xdist)
 ```
 
-Marker-gated suites are excluded from the default run and opted into explicitly:
+`live`, `eval`, `benchmark`, and `integration` markers run in the default suite and skip gracefully when their infrastructure is absent. They can also be run explicitly:
 
 ```bash
 uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/test_eval_suite.py
 uv run pytest -m integration
 uv run pytest -m live
 uv run pytest -m benchmark   # needs a running server; auto-skips if unreachable
+```
+
+`live_benchmark` and `smoke` are the only markers excluded from the default run:
+
+```bash
+uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov
+uv run pytest tests/smoke/ --no-cov
 ```
 
 The test pyramid, marker semantics, parallelism configuration, and the role of the eval harness are documented in [`Documentation/Architecture/200_testing_strategy.md`](Documentation/Architecture/200_testing_strategy.md). The eval fixture and threshold maintenance guide is [`tests/eval/README.md`](tests/eval/README.md).
