@@ -150,11 +150,11 @@ flowchart LR
     - needs BE-2 · completes (enables S3)
     - Tests
         - #integration_test — `test_smoke_server_graph_enabled_has_graph_data` — the graph-enabled smoke server starts and its seeded collection reports a non-empty graph (guards against a zero-node server that would make T-1 hit the S8 failure path instead of S3's happy path)
-- [ ] **T-1** — e2e smoke: `graph build-communities <collection> --wait` against a real `archon-search serve` subprocess #tester-role
+- [x] **T-1** — e2e smoke: `graph build-communities <collection> --wait` against a real `archon-search serve` subprocess #tester-role
     - — · 2.0h
     - needs BE-8, BE-9 · completes S3
     - Tests
-        - #e2e_test — `test_e2e_graph_build_communities_wait_against_server` — using the graph-enabled smoke server (BE-9; CLI-invocation modeled on `test_key_list_no_repr`), run `uv run archon-search graph build-communities <collection> --wait --api-url <base_url> --api-key <key>` as a subprocess and assert exit `0` with the job reaching `DONE` (S3). Guard with `importorskip("leidenalg")` (repo convention) so the test skips cleanly where the optional graph libraries are absent
+        - [x] #e2e_test — `test_e2e_graph_build_communities_wait_against_server` — using the graph-enabled smoke server (BE-9; CLI-invocation modeled on `test_key_list_no_repr`), run `uv run archon-search graph build-communities <collection> --wait --api-url <base_url> --api-key <key>` as a subprocess and assert exit `0` with the job reaching `DONE` (S3). Guard with `importorskip("leidenalg")` (repo convention) so the test skips cleanly where the optional graph libraries are absent
 
 ### Phase 5 · Close-out
 - [ ] **T-2** — Project close-out & acceptance fact-check #tester-role

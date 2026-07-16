@@ -335,3 +335,57 @@ def test_key_list_no_repr(smoke_server) -> None:
     # on a vacuous "No keys found." output).
     assert "id: " in result.stdout
     assert "namespace: " in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# graph build-communities --wait (S3) — real CLI-to-server HTTP round trip
+# against the graph-enabled smoke server, with real Leiden clustering compute.
+# ---------------------------------------------------------------------------
+
+
+def test_e2e_graph_build_communities_wait_against_server(smoke_server_graph_enabled) -> None:
+    """``archon-search graph build-communities smoke_graph --wait`` against the
+    graph-enabled smoke server (BE-9) must exit 0 and print the CLI's own
+    "Community rebuild complete" message once the job reaches DONE (S3).
+
+    TEST TRAP (repo convention): ``importorskip("leidenalg")`` must be the
+    FIRST statement inside the test body, not module-level — module scope
+    would skip every other test in this file, not just this one.
+
+    Modeled on ``test_key_list_no_repr``: a real ``uv run archon-search``
+    subprocess against the smoke server's ``base_url``/``api_key``, asserting
+    on the CLI's own stdout as the primary success signal rather than
+    independently re-polling the server.
+    """
+    pytest.importorskip("leidenalg")
+
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "archon-search",
+            "graph",
+            "build-communities",
+            "smoke_graph",
+            "--wait",
+            "--api-url",
+            smoke_server_graph_enabled.base_url,
+            "--api-key",
+            smoke_server_graph_enabled.api_key,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (
+        f"build-communities --wait failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "Community rebuild job submitted:" in result.stdout
+    # "Community rebuild complete" alone is a prefix both the count-bearing and
+    # count-less DONE branches print (graph_cmd.py's _poll_rebuild_job) — assert
+    # the "... communities built." suffix so this test proves Leiden actually
+    # produced a count on the fixture's real >=2-node/>=1-edge graph, not just
+    # that the job reached DONE.
+    assert "Community rebuild complete: " in result.stdout
+    assert "communities built." in result.stdout
