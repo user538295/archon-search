@@ -24,6 +24,7 @@ class CollectionMeta:
     pending_embedding_model: str | None = None
     needs_reindex: bool = False
     reindex_job_id: str | None = None
+    community_rebuild_job_id: str | None = None
     last_indexed: datetime | None = None
     last_described: datetime | None = None
     described_at_doc_count: int | None = None

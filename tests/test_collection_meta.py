@@ -53,6 +53,11 @@ def test_reindex_job_id_defaults_to_none():
     assert meta.reindex_job_id is None
 
 
+def test_community_rebuild_job_id_defaults_to_none():
+    meta = CollectionMeta("foo")
+    assert meta.community_rebuild_job_id is None
+
+
 def test_collection_meta_schema_version_default():
     """CollectionMeta() has schema_version == 0 by default."""
     meta = CollectionMeta(name="x")

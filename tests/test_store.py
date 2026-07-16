@@ -1279,6 +1279,11 @@ async def test_old_schema_upsert_preserves_new_columns(tmp_path: Path) -> None:
         await store._migrate_schema_version()
         await store.migrate_default_ttl_seconds()
 
+        # community_rebuild_job_id has no migration (recreation-only per BE-4); simulate a
+        # recreated/current-schema table by adding the nullable column before the current-binary write.
+        table = await db.open_table("_archon_collection_meta")
+        await table.add_columns(pa.field("community_rebuild_job_id", pa.utf8(), nullable=True))
+
         # Write B5 values to row_a via update_collection_meta
         meta_a = CollectionMeta(
             name="col-a",
@@ -6372,6 +6377,30 @@ async def test_reindex_job_id_round_trips_none(connected_store: SearchStore) -> 
     assert retrieved.reindex_job_id is None
 
 
+@pytest.mark.asyncio
+async def test_collection_meta_persists_community_rebuild_job_id(connected_store: SearchStore) -> None:
+    """community_rebuild_job_id="job-456" is stored and read back as "job-456"."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="c1-rebuild-job-id", active_embedding_model="model-A", community_rebuild_job_id="job-456")
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("c1-rebuild-job-id")
+    assert retrieved is not None
+    assert retrieved.community_rebuild_job_id == "job-456"
+
+
+@pytest.mark.asyncio
+async def test_community_rebuild_job_id_sentinel_coercion(connected_store: SearchStore) -> None:
+    """community_rebuild_job_id=None is stored and read back as None (Mo3 sentinel coercion)."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="c1-rebuild-job-id-none", active_embedding_model="model-A", community_rebuild_job_id=None)
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("c1-rebuild-job-id-none")
+    assert retrieved is not None
+    assert retrieved.community_rebuild_job_id is None
+
+
 # ---------------------------------------------------------------------------
 # Task 4.1 — get_stored_vector_dimension + count_chunks
 # ---------------------------------------------------------------------------
@@ -6961,6 +6990,31 @@ async def test_schema_version_preserved_through_update_description(tmp_path: Pat
         retrieved = await store.get_collection_meta("schema-preserve-test")
         assert retrieved is not None
         assert retrieved.schema_version == 5
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_meta_field_threaded_through_write_paths(tmp_path: Path) -> None:
+    """community_rebuild_job_id survives write via update_collection_meta and reload via update_description."""
+    from archon_search.collection_meta import CollectionMeta
+
+    store = SearchStore(tmp_path / "db_rebuild_id_thread")
+    await store.connect()
+    try:
+        meta = CollectionMeta(name="rebuild-id-thread-test", community_rebuild_job_id="job-789")
+        await store.update_collection_meta(meta)
+        await store.update_description(
+            "rebuild-id-thread-test",
+            description="updated desc",
+            last_described=None,
+            described_at_doc_count=None,
+            last_indexed=None,
+        )
+        retrieved = await store.get_collection_meta("rebuild-id-thread-test")
+        assert retrieved is not None
+        assert retrieved.community_rebuild_job_id == "job-789"
     finally:
         await store.disconnect()
 
