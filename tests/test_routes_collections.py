@@ -94,6 +94,9 @@ def test_list_collections_returns_real_chunk_count(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """GET /collections reports the live count_chunks value, not a hardcoded 0 (bug-080)."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+
     src = tmp_path / "docs"
     src.mkdir()
     cfg = SearchConfig()
@@ -101,8 +104,11 @@ def test_list_collections_returns_real_chunk_count(
     cfg.collections = [str(src)]
     app = create_app(cfg, tmp_store)
 
+    name = path_to_collection_name(str(src))
     mock_store = MagicMock()
-    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.get_all_collections_meta = AsyncMock(
+        return_value=[CollectionMeta(name=name, namespace=DEFAULT_NAMESPACE)]
+    )
     mock_store.count_chunks = AsyncMock(return_value=42)
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
@@ -117,16 +123,92 @@ def test_list_collections_returns_real_chunk_count(
     data = response.json()
     assert len(data) == 1
     assert data[0]["chunk_count"] == 42
-    # namespace must be forwarded so counts cannot leak across tenants.
-    from archon_search.constants import DEFAULT_NAMESPACE
-    name = path_to_collection_name(str(src))
+    # ns is forwarded for API symmetry; count_chunks is table-wide (isolation comes
+    # from one-collection-one-namespace, not from this argument).
     mock_store.count_chunks.assert_awaited_once_with(name, namespace=DEFAULT_NAMESPACE)
 
 
-def test_list_collections_chunk_count_zero_on_store_error(
+def test_list_collections_counts_each_collection_independently(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
-    """GET /collections degrades to chunk_count=0 when count_chunks raises (never 500s the list)."""
+    """Each collection carries its own live count, not a shared/conflated value (C1-I-03)."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    a = tmp_path / "cola"
+    a.mkdir()
+    b = tmp_path / "colb"
+    b.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(a), str(b)]
+    app = create_app(cfg, tmp_store)
+
+    name_a = path_to_collection_name(str(a))
+    name_b = path_to_collection_name(str(b))
+    counts = {name_a: 7, name_b: 11}
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(
+        return_value=[
+            CollectionMeta(name=name_a, namespace=DEFAULT_NAMESPACE),
+            CollectionMeta(name=name_b, namespace=DEFAULT_NAMESPACE),
+        ]
+    )
+    mock_store.count_chunks = AsyncMock(side_effect=lambda n, namespace: counts[n])
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    data = c.get("/collections/").json()
+    by_name = {e["name"]: e["chunk_count"] for e in data}
+    assert by_name[name_a] == 7
+    assert by_name[name_b] == 11
+
+
+def test_list_collections_forwards_nondefault_namespace(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """count_chunks receives the caller's real namespace, not a hardcoded default (C1-I-02)."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    key_a = "a" * 64
+    cfg.namespaces = {key_a: "tenantA"}
+    app = create_app(cfg, tmp_store)
+
+    name = path_to_collection_name(str(src))
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(
+        return_value=[CollectionMeta(name=name, namespace="tenantA")]
+    )
+    mock_store.count_chunks = AsyncMock(return_value=5)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    c = TestClient(app, headers={"Authorization": f"Bearer {key_a}"})
+    response = c.get("/collections/")
+    assert response.status_code == 200
+    assert response.json()[0]["chunk_count"] == 5
+    mock_store.count_chunks.assert_awaited_once_with(name, namespace="tenantA")
+
+
+def test_list_collections_metaless_skips_count_chunks(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """A configured-but-not-indexed collection (no meta row) reports 0 WITHOUT calling
+    count_chunks — proving the col_meta guard skips the store, so an orphaned table's
+    rows can never leak into the listing (C2-I-1). Fails if the guard is removed."""
     src = tmp_path / "docs"
     src.mkdir()
     cfg = SearchConfig()
@@ -135,7 +217,44 @@ def test_list_collections_chunk_count_zero_on_store_error(
     app = create_app(cfg, tmp_store)
 
     mock_store = MagicMock()
-    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])  # no meta row
+    # If the guard were removed, this non-zero count would surface for a metaless entry.
+    mock_store.count_chunks = AsyncMock(return_value=999)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get("/collections/")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["chunk_count"] == 0
+    mock_store.count_chunks.assert_not_awaited()
+
+
+def test_list_collections_chunk_count_zero_on_store_error(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections degrades to chunk_count=0 when count_chunks raises (never 500s the list)."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    name = path_to_collection_name(str(src))
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(
+        return_value=[CollectionMeta(name=name, namespace=DEFAULT_NAMESPACE)]
+    )
     mock_store.count_chunks = AsyncMock(side_effect=RuntimeError("db error"))
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
@@ -148,6 +267,8 @@ def test_list_collections_chunk_count_zero_on_store_error(
     response = c.get("/collections/")
     assert response.status_code == 200
     assert response.json()[0]["chunk_count"] == 0
+    # Prove the 0 came from the except branch, not from count_chunks being skipped.
+    mock_store.count_chunks.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -543,6 +664,8 @@ def test_collection_info_chunk_count_zero_on_store_error(
     response = c.get(f"/collections/{name}")
     assert response.status_code == 200
     assert response.json()["chunk_count"] == 0
+    # Prove the 0 came from the except branch, not from count_chunks being skipped.
+    mock_store.count_chunks.assert_awaited_once()
 
 
 def test_collection_info_centroid_present_true(

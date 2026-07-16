@@ -104,14 +104,24 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
             continue
         status = _collection_status(config, state_store, name)
         col_meta = meta_by_name.get(name)
-        try:
-            chunk_count = await search_store.count_chunks(name, namespace=namespace)
-        except Exception:  # noqa: BLE001 — one bad collection must not 500 the whole list
-            chunk_count = 0
+        # Live count, not the maintained meta.chunk_count: the cached value drifts
+        # (delete subtracts a vector count, TTL-expiry pruning never decrements it).
+        # A metaless entry is a configured-but-not-yet-indexed collection → 0; this
+        # also avoids surfacing an orphaned table's rows to a caller that has no meta
+        # row for it. count_chunks is table-wide (its namespace arg is ignored by the
+        # store), but one collection name maps to exactly one namespace, so the count
+        # is namespace-isolated in practice.
+        chunk_count = 0
+        if col_meta is not None:
+            try:
+                chunk_count = await search_store.count_chunks(name, namespace=namespace)
+            except Exception:  # noqa: BLE001 — one bad collection must not 500 the whole list
+                chunk_count = 0
         result.append(CollectionSummary(
             name=name,
             path=resolved,
             description="",
+            # doc_count intentionally 0 — populating it here is bug-025 (out of scope).
             doc_count=0,
             chunk_count=chunk_count,
             namespace=namespace,

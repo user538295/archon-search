@@ -114,6 +114,26 @@ def test_status_chunk_count_zero_on_store_error(tmp_db: Path) -> None:
     response = c.get("/status")
     assert response.status_code == 200
     assert response.json()["collections"][0]["chunk_count"] == 0
+    # Prove the 0 came from the except branch, not from count_chunks being skipped.
+    c.app.state.search_store.count_chunks.assert_awaited()
+
+
+def test_status_counts_each_collection_independently(tmp_db: Path) -> None:
+    """Each collection's chunk_count is its own live count, not a shared value (C1-I-04)."""
+    state = IndexingState(
+        collections={
+            "docs": CollectionProgress(status=IndexingStatus.DONE, total_files=1, processed_files=1),
+            "notes": CollectionProgress(status=IndexingStatus.DONE, total_files=1, processed_files=1),
+        }
+    )
+    c = _make_client_with_state(tmp_db, state)
+    counts = {"docs": 7, "notes": 11}
+    c.app.state.search_store.count_chunks = AsyncMock(side_effect=lambda name, namespace: counts[name])
+    response = c.get("/status")
+    assert response.status_code == 200
+    by_name = {col["name"]: col["chunk_count"] for col in response.json()["collections"]}
+    assert by_name["docs"] == 7
+    assert by_name["notes"] == 11
 
 
 def test_status_includes_eta_when_progress_known(tmp_db: Path) -> None:
