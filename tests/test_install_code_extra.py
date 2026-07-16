@@ -7,7 +7,13 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from archon_search.install import InstallError, _install_code_extra, _install_extra, _install_graph_extra
+from archon_search.install import (
+    InstallError,
+    _install_code_extra,
+    _install_extra,
+    _install_graph_extra,
+    _install_multilingual_extra,
+)
 
 
 class TestInstallCodeExtra:
@@ -227,3 +233,29 @@ class TestInstallGraphExtra:
                 _install_graph_extra(dry_run=False)
             except InstallError:
                 pytest.fail("_install_graph_extra raised InstallError on spaCy download failure")
+
+
+class TestInstallMultilingualExtra:
+    """Unit tests for _install_multilingual_extra() — mirrors _install_code_extra."""
+
+    def test_delegates_to_install_extra(self):
+        """_install_multilingual_extra() must delegate to _install_extra with the multilingual package."""
+        with patch("archon_search.install._install_extra") as mock_extra:
+            _install_multilingual_extra(dry_run=False)
+            mock_extra.assert_called_once_with(
+                "archon-search[multilingual]", "multilingual language detection", False
+            )
+
+    def test_delegates_dry_run(self):
+        """_install_multilingual_extra(dry_run=True) must delegate dry_run=True to _install_extra."""
+        with patch("archon_search.install._install_extra") as mock_extra:
+            _install_multilingual_extra(dry_run=True)
+            mock_extra.assert_called_once_with(
+                "archon-search[multilingual]", "multilingual language detection", True
+            )
+
+    def test_dry_run_no_subprocess(self):
+        """dry_run=True must not call any subprocess."""
+        with patch("subprocess.run") as mock_run:
+            _install_multilingual_extra(dry_run=True)
+            mock_run.assert_not_called()

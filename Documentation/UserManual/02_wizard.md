@@ -386,6 +386,8 @@ Code enrichment packages installed.
 
 If the install fails, a warning is shown but the overall wizard continues — code enrichment is optional.
 
+If you chose a **multilingual** profile, the wizard also installs the `archon-search[multilingual]` extra (`fasttext-wheel`, used for language detection) at this step — the server needs it to start when `multilingual = true`. If that install fails, the wizard reverts `multilingual = false` in the config so the server still starts (in English-only mode) instead of crashing on the next start. You can install it separately at any time with `pip install archon-search[multilingual]`.
+
 ### Step 8 — Model download
 
 ```

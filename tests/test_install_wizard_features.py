@@ -50,12 +50,17 @@ class TestWizardFeaturesDefaults:
     def test_defaults(self) -> None:
         f = WizardFeatures()
         assert f.install_code_extra is False
+        assert f.install_multilingual_extra is False
         assert f.disable_reranker is False
         assert f.enable_watch is False
         assert f.enable_telemetry is False
         assert f.eager_load_embedders is False
         assert f.routing_strategy == "centroid"
         assert f.log_format == "text"
+
+    def test_install_multilingual_extra_accepts_value(self) -> None:
+        f = WizardFeatures(install_multilingual_extra=True)
+        assert f.install_multilingual_extra is True
 
     def test_custom_values(self) -> None:
         f = WizardFeatures(

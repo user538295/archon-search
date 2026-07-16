@@ -73,6 +73,7 @@ def _patched_wizard(**extra_module_patches: Any) -> Generator[None, None, None]:
         # precedence (merged after base_patches).
         "_install_code_extra": MagicMock(),
         "_install_graph_extra": MagicMock(),
+        "_install_multilingual_extra": MagicMock(),
     }
 
     # Merge extra patches (using short names for consistency)
@@ -619,6 +620,250 @@ def test_wizard_declineProceedPrompt_revertsGraphEnabled(runner: CliRunner, tmp_
         "graph.enabled must be reverted to false when the user declines the "
         "Proceed? prompt after the config write — otherwise the next server "
         "start hard-fails on missing spaCy"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Use case 8b: Multilingual extra install (2026-07-15-040)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_e2e_multilingual_extra_install_triggered(runner: CliRunner, tmp_path: Path) -> None:
+    """wizard --non-interactive --multilingual → _install_multilingual_extra called once."""
+    config_path = tmp_path / "archon-search.toml"
+    install_multilingual_mock = MagicMock()
+
+    with _patched_wizard(
+        **{"archon_search.install._install_multilingual_extra": install_multilingual_mock}
+    ):
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--multilingual",
+            "--config", str(config_path),
+            "--skip-preload",
+        ])
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    install_multilingual_mock.assert_called_once()
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["multilingual"] is True
+
+
+@pytest.mark.integration
+def test_e2e_english_profile_does_not_install_multilingual(runner: CliRunner, tmp_path: Path) -> None:
+    """wizard --non-interactive --no-multilingual → _install_multilingual_extra NOT called."""
+    config_path = tmp_path / "archon-search.toml"
+    install_multilingual_mock = MagicMock()
+
+    with _patched_wizard(
+        **{"archon_search.install._install_multilingual_extra": install_multilingual_mock}
+    ):
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--no-multilingual",
+            "--config", str(config_path),
+            "--skip-preload",
+        ])
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    install_multilingual_mock.assert_not_called()
+
+
+@pytest.mark.integration
+def test_e2e_multilingual_install_failure_reverts_flag(runner: CliRunner, tmp_path: Path) -> None:
+    """_install_multilingual_extra raising InstallError → exit 0, config reverted to multilingual=false.
+
+    Otherwise the next server start hard-fails in _check_multilingual_deps when
+    fasttext-wheel is absent. Reverting lets the server start English-only.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    install_multilingual_mock = MagicMock(side_effect=InstallError("pip failed"))
+
+    with _patched_wizard(
+        **{"archon_search.install._install_multilingual_extra": install_multilingual_mock}
+    ):
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--multilingual",
+            "--config", str(config_path),
+            "--skip-preload",
+        ])
+
+    assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
+    install_multilingual_mock.assert_called_once()
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["multilingual"] is False, (
+        "multilingual must be reverted to false when the [multilingual] extra fails "
+        "to install — otherwise the next server start hard-fails on missing fasttext-wheel"
+    )
+
+
+@pytest.mark.integration
+def test_e2e_multilingual_disk_space_failure_reverts_flag(runner: CliRunner, tmp_path: Path) -> None:
+    """Disk-space check failure after config write must revert multilingual (mirrors C3-A-1).
+
+    The config is written with multilingual=true early (Step 6/7/8), but the
+    disk-space check (Step 11) happens later and can raise before the install
+    step. That early return must still roll back the flag.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    install_multilingual_mock = MagicMock()
+    disk_space_mock = MagicMock(side_effect=InstallError("not enough disk space"))
+
+    with _patched_wizard(
+        **{
+            "archon_search.install._install_multilingual_extra": install_multilingual_mock,
+            "archon_search.install._check_disk_space": disk_space_mock,
+        }
+    ):
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--multilingual",
+            "--config", str(config_path),
+            "--skip-preload",
+        ])
+
+    assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}: {result.output}"
+    install_multilingual_mock.assert_not_called()
+    assert config_path.exists(), "Config should have been written before the disk-space check"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["multilingual"] is False, (
+        "multilingual must be reverted to false when the disk-space check fails "
+        "after the config write"
+    )
+
+
+@pytest.mark.integration
+def test_e2e_multilingual_declineProceedPrompt_reverts_flag(runner: CliRunner, tmp_path: Path) -> None:
+    """Declining the final 'Proceed?' prompt must revert multilingual (mirrors C3-A-1).
+
+    Interactive-mode abort path for multilingual: the user answers "y" to the
+    multilingual prompt (so the config is written with multilingual=true
+    early), but then declines the final Proceed? confirmation. That early
+    return must still roll back the flag so the next server start does not
+    hard-fail on missing fasttext-wheel. Mirrors
+    test_wizard_declineProceedPrompt_revertsGraphEnabled.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    install_multilingual_mock = MagicMock()
+
+    # Input queue (multilingual minimal profile has reranker=None, so the
+    # reranker question is SKIPPED):
+    #  1. multilingual: "y"
+    #  2. code enrichment: "n"
+    #  3. watch: "n"
+    #  4. telemetry: "n"
+    #  5. eager load: "n"
+    #  6. routing strategy: "" (default)
+    #  7. log format: "" (default)
+    #  8. HyDE/RAG Fusion: "n"
+    #  9. "Proceed?": "n"  ← decline
+    stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "n", "n"]) + "\n"
+
+    with _no_anthropic_key():
+        with _patched_wizard(
+            **{"archon_search.install._install_multilingual_extra": install_multilingual_mock}
+        ):
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "minimal",
+                    "--config", str(config_path),
+                    "--skip-preload",
+                ],
+                input=stdin_responses,
+            )
+
+    assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}:\nOUT: {result.output}"
+    install_multilingual_mock.assert_not_called()
+    assert config_path.exists(), "Config should have been written before the Proceed? prompt"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["multilingual"] is False, (
+        "multilingual must be reverted to false when the user declines the "
+        "Proceed? prompt after the config write — otherwise the next server "
+        "start hard-fails on missing fasttext-wheel"
+    )
+
+
+@pytest.mark.integration
+def test_e2e_interactive_multilingual_install_triggered(runner: CliRunner, tmp_path: Path) -> None:
+    """Interactive mode: user answers "y" to multilingual and Proceed → install fires.
+
+    The existing test_e2e_interactive_multilingual_yes only spies on
+    _select_profile and proves nothing about the install actually firing.
+    This proves the interactive stdin-y -> install-fires wiring end-to-end,
+    and that multilingual=true is written to the config.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    install_multilingual_mock = MagicMock()
+
+    # Same interactive setup as the decline test above, but Proceed="y".
+    stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "n", "y"]) + "\n"
+
+    with _no_anthropic_key():
+        with _patched_wizard(
+            **{"archon_search.install._install_multilingual_extra": install_multilingual_mock}
+        ):
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "minimal",
+                    "--config", str(config_path),
+                    "--skip-preload",
+                ],
+                input=stdin_responses,
+            )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    install_multilingual_mock.assert_called_once()
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["multilingual"] is True
+
+
+@pytest.mark.integration
+def test_e2e_multilingual_install_before_prewarm(runner: CliRunner, tmp_path: Path) -> None:
+    """_install_multilingual_extra must run before _prewarm_models (Step 14 ordering).
+
+    Deliberately omits --skip-preload (unlike other tests in this module) —
+    with it, _prewarm_models is never called at all (install.py:2244), so the
+    ordering this test asserts could not be observed.  _prewarm_models is
+    mocked, so no real model download occurs.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    call_order: list[str] = []
+    install_mock = MagicMock(side_effect=lambda *a, **k: call_order.append("install"))
+    prewarm_mock = MagicMock(side_effect=lambda *a, **k: call_order.append("prewarm"))
+
+    with _patched_wizard(
+        **{
+            "archon_search.install._install_multilingual_extra": install_mock,
+            "archon_search.install._prewarm_models": prewarm_mock,
+            "archon_search.install._download_fasttext_model": MagicMock(),
+        }
+    ):
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--multilingual",
+            "--accept-fasttext-license",
+            "--config", str(config_path),
+        ])
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    assert call_order == ["install", "prewarm"], (
+        f"Expected install before prewarm, got call order: {call_order}"
     )
 
 

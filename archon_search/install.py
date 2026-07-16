@@ -147,6 +147,7 @@ class WizardFeatures:
 
     install_code_extra: bool = False
     install_graph_extra: bool = False
+    install_multilingual_extra: bool = False
     disable_reranker: bool = False
     enable_watch: bool = False
     enable_telemetry: bool = False
@@ -255,6 +256,10 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
     subprocess install, not a config key. ``install_graph_extra`` also controls a
     subprocess install, but additionally writes ``graph.enabled = true`` (BE-11):
     without it, the auto-installed ``[graph]`` extras are inert (C1-I-1).
+    ``install_multilingual_extra`` is likewise NOT written here — unlike graph,
+    the ``[database].multilingual`` key is written separately by the profile
+    config writer (``_write_profile_config``/``_profile_toml``), so no overlay
+    flag is needed.
     """
 
     def _ensure_section(name: str) -> None:
@@ -1507,6 +1512,16 @@ def _install_graph_extra(dry_run: bool = False) -> None:
         )
 
 
+def _install_multilingual_extra(dry_run: bool = False) -> None:
+    """Install ``archon-search[multilingual]`` (fasttext-wheel language detection).
+
+    Thin wrapper around :func:`_install_extra`.  Required by the server whenever
+    ``[database].multilingual = true``; without it ``_check_multilingual_deps``
+    hard-fails at startup.
+    """
+    _install_extra("archon-search[multilingual]", "multilingual language detection", dry_run)
+
+
 def _revert_graph_enabled_flag(config_path: Path, dry_run: bool) -> None:
     """Revert ``graph.enabled`` to false in the written config.
 
@@ -1528,6 +1543,35 @@ def _revert_graph_enabled_flag(config_path: Path, dry_run: bool) -> None:
             "Warning: graph.enabled has been reverted to false because "
             "the install did not complete; re-run the wizard or install "
             "archon-search[graph] manually to enable code/prose graphing.",
+            file=sys.stderr,
+        )
+
+
+def _revert_multilingual_flag(config_path: Path, dry_run: bool) -> None:
+    """Revert ``[database].multilingual`` to false in the written config.
+
+    ``run()`` writes ``multilingual=true`` early (config-write branches, Step
+    6/7/8) whenever a multilingual profile is selected, before the
+    ``[multilingual]`` extra is installed. If a later step aborts or fails
+    before that install succeeds, leaving ``multilingual=true`` on disk would
+    hard-fail the next server start via app.py's ``_check_multilingual_deps``
+    (fasttext-wheel absent). Reverting lets the server start English-only
+    instead of crashing. Mirrors :func:`_revert_graph_enabled_flag`. Note the
+    ``multilingual=true`` flag reverted here is written by the profile config
+    writer (``_write_profile_config``/``_profile_toml``), NOT by the
+    ``_apply_wizard_features_to_toml`` overlay that the graph flag comes from.
+    """
+    if dry_run or not config_path.exists():
+        return
+    doc = tomlkit.parse(config_path.read_text())
+    if "database" in doc and "multilingual" in doc["database"]:
+        doc["database"]["multilingual"] = False
+        atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
+        print(
+            "Warning: multilingual has been reverted to false because the "
+            "install did not complete; the server will start in English-only "
+            "mode. Re-run the wizard or install archon-search[multilingual] "
+            "manually to enable multilingual language detection.",
             file=sys.stderr,
         )
 
@@ -1930,6 +1974,11 @@ class SearchInstaller:
             if enable_rag_fusion:
                 features.enable_rag_fusion = enable_rag_fusion
 
+            # A multilingual profile needs the [multilingual] extra (fasttext-wheel)
+            # or the server hard-fails at startup. Derived from the resolved profile
+            # choice, so it fires identically in interactive and non-interactive paths.
+            features.install_multilingual_extra = is_multilingual
+
             # Step 3d-ii: non-loopback host security note
             _effective_host = features.host
             if _effective_host is not None and _effective_host != "127.0.0.1":
@@ -2103,6 +2152,8 @@ class SearchInstaller:
                 print(str(exc))
                 if features.install_graph_extra:
                     _revert_graph_enabled_flag(config_path, self.dry_run)
+                if features.install_multilingual_extra:
+                    _revert_multilingual_flag(config_path, self.dry_run)
                 return 1
 
             # Step 12: summary display
@@ -2123,6 +2174,8 @@ class SearchInstaller:
                     print("Installation aborted.")
                     if features.install_graph_extra:
                         _revert_graph_enabled_flag(config_path, self.dry_run)
+                    if features.install_multilingual_extra:
+                        _revert_multilingual_flag(config_path, self.dry_run)
                     return 1
 
             # Before Step 14: install code enrichment packages if requested
@@ -2142,6 +2195,17 @@ class SearchInstaller:
                     # Non-fatal — continue, but roll back the already-written
                     # graph.enabled=true config flag (C2-A / C3-A-1 fix).
                     _revert_graph_enabled_flag(config_path, self.dry_run)
+
+            # Before Step 14: install multilingual package if a multilingual profile
+            # was selected (2026-07-15-040). Same shape as the graph install above:
+            # non-fatal, and roll back the already-written multilingual=true flag on
+            # failure so the server starts English-only rather than crashing.
+            if features.install_multilingual_extra:
+                try:
+                    _install_multilingual_extra(dry_run=self.dry_run)
+                except InstallError as exc:
+                    print(f"Warning: multilingual install failed: {exc}", file=sys.stderr)
+                    _revert_multilingual_flag(config_path, self.dry_run)
 
             # Before Step 14b: create .secrets.env when AI query expansion is enabled
             if features.enable_hyde or features.enable_rag_fusion:
