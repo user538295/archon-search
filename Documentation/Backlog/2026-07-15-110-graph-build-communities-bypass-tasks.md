@@ -84,7 +84,7 @@ flowchart LR
         - #unit_test — `test_community_rebuild_job_round_trips_through_store` — after write + reload it deserialises as `CommunityRebuildJob`, not a plain `IngestJob` (IC-4)
         - #unit_test — `test_write_atomic_tags_community_rebuild` — a `CommunityRebuildJob` is tagged `"community_rebuild"`, not folded into the `"ingest"` catch-all (Mo7)
         - #unit_test — `test_create_community_rebuild_creates_queued_job` — the factory creates a `QUEUED` job carrying `collection` + `namespace`
-- [ ] **BE-3** — Add the async rebuild task (mirroring `_migration_task`): construct a fresh `CommunityBuilder`, `await build(collection, ns)`, map success → `DONE` with `result={"communities_built": N}`, and `ValueError`/`ImportError`/`RuntimeError` → `FAILED` with the error string #backend-role
+- [x] **BE-3** — Add the async rebuild task (mirroring `_migration_task`): construct a fresh `CommunityBuilder`, `await build(collection, ns)`, map success → `DONE` with `result={"communities_built": N}`, and `ValueError`/`ImportError`/`RuntimeError` → `FAILED` with the error string #backend-role
     - Use Cases · 3.0h
     - needs BE-1 · completes C4, S2, S8
     - Tests

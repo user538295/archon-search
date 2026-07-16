@@ -10,10 +10,14 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
 
 if TYPE_CHECKING:
+    from archon_search.config import GraphConfig, SearchConfig
     from archon_search.graph_store import GraphStore
+    from archon_search.jobs.store import JobStore
     from archon_search.pipeline import SearchPipeline
-    from archon_search.config import SearchConfig
+    from archon_search.store import SearchStore
+    from archon_search.types import CommunityRebuildJob
 
+from archon_search.community_builder import CommunityBuilder
 from archon_search.graph_inspector import (
     CollectionGraphView,
     CrossCollectionGraphView,
@@ -35,10 +39,53 @@ from archon_search.server.middleware_auth import (
     INVALID_NAMESPACE_SENTINEL,
     validate_token_and_get_namespace,
 )
+from archon_search.types import JobStatus
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _community_rebuild_task(
+    job: "CommunityRebuildJob",
+    job_store: "JobStore",
+    graph_store: "GraphStore",
+    graph_config: "GraphConfig",
+    search_store: "SearchStore | None" = None,
+) -> None:
+    """Coroutine that drives a single CommunityRebuildJob to completion.
+
+    Mirrors ``_migration_task`` (``routes_collections.py``). The caller is
+    responsible for ensuring the job is already in RUNNING state before
+    invoking this coroutine (the route transitions QUEUED -> RUNNING
+    immediately after creating the job, then passes it to
+    ``asyncio.create_task``).
+
+    Lifecycle (caller sets RUNNING -> this task drives to terminal):
+      1. Construct a fresh ``CommunityBuilder``.
+      2. ``await build(collection, ns)``.
+      3. Transition to DONE with ``result={"communities_built": N}`` on success.
+      4. Transition to FAILED with the error string on
+         ``ValueError``/``ImportError``/``RuntimeError``.
+    """
+    job_id = job.job_id
+    builder = CommunityBuilder(graph_store, graph_config, search_store=search_store)
+
+    try:
+        communities = await builder.build(job.collection, job.namespace)
+        job_store.update(
+            job_id,
+            status=JobStatus.DONE,
+            result={"communities_built": len(communities)},
+        )
+    except (ValueError, ImportError, RuntimeError) as exc:
+        logger.exception("_community_rebuild_task: job %s failed", job_id)
+        try:
+            job_store.update(job_id, status=JobStatus.FAILED, error=str(exc))
+        except (KeyError, OSError):
+            logger.error(
+                "_community_rebuild_task: could not persist FAILED status for job %s", job_id
+            )
 
 
 def _load_viewer_html() -> bytes:
