@@ -14,7 +14,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import rmtree
@@ -165,7 +165,7 @@ class WizardFeatures:
     enable_hyde: bool = False
     enable_rag_fusion: bool = False
     # G10 BE-8: provider-selection for HyDE / RAG Fusion
-    hyde_provider: str = "anthropic"          # "anthropic" | "openai" | "ollama"
+    hyde_provider: str = "anthropic"          # "anthropic" | "openai" | "ollama" | "claude_cli"
     hyde_model: str = ""                      # empty = use provider default
     hyde_ollama_base_url: str = ""            # empty = use config default
     rag_fusion_provider: str = "anthropic"
@@ -321,23 +321,36 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         doc["hyde"]["enabled"] = True
         if features.hyde_provider != "anthropic":
             doc["hyde"]["provider"] = features.hyde_provider
-            # Always write model for non-Anthropic providers (even empty string) so
-            # config.py's "if not model: raise ConfigError" guard fires at startup
-            # when the operator left the model prompt blank.
-            doc["hyde"]["model"] = features.hyde_model
-            if features.hyde_provider == "ollama":
-                _reconcile_ollama_base_url(doc["hyde"], features.hyde_ollama_base_url)
+            if features.hyde_provider == "claude_cli":
+                # Model is optional for claude_cli — a blank means "use Claude
+                # Code's default", so only write it when the operator chose one.
+                # Writing "" would trip config.py's non-empty guard at startup.
+                if features.hyde_model:
+                    doc["hyde"]["model"] = features.hyde_model
+            else:
+                # Always write model for ollama/openai (even empty string) so
+                # config.py's "if not model: raise ConfigError" guard fires at
+                # startup when the operator left the model prompt blank.
+                doc["hyde"]["model"] = features.hyde_model
+                if features.hyde_provider == "ollama":
+                    _reconcile_ollama_base_url(doc["hyde"], features.hyde_ollama_base_url)
 
     if features.enable_rag_fusion:
         _ensure_section("rag_fusion")
         doc["rag_fusion"]["enabled"] = True
         if features.rag_fusion_provider != "anthropic":
             doc["rag_fusion"]["provider"] = features.rag_fusion_provider
-            # Always write model for non-Anthropic providers (even empty string) so
-            # config.py's "if not model: raise ConfigError" guard fires at startup.
-            doc["rag_fusion"]["model"] = features.rag_fusion_model
-            if features.rag_fusion_provider == "ollama":
-                _reconcile_ollama_base_url(doc["rag_fusion"], features.rag_fusion_ollama_base_url)
+            if features.rag_fusion_provider == "claude_cli":
+                # Model is optional for claude_cli — a blank means "use Claude
+                # Code's default", so only write it when the operator chose one.
+                if features.rag_fusion_model:
+                    doc["rag_fusion"]["model"] = features.rag_fusion_model
+            else:
+                # Always write model for ollama/openai (even empty string) so
+                # config.py's "if not model: raise ConfigError" guard fires at startup.
+                doc["rag_fusion"]["model"] = features.rag_fusion_model
+                if features.rag_fusion_provider == "ollama":
+                    _reconcile_ollama_base_url(doc["rag_fusion"], features.rag_fusion_ollama_base_url)
 
     # BE-11: [graph] enabled must be written whenever the [graph] extras were
     # auto-installed, or the install is inert — see C1-I-1 / C1-A-4.
@@ -1047,6 +1060,79 @@ def _prompt_ollama_model(feature_label: str, default_base_url: str) -> tuple[str
     return stored, _prompt_model_freetext(feature_label)
 
 
+# Curated Claude model aliases shown by the wizard. The Claude CLI has no
+# runtime `models` subcommand, so this list is hardcoded and MUST be kept
+# current with Anthropic releases.
+_CLAUDE_MODEL_ALIASES: tuple[str, ...] = ("haiku", "sonnet", "opus", "fable")
+
+
+def _check_claude_cli_present() -> bool:
+    """Warn (but don't block) when the ``claude`` command is not on PATH.
+
+    Returns True when found. Mirrors the "wizard guides, doesn't block"
+    decision — a missing CLI surfaces its error on first search, exactly as a
+    missing ANTHROPIC_API_KEY does today.
+    """
+    if shutil.which("claude") is not None:
+        return True
+    print(
+        "  WARNING: 'claude' command not found in PATH.\n"
+        "  The claude_cli provider needs Claude Code installed and logged in.\n"
+        "  Install it from https://claude.ai/code, then start the server.\n"
+        "  Writing the config anyway — query expansion will fall back until 'claude' is available."
+    )
+    return False
+
+
+def _pick_claude_model(feature_label: str) -> str:
+    """Pick a Claude model: numbered alias, free-text full ID, or blank default.
+
+    Returns ``""`` when the operator leaves it blank (Claude Code uses its own
+    configured default) or on EOF.
+    """
+    print("\nClaude model aliases:")
+    for i, name in enumerate(_CLAUDE_MODEL_ALIASES, start=1):
+        print(f"  {i}. {name}")
+    print("  Or type a full model ID (e.g. claude-haiku-4-5-20251001).")
+    print("  Leave blank to use Claude Code's configured default.")
+    try:
+        raw = input(f"Model for {feature_label} (number, name, or blank): ").strip()
+    except EOFError:
+        return ""
+    if not raw:
+        return ""
+    if raw.isdigit() and 1 <= int(raw) <= len(_CLAUDE_MODEL_ALIASES):
+        return _CLAUDE_MODEL_ALIASES[int(raw) - 1]
+    return raw
+
+
+def _prompt_provider(
+    feature_label: str,
+    ask_choice: "Callable[[str, set[str], str], str]",
+    ollama_base_url_default: str,
+) -> tuple[str, str, str]:
+    """Ask which provider to use for *feature_label* and gather its model settings.
+
+    Returns ``(provider, model, ollama_base_url)``. ``model`` and
+    ``ollama_base_url`` are ``""`` when they resolve to the config default.
+    """
+    provider = ask_choice(
+        f"Which provider for {feature_label}? "
+        f"(anthropic/openai/ollama/claude_cli) [anthropic]: ",
+        {"anthropic", "openai", "ollama", "claude_cli"},
+        "anthropic",
+    )
+    if provider == "ollama":
+        base_url, model = _prompt_ollama_model(feature_label, ollama_base_url_default)
+        return provider, model, base_url
+    if provider == "openai":
+        return provider, _prompt_model_freetext(feature_label), ""
+    if provider == "claude_cli":
+        _check_claude_cli_present()
+        return provider, _pick_claude_model(feature_label), ""
+    return provider, "", ""
+
+
 def _prompt_optional_features(
     non_interactive: bool,
     profile: InstallProfile,
@@ -1251,40 +1337,29 @@ def _prompt_optional_features(
             "\nAI query expansion (HyDE + RAG Fusion):\n"
             "  HyDE generates hypothetical answers to improve embedding recall.\n"
             "  RAG Fusion runs multiple query reformulations and merges results.\n"
-            "  Supports Anthropic, OpenAI, and Ollama providers.\n"
+            "  Providers:\n"
+            "    anthropic  - Anthropic API (needs ANTHROPIC_API_KEY)\n"
+            "    openai     - OpenAI API (needs OPENAI_API_KEY)\n"
+            "    ollama     - runs locally, no API key\n"
+            "    claude_cli - uses Claude Code's login, no API key\n"
             "  Default: disabled."
         )
         if _ask_yn("Enable AI query expansion (HyDE + RAG Fusion)? [y/N]: "):
             _enable_hyde_val = True
             _enable_rag_fusion_val = True
 
-            # Provider selection for HyDE. For Ollama the base URL is asked first
-            # (needed to fetch the installed-model list), then a numbered picker;
-            # OpenAI keeps free-text model entry.
-            _hyde_provider_val = _ask_choice(
-                "Which provider for HyDE? (anthropic/openai/ollama) [anthropic]: ",
-                valid={"anthropic", "openai", "ollama"},
-                default="anthropic",
+            # Provider selection for HyDE. Ollama asks the base URL first (needed
+            # to fetch the installed-model list) then a numbered picker; OpenAI
+            # keeps free-text model entry; claude_cli checks PATH then offers a
+            # curated alias picker with a free-text fallback.
+            _hyde_provider_val, _hyde_model_val, _hyde_ollama_base_url_val = _prompt_provider(
+                "HyDE", _ask_choice, hyde_ollama_base_url_default
             )
-            if _hyde_provider_val == "ollama":
-                _hyde_ollama_base_url_val, _hyde_model_val = _prompt_ollama_model(
-                    "HyDE", hyde_ollama_base_url_default
-                )
-            elif _hyde_provider_val == "openai":
-                _hyde_model_val = _prompt_model_freetext("HyDE")
 
             # Provider selection for RAG Fusion (same flow, independent picker).
-            _rag_fusion_provider_val = _ask_choice(
-                "Which provider for RAG Fusion? (anthropic/openai/ollama) [anthropic]: ",
-                valid={"anthropic", "openai", "ollama"},
-                default="anthropic",
+            _rag_fusion_provider_val, _rag_fusion_model_val, _rag_fusion_ollama_base_url_val = (
+                _prompt_provider("RAG Fusion", _ask_choice, rag_fusion_ollama_base_url_default)
             )
-            if _rag_fusion_provider_val == "ollama":
-                _rag_fusion_ollama_base_url_val, _rag_fusion_model_val = _prompt_ollama_model(
-                    "RAG Fusion", rag_fusion_ollama_base_url_default
-                )
-            elif _rag_fusion_provider_val == "openai":
-                _rag_fusion_model_val = _prompt_model_freetext("RAG Fusion")
         else:
             _enable_hyde_val = False
             _enable_rag_fusion_val = False

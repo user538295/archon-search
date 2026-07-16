@@ -92,8 +92,8 @@ The `mcp` field added to `GET /status` and `GET /health` (D9):
 
 | Field | Type | Meaning |
 |---|---|---|
-| `key_available` | `bool` | `true` when the configured provider's required API key is set at call time (`ANTHROPIC_API_KEY` for `"anthropic"`, `OPENAI_API_KEY` for `"openai"`; always `true` for `"ollama"`). |
-| `provider` | `str` | Active LLM provider name: `"anthropic"` (default), `"ollama"`, or `"openai"` — mirrors `[hyde].provider` in config. **G10** |
+| `key_available` | `bool` | `true` when the configured provider's required API key is set at call time (`ANTHROPIC_API_KEY` for `"anthropic"`, `OPENAI_API_KEY` for `"openai"`; always `true` for `"ollama"` and `"claude_cli"` — neither needs a key). |
+| `provider` | `str` | Active LLM provider name: `"anthropic"` (default), `"ollama"`, `"openai"`, or `"claude_cli"` — mirrors `[hyde].provider` in config. **G10** |
 
 - `rag_fusion: RagFusionStatusDetail | null` — present only when `[rag_fusion] enabled = true` in config; `null` when RAG Fusion is disabled. Same shape as `HydeStatusDetail` (`key_available: bool`, `provider: str`). **G10**: `provider` field added; semantics identical to `HydeStatusDetail.provider`.
 

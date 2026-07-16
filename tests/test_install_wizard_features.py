@@ -11,7 +11,9 @@ from archon_search.config import OLLAMA_BASE_URL_DEFAULT, load_config
 from archon_search.install import (
     WizardFeatures,
     _apply_wizard_features_to_toml,
+    _check_claude_cli_present,
     _fetch_ollama_models,
+    _pick_claude_model,
     _pick_ollama_model,
     _prompt_gpu_confirm,
     _prompt_model_freetext,
@@ -1365,3 +1367,155 @@ class TestOllamaBaseUrlReconciliation:
         )
         _apply_wizard_features_to_toml(doc, features)
         assert "ollama_base_url" not in doc["rag_fusion"]
+
+
+class TestPickClaudeModel:
+    """Unit tests for _pick_claude_model() — curated alias picker + free-text."""
+
+    def test_pick_by_number(self) -> None:
+        with patch("builtins.input", return_value="2"):
+            assert _pick_claude_model("HyDE") == "sonnet"
+
+    def test_pick_by_alias_name(self) -> None:
+        with patch("builtins.input", return_value="opus"):
+            assert _pick_claude_model("HyDE") == "opus"
+
+    def test_pick_free_text_full_id(self) -> None:
+        with patch("builtins.input", return_value="claude-haiku-4-5-20251001"):
+            assert _pick_claude_model("HyDE") == "claude-haiku-4-5-20251001"
+
+    def test_blank_returns_empty(self) -> None:
+        with patch("builtins.input", return_value=""):
+            assert _pick_claude_model("HyDE") == ""
+
+    def test_eof_returns_empty(self) -> None:
+        with patch("builtins.input", side_effect=EOFError):
+            assert _pick_claude_model("HyDE") == ""
+
+    def test_out_of_range_number_treated_as_free_text(self) -> None:
+        # "9" is not a valid index → treated as a (nonsense) full model ID.
+        with patch("builtins.input", return_value="9"):
+            assert _pick_claude_model("HyDE") == "9"
+
+
+class TestCheckClaudeCliPresent:
+    """Unit tests for _check_claude_cli_present() — warn-not-block PATH check."""
+
+    def test_present_returns_true_no_warning(self, capsys) -> None:
+        with patch("archon_search.install.shutil.which", return_value="/usr/bin/claude"):
+            assert _check_claude_cli_present() is True
+        assert "WARNING" not in capsys.readouterr().out
+
+    def test_absent_returns_false_and_warns(self, capsys) -> None:
+        with patch("archon_search.install.shutil.which", return_value=None):
+            assert _check_claude_cli_present() is False
+        out = capsys.readouterr().out
+        assert "WARNING" in out
+        assert "claude.ai/code" in out
+
+
+class TestWizardClaudeCLI:
+    """claude_cli provider-selection in the HyDE/RAG Fusion wizard."""
+
+    _profile = ENGLISH_PROFILES["minimal"]
+
+    # --- _apply_wizard_features_to_toml ---
+
+    def test_claude_cli_with_model_writes_provider_and_model(self) -> None:
+        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
+
+        doc = tomlkit.parse(_default_toml())
+        features = WizardFeatures(
+            enable_hyde=True, hyde_provider="claude_cli", hyde_model="sonnet"
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["hyde"]["provider"] == "claude_cli"
+        assert doc["hyde"]["model"] == "sonnet"
+
+    def test_claude_cli_blank_model_omits_model_key(self) -> None:
+        """Blank model must NOT be written — an empty model trips config's guard."""
+        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
+
+        doc = tomlkit.parse(_default_toml())
+        features = WizardFeatures(
+            enable_rag_fusion=True, rag_fusion_provider="claude_cli", rag_fusion_model=""
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["rag_fusion"]["provider"] == "claude_cli"
+        # No model key written → config falls back to its default (not "").
+        assert "model" not in doc["rag_fusion"]
+
+    # --- _prompt_optional_features flow ---
+
+    def test_wizard_claude_cli_selected(self) -> None:
+        """Selecting claude_cli picks a model alias for both features."""
+        # enable=y; hyde=claude_cli, model "1" (haiku); rag=claude_cli, model "sonnet".
+        with patch("archon_search.install.shutil.which", return_value="/usr/bin/claude"):
+            with patch("builtins.input", side_effect=["y", "claude_cli", "1", "claude_cli", "sonnet"]):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile,
+                    install_code=False,
+                    disable_reranker=False,
+                    enable_watch=False,
+                    enable_telemetry=False,
+                    eager_load=False,
+                    routing_strategy="centroid",
+                    log_format="text",
+                )
+        assert features.hyde_provider == "claude_cli"
+        assert features.hyde_model == "haiku"
+        assert features.rag_fusion_provider == "claude_cli"
+        assert features.rag_fusion_model == "sonnet"
+
+    def test_wizard_claude_cli_missing_warns_but_proceeds(self, capsys) -> None:
+        """claude not on PATH → warning printed, config still gathered."""
+        with patch("archon_search.install.shutil.which", return_value=None):
+            with patch("builtins.input", side_effect=["y", "claude_cli", "", "anthropic"]):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile,
+                    install_code=False,
+                    disable_reranker=False,
+                    enable_watch=False,
+                    enable_telemetry=False,
+                    eager_load=False,
+                    routing_strategy="centroid",
+                    log_format="text",
+                )
+        assert features.hyde_provider == "claude_cli"
+        assert features.hyde_model == ""  # left blank → use Claude Code default
+        assert "WARNING" in capsys.readouterr().out
+
+    # --- E2E: wizard → TOML → loaded SearchConfig ---
+
+    def test_claude_cli_survives_to_loaded_config(self, tmp_path) -> None:
+        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
+
+        with patch("archon_search.install.shutil.which", return_value="/usr/bin/claude"):
+            with patch("builtins.input", side_effect=["y", "claude_cli", "opus", "claude_cli", ""]):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile,
+                    install_code=False,
+                    disable_reranker=False,
+                    enable_watch=False,
+                    enable_telemetry=False,
+                    eager_load=False,
+                    routing_strategy="centroid",
+                    log_format="text",
+                )
+
+        doc = tomlkit.parse(_default_toml())
+        _apply_wizard_features_to_toml(doc, features)
+        cfg_path = tmp_path / "archon-search.toml"
+        cfg_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+
+        # Must load without ConfigError even though RAG Fusion model was left blank.
+        cfg = load_config(cfg_path)
+        assert cfg.hyde.provider == "claude_cli"
+        assert cfg.hyde.model == "opus"
+        assert cfg.rag_fusion.provider == "claude_cli"
+        # Blank model → config keeps its default (DEFAULT_FAST_MODEL), no crash.
+        from archon_search.constants import DEFAULT_FAST_MODEL  # noqa: PLC0415
+        assert cfg.rag_fusion.model == DEFAULT_FAST_MODEL

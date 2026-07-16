@@ -22,7 +22,7 @@ class ConfigError(Exception):
     """Raised on invalid configuration values."""
 
 
-_VALID_PROVIDERS: frozenset[str] = frozenset({"anthropic", "ollama", "openai"})
+_VALID_PROVIDERS: frozenset[str] = frozenset({"anthropic", "ollama", "openai", "claude_cli"})
 OLLAMA_BASE_URL_DEFAULT: str = "http://localhost:11434"
 
 

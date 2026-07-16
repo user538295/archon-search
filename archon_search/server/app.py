@@ -162,6 +162,7 @@ def _build_query_expansion_provider(
     """Build and return the appropriate QueryExpansionProvider from config.
 
     Returns an OllamaQueryExpansionProvider for provider='ollama',
+    a ClaudeCLIQueryExpansionProvider for provider='claude_cli',
     an OpenAIQueryExpansionProvider for provider='openai',
     or an AnthropicQueryExpansionProvider for provider='anthropic' (default).
 
@@ -174,6 +175,11 @@ def _build_query_expansion_provider(
             OllamaQueryExpansionProvider,
         )
         return OllamaQueryExpansionProvider(model=model, base_url=ollama_base_url)
+    if provider == "claude_cli":
+        from archon_search.providers.claude_cli_provider import (  # noqa: PLC0415
+            ClaudeCLIQueryExpansionProvider,
+        )
+        return ClaudeCLIQueryExpansionProvider(model=model)
     if provider == "openai":
         from archon_search.providers.openai_provider import (  # noqa: PLC0415
             OpenAIQueryExpansionProvider,
