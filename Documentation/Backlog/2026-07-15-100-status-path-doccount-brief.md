@@ -40,6 +40,7 @@ Operators and developers checking system health. They run `archon-search status`
 - Add a `last_ingest_at` timestamp once the store tracks it.
 
 ## References
+- **Team plan:** [2026-07-15-100-status-path-doccount-team-plan.md](./2026-07-15-100-status-path-doccount-team-plan.md)
 - [[archon_search/server/routes_status.py:118–120]] `[code-agent]` — hardcoded `path=""`, `doc_count=0` with `"path not yet populated from store"` comment
 - [[Documentation/Backlog/bug-024-collection-chunk-count-brief.md]] `[user]` — sibling bug: `chunk_count=0` in collection list/info/status
 - [[Documentation/Backlog/bug-025-collection-description-brief.md]] `[user]` — sibling bug: `description=""` in collection list/info
