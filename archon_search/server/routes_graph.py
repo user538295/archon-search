@@ -1,13 +1,14 @@
-"""GET /graph endpoints for graph inspection — E2b."""
+"""GET/POST /graph endpoints for graph inspection and community rebuilds — E2b, BE-2."""
 from __future__ import annotations
 
+import asyncio
 import importlib.resources
 import json
 import logging
 from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig, SearchConfig
@@ -26,14 +27,17 @@ from archon_search.graph_inspector import (
     to_graphml,
 )
 from archon_search.graph_types import DEFAULT_IMPACT_DEPTH, ImpactDirection, ImpactResult
+from archon_search.jobs.model import job_to_dict
 from archon_search.server.schemas import (
     CrossCollectionGraphInspectionResponse,
+    ErrorDetail,
     GraphEdgeResponse,
     GraphImpactResponse,
     GraphInspectionResponse,
     GraphNodeResponse,
     ImpactEdgeResponse,
     ImpactGroupResponse,
+    JobResponse,
 )
 from archon_search.server.middleware_auth import (
     INVALID_NAMESPACE_SENTINEL,
@@ -44,6 +48,15 @@ from archon_search.types import JobStatus
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Error map for rebuild_communities: 401 (auth), 404 (collection not found),
+# 422 (graph disabled). No 409 yet — the duplicate-rebuild guard is BE-5, not
+# implemented in this route.
+_REBUILD_ERROR_RESPONSES = {
+    401: {"model": ErrorDetail},
+    404: {"model": ErrorDetail},
+    422: {"model": ErrorDetail},
+}
 
 
 async def _community_rebuild_task(
@@ -86,6 +99,89 @@ async def _community_rebuild_task(
             logger.error(
                 "_community_rebuild_task: could not persist FAILED status for job %s", job_id
             )
+
+
+@router.post(
+    "/graph/{collection}/rebuild-communities",
+    name="rebuild_communities",
+    status_code=202,
+    response_model=JobResponse,
+    responses=_REBUILD_ERROR_RESPONSES,
+)
+async def rebuild_communities(collection: str, request: Request) -> JSONResponse:
+    """Enqueue an async Leiden community rebuild for a collection — BE-2.
+
+    Follows the migrate route's pattern (``routes_collections.py``,
+    ``migrate_collection``): validate -> create job QUEUED -> transition
+    QUEUED -> RUNNING -> spawn task -> return 202 with the full JobResponse
+    body (``job_to_dict(running_job)``), so the response reports RUNNING,
+    not PENDING (S1).
+
+    Auth is handled solely by ``APIKeyMiddleware`` — this route does not
+    implement its own ``?token=`` fallback (unlike ``get_graph_view``, whose
+    branch exists only for HTML-iframe embedding). A token resolving to
+    ``INVALID_NAMESPACE_SENTINEL`` never reaches this handler; the middleware
+    returns a bare 500 first (S14).
+
+    Returns:
+    - 202: JobResponse-shaped body, status RUNNING.
+    - 404: Collection not found in the caller's namespace.
+    - 422: graph.enabled=false.
+    """
+    pipeline = request.app.state.pipeline
+    config = request.app.state.config
+    graph_store = request.app.state.graph_store
+    job_store: "JobStore" = request.app.state.job_store
+    search_store: "SearchStore" = request.app.state.search_store
+    ns: str = request.state.namespace
+
+    # Guard 1: graph enabled (verbatim detail string, matches the other four guards in this file).
+    if not config.graph.enabled:
+        raise HTTPException(
+            status_code=422,
+            detail="graph inspection requires [graph] enabled=true in server config",
+        )
+
+    # Guard 1b: graph_store may be None if graph.enabled=true but connect()
+    # failed at startup. Without this guard the task below would spawn with
+    # graph_store=None and raise AttributeError outside its caught exception
+    # tuple, wedging the job at RUNNING forever.
+    if graph_store is None:
+        raise HTTPException(
+            status_code=422,
+            detail="graph inspection requires [graph] enabled=true in server config",
+        )
+
+    # Guard 2: collection exists in the caller's namespace.
+    collection_meta = await pipeline.get_collection_meta(collection, namespace=ns)
+    if collection_meta is None:
+        raise HTTPException(status_code=404, detail="collection not found")
+
+    try:
+        job = job_store.create_community_rebuild(collection=collection, namespace=ns)
+    except OSError:
+        return JSONResponse({"detail": "internal error"}, status_code=500)
+
+    # Transition to RUNNING before spawning the task so the response never
+    # reports QUEUED (mirrors migrate_collection's pre-transition pattern, S1).
+    running_job = job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+    if running_job is None:
+        logger.error("rebuild_communities: failed to transition job %s to RUNNING", job.job_id)
+        return JSONResponse({"detail": "internal error"}, status_code=500)
+
+    task = asyncio.create_task(
+        _community_rebuild_task(
+            job=running_job,
+            job_store=job_store,
+            graph_store=graph_store,
+            graph_config=config.graph,
+            search_store=search_store,
+        )
+    )
+    request.app.state._background_tasks.add(task)
+    task.add_done_callback(request.app.state._background_tasks.discard)
+
+    return JSONResponse(job_to_dict(running_job), status_code=202)
 
 
 def _load_viewer_html() -> bytes:
