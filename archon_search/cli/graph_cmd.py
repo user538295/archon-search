@@ -1,23 +1,26 @@
-"""``archon-search graph`` CLI group (E1b BE-4).
+"""``archon-search graph`` CLI group (E1b BE-4, converted to an HTTP proxy in GBC110 BE-8).
 
 Provides:
 
 * ``archon-search graph build-communities <collection>``
-  Run Leiden community detection on the entity graph for *collection*, select
-  MMR representative chunks, and persist the result to the
-  ``_archon_graph_{col}_communities`` LanceDB table.
+  Proxies to ``POST /graph/{collection}/rebuild-communities`` on the running
+  server, which enqueues an async Leiden community-detection job and persists
+  the result to the ``_archon_graph_{ns}__{col}_communities`` LanceDB table.
+  Use ``--wait`` to poll the job to completion.
 """
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
+import time
 
 import click
+import httpx
 
-from archon_search.config import ConfigError, load_config
-from archon_search.community_builder import CommunityBuilder
-from archon_search.graph_store import GraphStore
-from archon_search.store import SearchStore
+from archon_search.cli.collection import (
+    _DEFAULT_API_URL,
+    _POLL_INTERVAL_SECONDS,
+    _TERMINAL_STATUSES,
+    _resolve_api_key,
+)
 
 
 @click.group("graph")
@@ -27,61 +30,102 @@ def graph_cmd() -> None:
 
 @graph_cmd.command("build-communities")
 @click.argument("collection")
+@click.option("--wait", "wait_flag", is_flag=True, default=False, help="Poll the job until it reaches a terminal status.")
 @click.option(
-    "--config",
-    "config_path",
-    default=None,
-    type=click.Path(path_type=Path),
-    help="Path to archon-search.toml (defaults to ~/.archon-search/archon-search.toml).",
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
 )
-def build_communities_cmd(collection: str, config_path: Path | None) -> None:
-    """Build Leiden communities for COLLECTION.
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def build_communities_cmd(
+    collection: str,
+    wait_flag: bool,
+    api_url: str,
+    api_key: str | None,
+) -> None:
+    """Build Leiden communities for COLLECTION via the running server.
 
-    Loads the entity graph from the ``_archon_graph_{col}_nodes`` /
-    ``_archon_graph_{col}_edges`` tables (created by ``ingest`` with
-    ``graph.enabled=true``), runs Leiden clustering, selects MMR representative
-    chunks per community, and writes results to
-    ``_archon_graph_{col}_communities``.
+    POSTs to ``/graph/{collection}/rebuild-communities`` and prints the
+    returned ``job_id``. With ``--wait``, polls ``GET /jobs/{id}`` until the
+    job reaches a terminal status (``DONE``/``FAILED``/``FAILED_EXPIRED``/
+    ``CANCELLED``), exiting 0 on ``DONE`` and non-zero otherwise.
 
     Exit codes:
-    - 0 on success
-    - 1 on any error (missing graph data, leidenalg absent, config/IO failure)
+    - 0 on success (job submitted, or --wait and job reached DONE)
+    - non-zero on any error, including the server not running
     """
+    key = _resolve_api_key(api_key)
+    headers = {"Authorization": f"Bearer {key}"}
+    base_url = api_url.rstrip("/")
+
     try:
-        cfg = load_config(config_path)
-    except (ConfigError, OSError, ValueError) as exc:
-        click.echo(f"Error loading config: {exc}", err=True)
+        resp = httpx.post(f"{base_url}/graph/{collection}/rebuild-communities", headers=headers)
+    except httpx.ConnectError as exc:
+        click.echo("Server is not running. Start it first with: archon-search start", err=True)
+        raise SystemExit(1) from exc
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1) from exc
 
-    if not cfg.graph.enabled:
-        click.echo(
-            "graph.enabled is false in config. Set graph.enabled = true in "
-            "archon-search.toml and re-run ingest before building communities.",
-            err=True,
-        )
+    if resp.status_code != 202:
+        click.echo(f"Error: server returned {resp.status_code}: {resp.text}", err=True)
         raise SystemExit(1)
 
-    async def _run() -> None:
-        graph_store = GraphStore(cfg.db_path)
-        search_store = SearchStore(cfg.db_path, config=cfg)
+    job_data = resp.json()
+    job_id: str = job_data["job_id"]
+    click.echo(f"Community rebuild job submitted: {job_id}")
 
-        try:
-            await graph_store.connect()
-            await search_store.connect()
-            builder = CommunityBuilder(graph_store, cfg.graph, search_store=search_store)
-            from archon_search.constants import DEFAULT_NAMESPACE  # noqa: PLC0415
-            # Note: the graph CLI commands operate on the default namespace only.
-            # Multi-namespace deployments have no REST or CLI path to build communities
-            # for non-default namespaces — this is a known E2d limitation.
-            communities = await builder.build(collection, ns=DEFAULT_NAMESPACE)
-            click.echo(
-                f"Built {len(communities)} communities for collection {collection!r}."
-            )
-        except (ValueError, ImportError, RuntimeError, OSError) as exc:
-            click.echo(str(exc), err=True)
-            raise SystemExit(1) from exc
-        finally:
-            await graph_store.disconnect()
-            await search_store.disconnect()
+    if wait_flag:
+        _poll_rebuild_job(job_id, base_url, headers)
 
-    asyncio.run(_run())
+
+def _poll_rebuild_job(job_id: str, base_url: str, headers: dict) -> None:
+    """Poll GET /jobs/{job_id} until terminal. Exits 0 on DONE, non-zero otherwise."""
+    url = f"{base_url}/jobs/{job_id}"
+    status = "UNKNOWN"
+    job: dict = {}
+
+    try:
+        while True:
+            try:
+                resp = httpx.get(url, headers=headers)
+            except httpx.HTTPError as exc:
+                click.echo(f"Error polling job: {exc}", err=True)
+                raise SystemExit(1) from exc
+
+            if resp.status_code != 200:
+                click.echo(
+                    f"Error polling job: server returned {resp.status_code}: {resp.text}",
+                    err=True,
+                )
+                raise SystemExit(1)
+
+            job = resp.json()
+            status = job["status"]
+
+            if status in _TERMINAL_STATUSES:
+                break
+
+            time.sleep(_POLL_INTERVAL_SECONDS)
+
+    except KeyboardInterrupt:
+        click.echo("Polling stopped — job continues on server")
+        return
+
+    if status == "DONE":
+        result = job.get("result") or {}
+        count = result.get("communities_built") if isinstance(result, dict) else None
+        if count is not None:
+            click.echo(f"Community rebuild complete: {count} communities built.")
+        else:
+            click.echo("Community rebuild complete.")
+        return
+
+    error = job.get("error") or "unknown error"
+    click.echo(f"Community rebuild {status}: {error}", err=True)
+    raise SystemExit(1)

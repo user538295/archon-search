@@ -1,25 +1,27 @@
 """E1b / T-1 — e2e tests for build-communities CLI and graph_mode=global search.
 
 Covers:
-- (a) build-communities CLI via CliRunner with real fixture graph data; communities
-      written to store; exit 0; summary output includes community count  (S1)
 - (b) POST /search graph_mode=global returns 200 + non-empty results +
       graph_expansion_applied=true when communities are built  (S2)
 - (c) POST /search graph_mode=global returns 422 graph_communities_not_built
       when communities have NOT been built  (S11)
 
-Test (a) requires leidenalg and is skipped gracefully when not installed.
 Tests (b) and (c) use make_real_app + direct community seeding; no leidenalg needed.
+
+Note (GBC110 BE-8): the former in-process ``build-communities`` CLI e2e test (a)
+was removed here — ``cli/graph_cmd.py`` was converted from an in-process command
+to an HTTP proxy against ``POST /graph/{collection}/rebuild-communities``. The
+real-subprocess CLI-vs-server e2e replacement is GBC110 T-1
+(``test_e2e_graph_build_communities_wait_against_server``), using the BE-9
+graph-enabled smoke-server fixture.
 """
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import sys
 import types
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -99,137 +101,6 @@ async def _write_communities_to_store(
         await gs.write_communities(col, [community], ns="default")
     finally:
         await gs.disconnect()
-
-
-# ---------------------------------------------------------------------------
-# (a) test_e2e_build_communities_cli
-# ---------------------------------------------------------------------------
-
-try:
-    import leidenalg as _leidenalg_check  # noqa: F401
-
-    _LEIDENALG_AVAILABLE = True
-except ImportError:
-    _LEIDENALG_AVAILABLE = False
-
-
-@pytest.mark.skipif(
-    not _LEIDENALG_AVAILABLE,
-    reason="leidenalg not installed; skipping T-1 (a) build-communities e2e test",
-)
-def test_e2e_build_communities_cli(tmp_path: Path) -> None:
-    """CliRunner + real store; ingest fixture graph data; build-communities exits 0;
-    store has >= 1 community and output contains community count  (S1).
-    """
-    from click.testing import CliRunner
-
-    from archon_search._types import ChunkRecord
-    from archon_search.cli.graph_cmd import graph_cmd
-    from archon_search.config import GraphConfig
-    from archon_search.graph_store import GraphStore
-    from archon_search.graph_types import (
-        EntityType,
-        GraphEdge,
-        GraphNode,
-        RelationshipType,
-        make_stable_edge_id,
-        make_stable_entity_id,
-    )
-    from archon_search.store import SearchStore
-
-    col = "t1-build-communities"
-    # doc_id must match [a-f0-9]{64}; use SHA-256 of a logical name
-    doc_id_a = hashlib.sha256(b"doc-auth-service").hexdigest()
-    doc_id_b = hashlib.sha256(b"doc-token-validator").hexdigest()
-
-    node_a = GraphNode(
-        id=make_stable_entity_id("concept", "AuthService"),
-        entity_name="AuthService",
-        entity_type=EntityType.concept,
-        source_doc_id=doc_id_a,
-        collection_name=col,
-    )
-    node_b = GraphNode(
-        id=make_stable_entity_id("concept", "TokenValidator"),
-        entity_name="TokenValidator",
-        entity_type=EntityType.concept,
-        source_doc_id=doc_id_b,
-        collection_name=col,
-    )
-    edge = GraphEdge(
-        id=make_stable_edge_id(node_a.id, node_b.id, "related_to"),
-        source_node_id=node_a.id,
-        target_node_id=node_b.id,
-        relationship_type=RelationshipType.related_to,
-        source_doc_id=node_a.source_doc_id,
-    )
-
-    # Production CLI: GraphStore(cfg.db_path) and SearchStore(cfg.db_path) share the same
-    # LanceDB directory. Graph tables use _archon_graph_ prefix; no collision with search tables.
-    db_path = str(tmp_path / "db")
-
-    async def _seed() -> None:
-        graph_store = GraphStore(db_path)
-        await graph_store.connect()
-        await graph_store.ensure_graph_tables(col, ns="default")
-        await graph_store.write_graph(col, [node_a, node_b], [edge], ns="default")
-        await graph_store.disconnect()
-
-        search_store = SearchStore(db_path)
-        await search_store.connect()
-        await search_store.ensure_collection(col, embedding_dim=3)
-        await search_store.ingest_chunks(col, [
-            ChunkRecord(
-                doc_id=doc_id_a,
-                chunk_id=f"{doc_id_a}-000000",
-                text="AuthService handles authentication tokens.",
-                vector=[1.0, 0.0, 0.0],
-                source_path="/docs/auth.txt",
-                indexed_at="2026-01-01T00:00:00Z",
-            ),
-            ChunkRecord(
-                doc_id=doc_id_b,
-                chunk_id=f"{doc_id_b}-000000",
-                text="TokenValidator checks JWT expiry and signature.",
-                vector=[0.0, 1.0, 0.0],
-                source_path="/docs/token.txt",
-                indexed_at="2026-01-01T00:00:00Z",
-            ),
-        ])
-        await search_store.disconnect()
-
-    asyncio.run(_seed())
-
-    mock_cfg = MagicMock()
-    mock_cfg.db_path = db_path
-    mock_cfg.graph = GraphConfig(enabled=True, community_summary_chunks=1)
-
-    runner = CliRunner()
-    with patch("archon_search.cli.graph_cmd.load_config", return_value=mock_cfg):
-        # No GraphStore.__init__ patch needed — CLI constructs GraphStore(cfg.db_path)
-        # which points to the same db_path where graph data was seeded above.
-        result = runner.invoke(graph_cmd, ["build-communities", col])
-
-    assert result.exit_code == 0, (
-        f"Expected exit 0 from build-communities; "
-        f"got exit_code={result.exit_code}:\n{result.output}"
-    )
-    # Output must contain a community count line (e.g. "Built 1 communities for collection...")
-    import re as _re
-    assert _re.search(r"built \d+ communit", result.output.lower()), (
-        f"Expected 'Built N communities' in output; got: {result.output!r}"
-    )
-
-    # Verify communities were persisted to the GraphStore at the shared db_path
-    async def _verify() -> None:
-        graph_store = GraphStore(db_path)
-        await graph_store.connect()
-        count, last_built_at = await graph_store.get_community_stats(col, ns="default")
-        await graph_store.disconnect()
-        assert count >= 1, f"Expected at least 1 community in store; got {count}"
-        assert last_built_at is not None, "Expected last_built_at to be set after build"
-
-    asyncio.run(_verify())
 
 
 # ---------------------------------------------------------------------------
