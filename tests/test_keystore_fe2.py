@@ -193,7 +193,7 @@ def test_cli_key_revoke_calls_delete():
 
         result = runner.invoke(
             key_cmd,
-            ["revoke", key_id],
+            ["revoke", key_id, "--yes"],
             env={"ARCHON_SEARCH_API_KEY": api_key},
             catch_exceptions=False,
         )
@@ -228,7 +228,7 @@ def test_cli_key_revoke_not_found_exits_nonzero():
 
         result = runner.invoke(
             key_cmd,
-            ["revoke", "no-such-id"],
+            ["revoke", "no-such-id", "--yes"],
             env={"ARCHON_SEARCH_API_KEY": "a" * 64},
         )
 
