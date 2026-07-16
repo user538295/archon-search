@@ -555,7 +555,7 @@ Entry point: `archon-search` (`archon_search/cli/main.py`, Click group). Most su
 | `key` | — | **D7** — Key management Click group. Bare invocation prints help. | — |
 | `key` | `create` | **D7** — Issue a new managed API key via `POST /keys`. Prints the raw token to **stdout only** and a contextual banner to **stderr only** (safe for shell `$()` capture). | `--namespace TEXT (required)`, `--label TEXT`, `--expires EXPR` (accepts `30d`, `12h`, `3600s`, or ISO-8601 datetime with timezone), `--api-url TEXT`, `--api-key TEXT` |
 | `key` | `list` | **D7** — List managed keys via `GET /keys`. Active-only by default; shows hint line when revoked keys are hidden. | `--namespace TEXT`, `--status [active\|revoked\|all]` (default `active`), `--api-url TEXT`, `--api-key TEXT` |
-| `key` | `revoke <id>` | **D7** — Revoke a managed key by ID via `DELETE /keys/{id}`. Idempotent. | `--api-url TEXT`, `--api-key TEXT` |
+| `key` | `revoke <id>` | **D7** — Revoke a managed key by ID via `DELETE /keys/{id}`. Idempotent. Prompts for confirmation before deleting, showing the key's label when a best-effort `GET /keys?status=all` lookup finds it (falls back to the raw ID otherwise). Declining exits `0` with no change; a non-interactive stdin (pipe/CI) without `--yes` aborts non-zero. `--yes`/`-y` skips both the prompt and the lookup. | `--yes`/`-y`, `--api-url TEXT`, `--api-key TEXT` |
 | `key` | `rotate` | **D7** — Rotate the default API key via `POST /keys/rotate`. Prints the new raw token to **stdout only**. `--grace` sets the grace period during which the old key remains valid. | `--grace DURATION` (same formats as `--expires`; converted to seconds integer), `--api-url TEXT`, `--api-key TEXT` |
 
 ## `[mcp]` config section (D9)
