@@ -145,7 +145,7 @@ flowchart LR
         - [x] #unit_test — `test_cli_wait_polls_until_done_exit_0` — `--wait` polls to `DONE` and exits `0` (S3 unit portion)
         - [x] #unit_test — `test_cli_connect_error_prints_server_not_running` — a mocked `httpx.ConnectError` yields exactly the server-not-running message and a non-zero exit (S4)
         - [x] #unit_test — `test_cli_wait_recognises_all_terminal_statuses` — `FAILED`/`CANCELLED`/`FAILED_EXPIRED` are all terminal, exit non-zero, never hang (S13)
-- [ ] **BE-9** — Provide a graph-enabled smoke-server fixture for the S3 e2e test: write a `[graph] enabled=true` config into the isolated `data_dir` before the server starts and ensure the seeded corpus is graph-extracted (so `CommunityBuilder.build` has nodes to cluster), extending or adding alongside `smoke_server` in `tests/smoke/conftest.py`. This is dev-owned infrastructure even though the test that consumes it (T-1) is tester-owned (Q10 → Option A) #backend-role
+- [x] **BE-9** — Provide a graph-enabled smoke-server fixture for the S3 e2e test: write a `[graph] enabled=true` config into the isolated `data_dir` before the server starts and ensure the seeded corpus is graph-extracted (so `CommunityBuilder.build` has nodes to cluster), extending or adding alongside `smoke_server` in `tests/smoke/conftest.py`. This is dev-owned infrastructure even though the test that consumes it (T-1) is tester-owned (Q10 → Option A) #backend-role
     - Presentation *(test infrastructure: `tests/smoke/conftest.py`)* · 2.0h
     - needs BE-2 · completes (enables S3)
     - Tests

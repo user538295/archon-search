@@ -9,6 +9,14 @@ fixture implements.
 Helper functions (``_free_port``, ``_start_server``, ``_poll_health_and_ready``,
 ``_seed_corpus``) are module-level so they can be exercised directly by
 ``tests/smoke/test_conftest.py`` without going through the fixture.
+
+``smoke_server_graph_enabled`` (BE-9) is a second, separate session-scoped
+fixture for tests needing ``[graph] enabled = true`` (e.g. the S3
+``graph build-communities --wait`` e2e test) — kept off ``smoke_server``
+itself so the graph feature stays off by default for the rest of the suite.
+It ``importorskip``s spaCy before starting the server (the graph extra is not
+in the ``dev`` group) and seeds a multi-entity corpus so the extracted graph is
+large enough for community clustering.
 """
 
 from __future__ import annotations
@@ -206,8 +214,15 @@ def _write_corpus(corpus_dir: Path) -> None:
         (corpus_dir / filename).write_text(text)
 
 
-def _seed_corpus(base_url: str, api_key: str, corpus_dir: Path, proc: subprocess.Popen) -> None:
-    """POST /collections/ {path} then poll the job to DONE, then assert doc_count > 0."""
+def _seed_corpus(
+    base_url: str, api_key: str, corpus_dir: Path, proc: subprocess.Popen, *, collection: str = "smoke"
+) -> None:
+    """POST /collections/ {path} then poll the job to DONE, then assert doc_count > 0.
+
+    ``collection`` must match the basename of ``corpus_dir`` — the server derives
+    the collection name from the ingested directory's path (see
+    ``path_to_collection_name`` in ``routes_collections.py``).
+    """
     headers = {"Authorization": f"Bearer {api_key}"}
 
     resp = httpx.post(
@@ -245,7 +260,7 @@ def _seed_corpus(base_url: str, api_key: str, corpus_dir: Path, proc: subprocess
             f"corpus pre-seed job {job_id} ended in status {job.get('status')} (error={job.get('error')})"
         )
 
-    detail_resp = httpx.get(f"{base_url}/collections/smoke", headers=headers, timeout=5)
+    detail_resp = httpx.get(f"{base_url}/collections/{collection}", headers=headers, timeout=5)
     assert detail_resp.status_code == 200
     doc_count = detail_resp.json()["doc_count"]
     assert doc_count > 0, "corpus pre-seed produced doc_count == 0 — fixture misconfiguration"
@@ -278,6 +293,132 @@ def smoke_server(tmp_path_factory) -> Iterator[SmokeServer]:
 
     try:
         _seed_corpus(base_url, api_key, corpus_dir, proc)
+    except Exception:
+        _terminate(proc)
+        raise
+
+    server = SmokeServer(
+        proc=proc,
+        port=port,
+        base_url=base_url,
+        api_key=api_key,
+        data_dir=data_dir,
+        corpus_dir=corpus_dir,
+    )
+
+    yield server
+
+    proc.terminate()
+    try:
+        proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
+        pytest.fail("server did not stop cleanly on SIGTERM")
+
+
+# Graph-corpus docs: unlike ``_CORPUS_DOCS`` (generic prose that yields at most
+# one entity per doc and therefore no co-occurrence edges), these sentences pack
+# several spaCy-recognised named entities (PERSON/ORG/GPE) into each chunk so the
+# real extraction pipeline produces MULTIPLE nodes AND co-occurrence edges. Only
+# then does ``CommunityBuilder.build`` clear its ``len(nodes) < 2`` short-circuit
+# and actually run Leiden clustering — the real S3 happy path T-1 exercises. A
+# single-entity corpus would populate a node but never reach clustering.
+_GRAPH_CORPUS_DOCS: dict[str, str] = {
+    "team.txt": (
+        "Alice works at Google in California. Bob also works at Google with "
+        "Alice. Alice and Bob collaborate on the Kubernetes project at Google."
+    ),
+    "office.txt": (
+        "Google is headquartered in Mountain View, California. Alice and Bob "
+        "both moved to Mountain View to join the Kubernetes team at Google."
+    ),
+}
+
+
+def _write_graph_corpus(corpus_dir: Path) -> None:
+    for filename, text in _GRAPH_CORPUS_DOCS.items():
+        (corpus_dir / filename).write_text(text)
+
+
+def _write_graph_enabled_config(data_dir: Path) -> None:
+    """Write ``[graph] enabled = true`` to the config path ``_subprocess_env``
+    points the subprocess at, before the server starts.
+
+    ``_subprocess_env`` always sets ``ARCHON_SEARCH_CONFIG`` to
+    ``{data_dir}/archon-search.toml`` (a path that does not exist by default,
+    so ``load_config()`` falls back to defaults — see that function's comment).
+    Writing this file at that same path before ``_start_server`` is called is
+    the only hook needed to turn the graph feature on for a smoke server.
+    """
+    (data_dir / "archon-search.toml").write_text("[graph]\nenabled = true\n")
+
+
+@pytest.fixture(scope="session")
+def smoke_server_graph_enabled(tmp_path_factory) -> Iterator[SmokeServer]:
+    """Like ``smoke_server``, but with ``[graph] enabled = true``.
+
+    A separate server subprocess and corpus from ``smoke_server`` — the graph
+    feature must be off by default for the rest of ``tests/smoke/``, so this
+    cannot just be a config tweak on the shared fixture.
+
+    Memory note: both this and ``smoke_server`` are session-scoped, so once a
+    session touches tests that use each, BOTH server subprocesses stay alive
+    until session teardown (``xdist_group("smoke_e2e")`` serialises test
+    *execution* onto one worker, not fixture *lifetime*). That is bounded — at
+    most two servers on the single smoke worker, only when both fixtures are
+    actually requested in a run — and the smoke suite is opt-in
+    (``uv run pytest tests/smoke/``), never part of the default suite.
+
+    Graph extras guard: ``graph.enabled = true`` makes the server raise
+    ``ConfigError`` at startup if spaCy is absent (it lives in the optional
+    ``archon-search[graph]`` extra, not the ``dev`` group). ``importorskip`` is
+    therefore done HERE, before the subprocess is spawned — a guard in a
+    consuming test body runs only after this session fixture has already been
+    set up, too late to convert a startup failure into a clean skip.
+
+    Seeds a multi-entity corpus (``_GRAPH_CORPUS_DOCS``) into a collection named
+    ``smoke_graph`` via the real REST API, so extraction runs through the real
+    pipeline. Asserts the resulting graph has >= 2 nodes AND >= 1 edge before
+    yielding, so a consumer is guaranteed a graph large enough for
+    ``CommunityBuilder.build`` to reach Leiden clustering rather than its
+    single-node short-circuit — the S3 happy path, not the S8 empty-graph
+    failure path.
+    """
+    pytest.importorskip("spacy")
+
+    port = _free_port()
+    data_dir = tmp_path_factory.mktemp("smoke_data_graph")
+    corpus_dir = tmp_path_factory.mktemp("smoke_graph", numbered=False)
+    api_key = secrets.token_hex(32)
+
+    _write_graph_corpus(corpus_dir)
+    _write_graph_enabled_config(data_dir)
+
+    proc = _start_server(port=port, data_dir=data_dir, api_key=api_key)
+    base_url = f"http://127.0.0.1:{port}"
+
+    try:
+        _seed_corpus(base_url, api_key, corpus_dir, proc, collection="smoke_graph")
+        graph_resp = httpx.get(
+            f"{base_url}/graph/smoke_graph",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=5,
+        )
+        assert graph_resp.status_code == 200, (
+            f"fixture sanity: GET /graph/smoke_graph failed: "
+            f"{graph_resp.status_code} {graph_resp.text}"
+        )
+        graph = graph_resp.json()
+        assert graph["node_count"] >= 2, (
+            f"graph-enabled corpus pre-seed produced {graph['node_count']} node(s); "
+            "need >= 2 so CommunityBuilder.build reaches Leiden clustering, not its "
+            "single-node short-circuit — fixture misconfiguration"
+        )
+        assert graph["edge_count"] >= 1, (
+            f"graph-enabled corpus pre-seed produced {graph['edge_count']} edge(s); "
+            "need >= 1 co-occurrence edge for meaningful clustering — fixture misconfiguration"
+        )
     except Exception:
         _terminate(proc)
         raise

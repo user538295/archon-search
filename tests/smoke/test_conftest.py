@@ -108,3 +108,49 @@ def test_startup_failure_error_includes_stderr(tmp_path_factory) -> None:
         assert "--- captured stderr ---" in message
     finally:
         blocker.close()
+
+
+# ---------------------------------------------------------------------------
+# Integration test — graph-enabled fixture has graph data (BE-9, guards S3)
+# ---------------------------------------------------------------------------
+
+
+def test_smoke_server_graph_enabled_has_graph_data(smoke_server_graph_enabled) -> None:
+    """The graph-enabled smoke server's seeded collection reports a non-empty graph.
+
+    Guards the S3 e2e test (``graph build-communities --wait``): without this,
+    a graph too small to cluster would make S3 hit the S8 failure path
+    (``CommunityBuilder.build`` raising on an empty/single-node graph) instead
+    of S3's happy path.
+
+    The graph extras are guarded (``importorskip("spacy")``) inside the
+    ``smoke_server_graph_enabled`` fixture itself — before the server is
+    spawned — so on a machine without them the fixture (and hence this test)
+    skips cleanly rather than erroring at setup. No further guard is needed
+    here.
+
+    Distinct from the fixture's own >=2-node/>=1-edge sanity check: this test
+    asserts the consumer-visible contract end to end — the collection is
+    populated (``doc_count > 0``) AND its graph is enabled (200, not the 422 a
+    disabled server returns) and non-empty (``node_count > 0``).
+    """
+    headers = {"Authorization": f"Bearer {smoke_server_graph_enabled.api_key}"}
+
+    detail_resp = httpx.get(
+        f"{smoke_server_graph_enabled.base_url}/collections/smoke_graph",
+        headers=headers,
+        timeout=5,
+    )
+    assert detail_resp.status_code == 200
+    assert detail_resp.json()["doc_count"] > 0
+
+    graph_resp = httpx.get(
+        f"{smoke_server_graph_enabled.base_url}/graph/smoke_graph",
+        headers=headers,
+        timeout=5,
+    )
+    assert graph_resp.status_code == 200, (
+        f"expected 200 (graph enabled); a 422 would mean graph is disabled: "
+        f"{graph_resp.status_code} {graph_resp.text}"
+    )
+    assert graph_resp.json()["node_count"] > 0
