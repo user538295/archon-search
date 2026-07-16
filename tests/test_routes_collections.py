@@ -507,8 +507,8 @@ def test_list_collections_filters_by_namespace(tmp_path: Path, tmp_store: JobSto
     name_a = path_to_collection_name(str(src_a))
     name_b = path_to_collection_name(str(src_b))
 
-    meta_a = CollectionMeta(name=name_a, namespace="tenantA")
-    meta_b = CollectionMeta(name=name_b, namespace="tenantB")
+    meta_a = CollectionMeta(name=name_a, namespace="tenantA", description="Tenant A docs")
+    meta_b = CollectionMeta(name=name_b, namespace="tenantB", description="Tenant B secret")
 
     mock_store = MagicMock()
     mock_store.get_all_collections_meta = AsyncMock(return_value=[meta_a, meta_b])
@@ -524,6 +524,9 @@ def test_list_collections_filters_by_namespace(tmp_path: Path, tmp_store: JobSto
     names = [e["name"] for e in data]
     assert name_a in names
     assert name_b not in names
+    # bug-090: the ns-filtered listing surfaces the caller-namespace collection's
+    # own stored description (not the old hardcoded "").
+    assert [e["description"] for e in data if e["name"] == name_a] == ["Tenant A docs"]
 
 
 def test_list_collections_no_meta_default_ns(tmp_path: Path, tmp_store: JobStore) -> None:
@@ -3939,3 +3942,154 @@ async def test_migration_task_spec_none_no_rewrite_pending_marks_failed(tmp_path
     assert final_job is not None
     assert final_job.status == JobStatus.FAILED
     assert "no pending REWRITE" in (final_job.error or "")
+
+
+# ---------------------------------------------------------------------------
+# bug-090 — collection responses surface the stored description (not "")
+# ---------------------------------------------------------------------------
+
+
+def _app_with_meta_store(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    *,
+    description: str | None = None,
+    has_meta: bool = True,
+):
+    """Build ``(client, name)`` for a single default-namespace collection app.
+
+    The mock store returns a ``CollectionMeta`` (built here with the
+    config-derived name so the namespace gate passes) from both
+    ``get_all_collections_meta`` (list) and ``get_collection_meta``
+    (detail/patch), so the same fixture drives all three handlers. Pass
+    ``has_meta=False`` to model a config-only collection with no meta row.
+    """
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    name = path_to_collection_name(str(src))
+    meta = (
+        CollectionMeta(name=name, namespace="default", description=description)
+        if has_meta
+        else None
+    )
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[] if meta is None else [meta])
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.count_documents = AsyncMock(return_value=0)
+    mock_store.count_chunks = AsyncMock(return_value=0)
+    mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"}), name
+
+
+def test_list_collections_surfaces_stored_description(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/ returns the stored description, not a hardcoded ""."""
+    c, name = _app_with_meta_store(tmp_path, tmp_store, description="A handbook about widgets.")
+
+    response = c.get("/collections/")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["description"] == "A handbook about widgets."
+
+
+def test_list_collections_description_falls_back_to_empty_when_none(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """A collection whose meta.description is None reports "" (no None leak).
+
+    Discriminates against a fix that drops the ``or ""`` coercion: a bare
+    ``col_meta.description`` would surface ``None``, which the ``str``-typed
+    ``CollectionSummary.description`` rejects with a 500.
+    """
+    c, name = _app_with_meta_store(tmp_path, tmp_store, description=None)
+
+    response = c.get("/collections/")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["description"] == ""
+
+
+def test_list_collections_no_meta_row_description_empty(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """A config-only collection with no meta row reports "" without crashing.
+
+    Guards the ``col_meta is None`` branch: a bare ``col_meta.description``
+    would raise AttributeError here.
+    """
+    c, name = _app_with_meta_store(tmp_path, tmp_store, has_meta=False)
+
+    response = c.get("/collections/")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["name"] == name
+    assert data[0]["description"] == ""
+
+
+def test_get_collection_info_surfaces_stored_description(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name} returns the stored description, not a hardcoded ""."""
+    c, name = _app_with_meta_store(tmp_path, tmp_store, description="Detailed summary.")
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    assert response.json()["description"] == "Detailed summary."
+
+
+def test_get_collection_info_description_none_falls_back_to_empty(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name} reports "" when meta.description is None."""
+    c, name = _app_with_meta_store(tmp_path, tmp_store, description=None)
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    assert response.json()["description"] == ""
+
+
+def test_patch_collection_surfaces_stored_description(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """PATCH /collections/{name} (no-op body) returns the stored description."""
+    c, name = _app_with_meta_store(tmp_path, tmp_store, description="Patched view.")
+
+    # No-op PATCH (empty body) still rebuilds the CollectionDetail response.
+    response = c.patch(f"/collections/{name}", json={})
+    assert response.status_code == 200
+    assert response.json()["description"] == "Patched view."
+
+
+def test_patch_collection_description_survives_field_change(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """PATCH with a real field change preserves the description.
+
+    A ``default_ttl_seconds`` change rebuilds ``meta`` via ``dataclasses.replace``
+    before the response is built; this pins that ``description`` survives that
+    reassignment (a replace that dropped/renamed ``description`` would break only
+    this mutate path, which the no-op test cannot catch).
+    """
+    c, name = _app_with_meta_store(tmp_path, tmp_store, description="Kept through TTL change.")
+
+    response = c.patch(f"/collections/{name}", json={"default_ttl_seconds": 3600})
+    assert response.status_code == 200
+    assert response.json()["description"] == "Kept through TTL change."

@@ -107,7 +107,7 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
         result.append(CollectionSummary(
             name=name,
             path=resolved,
-            description="",
+            description=(col_meta.description or "") if col_meta is not None else "",
             doc_count=0,
             chunk_count=0,
             namespace=namespace,
@@ -372,7 +372,7 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
     data = {
         "name": name,
         "path": resolved,
-        "description": "",
+        "description": (meta.description or "") if meta is not None else "",
         "doc_count": doc_count,
         "chunk_count": 0,
         "status": status,
@@ -608,7 +608,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
     return CollectionDetail(
         name=name,
         path=resolved,
-        description="",
+        description=meta.description or "",
         doc_count=doc_count,
         chunk_count=0,
         status=status,
