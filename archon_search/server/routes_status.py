@@ -112,12 +112,19 @@ async def status(request: Request) -> StatusResponse:
                     exc_info=True,
                 )
 
+        # Live chunk count; a failure here must never 500 the status endpoint.
+        chunk_count = 0
+        try:
+            chunk_count = await search_store.count_chunks(name, namespace=ns)
+        except Exception:  # noqa: BLE001
+            logger.warning("chunk count unavailable for collection %r; reporting 0", name, exc_info=True)
+
         collection_entries.append(
             StatusCollectionEntry(
                 name=name,
                 path="",  # path not yet populated from store
                 doc_count=0,
-                chunk_count=0,
+                chunk_count=chunk_count,
                 status=progress["status"] if progress else "not_yet_indexed",
                 watching=watching,
                 eta_seconds=progress["eta_seconds"] if progress else None,

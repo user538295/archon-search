@@ -90,6 +90,66 @@ def test_list_collections_shows_configured(tmp_path: Path, tmp_store: JobStore) 
     assert entry["name"] == expected_name
 
 
+def test_list_collections_returns_real_chunk_count(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections reports the live count_chunks value, not a hardcoded 0 (bug-080)."""
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.count_chunks = AsyncMock(return_value=42)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get("/collections/")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["chunk_count"] == 42
+    # namespace must be forwarded so counts cannot leak across tenants.
+    from archon_search.constants import DEFAULT_NAMESPACE
+    name = path_to_collection_name(str(src))
+    mock_store.count_chunks.assert_awaited_once_with(name, namespace=DEFAULT_NAMESPACE)
+
+
+def test_list_collections_chunk_count_zero_on_store_error(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections degrades to chunk_count=0 when count_chunks raises (never 500s the list)."""
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.count_chunks = AsyncMock(side_effect=RuntimeError("db error"))
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get("/collections/")
+    assert response.status_code == 200
+    assert response.json()[0]["chunk_count"] == 0
+
+
 # ---------------------------------------------------------------------------
 # POST /collections/
 # ---------------------------------------------------------------------------
@@ -422,6 +482,67 @@ def test_collection_info_doc_count_zero_on_store_error(
     response = c.get(f"/collections/{name}")
     assert response.status_code == 200
     assert response.json()["doc_count"] == 0
+
+
+def test_collection_info_chunk_count_real(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name} returns real chunk_count from SearchStore (bug-080)."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default")
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=3)
+    mock_store.count_chunks = AsyncMock(return_value=17)
+    mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    assert response.json()["chunk_count"] == 17
+    mock_store.count_chunks.assert_awaited_once_with(name, namespace="default")
+
+
+def test_collection_info_chunk_count_zero_on_store_error(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name} returns chunk_count=0 when count_chunks raises."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default")
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=3)
+    mock_store.count_chunks = AsyncMock(side_effect=RuntimeError("db error"))
+    mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    assert response.json()["chunk_count"] == 0
 
 
 def test_collection_info_centroid_present_true(
@@ -2295,6 +2416,25 @@ def test_patch_missing_embedding_model_accepted(
     ):
         response = client.patch(f"/collections/{name}", json={})
     assert response.status_code == 200, f"expected 200, got {response.status_code}: {response.text}"
+
+
+def test_patch_collection_response_chunk_count_real(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """PATCH /collections/{name} response carries the live chunk_count, not a hardcoded 0 (bug-080)."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default", active_embedding_model="BAAI/bge-small-en-v1.5")
+
+    client, _, _ = _make_patch_app(tmp_path, tmp_store, meta=meta, count_chunks=9)
+
+    # default_ttl_seconds-only PATCH skips embedding-model validation entirely.
+    response = client.patch(f"/collections/{name}", json={"default_ttl_seconds": 3600})
+    assert response.status_code == 200, f"expected 200, got {response.status_code}: {response.text}"
+    assert response.json()["chunk_count"] == 9
 
 
 def test_patch_null_embedding_model_accepted(

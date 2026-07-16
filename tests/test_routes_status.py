@@ -23,7 +23,7 @@ def tmp_db(tmp_path: Path) -> Path:
     return db
 
 
-def _make_client_with_state(tmp_db: Path, state: IndexingState) -> TestClient:
+def _make_client_with_state(tmp_db: Path, state: IndexingState, *, chunk_count: int = 0) -> TestClient:
     store = IndexingStateStore(tmp_db)
     store.write(state)
     config = SearchConfig()
@@ -39,6 +39,7 @@ def _make_client_with_state(tmp_db: Path, state: IndexingState) -> TestClient:
     mock_store.get_all_collections_meta = AsyncMock(
         return_value=[CollectionMeta(name=n, namespace=DEFAULT_NAMESPACE) for n in state.collections]
     )
+    mock_store.count_chunks = AsyncMock(return_value=chunk_count)
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
@@ -81,6 +82,38 @@ def test_status_returns_running_and_collections(tmp_db: Path) -> None:
     assert col["doc_count"] == 0
     assert col["chunk_count"] == 0
     assert "watching" in col
+
+
+def test_status_returns_real_chunk_count(tmp_db: Path) -> None:
+    """GET /status reports the live count_chunks value per collection, not a hardcoded 0 (bug-080)."""
+    state = IndexingState(
+        collections={
+            "docs": CollectionProgress(
+                status=IndexingStatus.DONE,
+                total_files=10,
+                processed_files=10,
+            )
+        }
+    )
+    c = _make_client_with_state(tmp_db, state, chunk_count=123)
+    response = c.get("/status")
+    assert response.status_code == 200
+    col = response.json()["collections"][0]
+    assert col["chunk_count"] == 123
+
+
+def test_status_chunk_count_zero_on_store_error(tmp_db: Path) -> None:
+    """GET /status degrades to chunk_count=0 when count_chunks raises — the health endpoint never 500s."""
+    state = IndexingState(
+        collections={
+            "docs": CollectionProgress(status=IndexingStatus.DONE, total_files=1, processed_files=1)
+        }
+    )
+    c = _make_client_with_state(tmp_db, state)
+    c.app.state.search_store.count_chunks = AsyncMock(side_effect=RuntimeError("db error"))
+    response = c.get("/status")
+    assert response.status_code == 200
+    assert response.json()["collections"][0]["chunk_count"] == 0
 
 
 def test_status_includes_eta_when_progress_known(tmp_db: Path) -> None:
