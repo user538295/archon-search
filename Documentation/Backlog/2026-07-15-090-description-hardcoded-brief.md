@@ -30,7 +30,8 @@ Operators who have description generation enabled (`description_generator` confi
 - The `patch_collection` handler calls `count_chunks()` for embedding-model logic but discards the result (bug-024); fixing both in the same PR keeps the handlers consistent.
 
 ## Open Questions
-- Does `CollectionSummary` (used by `list_collections`) expose `description` in its Pydantic schema? If not, the schema field needs to be marked non-optional (or have a default of `""`).
+- ~~Does `CollectionSummary` (used by `list_collections`) expose `description` in its Pydantic schema?~~ **Resolved:** yes — `CollectionSummary` declares `description: str = ""` (`schemas.py:435`) and `CollectionDetail` inherits it (`schemas.py:444`). No schema change needed; the default already handles the "not marked non-optional" concern.
+- **Implementation note (not a decision):** in `list_collections`, `col_meta` can be `None` (`routes_collections.py:106`, `meta_by_name.get(name)`), so guard the read — `col_meta.description if col_meta else ""`, not a bare `col_meta.description or ""`, which would crash on a collection with no metadata. Verify whether `meta` can also be `None` in `get_collection_info`/`patch_collection` before writing `meta.description`.
 
 ## Future Iterations
 - Surface description in `GET /status` collection entries (currently also returns stub data — tracked separately).

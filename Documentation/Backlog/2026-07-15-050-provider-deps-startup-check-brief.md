@@ -1,5 +1,15 @@
 # Feature Brief: Missing Anthropic Package Check at Server Startup
 
+> **STATUS: SUPERSEDED — resolved by [[Documentation/Backlog/2026-07-15-060-hyde-ragfusion-wizard-brief.md]].**
+> The `anthropic` branch of `_check_provider_deps()` was implemented there
+> (`archon_search/server/app.py`), with one deliberate deviation from the spec below:
+> the guard is **enabled-gated** (`elif provider == "anthropic" and enabled:`), NOT
+> unconditional. `anthropic` is the *default* provider (`config.py`), so an
+> unconditional `import anthropic` would require the `[hyde]`/`[rag_fusion]` extra on
+> every install and break the optional-extras model. The "fire regardless of `enabled`
+> state" decision below (In Scope / Key Decisions / Edge Cases) is therefore overridden.
+> Coverage lives in `tests/test_hyde_ragfusion_wizard.py::TestCheckProviderDepsAnthropic`.
+
 ## Problem
 When HyDE or RAG Fusion is enabled with the default `provider = "anthropic"`, the server starts without checking whether the `anthropic` package is installed. The first time a user actually runs a search that triggers query expansion, the server crashes with a confusing import error deep inside the call stack — not a clean message at startup. Every other provider (`ollama`, `openai`) already gets this check; `anthropic` was missed.
 
