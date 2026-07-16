@@ -74,6 +74,7 @@ def _patched_wizard(**extra_module_patches: Any) -> Generator[None, None, None]:
         "_install_code_extra": MagicMock(),
         "_install_graph_extra": MagicMock(),
         "_install_multilingual_extra": MagicMock(),
+        "_install_query_expansion_extras": MagicMock(return_value=[]),
     }
 
     # Merge extra patches (using short names for consistency)
@@ -621,6 +622,207 @@ def test_wizard_declineProceedPrompt_revertsGraphEnabled(runner: CliRunner, tmp_
         "Proceed? prompt after the config write — otherwise the next server "
         "start hard-fails on missing spaCy"
     )
+
+
+# ---------------------------------------------------------------------------
+# Use case 8a: HyDE / RAG Fusion provider install + rollback
+# (Documentation/Backlog/2026-07-15-060-hyde-ragfusion-wizard-brief.md)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_e2e_hyde_install_triggered(runner: CliRunner, tmp_path: Path) -> None:
+    """wizard --non-interactive --enable-hyde installs the provider package once
+    and writes [hyde].enabled = true."""
+    config_path = tmp_path / "archon-search.toml"
+    install_mock = MagicMock(return_value=[])
+
+    with _patched_wizard(
+        **{"archon_search.install._install_query_expansion_extras": install_mock}
+    ):
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+            "--enable-hyde",
+        ])
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    install_mock.assert_called_once()
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["hyde"]["enabled"] is True
+
+
+@pytest.mark.integration
+def test_e2e_hyde_and_rag_fusion_both_enabled(runner: CliRunner, tmp_path: Path) -> None:
+    """Both flags → both sections enabled in the written config."""
+    config_path = tmp_path / "archon-search.toml"
+
+    with _patched_wizard():
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+            "--enable-hyde",
+            "--enable-rag-fusion",
+        ])
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["hyde"]["enabled"] is True
+    assert doc["rag_fusion"]["enabled"] is True
+
+
+@pytest.mark.integration
+def test_e2e_hyde_install_failure_reverts(runner: CliRunner, tmp_path: Path) -> None:
+    """_install_query_expansion_extras returning a failed package → exit 0, [hyde].enabled
+    reverted to false so the next server start does not hard-fail on missing anthropic."""
+    config_path = tmp_path / "archon-search.toml"
+    install_mock = MagicMock(return_value=["hyde"])
+
+    with _patched_wizard(
+        **{"archon_search.install._install_query_expansion_extras": install_mock}
+    ):
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+            "--enable-hyde",
+        ])
+
+    assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
+    install_mock.assert_called_once()
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["hyde"]["enabled"] is False, (
+        "hyde.enabled must be reverted to false when the provider package fails to "
+        "install — otherwise the next server start hard-fails on missing anthropic"
+    )
+    assert "disabled because the install did not complete" in result.output
+
+
+@pytest.mark.integration
+def test_e2e_hyde_disk_space_failure_reverts(runner: CliRunner, tmp_path: Path) -> None:
+    """Disk-space check failure after config write must revert hyde.enabled (mirrors C3-A-1)."""
+    config_path = tmp_path / "archon-search.toml"
+    install_mock = MagicMock(return_value=[])
+    disk_space_mock = MagicMock(side_effect=InstallError("not enough disk space"))
+
+    with _patched_wizard(
+        **{
+            "archon_search.install._install_query_expansion_extras": install_mock,
+            "archon_search.install._check_disk_space": disk_space_mock,
+        }
+    ):
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+            "--enable-hyde",
+        ])
+
+    assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}: {result.output}"
+    install_mock.assert_not_called()
+    assert config_path.exists()
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["hyde"]["enabled"] is False
+    assert "disabled because the install did not complete" in result.output
+
+
+@pytest.mark.integration
+def test_e2e_hyde_declineProceedPrompt_reverts(runner: CliRunner, tmp_path: Path) -> None:
+    """Declining the final 'Proceed?' prompt must revert hyde.enabled.
+
+    Passing --enable-hyde short-circuits the interactive HyDE/provider prompts,
+    so the queue below covers the remaining optional-feature prompts for a
+    minimal English profile (which HAS a reranker, so that question is shown).
+    """
+    config_path = tmp_path / "archon-search.toml"
+    install_mock = MagicMock(return_value=[])
+
+    # Input queue (minimal English profile HAS a reranker; --enable-hyde skips
+    # the HyDE/RAG Fusion prompt):
+    #  1. multilingual: "n"
+    #  2. code enrichment: "n"
+    #  3. disable reranker: "n"
+    #  4. watch: "n"
+    #  5. telemetry: "n"
+    #  6. eager load: "n"
+    #  7. routing strategy: "" (default)
+    #  8. log format: "" (default)
+    #  9. "Proceed?": "n"  ← decline
+    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "", "n"]) + "\n"
+
+    with _no_anthropic_key():
+        with _patched_wizard(
+            **{"archon_search.install._install_query_expansion_extras": install_mock}
+        ):
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "minimal",
+                    "--config", str(config_path),
+                    "--skip-preload",
+                    "--enable-hyde",
+                ],
+                input=stdin_responses,
+            )
+
+    assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}:\nOUT: {result.output}"
+    install_mock.assert_not_called()
+    assert config_path.exists()
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["hyde"]["enabled"] is False
+    assert "disabled because the install did not complete" in result.output
+
+
+@pytest.mark.integration
+def test_e2e_summary_shows_hyde_bullet(runner: CliRunner, tmp_path: Path) -> None:
+    """The install summary must visibly confirm HyDE was enabled (mandatory confirmation)."""
+    config_path = tmp_path / "archon-search.toml"
+
+    with _patched_wizard():
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+            "--enable-hyde",
+        ])
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    assert "HyDE: enabled (provider: anthropic)" in result.output
+
+
+@pytest.mark.integration
+def test_e2e_post_write_assertion_fires_on_silent_drop(runner: CliRunner, tmp_path: Path) -> None:
+    """If the config write silently drops the [hyde] section, the post-write
+    assertion must abort the install with a clear error (Q1)."""
+    config_path = tmp_path / "archon-search.toml"
+
+    with _patched_wizard(
+        **{"archon_search.install._apply_wizard_features_to_toml": MagicMock()}
+    ):
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+            "--enable-hyde",
+        ])
+
+    assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}: {result.output}"
+    assert "hyde" in result.output.lower() and "persist" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------

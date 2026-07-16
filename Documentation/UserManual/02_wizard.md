@@ -340,6 +340,7 @@ After answering, the wizard:
 
 - Enables both `[hyde].enabled = true` and `[rag_fusion].enabled = true` in your config.
 - Writes `[hyde].provider` / `[rag_fusion].provider` (and `model`, `ollama_base_url` where applicable) for non-Anthropic providers. For `claude_cli`, `model` is only written when you choose one — a blank leaves it unset so the config default applies.
+- Installs the provider's package so the feature actually works: `anthropic` → `archon-search[hyde]`, `openai` → `archon-search[openai-provider]`, `ollama` → `archon-search[ollama]`. When both features share a provider (the default is `anthropic` for both), the package is installed once. `claude_cli` needs no package (it uses the `claude` command on your PATH). If the install fails, the wizard prints a warning and reverts `[hyde].enabled` / `[rag_fusion].enabled` to `false` so the next server start does not hard-fail on the missing package — re-run the wizard or install the package manually to enable it.
 - Creates `~/.archon-search/.secrets.env` (mode 600, empty) if it does not already exist and the selected provider requires an API key. (`ollama` and `claude_cli` need no key, so no secrets file is created for them.)
 
 To configure providers manually after the wizard, edit `archon-search.toml` directly: set `[hyde].provider` and `[rag_fusion].provider` to `"anthropic"`, `"openai"`, `"ollama"`, or `"claude_cli"`, and set the corresponding `model` and `ollama_base_url` fields as needed. You can also re-run the wizard with `--enable-hyde --enable-rag-fusion` to reconfigure.
@@ -365,9 +366,11 @@ Before downloading anything, the wizard prints a summary of what it is about to 
   Optional features:
     • Code enrichment (tree-sitter)
     • Watch directories (auto-reindex)
+    • HyDE: enabled (provider: anthropic)
+    • RAG Fusion: enabled (provider: anthropic)
 ```
 
-Only non-default optional features are listed. The `API key` line shows a masked preview and the path to the env file that holds the full key. If the key file does not exist yet (first install, server not yet started), `(not yet generated)` is shown instead. The summary also reflects any deployment flags you passed (custom host, port, db path, top-k, etc.). Then:
+Only non-default optional features are listed. When you enable AI query expansion, the summary confirms it with `HyDE: enabled (provider: …)` and `RAG Fusion: enabled (provider: …)` lines so you have visible proof the setting took effect before you exit the wizard. The `API key` line shows a masked preview and the path to the env file that holds the full key. If the key file does not exist yet (first install, server not yet started), `(not yet generated)` is shown instead. The summary also reflects any deployment flags you passed (custom host, port, db path, top-k, etc.). Then:
 
 ```
 Proceed? [Y/n]:

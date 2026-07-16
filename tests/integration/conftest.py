@@ -20,12 +20,28 @@ call async pipeline/store methods directly without going through TestClient.
 from __future__ import annotations
 
 import json
+import sys
 import time
+import types
 from contextlib import contextmanager
 from typing import Any, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def _stub_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """anthropic is an optional extra absent from the test env. create_app's
+    provider guard (_check_provider_deps) imports it when anthropic-backed
+    HyDE/RAG Fusion is enabled, and AnthropicQueryExpansionProvider.__init__
+    reads anthropic.APIError, so provide a bare stub for every integration test
+    (make_real_app enables features with the default anthropic provider). No
+    integration test asserts anthropic-absence behavior — those unit tests live
+    in tests/test_hyde.py / tests/test_rag_fusion.py and are unaffected."""
+    stub = types.ModuleType("anthropic")
+    stub.APIError = type("APIError", (Exception,), {})  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "anthropic", stub)
 
 
 @contextmanager

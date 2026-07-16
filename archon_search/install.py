@@ -730,6 +730,10 @@ def _render_summary(
             feature_bullets.append("• Code enrichment (tree-sitter)")
         if features.install_graph_extra:
             feature_bullets.append("• Graph enrichment (code graphing)")
+        if features.enable_hyde:
+            feature_bullets.append(f"• HyDE: enabled (provider: {features.hyde_provider})")
+        if features.enable_rag_fusion:
+            feature_bullets.append(f"• RAG Fusion: enabled (provider: {features.rag_fusion_provider})")
         if features.disable_reranker:
             feature_bullets.append("• Reranker disabled")
         if features.enable_watch:
@@ -1522,6 +1526,115 @@ def _install_multilingual_extra(dry_run: bool = False) -> None:
     _install_extra("archon-search[multilingual]", "multilingual language detection", dry_run)
 
 
+# Maps a HyDE / RAG Fusion provider to the pip extra that supplies its package.
+# 'claude_cli' is absent by design: it has no pip package (availability is the
+# `claude` binary on PATH). [hyde] and [rag_fusion] are byte-identical extras
+# (both pull anthropic>=0.40), so anthropic maps to a single name — this is what
+# lets the dedup below collapse anthropic-backed HyDE + RAG Fusion to one install.
+_PROVIDER_EXTRA: dict[str, str] = {
+    "anthropic": "archon-search[hyde]",
+    "openai": "archon-search[openai-provider]",
+    "ollama": "archon-search[ollama]",
+}
+
+
+def _install_query_expansion_extras(features: WizardFeatures, dry_run: bool = False) -> list[str]:
+    """Install provider packages for enabled HyDE / RAG Fusion features.
+
+    Resolves each enabled feature's provider to its pip extra and installs each
+    unique package once (so the common case — both features on the default
+    anthropic provider — installs a single package, while mixed providers install
+    each). ``claude_cli`` needs no package and is skipped. Returns the list of
+    feature SECTIONS (``"hyde"`` / ``"rag_fusion"``) whose provider package failed
+    to install (empty when all succeeded); never raises, so the caller can revert
+    exactly the flags whose package failed. When both features share a package
+    (both on anthropic), a single failure marks BOTH sections failed.
+    """
+    # Map each enabled section to its provider package (None = no package, e.g. claude_cli).
+    section_packages: list[tuple[str, str | None]] = []
+    if features.enable_hyde:
+        section_packages.append(("hyde", _PROVIDER_EXTRA.get(features.hyde_provider)))
+    if features.enable_rag_fusion:
+        section_packages.append(("rag_fusion", _PROVIDER_EXTRA.get(features.rag_fusion_provider)))
+
+    # Install each distinct package once.
+    packages: list[str] = []
+    for _section, pkg in section_packages:
+        if pkg and pkg not in packages:
+            packages.append(pkg)
+    failed_packages: list[str] = []
+    for package in packages:
+        try:
+            _install_extra(package, "AI query expansion", dry_run)
+        except InstallError as exc:
+            print(f"Warning: AI query expansion install failed for {package}: {exc}", file=sys.stderr)
+            failed_packages.append(package)
+
+    # Report the sections whose package failed (a shared failed package fails both).
+    return [section for section, pkg in section_packages if pkg is not None and pkg in failed_packages]
+
+
+def _revert_query_expansion_flags(
+    config_path: Path, dry_run: bool, *, sections: tuple[str, ...] = ("hyde", "rag_fusion")
+) -> None:
+    """Disable the given query-expansion *sections* and strip the provider keys
+    the wizard wrote, so no startup guard fires post-rollback.
+
+    Mirrors :func:`_revert_graph_enabled_flag`. ``run()`` writes ``enabled=true``
+    (and, for non-anthropic providers, ``provider``/``model``/``ollama_base_url``)
+    early — before the provider package is installed. If a later step aborts or an
+    install fails, leaving those keys on disk would hard-fail the next server start
+    via app.py's ``_check_provider_deps``: the anthropic guard is enabled-gated, but
+    the ollama/openai guards fire unconditionally on the provider value. Stripping
+    the provider keys reverts the section to the enabled-gated anthropic default,
+    which does not fire when disabled.
+    """
+    if dry_run or not config_path.exists():
+        return
+    doc = tomlkit.parse(config_path.read_text())
+    changed = False
+    for section in sections:
+        if section in doc and doc[section].get("enabled"):
+            doc[section]["enabled"] = False
+            for key in ("provider", "model", "ollama_base_url"):
+                if key in doc[section]:
+                    del doc[section][key]
+            changed = True
+    if changed:
+        atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
+        print(
+            "Warning: HyDE / RAG Fusion have been disabled because the install did "
+            "not complete. Re-run the wizard, or install the provider package "
+            "manually — e.g. `pip install archon-search[hyde]` (Anthropic, the "
+            "default), `archon-search[openai-provider]` (OpenAI), or "
+            "`archon-search[ollama]` (Ollama) — then set enabled = true under "
+            "[hyde] / [rag_fusion] in archon-search.toml.",
+            file=sys.stderr,
+        )
+
+
+def _assert_features_persisted(cfg: SearchConfig, features: WizardFeatures) -> None:
+    """Verify the wizard's HyDE / RAG Fusion choices survived the config round-trip.
+
+    Called in ``run()`` immediately after the freshly-written config is reloaded
+    via ``load_config``. Surfaces a silent write/parse failure at install time —
+    with an actionable message — instead of letting a feature show as enabled in
+    the wizard but disabled on the server. Raises ``InstallError`` on mismatch.
+    """
+    if features.enable_hyde and not cfg.hyde.enabled:
+        raise InstallError(
+            "[hyde].enabled was requested but is not present in the written "
+            "archon-search.toml after reload — the config write did not persist. "
+            "This is a bug; please re-run the wizard and report it if it recurs."
+        )
+    if features.enable_rag_fusion and not cfg.rag_fusion.enabled:
+        raise InstallError(
+            "[rag_fusion].enabled was requested but is not present in the written "
+            "archon-search.toml after reload — the config write did not persist. "
+            "This is a bug; please re-run the wizard and report it if it recurs."
+        )
+
+
 def _revert_graph_enabled_flag(config_path: Path, dry_run: bool) -> None:
     """Revert ``graph.enabled`` to false in the written config.
 
@@ -2110,6 +2223,18 @@ class SearchInstaller:
             else:
                 self.cfg = cfg = load_config(config_path)
 
+            # Step 8c: assert the wizard's HyDE / RAG Fusion choices persisted through
+            # the write→parse→load round-trip. Surfaces a silent config-write failure
+            # at install time rather than as a feature that shows enabled in the wizard
+            # but disabled on the server. Skipped in dry-run (nothing was written).
+            if not self.dry_run:
+                try:
+                    _assert_features_persisted(cfg, features)
+                except InstallError as exc:
+                    print(f"Install error: {exc}", file=sys.stderr)
+                    _revert_query_expansion_flags(config_path, self.dry_run)
+                    return 1
+
             # Step 9: GPU provider configuration (detection + user confirm already done in Step 2b)
             providers: list[str] = []
             # ONNX provider string configured for the Metal/CoreML GPU path, or
@@ -2154,6 +2279,8 @@ class SearchInstaller:
                     _revert_graph_enabled_flag(config_path, self.dry_run)
                 if features.install_multilingual_extra:
                     _revert_multilingual_flag(config_path, self.dry_run)
+                if features.enable_hyde or features.enable_rag_fusion:
+                    _revert_query_expansion_flags(config_path, self.dry_run)
                 return 1
 
             # Step 12: summary display
@@ -2176,6 +2303,8 @@ class SearchInstaller:
                         _revert_graph_enabled_flag(config_path, self.dry_run)
                     if features.install_multilingual_extra:
                         _revert_multilingual_flag(config_path, self.dry_run)
+                    if features.enable_hyde or features.enable_rag_fusion:
+                        _revert_query_expansion_flags(config_path, self.dry_run)
                     return 1
 
             # Before Step 14: install code enrichment packages if requested
@@ -2206,6 +2335,17 @@ class SearchInstaller:
                 except InstallError as exc:
                     print(f"Warning: multilingual install failed: {exc}", file=sys.stderr)
                     _revert_multilingual_flag(config_path, self.dry_run)
+
+            # Before Step 14: install provider packages for enabled HyDE / RAG Fusion.
+            # Same shape as the graph/multilingual installs above: non-fatal, and
+            # roll back the already-written enabled=true flags on failure so the next
+            # server start does not hard-fail on the missing provider package
+            # (the anthropic guard in app.py's _check_provider_deps).
+            # ponytail: revert wiring is triplicated across the disk-space/decline/install exit paths (mirrors the pre-existing graph & multilingual reverts); consolidate into one _revert_optional_feature_flags helper if a 4th revertable feature is added.
+            if features.enable_hyde or features.enable_rag_fusion:
+                _failed_sections = _install_query_expansion_extras(features, dry_run=self.dry_run)
+                if _failed_sections:
+                    _revert_query_expansion_flags(config_path, self.dry_run, sections=tuple(_failed_sections))
 
             # Before Step 14b: create .secrets.env when AI query expansion is enabled
             if features.enable_hyde or features.enable_rag_fusion:

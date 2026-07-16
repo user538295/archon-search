@@ -35,6 +35,20 @@ from archon_search.store import SearchStore
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
 
+
+@pytest.fixture(autouse=True)
+def _stub_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """anthropic is an optional extra absent from the test env. create_app's
+    provider guard (_check_provider_deps) now imports it when anthropic-backed
+    RAG Fusion is enabled, so provide a bare stub for these startup-path tests.
+    Actual generation is mocked elsewhere; this only satisfies the import guard."""
+    stub = types.ModuleType("anthropic")
+    # AnthropicQueryExpansionProvider.__init__ reads anthropic.APIError; give it
+    # a real exception class so construction (and any except clause) is valid.
+    stub.APIError = type("APIError", (Exception,), {})  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "anthropic", stub)
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------

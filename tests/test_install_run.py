@@ -1285,7 +1285,11 @@ def test_overwrite_warning_triggers_on_hand_edit(tmp_path: Path) -> None:
         patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
             install_code_extra=False, disable_reranker=False, enable_watch=False,
             enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy="centroid", log_format="text"
+            routing_strategy="centroid", log_format="text",
+            # Explicit False: a bare MagicMock returns a truthy attribute, which would
+            # trip the post-write HyDE/RAG Fusion persistence assertion (this test
+            # mocks _write_profile_config, so nothing is actually written).
+            enable_hyde=False, enable_rag_fusion=False,
         )),
         # input() used for: overwrite prompt ("y") and Proceed? ("y")
         patch("builtins.input", return_value="y"),

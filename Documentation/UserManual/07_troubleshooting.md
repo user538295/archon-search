@@ -92,6 +92,16 @@ The route returns 503 when *any* exception is raised by the collection-metadata 
 4. **Run `archon-search status`** — it warns on stderr when HyDE or RAG Fusion is enabled with a provider that needs an API key (Anthropic/OpenAI) but the key is absent. No warning fires for Ollama or Claude CLI (neither needs a key).
 5. If the key is set but you still see `expansion_warning`, the LLM provider API call may be timing out. Raise `timeout_seconds` in the `[hyde]` or `[rag_fusion]` TOML section (default is `10.0` seconds). For `provider = "ollama"`: if expansion fails, check that your Ollama server is running at `ollama_base_url` (default `http://localhost:11434`). For `provider = "claude_cli"`: if expansion fails, confirm the `claude` command is on the server's PATH and logged in (a hung or slow subprocess is killed at `timeout_seconds` and falls back silently).
 
+## Symptom: server refuses to start — "provider='anthropic' but the 'anthropic' package is not installed"
+
+The server exits at startup with a `ConfigError` naming `[hyde]` or `[rag_fusion]`, e.g. `[hyde] enabled=true with provider='anthropic' but the 'anthropic' package is not installed; run: pip install archon-search[hyde]`.
+
+The feature is enabled with the Anthropic provider (the default) but the provider package is missing — so HyDE/RAG Fusion could never run. The server now catches this at startup rather than failing silently on the first query.
+
+1. **Install the package**: `pip install archon-search[hyde]` (or `archon-search[rag_fusion]` — both pull the same `anthropic` dependency). For `provider = "openai"`: `pip install archon-search[openai-provider]`. For `provider = "ollama"`: `pip install archon-search[ollama]`. `provider = "claude_cli"` needs no package.
+2. **Or disable the feature**: set `[hyde].enabled = false` / `[rag_fusion].enabled = false` in `archon-search.toml` if you did not mean to enable it.
+3. This check fires only when the feature is **enabled** — a default install (feature off) never requires the `anthropic` package, even though `anthropic` is the default provider value. Running the wizard with `--enable-hyde` / `--enable-rag-fusion` installs the package for you.
+
 ## Symptom: FAILED_EXPIRED ingest jobs
 
 `GET /status` reports `failed_expired_ingest_count > 0`, or `archon-search status` shows a count with a re-ingest hint.

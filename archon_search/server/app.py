@@ -115,14 +115,21 @@ def _check_multilingual_deps(config: SearchConfig) -> None:
 
 
 def _check_provider_deps(config: SearchConfig) -> None:
-    """Check that provider package deps are present regardless of enabled state.
+    """Check that provider package deps are present for HyDE / RAG Fusion.
 
-    ConfigError fires even when hyde.enabled=false or rag_fusion.enabled=false —
-    a mis-configured provider is always an operator error.
+    Firing is provider-specific: the ``ollama`` and ``openai`` guards fire
+    unconditionally (any configured non-default provider is an explicit opt-in),
+    but the ``anthropic`` guard fires ONLY when the feature is enabled —
+    ``anthropic`` is the default provider (config.py), so an unconditional import
+    guard would require ``archon-search[hyde]`` on every install and break the
+    optional-extras model. ``claude_cli`` is never guarded (no pip package;
+    availability is the ``claude`` binary on PATH with graceful runtime degradation).
     """
-    for label, provider, model in (
-        ("hyde", config.hyde.provider, config.hyde.model),
-        ("rag_fusion", config.rag_fusion.provider, config.rag_fusion.model),
+    # Per-provider firing rule: ollama/openai unconditional; anthropic enabled-gated;
+    # claude_cli never (see docstring). `enabled` is consumed only by the anthropic branch.
+    for label, enabled, provider, model in (
+        ("hyde", config.hyde.enabled, config.hyde.provider, config.hyde.model),
+        ("rag_fusion", config.rag_fusion.enabled, config.rag_fusion.provider, config.rag_fusion.model),
     ):
         if provider == "ollama":
             try:
@@ -154,6 +161,21 @@ def _check_provider_deps(config: SearchConfig) -> None:
                     f"[{label}] provider='openai' requires a non-empty model name; "
                     f"set [{label}].model in archon-search.toml"
                 )
+        elif provider == "anthropic" and enabled:
+            # Enabled-gated, unlike ollama/openai above: 'anthropic' is the default
+            # provider (config.py), so an unconditional import guard would require the
+            # package on every server start and break the optional-extras philosophy.
+            # Only enforce it when the feature is actually turned on.
+            try:
+                import anthropic  # noqa: F401, PLC0415
+            except ImportError:
+                raise ConfigError(
+                    f"[{label}] enabled=true with provider='anthropic' but the 'anthropic' "
+                    f"package is not installed; run: pip install archon-search[hyde]"
+                )
+        # provider='claude_cli' is intentionally not guarded: it has no pip package
+        # and resolves availability via shutil.which('claude') with graceful runtime
+        # degradation (claude_cli_provider.py).
 
 
 def _build_query_expansion_provider(

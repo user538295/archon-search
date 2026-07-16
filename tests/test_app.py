@@ -12,6 +12,21 @@ from archon_search.server.app import create_app
 from archon_search.sync import path_to_collection_name
 
 
+@pytest.fixture(autouse=True)
+def _stub_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """anthropic is an optional extra absent from the test env. create_app's
+    provider guard (_check_provider_deps) now imports it when anthropic-backed
+    HyDE/RAG Fusion is enabled, so provide a bare stub for these startup-path
+    tests. No test in this file asserts anthropic-absence behavior."""
+    import sys  # noqa: PLC0415
+    import types  # noqa: PLC0415
+    stub = types.ModuleType("anthropic")
+    # AnthropicQueryExpansionProvider.__init__ reads anthropic.APIError; give it
+    # a real exception class so construction (and any except clause) is valid.
+    stub.APIError = type("APIError", (Exception,), {})  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "anthropic", stub)
+
+
 @pytest.fixture
 def config(tmp_path: Path) -> SearchConfig:
     cfg = SearchConfig()
@@ -568,3 +583,29 @@ def test_app_startup_no_log_when_rag_fusion_disabled(
         if r.levelno == logging.INFO and "RAG Fusion" in r.message and "Anthropic" in r.message
     ]
     assert not rag_fusion_msgs, f"Unexpected RAG Fusion INFO message when disabled: {rag_fusion_msgs}"
+
+
+def test_create_app_hyde_enabled_anthropic_missing_raises(
+    tmp_path: Path, job_store: JobStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """create_app must raise ConfigError when HyDE is enabled + anthropic absent (guard is wired in)."""
+    import sys  # noqa: PLC0415
+    from archon_search.config import ConfigError  # noqa: PLC0415
+    monkeypatch.setitem(sys.modules, "anthropic", None)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.hyde.enabled = True
+    with pytest.raises(ConfigError, match="anthropic"):
+        create_app(cfg, job_store)
+
+
+def test_create_app_hyde_disabled_anthropic_missing_ok(
+    tmp_path: Path, job_store: JobStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default install (HyDE disabled) must NOT require anthropic even though it is the default provider."""
+    import sys  # noqa: PLC0415
+    monkeypatch.setitem(sys.modules, "anthropic", None)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, job_store)
+    assert app is not None

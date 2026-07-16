@@ -14,6 +14,14 @@ from archon_search.platform.types import GpuType
 pytestmark = pytest.mark.xdist_group("install")
 
 
+@pytest.fixture(autouse=True)
+def _mock_query_expansion_install():
+    """Mock the provider-package install so enable_hyde/enable_rag_fusion runs in
+    this file never shell out to a real `pip install archon-search[hyde]`."""
+    with patch("archon_search.install._install_query_expansion_extras", return_value=[]):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Unit tests for _create_secrets_env
 # ---------------------------------------------------------------------------
