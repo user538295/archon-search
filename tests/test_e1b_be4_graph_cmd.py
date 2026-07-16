@@ -10,6 +10,9 @@ Converted from an in-process command to an HTTP proxy against
   exit non-zero, never hang (S13)
 - test_cli_non_202_initial_response_prints_error_and_exits_nonzero: non-202 initial POST
   response -> status code + response text in output, non-zero exit
+- test_cli_422_graph_disabled_surfaces_response_body_detail: a 422 initial POST response
+  (graph.enabled=false) -> the server's detail string from the response body is echoed,
+  non-zero exit (acceptance criterion: CLI surfaces the 422 detail from the response body)
 - test_cli_wait_mid_poll_error_exits_nonzero: httpx.HTTPError during --wait polling ->
   error message + non-zero exit
 """
@@ -142,6 +145,28 @@ def test_cli_non_202_initial_response_prints_error_and_exits_nonzero() -> None:
     assert result.exit_code != 0, f"Expected non-zero exit, got {result.exit_code}"
     assert "404" in result.output
     assert "not found" in result.output.lower()
+
+
+def test_cli_422_graph_disabled_surfaces_response_body_detail() -> None:
+    """A 422 (graph.enabled=false) response's detail string is echoed from the response body.
+
+    Acceptance criterion: "the CLI surfaces the server's 422 detail string from the
+    response body" — this exercises the same non-202 echo branch as the 404 test above,
+    but with the actual verbatim detail routes_graph.py's guards return.
+    """
+    runner = CliRunner()
+    detail = "graph inspection requires [graph] enabled=true in server config"
+    post_resp = _response(422, {"detail": detail})
+
+    with patch("archon_search.cli.graph_cmd.httpx.post", return_value=post_resp):
+        result = runner.invoke(
+            graph_cmd,
+            ["build-communities", "my-collection", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code != 0, f"Expected non-zero exit, got {result.exit_code}"
+    assert "422" in result.output
+    assert detail in result.output, f"Expected server detail in output: {result.output!r}"
 
 
 def test_cli_wait_mid_poll_error_exits_nonzero() -> None:

@@ -258,7 +258,7 @@ After entity extraction is populated (via graph extraction at ingest time with `
 archon-search graph build-communities <collection>
 ```
 
-This runs Leiden community detection on the entity graph, selects MMR-diverse representative chunks per community, and persists results to `_archon_graph_{col}_communities`. Run this command explicitly — it is never triggered automatically on ingest.
+This proxies to the running server (`POST /graph/{collection}/rebuild-communities`), which enqueues an async job that runs Leiden community detection on the entity graph, selects MMR-diverse representative chunks per community, and persists results to `_archon_graph_{ns}__{col}_communities`. The server must be running — the CLI no longer builds communities in-process. Add `--wait` to block until the job completes; the command prints a `job_id` and exits `0` immediately otherwise. Run this command explicitly — it is never triggered automatically on ingest.
 
 **When to re-run:** After any significant new ingest (e.g., many new documents), `GET /status` will show the old `last_built_at` timestamp, signalling stale communities. Re-run `build-communities` to refresh.
 

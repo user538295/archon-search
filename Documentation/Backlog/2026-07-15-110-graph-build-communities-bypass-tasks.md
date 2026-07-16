@@ -1,7 +1,7 @@
 ---
 feature: Per-Collection Community Rebuild via REST API
 plan: 2026-07-15-110-graph-build-communities-bypass-team-plan.md
-status: draft        # draft → in-progress → done
+status: done        # draft → in-progress → done
 ---
 
 # GBC110 · Per-Collection Community Rebuild via REST API — Task Breakdown
@@ -157,7 +157,7 @@ flowchart LR
         - [x] #e2e_test — `test_e2e_graph_build_communities_wait_against_server` — using the graph-enabled smoke server (BE-9; CLI-invocation modeled on `test_key_list_no_repr`), run `uv run archon-search graph build-communities <collection> --wait --api-url <base_url> --api-key <key>` as a subprocess and assert exit `0` with the job reaching `DONE` (S3). Guard with `importorskip("leidenalg")` (repo convention) so the test skips cleanly where the optional graph libraries are absent
 
 ### Phase 5 · Close-out
-- [ ] **T-2** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-2** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs all prior tasks · completes (acceptance gate)
     - Tests

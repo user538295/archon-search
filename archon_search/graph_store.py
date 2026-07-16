@@ -1188,11 +1188,18 @@ class GraphStore:
         operation idempotent — a second call to ``build-communities`` fully replaces
         the previous run without duplication.
 
-        Note: The delete + add sequence is not atomic. A concurrent reader between
-        the two operations will see zero communities for this collection. This is
-        acceptable because ``write_communities`` is called exclusively from the
-        ``build-communities`` CLI batch operation, and communities are derived
-        (rebuildable) data. The failure mode is: re-run ``build-communities``.
+        Note: The delete + add sequence is not atomic. A concurrent reader (e.g. a
+        query using ``graph_mode="local"``/``"global"``) between the two operations
+        will see zero communities for this collection — the per-(namespace,
+        collection) community-rebuild lock in ``community_builder.py`` (GBC110 BE-6)
+        serialises concurrent *writers* against each other, but does not close this
+        reader-visibility window. This is acceptable because communities are derived
+        (rebuildable) data, not source of truth: the current callers are
+        ``POST /graph/{collection}/rebuild-communities`` (via its async rebuild task)
+        and ``MaintenanceLoop._rebuild_communities_async`` (GC-triggered rebuild), and
+        the failure mode is simply a transient fallback to hybrid search — re-run the
+        rebuild (``archon-search graph build-communities <collection>`` or the REST
+        endpoint directly) to restore full community coverage.
         """
         import pyarrow as pa  # noqa: PLC0415
 
