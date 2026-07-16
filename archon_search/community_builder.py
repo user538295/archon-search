@@ -40,6 +40,35 @@ _LEIDENALG_INSTALL_HINT = (
     "Install it with: pip install archon-search[graph]"
 )
 
+# Module-level per-(namespace, collection) rebuild-lock registry (C3).
+#
+# Serialises concurrent CommunityBuilder.build() calls on the same graph
+# resource across ALL callers — the route's rebuild task and
+# MaintenanceLoop._rebuild_communities_async each construct their own,
+# separate CommunityBuilder instance, so an instance-held lock would not
+# serialise anything. This registry is the single shared point every caller
+# resolves through. Deliberately independent of SearchStore._collection_locks
+# (different key shape — (ns, collection) vs. collection alone — and a
+# different resource: this feature's writes go through GraphStore, which uses
+# its own LanceDB connection, not SearchStore's).
+#
+# The dict itself may exist at import time; the asyncio.Lock instances inside
+# it must NOT — they are created lazily, on first access, inside the running
+# event loop (mirrors SearchStore.lock_for / SearchCollectionSync._get_lock).
+# An import-time asyncio.Lock() binds to whichever loop is running (or none)
+# at import, which breaks a later `await lock.acquire()` under a different loop.
+_rebuild_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+def _get_rebuild_lock(ns: str, collection: str) -> asyncio.Lock:
+    """Lazily create and return the rebuild lock for *(ns, collection)*."""
+    key = (ns, collection)
+    lock = _rebuild_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _rebuild_locks[key] = lock
+    return lock
+
 
 # ---------------------------------------------------------------------------
 # MMR helpers
@@ -392,6 +421,14 @@ class CommunityBuilder:
     async def build(self, collection: str, ns: str, *, seed: int | None = None) -> list["Community"]:
         """Build Leiden communities for *collection*.
 
+        Resolves and acquires the module-level per-``(ns, collection)`` rebuild
+        lock (C3) for the whole build duration, so this call never runs
+        concurrently with another ``build()`` call on the same ``(ns, collection)``
+        key — including a ``MaintenanceLoop`` GC-triggered rebuild, which
+        constructs its own, separate ``CommunityBuilder`` instance. The lock is
+        independent of ``SearchStore.lock_for``, so a rebuild never blocks or is
+        blocked by document ingest on the same collection.
+
         Fills ``representative_chunk_ids`` via MMR when a ``search_store`` is
         provided. Attempts optional LLM summarisation when
         ``config.extraction_model`` is set; falls back to ``summary_text=None``
@@ -417,6 +454,12 @@ class CommunityBuilder:
             RuntimeError: When the graph store encounters an unexpected I/O or
                 storage error while loading nodes or edges.
         """
+        lock = _get_rebuild_lock(ns, collection)
+        async with lock:
+            return await self._build_locked(collection, ns, seed=seed)
+
+    async def _build_locked(self, collection: str, ns: str, *, seed: int | None = None) -> list["Community"]:
+        """Build body — caller must hold ``_get_rebuild_lock(ns, collection)``."""
         from archon_search.graph_types import Community  # noqa: PLC0415
 
         nodes = await self._store.get_all_nodes(collection, ns=ns)

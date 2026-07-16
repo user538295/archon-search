@@ -121,7 +121,7 @@ flowchart LR
         - #integration_test — `test_crash_recovery_unwedges_via_lazy_clear` — a stale id pointing at a `FAILED` job (post-restart flip stand-in) → new request returns `202`, not `409`, and the id is cleared (S16)
 
 ### Phase 3 · Run overlapping rebuilds safely *(concurrent rebuilds — user-vs-GC and two builder instances — can never write the community table at the same time; a user request arriving mid-GC-rebuild still completes correctly)*
-- [ ] **BE-6** — Add the module-level `_rebuild_locks: dict[tuple[str, str], asyncio.Lock]` registry + a lazy accessor in `community_builder.py`, and make `CommunityBuilder.build` resolve and acquire the `(namespace, collection)` lock for the whole build duration. Per-key locks are created **lazily on first access inside the running event loop** (mirroring `SearchStore.lock_for` / `SearchCollectionSync._get_lock`), never at import time — separate from `SearchStore.lock_for`, so it neither self-deadlocks the meta clear nor blocks ingest (C2-1/C2-2/C3) #backend-role
+- [x] **BE-6** — Add the module-level `_rebuild_locks: dict[tuple[str, str], asyncio.Lock]` registry + a lazy accessor in `community_builder.py`, and make `CommunityBuilder.build` resolve and acquire the `(namespace, collection)` lock for the whole build duration. Per-key locks are created **lazily on first access inside the running event loop** (mirroring `SearchStore.lock_for` / `SearchCollectionSync._get_lock`), never at import time — separate from `SearchStore.lock_for`, so it neither self-deadlocks the meta clear nor blocks ingest (C2-1/C2-2/C3) #backend-role
     - Use Cases · 4.0h
     - needs K1 · completes C3, C4, S9, S12
     - Tests
