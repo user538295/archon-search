@@ -304,7 +304,18 @@ For **Anthropic** (default): no further prompts. Add your API key to `~/.archon-
 
 For **OpenAI**: the wizard prompts for a model name (required). Add `OPENAI_API_KEY=<key>` to `~/.archon-search/.secrets.env`. Query text is sent to OpenAI's API on every request — do not enable in air-gapped deployments or where data residency requirements apply.
 
-For **Ollama**: the wizard prompts for a model name (required) and an optional base URL (default `http://localhost:11434`). No API key is needed. Query text never leaves your host — safe for air-gapped deployments.
+For **Ollama**: the wizard asks for the server base URL first (default `http://localhost:11434`; on a re-run it pre-fills the address already in your config, so pressing Enter keeps it), then contacts that address and lists the models installed there as a numbered menu — you pick by number instead of typing a name:
+
+```
+Ollama base URL for HyDE [http://localhost:11434]:
+
+Installed Ollama models:
+  1. llama3.2:latest
+  2. mistral:latest
+Select a model by number [1-2]:
+```
+
+If the server is unreachable or has no models installed, the wizard says so, suggests `ollama pull <model-name>` to install one, and falls back to manual model-name entry so you can still finish setup. HyDE and RAG Fusion each get their own base-URL prompt and picker. No API key is needed for Ollama — query text never leaves your host, so it is safe for air-gapped deployments.
 
 After answering, the wizard:
 

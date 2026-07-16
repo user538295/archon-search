@@ -43,10 +43,10 @@ Operators and developers setting up archon-search for the first time (or reconfi
 - **No new dependencies:** `urllib.request` and `urllib.error` are already imported in `install.py` (lines 14–15) — the fetch requires zero new packages.
 - **Existing tests:** `tests/test_install_wizard_features.py` covers the current model-prompt flow; the prompt-order change and new fallback paths will need test updates.
 
-## Open Questions
-- Should the base URL prompt appear even when the user previously entered a custom URL (e.g. in a re-run of the wizard), or should it default to whatever is already in the config file?
-- The `_OLLAMA_BASE_URL_DEFAULT` constant lives in `config.py` — should the wizard import it, or duplicate the string?
-- How should the numbered picker handle more than ~20 models (long list)? Paginate, truncate, or show all and scroll?
+## Resolved Decisions
+- **Base URL prompt on re-run:** Always prompt, but pre-fill the default with the address already saved in config when one exists (fall back to `_OLLAMA_BASE_URL_DEFAULT` on a fresh install). The HyDE/RAG-Fusion feature block (`install.py:1144`) currently reads nothing from existing config — this requires threading the loaded `ollama_base_url` into the prompt so a custom-address user presses Enter to keep it instead of re-typing.
+- **Base URL constant:** Import `_OLLAMA_BASE_URL_DEFAULT` from `config.py` (single source of truth); drop its leading underscore since it now has a cross-module consumer. Do not duplicate the literal string.
+- **Long model list (>~20):** Show all models as one numbered list and let the terminal scroll — no pagination or truncation. Real Ollama installs are small; the free-text fallback covers any unusual setup. Pagination is a documented future iteration, not first-cut scope.
 
 ## Future Iterations
 - Validate the free-text model name at wizard time by probing the Ollama API directly (e.g. `POST /api/show`) — gives immediate feedback instead of deferring to server startup.

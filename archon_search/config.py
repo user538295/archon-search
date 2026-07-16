@@ -23,7 +23,7 @@ class ConfigError(Exception):
 
 
 _VALID_PROVIDERS: frozenset[str] = frozenset({"anthropic", "ollama", "openai"})
-_OLLAMA_BASE_URL_DEFAULT: str = "http://localhost:11434"
+OLLAMA_BASE_URL_DEFAULT: str = "http://localhost:11434"
 
 
 @dataclass
@@ -33,7 +33,7 @@ class HyDEConfig:
     timeout_seconds: float = 10.0
     max_requests_per_minute: int = 60
     provider: str = "anthropic"
-    ollama_base_url: str = _OLLAMA_BASE_URL_DEFAULT
+    ollama_base_url: str = OLLAMA_BASE_URL_DEFAULT
 
 
 @dataclass
@@ -44,7 +44,7 @@ class RAGFusionConfig:
     max_requests_per_minute: int = 60
     num_queries: int = 2
     provider: str = "anthropic"
-    ollama_base_url: str = _OLLAMA_BASE_URL_DEFAULT
+    ollama_base_url: str = OLLAMA_BASE_URL_DEFAULT
 
 
 @dataclass

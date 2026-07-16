@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import json
 import logging
 import os
 import shutil
@@ -23,7 +24,7 @@ import click
 import tomlkit
 
 from archon_search._durable_io import atomic_write_bytes
-from archon_search.config import SearchConfig, get_default_config_path, load_config
+from archon_search.config import OLLAMA_BASE_URL_DEFAULT, SearchConfig, get_default_config_path, load_config
 from archon_search.key_manager import get_key_file, load_or_generate_key
 from archon_search.paths import get_data_dir
 from archon_search.pipeline import create_pipeline
@@ -225,6 +226,26 @@ def _profile_toml(profile_name: str, multilingual: bool, features: WizardFeature
     return tomlkit.dumps(doc)
 
 
+def _reconcile_ollama_base_url(section: tomlkit.items.Table, base_url: str) -> None:
+    """Set or clear ``ollama_base_url`` on a config *section* table.
+
+    The wizard mutates an existing config on re-run, so a plain conditional write
+    would leak a previously-saved custom URL when the operator keeps Ollama but
+    reverts the URL to the default (``base_url == ""``). Writing authoritatively —
+    set a custom value, else delete any stale key so config falls back to
+    ``OLLAMA_BASE_URL_DEFAULT`` — keeps the stored URL in step with that choice.
+
+    Scope: this only runs while the section's provider is still Ollama. Clearing a
+    stale Ollama block when the operator switches provider *away* (e.g. back to
+    Anthropic) is broader re-run hygiene tracked separately in
+    ``Documentation/Backlog/2026-07-15-140-wizard-rerun-stale-config-brief.md``.
+    """
+    if base_url:
+        section["ollama_base_url"] = base_url
+    elif "ollama_base_url" in section:
+        del section["ollama_base_url"]
+
+
 def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFeatures) -> None:
     """Write non-default WizardFeatures fields to *doc* in-place.
 
@@ -304,8 +325,8 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
             # config.py's "if not model: raise ConfigError" guard fires at startup
             # when the operator left the model prompt blank.
             doc["hyde"]["model"] = features.hyde_model
-            if features.hyde_provider == "ollama" and features.hyde_ollama_base_url:
-                doc["hyde"]["ollama_base_url"] = features.hyde_ollama_base_url
+            if features.hyde_provider == "ollama":
+                _reconcile_ollama_base_url(doc["hyde"], features.hyde_ollama_base_url)
 
     if features.enable_rag_fusion:
         _ensure_section("rag_fusion")
@@ -315,8 +336,8 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
             # Always write model for non-Anthropic providers (even empty string) so
             # config.py's "if not model: raise ConfigError" guard fires at startup.
             doc["rag_fusion"]["model"] = features.rag_fusion_model
-            if features.rag_fusion_provider == "ollama" and features.rag_fusion_ollama_base_url:
-                doc["rag_fusion"]["ollama_base_url"] = features.rag_fusion_ollama_base_url
+            if features.rag_fusion_provider == "ollama":
+                _reconcile_ollama_base_url(doc["rag_fusion"], features.rag_fusion_ollama_base_url)
 
     # BE-11: [graph] enabled must be written whenever the [graph] extras were
     # auto-installed, or the install is inert — see C1-I-1 / C1-A-4.
@@ -933,6 +954,99 @@ def _select_profile(
     raise SystemExit(1)  # unreachable, satisfies type checker
 
 
+_OLLAMA_FETCH_TIMEOUT_SECONDS = 5
+
+
+def _fetch_ollama_models(base_url: str) -> list[str]:
+    """Fetch installed model names from an Ollama server's ``/api/tags`` endpoint.
+
+    Returns a sorted list of model names, or ``[]`` on any failure — connection
+    refused, timeout, HTTP error, malformed JSON, or zero models installed.
+    Never raises: the wizard falls back to free-text entry on an empty list.
+    """
+    url = base_url.rstrip("/") + "/api/tags"
+    try:
+        with urllib.request.urlopen(url, timeout=_OLLAMA_FETCH_TIMEOUT_SECONDS) as resp:  # noqa: S310 (operator-supplied Ollama URL)
+            payload = json.loads(resp.read())
+    except Exception:  # noqa: BLE001 — best-effort probe; any failure (incl. http.client.IncompleteRead on a truncated body) → free-text fallback
+        return []
+    models = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(models, list):
+        return []
+    # Guard on str: a malformed entry like {"name": 123} would make sorted() raise
+    # TypeError (unorderable mixed types) — which must not escape this function.
+    names = [n for m in models if isinstance(m, dict) and isinstance(n := m.get("name"), str) and n]
+    return sorted(names)
+
+
+def _pick_ollama_model(models: list[str]) -> str:
+    """Show a numbered menu of ``models`` and return the chosen name.
+
+    One retry on an out-of-range or non-numeric entry; returns ``""`` on EOF or
+    after a second invalid entry (server startup then rejects the empty model).
+    """
+    print("\nInstalled Ollama models:")
+    for i, name in enumerate(models, start=1):
+        print(f"  {i}. {name}")
+    for attempt in range(2):
+        try:
+            raw = input(f"Select a model by number [1-{len(models)}]: ").strip()
+        except EOFError:
+            return ""
+        if raw.isdigit() and 1 <= int(raw) <= len(models):
+            return models[int(raw) - 1]
+        if attempt == 0:
+            print(f"  Enter a number between 1 and {len(models)}.")
+    return ""
+
+
+def _prompt_model_freetext(feature_label: str) -> str:
+    """Free-text model-name prompt with one retry; ``""`` on EOF or exhaustion."""
+    for attempt in range(2):
+        try:
+            m = input(f"Model name for {feature_label} (required for non-Anthropic providers): ").strip()
+        except EOFError:
+            return ""
+        if m:
+            return m
+        if attempt == 0:
+            print("  Model name is required for non-Anthropic providers.")
+    return ""
+
+
+def _prompt_ollama_model(feature_label: str, default_base_url: str) -> tuple[str, str]:
+    """Prompt for the Ollama base URL, then pick a model from the installed list.
+
+    Base URL is asked first (needed to fetch the model list); an empty answer
+    keeps ``default_base_url``. When models are found the user picks by number;
+    when the server is unreachable or has none, the wizard explains why and
+    falls back to free-text entry.
+
+    Returns ``(ollama_base_url, model)``. ``ollama_base_url`` is ``""`` when it
+    resolves to the built-in default (config supplies it), otherwise the custom
+    URL so it survives config regeneration.
+    """
+    try:
+        raw_url = input(f"Ollama base URL for {feature_label} [{default_base_url}]: ").strip()
+    except EOFError:
+        raw_url = ""
+    base_url = raw_url or default_base_url
+    stored = "" if base_url == OLLAMA_BASE_URL_DEFAULT else base_url
+
+    models = _fetch_ollama_models(base_url)
+    if models:
+        return stored, _pick_ollama_model(models)
+
+    print(
+        f"  No models available from {base_url}.\n"
+        f"  Ollama may not be running there, the address may be wrong, or no models are "
+        f'installed yet. If it is running, install one with "ollama pull <model-name>" and\n'
+        f"  re-run the wizard to pick from the list.\n"
+        f"  Falling back to manual model-name entry."
+    )
+    return stored, _prompt_model_freetext(feature_label)
+
+
 def _prompt_optional_features(
     non_interactive: bool,
     profile: InstallProfile,
@@ -947,11 +1061,15 @@ def _prompt_optional_features(
     log_to_stderr: bool | None = None,
     enable_hyde: bool | None = None,
     enable_rag_fusion: bool | None = None,
+    hyde_ollama_base_url_default: str = OLLAMA_BASE_URL_DEFAULT,
+    rag_fusion_ollama_base_url_default: str = OLLAMA_BASE_URL_DEFAULT,
 ) -> WizardFeatures:
     """Ask seven optional-feature questions after profile selection.
 
     Each keyword argument pre-answers its question when not None; None triggers
-    an interactive prompt (or the default in non-interactive mode).
+    an interactive prompt (or the default in non-interactive mode). The
+    ``*_ollama_base_url_default`` values pre-fill the Ollama base-URL prompt so a
+    re-run keeps the address already saved in config with a single Enter.
     """
 
     def _ask_yn(prompt_text: str, default: bool = False) -> bool:
@@ -1140,57 +1258,33 @@ def _prompt_optional_features(
             _enable_hyde_val = True
             _enable_rag_fusion_val = True
 
-            # Provider selection for HyDE
+            # Provider selection for HyDE. For Ollama the base URL is asked first
+            # (needed to fetch the installed-model list), then a numbered picker;
+            # OpenAI keeps free-text model entry.
             _hyde_provider_val = _ask_choice(
                 "Which provider for HyDE? (anthropic/openai/ollama) [anthropic]: ",
                 valid={"anthropic", "openai", "ollama"},
                 default="anthropic",
             )
-            if _hyde_provider_val != "anthropic":
-                for _attempt in range(2):
-                    try:
-                        _m = input("Model name for HyDE (required for non-Anthropic providers): ").strip()
-                    except EOFError:
-                        _m = ""
-                        break
-                    if _m:
-                        _hyde_model_val = _m
-                        break
-                    if _attempt == 0:
-                        print("  Model name is required for non-Anthropic providers.")
             if _hyde_provider_val == "ollama":
-                try:
-                    _hyde_ollama_base_url_val = input(
-                        "Ollama base URL for HyDE [http://localhost:11434]: "
-                    ).strip()
-                except EOFError:
-                    _hyde_ollama_base_url_val = ""
+                _hyde_ollama_base_url_val, _hyde_model_val = _prompt_ollama_model(
+                    "HyDE", hyde_ollama_base_url_default
+                )
+            elif _hyde_provider_val == "openai":
+                _hyde_model_val = _prompt_model_freetext("HyDE")
 
-            # Provider selection for RAG Fusion
+            # Provider selection for RAG Fusion (same flow, independent picker).
             _rag_fusion_provider_val = _ask_choice(
                 "Which provider for RAG Fusion? (anthropic/openai/ollama) [anthropic]: ",
                 valid={"anthropic", "openai", "ollama"},
                 default="anthropic",
             )
-            if _rag_fusion_provider_val != "anthropic":
-                for _attempt in range(2):
-                    try:
-                        _m = input("Model name for RAG Fusion (required for non-Anthropic providers): ").strip()
-                    except EOFError:
-                        _m = ""
-                        break
-                    if _m:
-                        _rag_fusion_model_val = _m
-                        break
-                    if _attempt == 0:
-                        print("  Model name is required for non-Anthropic providers.")
             if _rag_fusion_provider_val == "ollama":
-                try:
-                    _rag_fusion_ollama_base_url_val = input(
-                        "Ollama base URL for RAG Fusion [http://localhost:11434]: "
-                    ).strip()
-                except EOFError:
-                    _rag_fusion_ollama_base_url_val = ""
+                _rag_fusion_ollama_base_url_val, _rag_fusion_model_val = _prompt_ollama_model(
+                    "RAG Fusion", rag_fusion_ollama_base_url_default
+                )
+            elif _rag_fusion_provider_val == "openai":
+                _rag_fusion_model_val = _prompt_model_freetext("RAG Fusion")
         else:
             _enable_hyde_val = False
             _enable_rag_fusion_val = False
@@ -1737,6 +1831,8 @@ class SearchInstaller:
                 log_to_stderr=log_to_stderr if log_to_stderr else None,
                 enable_hyde=enable_hyde if enable_hyde else None,
                 enable_rag_fusion=enable_rag_fusion if enable_rag_fusion else None,
+                hyde_ollama_base_url_default=self.cfg.hyde.ollama_base_url,
+                rag_fusion_ollama_base_url_default=self.cfg.rag_fusion.ollama_base_url,
             )
 
             # Step 3d: overlay C15 Tier 1 flag values onto features
