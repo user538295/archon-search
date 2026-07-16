@@ -19,6 +19,7 @@ Covers:
 - #unit_test test_stale_job_id_cleared_and_proceeds
 - #unit_test test_task_clears_job_id_on_every_terminal_exit
 - #integration_test test_crash_recovery_unwedges_via_lazy_clear
+- #integration_test test_user_request_during_gc_rebuild_returns_202_then_blocks (BE-7, S15)
 """
 from __future__ import annotations
 
@@ -567,3 +568,116 @@ def test_crash_recovery_unwedges_via_lazy_clear(tmp_path: Path, monkeypatch: pyt
 
         reloaded = asyncio.run(search_store.get_collection_meta("testcol", namespace="default"))
         assert reloaded.community_rebuild_job_id != crashed_job.job_id
+
+
+# ---------------------------------------------------------------------------
+# BE-7 (S15) — a GC rebuild holding the shared module-level rebuild lock (no
+# community_rebuild_job_id set, since MaintenanceLoop's GC path never sets it)
+# -> a user POST still returns 202 immediately, and its task only reaches DONE
+# after the GC-held lock is released. Accepted trade-off (Mo4): 202-then-block,
+# not a fast 409 reject -- but no corruption (both complete cleanly).
+# ---------------------------------------------------------------------------
+
+
+def test_user_request_during_gc_rebuild_returns_202_then_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A GC rebuild holds the shared (ns, collection) rebuild lock directly
+    (standing in for MaintenanceLoop._rebuild_communities_async mid-build,
+    which sets no community_rebuild_job_id -- only the route does, for its
+    own 409 guard). A user POST arriving while the lock is held:
+    - passes the 409 guard (no community_rebuild_job_id is set) and returns
+      202 immediately (BE-2's job creation/transition never touches the
+      rebuild lock -- only the spawned task's CommunityBuilder.build() call
+      does).
+    - its background task then blocks inside CommunityBuilder.build() on the
+      shared module-level lock until the GC holder releases it.
+    - once released, the task proceeds and the job reaches DONE -- proving
+      the two never write the community table concurrently (no corruption).
+
+    The GC-lock-holder coroutine runs on the app's OWN event loop (via the
+    TestClient's blocking portal, ``client.portal``) so it acquires the SAME
+    lock object ``CommunityBuilder.build`` resolves inside the request's
+    spawned task -- exactly mirroring production, where MaintenanceLoop's
+    task and the route's spawned task are two independent asyncio tasks on
+    one shared event loop.
+    """
+    pytest.importorskip("leidenalg", reason="leidenalg not installed; skipping BE-7 S15 integration test")
+    from archon_search.community_builder import _get_rebuild_lock, _rebuild_locks
+    from archon_search.types import JobStatus
+
+    _install_spacy_stub(monkeypatch)
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        asyncio.run(_seed_collection(cfg.db_path, "testcol"))
+        asyncio.run(_seed_graph_node(cfg.db_path, "testcol", "default", "concept:alpha"))
+
+        _rebuild_locks.clear()
+        portal = client.portal
+
+        release_event = asyncio.Event()
+        held_event = asyncio.Event()
+        events: list[str] = []
+
+        async def _hold_gc_lock() -> None:
+            """Stand in for MaintenanceLoop._rebuild_communities_async holding
+            the shared (ns, collection) lock -- WITHOUT touching
+            CollectionMeta.community_rebuild_job_id, exactly like the real
+            GC path (which never sets it)."""
+            lock = _get_rebuild_lock("default", "testcol")
+            async with lock:
+                events.append("gc-start")
+                held_event.set()
+                await release_event.wait()
+                events.append("gc-end")
+
+        # Start the GC-rebuild stand-in on the app's own event loop so it
+        # acquires the SAME lock instance CommunityBuilder.build() resolves
+        # from the shared module-level registry inside the request's task.
+        gc_future = portal.start_task_soon(_hold_gc_lock)
+        portal.call(held_event.wait)
+
+        # Outer try/finally guarantees the module-global registry is cleared
+        # on exit (pass or fail) so a loop-bound lock never leaks into
+        # sibling tests on the same xdist worker. The GC-holder coroutine
+        # must be released and awaited BEFORE clearing the registry, hence
+        # the existing lock-release finally stays nested inside this one.
+        try:
+            try:
+                # community_rebuild_job_id is NOT set (GC path never sets it) --
+                # the user request must pass the 409 guard and return 202.
+                resp = client.post("/graph/testcol/rebuild-communities", headers=_auth(api_key))
+                events.append("route-202")
+                assert resp.status_code == 202
+                job_id = resp.json()["job_id"]
+                assert resp.json()["status"] == "RUNNING"
+
+                # The task is now blocked inside CommunityBuilder.build() waiting
+                # on the lock the GC stand-in holds -- it must NOT reach a
+                # terminal state while the lock is still held.
+                job_store = client.app.state.job_store
+                still_running = job_store.get(job_id)
+                assert still_running.status == JobStatus.RUNNING, (
+                    "user rebuild task completed before the GC-held lock was "
+                    "released -- it should have been blocked on the shared lock"
+                )
+            finally:
+                # Release the GC-held lock; the user's task can now proceed.
+                portal.call(release_event.set)
+                portal.call(gc_future.result)
+
+            done = _poll_job(client, job_id, api_key, timeout_s=10.0)
+            assert done["status"] == "DONE"
+            assert done["result"] == {"communities_built": 1}
+
+            # "route-202" happened while the GC lock was still held (gc-start
+            # already recorded, gc-end not yet) -- proving the request was
+            # accepted (not 409) DURING the GC rebuild, and only the underlying
+            # task's completion was delayed until gc-end (no corruption: exactly
+            # one community was written, not a partial/doubled concurrent write).
+            assert events.index("gc-start") < events.index("route-202") < events.index("gc-end")
+
+            search_store = client.app.state.search_store
+            reloaded_meta = asyncio.run(search_store.get_collection_meta("testcol", namespace="default"))
+            assert reloaded_meta.community_rebuild_job_id is None
+        finally:
+            _rebuild_locks.clear()

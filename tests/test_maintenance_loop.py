@@ -1018,3 +1018,189 @@ async def test_stale_mention_count_is_sum_across_collections(tmp_path: Path) -> 
 
     # Should sum to 6 (3 + 3)
     assert loaded.get("stale_mention_count") == 6
+
+
+# ---------------------------------------------------------------------------
+# BE-7 (S12/S15) — MaintenanceLoop._rebuild_communities_async serialises with
+# the route path via the shared module-level rebuild-lock registry.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=False)
+def _clear_rebuild_locks():
+    """Reset the module-level registry so this test doesn't leak locks."""
+    from archon_search.community_builder import _rebuild_locks
+
+    _rebuild_locks.clear()
+    yield
+    _rebuild_locks.clear()
+
+
+@pytest.mark.asyncio
+async def test_maintenance_loop_uses_shared_rebuild_lock(tmp_path: Path, _clear_rebuild_locks) -> None:
+    """BE-7/S12: the GC path's fresh CommunityBuilder serialises against the
+    route path's fresh CommunityBuilder via the shared module-level registry.
+
+    ``MaintenanceLoop._rebuild_communities_async`` constructs its own
+    ``CommunityBuilder`` and calls ``build()`` with no separate lock of its
+    own (verified: the method acquires no lock before calling
+    ``builder.build()``). This test proves that call and a second,
+    independently-constructed ``CommunityBuilder.build()`` call (standing in
+    for the REST route's task) resolve the SAME lock object for the same
+    ``(ns, collection)`` key and therefore serialise -- would fail (interleave)
+    against a per-instance lock design.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from archon_search.community_builder import CommunityBuilder
+    from archon_search.config import GraphConfig
+    from archon_search.graph_types import EntityType, GraphNode
+
+    ns = "default"
+    col = "shared-col"
+    events: list[str] = []
+
+    def make_node(node_id: str) -> GraphNode:
+        return GraphNode(
+            id=node_id,
+            entity_name=node_id,
+            entity_type=EntityType.concept,
+            source_doc_id="doc-1",
+            collection_name=col,
+        )
+
+    def make_graph_store(delay: float, label: str):
+        store = MagicMock()
+
+        async def _get_all_nodes(*args, **kwargs):
+            events.append(f"{label}-start")
+            if delay:
+                await asyncio.sleep(delay)
+            events.append(f"{label}-end")
+            # Single node: _build_locked's < 2 short-circuit still calls
+            # get_all_nodes and write_communities (inside the lock), but
+            # never touches get_all_edges or the real-Leiden path -- so this
+            # test doesn't require the optional leidenalg extra.
+            return [make_node("a")]
+
+        store.get_all_nodes = _get_all_nodes
+        store.get_all_edges = AsyncMock(return_value=[])
+        store.write_communities = AsyncMock(return_value=None)
+        return store
+
+    graph_config = GraphConfig()
+
+    # GC path: drive MaintenanceLoop._rebuild_communities_async exactly as
+    # _spawn_rebuild_task does -- it constructs its own fresh CommunityBuilder
+    # internally from loop._graph_store / loop._graph_config / loop._search_store.
+    gc_loop = MaintenanceLoop(
+        job_store=MagicMock(),
+        search_store=MagicMock(),
+        config=MaintenanceConfig(interval_hours=0),
+        data_dir=tmp_path,
+    )
+    gc_loop._graph_store = make_graph_store(0.05, "gc")
+    gc_loop._graph_config = graph_config
+    # No search_store needed for MMR representative-chunk selection in this
+    # test (CommunityBuilder treats None as "skip MMR, return no candidates").
+    gc_loop._search_store = None
+
+    # Route path stand-in: a second, wholly independent CommunityBuilder
+    # instance (mirrors _community_rebuild_task constructing its own). Both
+    # sides use a non-trivial delay so that, absent a shared lock, the two
+    # builds would provably interleave (see negative control below).
+    route_store = make_graph_store(0.05, "route")
+    route_builder = CommunityBuilder(route_store, graph_config)
+
+    await asyncio.gather(
+        gc_loop._rebuild_communities_async(ns, col),
+        route_builder.build(col, ns=ns),
+    )
+
+    # Both builds must have actually run to completion (start+end each) --
+    # otherwise a build that raised early inside the lock could vacuously
+    # satisfy the non-interleaving check below.
+    assert len(events) == 4, f"expected both builds to emit start+end markers: {events}"
+    assert gc_loop._graph_store.write_communities.await_count == 1
+    assert route_store.write_communities.await_count == 1
+
+    # Serialised execution: one build's start+end must both appear before the
+    # other build's start -- no interleaving of "start"/"end" markers.
+    gc_start = events.index("gc-start")
+    gc_end = events.index("gc-end")
+    route_start = events.index("route-start")
+    route_end = events.index("route-end")
+
+    assert (gc_end < route_start) or (route_end < gc_start), (
+        f"GC-path and route-path builds interleaved instead of serialising: {events}"
+    )
+
+    # --- Negative control (proves the assertion above has teeth) -----------
+    # Re-run the same two concurrent builds, but defeat the shared-lock
+    # registry by making _get_rebuild_lock hand out a BRAND-NEW asyncio.Lock
+    # on every call -- so the two builds resolve DISTINCT locks and cannot
+    # serialise against each other. With both delays at 0.05, the two
+    # _get_all_nodes coroutines both append "-start", both sleep, then both
+    # append "-end": a genuinely interleaved sequence. If this negative run
+    # did NOT interleave, the positive assertion above would be meaningless
+    # (it could pass by scheduling luck rather than by real serialisation).
+    from archon_search.community_builder import _rebuild_locks
+
+    _rebuild_locks.clear()
+    neg_events: list[str] = []
+
+    def make_neg_graph_store(delay: float, label: str):
+        store = MagicMock()
+
+        async def _get_all_nodes(*args, **kwargs):
+            neg_events.append(f"{label}-start")
+            if delay:
+                await asyncio.sleep(delay)
+            neg_events.append(f"{label}-end")
+            return [make_node("a")]
+
+        store.get_all_nodes = _get_all_nodes
+        store.get_all_edges = AsyncMock(return_value=[])
+        store.write_communities = AsyncMock(return_value=None)
+        return store
+
+    neg_gc_loop = MaintenanceLoop(
+        job_store=MagicMock(),
+        search_store=MagicMock(),
+        config=MaintenanceConfig(interval_hours=0),
+        data_dir=tmp_path,
+    )
+    # Distinct delays (not equal) so the interleave proof rests on STRUCTURE,
+    # not on CPython's FIFO wake-ordering of two equal timers: with distinct
+    # locks neither racer blocks on acquire, so both reach their "-start"
+    # marker before either sleeps out to "-end" regardless of sleep lengths.
+    neg_gc_loop._graph_store = make_neg_graph_store(0.05, "gc")
+    neg_gc_loop._graph_config = graph_config
+    neg_gc_loop._search_store = None
+
+    neg_route_store = make_neg_graph_store(0.15, "route")
+    neg_route_builder = CommunityBuilder(neg_route_store, graph_config)
+
+    with patch(
+        "archon_search.community_builder._get_rebuild_lock",
+        side_effect=lambda ns, collection: asyncio.Lock(),
+    ):
+        await asyncio.gather(
+            neg_gc_loop._rebuild_communities_async(ns, col),
+            neg_route_builder.build(col, ns=ns),
+        )
+
+    _rebuild_locks.clear()
+
+    neg_gc_start = neg_events.index("gc-start")
+    neg_gc_end = neg_events.index("gc-end")
+    neg_route_start = neg_events.index("route-start")
+    neg_route_end = neg_events.index("route-end")
+
+    # Structural interleave proof: with distinct locks BOTH builds enter (emit
+    # their "-start") before EITHER completes (emits any "-end"). This holds
+    # for any delays and does not depend on equal-timer wake ordering.
+    assert max(neg_gc_start, neg_route_start) < min(neg_gc_end, neg_route_end), (
+        f"negative control expected interleaving (distinct locks defeat "
+        f"serialisation) but markers did not interleave: {neg_events}"
+    )

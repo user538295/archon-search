@@ -129,7 +129,7 @@ flowchart LR
         - #unit_test — `test_rebuild_lock_independent_of_ingest_lock` — the rebuild lock and `SearchStore.lock_for` never contend; a rebuild does not block ingest (S9)
         - #unit_test — `test_rebuild_lock_created_lazily_in_running_loop` — the per-key lock is created on first access, not at import, avoiding cross-loop binding (C2-2)
         - #unit_test — `test_different_namespaces_do_not_serialise` — different `(ns, collection)` keys acquire independent locks (S11 lock-keying note)
-- [ ] **BE-7** — Route `MaintenanceLoop._rebuild_communities_async` through the shared lock (it already calls `build()` on its own fresh `CommunityBuilder`; confirm it acquires no separate lock and now serialises via the registry), closing the GC-vs-user race and accepting the `202`-then-block trade-off (Mo4) #backend-role
+- [x] **BE-7** — Route `MaintenanceLoop._rebuild_communities_async` through the shared lock (it already calls `build()` on its own fresh `CommunityBuilder`; confirm it acquires no separate lock and now serialises via the registry), closing the GC-vs-user race and accepting the `202`-then-block trade-off (Mo4) #backend-role
     - Use Cases · 2.0h
     - needs BE-6, BE-5 · completes S15
     - Tests
