@@ -1,6 +1,7 @@
 """Tests for _write_profile_config, _profile_toml, and configure_providers durable-write fix."""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -317,6 +318,19 @@ class TestApplyWizardFeaturesToToml:
         assert len(doc) == 0
         doc_str = tomlkit.dumps(doc)
         assert "install_code_extra" not in doc_str
+
+    def test_apply_install_multilingual_extra_not_written_to_toml(self) -> None:
+        """WizardFeatures(install_multilingual_extra=True) writes no key — it controls a subprocess install.
+
+        The multilingual state the server reads is [database].multilingual, written
+        separately from the profile. The install flag itself is not a config key.
+        """
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(install_multilingual_extra=True))
+        assert len(doc) == 0
+        assert "install_multilingual_extra" not in tomlkit.dumps(doc)
 
     # --- Task C15-1.2 tests ---
 
@@ -644,3 +658,61 @@ class TestLoadConfigAfterWriteWithFeatures:
         # Profile fields still correct
         assert cfg.embedding_model == profile.embedder
         assert cfg.profile == "balanced"
+
+
+class TestRevertMultilingualFlag:
+    """Unit tests for _revert_multilingual_flag() — mirrors _revert_graph_enabled_flag."""
+
+    def test_reverts_multilingual_true_to_false(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """A config with [database].multilingual=true is rewritten to false."""
+        from archon_search.install import _revert_multilingual_flag
+
+        config_path = tmp_path / "archon-search.toml"
+        config_path.write_text("[database]\nmultilingual = true\n")
+        _revert_multilingual_flag(config_path, dry_run=False)
+        doc = tomlkit.parse(config_path.read_text())
+        assert doc["database"]["multilingual"] is False
+
+        captured = capsys.readouterr()
+        assert "multilingual" in captured.err.lower()
+        assert "revert" in captured.err.lower()
+        assert "english-only" in captured.err.lower()
+
+    def test_dry_run_is_noop(self, tmp_path: Path) -> None:
+        """dry_run=True must not touch the file."""
+        from archon_search.install import _revert_multilingual_flag
+
+        config_path = tmp_path / "archon-search.toml"
+        config_path.write_text("[database]\nmultilingual = true\n")
+        _revert_multilingual_flag(config_path, dry_run=True)
+        doc = tomlkit.parse(config_path.read_text())
+        assert doc["database"]["multilingual"] is True
+
+    def test_missing_config_is_noop(self, tmp_path: Path) -> None:
+        """Absent config file must not raise."""
+        from archon_search.install import _revert_multilingual_flag
+
+        config_path = tmp_path / "does-not-exist.toml"
+        _revert_multilingual_flag(config_path, dry_run=False)  # must not raise
+        assert not config_path.exists()
+
+    def test_revert_flips_crashing_config_to_startable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reverting multilingual=true turns a crash-at-startup config into a startable one."""
+        from archon_search.install import _revert_multilingual_flag
+        from archon_search.server.app import _check_multilingual_deps
+
+        config_path = tmp_path / "archon-search.toml"
+        config_path.write_text("[database]\nmultilingual = true\n")
+
+        # Simulate fasttext-wheel absent: `import fasttext` raises ImportError.
+        monkeypatch.setitem(sys.modules, "fasttext", None)
+
+        with pytest.raises(RuntimeError):
+            _check_multilingual_deps(load_config(config_path))
+
+        _revert_multilingual_flag(config_path, dry_run=False)
+
+        # No exception — multilingual=false is a no-op for the dependency check.
+        _check_multilingual_deps(load_config(config_path))

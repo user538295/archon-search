@@ -26,6 +26,9 @@ from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
 
+# anthropic is stubbed for all integration tests by the autouse fixture in
+# tests/integration/conftest.py (create_app's provider guard imports it).
+
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -322,8 +322,39 @@ def list_subcommand(
 # ---------------------------------------------------------------------------
 
 
+def _lookup_key_label(base_url: str, headers: dict[str, str], key_id: str) -> str | None:
+    """Best-effort fetch of a key's label for the confirmation prompt.
+
+    Returns the label if the key is found and has one, else ``None``.  Never
+    raises: a network error, non-200 response, invalid JSON, missing key, or
+    absent label all fall back to ``None`` so the caller prompts with the raw
+    ID.  ``status=all`` is used so revoked keys are still matched.
+    """
+    try:
+        with httpx.Client() as client:
+            resp = client.get(
+                f"{base_url}/keys", headers=headers, params={"status": "all"}
+            )
+        if resp.status_code != 200:
+            return None
+        for record in resp.json().get("keys", []):
+            if record.get("id") == key_id:
+                return record.get("label") or None
+    except (httpx.HTTPError, ValueError):
+        return None
+    return None
+
+
 @key_cmd.command("revoke")
 @click.argument("key_id")
+@click.option(
+    "--yes",
+    "-y",
+    "assume_yes",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt (for non-interactive/scripted use).",
+)
 @click.option(
     "--api-url",
     default=_DEFAULT_API_URL,
@@ -335,9 +366,13 @@ def list_subcommand(
     default=None,
     help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
 )
-def revoke_subcommand(key_id: str, api_url: str, api_key: str | None) -> None:
+def revoke_subcommand(
+    key_id: str, assume_yes: bool, api_url: str, api_key: str | None
+) -> None:
     """Revoke a managed API key immediately.
 
+    Prompts for confirmation before deleting (showing the key's label when it
+    can be looked up).  Pass ``--yes``/``-y`` to skip the prompt in scripts.
     Idempotent: revoking an already-revoked key returns success.
     """
     try:
@@ -347,7 +382,19 @@ def revoke_subcommand(key_id: str, api_url: str, api_key: str | None) -> None:
         raise SystemExit(1) from exc
 
     headers = {"Authorization": f"Bearer {key}"}
-    url = f"{api_url.rstrip('/')}/keys/{key_id}"
+    base_url = api_url.rstrip("/")
+
+    if not assume_yes:
+        label = _lookup_key_label(base_url, headers, key_id)
+        target = f'"{label}" (id: {key_id})' if label else key_id
+        # Plain confirm (not abort=True): an interactive "no" returns False and
+        # exits 0; a non-interactive stdin (pipe/CI) raises Abort on EOF and
+        # exits non-zero, so silent revocation in automation still fails.
+        if not click.confirm(f"Revoke key {target}? This cannot be undone."):
+            click.echo("Aborted.")
+            return
+
+    url = f"{base_url}/keys/{key_id}"
 
     try:
         with httpx.Client() as client:

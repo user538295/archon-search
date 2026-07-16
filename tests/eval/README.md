@@ -228,7 +228,7 @@ Live latency numbers are measured on ephemeral GitHub Actions runners under shar
 
 ## Live benchmark lane (C16)
 
-The `live_benchmark` pytest marker runs two hard-gated latency benchmarks using **real fastembed BAAI/bge-small-en-v1.5 and Xenova/ms-marco-MiniLM-L-6-v2 ONNX models** on every PR. This is the only marker excluded from the default `uv run pytest` run — see below.
+The `live_benchmark` pytest marker runs two hard-gated latency benchmarks using **real fastembed BAAI/bge-small-en-v1.5 and Xenova/ms-marco-MiniLM-L-6-v2 ONNX models** on every PR. `live_benchmark` and `smoke` are the only two markers excluded from the default `uv run pytest` run — see below.
 
 ### Directory structure
 

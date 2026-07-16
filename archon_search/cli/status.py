@@ -84,6 +84,24 @@ def _print_failed_expired_count(server_payload: dict[str, Any]) -> None:
         )
 
 
+def _print_collections(server_payload: dict[str, Any]) -> None:
+    """Render each collection's name, cached doc_count, and path from GET /status.
+
+    Printed before the ``telemetry is None`` early-return so it still shows when
+    telemetry is disabled (the default). An empty path (no matching config entry)
+    is rendered as ``(no configured path)`` rather than a blank tail.
+    """
+    collections = server_payload.get("collections") or []
+    if not collections:
+        return
+    click.echo("\nCollections:")
+    for col in collections:
+        name = col.get("name", "")
+        doc_count = col.get("doc_count", 0)
+        path = col.get("path") or "(no configured path)"
+        click.echo(f"  {name}: {doc_count} document(s) — {path}")
+
+
 def _print_telemetry_status(telemetry: dict[str, Any]) -> None:
     """Render the telemetry sub-object from GET /status."""
     enabled = telemetry.get("enabled", False)
@@ -162,6 +180,7 @@ def status(api_url: str, api_key: str | None) -> None:
     _print_expansion_key_warnings(server_payload)
     _print_failed_expired_count(server_payload)
     _print_graph_gc_status(server_payload)
+    _print_collections(server_payload)
 
     telemetry = server_payload.get("telemetry")
     if telemetry is None:

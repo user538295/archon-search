@@ -24,6 +24,10 @@ def _make_search_config(tmp_path: Path) -> object:
     from dataclasses import dataclass, field
 
     @dataclass
+    class FakeProviderConfig:
+        ollama_base_url: str = "http://localhost:11434"
+
+    @dataclass
     class FakeSearchConfig:
         enabled: bool = True
         host: str = "localhost"
@@ -39,6 +43,9 @@ def _make_search_config(tmp_path: Path) -> object:
         pinned_collections: list[str] = field(default_factory=lambda: ["/pinned/docs"])
         auto_reindex_on_chunk_size_change: bool = True
         max_parallel_collections: int = 3
+        # G10 Ollama picker: run() threads these into the wizard's base-URL prompt.
+        hyde: FakeProviderConfig = field(default_factory=FakeProviderConfig)
+        rag_fusion: FakeProviderConfig = field(default_factory=FakeProviderConfig)
 
     return FakeSearchConfig()
 
@@ -657,6 +664,46 @@ class TestRun:
         assert result == 0
         assert "[4/5]" in captured.out
         assert "[5/5]" in captured.out
+
+    def test_run_threads_config_ollama_base_url_into_wizard(self, tmp_path: Path) -> None:
+        """run() must thread the saved config Ollama base URLs into the wizard prompt (C1-I-46).
+
+        This is the re-run prefill wiring: on a reconfigure, the base-URL prompt should
+        pre-fill the address already in config so the operator keeps it with one Enter.
+        """
+        from archon_search.install import WizardFeatures
+
+        installer = _make_installer(tmp_path)
+        installer.cfg.hyde.ollama_base_url = "http://saved-hyde:11434"
+        installer.cfg.rag_fusion.ollama_base_url = "http://saved-rag:11434"
+        config_path = Path(installer.config_file)
+        fake_legacy = tmp_path / "fake.plist"
+
+        captured: dict[str, object] = {}
+
+        def _capture(*_args: object, **kwargs: object) -> WizardFeatures:
+            captured.update(kwargs)
+            return WizardFeatures()
+
+        with patch("archon_search.install._prompt_optional_features", side_effect=_capture), \
+             patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install._remove_legacy_service"), \
+             patch("archon_search.install._prewarm_models"), \
+             patch("archon_search.install._check_disk_space"), \
+             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+             patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
+             patch.object(installer, "validate_providers", return_value=False), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_wait_for_service", return_value=True), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
+
+        assert result == 0
+        assert captured["hyde_ollama_base_url_default"] == "http://saved-hyde:11434"
+        assert captured["rag_fusion_ollama_base_url_default"] == "http://saved-rag:11434"
 
     def test_run_prints_validating_message_for_apple_silicon(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """For METAL GPU with validate_providers=True, CoreML appears in providers summary."""

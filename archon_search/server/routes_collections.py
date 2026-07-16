@@ -104,12 +104,26 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
             continue
         status = _collection_status(config, state_store, name)
         col_meta = meta_by_name.get(name)
+        # Live count, not the maintained meta.chunk_count: the cached value drifts
+        # (delete subtracts a vector count, TTL-expiry pruning never decrements it).
+        # A metaless entry is a configured-but-not-yet-indexed collection → 0; this
+        # also avoids surfacing an orphaned table's rows to a caller that has no meta
+        # row for it. count_chunks is table-wide (its namespace arg is ignored by the
+        # store), but one collection name maps to exactly one namespace, so the count
+        # is namespace-isolated in practice.
+        chunk_count = 0
+        if col_meta is not None:
+            try:
+                chunk_count = await search_store.count_chunks(name, namespace=namespace)
+            except Exception:  # noqa: BLE001 — one bad collection must not 500 the whole list
+                chunk_count = 0
         result.append(CollectionSummary(
             name=name,
             path=resolved,
             description=(col_meta.description or "") if col_meta is not None else "",
+            # doc_count intentionally 0 — populating it here is bug-025 (out of scope).
             doc_count=0,
-            chunk_count=0,
+            chunk_count=chunk_count,
             namespace=namespace,
             status=status,
             active_embedding_model=(col_meta.active_embedding_model or config.embedding_model) if col_meta is not None else config.embedding_model,
@@ -359,11 +373,16 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
     centroid_present = bool(meta is not None and meta.centroid)
     acl_protected = 0
     acl_open = 0
+    chunk_count = 0
     if search_store is not None:
         try:
             doc_count = await search_store.count_documents(name)
         except Exception:  # noqa: BLE001
             doc_count = 0
+        try:
+            chunk_count = await search_store.count_chunks(name, namespace=ns)
+        except Exception:  # noqa: BLE001
+            chunk_count = 0
         try:
             acl_protected, acl_open = await search_store.get_acl_stats(name)
         except Exception:  # noqa: BLE001
@@ -374,7 +393,7 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
         "path": resolved,
         "description": (meta.description or "") if meta is not None else "",
         "doc_count": doc_count,
-        "chunk_count": 0,
+        "chunk_count": chunk_count,
         "status": status,
         "active_embedding_model": (meta.active_embedding_model or config.embedding_model) if meta is not None else config.embedding_model,
         "pending_embedding_model": meta.pending_embedding_model if meta is not None else None,
@@ -593,6 +612,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
         pass
 
     doc_count = 0
+    chunk_count = 0
     centroid_present = bool(meta.centroid)
     acl_protected = 0
     acl_open = 0
@@ -600,6 +620,10 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
         doc_count = await search_store.count_documents(name)
     except Exception:  # noqa: BLE001
         doc_count = 0
+    try:
+        chunk_count = await search_store.count_chunks(name, namespace=ns)
+    except Exception:  # noqa: BLE001
+        chunk_count = 0
     try:
         acl_protected, acl_open = await search_store.get_acl_stats(name)
     except Exception:  # noqa: BLE001
@@ -610,7 +634,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
         path=resolved,
         description=meta.description or "",
         doc_count=doc_count,
-        chunk_count=0,
+        chunk_count=chunk_count,
         status=status,
         active_embedding_model=meta.active_embedding_model or config.embedding_model,
         pending_embedding_model=meta.pending_embedding_model,

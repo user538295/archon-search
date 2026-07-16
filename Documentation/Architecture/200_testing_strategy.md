@@ -11,8 +11,8 @@ Tests in `archon-search` are split across four pytest markers plus a default (un
 ## Principles
 
 1. **TDD-first.** Per `CLAUDE.md` (Code Style): write tests first, start with happy paths, then edge cases. Maintain 85%+ coverage. Resolve all warnings.
-2. **Default run includes every test except `live_benchmark`.** `addopts` in `pyproject.toml` sets `-m "not live_benchmark"` — this is the one intentional marker exclusion. `live_benchmark` tests perform module-level `sys.modules` mutation to remove fastembed stubs; running them in the same process as the default suite would poison `sys.modules` for regular tests. They run in a dedicated CI step instead. All other markers (`live`, `eval`, `benchmark`, `integration`, `live_eval`) run on every `uv run pytest` and skip gracefully when the required infrastructure is absent (server-dependent benchmarks, `live`/`live_eval` tests that gate on `ANTHROPIC_API_KEY` — which the autouse fixture in `tests/conftest.py` clears on every test, so these always skip on default runs even when the developer has the key exported in their shell; no clean shell-level workaround exists, see the `live` section below for how to run them), gated eval without `--thresholds-path`. ONNX downloads and tokenizer subprocesses are stubbed in `tests/conftest.py` before pytest discovery.
-3. **Markers document intent, not exclusion — with one exception.** `live`, `eval`, `benchmark`, `integration` are registered markers used for explicit targeted runs (e.g. `uv run pytest -m integration`) but are NOT excluded from the default run. `live_benchmark` is the sole exception (see principle 2).
+2. **Default run includes every test except `live_benchmark` and `smoke`.** `addopts` in `pyproject.toml` sets `-m "not live_benchmark and not smoke"` — these are the two intentional marker exclusions. `live_benchmark` tests perform module-level `sys.modules` mutation to remove fastembed stubs; running them in the same process as the default suite would poison `sys.modules` for regular tests. `smoke` tests spawn a real `archon-search serve` subprocess and are excluded so the default suite never launches a live server. Both run in dedicated steps instead. All other markers (`live`, `eval`, `benchmark`, `integration`, `live_eval`) run on every `uv run pytest` and skip gracefully when the required infrastructure is absent (server-dependent benchmarks, `live`/`live_eval` tests that gate on `ANTHROPIC_API_KEY` — which the autouse fixture in `tests/conftest.py` clears on every test, so these always skip on default runs even when the developer has the key exported in their shell; no clean shell-level workaround exists, see the `live` section below for how to run them), gated eval without `--thresholds-path`. ONNX downloads and tokenizer subprocesses are stubbed in `tests/conftest.py` before pytest discovery.
+3. **Markers document intent, not exclusion — with two exceptions.** `live`, `eval`, `benchmark`, `integration` are registered markers used for explicit targeted runs (e.g. `uv run pytest -m integration`) but are NOT excluded from the default run. `live_benchmark` and `smoke` are the two exceptions (see principle 2).
 4. **Eval is the retrieval-quality gate, not the unit-test tier.** Retrieval, reranking, and routing changes are validated by the `eval` marker with committed thresholds in `tests/eval/thresholds.toml`. Latency in the harness is a regression guard, not a production indicator.
 5. **Coverage gating is a single-run concept.** `--cov-fail-under=85` applies to the default single-run invocation. CI that runs multiple pytest invocations must accumulate coverage into a single dataset before applying the threshold — `.github/workflows/archon-search-pr.yml` does this by passing `--cov-append` to both the default and eval steps (writing into one `.coverage` file) and then running `coverage report --fail-under=85`. `coverage combine` is only needed when shards write parallel-mode files; the current PR workflow deliberately skips it. **Never bake `--no-cov` into `addopts`.**
 
@@ -20,7 +20,7 @@ Tests in `archon-search` are split across four pytest markers plus a default (un
 
 ```mermaid
 flowchart TB
-  subgraph default[Default run — all markers included except live_benchmark]
+  subgraph default[Default run — all markers included except live_benchmark and smoke]
     U[Unit tests<br/>tests/**/test_*.py<br/>stubs from tests/_search_stubs.py]
     I[integration<br/>real components<br/>local infra]
     E[eval<br/>tests/eval/<br/>deterministic backends]
@@ -28,15 +28,17 @@ flowchart TB
     L[live / live_eval<br/>autouse clears ANTHROPIC_API_KEY<br/>always skip on default runs]
   end
   LB[live_benchmark<br/>dedicated CI step<br/>real fastembed + ONNX<br/>skips without model cache]
+  SM[smoke<br/>real subprocess server<br/>CLI + REST assertions<br/>errors without model cache]
   default --> CI[CI: coverage gate ≥ 85%]
   LB --> CI2[CI: benchmark step<br/>p95/p90 gate]
+  SM --> CI3[CI: manual/pre-release step<br/>no coverage gate]
 ```
 
 ### Default tier (unit)
 
 - Invocation: `uv run pytest`.
 - No marker selector — all tests run.
-- Parallelism: the default run uses `pytest-xdist` with `-n auto --dist=loadgroup`. `--dist=loadgroup` distributes ungrouped tests individually across workers; tests with `pytestmark = pytest.mark.xdist_group("mcp")` (16 files that mutate `sys.modules["fastmcp"]`) are co-located on one worker to prevent `sys.modules` contamination; tests with `xdist_group("install")` (3 files that compete on `~/.archon-search/.install.lock`) are co-located on another. The `connected_store` fixture is session-scoped (one `SearchStore` per xdist worker); `col_name` mints a UUID-suffixed name to prevent cross-test collision.
+- Parallelism: the default run uses `pytest-xdist` with `-n 4 --dist=loadgroup`. The worker count is deliberately capped at 4 — never raised back to `-n auto` (auto meant 14 workers on the 14-core dev machine, and on model-loading paths each worker holds ~2 GB of fastembed/onnxruntime/torch, which OOM-crashed the 48 GB machine on 2026-07-05). `--dist=loadgroup` distributes ungrouped tests individually across workers; tests with `pytestmark = pytest.mark.xdist_group("mcp")` (16 files that mutate `sys.modules["fastmcp"]`) are co-located on one worker to prevent `sys.modules` contamination; tests with `xdist_group("install")` (3 files that compete on `~/.archon-search/.install.lock`) are co-located on another. The `connected_store` fixture is session-scoped (one `SearchStore` per xdist worker); `col_name` mints a UUID-suffixed name to prevent cross-test collision.
 - Test infra: `tests/conftest.py` installs ML stubs at module import time via `_search_stubs.install_stubs()`. It also injects `ARCHON_SEARCH_API_KEY = "0" * 64` so `create_app()` always sees a known key.
 - Serial escape hatch: `uv run pytest -n0` produces identical results in serial mode. Use `-n0 -x` for fail-fast isolation (xdist workers continue until their current test finishes) and `-n0 -s` for stdout passthrough (suppressed by xdist).
 - Coverage combining: `pytest-cov` natively supports xdist. Workers write `.coverage.workerN` files which the main process combines before applying `--cov-fail-under=85`. This applies to single-invocation runs only; CI requires `-n0` to avoid interference with multi-step `--cov-append` accumulation.
@@ -109,7 +111,7 @@ Runs the eval corpus through **real fastembed + cross-encoder model weights** �
 
 ### `live_benchmark` — `uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov`
 
-CI-gated latency benchmark using **real fastembed BAAI/bge-small-en-v1.5 and Xenova/ms-marco-MiniLM-L-6-v2 ONNX models** — the production code path through fastembed and cross-encoder inference. This is the only marker **excluded from the default `addopts` run** (see principle 2).
+CI-gated latency benchmark using **real fastembed BAAI/bge-small-en-v1.5 and Xenova/ms-marco-MiniLM-L-6-v2 ONNX models** — the production code path through fastembed and cross-encoder inference. This is one of only two markers **excluded from the default `addopts` run** (see principle 2; `smoke` is the other, below).
 
 - Tests live under `tests/eval/live_benchmark/`. Two benchmark tests:
   - `test_real_model_search_steady_state_p95` — 100-iteration steady-state p95 latency for `pipeline.search()` end-to-end.
@@ -120,6 +122,19 @@ CI-gated latency benchmark using **real fastembed BAAI/bge-small-en-v1.5 and Xen
 - Thresholds in `tests/eval/live_thresholds.toml` under `[real_model_search]`. Loaded by `load_benchmark_thresholds()` from `archon_search/eval/runner.py`. Unlike `load_live_thresholds()`, this function raises `ValueError` if the section is absent — the gate always requires explicit thresholds.
 - CI step: `archon-search-pr.yml` runs `pytest -o addopts= ... -n0 -m live_benchmark` with `timeout-minutes: 3` after the integration step and before the coverage enforcement step. Uses `--no-cov` to avoid per-call coverage overhead biasing latency measurements. A `Verify benchmark tests ran` step after it parses the JUnit XML and fails if all tests were skipped (guards against a silently empty model cache).
 - See `tests/eval/README.md` (live benchmark lane section) for calibration procedure and threshold update policy.
+
+### `smoke` — `uv run pytest tests/smoke/ --no-cov`
+
+Live subprocess smoke suite that spawns a real `archon-search serve` process and drives it with real CLI subprocess invocations and real HTTP requests — the tier that catches CLI-layer and process-lifecycle bugs (slow startup, raw Python repr output, blocking behaviour) that `TestClient`-based tests structurally cannot detect. This is one of only two markers **excluded from the default `addopts` run** (see principle 2; `live_benchmark` is the other, above).
+
+- Tests live under `tests/smoke/`: `conftest.py` (session fixture), `test_cli.py` (CLI subprocess assertions), `test_conftest.py` (fixture-format and server-startup tests), `test_rest.py` (REST assertions via `httpx`).
+- **Real subprocess, not `TestClient`**: the session fixture binds a free port (port-0 socket trick, no TOCTOU), starts `subprocess.Popen(["uv", "run", "archon-search", "serve"], ...)`, polls `GET /health` then `GET /ready`, pre-seeds a tiny real collection (3 text files ingested via `POST /collections/`), and tears down with SIGTERM (10 s) escalating to SIGKILL on timeout.
+- **`xdist_group("smoke_e2e")`** is set as module-level `pytestmark` in every smoke test file, serialising all smoke tests onto one xdist worker — this prevents two workers from spawning concurrent server subprocesses against the same fixture.
+- **Timing budgets**: CLI commands (`--help`, `config show`) budget 2 s; other CLI/REST calls budget 5 s. These catch gross startup/latency regressions, not tight P99 bounds.
+- **Output-format assertions**: no `CollectionMeta(` repr, no raw embedding-vector arrays (`"[0."`), no Python stack traces in stdout/stderr/response bodies.
+- **Exclusion mechanism**: `norecursedirs = ["tests/smoke"]` in `pyproject.toml` is what actually prevents pytest from auto-traversing the directory (so the fixture's real-subprocess spawn is never triggered by default collection); `-m "not smoke"` in `addopts` is a secondary, belt-and-suspenders guard. `tests/smoke/test_cli.py::test_smoke_marker_in_pyproject` asserts both guards plus the registered marker are present in `pyproject.toml` — but like every smoke test it is itself `norecursedirs`-excluded, so it only runs when `tests/smoke/` is invoked explicitly, not as a default-suite regression net.
+- **Requires the fastembed model cache** (`~/.cache/fastembed`, ~2 GB) on the host; the subprocess env passes `FASTEMBED_CACHE_PATH` so the model is reused rather than re-downloaded. On a machine without the cache, the first run triggers a cold download and may exceed the 30 s readiness timeout.
+- Run with `uv run pytest tests/smoke/ --no-cov` — not part of the coverage-gated default run; triggered manually or before a release, not on every PR.
 
 ## Coverage
 
@@ -140,6 +155,7 @@ CI-gated latency benchmark using **real fastembed BAAI/bge-small-en-v1.5 and Xen
 | Behaviour that requires real network               | Live        | `live`                  | Justify the dependency in the PR description. #Unverified (marker registered; no in-tree `@pytest.mark.live` usage sampled) |
 | Quality regression with real model weights         | Live eval   | `live_eval`             | Runs on tag push via `archon-search-eval-live.yml`. Requires model weight download. See `tests/eval/README.md` (live eval lane section). |
 | Latency regression in real fastembed/ONNX path     | Live benchmark | `live_benchmark`     | Runs in dedicated CI step with model cache; skips on developer machines without cache. Excluded from default `addopts` due to module-level `sys.modules` mutation. See `tests/eval/live_benchmark/`. |
+| CLI raw-repr output, slow startup, or blocking behaviour (the class of user-facing bugs 001–010 represent) | Smoke       | `smoke`                 | Real subprocess server + real CLI/HTTP calls; `TestClient` cannot detect these. Excluded from default `addopts` via the same dual-guard pattern as `live_benchmark`. Run with `uv run pytest tests/smoke/ --no-cov`. See `tests/smoke/`. |
 
 ## Parallel-test isolation (`archon_unset_data_dir` marker + `_archon_isolated_data_dir` autouse)
 

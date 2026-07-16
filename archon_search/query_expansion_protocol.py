@@ -18,11 +18,12 @@ def provider_key_available(provider: str) -> bool:
     """Return True when the given provider's required API key is set at call time.
 
     Provider semantics (checked at call time):
-    - ``"ollama"``    → always ``True`` (local inference; no key required)
-    - ``"openai"``    → ``OPENAI_API_KEY`` must be set
-    - ``"anthropic"`` → ``ANTHROPIC_API_KEY`` must be set (default)
+    - ``"ollama"``     → always ``True`` (local inference; no key required)
+    - ``"claude_cli"`` → always ``True`` (uses Claude Code's login; no key required)
+    - ``"openai"``     → ``OPENAI_API_KEY`` must be set
+    - ``"anthropic"``  → ``ANTHROPIC_API_KEY`` must be set (default)
     """
-    if provider == "ollama":
+    if provider in ("ollama", "claude_cli"):
         return True
     if provider == "openai":
         return bool(os.environ.get("OPENAI_API_KEY"))

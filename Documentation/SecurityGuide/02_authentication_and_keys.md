@@ -92,8 +92,11 @@ archon-search key create --namespace my-team
 # List active keys
 archon-search key list
 
-# Revoke a key immediately
+# Revoke a key (prompts for confirmation, showing the key's label if known)
 archon-search key revoke <id>
+
+# Revoke without the prompt (scripts / CI)
+archon-search key revoke <id> --yes
 
 # Rotate the default key (old key immediately revoked)
 archon-search key rotate
