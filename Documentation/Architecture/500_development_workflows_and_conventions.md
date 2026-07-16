@@ -48,14 +48,18 @@ uv run pytest tests/test_router.py::test_name -x
 # Skip coverage locally (developer override only — never bake into addopts)
 uv run pytest --no-cov
 
-# Marker-gated suites (excluded from default run)
-# Note: `--thresholds-path` is only registered by tests/eval/conftest.py, so the
-# explicit file path is what makes the option recognised. `-m eval` is redundant
-# given the explicit path but is kept as the canonical form (matches CLAUDE.md).
+# Targeted marker runs (these markers ALSO run in the default suite; listed for explicit targeting)
+# Note: `--thresholds-path tests/eval/thresholds.toml` is already baked into `addopts`
+# in pyproject.toml, so gated eval tests run by default. `-m eval` here narrows to just
+# that marker and is kept as the canonical form (matches CLAUDE.md).
 uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/test_eval_suite.py
 uv run pytest -m integration
 uv run pytest -m live
 uv run pytest -m benchmark   # needs a running server; auto-skips if unreachable
+
+# live_benchmark and smoke suites — excluded from default runs; run separately
+uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov
+uv run pytest tests/smoke/ --no-cov
 
 # Cut a release (tag + push; CI runs eval + publishes to PyPI via OIDC)
 bash release.sh           # interactive
@@ -63,9 +67,9 @@ bash release.sh -y        # non-interactive
 bash release.sh --dry-run
 ```
 
-The default `pytest` invocation excludes the `live`, `eval`, `benchmark`, and `integration` markers via `addopts` in `pyproject.toml`. Those suites are opt-in and run explicitly.
+The default `pytest` invocation excludes only the `live_benchmark` and `smoke` markers via `addopts` in `pyproject.toml` (`-m "not live_benchmark and not smoke"`); `live`, `eval`, `benchmark`, and `integration` markers run in the default suite and skip gracefully when their required infrastructure is absent. See `200_testing_strategy.md` for the full marker layout.
 
-The default run is parallel by default (`-n auto --dist=loadgroup` in `addopts`). For debugging use `-n0` to run serially: `uv run pytest -n0`. Fail-fast requires `-n0 -x` and stdout passthrough requires `-n0 -s` (xdist suppresses both by default).
+The default run is parallel by default (`-n 4 --dist=loadgroup` in `addopts`). The worker count is deliberately capped at 4 — never raise it back to `-n auto` (see `CLAUDE.md`). For debugging use `-n0` to run serially: `uv run pytest -n0`. Fail-fast requires `-n0 -x` and stdout passthrough requires `-n0 -s` (xdist suppresses both by default).
 
 ## Naming Convention: Package vs. Distribution
 

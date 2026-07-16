@@ -1,0 +1,127 @@
+openapi: 3.0.0
+info:
+  title: Archon Search Graph Community Rebuild API
+  version: 0.0.0
+tags: []
+paths:
+  /graph/{collection}/rebuild-communities:
+    post:
+      operationId: GraphCommunityRebuild_rebuildCommunities
+      parameters:
+        - name: collection
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: The request has been accepted for processing, but processing has not yet completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobResponse'
+        '401':
+          description: Access is unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '404':
+          description: The server cannot find the requested resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '409':
+          description: The request conflicts with the current state of the server.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '422':
+          description: Client error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+components:
+  schemas:
+    ErrorDetail:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+    JobResponse:
+      type: object
+      required:
+        - job_id
+        - status
+        - created_at
+        - updated_at
+        - namespace
+        - source
+        - source_path
+        - collection
+        - retry_count
+      properties:
+        job_id:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        result:
+          anyOf:
+            - type: string
+            - type: object
+              additionalProperties: {}
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        namespace:
+          type: string
+        progress:
+          type: object
+          additionalProperties: {}
+          nullable: true
+        source:
+          type: string
+          default: user
+        source_path:
+          type: string
+          default: ''
+        collection:
+          type: string
+          default: ''
+        retry_count:
+          type: integer
+          format: int32
+          default: 0
+        output_path:
+          type: string
+          nullable: true
+        archive_path:
+          type: string
+          nullable: true
+        kind:
+          type: string
+          nullable: true
+        migrations_applied:
+          type: array
+          items:
+            type: string
+          nullable: true
+        backup_confirmed:
+          type: boolean
+          nullable: true

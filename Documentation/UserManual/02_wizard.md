@@ -286,7 +286,11 @@ This prompt is **always shown** (no API key precondition). **G10**
 AI query expansion (HyDE + RAG Fusion):
   HyDE generates hypothetical answers to improve embedding recall.
   RAG Fusion runs multiple query reformulations and merges results.
-  Supports Anthropic, OpenAI, and Ollama providers.
+  Providers:
+    anthropic  - Anthropic API (needs ANTHROPIC_API_KEY)
+    openai     - OpenAI API (needs OPENAI_API_KEY)
+    ollama     - runs locally, no API key
+    claude_cli - uses Claude Code's login, no API key
   Default: disabled.
 Enable AI query expansion (HyDE + RAG Fusion)? [y/N]:
 ```
@@ -296,23 +300,50 @@ Enable AI query expansion (HyDE + RAG Fusion)? [y/N]:
 If you answer `y`, the wizard prompts for a provider for each feature independently:
 
 ```
-Which provider for HyDE? (anthropic/openai/ollama) [anthropic]:
-Which provider for RAG Fusion? (anthropic/openai/ollama) [anthropic]:
+Which provider for HyDE? (anthropic/openai/ollama/claude_cli) [anthropic]:
+Which provider for RAG Fusion? (anthropic/openai/ollama/claude_cli) [anthropic]:
 ```
 
 For **Anthropic** (default): no further prompts. Add your API key to `~/.archon-search/.secrets.env` (`ANTHROPIC_API_KEY=<key>`) so the managed service can reach Anthropic's API. The managed service (launchd on macOS, systemd on Linux) sources this file at start time; existing files are left untouched.
 
 For **OpenAI**: the wizard prompts for a model name (required). Add `OPENAI_API_KEY=<key>` to `~/.archon-search/.secrets.env`. Query text is sent to OpenAI's API on every request — do not enable in air-gapped deployments or where data residency requirements apply.
 
-For **Ollama**: the wizard prompts for a model name (required) and an optional base URL (default `http://localhost:11434`). No API key is needed. Query text never leaves your host — safe for air-gapped deployments.
+For **Ollama**: the wizard asks for the server base URL first (default `http://localhost:11434`; on a re-run it pre-fills the address already in your config, so pressing Enter keeps it), then contacts that address and lists the models installed there as a numbered menu — you pick by number instead of typing a name:
+
+```
+Ollama base URL for HyDE [http://localhost:11434]:
+
+Installed Ollama models:
+  1. llama3.2:latest
+  2. mistral:latest
+Select a model by number [1-2]:
+```
+
+If the server is unreachable or has no models installed, the wizard says so, suggests `ollama pull <model-name>` to install one, and falls back to manual model-name entry so you can still finish setup. HyDE and RAG Fusion each get their own base-URL prompt and picker. No API key is needed for Ollama — query text never leaves your host, so it is safe for air-gapped deployments.
+
+For **Claude CLI**: uses your existing Claude Code login — no API key. The wizard checks that the `claude` command is on your PATH (warning, not a hard stop, if it isn't) and then offers a curated list of model aliases with a free-text fallback for full model IDs:
+
+```
+Claude model aliases:
+  1. haiku
+  2. sonnet
+  3. opus
+  4. fable
+  Or type a full model ID (e.g. claude-haiku-4-5-20251001).
+  Leave blank to use Claude Code's configured default.
+Model for HyDE (number, name, or blank):
+```
+
+Leaving it blank omits `--model` so Claude Code uses its own configured default. If `claude` is not found, the wizard prints an install pointer (https://claude.ai/code) and still writes the config — install Claude Code before starting the server, and query expansion falls back silently until it is available. Unlike Ollama, this alias list is hardcoded in the wizard (the Claude CLI has no runtime model-listing command) and is updated with each release.
 
 After answering, the wizard:
 
 - Enables both `[hyde].enabled = true` and `[rag_fusion].enabled = true` in your config.
-- Writes `[hyde].provider` / `[rag_fusion].provider` (and `model`, `ollama_base_url` where applicable) for non-Anthropic providers.
-- Creates `~/.archon-search/.secrets.env` (mode 600, empty) if it does not already exist and the selected provider requires an API key.
+- Writes `[hyde].provider` / `[rag_fusion].provider` (and `model`, `ollama_base_url` where applicable) for non-Anthropic providers. For `claude_cli`, `model` is only written when you choose one — a blank leaves it unset so the config default applies.
+- Installs the provider's package so the feature actually works: `anthropic` → `archon-search[hyde]`, `openai` → `archon-search[openai-provider]`, `ollama` → `archon-search[ollama]`. When both features share a provider (the default is `anthropic` for both), the package is installed once. `claude_cli` needs no package (it uses the `claude` command on your PATH). If the install fails, the wizard prints a warning and reverts `[hyde].enabled` / `[rag_fusion].enabled` to `false` so the next server start does not hard-fail on the missing package — re-run the wizard or install the package manually to enable it.
+- Creates `~/.archon-search/.secrets.env` (mode 600, empty) if it does not already exist and the selected provider requires an API key. (`ollama` and `claude_cli` need no key, so no secrets file is created for them.)
 
-To configure providers manually after the wizard, edit `archon-search.toml` directly: set `[hyde].provider` and `[rag_fusion].provider` to `"anthropic"`, `"openai"`, or `"ollama"`, and set the corresponding `model` and `ollama_base_url` fields as needed. You can also re-run the wizard with `--enable-hyde --enable-rag-fusion` to reconfigure.
+To configure providers manually after the wizard, edit `archon-search.toml` directly: set `[hyde].provider` and `[rag_fusion].provider` to `"anthropic"`, `"openai"`, `"ollama"`, or `"claude_cli"`, and set the corresponding `model` and `ollama_base_url` fields as needed. You can also re-run the wizard with `--enable-hyde --enable-rag-fusion` to reconfigure.
 
 ### Step 6 — Summary screen
 
@@ -335,9 +366,11 @@ Before downloading anything, the wizard prints a summary of what it is about to 
   Optional features:
     • Code enrichment (tree-sitter)
     • Watch directories (auto-reindex)
+    • HyDE: enabled (provider: anthropic)
+    • RAG Fusion: enabled (provider: anthropic)
 ```
 
-Only non-default optional features are listed. The `API key` line shows a masked preview and the path to the env file that holds the full key. If the key file does not exist yet (first install, server not yet started), `(not yet generated)` is shown instead. The summary also reflects any deployment flags you passed (custom host, port, db path, top-k, etc.). Then:
+Only non-default optional features are listed. When you enable AI query expansion, the summary confirms it with `HyDE: enabled (provider: …)` and `RAG Fusion: enabled (provider: …)` lines so you have visible proof the setting took effect before you exit the wizard. The `API key` line shows a masked preview and the path to the env file that holds the full key. If the key file does not exist yet (first install, server not yet started), `(not yet generated)` is shown instead. The summary also reflects any deployment flags you passed (custom host, port, db path, top-k, etc.). Then:
 
 ```
 Proceed? [Y/n]:
@@ -355,6 +388,8 @@ Code enrichment packages installed.
 ```
 
 If the install fails, a warning is shown but the overall wizard continues — code enrichment is optional.
+
+If you chose a **multilingual** profile, the wizard also installs the `archon-search[multilingual]` extra (`fasttext-wheel`, used for language detection) at this step — the server needs it to start when `multilingual = true`. If that install fails, the wizard reverts `multilingual = false` in the config so the server still starts (in English-only mode) instead of crashing on the next start. You can install it separately at any time with `pip install archon-search[multilingual]`.
 
 ### Step 8 — Model download
 
@@ -433,7 +468,7 @@ All flags for the `wizard` command:
 | `--top-k INTEGER` | Not set (uses `5`) | Number of results returned per query (`top_k_return`). Valid range: 1–100. Values > 100 are rejected with a message to edit TOML directly. The wizard also sets `top_k_retrieve = max(15, 3 × top_k)` automatically. This flag is flags-only; no interactive prompt. A hint appears in the "Next steps" block. |
 | `--telemetry-retention-days INTEGER` | Not set (uses `30`) | Days before telemetry log files are pruned. Must be ≥ 1. Only written to TOML when `--telemetry` is also passed; passing it without `--telemetry` prints a warning on stderr and writes nothing. |
 | **Tier 2 AI flags** | | |
-| `--enable-hyde` | False (flag) | Enable HyDE (Hypothetical Document Embeddings) query expansion. Provider defaults to `"anthropic"` but can be changed by setting `[hyde].provider` in `archon-search.toml` (supported values: `"anthropic"`, `"openai"`, `"ollama"`). For Anthropic or OpenAI, the corresponding API key must be set; for Ollama, no API key is needed and query text stays on-host. |
+| `--enable-hyde` | False (flag) | Enable HyDE (Hypothetical Document Embeddings) query expansion. Provider defaults to `"anthropic"` but can be changed by setting `[hyde].provider` in `archon-search.toml` (supported values: `"anthropic"`, `"openai"`, `"ollama"`, `"claude_cli"`). For Anthropic or OpenAI, the corresponding API key must be set; for Ollama, no API key is needed and query text stays on-host; for Claude CLI, `claude` must be on PATH and logged in (no API key). |
 | `--enable-rag-fusion` | False (flag) | Enable RAG Fusion multi-query expansion. Same provider options and privacy considerations as `--enable-hyde`; provider controlled by `[rag_fusion].provider` in config. |
 | **Tier 2 security** | | |
 | `--server-key HEX_KEY` | Not set | Set a custom Bearer token for the server. Must be a lowercase hex string of at least 32 characters (e.g., generated with `python -c "import secrets; print(secrets.token_hex(32))"`). Writes `ARCHON_SEARCH_API_KEY=<key>` to `~/.archon-search/.search.env` (mode 600). A shell-history warning and restart note are always printed. If `ARCHON_SEARCH_API_KEY` env var is set, it takes priority over the file; an additional warning is printed in that case. |

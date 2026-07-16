@@ -133,7 +133,7 @@ The default test command:
 uv run pytest
 ```
 
-This run excludes `live`, `eval`, `benchmark`, and `integration` markers, enforces `--cov-fail-under=85`, and runs tests in parallel via `pytest-xdist` (`-n 4 --dist=loadgroup`; the worker count is deliberately capped — do not raise it back to `-n auto`, see the testing policy in `CLAUDE.md`). To skip coverage while iterating locally:
+This run excludes only the `live_benchmark` and `smoke` markers; `live`, `eval`, `benchmark`, and `integration` markers run in the default suite and skip gracefully when their infrastructure is absent. It enforces `--cov-fail-under=85` and runs tests in parallel via `pytest-xdist` (`-n 4 --dist=loadgroup`; the worker count is deliberately capped — do not raise it back to `-n auto`, see the testing policy in `CLAUDE.md`). To skip coverage while iterating locally:
 
 ```bash
 uv run pytest --no-cov
@@ -154,6 +154,13 @@ uv run pytest -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/te
 uv run pytest -m integration
 uv run pytest -m live
 uv run pytest -m benchmark   # needs a running server; auto-skips if unreachable
+```
+
+`live_benchmark` and `smoke` are excluded from the default run and must be run separately:
+
+```bash
+uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov
+uv run pytest tests/smoke/ --no-cov
 ```
 
 ## Common Pitfalls

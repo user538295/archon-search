@@ -36,6 +36,9 @@ def _base_run_patches(tmp_path: Path, features_override: WizardFeatures | None =
         "archon_search.install._prompt_multilingual": MagicMock(return_value=False),
         "archon_search.install._prompt_optional_features": MagicMock(return_value=features),
         "archon_search.install._prompt_gpu_confirm": MagicMock(return_value=True),
+        # Mock the subprocess-shelling provider install so enable_hyde/enable_rag_fusion
+        # runs never shell out to a real `pip install archon-search[hyde]`.
+        "archon_search.install._install_query_expansion_extras": MagicMock(return_value=[]),
     }
 
 
@@ -165,6 +168,29 @@ def test_run_passes_enable_rag_fusion_to_features(tmp_path: Path) -> None:
     assert rc == 0
     doc = tomlkit.parse(config_path.read_text())
     assert doc["rag_fusion"]["enabled"] is True
+
+
+def test_run_mixed_provider_partial_failure_reverts_only_failed_section(tmp_path: Path) -> None:
+    """run(): HyDE=anthropic ok + RAG Fusion=ollama fails → only rag_fusion reverted on disk."""
+    import tomlkit
+
+    features = WizardFeatures(
+        enable_hyde=True, hyde_provider="anthropic",
+        enable_rag_fusion=True, rag_fusion_provider="ollama", rag_fusion_model="qwen2.5:3b",
+    )
+    rc, config_path = _run_installer(
+        tmp_path,
+        {},
+        features_override=features,
+        extra_module_patches={
+            "archon_search.install._install_query_expansion_extras": MagicMock(return_value=["rag_fusion"]),
+        },
+    )
+    assert rc == 0
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["hyde"]["enabled"] is True, "hyde installed fine — must stay enabled"
+    assert doc["rag_fusion"]["enabled"] is False, "rag_fusion package failed — must be reverted"
+    assert "provider" not in doc["rag_fusion"], "reverted section must have provider stripped"
 
 
 def test_run_passes_telemetry_retention_days_to_features(tmp_path: Path) -> None:

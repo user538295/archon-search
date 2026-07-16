@@ -185,14 +185,16 @@ request_id_header = "X-Request-ID"
 # HyDE (Hypothetical Document Embeddings) — optional dense-retrieval recall booster.
 # Disabled by default.
 #
-# Provider options (G10): "anthropic" (default), "ollama" (local; zero-transmission),
-# "openai". Set provider = "ollama" for fully air-gapped deployments — query text
-# stays on-premise and is never sent to an external API.
+# Provider options: "anthropic" (default), "ollama" (local; zero-transmission),
+# "openai", "claude_cli" (uses Claude Code's login; no API key). Set provider =
+# "ollama" for fully air-gapped deployments — query text stays on-premise and is
+# never sent to an external API.
 #
 # WARNING (Anthropic/OpenAI): setting enabled = true with provider = "anthropic" or
 # "openai" causes the raw query text to be sent to the respective API servers on every
 # request that includes hyde=true. Do not enable in air-gapped deployments or where
-# data residency requirements apply.
+# data residency requirements apply. (provider = "claude_cli" sends query text to
+# Anthropic via Claude Code's own login — the same residency caveat applies.)
 #
 # Prerequisites (Anthropic — default):
 #   1. Install the optional dependency: pip install archon-search[hyde]
@@ -208,15 +210,22 @@ request_id_header = "X-Request-ID"
 #   2. Set OPENAI_API_KEY in the server's environment.
 #   3. Set provider = "openai" and model = "<openai-model>" below.
 #
+# Prerequisites (Claude CLI):
+#   1. Install Claude Code (https://claude.ai/code) and log in — no API key needed.
+#   2. Ensure the `claude` command is on the server's PATH.
+#   3. Set provider = "claude_cli" below. model is optional (see below).
+#
 # When enabled = false (the default), hyde=true in a request is silently ignored and
 # the standard query embedding is used (hyde_applied: false in the response).
 enabled = false
-# LLM provider for HyDE generation: "anthropic" (default), "ollama", or "openai".
+# LLM provider for HyDE generation: "anthropic" (default), "ollama", "openai", or "claude_cli".
 # provider = "anthropic"
 # Model used to generate the hypothetical answer passage.
 # For "anthropic" (default): a Claude model name (e.g. "claude-haiku-4-5-20251001").
 # For "ollama": the Ollama model tag (e.g. "llama3.2:3b"). REQUIRED for ollama/openai.
 # For "openai": an OpenAI model name (e.g. "gpt-4o-mini").
+# For "claude_cli": a model alias (haiku/sonnet/opus/fable) or full ID, passed as
+#   --model. OPTIONAL — blank or the default below omits --model (Claude Code's default).
 model = "claude-haiku-4-5-20251001"
 # Base URL for the Ollama server. Only used when provider = "ollama".
 # ollama_base_url = "http://localhost:11434"
@@ -225,7 +234,7 @@ model = "claude-haiku-4-5-20251001"
 timeout_seconds = 10.0
 # Per-process rate limit (requests per minute). Requests that exceed this limit
 # are answered with the fallback embedding (hyde_applied: false).
-# NOTE: this limit is NOT enforced when provider = "ollama" (local; no API cap).
+# NOTE: this limit is NOT enforced for provider = "ollama" or "claude_cli" (local/free; no API cap).
 # In multi-worker deployments the effective rate is multiplied by worker count.
 max_requests_per_minute = 60
 
@@ -233,14 +242,16 @@ max_requests_per_minute = 60
 # RAG Fusion — optional multi-query recall booster using LLM-generated query variants.
 # Disabled by default.
 #
-# Provider options (G10): "anthropic" (default), "ollama" (local; zero-transmission),
-# "openai". Set provider = "ollama" for fully air-gapped deployments — query text
-# stays on-premise and is never sent to an external API.
+# Provider options: "anthropic" (default), "ollama" (local; zero-transmission),
+# "openai", "claude_cli" (uses Claude Code's login; no API key). Set provider =
+# "ollama" for fully air-gapped deployments — query text stays on-premise and is
+# never sent to an external API.
 #
 # WARNING (Anthropic/OpenAI): setting enabled = true with provider = "anthropic" or
 # "openai" causes the raw query text to be sent to the respective API servers on every
 # request that includes rag_fusion=true. Do not enable in air-gapped deployments or
-# where data residency requirements apply.
+# where data residency requirements apply. (provider = "claude_cli" sends query text
+# to Anthropic via Claude Code's own login — the same residency caveat applies.)
 #
 # Prerequisites (Anthropic — default):
 #   1. Install the optional dependency: pip install archon-search[rag_fusion]
@@ -256,20 +267,28 @@ max_requests_per_minute = 60
 #   2. Set OPENAI_API_KEY in the server's environment.
 #   3. Set provider = "openai" and model = "<openai-model>" below.
 #
+# Prerequisites (Claude CLI):
+#   1. Install Claude Code (https://claude.ai/code) and log in — no API key needed.
+#   2. Ensure the `claude` command is on the server's PATH.
+#   3. Set provider = "claude_cli" below. model is optional (see below).
+#
 # When enabled = false (the default), rag_fusion=true in a request is silently ignored and
 # standard single-query search is used (rag_fusion_applied: false in the response).
 #
 # RATE LIMIT WARNING (Anthropic/OpenAI): [hyde].max_requests_per_minute +
 # [rag_fusion].max_requests_per_minute must not exceed your account's rate limit when
-# both features share the same provider. Rate limits are NOT enforced for Ollama.
-# In multi-worker deployments, the effective rate per feature is multiplied by worker count.
+# both features share the same provider. Rate limits are NOT enforced for Ollama or
+# claude_cli. In multi-worker deployments, the effective rate per feature is multiplied
+# by worker count.
 enabled = false
-# LLM provider for RAG Fusion generation: "anthropic" (default), "ollama", or "openai".
+# LLM provider for RAG Fusion generation: "anthropic" (default), "ollama", "openai", or "claude_cli".
 # provider = "anthropic"
 # Model used to generate query variants.
 # For "anthropic" (default): a Claude model name (e.g. "claude-haiku-4-5-20251001").
 # For "ollama": the Ollama model tag (e.g. "llama3.2:3b"). REQUIRED for ollama/openai.
 # For "openai": an OpenAI model name (e.g. "gpt-4o-mini").
+# For "claude_cli": a model alias (haiku/sonnet/opus/fable) or full ID, passed as
+#   --model. OPTIONAL — blank or the default below omits --model (Claude Code's default).
 model = "claude-haiku-4-5-20251001"
 # Base URL for the Ollama server. Only used when provider = "ollama".
 # ollama_base_url = "http://localhost:11434"
@@ -278,7 +297,7 @@ model = "claude-haiku-4-5-20251001"
 timeout_seconds = 10.0
 # Per-process rate limit (requests per minute). Requests that exceed this limit fall
 # back to single-query search (rag_fusion_applied: false).
-# NOTE: this limit is NOT enforced when provider = "ollama" (local; no API cap).
+# NOTE: this limit is NOT enforced for provider = "ollama" or "claude_cli" (local/free; no API cap).
 # In multi-worker deployments the effective rate is multiplied by worker count.
 max_requests_per_minute = 60
 # Number of LLM-generated query variants (not counting the original query).

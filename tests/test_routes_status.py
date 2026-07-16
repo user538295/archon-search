@@ -1138,6 +1138,238 @@ def test_get_status_telemetry_s5_hash_configured_but_salt_missing(tmp_db: Path) 
     assert tel["hash_doc_ids_enabled"] is False  # S5: config says hash, but salt unavailable
 
 
+# ---------------------------------------------------------------------------
+# SPD — per-collection path + doc_count in GET /status
+# ---------------------------------------------------------------------------
+
+
+def _make_client_spd(
+    tmp_db: Path,
+    meta_rows: list[CollectionMeta],
+    *,
+    collections: list[str] | None = None,
+    count_documents: AsyncMock | None = None,
+) -> TestClient:
+    """Build a TestClient with explicit config.collections and meta rows for SPD tests."""
+    from archon_search.server import routes_status
+
+    # /status logs a missing config path once per name (module-level set); clear it so
+    # each test starts from a clean slate and the DEBUG assertion (S3) is deterministic.
+    routes_status._missing_path_logged.clear()
+
+    config = SearchConfig()
+    config.db_path = str(tmp_db)
+    if collections is not None:
+        config.collections = collections
+    job_store = JobStore(path=tmp_db / "jobs.json")
+    app = create_app(config, job_store)
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=meta_rows)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.ping = AsyncMock(return_value=True)
+    mock_store.pending_migrations = AsyncMock(return_value=[])
+    # S5 spy: a live recount must never be issued during /status.
+    mock_store.count_documents = count_documents or AsyncMock(return_value=999)
+    # bug-080: /status reads a live chunk count per collection; mock it so it does not
+    # raise (which would emit a WARNING and pollute the missing-path log assertions).
+    mock_store.count_chunks = AsyncMock(return_value=0)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+
+def test_status_populates_real_path_and_doc_count(tmp_db: Path) -> None:
+    """S1: a collection with a configured path whose basename matches its name shows the
+    absolute path and its cached ``doc_count``."""
+    from pathlib import Path as _Path
+
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta_rows = [CollectionMeta(name="mydocs", namespace=DEFAULT_NAMESPACE, doc_count=42)]
+    c = _make_client_spd(tmp_db, meta_rows, collections=["/srv/data/mydocs"])
+    data = c.get("/status").json()
+    col = next(col for col in data["collections"] if col["name"] == "mydocs")
+    assert col["path"] == str(_Path("/srv/data/mydocs").expanduser().resolve())
+    assert col["doc_count"] == 42
+
+
+def test_status_zero_doc_count_with_real_path(tmp_db: Path) -> None:
+    """S2: a collection with a configured path but no documents shows the real path and
+    ``doc_count = 0`` (the cached meta default)."""
+    from pathlib import Path as _Path
+
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta_rows = [CollectionMeta(name="empty", namespace=DEFAULT_NAMESPACE, doc_count=0)]
+    c = _make_client_spd(tmp_db, meta_rows, collections=["/srv/data/empty"])
+    data = c.get("/status").json()
+    col = next(col for col in data["collections"] if col["name"] == "empty")
+    assert col["path"] == str(_Path("/srv/data/empty").expanduser().resolve())
+    assert col["doc_count"] == 0
+
+
+def test_status_missing_path_falls_back_and_logs_debug(
+    tmp_db: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """S3: a name absent from the config path map yields ``path=""``, a DEBUG log (once per
+    name — not WARNING), and a 200 with all other fields intact."""
+    import logging
+
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta_rows = [CollectionMeta(name="adhoc", namespace=DEFAULT_NAMESPACE, doc_count=7)]
+    # No config.collections → _all_collection_paths is empty → fallback path.
+    c = _make_client_spd(tmp_db, meta_rows, collections=[])
+    with caplog.at_level(logging.DEBUG, logger="archon_search.server.routes_status"):
+        response = c.get("/status")
+    assert response.status_code == 200
+    col = next(col for col in response.json()["collections"] if col["name"] == "adhoc")
+    assert col["path"] == ""
+    assert col["doc_count"] == 7  # doc_count is still populated on the fallback path
+
+    debug_records = [
+        r for r in caplog.records
+        if r.name == "archon_search.server.routes_status" and "adhoc" in r.getMessage()
+    ]
+    assert debug_records, "expected a fallback log for the missing path"
+    assert all(r.levelno == logging.DEBUG for r in debug_records), (
+        "the missing-path fallback must log at DEBUG, not WARNING (polled endpoint)"
+    )
+
+
+def test_status_missing_path_logged_once_per_name(tmp_db: Path) -> None:
+    """S3: the missing-path fallback logs once per collection name across repeated polls."""
+    import logging
+
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    meta_rows = [CollectionMeta(name="adhoc", namespace=DEFAULT_NAMESPACE)]
+    c = _make_client_spd(tmp_db, meta_rows, collections=[])
+
+    caplog_records: list[logging.LogRecord] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if "adhoc" in record.getMessage():
+                caplog_records.append(record)
+
+    logger = logging.getLogger("archon_search.server.routes_status")
+    handler = _Collector(level=logging.DEBUG)
+    logger.addHandler(handler)
+    prev_level = logger.level
+    logger.setLevel(logging.DEBUG)
+    try:
+        c.get("/status")
+        c.get("/status")
+        c.get("/status")
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(prev_level)
+
+    assert len(caplog_records) == 1, "the fallback must log once per name, not on every poll"
+
+
+def test_status_does_not_recount_documents_live(tmp_db: Path) -> None:
+    """S5: no per-collection live recount (`count_documents`) is issued during /status."""
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    spy = AsyncMock(return_value=123)
+    meta_rows = [CollectionMeta(name="mydocs", namespace=DEFAULT_NAMESPACE, doc_count=42)]
+    c = _make_client_spd(tmp_db, meta_rows, collections=["/srv/data/mydocs"], count_documents=spy)
+    response = c.get("/status")
+    assert response.status_code == 200
+    # Non-vacuity: the reported count is the cached meta value (42), NOT the spy's
+    # live-recount sentinel (123). This fails if the handler ever recounts live.
+    col = next(col for col in response.json()["collections"] if col["name"] == "mydocs")
+    assert col["doc_count"] == 42
+    spy.assert_not_called()
+
+
+def test_status_collision_basename_reports_last_write_wins_path(tmp_db: Path) -> None:
+    """S3/Q1 regression: two configured paths sharing a basename collapse to one name in
+    `_all_collection_paths` (collision-unaware key), so `/status` reports the LAST-registered
+    path for the surviving name. This pins the accepted (documented) last-write-wins behavior
+    so a future change to the lookup does not silently alter it."""
+    from pathlib import Path as _Path
+
+    from archon_search.constants import DEFAULT_NAMESPACE
+
+    # Both basenames are "reports"; the second entry wins the shared dict key.
+    meta_rows = [CollectionMeta(name="reports", namespace=DEFAULT_NAMESPACE, doc_count=3)]
+    c = _make_client_spd(
+        tmp_db, meta_rows, collections=["/team-a/reports", "/team-b/reports"]
+    )
+    data = c.get("/status").json()
+    col = next(col for col in data["collections"] if col["name"] == "reports")
+    # Accepted limitation: the reported path is the second (last-write-wins) config path,
+    # which may be the "wrong" one for the collection — documented under the plan's Q1.
+    assert col["path"] == str(_Path("/team-b/reports").expanduser().resolve())
+    assert col["doc_count"] == 3
+
+
+def test_status_configured_but_not_ingested_collection_absent(tmp_db: Path) -> None:
+    """A collection configured in `config.collections` but with no store meta row (never
+    ingested) does NOT appear in `/status` — the handler lists namespace-visible store-meta
+    collections, and the config path map alone never injects phantom entries."""
+    # config path present, but meta_rows empty → no "ghost" collection in the store.
+    c = _make_client_spd(tmp_db, [], collections=["/srv/data/ghost"])
+    data = c.get("/status").json()
+    names = [col["name"] for col in data["collections"]]
+    assert "ghost" not in names
+    assert data["collections"] == []
+
+
+def test_status_doc_count_and_visibility_namespace_scoped_path_from_global_config(
+    tmp_db: Path,
+) -> None:
+    """S4: collection **visibility** and **doc_count** are namespace-scoped (each caller sees
+    only its own rows, with its own cached count). The **path**, however, is resolved from the
+    single global `config.collections`/`pinned_collections` list by bare basename — it is NOT
+    tenant-aware, so any namespace owning a collection of the same name gets the same path.
+    This test pins both facts."""
+    from pathlib import Path as _Path
+
+    tenant_key = "c" * 64
+    config = SearchConfig()
+    config.db_path = str(tmp_db)
+    config.namespaces = {tenant_key: "tenantA"}
+    config.collections = ["/srv/data/shared"]
+
+    from archon_search.server import routes_status
+
+    routes_status._missing_path_logged.clear()
+
+    job_store = JobStore(path=tmp_db / "jobs.json")
+    app = create_app(config, job_store)
+
+    meta_rows = [
+        CollectionMeta(name="shared", namespace="tenantA", doc_count=5),
+        CollectionMeta(name="shared", namespace="tenantB", doc_count=99),
+    ]
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=meta_rows)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.ping = AsyncMock(return_value=True)
+    mock_store.pending_migrations = AsyncMock(return_value=[])
+    app.state.search_store = mock_store
+
+    c = TestClient(app, headers={"Authorization": f"Bearer {tenant_key}"})
+    data = c.get("/status").json()
+    cols = data["collections"]
+    assert len(cols) == 1  # only tenantA's row
+    assert cols[0]["name"] == "shared"
+    assert cols[0]["doc_count"] == 5  # tenantA's cached count, not tenantB's 99
+    # Path comes from the global config list by basename — same for any tenant owning
+    # "shared" (not namespace-scoped). Here it is the one configured "/srv/data/shared".
+    assert cols[0]["path"] == str(_Path("/srv/data/shared").expanduser().resolve())
+
+
 def test_openapi_snapshot_reflects_telemetry_field(tmp_db: Path) -> None:
     """GET /openapi.json includes the telemetry field in StatusResponse schema (D8 C3)."""
     config = SearchConfig()

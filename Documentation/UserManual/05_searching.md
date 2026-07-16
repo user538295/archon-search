@@ -216,7 +216,7 @@ The `language` filter is a strict equality match — `language=fr` does not matc
 
 HyDE (Hypothetical Document Embeddings) improves recall for vocabulary-mismatch queries — cases where the query phrasing is far from the document phrasing in embedding space. When enabled, the server asks an LLM to write a short hypothetical answer passage, embeds that passage, and uses the resulting vector for ANN lookup instead of the original query embedding.
 
-> **Privacy notice**: `hyde=true` sends the user's raw query to the configured LLM provider. With `provider = "anthropic"` (default) or `"openai"`, the query is transmitted to an external API server — do not enable in air-gapped deployments or where data residency requirements apply. With `provider = "ollama"`, the query stays on-premise (zero-transmission). See `Documentation/ADRs/C4-hyde-external-llm-dependency.md` for the full privacy trade-off. **G10**: set `[hyde].provider` to `"ollama"` or `"openai"` to use a local or alternative LLM.
+> **Privacy notice**: `hyde=true` sends the user's raw query to the configured LLM provider. With `provider = "anthropic"` (default), `"openai"`, or `"claude_cli"`, the query is transmitted to an external API server (`claude_cli` sends it to Anthropic via Claude Code's own login) — do not enable in air-gapped deployments or where data residency requirements apply. With `provider = "ollama"`, the query stays on-premise (zero-transmission). See `Documentation/ADRs/C4-hyde-external-llm-dependency.md` for the full privacy trade-off. **G10**: set `[hyde].provider` to `"ollama"`, `"openai"`, or `"claude_cli"` to use a local or alternative LLM.
 
 ### Installation
 
@@ -237,14 +237,14 @@ Add or edit the `[hyde]` section in `~/.archon-search/archon-search.toml`:
 # WARNING: enabled = true sends query text to the configured provider's API (Anthropic/OpenAI).
 # Use provider = "ollama" for fully air-gapped deployments.
 enabled = true
-# provider = "anthropic"  # "anthropic" (default), "ollama", or "openai" — G10
+# provider = "anthropic"  # "anthropic" (default), "ollama", "openai", or "claude_cli" — G10
 model = "claude-haiku-4-5-20251001"
 # ollama_base_url = "http://localhost:11434"  # only used when provider = "ollama"
 timeout_seconds = 10.0
 max_requests_per_minute = 60
 ```
 
-For the default Anthropic provider, set `ANTHROPIC_API_KEY` in the server's environment before starting. For OpenAI, set `OPENAI_API_KEY`. For Ollama, no API key is needed — just run an Ollama server:
+For the default Anthropic provider, set `ANTHROPIC_API_KEY` in the server's environment before starting. For OpenAI, set `OPENAI_API_KEY`. For Ollama, no API key is needed — just run an Ollama server. For Claude CLI, no API key is needed — install Claude Code, log in, and ensure `claude` is on the server's PATH:
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."   # Anthropic (default)
@@ -288,23 +288,23 @@ HyDE is designed to **never degrade availability**. It falls back silently (retu
 
 - `[hyde] enabled = false` in config (the kill-switch).
 - `hyde=true` in the request but the required provider package is not installed — in this case a `422` is returned (configuration error, not a runtime fallback).
-- The provider's required API key is absent from the environment (`ANTHROPIC_API_KEY` for `"anthropic"`, `OPENAI_API_KEY` for `"openai"`; not applicable for `"ollama"`). WARNING logged once.
+- The provider's required API key is absent from the environment (`ANTHROPIC_API_KEY` for `"anthropic"`, `OPENAI_API_KEY` for `"openai"`; not applicable for `"ollama"` or `"claude_cli"`). WARNING logged once. For `"claude_cli"`, the analogous failure is `claude` not on PATH or not logged in — it also degrades silently to plain search.
 - The LLM provider API call times out (after `timeout_seconds`). For `provider = "ollama"`: check that your Ollama server is running at `ollama_base_url` (default `http://localhost:11434`).
 - The provider returns an error.
-- The per-process rate limit (`max_requests_per_minute`) is exhausted (not enforced for `provider = "ollama"`).
+- The per-process rate limit (`max_requests_per_minute`) is exhausted (not enforced for `provider = "ollama"` or `"claude_cli"`).
 
 ### Operator notes
 
-- **Multi-worker deployments**: the rate limit is per-process. With N workers the effective call rate can be up to `N * max_requests_per_minute`. Not enforced for `provider = "ollama"`.
+- **Multi-worker deployments**: the rate limit is per-process. With N workers the effective call rate can be up to `N * max_requests_per_minute`. Not enforced for `provider = "ollama"` or `"claude_cli"`.
 - **API key rotation**: use `archon-search key rotate` (or `POST /keys/rotate`) for live rotation without restart. For legacy single-key deployments (env var / key file only), restart the server after changing the file.
-- **Model choice**: `claude-haiku-4-5-20251001` (the Anthropic default) is fast and cheap. For Ollama, use `model = "llama3.2"` or another locally available model tag. For OpenAI, `gpt-4o-mini` is a cost-effective choice. **G10**: set `[hyde].provider` to change provider; `model` is required for `"ollama"` and `"openai"`.
-- **Provider selection (G10)**: change `[hyde].provider` in TOML to `"ollama"` (local, no API cost) or `"openai"`. Run the wizard (`archon-search wizard`) for guided provider configuration.
+- **Model choice**: `claude-haiku-4-5-20251001` (the Anthropic default) is fast and cheap. For Ollama, use `model = "llama3.2"` or another locally available model tag. For OpenAI, `gpt-4o-mini` is a cost-effective choice. For Claude CLI, pick an alias (`haiku`/`sonnet`/`opus`/`fable`) or a full model ID, or leave it blank to use Claude Code's own default. **G10**: set `[hyde].provider` to change provider; `model` is required for `"ollama"` and `"openai"`, optional for `"claude_cli"`.
+- **Provider selection (G10)**: change `[hyde].provider` in TOML to `"ollama"` (local, no API cost), `"openai"`, or `"claude_cli"` (uses Claude Code's login, no API key). Run the wizard (`archon-search wizard`) for guided provider configuration.
 
 ## RAG Fusion multi-query recall (C5)
 
 RAG Fusion improves recall for multi-faceted queries — cases where the user's query can be expressed in several ways and the best documents only surface with different phrasings. When enabled, the server asks an LLM to generate N semantic variants of the original query, searches with all N+1 queries in parallel, and fuses the result sets via second-pass Reciprocal Rank Fusion (RRF).
 
-> **Privacy notice**: `rag_fusion=true` sends the user's raw query to the configured LLM provider to generate variants. With `provider = "anthropic"` (default) or `"openai"`, the query is transmitted externally — do not enable in air-gapped deployments or where data residency requirements apply. With `provider = "ollama"`, the query stays on-premise (zero-transmission). See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md` for the full privacy trade-off. **G10**: set `[rag_fusion].provider` to `"ollama"` or `"openai"` to use a local or alternative LLM.
+> **Privacy notice**: `rag_fusion=true` sends the user's raw query to the configured LLM provider to generate variants. With `provider = "anthropic"` (default), `"openai"`, or `"claude_cli"`, the query is transmitted externally (`claude_cli` sends it to Anthropic via Claude Code's own login) — do not enable in air-gapped deployments or where data residency requirements apply. With `provider = "ollama"`, the query stays on-premise (zero-transmission). See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md` for the full privacy trade-off. **G10**: set `[rag_fusion].provider` to `"ollama"`, `"openai"`, or `"claude_cli"` to use a local or alternative LLM.
 
 ### Installation
 
@@ -325,7 +325,7 @@ Add or edit the `[rag_fusion]` section in `~/.archon-search/archon-search.toml`:
 # WARNING: enabled = true sends query text to the configured provider's API (Anthropic/OpenAI).
 # Use provider = "ollama" for fully air-gapped deployments.
 enabled = true
-# provider = "anthropic"  # "anthropic" (default), "ollama", or "openai" — G10
+# provider = "anthropic"  # "anthropic" (default), "ollama", "openai", or "claude_cli" — G10
 model = "claude-haiku-4-5-20251001"
 # ollama_base_url = "http://localhost:11434"  # only used when provider = "ollama"
 timeout_seconds = 10.0
@@ -336,14 +336,14 @@ num_queries = 2   # LLM-generated variants; total searches = num_queries + 1
 | Key | Type | Default | Constraints | Description |
 |---|---|---|---|---|
 | `enabled` | `bool` | `false` | — | Kill-switch. When `false`, `rag_fusion=true` in requests is silently ignored. |
-| `provider` | `str` | `"anthropic"` | `"anthropic"`, `"ollama"`, `"openai"` | LLM provider for query variant generation. **G10** |
-| `model` | `str` | `"claude-haiku-4-5-20251001"` | Non-empty (required for `"ollama"`/`"openai"`) | Model used for query variant generation. |
+| `provider` | `str` | `"anthropic"` | `"anthropic"`, `"ollama"`, `"openai"`, `"claude_cli"` | LLM provider for query variant generation. **G10** |
+| `model` | `str` | `"claude-haiku-4-5-20251001"` | Non-empty (required for `"ollama"`/`"openai"`; optional for `"claude_cli"` — blank/default omits `--model`) | Model used for query variant generation. |
 | `ollama_base_url` | `str` | `"http://localhost:11434"` | — | Ollama server URL. Only used when `provider = "ollama"`. **G10** |
 | `timeout_seconds` | `float` | `10.0` | `> 0` | Per-request LLM API timeout. |
-| `max_requests_per_minute` | `int` | `60` | `>= 1` | Per-process token-bucket rate limit. Not enforced for `provider = "ollama"`. |
+| `max_requests_per_minute` | `int` | `60` | `>= 1` | Per-process token-bucket rate limit. Not enforced for `provider = "ollama"` or `"claude_cli"`. |
 | `num_queries` | `int` | `2` | `1–5` | Number of LLM-generated variants (not counting original). `num_queries=1` logs a WARNING. |
 
-For the default Anthropic provider, set `ANTHROPIC_API_KEY` in the server's environment. For OpenAI, set `OPENAI_API_KEY`. For Ollama, no API key is needed:
+For the default Anthropic provider, set `ANTHROPIC_API_KEY` in the server's environment. For OpenAI, set `OPENAI_API_KEY`. For Ollama, no API key is needed. For Claude CLI, no API key is needed — install Claude Code, log in, and ensure `claude` is on PATH:
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."   # Anthropic (default)
@@ -395,19 +395,19 @@ RAG Fusion is designed to **never degrade availability**. It falls back silently
 
 - `[rag_fusion] enabled = false` in config (the kill-switch).
 - `rag_fusion=true` in the request but the required provider package is not installed — in this case a `422` is returned (configuration error, not a runtime fallback).
-- The provider's required API key is absent from the environment (`ANTHROPIC_API_KEY` for `"anthropic"`, `OPENAI_API_KEY` for `"openai"`; not applicable for `"ollama"`). WARNING logged once.
+- The provider's required API key is absent from the environment (`ANTHROPIC_API_KEY` for `"anthropic"`, `OPENAI_API_KEY` for `"openai"`; not applicable for `"ollama"` or `"claude_cli"`). WARNING logged once. For `"claude_cli"`, the analogous failure is `claude` not on PATH or not logged in — it also degrades silently to plain search.
 - The LLM provider API call times out (after `timeout_seconds`). For `provider = "ollama"`: check that your Ollama server is running at `ollama_base_url` (default `http://localhost:11434`).
 - The provider returns an error.
-- The per-process rate limit (`max_requests_per_minute`) is exhausted (not enforced for `provider = "ollama"`).
+- The per-process rate limit (`max_requests_per_minute`) is exhausted (not enforced for `provider = "ollama"` or `"claude_cli"`).
 - The collection has no vector index (FTS-only mode).
 
 When the generator returns no variants (all failure paths), the original query is still searched normally.
 
 ### Operator notes
 
-- **Multi-worker deployments**: the rate limit is per-process. With N workers the effective call rate can be up to `N × max_requests_per_minute`. For deployments with both HyDE and RAG Fusion enabled using Anthropic or OpenAI, the combined limit applies: `N × (hyde.max_requests_per_minute + rag_fusion.max_requests_per_minute)` must not exceed your account rate limit. Not enforced for `provider = "ollama"`.
+- **Multi-worker deployments**: the rate limit is per-process. With N workers the effective call rate can be up to `N × max_requests_per_minute`. For deployments with both HyDE and RAG Fusion enabled using Anthropic or OpenAI, the combined limit applies: `N × (hyde.max_requests_per_minute + rag_fusion.max_requests_per_minute)` must not exceed your account rate limit. Not enforced for `provider = "ollama"` or `"claude_cli"`.
 - **Shared API key with HyDE**: when both features use the same provider, they share the same API key (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`). Tune both `max_requests_per_minute` values together to stay within your account limit.
-- **Provider selection (G10)**: change `[rag_fusion].provider` in TOML to `"ollama"` (local, no API cost, no key required) or `"openai"`. Run the wizard (`archon-search wizard`) for guided provider configuration.
+- **Provider selection (G10)**: change `[rag_fusion].provider` in TOML to `"ollama"` (local, no API cost, no key required), `"openai"`, or `"claude_cli"` (uses Claude Code's login, no API key). Run the wizard (`archon-search wizard`) for guided provider configuration.
 - **FTS-only collections**: `rag_fusion=true` is silently ignored (`rag_fusion_applied: false`) for collections without a vector index.
 - **`rag_fusion_queries_used` semantics**: counts only successful LLM-generated variant searches — does not count the original query search. The `rag_fusion_sub_queries` list (in `/explain` responses) will have `rag_fusion_queries_used + 1` entries.
 

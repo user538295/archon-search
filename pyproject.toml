@@ -103,6 +103,11 @@ norecursedirs = [
     # explicit `uv run pytest tests/eval/live_benchmark/` still works (pytest always
     # collects explicitly-passed paths regardless of norecursedirs).
     "tests/eval/live_benchmark",
+    # smoke tests spawn a real archon-search serve subprocess; excluding them prevents
+    # the default suite from auto-collecting this directory and spawning the server.
+    # Explicit `uv run pytest tests/smoke/ --no-cov` still works (pytest always
+    # collects explicitly-passed paths regardless of norecursedirs).
+    "tests/smoke",
 ]
 # --cov-fail-under=85 is intended for the default single-run invocation.
 # Split / matrix CI runs MUST combine coverage data (coverage combine) before
@@ -113,7 +118,7 @@ norecursedirs = [
 # -n is capped at 4 — never "auto": auto meant 14 workers on this 14-core machine, and on
 # model-loading paths each worker holds ~2 GB (fastembed/onnxruntime/torch); stacked runs
 # OOM-crashed the 48 GB machine on 2026-07-05 (Jetsam + WindowServer watchdog kill).
-addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n 4 --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark\""
+addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n 4 --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark and not smoke\""
 markers = [
     "benchmark: latency benchmark — serialized via xdist_group('benchmark'); server-dependent tests auto-skip when server is unreachable",
     "integration: integration tests requiring live infrastructure",
@@ -124,6 +129,7 @@ markers = [
     "archon_unset_data_dir: opt out of the autouse ARCHON_SEARCH_DATA_DIR isolation; the test exercises the Path.home() default-fallback path. Apply to the pinned MARKER_ALLOWLIST in tests/test_no_hardcoded_path_home.py only.",
     "live_benchmark: real-model latency benchmark; requires fastembed model cache; serialised via xdist_group('live_benchmark'); excluded from default suite",
     "unit: plain unit tests with no infrastructure dependencies",
+    "smoke: live subprocess smoke tests; require a real archon-search serve process; excluded from default run via norecursedirs + -m filter; run with `uv run pytest tests/smoke/ --no-cov`",
 ]
 
 [tool.uv]

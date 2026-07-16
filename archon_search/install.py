@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import json
 import logging
 import os
 import shutil
@@ -13,7 +14,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import rmtree
@@ -23,7 +24,7 @@ import click
 import tomlkit
 
 from archon_search._durable_io import atomic_write_bytes
-from archon_search.config import SearchConfig, get_default_config_path, load_config
+from archon_search.config import OLLAMA_BASE_URL_DEFAULT, SearchConfig, get_default_config_path, load_config
 from archon_search.key_manager import get_key_file, load_or_generate_key
 from archon_search.paths import get_data_dir
 from archon_search.pipeline import create_pipeline
@@ -146,6 +147,7 @@ class WizardFeatures:
 
     install_code_extra: bool = False
     install_graph_extra: bool = False
+    install_multilingual_extra: bool = False
     disable_reranker: bool = False
     enable_watch: bool = False
     enable_telemetry: bool = False
@@ -164,7 +166,7 @@ class WizardFeatures:
     enable_hyde: bool = False
     enable_rag_fusion: bool = False
     # G10 BE-8: provider-selection for HyDE / RAG Fusion
-    hyde_provider: str = "anthropic"          # "anthropic" | "openai" | "ollama"
+    hyde_provider: str = "anthropic"          # "anthropic" | "openai" | "ollama" | "claude_cli"
     hyde_model: str = ""                      # empty = use provider default
     hyde_ollama_base_url: str = ""            # empty = use config default
     rag_fusion_provider: str = "anthropic"
@@ -225,6 +227,26 @@ def _profile_toml(profile_name: str, multilingual: bool, features: WizardFeature
     return tomlkit.dumps(doc)
 
 
+def _reconcile_ollama_base_url(section: tomlkit.items.Table, base_url: str) -> None:
+    """Set or clear ``ollama_base_url`` on a config *section* table.
+
+    The wizard mutates an existing config on re-run, so a plain conditional write
+    would leak a previously-saved custom URL when the operator keeps Ollama but
+    reverts the URL to the default (``base_url == ""``). Writing authoritatively —
+    set a custom value, else delete any stale key so config falls back to
+    ``OLLAMA_BASE_URL_DEFAULT`` — keeps the stored URL in step with that choice.
+
+    Scope: this only runs while the section's provider is still Ollama. Clearing a
+    stale Ollama block when the operator switches provider *away* (e.g. back to
+    Anthropic) is broader re-run hygiene tracked separately in
+    ``Documentation/Backlog/2026-07-15-140-wizard-rerun-stale-config-brief.md``.
+    """
+    if base_url:
+        section["ollama_base_url"] = base_url
+    elif "ollama_base_url" in section:
+        del section["ollama_base_url"]
+
+
 def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFeatures) -> None:
     """Write non-default WizardFeatures fields to *doc* in-place.
 
@@ -234,6 +256,10 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
     subprocess install, not a config key. ``install_graph_extra`` also controls a
     subprocess install, but additionally writes ``graph.enabled = true`` (BE-11):
     without it, the auto-installed ``[graph]`` extras are inert (C1-I-1).
+    ``install_multilingual_extra`` is likewise NOT written here — unlike graph,
+    the ``[database].multilingual`` key is written separately by the profile
+    config writer (``_write_profile_config``/``_profile_toml``), so no overlay
+    flag is needed.
     """
 
     def _ensure_section(name: str) -> None:
@@ -300,23 +326,36 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         doc["hyde"]["enabled"] = True
         if features.hyde_provider != "anthropic":
             doc["hyde"]["provider"] = features.hyde_provider
-            # Always write model for non-Anthropic providers (even empty string) so
-            # config.py's "if not model: raise ConfigError" guard fires at startup
-            # when the operator left the model prompt blank.
-            doc["hyde"]["model"] = features.hyde_model
-            if features.hyde_provider == "ollama" and features.hyde_ollama_base_url:
-                doc["hyde"]["ollama_base_url"] = features.hyde_ollama_base_url
+            if features.hyde_provider == "claude_cli":
+                # Model is optional for claude_cli — a blank means "use Claude
+                # Code's default", so only write it when the operator chose one.
+                # Writing "" would trip config.py's non-empty guard at startup.
+                if features.hyde_model:
+                    doc["hyde"]["model"] = features.hyde_model
+            else:
+                # Always write model for ollama/openai (even empty string) so
+                # config.py's "if not model: raise ConfigError" guard fires at
+                # startup when the operator left the model prompt blank.
+                doc["hyde"]["model"] = features.hyde_model
+                if features.hyde_provider == "ollama":
+                    _reconcile_ollama_base_url(doc["hyde"], features.hyde_ollama_base_url)
 
     if features.enable_rag_fusion:
         _ensure_section("rag_fusion")
         doc["rag_fusion"]["enabled"] = True
         if features.rag_fusion_provider != "anthropic":
             doc["rag_fusion"]["provider"] = features.rag_fusion_provider
-            # Always write model for non-Anthropic providers (even empty string) so
-            # config.py's "if not model: raise ConfigError" guard fires at startup.
-            doc["rag_fusion"]["model"] = features.rag_fusion_model
-            if features.rag_fusion_provider == "ollama" and features.rag_fusion_ollama_base_url:
-                doc["rag_fusion"]["ollama_base_url"] = features.rag_fusion_ollama_base_url
+            if features.rag_fusion_provider == "claude_cli":
+                # Model is optional for claude_cli — a blank means "use Claude
+                # Code's default", so only write it when the operator chose one.
+                if features.rag_fusion_model:
+                    doc["rag_fusion"]["model"] = features.rag_fusion_model
+            else:
+                # Always write model for ollama/openai (even empty string) so
+                # config.py's "if not model: raise ConfigError" guard fires at startup.
+                doc["rag_fusion"]["model"] = features.rag_fusion_model
+                if features.rag_fusion_provider == "ollama":
+                    _reconcile_ollama_base_url(doc["rag_fusion"], features.rag_fusion_ollama_base_url)
 
     # BE-11: [graph] enabled must be written whenever the [graph] extras were
     # auto-installed, or the install is inert — see C1-I-1 / C1-A-4.
@@ -691,6 +730,10 @@ def _render_summary(
             feature_bullets.append("• Code enrichment (tree-sitter)")
         if features.install_graph_extra:
             feature_bullets.append("• Graph enrichment (code graphing)")
+        if features.enable_hyde:
+            feature_bullets.append(f"• HyDE: enabled (provider: {features.hyde_provider})")
+        if features.enable_rag_fusion:
+            feature_bullets.append(f"• RAG Fusion: enabled (provider: {features.rag_fusion_provider})")
         if features.disable_reranker:
             feature_bullets.append("• Reranker disabled")
         if features.enable_watch:
@@ -933,6 +976,172 @@ def _select_profile(
     raise SystemExit(1)  # unreachable, satisfies type checker
 
 
+_OLLAMA_FETCH_TIMEOUT_SECONDS = 5
+
+
+def _fetch_ollama_models(base_url: str) -> list[str]:
+    """Fetch installed model names from an Ollama server's ``/api/tags`` endpoint.
+
+    Returns a sorted list of model names, or ``[]`` on any failure — connection
+    refused, timeout, HTTP error, malformed JSON, or zero models installed.
+    Never raises: the wizard falls back to free-text entry on an empty list.
+    """
+    url = base_url.rstrip("/") + "/api/tags"
+    try:
+        with urllib.request.urlopen(url, timeout=_OLLAMA_FETCH_TIMEOUT_SECONDS) as resp:  # noqa: S310 (operator-supplied Ollama URL)
+            payload = json.loads(resp.read())
+    except Exception:  # noqa: BLE001 — best-effort probe; any failure (incl. http.client.IncompleteRead on a truncated body) → free-text fallback
+        return []
+    models = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(models, list):
+        return []
+    # Guard on str: a malformed entry like {"name": 123} would make sorted() raise
+    # TypeError (unorderable mixed types) — which must not escape this function.
+    names = [n for m in models if isinstance(m, dict) and isinstance(n := m.get("name"), str) and n]
+    return sorted(names)
+
+
+def _pick_ollama_model(models: list[str]) -> str:
+    """Show a numbered menu of ``models`` and return the chosen name.
+
+    One retry on an out-of-range or non-numeric entry; returns ``""`` on EOF or
+    after a second invalid entry (server startup then rejects the empty model).
+    """
+    print("\nInstalled Ollama models:")
+    for i, name in enumerate(models, start=1):
+        print(f"  {i}. {name}")
+    for attempt in range(2):
+        try:
+            raw = input(f"Select a model by number [1-{len(models)}]: ").strip()
+        except EOFError:
+            return ""
+        if raw.isdigit() and 1 <= int(raw) <= len(models):
+            return models[int(raw) - 1]
+        if attempt == 0:
+            print(f"  Enter a number between 1 and {len(models)}.")
+    return ""
+
+
+def _prompt_model_freetext(feature_label: str) -> str:
+    """Free-text model-name prompt with one retry; ``""`` on EOF or exhaustion."""
+    for attempt in range(2):
+        try:
+            m = input(f"Model name for {feature_label} (required for non-Anthropic providers): ").strip()
+        except EOFError:
+            return ""
+        if m:
+            return m
+        if attempt == 0:
+            print("  Model name is required for non-Anthropic providers.")
+    return ""
+
+
+def _prompt_ollama_model(feature_label: str, default_base_url: str) -> tuple[str, str]:
+    """Prompt for the Ollama base URL, then pick a model from the installed list.
+
+    Base URL is asked first (needed to fetch the model list); an empty answer
+    keeps ``default_base_url``. When models are found the user picks by number;
+    when the server is unreachable or has none, the wizard explains why and
+    falls back to free-text entry.
+
+    Returns ``(ollama_base_url, model)``. ``ollama_base_url`` is ``""`` when it
+    resolves to the built-in default (config supplies it), otherwise the custom
+    URL so it survives config regeneration.
+    """
+    try:
+        raw_url = input(f"Ollama base URL for {feature_label} [{default_base_url}]: ").strip()
+    except EOFError:
+        raw_url = ""
+    base_url = raw_url or default_base_url
+    stored = "" if base_url == OLLAMA_BASE_URL_DEFAULT else base_url
+
+    models = _fetch_ollama_models(base_url)
+    if models:
+        return stored, _pick_ollama_model(models)
+
+    print(
+        f"  No models available from {base_url}.\n"
+        f"  Ollama may not be running there, the address may be wrong, or no models are "
+        f'installed yet. If it is running, install one with "ollama pull <model-name>" and\n'
+        f"  re-run the wizard to pick from the list.\n"
+        f"  Falling back to manual model-name entry."
+    )
+    return stored, _prompt_model_freetext(feature_label)
+
+
+# Curated Claude model aliases shown by the wizard. The Claude CLI has no
+# runtime `models` subcommand, so this list is hardcoded and MUST be kept
+# current with Anthropic releases.
+_CLAUDE_MODEL_ALIASES: tuple[str, ...] = ("haiku", "sonnet", "opus", "fable")
+
+
+def _check_claude_cli_present() -> bool:
+    """Warn (but don't block) when the ``claude`` command is not on PATH.
+
+    Returns True when found. Mirrors the "wizard guides, doesn't block"
+    decision — a missing CLI surfaces its error on first search, exactly as a
+    missing ANTHROPIC_API_KEY does today.
+    """
+    if shutil.which("claude") is not None:
+        return True
+    print(
+        "  WARNING: 'claude' command not found in PATH.\n"
+        "  The claude_cli provider needs Claude Code installed and logged in.\n"
+        "  Install it from https://claude.ai/code, then start the server.\n"
+        "  Writing the config anyway — query expansion will fall back until 'claude' is available."
+    )
+    return False
+
+
+def _pick_claude_model(feature_label: str) -> str:
+    """Pick a Claude model: numbered alias, free-text full ID, or blank default.
+
+    Returns ``""`` when the operator leaves it blank (Claude Code uses its own
+    configured default) or on EOF.
+    """
+    print("\nClaude model aliases:")
+    for i, name in enumerate(_CLAUDE_MODEL_ALIASES, start=1):
+        print(f"  {i}. {name}")
+    print("  Or type a full model ID (e.g. claude-haiku-4-5-20251001).")
+    print("  Leave blank to use Claude Code's configured default.")
+    try:
+        raw = input(f"Model for {feature_label} (number, name, or blank): ").strip()
+    except EOFError:
+        return ""
+    if not raw:
+        return ""
+    if raw.isdigit() and 1 <= int(raw) <= len(_CLAUDE_MODEL_ALIASES):
+        return _CLAUDE_MODEL_ALIASES[int(raw) - 1]
+    return raw
+
+
+def _prompt_provider(
+    feature_label: str,
+    ask_choice: "Callable[[str, set[str], str], str]",
+    ollama_base_url_default: str,
+) -> tuple[str, str, str]:
+    """Ask which provider to use for *feature_label* and gather its model settings.
+
+    Returns ``(provider, model, ollama_base_url)``. ``model`` and
+    ``ollama_base_url`` are ``""`` when they resolve to the config default.
+    """
+    provider = ask_choice(
+        f"Which provider for {feature_label}? "
+        f"(anthropic/openai/ollama/claude_cli) [anthropic]: ",
+        {"anthropic", "openai", "ollama", "claude_cli"},
+        "anthropic",
+    )
+    if provider == "ollama":
+        base_url, model = _prompt_ollama_model(feature_label, ollama_base_url_default)
+        return provider, model, base_url
+    if provider == "openai":
+        return provider, _prompt_model_freetext(feature_label), ""
+    if provider == "claude_cli":
+        _check_claude_cli_present()
+        return provider, _pick_claude_model(feature_label), ""
+    return provider, "", ""
+
+
 def _prompt_optional_features(
     non_interactive: bool,
     profile: InstallProfile,
@@ -947,11 +1156,15 @@ def _prompt_optional_features(
     log_to_stderr: bool | None = None,
     enable_hyde: bool | None = None,
     enable_rag_fusion: bool | None = None,
+    hyde_ollama_base_url_default: str = OLLAMA_BASE_URL_DEFAULT,
+    rag_fusion_ollama_base_url_default: str = OLLAMA_BASE_URL_DEFAULT,
 ) -> WizardFeatures:
     """Ask seven optional-feature questions after profile selection.
 
     Each keyword argument pre-answers its question when not None; None triggers
-    an interactive prompt (or the default in non-interactive mode).
+    an interactive prompt (or the default in non-interactive mode). The
+    ``*_ollama_base_url_default`` values pre-fill the Ollama base-URL prompt so a
+    re-run keeps the address already saved in config with a single Enter.
     """
 
     def _ask_yn(prompt_text: str, default: bool = False) -> bool:
@@ -1014,7 +1227,7 @@ def _prompt_optional_features(
     elif non_interactive:
         _disable_reranker_val = False
     else:
-        _disable_reranker_val = _ask_yn("Disable reranker for lower latency? [y/N]: ")
+        _disable_reranker_val = not _ask_yn("Keep reranker enabled? [Y/n]: ", default=True)
 
     # --- enable_watch ---
     print(
@@ -1133,64 +1346,29 @@ def _prompt_optional_features(
             "\nAI query expansion (HyDE + RAG Fusion):\n"
             "  HyDE generates hypothetical answers to improve embedding recall.\n"
             "  RAG Fusion runs multiple query reformulations and merges results.\n"
-            "  Supports Anthropic, OpenAI, and Ollama providers.\n"
+            "  Providers:\n"
+            "    anthropic  - Anthropic API (needs ANTHROPIC_API_KEY)\n"
+            "    openai     - OpenAI API (needs OPENAI_API_KEY)\n"
+            "    ollama     - runs locally, no API key\n"
+            "    claude_cli - uses Claude Code's login, no API key\n"
             "  Default: disabled."
         )
         if _ask_yn("Enable AI query expansion (HyDE + RAG Fusion)? [y/N]: "):
             _enable_hyde_val = True
             _enable_rag_fusion_val = True
 
-            # Provider selection for HyDE
-            _hyde_provider_val = _ask_choice(
-                "Which provider for HyDE? (anthropic/openai/ollama) [anthropic]: ",
-                valid={"anthropic", "openai", "ollama"},
-                default="anthropic",
+            # Provider selection for HyDE. Ollama asks the base URL first (needed
+            # to fetch the installed-model list) then a numbered picker; OpenAI
+            # keeps free-text model entry; claude_cli checks PATH then offers a
+            # curated alias picker with a free-text fallback.
+            _hyde_provider_val, _hyde_model_val, _hyde_ollama_base_url_val = _prompt_provider(
+                "HyDE", _ask_choice, hyde_ollama_base_url_default
             )
-            if _hyde_provider_val != "anthropic":
-                for _attempt in range(2):
-                    try:
-                        _m = input("Model name for HyDE (required for non-Anthropic providers): ").strip()
-                    except EOFError:
-                        _m = ""
-                        break
-                    if _m:
-                        _hyde_model_val = _m
-                        break
-                    if _attempt == 0:
-                        print("  Model name is required for non-Anthropic providers.")
-            if _hyde_provider_val == "ollama":
-                try:
-                    _hyde_ollama_base_url_val = input(
-                        "Ollama base URL for HyDE [http://localhost:11434]: "
-                    ).strip()
-                except EOFError:
-                    _hyde_ollama_base_url_val = ""
 
-            # Provider selection for RAG Fusion
-            _rag_fusion_provider_val = _ask_choice(
-                "Which provider for RAG Fusion? (anthropic/openai/ollama) [anthropic]: ",
-                valid={"anthropic", "openai", "ollama"},
-                default="anthropic",
+            # Provider selection for RAG Fusion (same flow, independent picker).
+            _rag_fusion_provider_val, _rag_fusion_model_val, _rag_fusion_ollama_base_url_val = (
+                _prompt_provider("RAG Fusion", _ask_choice, rag_fusion_ollama_base_url_default)
             )
-            if _rag_fusion_provider_val != "anthropic":
-                for _attempt in range(2):
-                    try:
-                        _m = input("Model name for RAG Fusion (required for non-Anthropic providers): ").strip()
-                    except EOFError:
-                        _m = ""
-                        break
-                    if _m:
-                        _rag_fusion_model_val = _m
-                        break
-                    if _attempt == 0:
-                        print("  Model name is required for non-Anthropic providers.")
-            if _rag_fusion_provider_val == "ollama":
-                try:
-                    _rag_fusion_ollama_base_url_val = input(
-                        "Ollama base URL for RAG Fusion [http://localhost:11434]: "
-                    ).strip()
-                except EOFError:
-                    _rag_fusion_ollama_base_url_val = ""
         else:
             _enable_hyde_val = False
             _enable_rag_fusion_val = False
@@ -1338,6 +1516,125 @@ def _install_graph_extra(dry_run: bool = False) -> None:
         )
 
 
+def _install_multilingual_extra(dry_run: bool = False) -> None:
+    """Install ``archon-search[multilingual]`` (fasttext-wheel language detection).
+
+    Thin wrapper around :func:`_install_extra`.  Required by the server whenever
+    ``[database].multilingual = true``; without it ``_check_multilingual_deps``
+    hard-fails at startup.
+    """
+    _install_extra("archon-search[multilingual]", "multilingual language detection", dry_run)
+
+
+# Maps a HyDE / RAG Fusion provider to the pip extra that supplies its package.
+# 'claude_cli' is absent by design: it has no pip package (availability is the
+# `claude` binary on PATH). [hyde] and [rag_fusion] are byte-identical extras
+# (both pull anthropic>=0.40), so anthropic maps to a single name — this is what
+# lets the dedup below collapse anthropic-backed HyDE + RAG Fusion to one install.
+_PROVIDER_EXTRA: dict[str, str] = {
+    "anthropic": "archon-search[hyde]",
+    "openai": "archon-search[openai-provider]",
+    "ollama": "archon-search[ollama]",
+}
+
+
+def _install_query_expansion_extras(features: WizardFeatures, dry_run: bool = False) -> list[str]:
+    """Install provider packages for enabled HyDE / RAG Fusion features.
+
+    Resolves each enabled feature's provider to its pip extra and installs each
+    unique package once (so the common case — both features on the default
+    anthropic provider — installs a single package, while mixed providers install
+    each). ``claude_cli`` needs no package and is skipped. Returns the list of
+    feature SECTIONS (``"hyde"`` / ``"rag_fusion"``) whose provider package failed
+    to install (empty when all succeeded); never raises, so the caller can revert
+    exactly the flags whose package failed. When both features share a package
+    (both on anthropic), a single failure marks BOTH sections failed.
+    """
+    # Map each enabled section to its provider package (None = no package, e.g. claude_cli).
+    section_packages: list[tuple[str, str | None]] = []
+    if features.enable_hyde:
+        section_packages.append(("hyde", _PROVIDER_EXTRA.get(features.hyde_provider)))
+    if features.enable_rag_fusion:
+        section_packages.append(("rag_fusion", _PROVIDER_EXTRA.get(features.rag_fusion_provider)))
+
+    # Install each distinct package once.
+    packages: list[str] = []
+    for _section, pkg in section_packages:
+        if pkg and pkg not in packages:
+            packages.append(pkg)
+    failed_packages: list[str] = []
+    for package in packages:
+        try:
+            _install_extra(package, "AI query expansion", dry_run)
+        except InstallError as exc:
+            print(f"Warning: AI query expansion install failed for {package}: {exc}", file=sys.stderr)
+            failed_packages.append(package)
+
+    # Report the sections whose package failed (a shared failed package fails both).
+    return [section for section, pkg in section_packages if pkg is not None and pkg in failed_packages]
+
+
+def _revert_query_expansion_flags(
+    config_path: Path, dry_run: bool, *, sections: tuple[str, ...] = ("hyde", "rag_fusion")
+) -> None:
+    """Disable the given query-expansion *sections* and strip the provider keys
+    the wizard wrote, so no startup guard fires post-rollback.
+
+    Mirrors :func:`_revert_graph_enabled_flag`. ``run()`` writes ``enabled=true``
+    (and, for non-anthropic providers, ``provider``/``model``/``ollama_base_url``)
+    early — before the provider package is installed. If a later step aborts or an
+    install fails, leaving those keys on disk would hard-fail the next server start
+    via app.py's ``_check_provider_deps``: the anthropic guard is enabled-gated, but
+    the ollama/openai guards fire unconditionally on the provider value. Stripping
+    the provider keys reverts the section to the enabled-gated anthropic default,
+    which does not fire when disabled.
+    """
+    if dry_run or not config_path.exists():
+        return
+    doc = tomlkit.parse(config_path.read_text())
+    changed = False
+    for section in sections:
+        if section in doc and doc[section].get("enabled"):
+            doc[section]["enabled"] = False
+            for key in ("provider", "model", "ollama_base_url"):
+                if key in doc[section]:
+                    del doc[section][key]
+            changed = True
+    if changed:
+        atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
+        print(
+            "Warning: HyDE / RAG Fusion have been disabled because the install did "
+            "not complete. Re-run the wizard, or install the provider package "
+            "manually — e.g. `pip install archon-search[hyde]` (Anthropic, the "
+            "default), `archon-search[openai-provider]` (OpenAI), or "
+            "`archon-search[ollama]` (Ollama) — then set enabled = true under "
+            "[hyde] / [rag_fusion] in archon-search.toml.",
+            file=sys.stderr,
+        )
+
+
+def _assert_features_persisted(cfg: SearchConfig, features: WizardFeatures) -> None:
+    """Verify the wizard's HyDE / RAG Fusion choices survived the config round-trip.
+
+    Called in ``run()`` immediately after the freshly-written config is reloaded
+    via ``load_config``. Surfaces a silent write/parse failure at install time —
+    with an actionable message — instead of letting a feature show as enabled in
+    the wizard but disabled on the server. Raises ``InstallError`` on mismatch.
+    """
+    if features.enable_hyde and not cfg.hyde.enabled:
+        raise InstallError(
+            "[hyde].enabled was requested but is not present in the written "
+            "archon-search.toml after reload — the config write did not persist. "
+            "This is a bug; please re-run the wizard and report it if it recurs."
+        )
+    if features.enable_rag_fusion and not cfg.rag_fusion.enabled:
+        raise InstallError(
+            "[rag_fusion].enabled was requested but is not present in the written "
+            "archon-search.toml after reload — the config write did not persist. "
+            "This is a bug; please re-run the wizard and report it if it recurs."
+        )
+
+
 def _revert_graph_enabled_flag(config_path: Path, dry_run: bool) -> None:
     """Revert ``graph.enabled`` to false in the written config.
 
@@ -1359,6 +1656,35 @@ def _revert_graph_enabled_flag(config_path: Path, dry_run: bool) -> None:
             "Warning: graph.enabled has been reverted to false because "
             "the install did not complete; re-run the wizard or install "
             "archon-search[graph] manually to enable code/prose graphing.",
+            file=sys.stderr,
+        )
+
+
+def _revert_multilingual_flag(config_path: Path, dry_run: bool) -> None:
+    """Revert ``[database].multilingual`` to false in the written config.
+
+    ``run()`` writes ``multilingual=true`` early (config-write branches, Step
+    6/7/8) whenever a multilingual profile is selected, before the
+    ``[multilingual]`` extra is installed. If a later step aborts or fails
+    before that install succeeds, leaving ``multilingual=true`` on disk would
+    hard-fail the next server start via app.py's ``_check_multilingual_deps``
+    (fasttext-wheel absent). Reverting lets the server start English-only
+    instead of crashing. Mirrors :func:`_revert_graph_enabled_flag`. Note the
+    ``multilingual=true`` flag reverted here is written by the profile config
+    writer (``_write_profile_config``/``_profile_toml``), NOT by the
+    ``_apply_wizard_features_to_toml`` overlay that the graph flag comes from.
+    """
+    if dry_run or not config_path.exists():
+        return
+    doc = tomlkit.parse(config_path.read_text())
+    if "database" in doc and "multilingual" in doc["database"]:
+        doc["database"]["multilingual"] = False
+        atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
+        print(
+            "Warning: multilingual has been reverted to false because the "
+            "install did not complete; the server will start in English-only "
+            "mode. Re-run the wizard or install archon-search[multilingual] "
+            "manually to enable multilingual language detection.",
             file=sys.stderr,
         )
 
@@ -1737,6 +2063,8 @@ class SearchInstaller:
                 log_to_stderr=log_to_stderr if log_to_stderr else None,
                 enable_hyde=enable_hyde if enable_hyde else None,
                 enable_rag_fusion=enable_rag_fusion if enable_rag_fusion else None,
+                hyde_ollama_base_url_default=self.cfg.hyde.ollama_base_url,
+                rag_fusion_ollama_base_url_default=self.cfg.rag_fusion.ollama_base_url,
             )
 
             # Step 3d: overlay C15 Tier 1 flag values onto features
@@ -1758,6 +2086,11 @@ class SearchInstaller:
                 features.enable_hyde = enable_hyde
             if enable_rag_fusion:
                 features.enable_rag_fusion = enable_rag_fusion
+
+            # A multilingual profile needs the [multilingual] extra (fasttext-wheel)
+            # or the server hard-fails at startup. Derived from the resolved profile
+            # choice, so it fires identically in interactive and non-interactive paths.
+            features.install_multilingual_extra = is_multilingual
 
             # Step 3d-ii: non-loopback host security note
             _effective_host = features.host
@@ -1890,6 +2223,18 @@ class SearchInstaller:
             else:
                 self.cfg = cfg = load_config(config_path)
 
+            # Step 8c: assert the wizard's HyDE / RAG Fusion choices persisted through
+            # the write→parse→load round-trip. Surfaces a silent config-write failure
+            # at install time rather than as a feature that shows enabled in the wizard
+            # but disabled on the server. Skipped in dry-run (nothing was written).
+            if not self.dry_run:
+                try:
+                    _assert_features_persisted(cfg, features)
+                except InstallError as exc:
+                    print(f"Install error: {exc}", file=sys.stderr)
+                    _revert_query_expansion_flags(config_path, self.dry_run)
+                    return 1
+
             # Step 9: GPU provider configuration (detection + user confirm already done in Step 2b)
             providers: list[str] = []
             # ONNX provider string configured for the Metal/CoreML GPU path, or
@@ -1932,6 +2277,10 @@ class SearchInstaller:
                 print(str(exc))
                 if features.install_graph_extra:
                     _revert_graph_enabled_flag(config_path, self.dry_run)
+                if features.install_multilingual_extra:
+                    _revert_multilingual_flag(config_path, self.dry_run)
+                if features.enable_hyde or features.enable_rag_fusion:
+                    _revert_query_expansion_flags(config_path, self.dry_run)
                 return 1
 
             # Step 12: summary display
@@ -1952,6 +2301,10 @@ class SearchInstaller:
                     print("Installation aborted.")
                     if features.install_graph_extra:
                         _revert_graph_enabled_flag(config_path, self.dry_run)
+                    if features.install_multilingual_extra:
+                        _revert_multilingual_flag(config_path, self.dry_run)
+                    if features.enable_hyde or features.enable_rag_fusion:
+                        _revert_query_expansion_flags(config_path, self.dry_run)
                     return 1
 
             # Before Step 14: install code enrichment packages if requested
@@ -1971,6 +2324,28 @@ class SearchInstaller:
                     # Non-fatal — continue, but roll back the already-written
                     # graph.enabled=true config flag (C2-A / C3-A-1 fix).
                     _revert_graph_enabled_flag(config_path, self.dry_run)
+
+            # Before Step 14: install multilingual package if a multilingual profile
+            # was selected (2026-07-15-040). Same shape as the graph install above:
+            # non-fatal, and roll back the already-written multilingual=true flag on
+            # failure so the server starts English-only rather than crashing.
+            if features.install_multilingual_extra:
+                try:
+                    _install_multilingual_extra(dry_run=self.dry_run)
+                except InstallError as exc:
+                    print(f"Warning: multilingual install failed: {exc}", file=sys.stderr)
+                    _revert_multilingual_flag(config_path, self.dry_run)
+
+            # Before Step 14: install provider packages for enabled HyDE / RAG Fusion.
+            # Same shape as the graph/multilingual installs above: non-fatal, and
+            # roll back the already-written enabled=true flags on failure so the next
+            # server start does not hard-fail on the missing provider package
+            # (the anthropic guard in app.py's _check_provider_deps).
+            # ponytail: revert wiring is triplicated across the disk-space/decline/install exit paths (mirrors the pre-existing graph & multilingual reverts); consolidate into one _revert_optional_feature_flags helper if a 4th revertable feature is added.
+            if features.enable_hyde or features.enable_rag_fusion:
+                _failed_sections = _install_query_expansion_extras(features, dry_run=self.dry_run)
+                if _failed_sections:
+                    _revert_query_expansion_flags(config_path, self.dry_run, sections=tuple(_failed_sections))
 
             # Before Step 14b: create .secrets.env when AI query expansion is enabled
             if features.enable_hyde or features.enable_rag_fusion:

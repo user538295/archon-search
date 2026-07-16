@@ -23,7 +23,7 @@ uv run archon-search
 # Does not invoke launchd/systemd; blocks until SIGTERM/Ctrl-C.
 uv run archon-search serve
 
-# Full test suite — all markers except live_benchmark
+# Full test suite — all markers except live_benchmark and smoke
 uv run pytest
 
 # Serial execution — reserved for developer debugging only (fail-fast, stdout passthrough)
@@ -36,19 +36,23 @@ uv run pytest --no-cov
 # live_benchmark suite — excluded from default runs; skips gracefully without the fastembed model cache
 uv run pytest -m live_benchmark tests/eval/live_benchmark/ --no-cov
 
+# smoke suite — excluded from default runs; spawns a real archon-search serve subprocess; requires the fastembed model cache
+uv run pytest tests/smoke/ --no-cov
+
 # Cut a release (tag + push; CI runs eval + publishes to PyPI via OIDC)
 bash release.sh           # interactive
 bash release.sh -y        # non-interactive
 bash release.sh --dry-run
 ```
 
-Test markers (all run by default except `live_benchmark`; full rules under Repository conventions):
+Test markers (all run by default except `live_benchmark` and `smoke`; full rules under Repository conventions):
 
 - `integration` — run by default; no server or network required.
 - `benchmark` — serialized via `xdist_group("benchmark")`; server-dependent tests auto-skip.
 - `eval` — gated eval tests **run by default**: `--thresholds-path tests/eval/thresholds.toml` is wired into `addopts`. They skip only when invoked without that flag.
 - `live` / `live_eval` — skip gracefully when live infrastructure is absent.
-- `live_benchmark` — excluded from default runs at two levels (see Repository conventions); run separately with the command above.
+- `live_benchmark` — excluded from default runs primarily via `norecursedirs`, with `-m` addopts filter as a secondary guard (see Repository conventions); run separately with the command above.
+- `smoke` — excluded from default runs the same way as `live_benchmark` (`norecursedirs` primary, `-m` addopts filter secondary); every smoke test file sets `pytestmark = pytest.mark.xdist_group("smoke_e2e")` at module level to serialize onto one worker and prevent concurrent server subprocess instances; run separately with the command above.
 
 **PARALLEL TESTS ARE MANDATORY: Always run `uv run pytest` without `-n0`. The `addopts` in `pyproject.toml` already sets `-n 4 --dist=loadgroup`. The worker count is deliberately capped at 4 — never raise it back to `-n auto`: auto meant 14 workers on this 14-core machine, and on model-loading paths each worker holds ~2 GB (fastembed/onnxruntime/torch), which OOM-crashed the 48 GB machine on 2026-07-05. Never add `-n0` — it disables parallelism and is reserved for developer debugging only. To see more failure detail, use `--tb=short` or `--tb=long`, never `-n0 -s`.**
 
@@ -101,7 +105,7 @@ Opt-in and **disabled by default**; one JSONL line per call under `~/.archon-sea
 
 ## Repository conventions
 
-- Default pytest run includes **all** markers except `live_benchmark`, which is excluded at **two levels**: (1) `norecursedirs = ["tests/eval/live_benchmark"]` in `pyproject.toml` prevents pytest from auto-traversing that directory, so its conftest (which removes fastembed stubs at module level) is **never imported** during default collection — the critical isolation (without it, every xdist worker would poison `sys.modules["fastembed"]` for all subsequent tests); (2) `-m "not live_benchmark"` in `addopts` is a secondary guard. Gated `eval` tests run by default because `--thresholds-path tests/eval/thresholds.toml` is wired into `addopts`; they skip only when invoked without that flag. `live`/`live_eval` tests gating on `ANTHROPIC_API_KEY` always skip on default runs because the autouse fixture in `tests/conftest.py` clears the key on every test (eliminates the 30 s SDK-timeout floor); to run live tests against a real key, temporarily comment out the `monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)` line in `tests/conftest.py` — there is no clean shell-level workaround since every invocation loads the root conftest. Coverage gate (`--cov-fail-under=85`) applies to the default single-run invocation; split/matrix CI runs MUST `coverage combine` before applying the threshold; never bake `--no-cov` into `addopts`.
+- Default pytest run includes **all** markers except `live_benchmark` and `smoke`, each excluded at **two levels**: (1) `norecursedirs = ["tests/eval/live_benchmark", "tests/smoke"]` in `pyproject.toml` prevents pytest from auto-traversing those directories — for `live_benchmark` this keeps its conftest (which removes fastembed stubs at module level) **never imported** during default collection, the critical isolation (without it, every xdist worker would poison `sys.modules["fastembed"]` for all subsequent tests); for `smoke` this prevents the real `archon-search serve` subprocess fixture from ever being collected by default; (2) `-m "not live_benchmark and not smoke"` in `addopts` is a secondary guard for both. Gated `eval` tests run by default because `--thresholds-path tests/eval/thresholds.toml` is wired into `addopts`; they skip only when invoked without that flag. `live`/`live_eval` tests gating on `ANTHROPIC_API_KEY` always skip on default runs because the autouse fixture in `tests/conftest.py` clears the key on every test (eliminates the 30 s SDK-timeout floor); to run live tests against a real key, temporarily comment out the `monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)` line in `tests/conftest.py` — there is no clean shell-level workaround since every invocation loads the root conftest. Coverage gate (`--cov-fail-under=85`) applies to the default single-run invocation; split/matrix CI runs MUST `coverage combine` before applying the threshold; never bake `--no-cov` into `addopts`.
 - `tests/integration/` contains multi-component integration/e2e tests exercising real components (real `SearchStore`, real `SearchPipeline`, real LanceDB in `tmp_path`, `TestClient` against a real FastAPI app), distinct from unit tests in `tests/` which use the ML stubs from `tests/conftest.py`. They are marked `integration` and run in the default suite; isolate with `uv run pytest -m integration tests/integration/`. Shared helpers (`make_real_app`, `ingest_doc`, `ingest_file_via_path`, `search`, `make_real_pipeline`) live in `tests/integration/conftest.py` — do NOT modify `tests/conftest.py` when adding integration tests.
 - The package directory is `archon_search/` (underscore), the distribution is `archon-search` (hyphen). `pyproject.toml` `[tool.hatch.build.targets.wheel].packages` is explicit about this — don't "fix" it.
 - Breaking REST/MCP changes go in `BREAKING.md`.
