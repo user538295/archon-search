@@ -77,7 +77,7 @@ flowchart LR
     - Tests
 
 ### Phase 1 · Rebuild communities via REST *(the walking skeleton: a REST client triggers a rebuild, the job runs to completion, and it is tracked in `/jobs` — carries the trackable-job data foundation)*
-- [ ] **BE-1** — Add `CommunityRebuildJob` (`types.py`, subclass `IngestJob`) and make it round-trip through `JobStore`: register a `"community_rebuild"` branch in `_write_atomic`'s isinstance cascade (before the final `else`) and in `_load`'s `job_type` dispatch, plus a `create_community_rebuild(collection, namespace)` factory via the shared `create_job` helper #backend-role
+- [x] **BE-1** — Add `CommunityRebuildJob` (`types.py`, subclass `IngestJob`) and make it round-trip through `JobStore`: register a `"community_rebuild"` branch in `_write_atomic`'s isinstance cascade (before the final `else`) and in `_load`'s `job_type` dispatch, plus a `create_community_rebuild(collection, namespace)` factory via the shared `create_job` helper #backend-role
     - Interface Adapters *(also Entities: the new dataclass)* · 3.0h
     - needs K1 · completes C2
     - Tests

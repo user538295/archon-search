@@ -97,6 +97,11 @@ class MigrationJob(IngestJob):
 
 
 @dataclass
+class CommunityRebuildJob(IngestJob):
+    collection: str = ""
+
+
+@dataclass
 class Query:
     text: str
     slots: int | None = None

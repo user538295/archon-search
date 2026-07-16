@@ -13,7 +13,15 @@ from typing import Literal
 from archon_search._durable_io import atomic_write_json
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import IngestJob, JobStatus, get_jobs_file
-from archon_search.types import DeleteJob, ExportJob, ImportJob, MigrationJob, MigrationKind, ReindexJob
+from archon_search.types import (
+    CommunityRebuildJob,
+    DeleteJob,
+    ExportJob,
+    ImportJob,
+    MigrationJob,
+    MigrationKind,
+    ReindexJob,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +196,23 @@ class JobStore:
         )
         return self.create_job(job)  # type: ignore[return-value]
 
+    def create_community_rebuild(
+        self,
+        collection: str,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> CommunityRebuildJob:
+        """Create a CommunityRebuildJob with QUEUED status and persist it."""
+        now = _now_iso()
+        job = CommunityRebuildJob(
+            job_id=str(uuid.uuid4()),
+            status=JobStatus.QUEUED,
+            created_at=now,
+            updated_at=now,
+            namespace=namespace,
+            collection=collection,
+        )
+        return self.create_job(job)  # type: ignore[return-value]
+
     def update_progress(self, job_id: str, processed: int, total: int, phase: str) -> None:
         """Set the progress dict on a job."""
         self.update(job_id, progress={"processed": processed, "total": total, "phase": phase})
@@ -255,6 +280,8 @@ class JobStore:
                 elif job_type == "migration":
                     item["kind"] = MigrationKind(item["kind"])
                     job = MigrationJob(**item)
+                elif job_type == "community_rebuild":
+                    job = CommunityRebuildJob(**item)
                 else:
                     job = IngestJob(**item)
                 if job.status in _CRASH_STATUSES:
@@ -290,6 +317,8 @@ class JobStore:
                 item["job_type"] = "reindex"
             elif isinstance(job, DeleteJob):
                 item["job_type"] = "delete"
+            elif isinstance(job, CommunityRebuildJob):
+                item["job_type"] = "community_rebuild"
             else:
                 item["job_type"] = "ingest"
             data.append(item)
