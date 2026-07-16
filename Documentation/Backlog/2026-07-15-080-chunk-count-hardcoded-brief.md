@@ -31,9 +31,11 @@ Operators checking collection health via the REST API, a dashboard, or the CLI (
 - `list_collections` iterates all collections: N count queries per request. Acceptable for typical collection counts; cache if profiling shows it matters later.
 - Namespace isolation: `count_chunks` must receive the correct `ns` for each collection to avoid cross-namespace leakage.
 
-## Open Questions
-- Does `meta.chunk_count` get updated on ingest? If yes, reading `meta.chunk_count` would be cheaper than a live count query and should be preferred — verify in `pipeline.py` ingest path.
-- Is `count_chunks` O(1) in LanceDB (metadata read) or O(n) (full scan)? This affects whether a live call in `list_collections` is safe at scale.
+## Open Questions (resolved)
+- **Does `meta.chunk_count` get updated on ingest?** Yes — the centroid-maintenance path increments it (`store.py:1405`, and `store.py:1450` for a brand-new collection) and delete decrements it (`store.py:1514`). **But** it is NOT reliably current: the early-return branch taken when a batch has NaN/inf vectors sets `needs_recompute` and skips the count update (`store.py:1394-1402`, `1435-1442`), so the cached value can drift below the true count. Prefer the live count.
+- **Is `count_chunks` O(1) in LanceDB?** O(1) — it calls `table.count_rows()` (metadata read, not a scan), documented as such in the docstring (`store.py:2605-2620`). The N+1 concern in `list_collections` is therefore a non-issue: N cheap metadata reads, not N full scans. Drop the "cache if profiling shows it matters" hedge.
+
+Decision: use the live `count_chunks()` call in all four handlers (Option A).
 
 ## Future Iterations
 - Stream live chunk counts via a WebSocket or SSE endpoint for dashboards that need real-time ingestion progress

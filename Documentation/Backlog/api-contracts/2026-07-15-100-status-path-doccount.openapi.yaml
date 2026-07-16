@@ -1,0 +1,87 @@
+openapi: 3.0.0
+info:
+  title: Archon Search Status API
+  version: 0.0.0
+tags: []
+paths:
+  /status:
+    get:
+      operationId: Status_status
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+components:
+  schemas:
+    StatusCollectionEntry:
+      type: object
+      required:
+        - name
+        - path
+        - status
+        - watching
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        doc_count:
+          type: integer
+          format: int32
+          default: 0
+        chunk_count:
+          type: integer
+          format: int32
+          default: 0
+        status:
+          type: string
+        watching:
+          type: boolean
+        eta_seconds:
+          type: number
+          format: double
+          nullable: true
+        processed_files:
+          type: integer
+          format: int32
+          default: 0
+        total_files:
+          type: integer
+          format: int32
+          default: 0
+        error:
+          type: string
+          nullable: true
+        error_count:
+          type: integer
+          format: int32
+          default: 0
+        needs_reindex:
+          type: boolean
+          default: false
+        warning:
+          type: string
+          nullable: true
+        community_count:
+          type: integer
+          format: int32
+          default: 0
+        last_built_at:
+          type: string
+          nullable: true
+    StatusResponse:
+      type: object
+      required:
+        - running
+        - collections
+      properties:
+        running:
+          type: boolean
+        collections:
+          type: array
+          items:
+            $ref: '#/components/schemas/StatusCollectionEntry'
