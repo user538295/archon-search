@@ -65,13 +65,15 @@ A second group: developers already using Claude Code who want query expansion wi
 - **Both HyDE and RAG Fusion enabled with different providers**: fully supported by the existing config structure (`[hyde] provider` and `[rag_fusion] provider` are independent fields). Wizard should ask per-feature if both are enabled.
 - **`claude -p` output format**: the subprocess may include status lines or ANSI codes depending on Claude Code version. The provider implementation must strip non-text output before returning the generated text.
 
-## Open Questions
+## Resolved Decisions (was Open Questions)
 
-- Exact subprocess invocation for `claude_cli`: is it `claude -p "<prompt>"`, `claude --print "<prompt>"`, or `echo "<prompt>" | claude`? The flag name may differ across Claude Code versions — verify against current CLI help before implementing. It should be run in non-interactive mode.
-- `claude_cli` model: reuse the existing `[hyde] model` / `[rag_fusion] model` TOML field — pass it as `--model <value>` to the subprocess; omit the flag entirely when the value equals `DEFAULT_FAST_MODEL` or is blank, letting Claude Code use its own configured default. No new config field needed.
-- Robust availability check beyond `shutil.which`: should the wizard also attempt `claude --version` to confirm the CLI is functional and authenticated, or is PATH presence sufficient?
-- Wizard UX when both HyDE and RAG Fusion are enabled: ask provider once (same for both) or ask separately? Separate is more flexible; once is simpler. Plan-maker should decide.
-- `_VALID_PROVIDERS` in `config.py` needs `"claude_cli"` added — confirm no snapshot tests hard-code the current valid set.
+Resolved 2026-07-16. Verified against the installed Claude Code CLI and the current source; rationale recorded per decision.
+
+- **Subprocess invocation — RESOLVED: `claude -p "<prompt>" --output-format text --model <model>`.** The prompt is passed as an argument via a subprocess list (no shell, so no escaping/injection concern). `-p/--print`, `--output-format`, and `--model` are all present in the installed CLI (`claude --help`). Choosing `--output-format text` yields clean output and largely dissolves the ANSI/status-line stripping worry in Edge Cases below — that mode is documented plain text. The spike's only job is to re-confirm these flags against the Claude Code version shipped against and hard-code the confirmed form; `-p` alone is the fallback if `--output-format` is ever renamed. Rejected: bare `claude -p` (forces manual output stripping); stdin pipe (solves a prompt-length ceiling the short HyDE/RAG-Fusion prompts never hit).
+- **Model selection — RESOLVED (as previously proposed):** reuse the existing `[hyde] model` / `[rag_fusion] model` TOML field; pass it as `--model <value>`; omit the flag entirely when the value is blank or equals `DEFAULT_FAST_MODEL` (`"claude-haiku-4-5-20251001"`, `constants.py:28`), letting Claude Code use its own configured default. No new config field.
+- **Availability check — RESOLVED: `shutil.which("claude")` only.** No check the wizard can run proves the CLI is logged in (`--version` reports fine when logged out; a real `claude -p` probe is slow, can hang, and may cost tokens). PATH presence matches the "wizard guides, doesn't block" decision — a logged-out CLI surfaces its error on first search, exactly as a missing `ANTHROPIC_API_KEY` does today. Revisit only if operators report confusion.
+- **Wizard UX when both features enabled — RESOLVED: ask provider once, apply to both.** The config fields (`hyde_provider` / `rag_fusion_provider`, `install.py:168–172`) stay independent, so an operator wanting different providers per feature can still hand-edit the TOML. A per-feature prompt would double the questions for a rare case; add it only if that case proves common.
+- **`_VALID_PROVIDERS` — RESOLVED: add `"claude_cli"` (safe).** Single-source check at `config.py:25` (rejects unknown names at `config.py:630`/`672`). Verified: no test hard-codes the current three-provider set as an assertion, so adding a fourth breaks no snapshot.
 
 ## Future Iterations
 
