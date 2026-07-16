@@ -19,7 +19,7 @@ Developers and operators who have ingested a large code or document corpus with 
 ## In Scope
 - New REST endpoint `POST /graph/{collection}/rebuild-communities` that enqueues a community rebuild job
 - CLI `graph build-communities` updated to call that endpoint instead of running in-process
-- `--wait` flag (reuse the polling pattern from `migrate_cmd.py`)
+- `--wait` flag (reuse the polling pattern from `cli/collection.py`'s `_poll_migration_job`)
 - Clear error when server is not running: `"Server is not running. Start it first with: archon-search start"`
 
 ## Out of Scope
@@ -49,11 +49,12 @@ Developers and operators who have ingested a large code or document corpus with 
 - Progress streaming (SSE) for long-running Leiden partitioning on large graphs.
 
 ## References
+- **Team plan:** [2026-07-15-110-graph-build-communities-bypass-team-plan.md](./2026-07-15-110-graph-build-communities-bypass-team-plan.md)
 - [[archon_search/cli/graph_cmd.py:64–87]] `[code-agent]` — in-process implementation being replaced
-- [[archon_search/cli/migrate_cmd.py]] `[code-agent]` — REST-proxy + `--wait` pattern to follow
+- [[archon_search/cli/collection.py]] `[code-agent]` — REST-proxy + `--wait` pattern to follow (`migrate_cmd.py` does not exist; the migrate CLI and its `_poll_migration_job` polling helper live in `cli/collection.py`)
 - [[archon_search/jobs/]] `[code-agent]` — async job infrastructure
 - [[archon_search/server/routes_graph.py]] `[code-agent]` — existing graph routes; new endpoint goes here
-- [[Documentation/Backlog/bug-008-cli-server-proxy-brief.md]] `[user]` — parent architectural brief this depends on
+- [[Documentation/Backlog/2026-07-15-120-cli-server-proxy-brief.md]] `[user]` — parent architectural brief this depends on (formerly referenced as "bug-008")
 
 ## Recommendation
 Build this as part of the bug-008 CLI-server-proxy rollout — it is one of the eight commands that need porting. The only thing that makes it slightly more work than the others is the missing REST endpoint: every other bypassing command (add, remove, reindex, ingest, sync) already has a server-side route to call. The new endpoint is small (delegates to `CommunityBuilder.build()` wrapped in a job), but it must be built before the CLI change can land. Do not compromise on the serialisation constraint — concurrent in-process writes to the community tables are the most data-corrupting failure mode in this batch.
