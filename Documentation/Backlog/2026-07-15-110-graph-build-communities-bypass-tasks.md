@@ -111,7 +111,7 @@ flowchart LR
         - #unit_test — `test_collection_meta_persists_community_rebuild_job_id` — a set id survives write + reload through `update_collection_meta`/`_row_to_meta`
         - #unit_test — `test_community_rebuild_job_id_sentinel_coercion` — `None` ⇄ `""` coercion holds both directions (Mo3)
         - #integration_test — `test_meta_field_threaded_through_write_paths` — a meta written via the collection write paths and reloaded still carries the id (guards the multi-site threading)
-- [ ] **BE-5** — Add the `409` duplicate guard to the route and the two clear mechanisms (mirroring reindex, CM-1): set `community_rebuild_job_id` on enqueue; the guard reads it, looks up the job, returns `409` `"community rebuild already in progress for this collection"` only when the job is active (`{RUNNING, QUEUED, PENDING}`), else lazily clears the stale id and proceeds; the BE-3 task actively clears the id on **every** terminal exit (DONE and FAILED), each clear wrapped in its own `try/except Exception` #backend-role
+- [x] **BE-5** — Add the `409` duplicate guard to the route and the two clear mechanisms (mirroring reindex, CM-1): set `community_rebuild_job_id` on enqueue; the guard reads it, looks up the job, returns `409` `"community rebuild already in progress for this collection"` only when the job is active (`{RUNNING, QUEUED, PENDING}`), else lazily clears the stale id and proceeds; the BE-3 task actively clears the id on **every** terminal exit (DONE and FAILED), each clear wrapped in its own `try/except Exception` #backend-role
     - Presentation *(also Use Cases: the task-side active clear)* · 4.0h
     - needs BE-2, BE-3, BE-4 · completes C2, S7, S16
     - Tests

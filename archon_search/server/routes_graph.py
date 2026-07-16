@@ -50,13 +50,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Error map for rebuild_communities: 401 (auth), 404 (collection not found),
-# 422 (graph disabled). No 409 yet — the duplicate-rebuild guard is BE-5, not
-# implemented in this route.
+# 409 (rebuild already in progress), 422 (graph disabled).
 _REBUILD_ERROR_RESPONSES = {
     401: {"model": ErrorDetail},
     404: {"model": ErrorDetail},
+    409: {"model": ErrorDetail},
     422: {"model": ErrorDetail},
 }
+
+# Pinned "in progress" status set for the community_rebuild_job_id guard
+# (BE-5, CM-3). This route creates the job then transitions QUEUED -> RUNNING
+# before returning, same shape as the migrate route's reindex_job_id conflict
+# check (routes_collections.py ~915-924) -- QUEUED/PENDING only cover the
+# narrow window between job creation and the transition call.
+_REBUILD_ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.QUEUED, JobStatus.PENDING}
 
 
 async def _community_rebuild_task(
@@ -80,6 +87,13 @@ async def _community_rebuild_task(
       3. Transition to DONE with ``result={"communities_built": N}`` on success.
       4. Transition to FAILED with the error string on
          ``ValueError``/``ImportError``/``RuntimeError``.
+
+    BE-5: on every terminal exit (DONE and FAILED), actively clears
+    ``CollectionMeta.community_rebuild_job_id`` (mirrors ``_reindex_task``'s
+    pattern, ``routes_jobs.py``). The clear is wrapped in its own
+    ``try/except Exception`` so a clear failure logs and is swallowed, never
+    crashing the task -- the lazy clear in the route's guard is the fallback
+    that unwedges the collection if this active clear never runs (S16).
     """
     job_id = job.job_id
     builder = CommunityBuilder(graph_store, graph_config, search_store=search_store)
@@ -98,6 +112,18 @@ async def _community_rebuild_task(
         except (KeyError, OSError):
             logger.error(
                 "_community_rebuild_task: could not persist FAILED status for job %s", job_id
+            )
+
+    if search_store is not None:
+        try:
+            meta = await search_store.get_collection_meta(job.collection, namespace=job.namespace)
+            if meta is not None and meta.community_rebuild_job_id == job_id:
+                meta.community_rebuild_job_id = None
+                await search_store.update_collection_meta(meta)
+        except Exception:
+            logger.warning(
+                "_community_rebuild_task: failed to clear community_rebuild_job_id for job %s",
+                job_id,
             )
 
 
@@ -126,6 +152,7 @@ async def rebuild_communities(collection: str, request: Request) -> JSONResponse
     Returns:
     - 202: JobResponse-shaped body, status RUNNING.
     - 404: Collection not found in the caller's namespace.
+    - 409: A rebuild is already in progress for this collection (BE-5).
     - 422: graph.enabled=false.
     """
     pipeline = request.app.state.pipeline
@@ -157,6 +184,21 @@ async def rebuild_communities(collection: str, request: Request) -> JSONResponse
     if collection_meta is None:
         raise HTTPException(status_code=404, detail="collection not found")
 
+    # Guard 3 (BE-5, C2/CM-1): reject a duplicate rebuild already in progress,
+    # mirroring the reindex/migrate reindex_job_id conflict checks
+    # (routes_collections.py). If the referenced job is missing or terminal,
+    # the id is stale -- clear it and proceed (lazy clear; this is what
+    # unwedges a collection after a server crash mid-rebuild, S16, since
+    # JobStore._load's crash-status flip never touches CollectionMeta).
+    if collection_meta.community_rebuild_job_id is not None:
+        existing_job = job_store.get(collection_meta.community_rebuild_job_id)
+        if existing_job is not None and existing_job.status in _REBUILD_ACTIVE_STATUSES:
+            return JSONResponse(
+                {"detail": "community rebuild already in progress for this collection"},
+                status_code=409,
+            )
+        collection_meta.community_rebuild_job_id = None
+
     try:
         job = job_store.create_community_rebuild(collection=collection, namespace=ns)
     except OSError:
@@ -168,6 +210,17 @@ async def rebuild_communities(collection: str, request: Request) -> JSONResponse
     if running_job is None:
         logger.error("rebuild_communities: failed to transition job %s to RUNNING", job.job_id)
         return JSONResponse({"detail": "internal error"}, status_code=500)
+
+    # Set on enqueue (BE-5, C2) so the guard above can detect and reject a
+    # duplicate rebuild request while this one is active.
+    collection_meta.community_rebuild_job_id = running_job.job_id
+    try:
+        await search_store.update_collection_meta(collection_meta)
+    except Exception:
+        logger.warning(
+            "rebuild_communities: failed to persist community_rebuild_job_id for job %s",
+            running_job.job_id,
+        )
 
     task = asyncio.create_task(
         _community_rebuild_task(

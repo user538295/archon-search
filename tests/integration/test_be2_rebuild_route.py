@@ -1,10 +1,11 @@
-"""Unit + integration tests for BE-2 — POST /graph/{collection}/rebuild-communities.
+"""Unit + integration tests for BE-2/BE-5 — POST /graph/{collection}/rebuild-communities.
 
 Follows the migrate route (routes_collections.py, migrate_collection): validate
 graph-enabled (422) and collection-exists (404), create the job, transition
 QUEUED -> RUNNING, spawn the BE-3 task into _background_tasks, return 202 with
 the full JobResponse body. Relies solely on APIKeyMiddleware for auth — no
-graph-viewer ?token= branch.
+graph-viewer ?token= branch. BE-5 adds the 409 duplicate-rebuild guard and its
+two clear mechanisms (active, in the task; lazy, in the guard's read-path).
 
 Covers:
 - #unit_test test_rebuild_route_returns_202_running_job
@@ -14,6 +15,10 @@ Covers:
 - #unit_test test_rebuild_route_500_on_invalid_namespace_sentinel
 - #integration_test test_rebuild_targets_token_namespace_tables
 - #integration_test test_rebuild_route_422_when_graph_store_none
+- #unit_test test_second_rebuild_returns_409
+- #unit_test test_stale_job_id_cleared_and_proceeds
+- #unit_test test_task_clears_job_id_on_every_terminal_exit
+- #integration_test test_crash_recovery_unwedges_via_lazy_clear
 """
 from __future__ import annotations
 
@@ -367,3 +372,198 @@ def test_rebuild_targets_token_namespace_tables(tmp_path: Path, monkeypatch: pyt
     # even if the route keyed tables by collection name alone.
     assert not asyncio.run(_communities_table_exists(cfg.db_path, col_a, "nsb"))
     assert not asyncio.run(_communities_table_exists(cfg.db_path, col_b, "nsa"))
+
+
+# ---------------------------------------------------------------------------
+# S7 (unit) — a second rebuild request while one is active -> 409, no
+# duplicate job created.
+# ---------------------------------------------------------------------------
+
+
+def test_second_rebuild_returns_409(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An active community_rebuild_job_id -> 409, no duplicate job created (S7)."""
+    _install_spacy_stub(monkeypatch)
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        asyncio.run(_seed_collection(cfg.db_path, "testcol"))
+
+        from archon_search.types import JobStatus
+
+        job_store = client.app.state.job_store
+        active_job = job_store.create_community_rebuild(collection="testcol", namespace="default")
+        job_store.transition(active_job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+
+        search_store = client.app.state.search_store
+        meta = asyncio.run(search_store.get_collection_meta("testcol", namespace="default"))
+        meta.community_rebuild_job_id = active_job.job_id
+        asyncio.run(search_store.update_collection_meta(meta))
+
+        jobs_before = len(job_store.list())
+
+        resp = client.post("/graph/testcol/rebuild-communities", headers=_auth(api_key))
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "community rebuild already in progress for this collection"
+        assert len(job_store.list()) == jobs_before
+
+
+# ---------------------------------------------------------------------------
+# Lazy clear — a stale/missing/terminal referenced job -> id cleared, request
+# proceeds to 202.
+# ---------------------------------------------------------------------------
+
+
+def test_stale_job_id_cleared_and_proceeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing/terminal referenced job -> id cleared, request proceeds to 202 (lazy clear)."""
+    _install_spacy_stub(monkeypatch)
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        asyncio.run(_seed_collection(cfg.db_path, "testcol"))
+
+        search_store = client.app.state.search_store
+        meta = asyncio.run(search_store.get_collection_meta("testcol", namespace="default"))
+        # Points at a job_id that was never created (missing) -- the guard
+        # must treat "missing" the same as "terminal" and clear it.
+        meta.community_rebuild_job_id = "no-such-job-id"
+        asyncio.run(search_store.update_collection_meta(meta))
+
+        resp = client.post("/graph/testcol/rebuild-communities", headers=_auth(api_key))
+
+        assert resp.status_code == 202
+        assert resp.json()["job_id"] != "no-such-job-id"
+
+        reloaded = asyncio.run(search_store.get_collection_meta("testcol", namespace="default"))
+        assert reloaded.community_rebuild_job_id != "no-such-job-id"
+
+
+# ---------------------------------------------------------------------------
+# Active clear — the task clears community_rebuild_job_id on every terminal
+# exit (DONE and FAILED), and a clear failure is swallowed.
+# ---------------------------------------------------------------------------
+
+
+def test_task_clears_job_id_on_every_terminal_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rebuild task clears community_rebuild_job_id on both DONE and FAILED,
+    and a clear failure (update_collection_meta raising) is swallowed rather
+    than propagating out of the task."""
+    import archon_search.server.routes_graph as routes_graph_mod
+    from archon_search.jobs.store import JobStore
+    from archon_search.types import JobStatus
+
+    async def _run_case(outcome: str, meta_write_raises: bool) -> None:
+        from archon_search.collection_meta import CollectionMeta
+        from archon_search.graph_store import GraphStore
+        from archon_search.store import SearchStore
+
+        db_path = str(tmp_path / f"db-{outcome}-{meta_write_raises}")
+        search_store = SearchStore(db_path)
+        await search_store.connect()
+        graph_store = GraphStore(db_path)
+        await graph_store.connect()
+        job_store = JobStore(path=tmp_path / f"jobs-{outcome}-{meta_write_raises}.json")
+
+        try:
+            await search_store.ensure_collection("testcol", _STUB_EMBEDDING_DIM)
+            meta = CollectionMeta(
+                name="testcol",
+                active_embedding_model="stub-model",
+                doc_count=0,
+                chunk_count=0,
+                namespace="default",
+            )
+            job = job_store.create_community_rebuild(collection="testcol", namespace="default")
+            running_job = job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+            meta.community_rebuild_job_id = running_job.job_id
+            await search_store.update_collection_meta(meta)
+
+            class _FakeConfig:
+                pass
+
+            fake_graph_config = _FakeConfig()
+
+            class _FakeBuilder:
+                def __init__(self, *a, **kw):
+                    pass
+
+                async def build(self, collection, ns):
+                    if outcome == "done":
+                        return []
+                    raise ValueError("no graph nodes")
+
+            monkeypatch.setattr(routes_graph_mod, "CommunityBuilder", _FakeBuilder)
+
+            if meta_write_raises:
+                original_update = search_store.update_collection_meta
+                call_count = {"n": 0}
+
+                async def _flaky_update(m):
+                    call_count["n"] += 1
+                    if call_count["n"] == 1:
+                        # first call is the setup write above; let it through
+                        # by falling back to original -- but we already awaited
+                        # it, so this only affects the clear-time call below.
+                        raise OSError("disk full")
+                    return await original_update(m)
+
+                monkeypatch.setattr(search_store, "update_collection_meta", _flaky_update)
+
+            # Should never raise, even when the clear-time meta write fails.
+            await routes_graph_mod._community_rebuild_task(
+                job=running_job,
+                job_store=job_store,
+                graph_store=graph_store,
+                graph_config=fake_graph_config,
+                search_store=search_store,
+            )
+
+            reloaded_job = job_store.get(running_job.job_id)
+            assert reloaded_job.status == (
+                JobStatus.DONE if outcome == "done" else JobStatus.FAILED
+            )
+
+            if not meta_write_raises:
+                reloaded_meta = await search_store.get_collection_meta("testcol", namespace="default")
+                assert reloaded_meta.community_rebuild_job_id is None
+        finally:
+            await search_store.disconnect()
+            await graph_store.disconnect()
+
+    asyncio.run(_run_case("done", meta_write_raises=False))
+    asyncio.run(_run_case("failed", meta_write_raises=False))
+    asyncio.run(_run_case("done", meta_write_raises=True))
+
+
+# ---------------------------------------------------------------------------
+# S16 (integration) — a stale id pointing at a FAILED job (post-restart flip
+# stand-in) -> new request returns 202, not 409, and the id is cleared.
+# ---------------------------------------------------------------------------
+
+
+def test_crash_recovery_unwedges_via_lazy_clear(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stale community_rebuild_job_id pointing at a FAILED job (standing in
+    for JobStore._load's post-restart RUNNING -> FAILED crash flip, which
+    never touches CollectionMeta) -> a new request returns 202, not 409, and
+    the stale id is cleared (S16)."""
+    _install_spacy_stub(monkeypatch)
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        asyncio.run(_seed_collection(cfg.db_path, "testcol"))
+
+        from archon_search.types import JobStatus
+
+        job_store = client.app.state.job_store
+        crashed_job = job_store.create_community_rebuild(collection="testcol", namespace="default")
+        job_store.transition(crashed_job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+        # Stand in for the post-restart _load crash-status flip (RUNNING -> FAILED)
+        # that never touches CollectionMeta.
+        job_store.update(crashed_job.job_id, status=JobStatus.FAILED, error="process_restart")
+
+        search_store = client.app.state.search_store
+        meta = asyncio.run(search_store.get_collection_meta("testcol", namespace="default"))
+        meta.community_rebuild_job_id = crashed_job.job_id
+        asyncio.run(search_store.update_collection_meta(meta))
+
+        resp = client.post("/graph/testcol/rebuild-communities", headers=_auth(api_key))
+
+        assert resp.status_code == 202
+        assert resp.json()["job_id"] != crashed_job.job_id
+
+        reloaded = asyncio.run(search_store.get_collection_meta("testcol", namespace="default"))
+        assert reloaded.community_rebuild_job_id != crashed_job.job_id
