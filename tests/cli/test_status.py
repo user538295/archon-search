@@ -629,3 +629,65 @@ def test_status_cli_graph_fields_absent_when_graph_disabled(runner: CliRunner) -
             result = runner.invoke(main, ["status"])
     assert result.exit_code == 0, result.output
     # Should not crash even with null graph
+
+
+# ---------------------------------------------------------------------------
+# SPD — per-collection path + doc_count in `archon-search status` output
+# ---------------------------------------------------------------------------
+
+
+def test_status_cli_prints_collections(runner: CliRunner) -> None:
+    """S6: `archon-search status` prints each collection's name, doc_count, and path."""
+    server_payload = {
+        "collections": [
+            {"name": "mydocs", "path": "/srv/data/mydocs", "doc_count": 42},
+        ],
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status", return_value=server_payload
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "mydocs" in result.output
+    assert "42" in result.output
+    assert "/srv/data/mydocs" in result.output
+
+
+def test_status_cli_prints_collections_when_telemetry_disabled(runner: CliRunner) -> None:
+    """S6: the per-collection block prints even when telemetry is None (default install) —
+    it is rendered before the telemetry early-return."""
+    server_payload = {
+        "collections": [
+            {"name": "mydocs", "path": "/srv/data/mydocs", "doc_count": 3},
+        ],
+        "telemetry": None,  # disabled → early-return follows the collections block
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status", return_value=server_payload
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "mydocs" in result.output
+    assert "3" in result.output
+
+
+def test_status_cli_renders_empty_path_without_error(runner: CliRunner) -> None:
+    """S7: a collection with an empty path is still listed and the command exits cleanly."""
+    server_payload = {
+        "collections": [
+            {"name": "adhoc", "path": "", "doc_count": 7},
+        ],
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch(
+            "archon_search.cli.status._fetch_server_status", return_value=server_payload
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "adhoc" in result.output
+    assert "7" in result.output
+    assert "(no configured path)" in result.output

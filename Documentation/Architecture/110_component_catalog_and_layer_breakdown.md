@@ -14,7 +14,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 2. **Layers depend downward only.** Server depends on Query/Ingest; Query/Ingest never imports Server.
 3. **Names mirror responsibilities.** `routes_*.py` are HTTP edges; `*_meta.py` are metadata models; `_types.py` is the dataclass spine.
 4. **Underscored modules are internal.** `_types.py`, `_diagnostics.py`, `_helpers.py`, `_durable_io.py` are not part of the public import surface.
-5. **No reaching across siblings.** Pipeline stages talk to each other only through `SearchPipeline`; route modules talk to each other only through `app.state`. (#Unverified — `routes_collections.py` currently imports `IngestRequest` and `_default_ingest_task` from `routes_jobs.py` at module level; this is a type/helper import rather than runtime state sharing, but it bends the rule.)
+5. **No reaching across siblings.** Pipeline stages talk to each other only through `SearchPipeline`; route modules talk to each other only through `app.state`. (#Unverified — `routes_collections.py` currently imports `IngestRequest` and `_default_ingest_task` from `routes_jobs.py` at module level, and `routes_status.py` imports the `_all_collection_paths` helper from `routes_collections.py` at module level (also reused function-locally by `mcp.py`); these are type/helper imports rather than runtime state sharing, but they bend the rule.)
 
 ## Layer summary
 

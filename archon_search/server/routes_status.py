@@ -14,6 +14,7 @@ from archon_search.config import SearchConfig
 from archon_search.jobs.model import IngestJob, JobStatus
 from archon_search.progress import compute_eta_seconds
 from archon_search.server.readiness import collect_readiness
+from archon_search.server.routes_collections import _all_collection_paths
 from archon_search.server.schemas import (
     BackupStatusDetail,
     CodeParsersStatusDetail,
@@ -36,6 +37,31 @@ from archon_search.store import STORE_SCHEMA_VERSION, SearchStore
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Collection names already logged at DEBUG for a missing config path. /status is a
+# polled endpoint, so the fallback is logged once per name — not on every call.
+_missing_path_logged: set[str] = set()
+
+
+def _resolve_collection_path(paths: dict[str, str], name: str) -> str:
+    """Return the collection's absolute path, or ``""`` (logged once at DEBUG) when absent.
+
+    An absent name is an expected steady state — ad-hoc-ingested, collision-resolved
+    (``docs_2``), or config-removed collections have no entry in
+    ``_all_collection_paths(config)``. Resolved paths from that helper are never the empty
+    string (``Path(p).resolve()`` yields at least the CWD), so ``is not None`` reliably
+    distinguishes "present" from "absent". Caveat (plan Q1): the map is keyed by a
+    collision-unaware basename, so two configured paths sharing a basename collapse
+    last-write-wins — the surviving name may resolve to the *wrong* absolute path, not
+    ``""``. That is an accepted limitation, not a guarantee.
+    """
+    path = paths.get(name)
+    if path is not None:
+        return path
+    if name not in _missing_path_logged:
+        _missing_path_logged.add(name)
+        logger.debug("Status: no configured path for collection %r; reporting empty path", name)
+    return ""
 
 try:
     _VERSION = version("archon-search")
@@ -83,6 +109,9 @@ async def status(request: Request) -> StatusResponse:
     # E1b BE-8 — fetch graph_store once; used per-collection inside the loop below.
     graph_store = getattr(request.app.state, "graph_store", None)
 
+    # SPD — resolve config-derived absolute paths once; looked up by name in the loop.
+    collection_paths = _all_collection_paths(config)
+
     collection_entries: list[StatusCollectionEntry] = []
     for name in sorted(all_names):
         progress = collections_progress.get(name)
@@ -115,8 +144,8 @@ async def status(request: Request) -> StatusResponse:
         collection_entries.append(
             StatusCollectionEntry(
                 name=name,
-                path="",  # path not yet populated from store
-                doc_count=0,
+                path=_resolve_collection_path(collection_paths, name),
+                doc_count=col_meta.doc_count if col_meta else 0,
                 chunk_count=0,
                 status=progress["status"] if progress else "not_yet_indexed",
                 watching=watching,

@@ -25,7 +25,7 @@ archon-search serve            # foreground; blocks until SIGTERM / Ctrl-C
 
 Flags:
 
-- `start --config PATH` — validate an alternative config file before delegating to the service (`archon_search/cli/start.py`). `stop` and `status` take no flags.
+- `start --config PATH` — validate an alternative config file before delegating to the service (`archon_search/cli/start.py`). `stop` takes no flags; `status` accepts `--api-url` and `--api-key` (`archon_search/cli/status.py`).
 - `serve --config PATH` — same `--config` semantics as `start`, but runs uvicorn in the foreground via `run_server(config)`. The host default is `0.0.0.0` (overridable by `[server].host` in TOML or `ARCHON_SEARCH_HOST` in the env), so a containerised invocation is publicly reachable on the mapped port. `serve` never calls launchd/systemd and never registers a service — see `archon_search/cli/serve.py`. For the Docker image and the docker-compose stack see [Documentation/UserManual/08_running_with_docker.md](08_running_with_docker.md).
 
 What `start` actually does (`archon_search/cli/start.py`):
@@ -42,6 +42,8 @@ Prerequisite: the service must have been registered with `archon-search install`
 - `running (PID <n>)` when the PID is known but uptime is not,
 - `running` (no parentheses, no PID) when the service reports running but PID is unknown,
 - `stopped` otherwise.
+
+When the server is reachable, `status` also prints a **Collections** block — one line per namespace-visible collection with its cached document count and the absolute **configured source path** (the directory you point archon-search at, resolved from `collections`/`pinned_collections`; this is the corpus location, not the internal LanceDB index under `~/.archon-search/`), e.g. `mydocs: 142 document(s) — /Users/you/projects/mydocs`. A collection with no matching configured path (ad-hoc-ingested or collision-resolved) shows `(no configured path)`. This block is printed even when telemetry is disabled.
 
 ## Endpoints exposed
 
