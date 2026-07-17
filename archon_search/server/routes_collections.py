@@ -199,6 +199,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
                 needs_reindex=False,
                 reindex_job_id=None,
                 community_rebuild_job_id=None,
+                metadata_reindex_job_id=None,
                 schema_version=STORE_SCHEMA_VERSION,
             )
         )

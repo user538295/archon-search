@@ -404,6 +404,7 @@ class SearchStore:
                 pa.field("needs_reindex", pa.bool_(), nullable=True),
                 pa.field("reindex_job_id", pa.utf8(), nullable=True),
                 pa.field("community_rebuild_job_id", pa.utf8(), nullable=True),
+                pa.field("metadata_reindex_job_id", pa.utf8(), nullable=True),
                 pa.field("last_indexed", pa.utf8()),
                 pa.field("last_described", pa.utf8()),
                 pa.field("described_at_doc_count", pa.int64()),
@@ -567,6 +568,7 @@ class SearchStore:
             needs_reindex=bool(row.get("needs_reindex") or False),
             reindex_job_id=row.get("reindex_job_id") or None,
             community_rebuild_job_id=row.get("community_rebuild_job_id") or None,
+            metadata_reindex_job_id=row.get("metadata_reindex_job_id") or None,
             last_indexed=last_indexed,
             last_described=last_described,
             described_at_doc_count=described_at,
@@ -862,6 +864,48 @@ class SearchStore:
             else:
                 raise
 
+    async def _migrate_community_rebuild_job_id(self) -> None:
+        """Idempotent: adds community_rebuild_job_id (utf8|null) to _archon_collection_meta."""
+        import pyarrow as pa  # noqa: PLC0415
+
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        table = await db.open_table(_META_TABLE)
+        schema = await table.schema()
+        if "community_rebuild_job_id" in schema.names:
+            return
+        try:
+            await table.add_columns(pa.field("community_rebuild_job_id", pa.utf8(), nullable=True))
+            logger.info("GBC110 migration: added community_rebuild_job_id column to %s", _META_TABLE)
+        except RuntimeError as exc:
+            if "already exists" in str(exc).lower():
+                logger.warning("Concurrent GBC110 migration: community_rebuild_job_id already added — %s", exc)
+            else:
+                raise
+
+    async def _migrate_metadata_reindex_job_id(self) -> None:
+        """Idempotent: adds metadata_reindex_job_id (utf8|null) to _archon_collection_meta."""
+        import pyarrow as pa  # noqa: PLC0415
+
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        table = await db.open_table(_META_TABLE)
+        schema = await table.schema()
+        if "metadata_reindex_job_id" in schema.names:
+            return
+        try:
+            await table.add_columns(pa.field("metadata_reindex_job_id", pa.utf8(), nullable=True))
+            logger.info("CSP120 migration: added metadata_reindex_job_id column to %s", _META_TABLE)
+        except RuntimeError as exc:
+            if "already exists" in str(exc).lower():
+                logger.warning("Concurrent CSP120 migration: metadata_reindex_job_id already added — %s", exc)
+            else:
+                raise
+
     async def _migrate_schema_version(self) -> None:
         """Idempotent: adds schema_version column to _archon_collection_meta if absent."""
         db = self._require_connected()
@@ -934,6 +978,8 @@ class SearchStore:
         await self.migrate_centroid_sum()
         await self.migrate_per_collection_model()
         await self._migrate_schema_version()
+        await self._migrate_community_rebuild_job_id()
+        await self._migrate_metadata_reindex_job_id()
 
     # Catalog of all known migrations.  Each entry is a MigrationSpec that describes
     # one idempotent structural change.  The five existing migrate_*() methods are
@@ -1164,6 +1210,7 @@ class SearchStore:
                         "needs_reindex": meta.needs_reindex,
                         "reindex_job_id": meta.reindex_job_id or "",
                         "community_rebuild_job_id": meta.community_rebuild_job_id or "",
+                        "metadata_reindex_job_id": meta.metadata_reindex_job_id or "",
                         "last_indexed": last_indexed_str,
                         "last_described": last_described_str,
                         "described_at_doc_count": described_at,
@@ -1221,6 +1268,7 @@ class SearchStore:
                 needs_reindex=existing.needs_reindex,
                 reindex_job_id=existing.reindex_job_id,
                 community_rebuild_job_id=existing.community_rebuild_job_id,
+                metadata_reindex_job_id=existing.metadata_reindex_job_id,
                 last_indexed=last_indexed,
                 last_described=last_described,
                 described_at_doc_count=described_at_doc_count,
@@ -1301,6 +1349,7 @@ class SearchStore:
                     "needs_reindex": meta.needs_reindex,
                     "reindex_job_id": meta.reindex_job_id or "",
                     "community_rebuild_job_id": meta.community_rebuild_job_id or "",
+                    "metadata_reindex_job_id": meta.metadata_reindex_job_id or "",
                     "last_indexed": last_indexed_str,
                     "last_described": last_described_str,
                     "described_at_doc_count": described_at,
@@ -1365,6 +1414,7 @@ class SearchStore:
                     needs_reindex=existing.needs_reindex,
                     reindex_job_id=existing.reindex_job_id,
                     community_rebuild_job_id=existing.community_rebuild_job_id,
+                    metadata_reindex_job_id=existing.metadata_reindex_job_id,
                     last_indexed=existing.last_indexed,
                     last_described=existing.last_described,
                     described_at_doc_count=existing.described_at_doc_count,
@@ -1396,6 +1446,7 @@ class SearchStore:
                     needs_reindex=existing.needs_reindex,
                     reindex_job_id=existing.reindex_job_id,
                     community_rebuild_job_id=existing.community_rebuild_job_id,
+                    metadata_reindex_job_id=existing.metadata_reindex_job_id,
                     last_indexed=existing.last_indexed,
                     last_described=existing.last_described,
                     described_at_doc_count=existing.described_at_doc_count,
@@ -1426,6 +1477,7 @@ class SearchStore:
                 needs_reindex=existing.needs_reindex,
                 reindex_job_id=existing.reindex_job_id,
                 community_rebuild_job_id=existing.community_rebuild_job_id,
+                metadata_reindex_job_id=existing.metadata_reindex_job_id,
                 last_indexed=existing.last_indexed,
                 last_described=existing.last_described,
                 described_at_doc_count=existing.described_at_doc_count,
@@ -1506,6 +1558,7 @@ class SearchStore:
                 needs_reindex=existing.needs_reindex,
                 reindex_job_id=existing.reindex_job_id,
                 community_rebuild_job_id=existing.community_rebuild_job_id,
+                metadata_reindex_job_id=existing.metadata_reindex_job_id,
                 last_indexed=now,
                 last_described=existing.last_described,
                 described_at_doc_count=existing.described_at_doc_count,
@@ -1543,6 +1596,7 @@ class SearchStore:
             needs_reindex=existing.needs_reindex,
             reindex_job_id=existing.reindex_job_id,
             community_rebuild_job_id=existing.community_rebuild_job_id,
+            metadata_reindex_job_id=existing.metadata_reindex_job_id,
             last_indexed=now,
             last_described=existing.last_described,
             described_at_doc_count=existing.described_at_doc_count,

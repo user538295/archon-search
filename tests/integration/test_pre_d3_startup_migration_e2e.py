@@ -79,7 +79,7 @@ def test_pre_d3_startup_applies_in_place_migrations_e2e(
     # Step 1: seed a pre-D3 meta table (no schema_version or default_ttl_seconds columns) with one row.
     # The schema mirrors _meta_schema() minus the fields added after D3.
     pre_d3_schema = pa.schema(
-        [f for f in SearchStore._meta_schema() if f.name not in ("schema_version", "default_ttl_seconds", "community_rebuild_job_id")]
+        [f for f in SearchStore._meta_schema() if f.name not in ("schema_version", "default_ttl_seconds", "community_rebuild_job_id", "metadata_reindex_job_id")]
     )
 
     col_path = tmp_path / "pre_d3_docs"
@@ -286,6 +286,7 @@ def test_apply_in_place_migrations_bumped_schema_version_e2e(
             "needs_reindex": False,
             "reindex_job_id": None,
             "community_rebuild_job_id": None,
+            "metadata_reindex_job_id": None,
             "last_indexed": "",
             "last_described": "",
             "described_at_doc_count": 0,

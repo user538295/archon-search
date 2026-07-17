@@ -151,9 +151,12 @@ async def test_schema_version_upgrade_0_to_1_runs_both_migrations(tmp_path):
         pa.field("pending_embedding_model", pa.utf8(), nullable=True),
         pa.field("needs_reindex", pa.bool_(), nullable=True),
         pa.field("reindex_job_id", pa.utf8(), nullable=True),
-        # community_rebuild_job_id has no migration (recreation-only per BE-4), so a
+        # community_rebuild_job_id has no migration (recreation-only per GBC110 BE-4), so a
         # current-binary store always has this nullable column present, even at v0.
         pa.field("community_rebuild_job_id", pa.utf8(), nullable=True),
+        # metadata_reindex_job_id has no migration (recreation-only per CSP120 BE-2), so a
+        # current-binary store always has this nullable column present, even at v0.
+        pa.field("metadata_reindex_job_id", pa.utf8(), nullable=True),
         pa.field("last_indexed", pa.utf8()),
         pa.field("last_described", pa.utf8()),
         pa.field("described_at_doc_count", pa.int64()),
@@ -184,6 +187,7 @@ async def test_schema_version_upgrade_0_to_1_runs_both_migrations(tmp_path):
         "needs_reindex": None,
         "reindex_job_id": None,
         "community_rebuild_job_id": None,
+        "metadata_reindex_job_id": None,
         "last_indexed": "2024-01-01T00:00:00.000000Z",
         "last_described": "2024-01-01T00:00:00.000000Z",
         "described_at_doc_count": 0,

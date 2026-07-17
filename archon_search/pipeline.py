@@ -3389,12 +3389,14 @@ class SearchPipeline:
             needs_reindex = existing_meta.needs_reindex
             reindex_job_id = existing_meta.reindex_job_id
             community_rebuild_job_id = existing_meta.community_rebuild_job_id
+            metadata_reindex_job_id = existing_meta.metadata_reindex_job_id
         else:
             active_embedding_model = global_embedder.model_name
             pending_embedding_model = None
             needs_reindex = False
             reindex_job_id = None
             community_rebuild_job_id = None
+            metadata_reindex_job_id = None
 
         if not vectors:
             if force or existing_meta is not None:
@@ -3411,6 +3413,7 @@ class SearchPipeline:
                     needs_reindex=needs_reindex,
                     reindex_job_id=reindex_job_id,
                     community_rebuild_job_id=community_rebuild_job_id,
+                    metadata_reindex_job_id=metadata_reindex_job_id,
                     last_indexed=datetime.now(UTC),
                     last_described=last_described,
                     described_at_doc_count=described_at,
@@ -3446,6 +3449,7 @@ class SearchPipeline:
             needs_reindex=needs_reindex,
             reindex_job_id=reindex_job_id,
             community_rebuild_job_id=community_rebuild_job_id,
+            metadata_reindex_job_id=metadata_reindex_job_id,
             last_indexed=datetime.now(UTC),
             last_described=last_described,
             described_at_doc_count=described_at,

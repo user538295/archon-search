@@ -1279,10 +1279,12 @@ async def test_old_schema_upsert_preserves_new_columns(tmp_path: Path) -> None:
         await store._migrate_schema_version()
         await store.migrate_default_ttl_seconds()
 
-        # community_rebuild_job_id has no migration (recreation-only per BE-4); simulate a
-        # recreated/current-schema table by adding the nullable column before the current-binary write.
+        # community_rebuild_job_id and metadata_reindex_job_id have no migration (recreation-only);
+        # simulate a recreated/current-schema table by adding the nullable columns before the
+        # current-binary write.
         table = await db.open_table("_archon_collection_meta")
         await table.add_columns(pa.field("community_rebuild_job_id", pa.utf8(), nullable=True))
+        await table.add_columns(pa.field("metadata_reindex_job_id", pa.utf8(), nullable=True))
 
         # Write B5 values to row_a via update_collection_meta
         meta_a = CollectionMeta(
@@ -6401,6 +6403,50 @@ async def test_community_rebuild_job_id_sentinel_coercion(connected_store: Searc
     assert retrieved.community_rebuild_job_id is None
 
 
+@pytest.mark.asyncio
+async def test_update_collection_meta_round_trips_metadata_reindex_job_id(connected_store: SearchStore) -> None:
+    """metadata_reindex_job_id="job-meta-1" is stored and read back as "job-meta-1"."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="c1-meta-reindex-job", active_embedding_model="model-A", metadata_reindex_job_id="job-meta-1")
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("c1-meta-reindex-job")
+    assert retrieved is not None
+    assert retrieved.metadata_reindex_job_id == "job-meta-1"
+
+
+@pytest.mark.asyncio
+async def test_metadata_reindex_job_id_sentinel_coercion(connected_store: SearchStore) -> None:
+    """metadata_reindex_job_id=None is stored and read back as None (sentinel coercion)."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="c1-meta-reindex-job-none", active_embedding_model="model-A", metadata_reindex_job_id=None)
+    await connected_store.update_collection_meta(meta)
+    retrieved = await connected_store.get_collection_meta("c1-meta-reindex-job-none")
+    assert retrieved is not None
+    assert retrieved.metadata_reindex_job_id is None
+
+
+@pytest.mark.asyncio
+async def test_metadata_reindex_job_id_preserved_through_update_description(connected_store: SearchStore) -> None:
+    """metadata_reindex_job_id survives a _do_write_meta_unlocked write via update_description."""
+    from archon_search.collection_meta import CollectionMeta
+
+    col = "c1-meta-reindex-desc"
+    meta = CollectionMeta(name=col, active_embedding_model="model-A", metadata_reindex_job_id="job-desc-test")
+    await connected_store.update_collection_meta(meta)
+    await connected_store.update_description(
+        collection=col,
+        description="updated description",
+        last_described=None,
+        described_at_doc_count=None,
+        last_indexed=None,
+    )
+    retrieved = await connected_store.get_collection_meta(col)
+    assert retrieved is not None
+    assert retrieved.metadata_reindex_job_id == "job-desc-test"
+
+
 # ---------------------------------------------------------------------------
 # Task 4.1 — get_stored_vector_dimension + count_chunks
 # ---------------------------------------------------------------------------
@@ -7381,7 +7427,7 @@ async def test_run_startup_migrations_applies_in_place_on_startup(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
-    """_run_startup_migrations() calls all 6 methods in the correct order."""
+    """_run_startup_migrations() calls all 8 methods in the correct order."""
     from archon_search.store import SearchStore
 
     call_order: list[str] = []
@@ -7398,6 +7444,8 @@ async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
     store.migrate_centroid_sum = make_recorder("migrate_centroid_sum")
     store.migrate_per_collection_model = make_recorder("migrate_per_collection_model")
     store._migrate_schema_version = make_recorder("_migrate_schema_version")
+    store._migrate_community_rebuild_job_id = make_recorder("_migrate_community_rebuild_job_id")
+    store._migrate_metadata_reindex_job_id = make_recorder("_migrate_metadata_reindex_job_id")
 
     await store._run_startup_migrations()
 
@@ -7408,6 +7456,8 @@ async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
         "migrate_centroid_sum",
         "migrate_per_collection_model",
         "_migrate_schema_version",
+        "_migrate_community_rebuild_job_id",
+        "_migrate_metadata_reindex_job_id",
     ], f"Unexpected call order: {call_order}"
 
 
