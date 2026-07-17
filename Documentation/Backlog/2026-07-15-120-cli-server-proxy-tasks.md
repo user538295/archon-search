@@ -195,7 +195,7 @@ flowchart LR
         - #unit_test — `test_sync_wait_polls_to_done` — mocked poll → completion, exit 0
         - #unit_test — `test_sync_server_not_running` — `httpx.ConnectError` → "archon-search serve is not running. Start it first.", exit 1
 
-- [ ] **FE-7** — Convert `collection reindex-metadata` (`collection.py:238–302`) to httpx proxy: remove `pipeline.store.reindex_metadata()` call, POST to `POST /collections/{name}/reindex-metadata` with `{"dry_run": ..., "normalize_timestamps": ...}` body, forward existing `--dry-run`/`--normalize-timestamps` options, add `--api-url`/`--api-key`/`--wait` #frontend-role
+- [x] **FE-7** — Convert `collection reindex-metadata` (`collection.py:238–302`) to httpx proxy: remove `pipeline.store.reindex_metadata()` call, POST to `POST /collections/{name}/reindex-metadata` with `{"dry_run": ..., "normalize_timestamps": ...}` body, forward existing `--dry-run`/`--normalize-timestamps` options, add `--api-url`/`--api-key`/`--wait` #frontend-role
     - Presentation · 2.0h
     - needs FE-1, BE-4 · completes S5 (CLI side)
     - Tests

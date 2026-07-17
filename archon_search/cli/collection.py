@@ -226,63 +226,85 @@ def info(collection_name: str, config_path: Path | None) -> None:
     default=True,
     help="Rewrite indexed_at/updated_at to fixed-width UTC (YYYY-MM-DDTHH:MM:SS.ffffffZ)",
 )
-@click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
+@click.option("--wait", "wait_flag", is_flag=True, default=False, help="Poll until the reindex-metadata job completes")
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
 def reindex_metadata_cmd(
     collection_name: str,
     dry_run: bool,
     normalize_timestamps: bool,
-    config_path: Path | None,
+    wait_flag: bool,
+    api_url: str,
+    api_key: str | None,
 ) -> None:
     """Backfill metadata fields (file_type, updated_at, ingested_by) on an existing collection.
 
-    Reads each row, refreshes file_type from source_path extension and
-    updated_at from mtime, and rewrites legacy ``"archon-search-cli"`` ->
-    ``"reindex"``. When --normalize-timestamps is on (default), indexed_at and
-    updated_at are also rewritten to fixed-width UTC where they do not already
-    conform. Holds a per-collection lock for the duration; ingest into the same
-    collection is blocked until reindex finishes.
+    Routes through the archon-search server (POST /collections/{name}/reindex-metadata).
+    Use --wait to poll until the job completes.
     """
+    key = _resolve_api_key(api_key)
+    headers = {"Authorization": f"Bearer {key}"}
+    base_url = api_url.rstrip("/")
+    post_url = f"{base_url}/collections/{collection_name}/reindex-metadata"
+    body = {"dry_run": dry_run, "normalize_timestamps": normalize_timestamps}
+
     try:
-        cfg = load_config(config_path)
-    except Exception as exc:
-        click.echo(f"Error loading config: {exc}", err=True)
+        resp = httpx.post(post_url, json=body, headers=headers)
+    except httpx.ConnectError:
+        click.echo(
+            "archon-search serve is not running. Start it first.",
+            err=True,
+        )
+        raise SystemExit(1)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1)
 
-    async def _run() -> None:
-        pipeline = create_pipeline(cfg)
+    if resp.status_code == 404:
+        click.echo(f"Error: collection '{collection_name}' not found.", err=True)
+        raise SystemExit(1)
+
+    if resp.status_code == 409:
         try:
-            await pipeline.store.connect()
-
-            def _on_progress(processed: int, total: int) -> None:
-                click.echo(f"reindex-metadata: {collection_name} - {processed}/{total}")
-
-            result = await pipeline.store.reindex_metadata(
-                collection_name,
-                dry_run=dry_run,
-                normalize_timestamps=normalize_timestamps,
-                progress_cb=_on_progress,
-            )
-            click.echo(
-                f"reindex-metadata: {collection_name} - done. "
-                f"processed={result.processed}, updated={result.updated}, "
-                f"ts_normalized={result.ts_normalized}, "
-                f"warnings={len(result.warnings)}"
-            )
-            if result.warnings:
-                click.echo("warnings:")
-                for w in result.warnings:
-                    click.echo(f"  - {w}")
-        finally:
-            try:
-                await pipeline.store.disconnect()
-            except Exception:
-                pass
-
-    try:
-        asyncio.run(_run())
-    except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
+            detail = resp.json().get("detail", "metadata reindex already in progress")
+        except Exception:
+            detail = "metadata reindex already in progress"
+        click.echo(f"Error: {detail}", err=True)
         raise SystemExit(1)
+
+    if resp.status_code != 202:
+        click.echo(f"Error: server returned {resp.status_code}: {resp.text}", err=True)
+        raise SystemExit(1)
+
+    job_data = resp.json()
+    job_id: str = job_data["job_id"]
+    click.echo(f"Reindex-metadata job submitted: {job_id}. Track progress with: archon-search jobs status {job_id}")
+
+    if wait_flag:
+        job = _poll_job(job_id, base_url, headers)
+        if job:
+            result = job.get("result") or {}
+            click.echo(
+                f"Reindex-metadata complete for '{collection_name}'. "
+                f"processed={result.get('processed', 0)}, "
+                f"updated={result.get('updated', 0)}, "
+                f"skipped={result.get('skipped', 0)}, "
+                f"ts_normalized={result.get('ts_normalized', 0)}"
+            )
+            warnings = result.get("warnings") or []
+            if warnings:
+                click.echo("warnings:")
+                for w in warnings:
+                    click.echo(f"  - {w}")
 
 
 @collection.command("migrate")

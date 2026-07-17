@@ -4,14 +4,14 @@ from __future__ import annotations
 import hashlib
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 from click.testing import CliRunner
 
 from archon_search.cli.collection import collection
-from archon_search.store import ReindexResult, _FIXED_WIDTH_TS_RE
+from archon_search.store import _FIXED_WIDTH_TS_RE
 
 
 # ---------------------------------------------------------------------------
@@ -50,67 +50,52 @@ def test_legacy_format_regex_rejects_known_legacy_shapes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_pipeline_patch(reindex_result=None, raise_=None, progress=None):
-    pipeline = MagicMock()
-    pipeline.store.connect = AsyncMock()
-    pipeline.store.disconnect = AsyncMock()
-
-    async def _reindex(*args, **kwargs):
-        if raise_ is not None:
-            raise raise_
-        cb = kwargs.get("progress_cb")
-        if cb is not None and progress is not None:
-            for p, t in progress:
-                cb(p, t)
-        return reindex_result or ReindexResult(processed=0, updated=0)
-
-    pipeline.store.reindex_metadata = AsyncMock(side_effect=_reindex)
-    return pipeline
+def _mock_response(status_code: int, body: dict | None = None, text: str = "") -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.return_value = body or {}
+    resp.text = text or str(body or "")
+    return resp
 
 
-def _invoke(reindex_result=None, raise_=None, progress=None, extra_args=()):
+# ---------------------------------------------------------------------------
+# 2. Unit tests: proxy forwards options correctly via httpx POST
+# ---------------------------------------------------------------------------
+
+
+def test_reindex_metadata_no_normalize_timestamps_passes_false_to_body() -> None:
+    """--no-normalize-timestamps must send normalize_timestamps=False in request body."""
     runner = CliRunner()
-    pipeline = _make_pipeline_patch(reindex_result, raise_, progress)
-    with (
-        patch("archon_search.cli.collection.load_config", return_value=MagicMock()),
-        patch("archon_search.cli.collection.create_pipeline", return_value=pipeline),
-    ):
-        return (
-            runner.invoke(collection, ["reindex-metadata", "my-col", *extra_args]),
-            pipeline,
+    post_resp = _mock_response(202, {"job_id": "job-rm-001", "status": "RUNNING"})
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp) as mock_post:
+        result = runner.invoke(
+            collection,
+            ["reindex-metadata", "my-col", "--no-normalize-timestamps", "--api-key", "test-key"],
         )
 
-
-# ---------------------------------------------------------------------------
-# 2. Unit test: --dry-run reports count, writes nothing
-# ---------------------------------------------------------------------------
-
-
-def test_reindex_metadata_no_normalize_timestamps_passes_false_to_store() -> None:
-    """--no-normalize-timestamps must pass normalize_timestamps=False to store."""
-    result, pipeline = _invoke(
-        reindex_result=ReindexResult(processed=2, updated=0, skipped=0, ts_normalized=0),
-        extra_args=("--no-normalize-timestamps",),
-    )
     assert result.exit_code == 0, result.output
-    _, kwargs = pipeline.store.reindex_metadata.call_args
-    assert kwargs.get("normalize_timestamps") is False
+    _, call_kwargs = mock_post.call_args
+    body = call_kwargs.get("json", {})
+    assert body.get("normalize_timestamps") is False
 
 
-def test_reindex_metadata_normalize_timestamps_dry_run_reports_count() -> None:
-    """--dry-run with --normalize-timestamps reports ts_normalized count; store not mutated."""
-    result, pipeline = _invoke(
-        reindex_result=ReindexResult(processed=5, updated=0, skipped=0, ts_normalized=3),
-        extra_args=("--dry-run", "--normalize-timestamps"),
-    )
+def test_reindex_metadata_normalize_timestamps_dry_run_sends_correct_body() -> None:
+    """--dry-run with --normalize-timestamps sends dry_run=true and normalize_timestamps=true."""
+    runner = CliRunner()
+    post_resp = _mock_response(202, {"job_id": "job-rm-002", "status": "RUNNING"})
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp) as mock_post:
+        result = runner.invoke(
+            collection,
+            ["reindex-metadata", "my-col", "--dry-run", "--normalize-timestamps", "--api-key", "test-key"],
+        )
+
     assert result.exit_code == 0, result.output
-    # dry_run must be passed through
-    _, kwargs = pipeline.store.reindex_metadata.call_args
-    assert kwargs.get("dry_run") is True
-    # normalize_timestamps must be passed through
-    assert kwargs.get("normalize_timestamps") is True
-    # The CLI must surface ts_normalized in output
-    assert "ts_normalized=3" in result.output
+    _, call_kwargs = mock_post.call_args
+    body = call_kwargs.get("json", {})
+    assert body.get("dry_run") is True
+    assert body.get("normalize_timestamps") is True
 
 
 # ---------------------------------------------------------------------------

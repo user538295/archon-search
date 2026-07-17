@@ -689,7 +689,7 @@ This is a **new optional field**; it does not appear on any other endpoint or MC
 - **C2 update**: `language` is now an active filter; valid ISO codes and `"unknown"` are accepted. Invalid values still return `{error: ..., code: "validation_error"}`.
 
 **Operational — datetime normalization**:
-- Date-range filters (`indexed_after`, `indexed_before`) compare lexicographically against the `indexed_at` column using fixed-width UTC format (`YYYY-MM-DDTHH:MM:SS.ffffffZ`). Collections indexed before A2 may contain variable-precision timestamps that produce incorrect date-range results. Run `archon-search collection reindex-metadata <name> --normalize-timestamps` (introduced in this release) to rewrite all rows to the fixed-width format. This command is offline-friendly and blocks only concurrent ingest to the same collection.
+- Date-range filters (`indexed_after`, `indexed_before`) compare lexicographically against the `indexed_at` column using fixed-width UTC format (`YYYY-MM-DDTHH:MM:SS.ffffffZ`). Collections indexed before A2 may contain variable-precision timestamps that produce incorrect date-range results. Run `archon-search collection reindex-metadata <name> --normalize-timestamps` (introduced in this release) to rewrite all rows to the fixed-width format. This command requires the server to be running and routes through `POST /collections/{name}/reindex-metadata`.
 
 **Migration**:
 - REST: no migration needed for existing clients — `filters` is optional.
@@ -738,7 +738,7 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 **Migration**:
 - MCP consumers: regenerate types or relax strict-mode validation; the new keys are additive on every response item, never replace existing ones.
 - REST consumers using tolerant JSON parsing: nothing to do. Strict-typed clients: regenerate from the updated OpenAPI.
-- Existing collections: pre-A1 rows continue to read as-is via the read-boundary normalizer (`ingested_by` legacy → `"cli"`, empty `file_type` → `""`, `updated_at` falls back to `indexed_at`). To populate real values on pre-A1 rows, run `archon-search collection reindex-metadata <name>` (offline-friendly, blocks only `/ingest` to the same collection).
+- Existing collections: pre-A1 rows continue to read as-is via the read-boundary normalizer (`ingested_by` legacy → `"cli"`, empty `file_type` → `""`, `updated_at` falls back to `indexed_at`). To populate real values on pre-A1 rows, run `archon-search collection reindex-metadata <name>` (requires the server to be running; routes through `POST /collections/{name}/reindex-metadata`).
 
 **Announced in**: this release. No prior deprecation — the impacted MCP shape was never documented as stable.
 
