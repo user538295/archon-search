@@ -85,7 +85,7 @@ The runtime is a layered pipeline: `parser.py` → `chunker.py` → `embedder.py
 
 ### Server (`archon_search/server/`)
 
-`app.py` builds the FastAPI app; routes are split per resource (`routes_*.py`); `schemas.py` + `schemas_telemetry.py` hold the Pydantic models. All endpoints except `GET /health` and `GET /ready` require a `Bearer` token. `GET /openapi.json` is the authoritative API contract — keep it in sync, and record breaking changes in `BREAKING.md`.
+`app.py` builds the FastAPI app; routes are split per resource (`routes_*.py`); `schemas.py` + `schemas_telemetry.py` hold the Pydantic models. All endpoints except `GET /health` and `GET /ready` require a `Bearer` token. `GET /openapi.json` is the authoritative API contract — keep it in sync, and record breaking changes in `BREAKING.md`. **CSP120** adds two new endpoints: `POST /sync` (`routes_sync.py` — triggers `SearchCollectionSync.sync()` as a `SyncJob`) and `POST /collections/{name}/reindex-metadata` (`routes_collections.py` — runs `SearchStore.reindex_metadata()` as a `MetadataReindexJob`). Both follow the `rebuild_communities` route pattern (QUEUED→RUNNING before returning 202).
 
 MCP (`mcp.py`): mounted at `/mcp` on the REST port when `mcp.enabled = true` (default) — no second uvicorn, no second port; in serve mode it therefore binds `0.0.0.0:{port}/mcp`. Traps: the mount must be wrapped in an explicit `mcp_starlette.router.lifespan_context(app)` delegation or FastMCP's session task group never starts; a mount failure logs a warning and must never block REST startup; `app.state.mcp_bound` is the single source of truth for MCP status (with `enabled = false`, `/status` and `/health` report `mcp: null`). Tool names do not mirror REST routes 1:1 — `mcp.py` is the source of truth; MCP validation mirrors REST rules; namespace auth reaches every tool via `request.state.namespace`. Permanent design decision (not deferred work): `search_with_context` rejects any non-null `graph_mode` — use `search` instead. See ADR-09 for the mount and namespace-propagation spike.
 
@@ -93,7 +93,9 @@ OpenAI shim (`routes_openai_shim.py` + `schemas_openai.py`): G9 — mounted at `
 
 ### CLI (`archon_search/cli/`)
 
-`main.py` is the `archon-search` Click entry point; `_helpers.py` is shared CLI infrastructure. `serve.py` runs the server in the foreground with the host default flipped to `0.0.0.0` and never touches launchd/systemd.
+`main.py` is the `archon-search` Click entry point; `_helpers.py` is shared CLI infrastructure (including the shared `_poll_job` helper); `serve.py` runs the server in the foreground with the host default flipped to `0.0.0.0` and never touches launchd/systemd.
+
+**CSP120**: all write commands are HTTP proxies — they submit jobs to the running server and return a job ID immediately. The following commands require `archon-search serve` to be running and accept `--api-url` / `--api-key`: `collection add` (proxies `POST /collections/`), `collection remove` (proxies `DELETE /collections/{name}`), `collection reindex` (proxies `POST /collections/{name}/reindex`), `collection reindex-metadata` (proxies `POST /collections/{name}/reindex-metadata`), `ingest` (proxies `POST /ingest`), `sync` (proxies `POST /sync`). All except `remove` support `--wait` (polls `GET /jobs/{id}` via `_poll_job` in `_helpers.py`). `jobs status <job_id>` (`jobs_cmd.py`) is a new one-shot status-check command. Read-only commands (`collection list`, `collection info`) keep the direct-store path and work offline. Two new server endpoints were added: `POST /sync` (`routes_sync.py`) and `POST /collections/{name}/reindex-metadata` (`routes_collections.py`).
 
 ### Telemetry (`archon_search/telemetry/`)
 

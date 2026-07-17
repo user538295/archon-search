@@ -93,6 +93,23 @@ curl -s -X POST http://127.0.0.1:8765/search \
 
 If you prefer a static key without touching the file, export `ARCHON_SEARCH_API_KEY` before starting the server — see [`02_configuration.md`](./02_configuration.md).
 
+## CLI write commands require the server
+
+All write operations from the CLI submit jobs to the running server — the same way `collection migrate` works. The following commands **require `archon-search serve` (or `start`) to be running** before they can execute:
+
+- `collection add <path>` — proxies `POST /collections/`
+- `collection remove <name>` — proxies `DELETE /collections/{name}`
+- `collection reindex <name>` — proxies `POST /collections/{name}/reindex`
+- `collection reindex-metadata <name>` — proxies `POST /collections/{name}/reindex-metadata`
+- `ingest --path <path>` — proxies `POST /ingest`
+- `sync` — proxies `POST /sync`
+- `graph build-communities <collection>` — proxies `POST /graph/{collection}/rebuild-communities`
+- `collection migrate <name>` — proxies `POST /collections/{name}/migrate`
+
+These commands exit 1 with `"archon-search serve is not running. Start it first."` when the server is not reachable — no in-process fallback.
+
+Read-only commands (`collection list`, `collection info`) work offline via direct LanceDB reads and do not require the server.
+
 ## Applying config changes
 
 The server reads configuration only at startup, so changes to `~/.archon-search/archon-search.toml` (host, port, chunk size, telemetry, etc.) require a restart:

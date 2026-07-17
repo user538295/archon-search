@@ -36,8 +36,6 @@ MARKER_NAME = "archon_unset_data_dir"
 # Any test added here must exercise the Path.home() / ".archon-search" fallback codepath;
 # apply this marker only to tests in this frozenset or update it with a C17-plan amendment.
 MARKER_ALLOWLIST: frozenset[str] = frozenset({
-    "tests/cli/test_ingest.py::test_default_ingest_path",
-    "tests/test_cli_ingest_paths.py::test_default_history_path",
     "tests/test_cli_serve.py::test_serve_no_warning_when_data_dir_unset",
     "tests/test_job_store.py::test_jobs_file_default_path",
     "tests/test_jobs_paths.py::test_get_jobs_file_default",

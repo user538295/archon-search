@@ -13,7 +13,6 @@ import asyncio
 import os
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -147,17 +146,15 @@ def test_future_mtime_accepted_as_is(
 def test_reindex_metadata_cli_to_search_response_round_trip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Seed LanceDB rows with legacy-shaped data, run reindex-metadata CLI,
+    """Seed LanceDB rows with legacy-shaped data, run reindex-metadata via store,
     POST /search, assert response items carry updated metadata fields.
 
     Verifies the reindex path actually overwrites fields rather than leaving
     legacy values in place. Seeds the collection via HTTP ingest (dim=384 from
     stub embedder), then forces legacy metadata state via direct table update,
-    then runs the CLI to backfill.
+    then calls store.reindex_metadata() directly (CSP120: CLI is now a proxy).
     """
-    from archon_search.cli.collection import collection as collection_cli
     from archon_search.store import SearchStore
-    from click.testing import CliRunner
 
     # Create a source file so reindex can read its mtime and extension
     src = tmp_path / "legacy.md"
@@ -186,8 +183,7 @@ def test_reindex_metadata_cli_to_search_response_round_trip(
         # Force legacy metadata state on all rows
         asyncio.run(_force_legacy(store, col))
 
-        # Verify legacy state is in place by searching — ingested_by should be legacy
-        # (but the search route normalizes ingested_by at read time, so we check store directly)
+        # Verify legacy state is in place — ingested_by should be legacy
         async def _check_raw_row(s, c):
             db = s._require_connected()
             t = await db.open_table(c)
@@ -200,23 +196,8 @@ def test_reindex_metadata_cli_to_search_response_round_trip(
             f"expected legacy ingested_by before reindex, got: {raw['ingested_by']!r}"
         )
 
-        # Run reindex-metadata CLI — patch create_pipeline to use our connected store
-        pipeline_mock = MagicMock()
-        pipeline_mock.store = store
-
-        async def _noop() -> None:
-            return None
-
-        runner = CliRunner()
-        with (
-            patch("archon_search.cli.collection.load_config", return_value=cfg),
-            patch("archon_search.cli.collection.create_pipeline", return_value=pipeline_mock),
-            patch.object(SearchStore, "connect", new=lambda self: _noop()),
-            patch.object(SearchStore, "disconnect", new=lambda self: _noop()),
-        ):
-            result = runner.invoke(collection_cli, ["reindex-metadata", col])
-
-        assert result.exit_code == 0, f"reindex-metadata CLI failed: {result.output}"
+        # Run reindex-metadata directly via store (CSP120: CLI is an HTTP proxy)
+        asyncio.run(store.reindex_metadata(col))
 
         # Verify via POST /search that response items carry updated metadata
         items = search(client, col, "legacy content reindexing", api_key=api_key)
@@ -228,6 +209,6 @@ def test_reindex_metadata_cli_to_search_response_round_trip(
             )
             assert item["updated_at"], "updated_at should be non-empty after reindex"
             assert item["ingested_by"] == "reindex", (
-                f"expected ingested_by='reindex' after CLI reindex, "
+                f"expected ingested_by='reindex' after reindex, "
                 f"got: {item['ingested_by']!r}"
             )

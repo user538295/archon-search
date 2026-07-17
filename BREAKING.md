@@ -8,6 +8,43 @@
 
 ## Changelog
 
+### [next release] — CSP120: `archon-search collection add`, `collection reindex`, and `sync` are now HTTP proxies (require server running)
+
+**Surface**: `archon-search collection add`, `archon-search collection reindex`, and `archon-search sync` CLI commands.
+
+**Breaking changes**:
+
+**`collection add`:**
+
+1. **Server must be running.** `archon-search collection add <path>` now proxies `POST /collections/` on the running server. Exits `1` with `"archon-search serve is not running. Start it first."` when the server is not reachable. Previously ran in-process without a server.
+2. **Config is no longer written locally.** The CLI no longer writes `archon-search.toml`. The server writes the path to `archon-search.toml` server-side via `_maybe_save_config()` as part of `POST /collections/`. If the ingest job later fails asynchronously, the config entry remains (stale "registered but not yet populated"); recovery is via `collection reindex <name>`.
+3. **`--config` option removed.** Use `--api-url` / `--api-key` instead.
+4. **Output changed.** Previously printed nothing until ingest completed. Now prints `Add collection job submitted: <job_id>. Collection: '<name>'` immediately. Use `--wait` to block until ingest completes.
+5. **Collection name comes from the server.** The displayed collection name is derived by the server's `path_to_collection_name(resolved_path)` (lowercased, non-alphanumeric runs replaced by `_`, leading/trailing `_` stripped). This is the same function the server used previously, but the CLI previously computed it locally — any discrepancy between client-side and server-side resolution is now eliminated.
+
+**`collection reindex`:**
+
+1. **Server must be running.** `archon-search collection reindex <name>` now proxies `POST /collections/{name}/reindex`. Exits `1` on `ConnectError`. Previously ran in-process.
+2. **`--config` option removed.** Use `--api-url` / `--api-key` instead.
+3. **Output changed.** Previously blocked until reindex completed. Now prints the job ID immediately. Use `--wait` to block.
+
+**`sync`:**
+
+1. **Server must be running.** `archon-search sync` now proxies `POST /sync`. Exits `1` on `ConnectError`. Previously ran `SearchCollectionSync` in-process.
+2. **`--config` option removed.** Use `--api-url` / `--api-key` instead.
+3. **Output changed.** Previously blocked until sync completed. Now prints the job ID immediately. Use `--wait` to block.
+4. **Sync is namespace-blind in v1.** `POST /sync` syncs all server-configured collections regardless of the caller's namespace (see Known Limitations in the CSP120 team plan). Per-namespace filtering is deferred.
+
+**`collection reindex-metadata`:**
+
+1. **Server must be running.** `archon-search collection reindex-metadata <name>` now proxies `POST /collections/{name}/reindex-metadata`. Exits `1` on `ConnectError`. Previously ran in-process.
+2. **`--config` option removed.** Use `--api-url` / `--api-key` instead.
+3. **Output changed.** Previously blocked until reindex-metadata completed. Now prints the job ID immediately. Use `--wait` to block.
+
+**Migration**: ensure `archon-search serve` is running before invoking any of these commands. Replace `--config` flags with `--api-url` / `--api-key`. Scripts that expect synchronous completion must add `--wait`.
+
+---
+
 ### [next release] — FE-8: `archon-search collection remove` is now an HTTP proxy (requires server running)
 
 **Surface**: `archon-search collection remove` CLI command.

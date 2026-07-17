@@ -1,12 +1,12 @@
-"""End-to-end pin for ``archon-search collection reindex-metadata`` against a
+"""End-to-end pin for ``SearchStore.reindex_metadata`` against a
 Python-constructed pre-A1 collection.
 
 Implements Task 6.4 of Documentation/Backlog/A1-metadata-schema-v1-plan.md.
 
-These tests are intentionally sync (no ``@pytest.mark.asyncio``): the CLI
-itself calls ``asyncio.run()`` internally and that conflicts with a running
-test event loop. We drive a fresh ``SearchStore`` synchronously, mock the
-factory bindings, and assert via raw-row reads.
+These tests are intentionally sync (no ``@pytest.mark.asyncio``): they drive
+a fresh ``SearchStore`` synchronously via ``asyncio.run()`` and assert via
+raw-row reads. The CLI was a proxy (CSP120) so tests now call the store
+method directly.
 """
 from __future__ import annotations
 
@@ -15,13 +15,10 @@ import hashlib
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
-from click.testing import CliRunner
 
 from archon_search._types import ChunkRecord
-from archon_search.cli.collection import collection
 from archon_search.store import SearchStore
 
 _DIM = 4
@@ -73,25 +70,9 @@ async def _seed(store: SearchStore, col: str, source_path: str) -> str:
     return chunk.chunk_id
 
 
-def _invoke_cli(store: SearchStore, name: str, *extra: str):
-    """Run the CLI with create_pipeline mocked to return a pipeline whose
-    .store attribute is the *already connected* store. connect/disconnect
-    are patched to be no-ops on this instance so the CLI doesn't reset it."""
-    pipeline = MagicMock()
-    pipeline.store = store
-    runner = CliRunner()
-    cfg = MagicMock()
-
-    async def _noop() -> None:
-        return None
-
-    with (
-        patch("archon_search.cli.collection.load_config", return_value=cfg),
-        patch("archon_search.cli.collection.create_pipeline", return_value=pipeline),
-        patch.object(SearchStore, "connect", new=lambda self: _noop()),
-        patch.object(SearchStore, "disconnect", new=lambda self: _noop()),
-    ):
-        return runner.invoke(collection, ["reindex-metadata", name, *extra])
+def _run_reindex(store: SearchStore, name: str, *, dry_run: bool = False):
+    """Call store.reindex_metadata() directly (CSP120: CLI is now a proxy)."""
+    return asyncio.run(store.reindex_metadata(name, dry_run=dry_run))
 
 
 @pytest.fixture
@@ -111,8 +92,7 @@ def test_pre_a1_collection_after_reindex(
     src.write_text("seed content")
     chunk_id = asyncio.run(_seed(store_e2e, col, str(src)))
 
-    result = _invoke_cli(store_e2e, col)
-    assert result.exit_code == 0, result.output
+    _run_reindex(store_e2e, col)
 
     row = asyncio.run(_read_raw(store_e2e, col, chunk_id))
     assert row["file_type"] == "md"
@@ -129,8 +109,7 @@ def test_pre_a1_collection_dry_run_changes_nothing(
     src.write_text("seed")
     chunk_id = asyncio.run(_seed(store_e2e, col, str(src)))
 
-    result = _invoke_cli(store_e2e, col, "--dry-run")
-    assert result.exit_code == 0, result.output
+    _run_reindex(store_e2e, col, dry_run=True)
 
     row = asyncio.run(_read_raw(store_e2e, col, chunk_id))
     assert row["ingested_by"] == "archon-search-cli"

@@ -90,28 +90,37 @@ def test_e2e_rest_413_single_file_over_limit(
 def test_e2e_cli_single_file_over_limit_exits_nonzero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CliRunner ingest --path oversized-file with toml max_file_mb=1 → exit non-zero;
-    stderr contains actionable message.
+    """CliRunner ingest --path oversized-file → server returns 413 → CLI exits non-zero;
+    stderr contains actionable message from server.
+
+    CSP120: ingest CLI is now a proxy; oversized-file rejection happens server-side.
+    We mock httpx.post to return 413 with the server's error detail.
 
     Completes: S3
     """
+    import httpx
     from click.testing import CliRunner
+    from unittest.mock import MagicMock
 
     from archon_search.cli.ingest import ingest
-
-    toml_path = tmp_path / "archon-search.toml"
-    toml_path.write_text("[ingest]\nmax_file_mb = 1\n", encoding="utf-8")
+    from archon_search._types import IngestError
 
     oversized = tmp_path / "bigfile.pdf"
     oversized.write_bytes(b"x")  # real file so is_file() passes
 
+    err = IngestError(file_size_mb=5, limit_mb=1)
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 413
+    mock_resp.text = f'{{"detail": "{err.message}"}}'
+
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key")
 
     runner = CliRunner()
-    with patch("os.path.getsize", return_value=5 * ONE_MB):
+    with patch("archon_search.cli.ingest.httpx.post", return_value=mock_resp):
         result = runner.invoke(
             ingest,
-            ["--path", str(oversized), "--config", str(toml_path)],
+            ["--path", str(oversized)],
         )
 
     assert result.exit_code != 0, (

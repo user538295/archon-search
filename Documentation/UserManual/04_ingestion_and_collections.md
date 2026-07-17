@@ -41,7 +41,7 @@
 
 ## CLI commands
 
-Most `archon-search` ingestion commands accept `--config PATH` to point at a non-default TOML file. The `collection reindex` and `ingest` commands are exceptions — they proxy requests to the running server and accept `--api-url` / `--api-key` instead of `--config`.
+All **write** commands (`collection add`, `collection remove`, `collection reindex`, `collection reindex-metadata`, `ingest`, `sync`) proxy requests to the running server and accept `--api-url` / `--api-key` instead of `--config`. The server must be running before invoking any write command; each command exits 1 with `"archon-search serve is not running. Start it first."` on connection failure. **Read-only** commands (`collection list`, `collection info`) still use `--config PATH` and work offline.
 
 ### `archon-search ingest`
 
@@ -103,11 +103,23 @@ Prints one line per collection: `<name>  docs=<n>  chunks=<n>`. Returns "No coll
 
 ### `archon-search collection add <path>`
 
-Adds the path to `[collections].collections` in the TOML (if not already present) and ingests it immediately. If the config file does not yet exist, `collection add` creates a new TOML document at the default config location.
+Registers the path as a collection and enqueues an ingest job on the running server. The server writes the path to `archon-search.toml` server-side via `_maybe_save_config()` — the CLI no longer writes TOML locally. **Requires `archon-search serve` to be running.**
 
 ```bash
 archon-search collection add /Users/me/docs
+archon-search collection add /Users/me/docs --wait
+archon-search collection add /Users/me/docs --wait --api-url http://localhost:8765 --api-key <key>
 ```
+
+Options:
+
+- `--wait` — poll `GET /jobs/{id}` until the ingest job reaches a terminal status; prints `Collection '<name>' ingested successfully.` on DONE. Exits 1 on FAILED.
+- `--api-url TEXT` — base URL of the archon-search server (default `http://localhost:8765`).
+- `--api-key TEXT` — API key (falls back to `ARCHON_SEARCH_API_KEY` env var or the key file).
+
+Output (no `--wait`): `Add collection job submitted: <job_id>. Collection: '<name>'` plus a hint for tracking progress with `archon-search jobs status <job_id>`. The collection name shown comes from the server response and matches what the server used for `path_to_collection_name(resolved_path)`.
+
+If the collection is already registered, the server returns 409 and the CLI exits 1.
 
 Pinned collections must be added manually to `pinned_collections` in TOML — the CLI does not have a "pin" flag.
 
