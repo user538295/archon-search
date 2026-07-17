@@ -4358,3 +4358,262 @@ def test_patch_collection_description_survives_field_change(
     response = c.patch(f"/collections/{name}", json={"default_ttl_seconds": 3600})
     assert response.status_code == 200
     assert response.json()["description"] == "Kept through TTL change."
+
+
+# ---------------------------------------------------------------------------
+# POST /collections/{name}/reindex-metadata — CSP120 BE-4
+# ---------------------------------------------------------------------------
+
+
+def _make_reindex_metadata_app(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    *,
+    meta_kwargs: dict | None = None,
+    has_meta: bool = True,
+    in_config: bool = True,
+) -> tuple:
+    """Helper: create an app with one collection and a mock search_store for reindex-metadata tests."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    if in_config:
+        cfg.collections = [str(src)]
+
+    name = path_to_collection_name(str(src))
+    extra = meta_kwargs or {}
+    meta = CollectionMeta(name=name, namespace="default", **extra) if has_meta else None
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    return c, name, meta, mock_store
+
+
+def test_reindex_metadata_returns_202_running(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/{name}/reindex-metadata → 202 + RUNNING JobResponse."""
+    c, name, meta, mock_store = _make_reindex_metadata_app(tmp_path, tmp_store)
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post(f"/collections/{name}/reindex-metadata", json={})
+
+    assert response.status_code == 202
+    data = response.json()
+    assert "job_id" in data
+    assert data["status"] == "RUNNING"
+
+
+def test_reindex_metadata_404_collection_not_in_config(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/{name}/reindex-metadata → 404 when collection absent from config."""
+    c, name, meta, mock_store = _make_reindex_metadata_app(
+        tmp_path, tmp_store, in_config=False
+    )
+
+    response = c.post(f"/collections/{name}/reindex-metadata", json={})
+
+    assert response.status_code == 404
+
+
+def test_reindex_metadata_404_meta_row_absent(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/{name}/reindex-metadata → 404 when meta row is absent."""
+    c, name, meta, mock_store = _make_reindex_metadata_app(
+        tmp_path, tmp_store, has_meta=False
+    )
+
+    response = c.post(f"/collections/{name}/reindex-metadata", json={})
+
+    assert response.status_code == 404
+
+
+def test_reindex_metadata_409_duplicate_submission(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/{name}/reindex-metadata → 409 when metadata_reindex_job_id is active."""
+    from archon_search.types import MetadataReindexJob, JobKind
+    from archon_search.jobs.model import JobStatus
+    import uuid
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    running_job = MetadataReindexJob(
+        job_id=str(uuid.uuid4()),
+        status=JobStatus.RUNNING,
+        created_at=now,
+        updated_at=now,
+        namespace="default",
+        collection="",
+        kind=JobKind.metadata_reindex,
+    )
+    tmp_store.create_job(running_job)
+
+    c, name, meta, mock_store = _make_reindex_metadata_app(
+        tmp_path, tmp_store, meta_kwargs={"metadata_reindex_job_id": running_job.job_id}
+    )
+
+    response = c.post(f"/collections/{name}/reindex-metadata", json={})
+
+    assert response.status_code == 409
+    assert "metadata reindex already in progress" in response.json()["detail"]
+
+
+def _poll_reindex_job_until_terminal(
+    job_store: JobStore, job_id: str, timeout: float = 5.0
+) -> object:
+    """Poll job_store.get until status is terminal. Returns the terminal job."""
+    import time
+
+    terminal = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED, JobStatus.CANCELLED}
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        job = job_store.get(job_id)
+        if job is not None and job.status in terminal:
+            return job
+        time.sleep(0.05)
+    pytest.fail(f"Job {job_id!r} did not reach a terminal status within {timeout}s")
+
+
+def test_reindex_metadata_task_done_path_and_flag_forwarding(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """Background task runs to DONE; dry_run/normalize_timestamps forwarded to reindex_metadata.
+
+    T1: task DONE path is exercised.
+    T2: flag forwarding (dry_run=True, normalize_timestamps=False) asserted on the store call.
+    """
+    from archon_search.store import ReindexResult
+
+    result_obj = ReindexResult(processed=3, updated=2, skipped=1, ts_normalized=0, warnings=["w"])
+
+    # Update the mock_store's reindex_metadata BEFORE making the request so
+    # the task picks it up when it runs.
+    c, name, meta, mock_store = _make_reindex_metadata_app(tmp_path, tmp_store)
+    mock_store.reindex_metadata = AsyncMock(return_value=result_obj)
+
+    # Do NOT patch asyncio.create_task — let the task actually run.
+    response = c.post(
+        f"/collections/{name}/reindex-metadata",
+        json={"dry_run": True, "normalize_timestamps": False},
+    )
+
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+
+    # Poll until the background task reaches a terminal state.
+    terminal_job = _poll_reindex_job_until_terminal(tmp_store, job_id)
+
+    assert terminal_job.status == JobStatus.DONE, (
+        f"Expected DONE, got {terminal_job.status!r}; error={getattr(terminal_job, 'error', None)!r}"
+    )
+    # Verify the result fields are stored.
+    assert terminal_job.result is not None
+    assert terminal_job.result["processed"] == 3
+    assert terminal_job.result["updated"] == 2
+    assert terminal_job.result["warnings"] == ["w"]
+
+    # T2: assert the store was called with the forwarded flags.
+    mock_store.reindex_metadata.assert_called_once_with(
+        name,
+        dry_run=True,
+        normalize_timestamps=False,
+    )
+
+
+def test_reindex_metadata_task_failed_path(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """Background task transitions to FAILED on OSError; metadata_reindex_job_id is cleared.
+
+    T5: FAILED branch (except Exception) is exercised.
+    T4: id is cleared in finally even on failure, so a re-submit returns 202.
+    """
+    c, name, meta, mock_store = _make_reindex_metadata_app(tmp_path, tmp_store)
+    mock_store.reindex_metadata = AsyncMock(side_effect=OSError("table dropped"))
+
+    response = c.post(f"/collections/{name}/reindex-metadata", json={})
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+
+    # Poll until terminal (expect FAILED).
+    terminal_job = _poll_reindex_job_until_terminal(tmp_store, job_id)
+    assert terminal_job.status == JobStatus.FAILED
+    assert terminal_job.error is not None
+    assert "table dropped" in terminal_job.error
+
+    # T4: after failure, the finally block should have cleared metadata_reindex_job_id,
+    # so a second POST must return 202 (not 409).
+    # update_collection_meta is a mock, so reset side effects to a fresh return.
+    # Re-create the mock meta to reflect cleared id (get_collection_meta returns fresh meta).
+    from archon_search.collection_meta import CollectionMeta
+
+    fresh_meta = CollectionMeta(name=name, namespace="default")
+    mock_store.get_collection_meta = AsyncMock(return_value=fresh_meta)
+    mock_store.reindex_metadata = AsyncMock(return_value=MagicMock(
+        processed=0, updated=0, skipped=0, ts_normalized=0, warnings=[]
+    ))
+
+    response2 = c.post(f"/collections/{name}/reindex-metadata", json={})
+    assert response2.status_code == 202, (
+        f"Expected 202 on re-submit after FAILED, got {response2.status_code}: {response2.text}"
+    )
+
+
+def test_reindex_metadata_stale_job_id_clears_and_returns_202(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """Stale metadata_reindex_job_id pointing at a DONE job is lazy-cleared; 202 returned.
+
+    T3: the stale-job lazy-clear path (guard 3) is exercised.
+    """
+    from archon_search.types import MetadataReindexJob, JobKind
+    import uuid
+    from datetime import datetime, timezone
+
+    # Create a job and transition it to DONE (terminal).
+    now = datetime.now(timezone.utc).isoformat()
+    done_job = MetadataReindexJob(
+        job_id=str(uuid.uuid4()),
+        status=JobStatus.DONE,
+        created_at=now,
+        updated_at=now,
+        namespace="default",
+        collection="",
+        kind=JobKind.metadata_reindex,
+    )
+    tmp_store.create_job(done_job)
+
+    # Point meta at the DONE job — simulates stale id after a previous run.
+    c, name, meta, mock_store = _make_reindex_metadata_app(
+        tmp_path, tmp_store, meta_kwargs={"metadata_reindex_job_id": done_job.job_id}
+    )
+
+    from unittest.mock import patch
+
+    with patch("archon_search.server.routes_collections.asyncio.create_task",
+               side_effect=lambda coro: (coro.close(), MagicMock())[1]):
+        response = c.post(f"/collections/{name}/reindex-metadata", json={})
+
+    # Stale DONE id should be cleared and a new 202 returned.
+    assert response.status_code == 202, (
+        f"Expected 202 for stale DONE job_id, got {response.status_code}: {response.text}"
+    )
+    new_job_id = response.json()["job_id"]
+    assert new_job_id != done_job.job_id, "New job must have a fresh job_id"

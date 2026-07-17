@@ -2863,6 +2863,22 @@
         "title": "ReadinessResponse",
         "type": "object"
       },
+      "ReindexMetadataRequest": {
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "normalize_timestamps": {
+            "default": true,
+            "title": "Normalize Timestamps",
+            "type": "boolean"
+          }
+        },
+        "title": "ReindexMetadataRequest",
+        "type": "object"
+      },
       "RouteRequest": {
         "properties": {
           "query": {
@@ -4876,6 +4892,91 @@
           }
         ],
         "summary": "Reindex Collection"
+      }
+    },
+    "/collections/{name}/reindex-metadata": {
+      "post": {
+        "description": "Enqueue an async metadata reindex job for a collection \u2014 CSP120 BE-4.\n\nFollows the rebuild_communities pattern (``routes_graph.py``):\nvalidate -> create job QUEUED -> transition QUEUED -> RUNNING -> spawn task\n-> return 202 with the full JobResponse body, so the response reports RUNNING.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in config or meta record absent.\n- 409: A metadata reindex is already in progress for this collection.",
+        "operationId": "reindex_metadata_collections__name__reindex_metadata_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReindexMetadataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Reindex Metadata"
       }
     },
     "/explain": {

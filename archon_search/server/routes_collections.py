@@ -25,7 +25,7 @@ from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, DocumentInfoItem, DocumentListResponse, ErrorDetail, ExpiringChunkItem, ExpiringChunksResponse, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
 from archon_search.store import STORE_SCHEMA_VERSION, StoreBusyError
 from archon_search.sync import path_to_collection_name
-from archon_search.types import JobStatus, MigrationJob, MigrationKind, MigrationSpec
+from archon_search.types import JobStatus, MetadataReindexJob, MigrationJob, MigrationKind, MigrationSpec
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,11 @@ router = APIRouter(prefix="/collections")
 class AddCollectionRequest(BaseModel):
     path: str
     embedding_model: str | None = None
+
+
+class ReindexMetadataRequest(BaseModel):
+    dry_run: bool = False
+    normalize_timestamps: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -984,3 +989,169 @@ async def migrate_collection(
     return MigrateInPlaceResponse(
         migrations_applied=[s.name for s in in_place_specs],
     )
+
+
+# ---------------------------------------------------------------------------
+# Metadata reindex endpoint (CSP120 BE-4)
+# ---------------------------------------------------------------------------
+
+# Active job statuses for the metadata_reindex_job_id 409 guard.
+# Mirrors _REBUILD_ACTIVE_STATUSES from routes_graph.py.
+_REINDEX_METADATA_ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.QUEUED, JobStatus.PENDING}
+
+_ERROR_401_404_409 = {
+    401: {"model": ErrorDetail},
+    404: {"model": ErrorDetail},
+    409: {"model": ErrorDetail},
+}
+
+
+async def _reindex_metadata_task(
+    job: MetadataReindexJob,
+    job_store: JobStore,
+    search_store: object,
+    dry_run: bool,
+    normalize_timestamps: bool,
+) -> None:
+    """Coroutine that drives a MetadataReindexJob to completion.
+
+    The caller is responsible for ensuring the job is already in RUNNING state
+    before invoking this coroutine (the route transitions QUEUED -> RUNNING
+    immediately after creating the job).
+
+    Lifecycle (caller sets RUNNING -> this task drives to terminal):
+      1. Call ``search_store.reindex_metadata(collection, dry_run=..., normalize_timestamps=...)``.
+      2. Transition to DONE with all 5 ReindexResult fields on success.
+      3. Transition to FAILED with the error string on any exception.
+      4. In finally: clear ``CollectionMeta.metadata_reindex_job_id``.
+
+    Note: does NOT pre-acquire the per-collection lock — ``reindex_metadata``
+    already acquires ``lock_for(collection)`` internally (non-reentrant).
+    """
+    job_id = job.job_id
+
+    try:
+        result = await search_store.reindex_metadata(  # type: ignore[attr-defined]
+            job.collection,
+            dry_run=dry_run,
+            normalize_timestamps=normalize_timestamps,
+        )
+        job_store.update(
+            job_id,
+            status=JobStatus.DONE,
+            result={
+                "processed": result.processed,
+                "updated": result.updated,
+                "skipped": result.skipped,
+                "ts_normalized": result.ts_normalized,
+                "warnings": result.warnings,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("_reindex_metadata_task: job %s failed", job_id)
+        try:
+            job_store.update(job_id, status=JobStatus.FAILED, error=str(exc))
+        except (KeyError, OSError):
+            logger.error(
+                "_reindex_metadata_task: could not persist FAILED status for job %s", job_id
+            )
+    finally:
+        try:
+            meta = await search_store.get_collection_meta(  # type: ignore[attr-defined]
+                job.collection, namespace=job.namespace
+            )
+            if meta is not None and meta.metadata_reindex_job_id == job_id:
+                meta.metadata_reindex_job_id = None
+                await search_store.update_collection_meta(meta)  # type: ignore[attr-defined]
+        except Exception:
+            logger.warning(
+                "_reindex_metadata_task: failed to clear metadata_reindex_job_id for job %s",
+                job_id,
+            )
+
+
+@router.post(
+    "/{name}/reindex-metadata",
+    name="reindex_metadata",
+    status_code=202,
+    response_model=JobResponse,
+    responses=_ERROR_401_404_409,
+)
+async def reindex_metadata(
+    name: str, body: ReindexMetadataRequest, request: Request
+) -> JSONResponse:
+    """Enqueue an async metadata reindex job for a collection — CSP120 BE-4.
+
+    Follows the rebuild_communities pattern (``routes_graph.py``):
+    validate -> create job QUEUED -> transition QUEUED -> RUNNING -> spawn task
+    -> return 202 with the full JobResponse body, so the response reports RUNNING.
+
+    Returns:
+    - 202: JobResponse-shaped body, status RUNNING.
+    - 404: Collection not found in config or meta record absent.
+    - 409: A metadata reindex is already in progress for this collection.
+    """
+    config: SearchConfig = request.app.state.config
+    search_store = request.app.state.search_store
+    job_store: JobStore = request.app.state.job_store
+    ns: str = request.state.namespace
+
+    # Guard 1: collection must be in the configured path list.
+    path_to_name = _all_collection_paths(config)
+    if name not in path_to_name:
+        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
+    # Guard 2: namespace-scoped meta record must exist.
+    meta = await search_store.get_collection_meta(name, namespace=ns)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+
+    # Guard 3: reject duplicate if an active reindex is already in progress.
+    # Lazy-stale-clear: if the referenced job is missing or terminal, clear and proceed.
+    if meta.metadata_reindex_job_id is not None:
+        existing_job = job_store.get(meta.metadata_reindex_job_id)
+        if existing_job is not None and existing_job.status in _REINDEX_METADATA_ACTIVE_STATUSES:
+            return JSONResponse(
+                {"detail": "metadata reindex already in progress for this collection"},
+                status_code=409,
+            )
+        meta.metadata_reindex_job_id = None
+
+    try:
+        job = job_store.create_metadata_reindex(collection=name, namespace=ns)
+    except OSError:
+        return JSONResponse({"detail": "internal error"}, status_code=500)
+
+    # Transition to RUNNING before spawning the task so the response never
+    # reports QUEUED (mirrors rebuild_communities' pre-transition pattern).
+    running_job = job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+    if running_job is None:
+        logger.error(
+            "reindex_metadata: failed to transition job %s to RUNNING", job.job_id
+        )
+        return JSONResponse({"detail": "internal error"}, status_code=500)
+
+    # Set metadata_reindex_job_id AFTER the QUEUED->RUNNING transition so the
+    # guard above can detect and reject a duplicate submission while this one is active.
+    meta.metadata_reindex_job_id = running_job.job_id
+    try:
+        await search_store.update_collection_meta(meta)
+    except Exception:
+        logger.warning(
+            "reindex_metadata: failed to persist metadata_reindex_job_id for job %s",
+            running_job.job_id,
+        )
+
+    task = asyncio.create_task(
+        _reindex_metadata_task(
+            job=running_job,
+            job_store=job_store,
+            search_store=search_store,
+            dry_run=body.dry_run,
+            normalize_timestamps=body.normalize_timestamps,
+        )
+    )
+    request.app.state._background_tasks.add(task)
+    task.add_done_callback(request.app.state._background_tasks.discard)
+
+    return JSONResponse(job_to_dict(running_job), status_code=202)
