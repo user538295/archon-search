@@ -229,7 +229,7 @@ flowchart LR
         - #unit_test — `test_remove_503_lock_contention_prints_correct_message` — 503 → lock-contention message, exit 1
         - #unit_test — `test_remove_force_option_no_longer_exists` — `--force` absent from command options after conversion
 
-- [ ] **T-4** — e2e: `collection remove <name>` against real `smoke_server`; verify synchronous 200 (no `--wait`), collection absent in `GET /collections/` afterwards #tester-role
+- [x] **T-4** — e2e: `collection remove <name>` against real `smoke_server`; verify synchronous 200 (no `--wait`), collection absent in `GET /collections/` afterwards #tester-role
     - — · 2.0h
     - needs FE-8 · completes S3
     - Tests

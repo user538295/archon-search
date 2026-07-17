@@ -815,3 +815,134 @@ def test_e2e_collection_reindex_metadata_wait_against_server(smoke_server) -> No
     assert "skipped" in job_result, f"ReindexResult missing 'skipped'; result={job_result!r}"
     assert "ts_normalized" in job_result, f"ReindexResult missing 'ts_normalized'; result={job_result!r}"
     assert "warnings" in job_result, f"ReindexResult missing 'warnings'; result={job_result!r}"
+
+
+# ---------------------------------------------------------------------------
+# collection remove (S3, T-4) — HTTP-proxy CLI command against the live smoke
+# server; synchronous 200 (no --wait), collection absent in GET /collections/
+# afterwards.
+# ---------------------------------------------------------------------------
+
+
+def test_e2e_collection_remove_against_server(smoke_server, tmp_path) -> None:
+    """``archon-search collection remove <name>`` against the smoke server
+    must exit 0 and print "Removed collection '<name>'." (S3).
+
+    Test design:
+    1. Create a temp directory (function-scoped ``tmp_path``) with a real text
+       document so the server can ingest it.
+    2. Add the collection via ``POST /collections/`` REST call; poll until the
+       ingest job reaches DONE (so the collection is fully registered and the
+       meta row exists — the DELETE guard requires this).
+    3. Run ``archon-search collection remove <name>`` as a subprocess; assert
+       ``returncode == 0`` and the success message in stdout.
+    4. Assert the collection IS present in ``GET /collections/`` before removal (discriminating pre-condition).
+    5. Assert collection absent from ``GET /collections/`` and ``GET /collections/{name}`` returns 404.
+
+    Uses ``tmp_path`` (function-scoped) alongside the session-scoped
+    ``smoke_server`` — pytest allows this scope mix.
+    """
+    headers = {"Authorization": f"Bearer {smoke_server.api_key}"}
+
+    # Create a temp directory with a real document so ingest produces > 0 chunks.
+    col_dir = tmp_path / "smokeremove"
+    col_dir.mkdir()
+    (col_dir / "doc.txt").write_text(
+        "archon-search collection remove smoke test document with enough content to produce chunks."
+    )
+    collection_name = "smokeremove"  # path_to_collection_name uses the basename
+
+    # Add the collection via REST (not via CLI) to seed it cleanly.
+    add_resp = httpx.post(
+        f"{smoke_server.base_url}/collections/",
+        json={"path": str(col_dir)},
+        headers=headers,
+        timeout=10,
+    )
+    assert add_resp.status_code == 202, (
+        f"fixture: POST /collections/ failed: {add_resp.status_code} {add_resp.text}"
+    )
+    job_id = add_resp.json()["job_id"]
+
+    # Poll until the ingest job reaches DONE so the meta row exists.
+    deadline = time.monotonic() + 60.0
+    while time.monotonic() < deadline:
+        poll_resp = httpx.get(
+            f"{smoke_server.base_url}/jobs/{job_id}",
+            headers=headers,
+            timeout=5,
+        )
+        if poll_resp.status_code == 200 and poll_resp.json().get("status") in _TERMINAL_STATUSES:
+            break
+        time.sleep(0.5)
+    else:
+        pytest.fail(f"add-collection job {job_id} did not reach a terminal state within 60 s")
+
+    job_status = poll_resp.json()
+    assert job_status.get("status") == "DONE", (
+        f"add-collection job ended in non-DONE terminal state: {job_status!r}"
+    )
+
+    # Pre-removal: assert the collection IS present before we remove it (discriminating assertion).
+    pre_remove_resp = httpx.get(
+        f"{smoke_server.base_url}/collections/",
+        headers=headers,
+        timeout=10,
+    )
+    assert pre_remove_resp.status_code == 200, (
+        f"pre-removal GET /collections/ failed: {pre_remove_resp.status_code} {pre_remove_resp.text}"
+    )
+    pre_remove_names = [c["name"] for c in pre_remove_resp.json()]
+    assert collection_name in pre_remove_names, (
+        f"collection '{collection_name}' not found in GET /collections/ before remove: {pre_remove_names}"
+    )
+
+    # Run the CLI remove command (synchronous — no --wait needed for DELETE).
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "archon-search",
+            "collection",
+            "remove",
+            collection_name,
+            "--api-url",
+            smoke_server.base_url,
+            "--api-key",
+            smoke_server.api_key,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, (
+        f"collection remove failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert f"Removed collection '{collection_name}'." in result.stdout, (
+        f"expected success message in stdout; got: {result.stdout!r}"
+    )
+
+    # Verify the collection is no longer listed.
+    collections_resp = httpx.get(
+        f"{smoke_server.base_url}/collections/",
+        headers=headers,
+        timeout=10,
+    )
+    assert collections_resp.status_code == 200, (
+        f"GET /collections/ failed: {collections_resp.status_code} {collections_resp.text}"
+    )
+    collection_names = [c["name"] for c in collections_resp.json()]
+    assert collection_name not in collection_names, (
+        f"collection '{collection_name}' still present in GET /collections/ after remove: {collection_names}"
+    )
+
+    # Also verify the single-item detail endpoint returns 404 (separate code path from the list).
+    detail_resp = httpx.get(
+        f"{smoke_server.base_url}/collections/{collection_name}",
+        headers=headers,
+        timeout=10,
+    )
+    assert detail_resp.status_code == 404, (
+        f"GET /collections/{collection_name} should return 404 after remove; got: {detail_resp.status_code}"
+    )
