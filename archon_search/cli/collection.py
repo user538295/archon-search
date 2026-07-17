@@ -13,14 +13,11 @@ import tomlkit
 
 from archon_search.cli._helpers import _poll_job
 from archon_search.config import get_default_config_path, load_config
-from archon_search.embedder import make_embedder
 from archon_search.key_manager import load_or_generate_key
 from archon_search.observability import bind_stage_recorder, new_correlation_id
 from archon_search.pipeline import create_pipeline
 
 _DEFAULT_API_URL = "http://localhost:8765"
-_POLL_INTERVAL_SECONDS = 2
-_TERMINAL_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
 
 
 def _resolve_api_key(api_key: str | None) -> str:
@@ -431,94 +428,50 @@ def _poll_migration_job(job_id: str, base_url: str, headers: dict) -> None:
 
 @collection.command("reindex")
 @click.argument("collection_name")
-@click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
-def reindex(collection_name: str, config_path: Path | None) -> None:
+@click.option("--wait", "wait_flag", is_flag=True, default=False, help="Poll until the reindex job completes")
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def reindex(collection_name: str, wait_flag: bool, api_url: str, api_key: str | None) -> None:
     """Force full reindex of a collection."""
-    try:
-        cfg = load_config(config_path)
-    except Exception as exc:
-        click.echo(f"Error loading config: {exc}", err=True)
-        raise SystemExit(1)
-
-    async def _run() -> None:
-        from archon_search.progress import IndexingStateStore  # noqa: PLC0415
-        from archon_search.sync import path_to_collection_name as p2cn  # noqa: PLC0415
-
-        # Find source path for this collection
-        source_path: str | None = None
-        for p in cfg.pinned_collections + cfg.collections:
-            if p2cn(p) == collection_name:
-                source_path = p
-                break
-        if source_path is None:
-            click.echo(f"Error: collection '{collection_name}' not found in config.", err=True)
-            raise SystemExit(1)
-
-        pipeline = create_pipeline(cfg)
-        try:
-            await pipeline.store.connect()
-
-            # Resolve per-collection embedder from CollectionMeta
-            meta = await pipeline.store.get_collection_meta(collection_name)
-            if meta is not None and meta.pending_embedding_model:
-                embedder = make_embedder(meta.pending_embedding_model)
-            elif meta is not None and meta.active_embedding_model:
-                embedder = make_embedder(meta.active_embedding_model)
-                if cfg.embedding_model and meta.active_embedding_model != cfg.embedding_model:
-                    logger.warning("using per-collection model %s for %s", meta.active_embedding_model, collection_name)
-            else:
-                embedder = pipeline._global_embedder
-
-            # Clear state to force full reindex
-            state_store = IndexingStateStore(Path(cfg.db_path).expanduser())
-            state_store.remove_collection(collection_name)
-            # Drop old data
-            try:
-                await pipeline.store.drop_collection(collection_name)
-            except Exception:
-                pass
-            # Reindex — failure must NOT write state back
-            timings_enabled = getattr(getattr(cfg, "observability", None), "stage_timings_enabled", True)
-            if timings_enabled:
-                cid = new_correlation_id()
-                with bind_stage_recorder() as recorder:
-                    t0 = time.perf_counter()
-                    results = await pipeline.ingest_directory(
-                        Path(source_path).expanduser(), collection_name, force_regenerate_description=True,
-                        embedder=embedder,
-                    )
-                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
-                    logger.info(
-                        "stage timings",
-                        extra={
-                            "event_type": "stage_timings",
-                            "correlation_id": cid,
-                            "endpoint": "ingest",
-                            "collection": collection_name,
-                            "stage_timings_ms": recorder.stage_sums_ms,
-                        },
-                    )
-            else:
-                results = await pipeline.ingest_directory(
-                    Path(source_path).expanduser(), collection_name, force_regenerate_description=True,
-                    embedder=embedder,
-                )
-            ok = sum(1 for r in results if r.status == "ok")
-            errors = sum(1 for r in results if r.status == "error")
-            click.echo(f"Reindex complete for '{collection_name}': {ok} ingested, {errors} errors.")
-
-            # Promote pending → active on success (model-change reindex)
-            if meta is not None and meta.pending_embedding_model:
-                meta.active_embedding_model = meta.pending_embedding_model
-                meta.pending_embedding_model = None
-                meta.needs_reindex = False
-                meta.reindex_job_id = None
-                await pipeline.store.update_collection_meta(meta)
-        finally:
-            await pipeline.store.disconnect()
+    key = _resolve_api_key(api_key)
+    headers = {"Authorization": f"Bearer {key}"}
+    base_url = api_url.rstrip("/")
+    post_url = f"{base_url}/collections/{collection_name}/reindex"
 
     try:
-        asyncio.run(_run())
-    except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
+        resp = httpx.post(post_url, headers=headers)
+    except httpx.ConnectError:
+        click.echo(
+            "archon-search serve is not running. Start it first.",
+            err=True,
+        )
         raise SystemExit(1)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
+        raise SystemExit(1)
+
+    if resp.status_code == 404:
+        click.echo(f"Error: collection '{collection_name}' not found.", err=True)
+        raise SystemExit(1)
+
+    if resp.status_code != 202:
+        click.echo(f"Error: server returned {resp.status_code}: {resp.text}", err=True)
+        raise SystemExit(1)
+
+    job_data = resp.json()
+    job_id: str = job_data["job_id"]
+    click.echo(f"Reindex job submitted: {job_id}")
+
+    if wait_flag:
+        job = _poll_job(job_id, base_url, headers)
+        if job:
+            click.echo(f"Reindex complete for '{collection_name}'.")

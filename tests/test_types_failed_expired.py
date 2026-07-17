@@ -32,10 +32,10 @@ def test_failed_expired_is_terminal_in_export_cmd():
     assert "FAILED_EXPIRED" in export_mod._TERMINAL_STATUSES
 
 
-def test_failed_expired_is_terminal_in_collection():
-    """cli/collection.py _TERMINAL_STATUSES includes FAILED_EXPIRED string literal."""
-    import archon_search.cli.collection as collection_mod
-    assert "FAILED_EXPIRED" in collection_mod._TERMINAL_STATUSES
+def test_failed_expired_is_terminal_in_helpers():
+    """cli/_helpers.py _TERMINAL_STATUSES includes FAILED_EXPIRED string literal."""
+    import archon_search.cli._helpers as helpers_mod
+    assert "FAILED_EXPIRED" in helpers_mod._TERMINAL_STATUSES
 
 
 def test_job_status_enum_members():

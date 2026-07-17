@@ -105,7 +105,7 @@ flowchart LR
         - #unit_test — `test_poll_job_prints_progress_each_interval` — prints progress fields each poll when present in the job response
         - #unit_test — `test_poll_job_keyboard_interrupt_exits_0` — `KeyboardInterrupt` during poll prints "Polling stopped — job continues on server", exits 0
 
-- [ ] **FE-2** — Convert `collection reindex` (`collection.py:472–564`) to httpx proxy: remove in-process body, add `--api-url`/`--api-key`/`--wait` options, POST to `POST /collections/{name}/reindex`, call `_poll_job` on `--wait`; follow `migrate_cmd` (`collection.py:305–420`) as the template; catch `httpx.ConnectError` before the broader `httpx.HTTPError` #frontend-role
+- [x] **FE-2** — Convert `collection reindex` (`collection.py:472–564`) to httpx proxy: remove in-process body, add `--api-url`/`--api-key`/`--wait` options, POST to `POST /collections/{name}/reindex`, call `_poll_job` on `--wait`; follow `migrate_cmd` (`collection.py:305–420`) as the template; catch `httpx.ConnectError` before the broader `httpx.HTTPError` #frontend-role
     - Presentation · 2.0h
     - needs FE-1 · completes S4, S8, S10, S11, S21, S22
     - Tests

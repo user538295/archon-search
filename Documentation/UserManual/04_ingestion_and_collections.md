@@ -41,7 +41,7 @@
 
 ## CLI commands
 
-All `archon-search` ingestion commands accept `--config PATH` to point at a non-default TOML file.
+Most `archon-search` ingestion commands accept `--config PATH` to point at a non-default TOML file. The `collection reindex` command is an exception — it proxies the request to the running server and accepts `--api-url` / `--api-key` instead of `--config`.
 
 ### `archon-search ingest`
 
@@ -126,15 +126,21 @@ Prints `str(meta)` for one collection — i.e. the dataclass `__repr__`, formatt
 
 ```bash
 archon-search collection reindex docs
+archon-search collection reindex docs --wait
+archon-search collection reindex docs --wait --api-url http://localhost:8765 --api-key <key>
 ```
 
-Forces a full rebuild:
+Submits a `POST /collections/{name}/reindex` request to the running archon-search server and prints the enqueued job ID. The server performs the full rebuild asynchronously.
 
-1. Clears the indexing state for the collection.
-2. Drops the LanceDB table (best-effort; errors are swallowed).
-3. Re-ingests the source path with `force_regenerate_description=True`, regenerating the auto-description (see `description_generator.py` for what "auto-description" means).
+Flags:
 
-The collection must already exist in `pinned_collections` or `collections` in the TOML; otherwise the command exits 1.
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--wait` | off | Poll `GET /jobs/{id}` until the job reaches a terminal status (DONE / FAILED / CANCELLED) and print progress. Exits 1 if the job ends in a non-DONE terminal state. |
+| `--api-url URL` | `http://localhost:8765` | Base URL of the archon-search server. |
+| `--api-key KEY` | falls back to `ARCHON_SEARCH_API_KEY` env var or the key file | Bearer token sent as `Authorization: Bearer <key>`. |
+
+The server must be running; the command exits 1 with "archon-search serve is not running. Start it first." if the connection is refused. Exits 1 with "collection not found" on a 404 response.
 
 ## REST equivalents
 
