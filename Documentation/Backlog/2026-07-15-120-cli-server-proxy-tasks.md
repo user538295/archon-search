@@ -187,7 +187,7 @@ flowchart LR
         - #unit_test — `test_reindex_metadata_409_duplicate_submission` — `meta.metadata_reindex_job_id` set to active job id → 409
         - #integration_test — `test_reindex_metadata_job_result_contains_all_fields` — real `SearchStore` via `make_real_app`; job DONE result has `processed`, `updated`, `skipped`, `ts_normalized`, `warnings` (S5 server side; S19 active guard end-to-end)
 
-- [ ] **FE-6** — Convert `sync` (`sync.py:15–47`) to httpx proxy: remove `SearchCollectionSync` construction and `sync_runner.sync()` call, POST to `POST /sync`, add `--api-url`/`--api-key`/`--wait` #frontend-role
+- [x] **FE-6** — Convert `sync` (`sync.py:15–47`) to httpx proxy: remove `SearchCollectionSync` construction and `sync_runner.sync()` call, POST to `POST /sync`, add `--api-url`/`--api-key`/`--wait` #frontend-role
     - Presentation · 2.0h
     - needs FE-1, BE-3 · completes S7 (CLI side)
     - Tests

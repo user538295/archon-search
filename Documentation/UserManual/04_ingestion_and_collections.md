@@ -78,13 +78,20 @@ Output (with `--wait`): same as above, plus per-poll progress and `Ingest comple
 
 ### `archon-search sync`
 
-Re-sync everything declared in config (`pinned_collections + collections`). Honors the indexing state store so it skips work for already-indexed files. On entry it also resets any stale `IN_PROGRESS` entries to `PENDING` so that work interrupted by a crash is retried on the next run (`sync.py:_reset_stale_in_progress`).
+Submits a server-side `POST /sync` job that re-syncs all configured collections. The server must be running before invoking this command; the CLI exits `1` with `"archon-search serve is not running. Start it first."` when the connection is refused.
 
 ```bash
-archon-search sync
+archon-search sync [--wait] [--api-url URL] [--api-key KEY]
 ```
 
-This is conceptually the same operation the background service runs on startup via its install-trigger path. #Unverified — startup wiring in `server/app.py` was not traced end-to-end for this doc. Use `sync` manually after editing the collection lists in TOML without going through `collection add`.
+| Option | Default | Description |
+|---|---|---|
+| `--wait` | off | Poll `GET /jobs/{id}` until the job reaches a terminal status, then print `Sync complete.` on success or exit `1` on failure. |
+| `--api-url URL` | `http://localhost:8765` | Base URL of the running archon-search server. |
+| `--api-key KEY` | env `ARCHON_SEARCH_API_KEY` or key file | Bearer token for server auth. |
+
+Output (no `--wait`): `Sync job submitted: <job_id>. Track progress with: archon-search jobs status <job_id>`.
+Output (with `--wait`): same as above, plus `Sync complete.` on success.
 
 ### `archon-search collection list`
 

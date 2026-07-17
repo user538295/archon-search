@@ -202,28 +202,19 @@ def test_sync_command_available(runner: CliRunner) -> None:
 
 
 def test_sync_calls_collection_sync(runner: CliRunner, tmp_path: Path) -> None:
-    config_file = tmp_path / "archon-search.toml"
-    config_file.write_text("")
-    mock_sync = MagicMock()
-    mock_sync.sync = AsyncMock(return_value=None)
+    # sync is now an httpx proxy (FE-6) — verify it POSTs to /sync.
+    import httpx as _httpx
 
-    mock_pipeline = MagicMock()
-    mock_pipeline.store.connect = AsyncMock()
-    mock_pipeline.store.disconnect = AsyncMock()
+    resp_202 = MagicMock()
+    resp_202.status_code = 202
+    resp_202.json.return_value = {"job_id": "sync-test-id", "status": "RUNNING"}
 
-    with (
-        patch("archon_search.cli.sync.load_config") as mock_load,
-        patch("archon_search.cli.sync.SearchCollectionSync", return_value=mock_sync),
-        patch("archon_search.cli.sync.create_pipeline", return_value=mock_pipeline),
-        patch("archon_search.cli.sync.IndexingStateStore"),
-    ):
-        mock_load.return_value = MagicMock(pinned_collections=[], collections=[], db_path=str(tmp_path), embedding_model="test", chunk_size=512, auto_reindex_on_chunk_size_change=True)
-        result = runner.invoke(main, ["sync", "--config", str(config_file)])
+    with patch("httpx.post", return_value=resp_202) as mock_post:
+        result = runner.invoke(main, ["sync", "--api-key", "testkey"])
     assert result.exit_code == 0, result.output
-    mock_sync.sync.assert_called_once()
-    call_arg = mock_sync.sync.call_args[0][0]
-    # Should be pinned_collections + collections (both empty in mock)
-    assert isinstance(call_arg, list)
+    mock_post.assert_called_once()
+    call_url = mock_post.call_args[0][0]
+    assert "/sync" in call_url
 
 
 # ---------------------------------------------------------------------------
