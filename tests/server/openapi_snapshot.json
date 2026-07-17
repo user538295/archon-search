@@ -6232,6 +6232,53 @@
         "summary": "Status"
       }
     },
+    "/sync": {
+      "post": {
+        "description": "Enqueue an async full-collection sync \u2014 CSP120 BE-3.\n\nSyncs ALL server-configured collections (pinned_collections + collections)\nvia ``SearchCollectionSync.sync()``. No request body needed (C2).\n\nReturns:\n- 202: JobResponse-shaped body with status RUNNING.\n- 401: Missing or invalid Bearer token.\n- 409: A sync is already in progress.",
+        "operationId": "trigger_sync_sync_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Trigger Sync",
+        "tags": [
+          "sync"
+        ]
+      }
+    },
     "/telemetry/entries": {
       "get": {
         "operationId": "get_telemetry_entries_telemetry_entries_get",

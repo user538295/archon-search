@@ -60,6 +60,7 @@ from archon_search.server.routes_route import router as route_router
 from archon_search.server.routes_search import router as search_router
 from archon_search.server.routes_state import router as state_router
 from archon_search.server.routes_status import router as status_router
+from archon_search.server.routes_sync import router as sync_router
 from archon_search.server.routes_telemetry import router as telemetry_router
 from archon_search.telemetry.hasher import hash_doc_id, load_or_create_salt
 from archon_search.telemetry.pruner import Pruner
@@ -664,6 +665,20 @@ def create_app(
         defref_extractor=_defref_extractor,
         ppr_walker=_ppr_walker,
     )
+    from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+
+    # asyncio.Lock() is created here (in create_app's synchronous body, matching
+    # the established app.state.* pattern). On Python 3.12+ the lock binds to
+    # the running loop lazily on first use, so construction here is correct.
+    app.state.sync_lock = asyncio.Lock()
+    app.state.collection_sync = SearchCollectionSync(
+        pipeline=app.state.pipeline,
+        state_store=app.state.state_store,
+        pinned_collections=config.pinned_collections,
+        chunk_size=config.chunk_size,
+        auto_reindex_on_chunk_size_change=config.auto_reindex_on_chunk_size_change,
+    )
+
     from archon_search.hyde import HyDEGenerator  # noqa: PLC0415
     from archon_search.rag_fusion import RAGFusionGenerator  # noqa: PLC0415
 
@@ -698,6 +713,7 @@ def create_app(
     app.include_router(telemetry_router)
     app.include_router(backup_router)
     app.include_router(maintenance_router)
+    app.include_router(sync_router)
     app.include_router(keys_router)
     # OpenAI-compatible shim routes — guarded separately from the middleware guard
     # above (they live in different regions of create_app).  When disabled, no
