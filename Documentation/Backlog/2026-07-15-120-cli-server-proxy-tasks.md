@@ -203,7 +203,7 @@ flowchart LR
         - #unit_test — `test_reindex_metadata_forwards_dry_run_flag_in_body` — `--dry-run` present → request body contains `"dry_run": true`
         - #unit_test — `test_reindex_metadata_wait_polls_to_done` — mocked poll → completion, exit 0
 
-- [ ] **T-3** — e2e: `sync --wait` against `smoke_server` verifying all 6 `SyncResult` fields in job result (S7); `collection reindex-metadata smoke --wait` verifying all 5 `ReindexResult` fields in job result (S5) #tester-role
+- [x] **T-3** — e2e: `sync --wait` against `smoke_server` verifying all 6 `SyncResult` fields in job result (S7); `collection reindex-metadata smoke --wait` verifying all 5 `ReindexResult` fields in job result (S5) #tester-role
     - — · 3.0h
     - needs FE-6, FE-7 · completes S5, S7
     - Tests

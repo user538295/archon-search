@@ -658,3 +658,160 @@ def test_e2e_jobs_status_after_reindex(smoke_server) -> None:
     assert "created_at:" in result.stdout, (
         f"expected 'created_at:' in stdout; got: {result.stdout!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# sync --wait (S7) and collection reindex-metadata --wait (S5) — HTTP-proxy
+# CLI commands against the live smoke server; verify all SyncResult / ReindexResult
+# fields are present in the completed job's result payload.
+# ---------------------------------------------------------------------------
+
+
+def test_e2e_sync_wait_all_result_fields_against_server(smoke_server) -> None:
+    """``archon-search sync --wait`` against the smoke server must exit 0,
+    print "Sync job submitted:", and "Sync complete."; the completed job
+    result (fetched via ``GET /jobs/{id}``) must contain all 6 ``SyncResult``
+    fields: ``added``, ``removed``, ``unchanged``, ``errors``, ``skipped``,
+    ``updated`` (S7, C2).
+
+    Note: the smoke server's ``ARCHON_SEARCH_CONFIG`` points at a non-existent
+    file so ``load_config()`` uses defaults, where both ``pinned_collections``
+    and ``collections`` are empty lists. ``POST /sync`` therefore calls
+    ``SearchCollectionSync.sync([])`` which produces an all-empty
+    ``SyncResult`` (nothing to add/remove/update). This test proves the
+    CLI-to-server wiring and the 6-field result shape — not the sync
+    algorithm itself (covered by unit tests).
+
+    Modeled on the other e2e tests in this file: subprocess CLI against the
+    live smoke server, with job_id parsed from stdout and result verified
+    via a direct REST call.
+    """
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "archon-search",
+            "sync",
+            "--wait",
+            "--api-url",
+            smoke_server.base_url,
+            "--api-key",
+            smoke_server.api_key,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, (
+        f"sync --wait failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "Sync job submitted:" in result.stdout, (
+        f"expected 'Sync job submitted:' in stdout; got: {result.stdout!r}"
+    )
+    assert "Sync complete." in result.stdout, (
+        f"expected 'Sync complete.' in stdout; got: {result.stdout!r}"
+    )
+
+    # Parse job_id from stdout: "Sync job submitted: <job_id>. Track progress..."
+    match = re.search(r"Sync job submitted: ([^\s.]+)", result.stdout)
+    assert match, f"could not parse job_id from stdout: {result.stdout!r}"
+    job_id = match.group(1)
+
+    # Fetch completed job via REST and assert all 6 SyncResult fields are present.
+    headers = {"Authorization": f"Bearer {smoke_server.api_key}"}
+    job_resp = httpx.get(
+        f"{smoke_server.base_url}/jobs/{job_id}",
+        headers=headers,
+        timeout=10,
+    )
+    assert job_resp.status_code == 200, (
+        f"GET /jobs/{job_id} failed: {job_resp.status_code} {job_resp.text}"
+    )
+    job_data = job_resp.json()
+    assert job_data["status"] == "DONE", (
+        f"expected job status DONE; got: {job_data['status']!r}"
+    )
+    # A DONE sync job always carries a result dict — None here would be a server bug.
+    job_result = job_data.get("result")
+    assert job_result is not None, (
+        f"DONE sync job has no result payload (server returned null); job={job_data!r}"
+    )
+    assert "added" in job_result, f"SyncResult missing 'added'; result={job_result!r}"
+    assert "removed" in job_result, f"SyncResult missing 'removed'; result={job_result!r}"
+    assert "unchanged" in job_result, f"SyncResult missing 'unchanged'; result={job_result!r}"
+    assert "errors" in job_result, f"SyncResult missing 'errors'; result={job_result!r}"
+    assert "skipped" in job_result, f"SyncResult missing 'skipped'; result={job_result!r}"
+    assert "updated" in job_result, f"SyncResult missing 'updated'; result={job_result!r}"
+
+
+def test_e2e_collection_reindex_metadata_wait_against_server(smoke_server) -> None:
+    """``archon-search collection reindex-metadata smoke --wait`` against the
+    smoke server must exit 0, print "Reindex-metadata job submitted:", and
+    the completion marker; the completed job result (fetched via
+    ``GET /jobs/{id}``) must contain all 5 ``ReindexResult`` fields:
+    ``processed``, ``updated``, ``skipped``, ``ts_normalized``, ``warnings``
+    (S5, C3).
+
+    Uses the pre-seeded ``smoke`` collection so the metadata reindex operates
+    on real indexed chunks.
+    """
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "archon-search",
+            "collection",
+            "reindex-metadata",
+            "smoke",
+            "--wait",
+            "--api-url",
+            smoke_server.base_url,
+            "--api-key",
+            smoke_server.api_key,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, (
+        f"collection reindex-metadata --wait failed: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "Reindex-metadata job submitted:" in result.stdout, (
+        f"expected 'Reindex-metadata job submitted:' in stdout; got: {result.stdout!r}"
+    )
+    assert "Reindex-metadata complete for 'smoke'." in result.stdout, (
+        f"expected completion marker in stdout; got: {result.stdout!r}"
+    )
+
+    # Parse job_id from stdout: "Reindex-metadata job submitted: <job_id>. Track progress..."
+    match = re.search(r"Reindex-metadata job submitted: ([^\s.]+)", result.stdout)
+    assert match, f"could not parse job_id from stdout: {result.stdout!r}"
+    job_id = match.group(1)
+
+    # Fetch completed job via REST and assert all 5 ReindexResult fields are present.
+    headers = {"Authorization": f"Bearer {smoke_server.api_key}"}
+    job_resp = httpx.get(
+        f"{smoke_server.base_url}/jobs/{job_id}",
+        headers=headers,
+        timeout=10,
+    )
+    assert job_resp.status_code == 200, (
+        f"GET /jobs/{job_id} failed: {job_resp.status_code} {job_resp.text}"
+    )
+    job_data = job_resp.json()
+    assert job_data["status"] == "DONE", (
+        f"expected job status DONE; got: {job_data['status']!r}"
+    )
+    # A DONE reindex-metadata job always carries a result dict — None here would be a server bug.
+    job_result = job_data.get("result")
+    assert job_result is not None, (
+        f"DONE reindex-metadata job has no result payload (server returned null); job={job_data!r}"
+    )
+    assert "processed" in job_result, f"ReindexResult missing 'processed'; result={job_result!r}"
+    assert "updated" in job_result, f"ReindexResult missing 'updated'; result={job_result!r}"
+    assert "skipped" in job_result, f"ReindexResult missing 'skipped'; result={job_result!r}"
+    assert "ts_normalized" in job_result, f"ReindexResult missing 'ts_normalized'; result={job_result!r}"
+    assert "warnings" in job_result, f"ReindexResult missing 'warnings'; result={job_result!r}"
