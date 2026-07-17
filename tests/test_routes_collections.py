@@ -303,6 +303,8 @@ def test_add_collection_persists_and_starts_ingest(
     data = response.json()
     assert "job_id" in data
     assert data["status"] == JobStatus.PENDING.value
+    # FE-4/C1-I-1: 202 must carry the server-derived collection name (not empty string)
+    assert data["collection"] == path_to_collection_name(str(src.resolve()))
 
     # Config was updated
     updated_config: SearchConfig = app.state.config

@@ -322,32 +322,27 @@ def test_collection_remove_dry_run_and_force_mutually_exclusive(runner: CliRunne
     assert result.exit_code != 0
 
 
-def test_collection_add_calls_ingest_directory(runner: CliRunner, tmp_path: Path) -> None:
-    config_file = tmp_path / "archon-search.toml"
-    config_file.write_text("[collections]\npinned_collections = []\ncollections = []\n")
+def test_collection_add_submits_job_via_httpx(runner: CliRunner, tmp_path: Path) -> None:
+    """collection add now proxies to POST /collections/ via httpx (FE-4)."""
+    import httpx
 
-    mock_pipeline = MagicMock()
-    mock_pipeline.store.connect = AsyncMock()
-    mock_pipeline.store.disconnect = AsyncMock()
-    mock_pipeline.ingest_directory = AsyncMock(return_value=[])
+    post_resp = MagicMock()
+    post_resp.status_code = 202
+    post_resp.json.return_value = {
+        "job_id": "job-test-001",
+        "status": "QUEUED",
+        "collection": "my_path",
+    }
 
-    with (
-        patch("archon_search.cli.collection.load_config") as mock_load,
-        patch("archon_search.cli.collection.create_pipeline", return_value=mock_pipeline),
-        patch("archon_search.cli.collection.get_default_config_path", return_value=config_file),
-    ):
-        mock_load.return_value = MagicMock(
-            pinned_collections=[],
-            collections=[str(tmp_path)],
-            db_path=str(tmp_path),
-            embedding_model="test",
-            chunk_size=512,
-        )
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp) as mock_post:
         result = runner.invoke(main, [
             "collection", "add", str(tmp_path),
-            "--config", str(config_file),
+            "--api-key", "test-key",
         ])
     assert result.exit_code == 0, result.output
-    mock_pipeline.ingest_directory.assert_called_once()
+    mock_post.assert_called_once()
+    call_url = mock_post.call_args[0][0]
+    assert "/collections" in call_url
+    assert mock_post.call_args[1]["json"]["path"] == str(tmp_path)
 
 

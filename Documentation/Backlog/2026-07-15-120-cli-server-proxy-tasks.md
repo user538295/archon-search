@@ -132,13 +132,13 @@ flowchart LR
 
 ### Phase 2 · Add and ingest via server
 
-- [ ] **FE-4** — Convert `collection add` (`collection.py:73–140`) to httpx proxy: remove local `archon-search.toml` write, POST to `POST /collections/` (`AddCollectionRequest` body, `routes_collections.py:40–42`), print collection name from the 202 response `collection` field (not derived locally), add `--api-url`/`--api-key`/`--wait` #frontend-role
+- [x] **FE-4** — Convert `collection add` (`collection.py:73–140`) to httpx proxy: remove local `archon-search.toml` write, POST to `POST /collections/` (`AddCollectionRequest` body, `routes_collections.py:40–42`), print collection name from the 202 response `collection` field (not derived locally), add `--api-url`/`--api-key`/`--wait` #frontend-role
     - Presentation · 3.0h
     - needs FE-1 · completes S1, S2, S14
     - Tests
         - #unit_test — `test_add_submits_job_prints_id_and_server_collection_name` — mocked 202 with `collection` field → job_id + server-derived collection name printed, exit 0
         - #unit_test — `test_add_with_wait_polls_to_done` — mocked poll → completion, exit 0
-        - #unit_test — `test_add_does_not_write_local_toml` — verify no `archon-search.toml` write occurs after conversion
+        - #unit_test — `test_add_does_not_call_load_config` — verify `load_config` is never called after conversion
         - #unit_test — `test_add_409_collection_already_registered` — 409 → specific error message, exit 1
 
 - [ ] **FE-5** — Convert `ingest` (`ingest.py:25–115`) to httpx proxy: POST to `POST /ingest` (`routes_jobs.py:424–500`); derive collection name via `path_to_collection_name(path)` (from `archon_search/sync.py:29–45`) when `--collection` omitted; add `--api-url`/`--api-key`/`--wait` #frontend-role

@@ -241,7 +241,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
 
     ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     try:
-        job = store.create(namespace=ns)
+        job = store.create(namespace=ns, collection=collection_name)
     except OSError:
         if isinstance(lock_result, asyncio.Lock) and lock_result.locked():
             lock_result.release()

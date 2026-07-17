@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import time
 from pathlib import Path
 
 import click
@@ -14,7 +13,6 @@ import tomlkit
 from archon_search.cli._helpers import _poll_job
 from archon_search.config import get_default_config_path, load_config
 from archon_search.key_manager import load_or_generate_key
-from archon_search.observability import bind_stage_recorder, new_correlation_id
 from archon_search.pipeline import create_pipeline
 
 _DEFAULT_API_URL = "http://localhost:8765"
@@ -70,72 +68,59 @@ def list_cmd(config_path: Path | None) -> None:
 
 @collection.command("add")
 @click.argument("path")
-@click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
-def add(path: str, config_path: Path | None) -> None:
+@click.option("--wait", "wait_flag", is_flag=True, default=False, help="Poll until the ingest job completes")
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def add(path: str, wait_flag: bool, api_url: str, api_key: str | None) -> None:
     """Add a path to collections and ingest it."""
-    config_file = config_path or get_default_config_path()
+    key = _resolve_api_key(api_key)
+    headers = {"Authorization": f"Bearer {key}"}
+    base_url = api_url.rstrip("/")
+    post_url = f"{base_url}/collections/"
 
     try:
-        cfg = load_config(config_file)
-    except Exception as exc:
-        click.echo(f"Error loading config: {exc}", err=True)
+        resp = httpx.post(post_url, json={"path": path}, headers=headers)
+    except httpx.ConnectError:
+        click.echo(
+            "archon-search serve is not running. Start it first.",
+            err=True,
+        )
+        raise SystemExit(1)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1)
 
-    # Add to config if not already present
-    if path not in cfg.collections:
-        if config_file.exists():
-            doc = tomlkit.parse(config_file.read_text(encoding="utf-8"))
-        else:
-            doc = tomlkit.document()
-
-        if "collections" not in doc:
-            doc.add("collections", tomlkit.table())
-
-        existing = list(doc["collections"].get("collections", []))  # type: ignore[union-attr]
-        if path not in existing:
-            existing.append(path)
-            doc["collections"]["collections"] = existing  # type: ignore[index]
-            config_file.parent.mkdir(parents=True, exist_ok=True)
-            config_file.write_text(tomlkit.dumps(doc), encoding="utf-8")  # noqa: durable-write
-
-    # Reload config and ingest
-    cfg = load_config(config_file)
-    from archon_search.sync import path_to_collection_name  # noqa: PLC0415
-
-    collection_name = path_to_collection_name(path)
-
-    async def _run() -> None:
-        pipeline = create_pipeline(cfg)
-        timings_enabled = getattr(getattr(cfg, "observability", None), "stage_timings_enabled", True)
+    if resp.status_code == 409:
         try:
-            await pipeline.store.connect()
-            if timings_enabled:
-                cid = new_correlation_id()
-                with bind_stage_recorder() as recorder:
-                    t0 = time.perf_counter()
-                    result = await pipeline.ingest_directory(Path(path).expanduser(), collection_name, embedder=pipeline._global_embedder)
-                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
-                    logger.info(
-                        "stage timings",
-                        extra={
-                            "event_type": "stage_timings",
-                            "correlation_id": cid,
-                            "endpoint": "ingest",
-                            "collection": collection_name,
-                            "stage_timings_ms": recorder.stage_sums_ms,
-                        },
-                    )
-            else:
-                result = await pipeline.ingest_directory(Path(path).expanduser(), collection_name, embedder=pipeline._global_embedder)
-            click.echo(f"Added collection '{collection_name}': {len(result)} files ingested")
-        finally:
-            await pipeline.store.disconnect()
-
-    try:
-        asyncio.run(_run())
-    except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
+            detail = resp.json().get("detail", "collection already registered")
+        except Exception:
+            detail = "collection already registered"
+        click.echo(f"Error: {detail}", err=True)
         raise SystemExit(1)
+
+    if resp.status_code != 202:
+        click.echo(f"Error: server returned {resp.status_code}: {resp.text}", err=True)
+        raise SystemExit(1)
+
+    job_data = resp.json()
+    job_id: str = job_data["job_id"]
+    collection_name: str = job_data["collection"]
+    click.echo(f"Add collection job submitted: {job_id}. Collection: '{collection_name}'")
+    click.echo(f"Track progress with: archon-search jobs status {job_id}")
+
+    if wait_flag:
+        job = _poll_job(job_id, base_url, headers)
+        if job:
+            click.echo(f"Collection '{collection_name}' ingested successfully.")
 
 
 @collection.command("remove")

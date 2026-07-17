@@ -240,7 +240,7 @@ async def test_reindex_metadata_normalize_timestamps_progress_logged(
     assert calls[-1][0] == calls[-1][1]  # processed == total at final call
 
 
-# ---------------------------------------------------------------------------
+
 # ---------------------------------------------------------------------------
 # BE-5: collection migrate --dry-run subcommand
 # ---------------------------------------------------------------------------
@@ -583,3 +583,159 @@ def test_migrate_cli_backup_first_without_apply_is_error() -> None:
 
     assert result.exit_code == 1
     assert "--backup-first requires --apply" in result.output
+
+
+# ---------------------------------------------------------------------------
+# FE-4: collection add — httpx proxy tests
+# ---------------------------------------------------------------------------
+
+
+def _add_job_response(job_id: str, status: str, collection_name: str = "my_docs") -> dict:
+    """Build a minimal 202 /collections POST or GET /jobs/{id} response dict."""
+    return {"job_id": job_id, "status": status, "collection": collection_name}
+
+
+def test_add_submits_job_prints_id_and_server_collection_name() -> None:
+    """Mocked 202 with 'collection' field → job_id + server-derived collection name printed, exit 0."""
+    runner = CliRunner()
+    job_id = "job-add-001"
+    post_resp = MagicMock()
+    post_resp.status_code = 202
+    post_resp.json.return_value = _add_job_response(job_id, "QUEUED", "my_docs")
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp) as mock_post:
+        result = runner.invoke(
+            collection,
+            ["add", "/some/path/my docs", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert job_id in result.output
+    assert "my_docs" in result.output
+    mock_post.assert_called_once()
+    call_url, call_kwargs = mock_post.call_args[0][0], mock_post.call_args[1]
+    assert call_url == "http://localhost:8765/collections/"
+    # Must include the path in the request body
+    posted_json = call_kwargs.get("json", {})
+    assert posted_json.get("path") == "/some/path/my docs"
+    # Must send auth header
+    assert call_kwargs.get("headers", {}).get("Authorization") == "Bearer test-key"
+
+
+def test_add_with_wait_polls_to_done() -> None:
+    """Mocked poll → completion, exit 0."""
+    runner = CliRunner()
+    job_id = "job-add-002"
+
+    post_resp = MagicMock()
+    post_resp.status_code = 202
+    post_resp.json.return_value = _add_job_response(job_id, "QUEUED", "my_collection")
+
+    get_job_sequence = [
+        MagicMock(status_code=200, json=lambda: {"job_id": job_id, "status": "RUNNING"}),
+        MagicMock(status_code=200, json=lambda: {"job_id": job_id, "status": "DONE"}),
+    ]
+
+    with (
+        patch("archon_search.cli.collection.httpx.post", return_value=post_resp),
+        patch("archon_search.cli._helpers.httpx.get", side_effect=get_job_sequence),
+        patch("archon_search.cli._helpers.time.sleep"),
+    ):
+        result = runner.invoke(
+            collection,
+            ["add", "/some/path", "--wait", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert job_id in result.output
+    # Completion message must appear — proves the RUNNING→DONE poll actually ran
+    assert "ingested successfully" in result.output.lower()
+
+
+def test_add_does_not_call_load_config() -> None:
+    """add must not call load_config — it is a pure HTTP proxy."""
+    import archon_search.cli.collection as col_mod
+
+    post_resp = MagicMock()
+    post_resp.status_code = 202
+    post_resp.json.return_value = _add_job_response("job-add-003", "QUEUED", "mypath")
+
+    with (
+        patch("archon_search.cli.collection.httpx.post", return_value=post_resp),
+        patch.object(col_mod, "load_config") as mock_load_config,
+    ):
+        runner = CliRunner()
+        result = runner.invoke(collection, ["add", "/some/path", "--api-key", "test-key"])
+
+    assert result.exit_code == 0, result.output
+    mock_load_config.assert_not_called()
+
+
+def test_add_409_collection_already_registered() -> None:
+    """409 → specific error message, exit 1."""
+    runner = CliRunner()
+
+    post_resp = MagicMock()
+    post_resp.status_code = 409
+    post_resp.text = '{"detail": "collection already registered"}'
+    post_resp.json.return_value = {"detail": "collection already registered"}
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp):
+        result = runner.invoke(
+            collection,
+            ["add", "/some/path", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 1
+    assert "already" in result.output.lower() or "409" in result.output
+
+
+def test_add_server_not_running_exits_1() -> None:
+    """ConnectError → human-readable error, exit 1."""
+    runner = CliRunner()
+
+    with patch(
+        "archon_search.cli.collection.httpx.post",
+        side_effect=httpx.ConnectError("Connection refused"),
+    ):
+        result = runner.invoke(
+            collection,
+            ["add", "/some/path", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 1
+    assert "not running" in result.output.lower() or "start it first" in result.output.lower()
+
+
+def test_add_503_prints_error_exits_1() -> None:
+    """503 from server → error printed, exit 1."""
+    runner = CliRunner()
+
+    post_resp = MagicMock()
+    post_resp.status_code = 503
+    post_resp.text = "store busy"
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp):
+        result = runner.invoke(
+            collection,
+            ["add", "/some/path", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 1
+
+
+def test_add_generic_http_error_exits_1() -> None:
+    """Generic HTTPError (e.g. ReadTimeout) → 'Error contacting server' message, exit 1."""
+    runner = CliRunner()
+
+    with patch(
+        "archon_search.cli.collection.httpx.post",
+        side_effect=httpx.ReadTimeout("Read timeout"),
+    ):
+        result = runner.invoke(
+            collection,
+            ["add", "/some/path", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 1
+    assert "error contacting server" in result.output.lower()
