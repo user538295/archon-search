@@ -111,21 +111,23 @@ archon-search collection add /Users/me/docs
 
 Pinned collections must be added manually to `pinned_collections` in TOML — the CLI does not have a "pin" flag.
 
-### `archon-search collection remove <path>`
+### `archon-search collection remove <name>`
+
+Removes a collection by name. Requires the server to be running — the command proxies `DELETE /collections/{name}` on the archon-search server.
 
 ```bash
-archon-search collection remove /Users/me/docs
-archon-search collection remove /Users/me/docs --dry-run
-archon-search collection remove /Users/me/docs --force
+archon-search collection remove docs
+archon-search collection remove docs --api-url http://localhost:8765 --api-key <key>
 ```
 
-Flags:
+Options:
 
-- `--dry-run` — print what would happen, do not execute.
-- `--force` — proceed even if the service is running.
-- `--dry-run` and `--force` are mutually exclusive.
+- `--api-url TEXT` — base URL of the archon-search server (default `http://localhost:8765`).
+- `--api-key TEXT` — API key (falls back to `ARCHON_SEARCH_API_KEY` env var or the key file).
 
-If the path is in `pinned_collections` but **not** in `collections`, removal is rejected with a message instructing you to unpin first. Path comparison uses resolved absolute paths (`Path(p).expanduser().resolve()`), not raw string equality.
+The `--dry-run`, `--force`, and `--config` flags have been removed (see `BREAKING.md`). Use `archon-search collection list` to find the exact collection name.
+
+If the collection is pinned-only (present in `pinned_collections` but not `collections`), the server returns 409 and the CLI prints `"Cannot remove '<name>': collection is pinned-only. Un-pin it first."` If a write is in progress on the collection, the server returns 503 and the CLI prints `"Cannot remove '<name>': the server has a write in progress on this collection. Retry after the active job completes."`
 
 ### `archon-search collection info <name>`
 

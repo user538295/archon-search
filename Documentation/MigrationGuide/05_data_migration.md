@@ -80,7 +80,7 @@ archon-search collection list | awk '{print $1}' | \
   while read -r c; do archon-search collection reindex "$c"; done
 ```
 
-All `collection` subcommands (`list`, `add`, `remove`, `info`, `reindex`) operate **directly on LanceDB** via the in-process pipeline — they do not call the HTTP control plane. You must therefore `archon-search stop` the running server first; otherwise two processes would open the same LanceDB tree and state file concurrently.
+`collection list` and `collection info` read LanceDB directly (no server required). `collection add`, `collection remove`, `collection reindex`, and `collection reindex-metadata` are HTTP proxies — they route through the running archon-search server. Ensure `archon-search serve` is running before invoking those write commands.
 
 ## Backup and restore
 

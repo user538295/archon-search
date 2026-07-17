@@ -8,10 +8,9 @@ from pathlib import Path
 
 import click
 import httpx
-import tomlkit
 
 from archon_search.cli._helpers import _poll_job
-from archon_search.config import get_default_config_path, load_config
+from archon_search.config import load_config
 from archon_search.key_manager import load_or_generate_key
 from archon_search.pipeline import create_pipeline
 
@@ -124,68 +123,61 @@ def add(path: str, wait_flag: bool, api_url: str, api_key: str | None) -> None:
 
 
 @collection.command("remove")
-@click.argument("path")
-@click.option("--dry-run", is_flag=True, default=False, help="Print what would be done without executing")
-@click.option("--force", is_flag=True, default=False, help="Proceed even if service is running")
-@click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
-def remove(path: str, dry_run: bool, force: bool, config_path: Path | None) -> None:
-    """Remove a collection."""
-    if dry_run and force:
-        click.echo("Error: --dry-run and --force are mutually exclusive", err=True)
-        raise SystemExit(1)
-
-    config_file = config_path or get_default_config_path()
+@click.argument("name")
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def remove(name: str, api_url: str, api_key: str | None) -> None:
+    """Remove a collection (proxies DELETE /collections/{name}; requires server running)."""
+    key = _resolve_api_key(api_key)
+    headers = {"Authorization": f"Bearer {key}"}
+    base_url = api_url.rstrip("/")
+    delete_url = f"{base_url}/collections/{name}"
 
     try:
-        cfg = load_config(config_file)
-    except Exception as exc:
-        click.echo(f"Error loading config: {exc}", err=True)
+        resp = httpx.delete(delete_url, headers=headers)
+    except httpx.ConnectError:
+        click.echo(
+            "archon-search serve is not running. Start it first.",
+            err=True,
+        )
+        raise SystemExit(1)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1)
 
-    resolved = Path(path).expanduser().resolve()
-    in_pinned = any(Path(p).expanduser().resolve() == resolved for p in cfg.pinned_collections)
-    in_collections = any(Path(p).expanduser().resolve() == resolved for p in cfg.collections)
-
-    # Pinned-only check: in pinned but NOT in collections
-    if in_pinned and not in_collections:
+    if resp.status_code == 409:
         click.echo(
-            f"Error: '{path}' is a pinned collection. Remove it from pinned_collections first.",
+            f"Cannot remove '{name}': collection is pinned-only. Un-pin it first.",
             err=True,
         )
         raise SystemExit(1)
 
-    if dry_run:
-        click.echo(f"[dry-run] Would remove collection for path: {path}")
-        return
-
-    from archon_search.sync import path_to_collection_name  # noqa: PLC0415
-
-    collection_name = path_to_collection_name(path)
-
-    async def _run() -> None:
-        pipeline = create_pipeline(cfg)
-        try:
-            await pipeline.store.connect()
-            await pipeline.store.drop_collection(collection_name)
-            click.echo(f"Removed collection '{collection_name}'.")
-        finally:
-            await pipeline.store.disconnect()
-
-    try:
-        asyncio.run(_run())
-    except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
+    if resp.status_code == 503:
+        click.echo(
+            f"Cannot remove '{name}': the server has a write in progress on this collection."
+            " Retry after the active job completes.",
+            err=True,
+        )
         raise SystemExit(1)
 
-    # Remove from config
-    if config_file.exists():
-        doc = tomlkit.parse(config_file.read_text(encoding="utf-8"))
-        if "collections" in doc:
-            existing = list(doc["collections"].get("collections", []))  # type: ignore[union-attr]
-            if path in existing:
-                existing.remove(path)
-                doc["collections"]["collections"] = existing  # type: ignore[index]
-                config_file.write_text(tomlkit.dumps(doc), encoding="utf-8")  # noqa: durable-write
+    if resp.status_code == 404:
+        click.echo(f"Error: collection '{name}' not found.", err=True)
+        raise SystemExit(1)
+
+    if resp.status_code != 200:
+        click.echo(f"Error: server returned {resp.status_code}: {resp.text}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Removed collection '{name}'.")
 
 
 @collection.command("info")

@@ -106,7 +106,7 @@ The container reads the same env vars as a host-installed server, plus two that 
 | `ARCHON_SEARCH_CONTAINER` | `1` (baked into image) | Adds `StreamHandler(sys.stderr)` to the `archon_search` logger so `docker logs` captures output. |
 | `FASTEMBED_CACHE_PATH` | `/data/fastembed-cache` (baked into image) | Persists fastembed-downloaded model weights on the mounted volume instead of the ephemeral container layer. |
 | `ARCHON_SEARCH_KEY_FILE` | unset | Overrides the key file path. Takes precedence over `ARCHON_SEARCH_DATA_DIR` for the key file only. |
-| `ARCHON_SEARCH_CONFIG` | unset | Points at a TOML config file. Required if you want `archon-search collection add/remove` to work inside the container — those commands write to the TOML, and without `ARCHON_SEARCH_CONFIG=/data/archon-search.toml` they will try to write outside the mounted volume. The `serve` subcommand logs a warning at startup when `ARCHON_SEARCH_DATA_DIR` is set but `ARCHON_SEARCH_CONFIG` is not. |
+| `ARCHON_SEARCH_CONFIG` | unset | Points at a TOML config file. Required if you want `archon-search collection add` to work inside the container — that command sends the path to the server which writes it to TOML, and without `ARCHON_SEARCH_CONFIG=/data/archon-search.toml` the server will try to write outside the mounted volume. `collection remove` now proxies to the server (no direct TOML write on the CLI side). The `serve` subcommand logs a warning at startup when `ARCHON_SEARCH_DATA_DIR` is set but `ARCHON_SEARCH_CONFIG` is not. |
 
 ## Persistence layout
 
@@ -137,7 +137,7 @@ The container speaks plaintext HTTP only. Put a reverse proxy (nginx, Caddy, Tra
 
 - **`GET /ready` does not gate readiness on model availability** — `ready` reflects only whether the LanceDB storage layer is connected. D6 added a `checks.models` field that reports model-validation state (`pending`/`ok`/`warn`/`fail`) but does not affect the HTTP status or the `ready` flag. The first `/search` after a cold start may still pay a multi-second model-load tax.
 - **In-flight ingest jobs are not awaited on SIGTERM** — the container exits cleanly, but a job in progress is marked `FAILED` on the next start. Tune `stop_grace_period` to your workload.
-- **`archon-search collection add/remove` writes to the TOML file** — see `ARCHON_SEARCH_CONFIG` above. Operators who need dynamic collection management inside the container must mount a config file under `/data` and point at it explicitly.
+- **`archon-search collection add` writes to the TOML file via the server** — see `ARCHON_SEARCH_CONFIG` above. `collection remove` also proxies through the server. Operators who need dynamic collection management inside the container must mount a config file under `/data` and point `ARCHON_SEARCH_CONFIG` at it.
 - **No Apple Silicon / Metal GPU image.** Apple GPUs are not supported in v1.
 
 ## See also

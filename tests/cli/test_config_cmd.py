@@ -247,61 +247,72 @@ def test_collection_remove_available(runner: CliRunner) -> None:
     assert result.exit_code == 0, result.output
 
 
-def test_collection_remove_dry_run_and_force_semantics_preserved(runner: CliRunner, tmp_path: Path) -> None:
-    config_file = tmp_path / "archon-search.toml"
-    config_file.write_text("[collections]\npinned_collections = [\"/some/path\"]\ncollections = [\"/some/path\"]\n")
-    result = runner.invoke(main, [
-        "collection", "remove", "/some/path",
-        "--dry-run",
-        "--config", str(config_file),
-    ])
-    assert result.exit_code == 0, result.output
+def test_collection_remove_proxies_delete_to_server(runner: CliRunner) -> None:
+    """collection remove now proxies to DELETE /collections/{name} via httpx (FE-8)."""
+    import httpx
 
+    del_resp = MagicMock()
+    del_resp.status_code = 200
+    del_resp.json.return_value = {"name": "mycol", "deleted": True}
 
-def test_collection_remove_force_flag(runner: CliRunner, tmp_path: Path) -> None:
-    config_file = tmp_path / "archon-search.toml"
-    config_file.write_text("[collections]\npinned_collections = []\ncollections = [\"/some/path\"]\n")
-
-    mock_pipeline = MagicMock()
-    mock_pipeline.store.connect = AsyncMock()
-    mock_pipeline.store.disconnect = AsyncMock()
-    mock_pipeline.store.drop_collection = AsyncMock()
-
-    with (
-        patch("archon_search.cli.collection.load_config") as mock_load,
-        patch("archon_search.cli.collection.create_pipeline", return_value=mock_pipeline),
-    ):
-        mock_load.return_value = MagicMock(pinned_collections=[], collections=["/some/path"], db_path=str(tmp_path), embedding_model="test", chunk_size=512)
+    with patch("archon_search.cli.collection.httpx.delete", return_value=del_resp) as mock_delete:
         result = runner.invoke(main, [
-            "collection", "remove", "/some/path",
-            "--force",
-            "--config", str(config_file),
+            "collection", "remove", "mycol",
+            "--api-key", "test-key",
         ])
+
     assert result.exit_code == 0, result.output
+    assert "mycol" in result.output
+    call_url = mock_delete.call_args[0][0]
+    assert "/collections/mycol" in call_url
 
 
-def test_collection_remove_pinned_only_error_preserved(runner: CliRunner, tmp_path: Path) -> None:
-    config_file = tmp_path / "archon-search.toml"
-    config_file.write_text(
-        "[collections]\npinned_collections = [\"/pinned/path\"]\ncollections = []\n"
-    )
-    result = runner.invoke(main, [
-        "collection", "remove", "/pinned/path",
-        "--config", str(config_file),
-    ])
-    assert result.exit_code != 0
-    assert "pinned" in result.output.lower() or "error" in result.output.lower()
+def test_collection_remove_409_pinned_only(runner: CliRunner) -> None:
+    """409 from server → pinned-only message, exit 1."""
+    del_resp = MagicMock()
+    del_resp.status_code = 409
+    del_resp.json.return_value = {"detail": "pinned-only"}
+    del_resp.text = "pinned-only"
+
+    with patch("archon_search.cli.collection.httpx.delete", return_value=del_resp):
+        result = runner.invoke(main, [
+            "collection", "remove", "mycol",
+            "--api-key", "test-key",
+        ])
+
+    assert result.exit_code == 1
+    assert "Cannot remove 'mycol'" in result.output
+    assert "Un-pin it first" in result.output
 
 
-def test_collection_remove_dry_run_and_force_mutually_exclusive(runner: CliRunner, tmp_path: Path) -> None:
-    config_file = tmp_path / "archon-search.toml"
-    config_file.write_text("[collections]\npinned_collections = []\ncollections = [\"/some/path\"]\n")
-    result = runner.invoke(main, [
-        "collection", "remove", "/some/path",
-        "--dry-run", "--force",
-        "--config", str(config_file),
-    ])
-    assert result.exit_code != 0
+def test_collection_remove_force_no_longer_an_option(runner: CliRunner) -> None:
+    """--force is not a valid option after conversion to httpx proxy."""
+    del_resp = MagicMock()
+    del_resp.status_code = 200
+
+    with patch("archon_search.cli.collection.httpx.delete", return_value=del_resp):
+        result = runner.invoke(main, [
+            "collection", "remove", "mycol",
+            "--force",
+            "--api-key", "test-key",
+        ])
+
+    assert result.exit_code == 2  # Click unrecognized option
+
+
+def test_collection_remove_dry_run_no_longer_an_option(runner: CliRunner) -> None:
+    """--dry-run is not a valid option after conversion to httpx proxy."""
+    del_resp = MagicMock()
+    del_resp.status_code = 200
+
+    with patch("archon_search.cli.collection.httpx.delete", return_value=del_resp):
+        result = runner.invoke(main, [
+            "collection", "remove", "mycol",
+            "--dry-run",
+            "--api-key", "test-key",
+        ])
+
+    assert result.exit_code == 2  # Click unrecognized option
 
 
 def test_collection_add_submits_job_via_httpx(runner: CliRunner, tmp_path: Path) -> None:

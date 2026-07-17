@@ -220,7 +220,7 @@ flowchart LR
         - #unit_test — `test_delete_acquires_lock_before_drop` — spy on `acquire_collection_lock_or_503`; assert called before `drop_collection`
         - #integration_test — `test_delete_collection_succeeds_with_real_lock` — real `SearchStore` via `make_real_app`; DELETE → 200; collection absent in `GET /collections/`
 
-- [ ] **FE-8** — Convert `collection remove` (`collection.py:143–205`) to httpx proxy: `DELETE /collections/{name}`, drop `--force` option, add `--api-url`/`--api-key`; handle 409 → "Cannot remove '{name}': collection is pinned-only. Un-pin it first." exit 1; handle 503 → "Cannot remove '{name}': the server has a write in progress on this collection. Retry after the active job completes." exit 1 #frontend-role
+- [x] **FE-8** — Convert `collection remove` (`collection.py:143–205`) to httpx proxy: `DELETE /collections/{name}`, drop `--force` option, add `--api-url`/`--api-key`; handle 409 → "Cannot remove '{name}': collection is pinned-only. Un-pin it first." exit 1; handle 503 → "Cannot remove '{name}': the server has a write in progress on this collection. Retry after the active job completes." exit 1 #frontend-role
     - Presentation · 2.0h
     - needs FE-1, BE-5 · completes S3, S20
     - Tests

@@ -8,6 +8,26 @@
 
 ## Changelog
 
+### [next release] — FE-8: `archon-search collection remove` is now an HTTP proxy (requires server running)
+
+**Surface**: `archon-search collection remove` CLI command.
+
+**Breaking changes**:
+
+1. **Positional argument changed from filesystem path to collection name.** Previously `collection remove /Users/me/docs` took the source directory path. Now it takes the collection name as derived by `path_to_collection_name` (e.g. `collection remove docs`). Use `archon-search collection list` to see the exact names.
+
+2. **`--dry-run` option removed.** The `--dry-run` flag no longer exists.
+
+3. **`--force` option removed.** The `--force` flag no longer exists. The server serialises concurrent writes automatically; no caller-side bypass is needed.
+
+4. **`--config` option removed.** The `--config PATH` flag no longer exists. Authentication is now via `--api-key` / `ARCHON_SEARCH_API_KEY` env var / key file. The `--api-url` and `--api-key` options replace `--config`.
+
+5. **Server must be running.** `archon-search collection remove` now proxies the request to `DELETE /collections/{name}` on the running archon-search server (default `http://localhost:8765`). The command exits `1` with `"archon-search serve is not running. Start it first."` when the server is not reachable. Previously the command ran in-process without a server.
+
+**Migration**: replace `collection remove <path>` with `collection remove <name>` (get `<name>` from `collection list`). Remove any `--dry-run`, `--force`, or `--config` flags. Ensure `archon-search serve` is running before invoking `collection remove`.
+
+---
+
 ### [next release] — FE-5: `archon-search ingest` is now an HTTP proxy (requires server running)
 
 **Surface**: `archon-search ingest` CLI command.
