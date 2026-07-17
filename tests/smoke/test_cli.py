@@ -16,6 +16,7 @@ all smoke tests share the single session-scoped server subprocess.
 from __future__ import annotations
 
 import os
+import re
 import socket
 import subprocess
 import tempfile
@@ -436,6 +437,153 @@ def test_e2e_collection_reindex_wait_against_server(smoke_server) -> None:
     )
     assert "Reindex complete for 'smoke'." in result.stdout, (
         f"expected completion marker in stdout; got: {result.stdout!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# collection add --wait (S1, S2) and ingest --wait (S6) — HTTP-proxy CLI commands
+# against the live smoke server, exercising the full async-job round trip.
+# ---------------------------------------------------------------------------
+
+
+def test_e2e_collection_add_wait_against_server(smoke_server, tmp_path) -> None:
+    """``archon-search collection add <dir> --wait`` against the smoke server
+    must exit 0, print "Add collection job submitted:", and print the completion
+    marker "ingested successfully." once the job reaches DONE (S1).
+
+    Creates a temp directory (function-scoped ``tmp_path``) containing a single
+    text document, invokes the CLI as a subprocess, and asserts:
+    1. ``returncode == 0``
+    2. The job-submitted line appears in stdout.
+    3. The completion marker appears in stdout.
+    4. The collection name extracted from stdout appears in ``GET /collections/``.
+
+    Uses ``tmp_path`` (function-scoped) alongside the session-scoped
+    ``smoke_server`` — pytest allows this scope mix.
+    """
+    # "smokeadd" is the collection name derived by the server (path_to_collection_name uses the basename).
+    col_dir = tmp_path / "smokeadd"
+    col_dir.mkdir()
+    (col_dir / "doc.txt").write_text(
+        "archon-search collection add smoke test document with enough content to produce chunks."
+    )
+
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "archon-search",
+            "collection",
+            "add",
+            str(col_dir),
+            "--wait",
+            "--api-url",
+            smoke_server.base_url,
+            "--api-key",
+            smoke_server.api_key,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, (
+        f"collection add --wait failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "Add collection job submitted:" in result.stdout, (
+        f"expected 'Add collection job submitted:' in stdout; got: {result.stdout!r}"
+    )
+    assert "ingested successfully." in result.stdout, (
+        f"expected completion marker in stdout; got: {result.stdout!r}"
+    )
+
+    # Parse the collection name from stdout: "Collection: '{collection_name}'"
+    match = re.search(r"Collection: '([^']+)'", result.stdout)
+    assert match, f"could not parse collection name from stdout: {result.stdout!r}"
+    collection_name = match.group(1)
+
+    collections_resp = httpx.get(
+        f"{smoke_server.base_url}/collections/",
+        headers={"Authorization": f"Bearer {smoke_server.api_key}"},
+        timeout=10,
+    )
+    assert collections_resp.status_code == 200, (
+        f"GET /collections/ failed: {collections_resp.status_code} {collections_resp.text}"
+    )
+    collection_names = [c["name"] for c in collections_resp.json()]
+    assert collection_name in collection_names, (
+        f"collection '{collection_name}' not found in GET /collections/: {collection_names}"
+    )
+
+
+def test_e2e_ingest_wait_against_server(smoke_server, tmp_path) -> None:
+    """``archon-search ingest --path <file> --collection smoke --wait`` against
+    the smoke server must exit 0 and print the completion marker
+    "Ingest complete for 'smoke'." once the job reaches DONE (S6).
+
+    Creates a temporary file and ingests it into the pre-existing ``smoke``
+    collection, asserting on the CLI's own stdout as the primary success signal.
+    """
+    ingest_file = tmp_path / "extra.txt"
+    ingest_file.write_text(
+        "Additional document ingested into the smoke collection via the CLI ingest command."
+    )
+
+    # Capture pre-ingest chunk count so we can verify ingestion had an effect.
+    headers = {"Authorization": f"Bearer {smoke_server.api_key}"}
+    before_resp = httpx.get(
+        f"{smoke_server.base_url}/collections/smoke",
+        headers=headers,
+        timeout=10,
+    )
+    assert before_resp.status_code == 200, (
+        f"fixture: GET /collections/smoke failed before ingest: {before_resp.status_code}"
+    )
+    chunk_count_before = before_resp.json()["chunk_count"]
+
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "archon-search",
+            "ingest",
+            "--path",
+            str(ingest_file),
+            "--collection",
+            "smoke",
+            "--wait",
+            "--api-url",
+            smoke_server.base_url,
+            "--api-key",
+            smoke_server.api_key,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, (
+        f"ingest --wait failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "Ingest job submitted:" in result.stdout, (
+        f"expected 'Ingest job submitted:' in stdout; got: {result.stdout!r}"
+    )
+    assert "Ingest complete for 'smoke'." in result.stdout, (
+        f"expected completion marker in stdout; got: {result.stdout!r}"
+    )
+
+    # Verify the ingest actually produced indexed content.
+    after_resp = httpx.get(
+        f"{smoke_server.base_url}/collections/smoke",
+        headers=headers,
+        timeout=10,
+    )
+    assert after_resp.status_code == 200, (
+        f"GET /collections/smoke failed after ingest: {after_resp.status_code}"
+    )
+    chunk_count_after = after_resp.json()["chunk_count"]
+    assert chunk_count_after > chunk_count_before, (
+        f"ingest completed but chunk_count did not increase: before={chunk_count_before}, after={chunk_count_after}"
     )
 
 

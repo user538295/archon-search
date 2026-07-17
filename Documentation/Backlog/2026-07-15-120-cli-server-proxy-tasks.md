@@ -149,12 +149,12 @@ flowchart LR
         - #unit_test — `test_ingest_derives_collection_name_from_path_when_omitted` — omitting `--collection` calls `path_to_collection_name`; derived name sent in request body
         - #unit_test — `test_ingest_wait_polls_to_done` — mocked poll → completion, exit 0
 
-- [ ] **T-2** — e2e: `collection add <dir> --wait` and `ingest --path <file> --collection smoke --wait` against real `smoke_server`; seed with `tmp_path`; assert returncode=0, success markers, collection visible in `GET /collections/` #tester-role
+- [x] **T-2** — e2e: `collection add <dir> --wait` and `ingest --path <file> --collection smoke --wait` against real `smoke_server`; seed with `tmp_path`; assert returncode=0, success markers, collection visible in `GET /collections/` #tester-role
     - — · 3.0h
     - needs FE-4, FE-5 · completes S1, S2, S6
     - Tests
-        - #e2e_test — `test_e2e_collection_add_wait_against_server` — create temp dir with a text doc, subprocess `collection add <dir> --wait`, assert `returncode == 0`, collection name (from stdout) appears in `GET /collections/`
-        - #e2e_test — `test_e2e_ingest_wait_against_server` — subprocess `ingest --path <file> --collection smoke --wait`, assert `returncode == 0`, completion marker in stdout
+        - [x] #e2e_test — `test_e2e_collection_add_wait_against_server` — create temp dir with a text doc, subprocess `collection add <dir> --wait`, assert `returncode == 0`, collection name (from stdout) appears in `GET /collections/`
+        - [x] #e2e_test — `test_e2e_ingest_wait_against_server` — subprocess `ingest --path <file> --collection smoke --wait`, assert `returncode == 0`, completion marker in stdout
 
 ### Phase 3 · Sync and reindex-metadata via server *(two new server endpoints)*
 
