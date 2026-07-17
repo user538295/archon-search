@@ -80,7 +80,7 @@ flowchart LR
 
 ### Phase 0 · Kickoff
 
-- [ ] **K1** — Align team on contracts C1/C2/C3, confirm `JobKind` enum goes in `archon_search/types.py`, and confirm `SyncJob.collection = ""` decision #team
+- [x] **K1** — Align team on contracts C1/C2/C3, confirm `JobKind` enum goes in `archon_search/types.py`, and confirm `SyncJob.collection = ""` decision #team
     - — · 1.0h
     - completes C1, C2, C3
     - Tests
