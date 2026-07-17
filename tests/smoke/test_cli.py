@@ -26,6 +26,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from archon_search.cli._helpers import _TERMINAL_STATUSES
+
 pytestmark = pytest.mark.xdist_group("smoke_e2e")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -389,3 +391,122 @@ def test_e2e_graph_build_communities_wait_against_server(smoke_server_graph_enab
     # that the job reached DONE.
     assert "Community rebuild complete: " in result.stdout
     assert "communities built." in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# collection reindex --wait + jobs status (S4, S24) — HTTP-proxy CLI commands
+# against the live smoke server.
+# ---------------------------------------------------------------------------
+
+
+def test_e2e_collection_reindex_wait_against_server(smoke_server) -> None:
+    """``archon-search collection reindex smoke --wait`` against the smoke server
+    must exit 0, print "Reindex job submitted:", and print the completion marker
+    "Reindex complete for 'smoke'." once the job reaches DONE (S4).
+
+    Modeled on ``test_e2e_graph_build_communities_wait_against_server``: a real
+    ``uv run archon-search`` subprocess against the smoke server's
+    ``base_url``/``api_key``, asserting on the CLI's own stdout as the primary
+    success signal rather than independently re-polling the server.
+    """
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "archon-search",
+            "collection",
+            "reindex",
+            "smoke",
+            "--wait",
+            "--api-url",
+            smoke_server.base_url,
+            "--api-key",
+            smoke_server.api_key,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (
+        f"collection reindex --wait failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "Reindex job submitted:" in result.stdout, (
+        f"expected 'Reindex job submitted:' in stdout; got: {result.stdout!r}"
+    )
+    assert "Reindex complete for 'smoke'." in result.stdout, (
+        f"expected completion marker in stdout; got: {result.stdout!r}"
+    )
+
+
+def test_e2e_jobs_status_after_reindex(smoke_server) -> None:
+    """``archon-search jobs status <job_id>`` for a reindex job that has
+    reached DONE must exit 0 and print job_id, status, collection, and
+    created_at fields (S24).
+
+    Submits its own reindex job (no --wait) to obtain a fresh job_id, then
+    waits for it to reach a terminal state via REST before running
+    ``jobs status``.  Using a fresh job avoids inter-test state coupling and
+    gives a predictable job_id to query.
+    """
+    headers = {"Authorization": f"Bearer {smoke_server.api_key}"}
+
+    # Submit a reindex job without --wait to capture the job_id.
+    resp = httpx.post(
+        f"{smoke_server.base_url}/collections/smoke/reindex",
+        headers=headers,
+        timeout=10,
+    )
+    assert resp.status_code == 202, (
+        f"fixture: POST /collections/smoke/reindex failed: {resp.status_code} {resp.text}"
+    )
+    job_id = resp.json()["job_id"]
+
+    # Poll until the job reaches a terminal state so ``jobs status`` exits 0.
+    _TERMINAL = _TERMINAL_STATUSES
+    deadline = time.monotonic() + 60.0
+    while time.monotonic() < deadline:
+        poll_resp = httpx.get(
+            f"{smoke_server.base_url}/jobs/{job_id}",
+            headers=headers,
+            timeout=5,
+        )
+        if poll_resp.status_code == 200 and poll_resp.json().get("status") in _TERMINAL:
+            break
+        time.sleep(0.5)
+    else:
+        pytest.fail(f"reindex job {job_id} did not reach a terminal state within 60 s")
+
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "archon-search",
+            "jobs",
+            "status",
+            job_id,
+            "--api-url",
+            smoke_server.base_url,
+            "--api-key",
+            smoke_server.api_key,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode == 0, (
+        f"jobs status failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "status:     DONE" in result.stdout, (
+        f"expected 'status:     DONE' in stdout; got: {result.stdout!r}"
+    )
+    assert job_id in result.stdout, (
+        f"expected job_id {job_id!r} in stdout; got: {result.stdout!r}"
+    )
+    assert "collection:" in result.stdout, (
+        f"expected 'collection:' in stdout; got: {result.stdout!r}"
+    )
+    assert "created_at:" in result.stdout, (
+        f"expected 'created_at:' in stdout; got: {result.stdout!r}"
+    )

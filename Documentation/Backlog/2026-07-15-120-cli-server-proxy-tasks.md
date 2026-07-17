@@ -123,12 +123,12 @@ flowchart LR
         - [x] #unit_test — `test_jobs_status_in_progress_exits_0` — RUNNING/QUEUED/PENDING/CANCELLING → prints status, exit 0
         - [x] #unit_test — `test_jobs_status_404_exits_1` — 404 → "Job not found: {job_id}", exit 1
 
-- [ ] **T-1** — e2e: `collection reindex smoke --wait` against real `smoke_server`; verify CLI exits 0 and success markers in stdout; also run `jobs status <job_id>` on the completed job #tester-role
+- [x] **T-1** — e2e: `collection reindex smoke --wait` against real `smoke_server`; verify CLI exits 0 and success markers in stdout; also run `jobs status <job_id>` on the completed job #tester-role
     - — · 2.0h
     - needs FE-2, FE-3 · completes S4
     - Tests
-        - #e2e_test — `test_e2e_collection_reindex_wait_against_server` — subprocess `collection reindex smoke --wait --api-url ... --api-key ...`, assert `returncode == 0`, "Job submitted:" in stdout, completion marker in stdout
-        - #e2e_test — `test_e2e_jobs_status_after_reindex` — parse job_id from prior stdout, run `jobs status <id>`, assert `returncode == 0`, status field in output
+        - [x] #e2e_test — `test_e2e_collection_reindex_wait_against_server` — subprocess `collection reindex smoke --wait --api-url ... --api-key ...`, assert `returncode == 0`, "Job submitted:" in stdout, completion marker in stdout
+        - [x] #e2e_test — `test_e2e_jobs_status_after_reindex` — parse job_id from prior stdout, run `jobs status <id>`, assert `returncode == 0`, status field in output
 
 ### Phase 2 · Add and ingest via server
 
