@@ -22,10 +22,14 @@
 ## Install from PyPI (recommended)
 
 ```bash
+# pip
 pip install archon-search
+
+# uv (installs the CLI into an isolated managed environment)
+uv tool install archon-search
 ```
 
-This installs the `archon-search` CLI entry point (declared in `pyproject.toml` as `archon_search.cli.main:main`).
+Both methods install the `archon-search` CLI entry point (declared in `pyproject.toml` as `archon_search.cli.main:main`).
 
 Verify:
 
@@ -145,11 +149,47 @@ The wizard:
 12. Registers and starts the service via the platform adapter (`archon_search/platform/macos.py`, `linux.py`).
 13. Polls `GET http://<host>:<port>/health` for up to 60 seconds; exits non-zero if the service does not become ready.
 
-To remove:
+## Uninstall
+
+**Step 1 — stop and unregister the service** (while the CLI is still on PATH):
 
 ```bash
-archon-search uninstall            # stop + unregister
-archon-search uninstall --delete-db  # also remove the configured db_path (default: ~/.archon-search/search/)
+archon-search uninstall
+```
+
+Pass `--delete-db` to also remove the search database directory (default: `~/.archon-search/search/`). This is irreversible — all indexed data is lost:
+
+```bash
+archon-search uninstall --delete-db
+```
+
+**Step 2 — remove the package:**
+
+```bash
+# pip
+pip uninstall archon-search
+
+# uv tool
+uv tool uninstall archon-search
+
+# checkout / dev install — delete the cloned directory
+```
+
+**User data is not removed by either step.** `archon-search uninstall` only stops the OS service (launchd plist on macOS, systemd user unit on Linux) and unregisters it. The following paths are left on disk:
+
+| Path | Contents |
+|------|----------|
+| `~/.archon-search/archon-search.toml` | Server config |
+| `~/.archon-search/.search.env` | API key (mode `600`) |
+| `~/.archon-search/search/` | LanceDB vector store and FTS index (removed by `--delete-db`) |
+| `~/.archon-search/logs/` | Server logs |
+| `~/.archon-search/models/` | Downloaded model weights |
+| `~/.archon-search/search-logs/` | Telemetry JSONL (only if telemetry was enabled) |
+
+To remove all user data after uninstalling:
+
+```bash
+rm -rf ~/.archon-search/
 ```
 
 ## What gets created on first run

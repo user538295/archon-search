@@ -2,6 +2,11 @@
 
 ## Feature ideas
 
+### Extend install add uninstall section in README.md
+
+The app can be installed via `uv`. Add this option too.
+Also add the uninstall section to the readme.md (not just the uv, but all of them). include the info that uninstall won't remove the user data and what cna do to remove them to during the uninstall or manually.
+
 ### One Major lifecycle gap remains: def/ref cleanup on TTL/maintenance-only chunk expiry (not on explicit delete or sync/watcher delete).
 
 ### Handle more file type without file size limit.

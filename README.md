@@ -21,11 +21,16 @@ It runs as its own process, persists indexes and configuration under `~/.archon-
 ## Installation
 
 ```bash
+# pip
 pip install archon-search
+archon-search wizard
+
+# uv (installs the CLI into an isolated managed environment)
+uv tool install archon-search
 archon-search wizard
 ```
 
-After `pip install`, run `archon-search wizard` to complete setup. The wizard lets you choose a profile (`minimal`, `balanced`, or `max`), downloads the matching embedding and reranker models, and registers the server as a background service. See [Documentation/UserManual/01_installation.md](Documentation/UserManual/01_installation.md) for the full profile comparison table, flag reference, and disk-space requirements.
+After installing, run `archon-search wizard` to complete setup. The wizard lets you choose a profile (`minimal`, `balanced`, or `max`), downloads the matching embedding and reranker models, and registers the server as a background service. See [Documentation/UserManual/01_installation.md](Documentation/UserManual/01_installation.md) for the full profile comparison table, flag reference, and disk-space requirements.
 
 Or, for a checkout-based development install:
 
@@ -33,6 +38,49 @@ Or, for a checkout-based development install:
 git clone https://github.com/user538295/archon-search.git
 cd archon-search
 uv sync --dev
+```
+
+## Uninstall
+
+**Step 1 — stop and unregister the service** (do this while the CLI is still available):
+
+```bash
+archon-search uninstall
+```
+
+To also delete the search database at this point (irreversible — removes all indexed data):
+
+```bash
+archon-search uninstall --delete-db
+```
+
+**Step 2 — remove the package:**
+
+```bash
+# pip
+pip uninstall archon-search
+
+# uv tool
+uv tool uninstall archon-search
+
+# checkout / dev install — delete the cloned directory
+```
+
+**User data is not removed by either step.** `archon-search uninstall` only stops the OS service and unregisters it; uninstalling the package removes only the CLI binary. The following are left on disk and must be removed manually if you want a complete wipe:
+
+| Path | Contents |
+|------|----------|
+| `~/.archon-search/archon-search.toml` | Server config |
+| `~/.archon-search/.search.env` | API key |
+| `~/.archon-search/search/` | LanceDB vector store and FTS index |
+| `~/.archon-search/logs/` | Server logs |
+| `~/.archon-search/models/` | Downloaded embedding/reranker model weights |
+| `~/.archon-search/search-logs/` | Telemetry JSONL (only if telemetry was enabled) |
+
+To remove all user data:
+
+```bash
+rm -rf ~/.archon-search/
 ```
 
 ## Quick start
