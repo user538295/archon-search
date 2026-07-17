@@ -493,3 +493,4 @@ _All open questions resolved — status is `planned`._
 ## References
 
 - **Brief:** [2026-07-15-110-graph-build-communities-bypass-brief.md](./2026-07-15-110-graph-build-communities-bypass-brief.md)
+- **Tasks:** [2026-07-15-110-graph-build-communities-bypass-tasks.md](./2026-07-15-110-graph-build-communities-bypass-tasks.md)

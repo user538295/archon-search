@@ -1,0 +1,206 @@
+openapi: 3.0.0
+info:
+  title: archon-search CLI proxy API
+  version: 0.0.0
+tags: []
+paths:
+  /collections:
+    post:
+      operationId: Collections_add
+      parameters: []
+      responses:
+        '202':
+          description: The request has been accepted for processing, but processing has not yet completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobResponse'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddCollectionRequest'
+  /collections/{name}:
+    delete:
+      operationId: Collections_remove
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteResponse'
+  /collections/{name}/reindex:
+    post:
+      operationId: Collections_reindex
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: The request has been accepted for processing, but processing has not yet completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobResponse'
+  /collections/{name}/reindex-metadata:
+    post:
+      operationId: Collections_reindexMetadata
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: The request has been accepted for processing, but processing has not yet completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobResponse'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReindexMetadataRequest'
+  /ingest:
+    post:
+      operationId: Ingest_ingest
+      parameters: []
+      responses:
+        '202':
+          description: The request has been accepted for processing, but processing has not yet completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobResponse'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestRequest'
+  /jobs/{job_id}:
+    get:
+      operationId: Jobs_get
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobResponse'
+  /sync:
+    post:
+      operationId: Sync_sync
+      parameters: []
+      responses:
+        '202':
+          description: The request has been accepted for processing, but processing has not yet completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobResponse'
+components:
+  schemas:
+    AddCollectionRequest:
+      type: object
+      required:
+        - path
+      properties:
+        path:
+          type: string
+        embedding_model:
+          type: string
+          nullable: true
+    DeleteResponse:
+      type: object
+      required:
+        - name
+        - deleted
+      properties:
+        name:
+          type: string
+        deleted:
+          type: boolean
+    IngestRequest:
+      type: object
+      required:
+        - collection
+      properties:
+        collection:
+          type: string
+        path:
+          type: string
+          nullable: true
+        ingested_by:
+          type: string
+    JobResponse:
+      type: object
+      required:
+        - job_id
+        - status
+        - collection
+        - created_at
+        - updated_at
+      properties:
+        job_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        collection:
+          type: string
+          description: "The collection name this job targets. For POST /sync jobs (whole-server sync), this field is \"\" (empty string) — consumers must treat an empty collection as \"whole-server sync\" rather than a named collection."
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        progress:
+          type: object
+          additionalProperties: {}
+          nullable: true
+        result:
+          anyOf:
+            - type: object
+              additionalProperties: {}
+            - type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+    JobStatus:
+      type: string
+      enum:
+        - PENDING
+        - QUEUED
+        - RUNNING
+        - DONE
+        - FAILED
+        - FAILED_EXPIRED
+        - CANCELLED
+        - CANCELLING
+    ReindexMetadataRequest:
+      type: object
+      properties:
+        dry_run:
+          type: boolean
+        normalize_timestamps:
+          type: boolean

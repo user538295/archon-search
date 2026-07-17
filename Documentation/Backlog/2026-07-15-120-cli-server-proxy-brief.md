@@ -17,7 +17,7 @@ Operators and developers who use the CLI to manage collections while the server 
 4. If the server is running: the CLI sends the request to the appropriate REST endpoint (e.g. `POST /collections/`) and receives a job ID.
 5. The CLI prints: `"Job submitted: <job_id>. Track progress with: archon-search jobs status <job_id>"`.
 6. With `--wait`: the CLI polls the job until it reaches a terminal state (DONE / FAILED) and prints live progress, just as `migrate --wait` does today.
-7. The collection path is still written to `archon-search.toml` by the CLI directly (config update stays local, doesn't need the server).
+7. The collection path is written to `archon-search.toml` by the **server** as part of processing `POST /collections/` (via `_maybe_save_config()` at `routes_collections.py:187`) — the CLI no longer writes it locally.
 
 ## In Scope
 - `collection add` — submit to `POST /collections/`
@@ -33,13 +33,13 @@ Operators and developers who use the CLI to manage collections while the server 
 ## Out of Scope
 - **In-process fallback mode** — deliberately excluded. A "try server, fall back to direct" dual path hides the problem and still allows concurrent write races. The fix is a clear requirement: server must be running for write operations.
 - **Lock-file coordination** — rejected in favour of this proper fix. A `.cli-ingest.lock` file would prevent data corruption but wouldn't fix job invisibility or duplicate model loading.
-- **Read-only commands** (`list`, `info`) — these can optionally continue using a direct database connection for speed; they don't write and don't need the server. Whether to also proxy them is a separate decision.
+- **Read-only commands** (`list`, `info`) — resolved (Q-A): they stay direct (they don't write, don't race, and must work with the server off). They gain `--api-url`/`--api-key` for parity but default to direct.
 - **Server startup from the CLI** — auto-starting the server when it's not running is out of scope for this brief; it is a separate UX feature.
 
 ## Key Decisions
 - **Require the server for all write operations:** this is the right constraint. The in-process path predates the async job system and was never updated. `migrate` already proved this model works.
 - **Template: `migrate_cmd.py`:** every command follows this exact pattern — `httpx` call, handle 202 with job ID, `--wait` flag polls `GET /jobs/{id}`, clean error on connection refused.
-- **Config update stays local:** writing the path to `archon-search.toml` is a CLI-only operation (file I/O, no server involvement). Only the ingest itself is proxied.
+- **Config update is server-side:** `POST /collections/` already calls `_maybe_save_config()` at `routes_collections.py:187`, writing the path to `archon-search.toml` server-side. The CLI's local TOML write is removed to avoid duplicate entries.
 - **Error message on missing server:** `"archon-search serve is not running. Start it first."` — not a raw `[Errno 61] Connection refused`.
 
 ## Edge Cases & Constraints
@@ -51,12 +51,17 @@ Operators and developers who use the CLI to manage collections while the server 
 - **`graph build-communities`:** if a REST endpoint for this does not yet exist on the server, the command should error with _"This operation requires the server to expose a /graph/.../build-communities endpoint (not yet available). Use the server directly."_ rather than silently falling back to in-process.
 
 ## Open Questions
-- Does a `DELETE /collections/{name}` endpoint exist, or does remove need a new endpoint? Check `routes_collections.py`.
-- Does the `sync` command have a REST trigger endpoint, or does it need one added? (`POST /maintenance/trigger` may cover this, or a dedicated `POST /sync/trigger` may be needed.)
-- Does `graph build-communities` have a REST endpoint? If not, is adding one in scope for this brief or a follow-up?
-- Should `list` and `info` also proxy via REST for consistency, or stay direct for speed? (The `CollectionDetail` schema from `GET /collections/{name}` already filters out raw vectors — see Issue 7.)
-- The `ingest` CLI command (`archon_search/cli/ingest.py`) — does it have its own command group or is it an alias for `collection add`? Need to confirm scope before implementation.
-- After `collection add` proxies via REST, the server creates and tracks a job. Should the path still be written to `archon-search.toml` before or after the job is confirmed DONE? (Recommendation: write it before submission, so the path is registered even if the job fails and the user retries.)
+
+### Resolved (fact-checked against source 2026-07-16)
+- ✅ **`DELETE /collections/{name}` exists** — `routes_collections.py:277`, returns synchronous `200` (`DeleteResponse`). No new endpoint needed; `remove` is a mechanical proxy (no `--wait` polling required).
+- ✅ **`sync` needs a NEW endpoint** — no sync trigger endpoint exists in any `routes_*.py`. `POST /maintenance/trigger` (`routes_maintenance.py:22`) does **not** cover it: it fires a full maintenance pass (FTS optimize, orphan cleanup, expired-chunk pruning, graph GC, community rebuild, failed-ingest retry), which is semantically unrelated to a corpus re-scan/reconcile (`SearchCollectionSync.sync()`). A dedicated `POST /sync` (202 + job) must be built.
+- ✅ **`graph build-communities` has an endpoint** — `POST /graph/{collection}/rebuild-communities` (`routes_graph.py:130`, 202 + job). The CLI was converted to a proxy in GBC110 (`archon_search/cli/graph_cmd.py`). This is the reference implementation for the remaining commands.
+- ✅ **`ingest` is a standalone command, not an alias** — `archon_search/cli/ingest.py:25–115`; server endpoint `POST /ingest` already exists (`routes_jobs.py:424`, 202 + job). Mechanical proxy.
+- ℹ️ **Endpoint coverage:** 5/8 commands (`add`, `remove`, `reindex`, `ingest`, `graph build-communities`) hit existing endpoints; 2/8 (`reindex-metadata`, `sync`) require new server endpoints built first.
+
+### Resolved decisions (2026-07-16)
+- ✅ **Q-A — `list`/`info` stay direct.** They only read metadata (`list_collections`/`get_collection_meta`, `collection.py:53–64`/`208–235`), never write and never embed, so the concurrent-write corruption risk this feature fixes does not apply to them. Routing them through the server would break offline `list` (the most common quick-check) for no safety gain. Keep the direct DB path; add `--api-url`/`--api-key` flags for parity but **default to direct** (proxy available, not required). Read-only reads against the LanceDB file are safe alongside a running server.
+- ✅ **Q-B — `collection add`'s local CLI TOML write is REMOVED.** Fact-check against source (`routes_collections.py:187`) revealed that `POST /collections/` already calls `_maybe_save_config()` server-side during every successful request — before the ingest job is enqueued. The CLI's planned pre-write would therefore create duplicate entries in `archon-search.toml`. Resolution: the CLI's local TOML write is removed entirely; the server handles the config write as part of processing `POST /collections/`. The accepted worst case (a stale "registered but not yet populated" entry on ingest failure) still applies — the server's `_maybe_save_config()` runs before the async ingest task completes — but recovery is via `collection reindex <name>` or maintenance sync, not by re-running `collection add` (which would 409 because the collection is already registered).
 
 ## Future Iterations
 - Auto-detect server and offer to start it if not running (`archon-search serve --background`).
@@ -65,6 +70,7 @@ Operators and developers who use the CLI to manage collections while the server 
 - A `--no-server` escape hatch for disaster-recovery scenarios (e.g. server will not start due to a corrupt index) — explicitly labelled as unsafe, writes a lock file, disables concurrent server writes.
 
 ## References
+- **Team plan:** [2026-07-15-120-cli-server-proxy-team-plan.md](./2026-07-15-120-cli-server-proxy-team-plan.md)
 - [[archon_search/cli/collection.py]] `[code-agent]` — all in-process command implementations; `migrate_cmd` is the reference template
 - [[archon_search/server/routes_collections.py]] `[code-agent]` — REST endpoints that already exist; `POST /collections/` returns `202 + job_id`
 - [[archon_search/jobs/]] `[code-agent]` — async job infrastructure bypassed by the CLI today
