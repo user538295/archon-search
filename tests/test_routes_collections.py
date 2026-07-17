@@ -384,12 +384,14 @@ def test_remove_collection_deletes_config_and_data(
     app = create_app(cfg, tmp_store)
 
     # Fix 9: wire a mock search_store and assert drop_collection was called
+    import asyncio as _asyncio
     from archon_search.collection_meta import CollectionMeta as _CM
     _meta = _CM(name=path_to_collection_name(str(src)), namespace="default")
     mock_search_store = MagicMock()
     mock_search_store.get_collection_meta = AsyncMock(return_value=_meta)
     mock_search_store.drop_collection = AsyncMock()
     mock_search_store.delete_collection_meta = AsyncMock()
+    mock_search_store.lock_for = MagicMock(return_value=_asyncio.Lock())
     app.state.search_store = mock_search_store
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
@@ -1154,6 +1156,7 @@ def test_remove_collection_deletes_meta_row(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """Successful DELETE calls delete_collection_meta with the correct name + namespace."""
+    import asyncio as _asyncio
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "myproject"
@@ -1176,6 +1179,7 @@ def test_remove_collection_deletes_meta_row(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
@@ -1191,6 +1195,7 @@ def test_remove_collection_success_drops_table_and_meta(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """Successful DELETE calls both drop_collection AND delete_collection_meta; meta absent after."""
+    import asyncio as _asyncio
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "myproject"
@@ -1222,6 +1227,7 @@ def test_remove_collection_success_drops_table_and_meta(
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
 
     app = create_app(cfg, tmp_store)
     app.state.search_store = mock_store
@@ -1235,8 +1241,174 @@ def test_remove_collection_success_drops_table_and_meta(
     assert deleted["done"] is True
 
 
+def test_delete_collection_503_when_lock_held(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """DELETE /collections/{name} returns 503 when the per-collection lock is already held."""
+    import asyncio as _asyncio
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "locked_col"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    caller_key = "f" * 64
+    caller_ns = "tenantF"
+    cfg.namespaces = {caller_key: caller_ns}
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace=caller_ns)
+
+    # Pre-acquire the lock so acquire_collection_lock_or_503 times out.
+    held_lock = _asyncio.Lock()
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.drop_collection = AsyncMock()
+    mock_store.delete_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=held_lock)
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    # Acquire the lock before the request so it times out inside the handler.
+    import threading
+
+    ready = threading.Event()
+    done = threading.Event()
+
+    def _hold_lock() -> None:
+        import asyncio
+
+        async def _run() -> None:
+            await held_lock.acquire()
+            ready.set()
+            done.wait()
+
+        asyncio.run(_run())
+
+    holder = threading.Thread(target=_hold_lock, daemon=True)
+    holder.start()
+    ready.wait()
+
+    c = TestClient(app, headers={"Authorization": f"Bearer {caller_key}"})
+    response = c.delete(f"/collections/{name}")
+
+    done.set()
+    holder.join()
+
+    assert response.status_code == 503
+    data = response.json()
+    assert data["error"] == "store_busy"
+    assert "Retry-After" in response.headers
+    # drop_collection must NOT have been called
+    mock_store.drop_collection.assert_not_called()
+
+
+def test_delete_acquires_lock_before_drop(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """DELETE /collections/{name} calls acquire_collection_lock_or_503 before drop_collection."""
+    import asyncio as _asyncio
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "ordered_col"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default")
+
+    call_order: list[str] = []
+
+    acquired_lock = _asyncio.Lock()
+
+    async def _mock_acquire_lock(store, collection_name: str):
+        call_order.append("acquire")
+        await acquired_lock.acquire()
+        return acquired_lock
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+
+    async def _mock_drop(n: str) -> None:
+        call_order.append("drop")
+
+    mock_store.drop_collection = AsyncMock(side_effect=_mock_drop)
+    mock_store.delete_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    with patch(
+        "archon_search.server.routes_collections.acquire_collection_lock_or_503",
+        side_effect=_mock_acquire_lock,
+    ):
+        response = c.delete(f"/collections/{name}")
+
+    assert response.status_code == 200
+    assert call_order == ["acquire", "drop"], (
+        f"Expected ['acquire', 'drop'], got {call_order!r}"
+    )
+    assert not acquired_lock.locked(), "Lock must be released after successful DELETE"
+
+
+def test_delete_collection_lock_released_on_exception(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """Lock is released even when delete_collection_meta raises."""
+    import asyncio as _asyncio
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "exc_col"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default")
+
+    real_lock = _asyncio.Lock()
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.drop_collection = AsyncMock()
+    mock_store.delete_collection_meta = AsyncMock(side_effect=RuntimeError("db failure"))
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=real_lock)
+
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, raise_server_exceptions=False, headers={"Authorization": f"Bearer {key}"})
+    response = c.delete(f"/collections/{name}")
+
+    # The exception propagates as 500
+    assert response.status_code == 500
+    # Lock MUST be released despite the exception
+    assert not real_lock.locked(), "Lock must be released even when delete_collection_meta raises"
+
+
 # ---------------------------------------------------------------------------
-# GET /collections/{name} — namespace enforcement 
+# GET /collections/{name} — namespace enforcement
 # ---------------------------------------------------------------------------
 
 

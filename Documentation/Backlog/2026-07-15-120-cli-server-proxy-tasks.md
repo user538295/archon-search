@@ -212,7 +212,7 @@ flowchart LR
 
 ### Phase 4 · Safe remove with lock
 
-- [ ] **BE-5** — Add `acquire_collection_lock_or_503` call to `DELETE /collections/{name}` handler (`routes_collections.py:277–337`) before `drop_collection()` and `delete_collection_meta()`; follow the existing pattern at `routes_collections.py:228`; release the lock after drop completes #backend-role
+- [x] **BE-5** — Add `acquire_collection_lock_or_503` call to `DELETE /collections/{name}` handler (`routes_collections.py:277–337`) before `drop_collection()` and `delete_collection_meta()`; follow the existing pattern at `routes_collections.py:228`; release the lock after drop completes #backend-role
     - Interface Adapters · 2.0h
     - needs K1 · completes S11 (server side — 503 from DELETE)
     - Tests

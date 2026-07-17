@@ -307,3 +307,60 @@ def test_delete_pinned_only_collection_returns_error(
             f"Pinned collection {col_name!r} was removed from the store despite "
             f"the 409 rejection — data-loss bug"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — DELETE succeeds while real per-collection lock is released
+# ---------------------------------------------------------------------------
+
+
+def test_delete_collection_succeeds_with_real_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DELETE /collections/{name} succeeds (200) with a real SearchStore and real lock.
+
+    Verifies that acquire_collection_lock_or_503 does not wedge the handler —
+    the lock is acquired, drop_collection runs, the lock is released, and the
+    collection is absent from GET /collections/ afterwards.
+    """
+    col_name = "lifecycle_lock_test"
+    col_dir = tmp_path / col_name
+    col_dir.mkdir()
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        store = client.app.state.search_store
+
+        # Register and inject collection.
+        cfg.collections.append(str(col_dir))
+        asyncio.run(
+            _inject_collection(
+                store,
+                col_name,
+                "lock test document",
+                f"/data/{col_name}/doc.md",
+                namespace="default",
+                embedding_model=cfg.embedding_model,
+            )
+        )
+
+        # Verify it is visible before delete.
+        list_resp = client.get("/collections/", headers=_auth(api_key))
+        assert list_resp.status_code == 200
+        names_before = {c["name"] for c in list_resp.json()}
+        assert col_name in names_before
+
+        # DELETE — must succeed despite the lock acquisition path.
+        del_resp = client.delete(f"/collections/{col_name}", headers=_auth(api_key))
+        assert del_resp.status_code == 200, (
+            f"DELETE /collections/{col_name} expected 200, "
+            f"got {del_resp.status_code}: {del_resp.text}"
+        )
+        assert del_resp.json().get("deleted") is True
+
+        # Collection absent after delete.
+        list_resp2 = client.get("/collections/", headers=_auth(api_key))
+        assert list_resp2.status_code == 200
+        names_after = {c["name"] for c in list_resp2.json()}
+        assert col_name not in names_after, (
+            f"Collection {col_name!r} still present in GET /collections/ after DELETE"
+        )

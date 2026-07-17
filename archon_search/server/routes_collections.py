@@ -280,7 +280,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     return JobResponse(**job_to_dict(job))
 
 
-@router.delete("/{name}", response_model=DeleteResponse, responses={401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}})
+@router.delete("/{name}", response_model=DeleteResponse, responses={401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}, 503: {"model": ErrorDetail}})
 async def remove_collection(name: str, request: Request) -> DeleteResponse | JSONResponse:
     """Remove a collection: delete config entry and drop LanceDB data."""
     config: SearchConfig = request.app.state.config
@@ -316,29 +316,38 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
             ),
         )
 
-    # Remove from collections list (by original path values)
-    if in_collections:
-        config.collections = [
-            p for p in config.collections
-            if str(Path(p).expanduser().resolve()) != resolved
-        ]
+    # Acquire the per-collection lock before mutating — 503 if a write is in progress.
+    lock_result = await acquire_collection_lock_or_503(search_store, name)
+    if isinstance(lock_result, JSONResponse):
+        return lock_result
 
-    # Remove from pinned_collections list if also present there
-    if in_pinned:
-        config.pinned_collections = [
-            p for p in config.pinned_collections
-            if str(Path(p).expanduser().resolve()) != resolved
-        ]
+    try:
+        # Remove from collections list (by original path values)
+        if in_collections:
+            config.collections = [
+                p for p in config.collections
+                if str(Path(p).expanduser().resolve()) != resolved
+            ]
 
-    _maybe_save_config(config, request)
+        # Remove from pinned_collections list if also present there
+        if in_pinned:
+            config.pinned_collections = [
+                p for p in config.pinned_collections
+                if str(Path(p).expanduser().resolve()) != resolved
+            ]
 
-    # Drop LanceDB table and meta row
-    if search_store is not None:
-        try:
-            await search_store.drop_collection(name)
-        except (KeyError, RuntimeError):
-            pass  # table doesn't exist — that's fine
-        await search_store.delete_collection_meta(name, ns)
+        _maybe_save_config(config, request)
+
+        # Drop LanceDB table and meta row
+        if search_store is not None:
+            try:
+                await search_store.drop_collection(name)
+            except (KeyError, RuntimeError):
+                pass  # table doesn't exist — that's fine
+            await search_store.delete_collection_meta(name, ns)
+    finally:
+        if isinstance(lock_result, asyncio.Lock) and lock_result.locked():
+            lock_result.release()
 
     return DeleteResponse(name=name, deleted=True)
 
