@@ -5,6 +5,7 @@ import click
 from archon_search.cli.backup_cmd import backup_cmd
 from archon_search.cli.collection import collection
 from archon_search.cli.graph_cmd import graph_cmd
+from archon_search.cli.jobs_cmd import jobs
 from archon_search.cli.key_cmd import key_cmd
 from archon_search.cli.maintenance_cmd import maintenance_cmd
 from archon_search.cli.config_cmd import config
@@ -46,6 +47,7 @@ main.add_command(backup_cmd)
 main.add_command(maintenance_cmd)
 main.add_command(key_cmd)
 main.add_command(graph_cmd)
+main.add_command(jobs)
 
 
 if __name__ == "__main__":

@@ -114,14 +114,14 @@ flowchart LR
         - #unit_test — `test_reindex_server_not_running` — `httpx.ConnectError` → "archon-search serve is not running. Start it first.", exit 1
         - #unit_test — `test_reindex_non202_prints_status_and_body` — 409/503 response → status + body on stderr, exit 1
 
-- [ ] **FE-3** — Create `archon_search/cli/jobs_cmd.py` with `jobs` Click group and `status <job_id>` subcommand (calls `GET /jobs/{job_id}` once via `routes_jobs.py:561–569`); register via `main.add_command(jobs)` in `main.py`; print `job_id`, `status`, `collection`, `created_at`, `progress` (if non-null), `error` (if FAILED/FAILED_EXPIRED); exit 0 for DONE and in-progress states (PENDING/QUEUED/RUNNING/CANCELLING); exit 1 for FAILED/FAILED_EXPIRED/CANCELLED/404 #frontend-role
+- [x] **FE-3** — Create `archon_search/cli/jobs_cmd.py` with `jobs` Click group and `status <job_id>` subcommand (calls `GET /jobs/{job_id}` once via `routes_jobs.py:561–569`); register via `main.add_command(jobs)` in `main.py`; print `job_id`, `status`, `collection`, `created_at`, `progress` (if non-null), `error` (if FAILED/FAILED_EXPIRED); exit 0 for DONE and in-progress states (PENDING/QUEUED/RUNNING/CANCELLING); exit 1 for FAILED/FAILED_EXPIRED/CANCELLED/404 #frontend-role
     - Presentation · 3.0h
     - needs K1 · completes S24
     - Tests
-        - #unit_test — `test_jobs_status_done_exits_0` — DONE response → prints all status fields, exit 0
-        - #unit_test — `test_jobs_status_failed_exits_1` — FAILED → prints error field, exit 1; FAILED_EXPIRED → exit 1; CANCELLED → exit 1
-        - #unit_test — `test_jobs_status_in_progress_exits_0` — RUNNING/QUEUED/PENDING/CANCELLING → prints status, exit 0
-        - #unit_test — `test_jobs_status_404_exits_1` — 404 → "Job not found: {job_id}", exit 1
+        - [x] #unit_test — `test_jobs_status_done_exits_0` — DONE response → prints all status fields, exit 0
+        - [x] #unit_test — `test_jobs_status_failed_exits_1` — FAILED → prints error field, exit 1; FAILED_EXPIRED → exit 1; CANCELLED → exit 1
+        - [x] #unit_test — `test_jobs_status_in_progress_exits_0` — RUNNING/QUEUED/PENDING/CANCELLING → prints status, exit 0
+        - [x] #unit_test — `test_jobs_status_404_exits_1` — 404 → "Job not found: {job_id}", exit 1
 
 - [ ] **T-1** — e2e: `collection reindex smoke --wait` against real `smoke_server`; verify CLI exits 0 and success markers in stdout; also run `jobs status <job_id>` on the completed job #tester-role
     - — · 2.0h
