@@ -15,6 +15,7 @@ all smoke tests share the single session-scoped server subprocess.
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import socket
@@ -946,3 +947,133 @@ def test_e2e_collection_remove_against_server(smoke_server, tmp_path) -> None:
     assert detail_resp.status_code == 404, (
         f"GET /collections/{collection_name} should return 404 after remove; got: {detail_resp.status_code}"
     )
+
+
+# ---------------------------------------------------------------------------
+# T-5 structural single-writer check (S16) — no server required
+# ---------------------------------------------------------------------------
+
+# Read commands in collection.py that legitimately retain asyncio.run() +
+# create_pipeline because they open LanceDB in-process.  All other @collection.command
+# functions are write commands (HTTP proxies) and are checked by the guard.
+# Fail-closed design: new commands are guarded by default; only explicitly
+# blessed read commands are excluded.
+_COLLECTION_READ_CMDS = frozenset({"list_cmd", "info"})
+
+
+def _has_asyncio_run_call(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Return True if ``node``'s body (and nested defs) contains ``asyncio.run(...)``."""
+    for subnode in ast.walk(node):
+        if isinstance(subnode, ast.Call):
+            func = subnode.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "run"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "asyncio"
+            ):
+                return True
+    return False
+
+
+def test_cli_write_commands_contain_no_direct_store_imports() -> None:
+    """Structural guard (S16): CLI write-command modules must not import
+    ``SearchPipeline``, ``SearchStore``, or ``create_pipeline`` directly,
+    and write-command function bodies must not call ``asyncio.run()``.
+
+    ``collection.py`` is mixed: read commands (``list_cmd``, ``info``) still
+    use ``asyncio.run()`` + ``create_pipeline`` (in-process LanceDB reads).
+    Write commands are derived by excluding the known read commands from all
+    ``@collection.command``-decorated functions (fail-closed: new commands are
+    guarded by default).  Both ``async def`` and plain ``def`` functions are
+    checked for ``asyncio.run()`` calls.
+
+    ``ingest.py`` and ``sync.py`` are purely write-command modules; they are
+    checked for ``asyncio.run()`` as whole-file text assertions (both currently
+    have no ``asyncio`` import at all, so aliasing is not a practical concern).
+
+    Non-automatable companion (S17): stop the server, run
+    ``archon-search collection list`` and ``archon-search collection info <name>``,
+    verify both succeed.  The server is not needed — those commands open LanceDB
+    in-process — but stopping the session-scoped ``smoke_server`` mid-session
+    would break sibling smoke tests in this file.
+    """
+    cli_dir = REPO_ROOT / "archon_search" / "cli"
+    collection_py = cli_dir / "collection.py"
+    ingest_py = cli_dir / "ingest.py"
+    sync_py = cli_dir / "sync.py"
+
+    # ------------------------------------------------------------------
+    # 1. Forbidden import strings — check all three files.
+    # Covers the canonical import forms (plan spec S16). The real in-process
+    # gateway is create_pipeline; SearchPipeline/SearchStore are checked
+    # per spec and as an extra future-regression guard.
+    # ------------------------------------------------------------------
+    for fpath in (collection_py, ingest_py, sync_py):
+        src = fpath.read_text()
+        assert "from archon_search.pipeline import SearchPipeline" not in src, (
+            f"{fpath.name}: 'from archon_search.pipeline import SearchPipeline' must be absent "
+            f"from CLI write-command modules (S16)"
+        )
+        assert "from archon_search.store import SearchStore" not in src, (
+            f"{fpath.name}: 'from archon_search.store import SearchStore' must be absent "
+            f"from CLI write-command modules (S16)"
+        )
+
+    # create_pipeline is the actual in-process LanceDB gateway; it must not
+    # be imported in the purely write-command files.
+    for fpath in (ingest_py, sync_py):
+        src = fpath.read_text()
+        assert "from archon_search.pipeline import create_pipeline" not in src, (
+            f"{fpath.name}: 'from archon_search.pipeline import create_pipeline' must be absent "
+            f"from a purely write-command module (S16) — use the server HTTP API instead"
+        )
+
+    # ------------------------------------------------------------------
+    # 2. asyncio.run() absent from purely write-command files.
+    # ------------------------------------------------------------------
+    for fpath in (ingest_py, sync_py):
+        src = fpath.read_text()
+        assert "asyncio.run(" not in src, (
+            f"{fpath.name}: asyncio.run() must not appear in a purely write-command module (S16)"
+        )
+
+    # ------------------------------------------------------------------
+    # 3. collection.py AST checks: write-command bodies must not call
+    #    asyncio.run(); read commands must still do so (positive control).
+    # ------------------------------------------------------------------
+    collection_src = collection_py.read_text()
+    tree = ast.parse(collection_src)
+
+    # Collect all top-level Click command functions (both def and async def).
+    all_cmd_fns: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            all_cmd_fns[node.name] = node
+
+    write_cmds = {name: node for name, node in all_cmd_fns.items() if name not in _COLLECTION_READ_CMDS}
+
+    # 3a. No asyncio.run() in any write-command body.
+    offending: list[str] = [
+        f"{name} (line {node.lineno})"
+        for name, node in write_cmds.items()
+        if _has_asyncio_run_call(node)
+    ]
+    assert not offending, (
+        f"collection.py write-command bodies must not call asyncio.run(); "
+        f"found in: {offending} (S16)"
+    )
+
+    # 3b. Positive control: read commands must still call asyncio.run()
+    # (confirms the read/write partition is real, not vacuously satisfied).
+    for read_name in _COLLECTION_READ_CMDS:
+        read_node = all_cmd_fns.get(read_name)
+        assert read_node is not None, (
+            f"collection.py: expected read command '{read_name}' to exist — "
+            f"update _COLLECTION_READ_CMDS if it was renamed or removed"
+        )
+        assert _has_asyncio_run_call(read_node), (
+            f"collection.py: read command '{read_name}' no longer calls asyncio.run() — "
+            f"if it was converted to an HTTP proxy, move it to the write-command set "
+            f"by removing it from _COLLECTION_READ_CMDS"
+        )

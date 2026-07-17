@@ -235,7 +235,7 @@ flowchart LR
     - Tests
         - #e2e_test — `test_e2e_collection_remove_against_server` — add temp collection via `POST /collections/` REST call; subprocess `collection remove <name>`, assert `returncode == 0`; `GET /collections/` shows collection absent
 
-- [ ] **T-5** — Structural single-writer check: open `collection.py`, `ingest.py`, `sync.py` and assert `SearchPipeline` and `SearchStore` are not imported in any CLI write-command module post-conversion (S16); manual offline check: stop the server, run `collection list` and `collection info`, verify both succeed (S17) #tester-role
+- [x] **T-5** — Structural single-writer check: open `collection.py`, `ingest.py`, `sync.py` and assert `SearchPipeline` and `SearchStore` are not imported in any CLI write-command module post-conversion (S16); manual offline check: stop the server, run `collection list` and `collection info`, verify both succeed (S17) #tester-role
     - — · 2.0h
     - needs FE-4, FE-5, FE-6, FE-7, FE-8 · completes S16, S17
     - Tests
