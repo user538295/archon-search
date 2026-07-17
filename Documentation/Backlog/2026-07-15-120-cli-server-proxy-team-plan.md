@@ -492,3 +492,4 @@ _All open questions are resolved — see below. Status is `planned`._
 ## References
 
 - **Brief:** [2026-07-15-120-cli-server-proxy-brief.md](./2026-07-15-120-cli-server-proxy-brief.md)
+- **Tasks:** [2026-07-15-120-cli-server-proxy-tasks.md](./2026-07-15-120-cli-server-proxy-tasks.md)
