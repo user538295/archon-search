@@ -34,9 +34,10 @@ Operators running multi-namespace deployments (e.g. separate namespaces per team
 - **Collection exists in a different namespace than specified**: `GraphStore.ensure_graph_tables()` creates tables if absent — a wrong namespace silently creates an empty community set. This is pre-existing behavior, not introduced by this fix, but the added output (showing which namespace was targeted) makes the mistake visible.
 - **Dependency on bug-008**: If `graph build-communities` is later migrated to proxy through a REST endpoint (`POST /graph/{collection}/rebuild-communities`), the `--namespace` flag must be forwarded as a query/body param. The fix here is designed so the flag is cleanly passable either way.
 
-## Open Questions
-- Does a `POST /graph/{collection}/rebuild-communities` REST endpoint need to be added as part of the bug-008 migration, or should the CLI command be deprecated in favour of `archon-search maintenance run`? (Planning decision — does not affect this fix.)
-- Should the flag be `--namespace` or `--ns` for consistency with other multi-namespace CLI commands? Check the convention used in `key` and `backup` commands.
+## Decisions
+
+- **REST migration timing:** Add `--namespace` now; keep the REST proxy migration for bug-008. The fix is a one-liner; mixing it with the architectural swap makes the PR harder to review and risks bug-008 sequencing issues. The flag is designed to forward cleanly to the REST endpoint when bug-008 lands.
+- **Flag name:** Use `--namespace`. Confirmed: `key_cmd.py` lines 113 and 227 already use `--namespace`; no CLI command uses `--ns`. Use the existing convention.
 
 ## Future Iterations
 - Add `--namespace` to `graph inspect` and `graph view` commands if they have the same hardcoded-default limitation

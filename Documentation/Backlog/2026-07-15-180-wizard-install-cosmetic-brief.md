@@ -41,9 +41,10 @@ The wizard completes without printing any unexplained technical warnings — use
 - **Bug B — narrow filter scope**: The `warnings.filterwarnings` call must target the specific message string to avoid suppressing unrelated fastembed warnings that might be actionable in the future. Use `warnings.catch_warnings()` as a context manager scoped to the `TextEmbedding(...)` line.
 - **Non-uv installs**: If `--system` is the chosen fix for Bug A, verify it is supported by the spaCy version pinned in `pyproject.toml` (`spacy>=3.8,<3.9`).
 
-## Open Questions
-- For Bug A: Does `python -m spacy download en_core_web_sm --system` work with `spacy>=3.8,<3.9`? If not, plan-maker should fall back to `uv pip install --python <sys.executable> en-core-web-sm` (the PyPI wheel name), which is consistent with how `_install_extra()` installs all other packages.
-- For Bug B: Does the fastembed warning appear only when `lazy_load=True` (current code), or also at first real embed call during server startup? If the warning also fires at runtime, the suppression scope may need to extend to the embedder initialization in `embedder.py` as well. Plan-maker should check both call sites.
+## Decisions
+
+- **Bug A — spaCy download approach:** Replace the `python -m spacy download` call with `uv pip install --python <sys.executable> en-core-web-sm`. This is consistent with how `_install_extra()` installs every other package and removes the environment-detection assumption that caused the bug. The `--system` flag is a narrower fix but stays within spaCy's tooling with different environment assumptions from the rest of the installer. Confirm the PyPI wheel name `en-core-web-sm` matches the `spacy>=3.8,<3.9` pin before shipping.
+- **Bug B — fastembed warning suppression scope:** Suppress only at `install.py:455` (the confirmed site). Use `warnings.catch_warnings()` as a context manager scoped to the `TextEmbedding(...)` line with a narrow message filter. Check `embedder.py` separately — if the warning fires at server startup, add suppression there with evidence. Suppressing a call site where you haven't confirmed the warning fires is speculative and could hide a real future warning if the message string changes.
 
 ## Future Iterations
 - A unified "clean install output" pass that audits all subprocess calls in `install.py` for similar environment-assumption failures — there may be other edge cases in tool-install contexts.

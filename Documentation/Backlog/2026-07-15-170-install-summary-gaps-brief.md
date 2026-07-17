@@ -34,9 +34,10 @@ Any user running `archon-search wizard` or `archon-search install` who enables A
 - **Provider shown in bullet**: Optionally show the provider (`• HyDE query expansion enabled (anthropic)`) so users can confirm the right provider was set. Simple string interpolation from `features.hyde_provider` if that field exists, else omit.
 - **log_to_stderr note placement**: Append after the feature bullets block, not inside it — it is a logging mode, not a feature toggle.
 
-## Open Questions
-- Does `WizardFeatures` (or equivalent dataclass) carry `hyde_provider` / `rag_fusion_provider` fields, or only `enable_hyde`/`enable_rag_fusion` booleans? If providers are available, include them in the bullet text. If not, omit — don't add provider fields to `WizardFeatures` for this bug alone.
-- Should the summary also confirm that the package extras were successfully installed (e.g. `archon-search[hyde]`)? Depends on whether bug-001 adds the install step — coordinate with that PR.
+## Decisions
+
+- **HyDE/RAG Fusion provider in bullet:** Already resolved in code. `install.py:733–736` already prints provider-aware bullets (`f"• HyDE: enabled (provider: {features.hyde_provider})"`) and `WizardFeatures` carries `hyde_provider: str` and `rag_fusion_provider: str`. No code change needed here. **The real remaining gap is `log_to_stderr`** — no bullet exists for it in `install.py:727–749`. Add `if features.log_to_stderr: feature_bullets.append("• Logging to stderr (no log file)")`. Before shipping, do a quick pass comparing every field in `WizardFeatures` against the summary block — the brief incorrectly thought HyDE was missing, suggesting it was written from a stale code read.
+- **Extras-install confirmation in summary:** Do not add anything about extras until bug-001 (which adds the `archon-search[hyde]` install step) ships. A placeholder is more confusing than helpful. Add the confirmation bullet in the same PR as bug-001.
 
 ## Future Iterations
 - A "what was changed vs previous install" diff view for re-runs (shows what the wizard changed, not just what is now enabled).

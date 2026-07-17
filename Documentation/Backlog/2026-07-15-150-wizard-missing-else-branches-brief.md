@@ -40,8 +40,9 @@ Bundle with **bug-010** — same function, same fix pattern, same PR.
 - **`routing_strategy` default**: the else-branch must write `"centroid"`, not `false` or empty. Same for `log_format` → `"text"`.
 - **Idempotency**: running the wizard twice with the same answers produces the same TOML — no spurious diffs.
 
-## Open Questions
-- Does `telemetry.enabled = false` have any different behavior from the section being absent? Verify in `config.py` that `load_config` treats both identically. (Likely yes — `enabled = false` is explicit and safer.)
+## Decisions
+
+- **`telemetry.enabled = false` vs absent section:** Confirmed identical at runtime. `config.py:561–562` shows `if "enabled" in telemetry_cfg: telemetry.enabled = _coerce_bool(...)` — when the section is absent, `TelemetryConfig()` default (`enabled = False`) is used. Write the explicit `enabled = false` in the else-branch anyway: it locks in the behavior against any future change to `TelemetryConfig`'s default and makes the config readable without knowing the code default.
 
 ## Future Iterations
 - Wizard diff preview: "Here's what will change in your config" before writing — deferred, UI complexity.

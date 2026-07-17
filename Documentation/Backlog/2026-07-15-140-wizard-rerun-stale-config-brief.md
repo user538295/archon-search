@@ -33,9 +33,10 @@ Any operator who ran the wizard once (enabling HyDE or RAG Fusion), then later r
 - **User previously set a custom provider/model, then re-runs and says "no":** The section is preserved with `enabled = false`; provider/model keys remain. Re-enabling later (say "yes" on the next wizard run) will pick up the existing provider/model values.
 - **Non-interactive / scripted wizard run with `--no-hyde` flag:** Same fix applies — the flag sets `enable_hyde = False`, which must produce `enabled = false` in TOML, not silence.
 
-## Open Questions
-- `_write_profile_config` (`install.py:298–319`) is the only write site — verify no other code path can write `[hyde] enabled = true` outside this function that would race with the fix.
-- Should a first-install "no" (no existing `[hyde]` section) also write `enabled = false`? Consistent behaviour says yes, but it adds a section users may not expect. Confirm with plan-maker.
+## Decisions
+
+- **Other write sites:** `doc["hyde"]["enabled"] = True` appears exactly once, in `_apply_wizard_features_to_toml` (`install.py:326`). The wizard runs synchronously — no race possible. Add the else-branch and ship; no separate audit needed.
+- **First-install "no":** Always write `enabled = false`, even when no `[hyde]` section previously existed. The value is the same as the code default so it cannot change behavior, and it makes the config self-documenting on every run. Skipping it on first install would make the else-branch behave differently on first vs re-run with no benefit.
 
 ## Future Iterations
 - Companion fix (bug-001): wizard should also install `archon-search[hyde]` / `[rag_fusion]` extras when the user says "yes," mirroring the `[graph]` extra install pattern.

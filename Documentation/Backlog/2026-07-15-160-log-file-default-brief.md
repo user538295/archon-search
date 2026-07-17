@@ -44,9 +44,10 @@ Any operator who ran the setup wizard, chose JSON log format, and answered "yes"
 - **User has already edited their TOML by hand:** If a user manually set `log_file = ""` for a real reason, the wizard fix does not affect them (wizard only runs at install/re-install time). Their intent is preserved.
 - **`test_config_defaults.py` snapshot:** The code default (`"~/.archon-search/logs/archon-search.log"`) is already correct and pinned in this test. No snapshot update needed.
 
-## Open Questions
-- Should `load_config()` emit a WARNING when it reads `log_file = ""` from the TOML, to help operators who don't read release notes discover the issue? (Low-risk addition: `if "log_file" in log_cfg and not str(log_cfg["log_file"]).strip(): log.warning("log_file is empty in config — file logging disabled")`)
-- Should the wizard's new "Also write logs to a file?" question be skipped entirely (always writing to file) to reduce wizard length? The tradeoff: fewer questions vs. less operator control.
+## Decisions
+
+- **WARNING in `load_config()` for `log_file = ""`:** Add it. The wizard fix only helps new installs; operators with already-broken configs (from before this fix) have no signal without the warning. Word it to say "remove this line or set it to a path to re-enable file logging" so even unintentional viewers know exactly what to do. The cost (a spurious warning for operators who intentionally set `log_file = ""`) is low and acceptable.
+- **Second wizard prompt ("Also write logs to a file?"):** Drop it; always keep the log file when stderr logging is enabled. The entire bug is that the wizard silently disabled file logging as a side-effect. The fix should be "file logging stays on unless you say otherwise" — and the right moment to say otherwise is a manual TOML edit, not a wizard prompt almost no one needs. Intentional opt-out (e.g. container deployments) remains possible via `log_file = ""` in TOML.
 
 ## Future Iterations
 - `archon-search doctor` command that checks for common misconfigurations like `log_file = ""` and suggests fixes
