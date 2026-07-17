@@ -101,6 +101,23 @@ class CommunityRebuildJob(IngestJob):
     collection: str = ""
 
 
+class JobKind(str, Enum):
+    sync = "sync"
+    metadata_reindex = "metadata_reindex"
+
+
+@dataclass
+class SyncJob(IngestJob):
+    collection: str = ""
+    kind: JobKind = JobKind.sync
+
+
+@dataclass
+class MetadataReindexJob(IngestJob):
+    collection: str = ""
+    kind: JobKind = JobKind.metadata_reindex
+
+
 @dataclass
 class Query:
     text: str

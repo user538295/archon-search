@@ -18,9 +18,12 @@ from archon_search.types import (
     DeleteJob,
     ExportJob,
     ImportJob,
+    JobKind,
+    MetadataReindexJob,
     MigrationJob,
     MigrationKind,
     ReindexJob,
+    SyncJob,
 )
 
 logger = logging.getLogger(__name__)
@@ -213,6 +216,39 @@ class JobStore:
         )
         return self.create_job(job)  # type: ignore[return-value]
 
+    def create_sync(
+        self,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> SyncJob:
+        """Create a SyncJob with QUEUED status and persist it."""
+        now = _now_iso()
+        job = SyncJob(
+            job_id=str(uuid.uuid4()),
+            status=JobStatus.QUEUED,
+            created_at=now,
+            updated_at=now,
+            namespace=namespace,
+            collection="",
+        )
+        return self.create_job(job)  # type: ignore[return-value]
+
+    def create_metadata_reindex(
+        self,
+        collection: str,
+        namespace: str = DEFAULT_NAMESPACE,
+    ) -> MetadataReindexJob:
+        """Create a MetadataReindexJob with QUEUED status and persist it."""
+        now = _now_iso()
+        job = MetadataReindexJob(
+            job_id=str(uuid.uuid4()),
+            status=JobStatus.QUEUED,
+            created_at=now,
+            updated_at=now,
+            namespace=namespace,
+            collection=collection,
+        )
+        return self.create_job(job)  # type: ignore[return-value]
+
     def update_progress(self, job_id: str, processed: int, total: int, phase: str) -> None:
         """Set the progress dict on a job."""
         self.update(job_id, progress={"processed": processed, "total": total, "phase": phase})
@@ -282,6 +318,12 @@ class JobStore:
                     job = MigrationJob(**item)
                 elif job_type == "community_rebuild":
                     job = CommunityRebuildJob(**item)
+                elif job_type == JobKind.sync.value:
+                    item["kind"] = JobKind(item["kind"])
+                    job = SyncJob(**item)
+                elif job_type == JobKind.metadata_reindex.value:
+                    item["kind"] = JobKind(item["kind"])
+                    job = MetadataReindexJob(**item)
                 else:
                     job = IngestJob(**item)
                 if job.status in _CRASH_STATUSES:
@@ -319,6 +361,10 @@ class JobStore:
                 item["job_type"] = "delete"
             elif isinstance(job, CommunityRebuildJob):
                 item["job_type"] = "community_rebuild"
+            elif isinstance(job, SyncJob):
+                item["job_type"] = JobKind.sync.value
+            elif isinstance(job, MetadataReindexJob):
+                item["job_type"] = JobKind.metadata_reindex.value
             else:
                 item["job_type"] = "ingest"
             data.append(item)

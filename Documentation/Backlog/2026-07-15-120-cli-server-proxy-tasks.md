@@ -87,7 +87,7 @@ flowchart LR
 
 ### Phase 1 · Submit a write job via CLI *(walking skeleton: operator submits a reindex job; CLI → httpx → existing `POST /collections/{name}/reindex` → poll loop → DONE)*
 
-- [ ] **BE-1** — Add `JobKind(str, Enum)` + `SyncJob` + `MetadataReindexJob` dataclasses to `archon_search/types.py` (mirror `CommunityRebuildJob` at `types.py:100–101`); add `create_sync` / `create_metadata_reindex` factories to `archon_search/jobs/store.py` (mirror `create_community_rebuild` at `store.py:199–214`, status=`QUEUED`); extend both the `_write_atomic` discriminator ladder (`store.py:310–323`) and the `_load` discriminator ladder (`store.py:271–286`) with `"sync"` and `"metadata_reindex"` branches; convert `kind` string back to `JobKind` enum in `_load` (mirror `MigrationJob` at `store.py:281`) #backend-role
+- [x] **BE-1** — Add `JobKind(str, Enum)` + `SyncJob` + `MetadataReindexJob` dataclasses to `archon_search/types.py` (mirror `CommunityRebuildJob` at `types.py:100–101`); add `create_sync` / `create_metadata_reindex` factories to `archon_search/jobs/store.py` (mirror `create_community_rebuild` at `store.py:199–214`, status=`QUEUED`); extend both the `_write_atomic` discriminator ladder (`store.py:310–323`) and the `_load` discriminator ladder (`store.py:271–286`) with `"sync"` and `"metadata_reindex"` branches; convert `kind` string back to `JobKind` enum in `_load` (mirror `MigrationJob` at `store.py:281`) #backend-role
     - Entities + Frameworks & Drivers · 6.0h
     - needs K1 · completes S25, S26
     - Tests
