@@ -633,8 +633,8 @@ def test_migrate_cli_wait_polls_until_done_exits_0() -> None:
 
     with (
         patch("archon_search.cli.collection.httpx.post", return_value=post_resp) as mock_post,
-        patch("archon_search.cli.collection.httpx.get", side_effect=get_job_sequence),
-        patch("archon_search.cli.collection.time.sleep"),  # no real sleeping in tests
+        patch("archon_search.cli._helpers.httpx.get", side_effect=get_job_sequence),
+        patch("archon_search.cli._helpers.time.sleep"),  # no real sleeping in tests
     ):
         result = runner.invoke(
             collection,
@@ -663,8 +663,8 @@ def test_migrate_cli_wait_exits_1_on_failed() -> None:
 
     with (
         patch("archon_search.cli.collection.httpx.post", return_value=post_resp),
-        patch("archon_search.cli.collection.httpx.get", side_effect=get_job_sequence),
-        patch("archon_search.cli.collection.time.sleep"),
+        patch("archon_search.cli._helpers.httpx.get", side_effect=get_job_sequence),
+        patch("archon_search.cli._helpers.time.sleep"),
     ):
         result = runner.invoke(
             collection,
@@ -687,8 +687,8 @@ def test_migrate_cli_wait_exits_1_on_cancelled() -> None:
 
     with (
         patch("archon_search.cli.collection.httpx.post", return_value=post_resp),
-        patch("archon_search.cli.collection.httpx.get", side_effect=get_job_sequence),
-        patch("archon_search.cli.collection.time.sleep"),
+        patch("archon_search.cli._helpers.httpx.get", side_effect=get_job_sequence),
+        patch("archon_search.cli._helpers.time.sleep"),
     ):
         result = runner.invoke(
             collection,
@@ -728,8 +728,8 @@ def test_migrate_cli_wait_poll_error_exits_1() -> None:
 
     with (
         patch("archon_search.cli.collection.httpx.post", return_value=post_resp),
-        patch("archon_search.cli.collection.httpx.get", return_value=get_resp_500),
-        patch("archon_search.cli.collection.time.sleep"),
+        patch("archon_search.cli._helpers.httpx.get", return_value=get_resp_500),
+        patch("archon_search.cli._helpers.time.sleep"),
     ):
         result = runner.invoke(
             collection,

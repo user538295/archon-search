@@ -10,15 +10,12 @@ Provides:
 """
 from __future__ import annotations
 
-import time
-
 import click
 import httpx
 
+from archon_search.cli._helpers import _poll_job
 from archon_search.cli.collection import (
     _DEFAULT_API_URL,
-    _POLL_INTERVAL_SECONDS,
-    _TERMINAL_STATUSES,
     _resolve_api_key,
 )
 
@@ -86,46 +83,13 @@ def build_communities_cmd(
 
 def _poll_rebuild_job(job_id: str, base_url: str, headers: dict) -> None:
     """Poll GET /jobs/{job_id} until terminal. Exits 0 on DONE, non-zero otherwise."""
-    url = f"{base_url}/jobs/{job_id}"
-    status = "UNKNOWN"
-    job: dict = {}
-
-    try:
-        while True:
-            try:
-                resp = httpx.get(url, headers=headers)
-            except httpx.HTTPError as exc:
-                click.echo(f"Error polling job: {exc}", err=True)
-                raise SystemExit(1) from exc
-
-            if resp.status_code != 200:
-                click.echo(
-                    f"Error polling job: server returned {resp.status_code}: {resp.text}",
-                    err=True,
-                )
-                raise SystemExit(1)
-
-            job = resp.json()
-            status = job["status"]
-
-            if status in _TERMINAL_STATUSES:
-                break
-
-            time.sleep(_POLL_INTERVAL_SECONDS)
-
-    except KeyboardInterrupt:
-        click.echo("Polling stopped — job continues on server")
+    job = _poll_job(job_id, base_url, headers)
+    if not job:
+        # KeyboardInterrupt path — _poll_job already printed the message
         return
-
-    if status == "DONE":
-        result = job.get("result") or {}
-        count = result.get("communities_built") if isinstance(result, dict) else None
-        if count is not None:
-            click.echo(f"Community rebuild complete: {count} communities built.")
-        else:
-            click.echo("Community rebuild complete.")
-        return
-
-    error = job.get("error") or "unknown error"
-    click.echo(f"Community rebuild {status}: {error}", err=True)
-    raise SystemExit(1)
+    result = job.get("result") or {}
+    count = result.get("communities_built") if isinstance(result, dict) else None
+    if count is not None:
+        click.echo(f"Community rebuild complete: {count} communities built.")
+    else:
+        click.echo("Community rebuild complete.")

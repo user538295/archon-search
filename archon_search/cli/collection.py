@@ -11,6 +11,7 @@ import click
 import httpx
 import tomlkit
 
+from archon_search.cli._helpers import _poll_job
 from archon_search.config import get_default_config_path, load_config
 from archon_search.embedder import make_embedder
 from archon_search.key_manager import load_or_generate_key
@@ -421,52 +422,11 @@ def migrate_cmd(
 
 def _poll_migration_job(job_id: str, base_url: str, headers: dict) -> None:
     """Poll GET /jobs/{job_id} until terminal, printing progress. Exits 1 on FAILED/CANCELLED."""
-    url = f"{base_url}/jobs/{job_id}"
-    status = "UNKNOWN"
-
-    try:
-        while True:
-            try:
-                resp = httpx.get(url, headers=headers)
-            except httpx.HTTPError as exc:
-                click.echo(f"Error polling job: {exc}", err=True)
-                raise SystemExit(1) from exc
-
-            if resp.status_code != 200:
-                click.echo(
-                    f"Error polling job: server returned {resp.status_code}: {resp.text}",
-                    err=True,
-                )
-                raise SystemExit(1)
-
-            job = resp.json()
-            status = job["status"]
-            progress = job.get("progress")
-
-            if progress:
-                phase = progress.get("phase", "")
-                processed = progress.get("processed", 0)
-                total = progress.get("total", 0)
-                click.echo(f"{phase}: {processed}/{total}")
-
-            if status in _TERMINAL_STATUSES:
-                break
-
-            time.sleep(_POLL_INTERVAL_SECONDS)
-
-    except KeyboardInterrupt:
-        click.echo("Polling stopped — job continues on server")
+    job = _poll_job(job_id, base_url, headers)
+    if not job:
+        # KeyboardInterrupt path — _poll_job already printed the message
         return
-
-    if status == "DONE":
-        click.echo("Migration complete.")
-    elif status == "FAILED":
-        error = job.get("error") or "unknown error"
-        click.echo(f"Migration FAILED: {error}", err=True)
-        raise SystemExit(1)
-    else:
-        click.echo(f"Job ended with status: {status}")
-        raise SystemExit(1)
+    click.echo("Migration complete.")
 
 
 @collection.command("reindex")

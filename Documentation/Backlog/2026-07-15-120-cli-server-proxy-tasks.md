@@ -96,7 +96,7 @@ flowchart LR
         - #unit_test — `test_sync_job_kind_emitted_in_job_to_dict` — `job_to_dict(sync_job)["kind"] == JobKind.sync.value` (not None, not a bare string)
         - #unit_test — `test_sync_and_metadata_reindex_jobs_round_trip_through_store` — write via `_write_atomic`, read via `_load`; assert `type(loaded) is SyncJob` and `type(loaded) is MetadataReindexJob` respectively, never bare `IngestJob`; `loaded.kind` is a `JobKind` enum instance
 
-- [ ] **FE-1** — Extract shared `_poll_job(job_id, base_url, headers)` helper into `archon_search/cli/_helpers.py` (currently holds only `_get_service()`, lines 9–20); deduplicate `_poll_migration_job` (`collection.py:422–469`) and `_poll_rebuild_job` (`graph_cmd.py:87–131`); update both callers to use the shared helper #frontend-role
+- [x] **FE-1** — Extract shared `_poll_job(job_id, base_url, headers)` helper into `archon_search/cli/_helpers.py` (currently holds only `_get_service()`, lines 9–20); deduplicate `_poll_migration_job` (`collection.py:422–469`) and `_poll_rebuild_job` (`graph_cmd.py:87–131`); update both callers to use the shared helper #frontend-role
     - Presentation · 3.0h
     - needs K1 · completes S9, S12, S13, S18
     - Tests

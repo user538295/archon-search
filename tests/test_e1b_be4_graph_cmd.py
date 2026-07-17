@@ -68,10 +68,10 @@ def test_cli_wait_polls_until_done_exit_0() -> None:
     with (
         patch("archon_search.cli.graph_cmd.httpx.post", return_value=post_resp),
         patch(
-            "archon_search.cli.graph_cmd.httpx.get",
+            "archon_search.cli._helpers.httpx.get",
             side_effect=[running_resp, done_resp],
         ),
-        patch("archon_search.cli.graph_cmd.time.sleep"),
+        patch("archon_search.cli._helpers.time.sleep"),
     ):
         result = runner.invoke(
             graph_cmd,
@@ -114,8 +114,8 @@ def test_cli_wait_recognises_all_terminal_statuses(terminal_status: str) -> None
 
     with (
         patch("archon_search.cli.graph_cmd.httpx.post", return_value=post_resp),
-        patch("archon_search.cli.graph_cmd.httpx.get", return_value=terminal_resp) as mock_get,
-        patch("archon_search.cli.graph_cmd.time.sleep") as mock_sleep,
+        patch("archon_search.cli._helpers.httpx.get", return_value=terminal_resp) as mock_get,
+        patch("archon_search.cli._helpers.time.sleep") as mock_sleep,
     ):
         result = runner.invoke(
             graph_cmd,
@@ -178,10 +178,10 @@ def test_cli_wait_mid_poll_error_exits_nonzero() -> None:
     with (
         patch("archon_search.cli.graph_cmd.httpx.post", return_value=post_resp),
         patch(
-            "archon_search.cli.graph_cmd.httpx.get",
+            "archon_search.cli._helpers.httpx.get",
             side_effect=httpx.HTTPError("boom"),
         ),
-        patch("archon_search.cli.graph_cmd.time.sleep"),
+        patch("archon_search.cli._helpers.time.sleep"),
     ):
         result = runner.invoke(
             graph_cmd,
