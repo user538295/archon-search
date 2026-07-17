@@ -126,7 +126,7 @@ When `/data` is mounted, the volume looks like this after a few requests:
 │   └── lid.176.ftz              # fasttext language detector (multilingual only)
 ├── fastembed-cache/             # fastembed model weights
 └── history/
-    └── sessions/                # default --sessions-dir for `archon-search ingest`
+    └── sessions/                # history sessions directory
 ```
 
 ## TLS termination

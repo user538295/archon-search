@@ -230,19 +230,10 @@ def test_sync_calls_collection_sync(runner: CliRunner, tmp_path: Path) -> None:
 # collection subgroup
 # ---------------------------------------------------------------------------
 
-def test_ingest_uses_default_path_when_no_path_given(runner: CliRunner) -> None:
-    mock_pipeline = MagicMock()
-    mock_pipeline.store.connect = AsyncMock()
-    mock_pipeline.store.disconnect = AsyncMock()
-    mock_pipeline.ingest_directory = AsyncMock(return_value=[])
-
-    with (
-        patch("archon_search.cli.ingest.load_config"),
-        patch("archon_search.cli.ingest.create_pipeline", return_value=mock_pipeline),
-    ):
-        result = runner.invoke(main, ["ingest"])
-    # Should not fail with "missing argument" — path is now optional
-    assert "Missing option" not in result.output
+def test_ingest_exits_with_error_when_no_path_given(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["ingest"])
+    assert result.exit_code == 1
+    assert "Error: --path is required." in result.output
 
 
 def test_collection_group_available(runner: CliRunner) -> None:

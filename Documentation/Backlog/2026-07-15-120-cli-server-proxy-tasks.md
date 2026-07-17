@@ -141,7 +141,7 @@ flowchart LR
         - #unit_test — `test_add_does_not_call_load_config` — verify `load_config` is never called after conversion
         - #unit_test — `test_add_409_collection_already_registered` — 409 → specific error message, exit 1
 
-- [ ] **FE-5** — Convert `ingest` (`ingest.py:25–115`) to httpx proxy: POST to `POST /ingest` (`routes_jobs.py:424–500`); derive collection name via `path_to_collection_name(path)` (from `archon_search/sync.py:29–45`) when `--collection` omitted; add `--api-url`/`--api-key`/`--wait` #frontend-role
+- [x] **FE-5** — Convert `ingest` (`ingest.py:25–115`) to httpx proxy: POST to `POST /ingest` (`routes_jobs.py:424–500`); derive collection name via `path_to_collection_name(path)` (from `archon_search/sync.py:29–45`) when `--collection` omitted; add `--api-url`/`--api-key`/`--wait` #frontend-role
     - Presentation · 2.0h
     - needs FE-1 · completes S6
     - Tests

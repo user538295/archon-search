@@ -412,7 +412,7 @@ Waiting for search service......... ready.
 archon-search is running on http://127.0.0.1:8765
 
 Next steps:
-  archon-search ingest <path>           # add documents to search
+  archon-search ingest --path <path>    # add documents to search
   archon-search status                  # check service health
   archon-search sync                    # sync watched directories
   archon-search stop                    # stop the service

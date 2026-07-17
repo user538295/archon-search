@@ -1,115 +1,68 @@
 """archon-search ingest subcommand."""
 from __future__ import annotations
 
-import asyncio
-import logging
-import math
-import os
-import time
 from pathlib import Path
 
 import click
+import httpx
 
-from archon_search.config import load_config
-from archon_search.observability import bind_stage_recorder, new_correlation_id
-from archon_search.paths import get_data_dir
-from archon_search.pipeline import create_pipeline
-
-logger = logging.getLogger(__name__)
-
-# Files larger than this threshold receive a pre-parse notice on stderr.
-# Independent of max_file_mb — this is a UX hint for slow parses.
-_LARGE_FILE_NOTICE_MB = 10
+from archon_search.cli._helpers import _poll_job
+from archon_search.cli.collection import _DEFAULT_API_URL, _resolve_api_key
+from archon_search.sync import path_to_collection_name
 
 
 @click.command()
 @click.option("--path", "ingest_path", default=None, type=click.Path(path_type=Path), help="File or directory to ingest")
 @click.option("--collection", default=None, help="Collection name (defaults to path basename or file stem)")
-@click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
-def ingest(ingest_path: Path | None, collection: str | None, config_path: Path | None) -> None:
+@click.option("--wait", "wait_flag", is_flag=True, default=False, help="Poll until the ingest job completes")
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def ingest(ingest_path: Path | None, collection: str | None, wait_flag: bool, api_url: str, api_key: str | None) -> None:
     """Ingest documents from a file or directory into a collection."""
     if ingest_path is None:
-        # Resolved lazily via get_data_dir() so ARCHON_SEARCH_DATA_DIR
-        # redirects the default ingest path at call time (C9 Task 2.6).
-        ingest_path = get_data_dir() / "history" / "sessions"
-        click.echo(f"No --path given, using default: {ingest_path}")
-
-    try:
-        cfg = load_config(config_path)
-    except Exception as exc:
-        click.echo(f"Error loading config: {exc}", err=True)
+        click.echo("Error: --path is required.", err=True)
         raise SystemExit(1)
 
-    is_single_file = ingest_path.is_file()
+    collection_name = collection or path_to_collection_name(str(ingest_path))
 
-    if is_single_file:
-        # Single-file mode: collection defaults to the file's stem (no extension)
-        collection_name = collection or ingest_path.stem
-        # Large-file notice: print to stderr before handing off to the parser
-        try:
-            file_size_mb = math.ceil(os.path.getsize(ingest_path) / (1024 * 1024))
-            if file_size_mb > _LARGE_FILE_NOTICE_MB:
-                click.echo(
-                    f"Parsing large file ({file_size_mb} MB); this may take a while…",
-                    err=True,
-                )
-        except OSError:
-            pass  # Can't stat the file; skip the notice
-    else:
-        # Directory mode (or default history path): collection defaults to the directory name
-        collection_name = collection or ingest_path.name
+    key = _resolve_api_key(api_key)
+    headers = {"Authorization": f"Bearer {key}"}
+    base_url = api_url.rstrip("/")
+    post_url = f"{base_url}/ingest"
 
-    def _print_dir_summary(results: list) -> None:
-        ok = sum(1 for r in results if r.status == "ok")
-        errors = sum(1 for r in results if r.status == "error")
-        for r in results:
-            for warning in r.warnings:
-                click.echo(f"Warning: {warning}", err=True)
-        click.echo(f"Ingest complete: {ok} ingested, {errors} errors.")
-
-    async def _run() -> None:
-        pipeline = create_pipeline(cfg)
-        timings_enabled = getattr(getattr(cfg, "observability", None), "stage_timings_enabled", True)
-        try:
-            await pipeline.store.connect()
-            if is_single_file:
-                result = await pipeline.ingest_file(
-                    ingest_path, collection_name, embedder=pipeline._global_embedder
-                )
-                for warning in result.warnings:
-                    click.echo(f"Warning: {warning}", err=True)
-                if result.status == "error":
-                    msg = result.error or "Ingest failed."
-                    click.echo(f"Error: {msg}", err=True)
-                    raise SystemExit(1)
-                click.echo(f"Ingest complete: 1 ingested, 0 errors.")
-            elif timings_enabled:
-                cid = new_correlation_id()
-                with bind_stage_recorder() as recorder:
-                    t0 = time.perf_counter()
-                    results = await pipeline.ingest_directory(ingest_path, collection_name, embedder=pipeline._global_embedder)
-                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
-                    logger.info(
-                        "stage timings",
-                        extra={
-                            "event_type": "stage_timings",
-                            "correlation_id": cid,
-                            "endpoint": "ingest",
-                            "collection": collection_name,
-                            "stage_timings_ms": recorder.stage_sums_ms,
-                        },
-                    )
-                _print_dir_summary(results)
-            else:
-                results = await pipeline.ingest_directory(ingest_path, collection_name, embedder=pipeline._global_embedder)
-                _print_dir_summary(results)
-        finally:
-            await pipeline.store.disconnect()
+    body: dict = {"collection": collection_name, "path": str(Path(ingest_path).expanduser().resolve())}
 
     try:
-        asyncio.run(_run())
-    except SystemExit:
-        raise
-    except Exception as exc:
-        click.echo(f"Error during ingest: {exc}", err=True)
+        resp = httpx.post(post_url, json=body, headers=headers)
+    except httpx.ConnectError:
+        click.echo(
+            "archon-search serve is not running. Start it first.",
+            err=True,
+        )
         raise SystemExit(1)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
+        raise SystemExit(1)
+
+    if resp.status_code != 202:
+        click.echo(f"Error: server returned {resp.status_code}: {resp.text}", err=True)
+        raise SystemExit(1)
+
+    job_data = resp.json()
+    job_id: str = job_data["job_id"]
+    click.echo(f"Ingest job submitted: {job_id}. Collection: '{collection_name}'")
+    click.echo(f"Track progress with: archon-search jobs status {job_id}")
+
+    if wait_flag:
+        job = _poll_job(job_id, base_url, headers)
+        if job:
+            click.echo(f"Ingest complete for '{collection_name}'.")

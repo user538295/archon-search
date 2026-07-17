@@ -790,7 +790,7 @@ def _print_next_steps(host: str, port: int, api_key_file: str) -> None:
     key_path = Path(api_key_file) if api_key_file else key_manager.get_key_file()
     print(f"\narchon-search is running on http://{host}:{port}\n")
     print("Next steps:")
-    print("  archon-search ingest <path>           # add documents to search")
+    print("  archon-search ingest --path <path>    # add documents to search")
     print("  archon-search status                  # check service health")
     print("  archon-search sync                    # sync watched directories")
     print("  archon-search stop                    # stop the service")

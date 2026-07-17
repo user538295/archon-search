@@ -9,7 +9,7 @@
 
 1. **A "collection" is a named index over one source path.** The collection name is derived from the path via `archon_search.sync.path_to_collection_name`; the same path always produces the same name. Note: `path_to_collection_name` is collision-unaware by design — two distinct paths with the same `Path.name` (e.g. `/a/docs` and `/b/docs`) produce the same raw name and are disambiguated downstream by `SearchCollectionSync`.
 2. **Two collection lists.** `[collections].collections` are normal collections; `[collections].pinned_collections` are always included in every search regardless of routing. Pinned-only collections cannot be removed without first unpinning (enforced for the CLI at `cli/collection.py:124-130` and for the REST `DELETE /collections/{name}` at `routes_collections.py:197-205`).
-3. **Only `sync` is incremental.** `archon-search sync` consults the indexing state store and skips already-indexed files; it also resets stale `IN_PROGRESS` entries to `PENDING` for crash recovery (`sync.py:_reset_stale_in_progress`). In contrast, `archon-search ingest` calls `pipeline.ingest_directory` directly and re-processes every file under the path with no state-store consultation. Use `collection reindex` to force a full rebuild (clears state and drops the LanceDB table).
+3. **Only `sync` is incremental.** `archon-search sync` consults the indexing state store and skips already-indexed files; it also resets stale `IN_PROGRESS` entries to `PENDING` for crash recovery (`sync.py:_reset_stale_in_progress`). In contrast, `archon-search ingest` submits an async `POST /ingest` job to the server, which re-processes every file under the path with no state-store consultation. Use `collection reindex` to force a full rebuild (clears state and drops the LanceDB table).
 4. **The watcher is opt-in.** Set `[collections].watch = true` to keep the index in sync with on-disk changes via watchdog (`archon_search/watcher.py`, `sync.py`).
 5. **Chunk-size changes trigger reindex.** If `chunk_size` differs from the value previously used for a collection and `auto_reindex_on_chunk_size_change = true` (default), affected collections rebuild on the next start.
 
@@ -41,34 +41,40 @@
 
 ## CLI commands
 
-Most `archon-search` ingestion commands accept `--config PATH` to point at a non-default TOML file. The `collection reindex` command is an exception — it proxies the request to the running server and accepts `--api-url` / `--api-key` instead of `--config`.
+Most `archon-search` ingestion commands accept `--config PATH` to point at a non-default TOML file. The `collection reindex` and `ingest` commands are exceptions — they proxy requests to the running server and accept `--api-url` / `--api-key` instead of `--config`.
 
 ### `archon-search ingest`
 
-One-shot ingest of a **file or directory**. Re-processes every file under `--path` on each run; this command is **not** incremental.
+One-shot ingest of a **file or directory**. Submits an async ingest job to the running archon-search server via `POST /ingest`; the server processes every file under `--path`. **Requires `archon-search serve` to be running.**
 
 ```bash
 # Ingest a directory
 archon-search ingest --path /Users/me/docs --collection docs
 
-# Ingest a single file (collection name defaults to the filename without extension)
+# Ingest a single file (collection name derived from full filename)
 archon-search ingest --path /Users/me/report.pdf
+# → collection name: "report_pdf"
+
+# Ingest and block until the job completes
+archon-search ingest --path /Users/me/docs --collection docs --wait
 ```
 
 Flags (`archon_search/cli/ingest.py`):
 
 | Flag | Default | Effect |
 | --- | --- | --- |
-| `--path PATH` | `~/.archon-search/history/sessions` (re-rooted by `ARCHON_SEARCH_DATA_DIR` to `$DATA_DIR/history/sessions` when set) | File or directory to ingest. When omitted, the CLI prints `No --path given, using default: <path>` to stdout before running. The default path is resolved lazily on every invocation via `get_data_dir()`. When `--path` points to a single file, routes directly to `pipeline.ingest_file()`; when it points to a directory, routes to `pipeline.ingest_directory()`. |
-| `--collection NAME` | Directory mode: path basename. Single-file mode: `Path(path).stem` (filename without extension). | Override the collection name. |
-| `--config PATH` | default config path | Alternative config file. |
+| `--path PATH` | **required** | File or directory to ingest. Must be provided — omitting exits `1` with `Error: --path is required.` The path is resolved to an absolute path before submission. |
+| `--collection NAME` | `path_to_collection_name(path)` — applies `archon_search.sync.path_to_collection_name` to the full filename (e.g. `report.pdf` → `"report_pdf"`). | Override the collection name. |
+| `--wait` | off | Poll `GET /jobs/{id}` until the job reaches a terminal status and print progress. Exits `1` if the job ends in a non-DONE terminal state. |
+| `--api-url URL` | `http://localhost:8765` | Base URL of the archon-search server. |
+| `--api-key KEY` | falls back to `ARCHON_SEARCH_API_KEY` env var or the key file | Bearer token for server auth. |
 
-**Large-file behaviour (E0d)**:
-- For any file > 10 MB, a pre-parse notice is printed to stderr before ingestion begins: `Parsing large file (X MB); this may take a while…`
-- When `[ingest].max_file_mb > 0` is set in TOML and the file exceeds the limit, the CLI prints the actionable error message to stderr and exits non-zero. No chunks are written.
-- Setting `max_file_mb = 0` (the default) disables the size guard — any file size is accepted.
+**Server required**: the server must be running before invoking this command. The CLI exits `1` with `"archon-search serve is not running. Start it first."` when the connection is refused.
 
-Output: `Ingest complete: <ok> ingested, <errors> errors.` (no per-file progress trail — that is `sync`'s job).
+**Large files**: the server enforces the `[ingest].max_file_mb` limit and returns `413` when a single file exceeds it; the CLI prints the error and exits `1`. No local size check is performed.
+
+Output (no `--wait`): `Ingest job submitted: <job_id>. Collection: '<name>'` plus a hint for tracking progress.
+Output (with `--wait`): same as above, plus per-poll progress and `Ingest complete for '<name>'.` on success.
 
 ### `archon-search sync`
 

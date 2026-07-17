@@ -8,6 +8,26 @@
 
 ## Changelog
 
+### [next release] — FE-5: `archon-search ingest` is now an HTTP proxy (requires server running)
+
+**Surface**: `archon-search ingest` CLI command.
+
+**Breaking changes**:
+
+1. **`--path` is now mandatory.** Previously, when `--path` was omitted the command defaulted to `~/.archon-search/history/sessions` and printed `No --path given, using default: <path>`. Now, omitting `--path` exits `1` with `Error: --path is required.` No default path fallback exists.
+
+2. **Collection name derivation changed for single files.** Previously, a single-file path derived the collection name from `Path.stem` (e.g. `docs.md` → `"docs"`). Now, `path_to_collection_name` is applied to the full filename (e.g. `docs.md` → `"docs_md"`). To preserve the old name, pass `--collection docs` explicitly.
+
+3. **Server must be running.** `archon-search ingest` now proxies the request to `POST /ingest` on the running archon-search server (default `http://localhost:8765`). The command exits `1` with `"archon-search serve is not running. Start it first."` when the server is not reachable. Previously the command ran in-process without a server.
+
+4. **`--config` option removed.** The `--config PATH` flag no longer exists. Authentication is now via `--api-key` / `ARCHON_SEARCH_API_KEY` env var / key file. The `--api-url` and `--api-key` options replace `--config`.
+
+5. **Output changed.** Previously: `Ingest complete: <ok> ingested, <errors> errors.` immediately on completion. Now: the job is submitted asynchronously and `Ingest job submitted: <job_id>. Collection: '<name>'` is printed. Use `--wait` to block until completion (prints `Ingest complete for '<name>'.`).
+
+**Migration**: scripts that call `archon-search ingest` without `--path` must add `--path`. Scripts that pass `--config` must switch to `--api-key` / `--api-url`. Scripts that relied on the single-file `Path.stem` collection name must pass `--collection <stem>` explicitly. Ensure `archon-search serve` is running before invoking `archon-search ingest`.
+
+---
+
 ### [next release] — G10: `HydeStatusDetail` and `RagFusionStatusDetail` gain `provider: str` field
 
 **Surface**: `GET /status` response — `hyde: HydeStatusDetail | null` and `rag_fusion: RagFusionStatusDetail | null` sub-objects.

@@ -80,7 +80,7 @@ def _print_failed_expired_count(server_payload: dict[str, Any]) -> None:
     if count > 0:
         click.echo(
             f"\n{count} ingest job(s) expired without completing. "
-            "Re-ingest the affected files to recover: archon-search ingest <path>"
+            "Re-ingest the affected files to recover: archon-search ingest --path <path>"
         )
 
 
