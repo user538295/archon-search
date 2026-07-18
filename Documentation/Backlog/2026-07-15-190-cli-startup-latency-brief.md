@@ -53,6 +53,7 @@ No user-visible flow change. The only observable difference:
 - [[archon_search/description_generator.py]] `[code-agent]` — `from claude_agent_sdk import ...` at line 9; fires on every pipeline import
 - [[archon_search/cli/collection.py]] `[code-agent]` — `from archon_search.pipeline import create_pipeline` at line 18
 - [[archon_search/cli/ingest.py]] `[code-agent]` — `from archon_search.pipeline import create_pipeline` at line 16
+- **Team plan:** [2026-07-15-190-cli-startup-latency-team-plan.md](./2026-07-15-190-cli-startup-latency-team-plan.md)
 
 ## Recommendation
 Build this. It is a 5-file, ~10-line change with a direct, measured impact: lightweight commands go from 1.4 seconds to under 0.2 seconds. The risk is low — moving an import inside a function changes nothing about how the code runs, only when the module is first loaded. The hardest part is not the code change; it is auditing every test that patches these modules and ensuring type-checker annotations stay intact. Do both in the same PR.
