@@ -13,13 +13,11 @@ Any user running `archon-search wizard` or `archon-search install` who enables A
 1. User completes the wizard, including answering yes to HyDE and/or RAG Fusion.
 2. Wizard writes the config and prints the install summary.
 3. Summary now includes: `• HyDE query expansion enabled` and/or `• RAG Fusion query expansion enabled` in the feature bullets list.
-4. If `log_to_stderr` was enabled, summary also shows `• Logging to stderr only (no log file)`.
 
 ## In Scope
 - Add `enable_hyde` bullet to `feature_bullets` in `_render_summary` (`install.py:689–709`) when `features.enable_hyde` is True.
 - Add `enable_rag_fusion` bullet when `features.enable_rag_fusion` is True.
-- Add `log_to_stderr` note when `features.log_to_stderr` is True.
-- Bundle with bug-001 (HyDE/RAG Fusion wizard) — same file, three-line addition in the same function.
+- Bundle with bug-001 (HyDE/RAG Fusion wizard) — same file, two-line addition in the same function.
 
 ## Out of Scope
 - Changing the wizard question or install logic (covered by bug-001 and bug-010).
@@ -32,19 +30,18 @@ Any user running `archon-search wizard` or `archon-search install` who enables A
 ## Edge Cases & Constraints
 - **Both HyDE and RAG Fusion enabled**: Print two separate bullets, not one combined line — consistent with how code and graph enrichment each get their own bullet.
 - **Provider shown in bullet**: Optionally show the provider (`• HyDE query expansion enabled (anthropic)`) so users can confirm the right provider was set. Simple string interpolation from `features.hyde_provider` if that field exists, else omit.
-- **log_to_stderr note placement**: Append after the feature bullets block, not inside it — it is a logging mode, not a feature toggle.
 
 ## Decisions
 
-- **HyDE/RAG Fusion provider in bullet:** Already resolved in code. `install.py:733–736` already prints provider-aware bullets (`f"• HyDE: enabled (provider: {features.hyde_provider})"`) and `WizardFeatures` carries `hyde_provider: str` and `rag_fusion_provider: str`. No code change needed here. **The real remaining gap is `log_to_stderr`** — no bullet exists for it in `install.py:727–749`. Add `if features.log_to_stderr: feature_bullets.append("• Logging to stderr (no log file)")`. Before shipping, do a quick pass comparing every field in `WizardFeatures` against the summary block — the brief incorrectly thought HyDE was missing, suggesting it was written from a stale code read.
+- **HyDE/RAG Fusion provider in bullet:** Already resolved in code. `install.py:733–736` already prints provider-aware bullets (`f"• HyDE: enabled (provider: {features.hyde_provider})"`) and `WizardFeatures` carries `hyde_provider: str` and `rag_fusion_provider: str`. No code change needed here. Before shipping, do a quick pass comparing every field in `WizardFeatures` against the summary block — the brief incorrectly thought HyDE was missing, suggesting it was written from a stale code read.
 - **Extras-install confirmation in summary:** Do not add anything about extras until bug-001 (which adds the `archon-search[hyde]` install step) ships. A placeholder is more confusing than helpful. Add the confirmation bullet in the same PR as bug-001.
 
 ## Future Iterations
 - A "what was changed vs previous install" diff view for re-runs (shows what the wizard changed, not just what is now enabled).
 
 ## References
-- [[archon_search/install.py:689–709]] `[code-agent]` — `_render_summary` / `feature_bullets` — confirmed missing HyDE/RAG Fusion/log_to_stderr bullets
-- [[archon_search/install.py:160–165]] `[code-agent]` — `WizardFeatures` dataclass with `log_to_stderr`, `enable_hyde`, `enable_rag_fusion` fields
+- [[archon_search/install.py:689–709]] `[code-agent]` — `_render_summary` / `feature_bullets` — confirmed missing HyDE/RAG Fusion bullets
+- [[archon_search/install.py:160–165]] `[code-agent]` — `WizardFeatures` dataclass with `enable_hyde`, `enable_rag_fusion` fields
 - [[Documentation/Backlog/bug-001-hyde-ragfusion-wizard-brief.md]] `[user]` — parent bug covering wizard install of extras and TOML write; this brief should be bundled into that PR
 
 ## Recommendation

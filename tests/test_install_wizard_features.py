@@ -187,10 +187,10 @@ class TestPromptOptionalFeatures:
 
     def test_interactive_all_yes(self) -> None:
         """All 'y' inputs (and valid choices) produce all-enabled features."""
-        # 8 questions: code(y), reranker(y=keep enabled), watch(y), telemetry(y), eager_load(y),
-        # routing_strategy("hybrid"), log_format("json"), log_to_stderr(y)
+        # 7 questions: code(y), reranker(y=keep enabled), watch(y), telemetry(y), eager_load(y),
+        # routing_strategy("hybrid"), log_format("json")
         # enable_hyde/enable_rag_fusion pre-answered False to isolate from HyDE prompt changes.
-        responses = iter(["y", "y", "y", "y", "y", "hybrid", "json", "y"])
+        responses = iter(["y", "y", "y", "y", "y", "hybrid", "json"])
         with patch("builtins.input", side_effect=responses):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -205,7 +205,6 @@ class TestPromptOptionalFeatures:
         assert features.eager_load_embedders is True
         assert features.routing_strategy == "hybrid"
         assert features.log_format == "json"
-        assert features.log_to_stderr is True
 
     def test_reranker_question_skipped_when_no_reranker(self) -> None:
         """When profile.reranker is None, disable_reranker stays False without prompting."""
@@ -256,10 +255,10 @@ class TestPromptOptionalFeatures:
         assert features == WizardFeatures()
 
     def test_invalid_log_format_retries(self) -> None:
-        """First 'bad' then 'json' → log_format='json'. The json format triggers the stderr follow-up."""
+        """First 'bad' then 'json' → log_format='json'."""
         # n(code), n(reranker), n(watch), n(telemetry), n(eager), ""(routing), "bad"(log retry 1),
-        # "json"(log retry 2), "n"(log_to_stderr follow-up triggered by json)
-        responses = iter(["n", "n", "n", "n", "n", "", "bad", "json", "n"])
+        # "json"(log retry 2)
+        responses = iter(["n", "n", "n", "n", "n", "", "bad", "json"])
         with patch("builtins.input", side_effect=responses):
             features = _prompt_optional_features(
                 non_interactive=False,
@@ -457,26 +456,24 @@ class TestWizardFeaturesC15NewFields:
     """Tests for C15 Task 1.1 — 9 new WizardFeatures fields."""
 
     def test_wizard_features_new_fields_default_to_none_or_false(self) -> None:
-        """All 9 new C15 fields have correct defaults (None or False)."""
+        """All new C15 fields have correct defaults (None or False)."""
         f = WizardFeatures()
         assert f.host is None
         assert f.port is None
         assert f.db_path is None
         assert f.log_level is None
-        assert f.log_to_stderr is False
         assert f.top_k is None
         assert f.telemetry_retention_days is None
         assert f.enable_hyde is False
         assert f.enable_rag_fusion is False
 
     def test_wizard_features_new_fields_accept_values(self) -> None:
-        """All 9 new C15 fields accept non-default values."""
+        """All new C15 fields accept non-default values."""
         f = WizardFeatures(
             host="0.0.0.0",
             port=9000,
             db_path="~/custom",
             log_level="DEBUG",
-            log_to_stderr=True,
             top_k=20,
             telemetry_retention_days=7,
             enable_hyde=True,
@@ -486,7 +483,6 @@ class TestWizardFeaturesC15NewFields:
         assert f.port == 9000
         assert f.db_path == "~/custom"
         assert f.log_level == "DEBUG"
-        assert f.log_to_stderr is True
         assert f.top_k == 20
         assert f.telemetry_retention_days == 7
         assert f.enable_hyde is True

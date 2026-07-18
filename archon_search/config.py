@@ -383,6 +383,12 @@ def load_config(path: Path | None = None, *, serve: bool = False) -> SearchConfi
         _apply_toml(config, doc)
 
     _apply_env_overrides(config)
+    if not config.log_file and os.environ.get("ARCHON_SEARCH_CONTAINER") != "1":
+        _logger.warning(
+            "[logging].log_file is set to an empty string — file logging is disabled. "
+            "To re-enable, set [logging].log_file to a path, "
+            "or set ARCHON_SEARCH_CONTAINER=1 to use stderr output instead."
+        )
     _post_process_backup(config)
     _post_process_maintenance(config)
     return config
@@ -545,11 +551,6 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         config.level = raw_level
     if "log_file" in log_cfg:
         config.log_file = str(log_cfg["log_file"])
-        if not config.log_file:
-            _logger.warning(
-                "[logging].log_file is set to an empty string — file logging is disabled. "
-                "Remove this line or set it to a path to re-enable file logging."
-            )
     if "format" in log_cfg:
         fmt = str(log_cfg["format"])
         if fmt not in {"text", "json"}:

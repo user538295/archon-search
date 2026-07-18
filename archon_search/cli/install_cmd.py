@@ -109,8 +109,6 @@ def _install_options(f: click.decorators.FC) -> click.decorators.FC:
 @click.option("--log-level",
               type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=True),
               default=None, help="Log level")
-@click.option("--log-to-stderr", is_flag=True, default=False,
-              help="Log to stderr only (sets log_file=''); canonical container combo: --log-format json --log-to-stderr")
 @click.option("--top-k", type=int, default=None, callback=_validate_top_k, is_eager=False,
               help="Number of results to return per query (default: 5; valid: 1–100)")
 @click.option("--telemetry-retention-days", type=click.IntRange(min=1), default=None,
@@ -144,7 +142,6 @@ def wizard(
     port: int | None,
     db_path: str | None,
     log_level: str | None,
-    log_to_stderr: bool,
     top_k: int | None,
     telemetry_retention_days: int | None,
     enable_hyde: bool,
@@ -187,7 +184,6 @@ def wizard(
             port=port,
             db_path=db_path,
             log_level=log_level,
-            log_to_stderr=log_to_stderr,
             top_k=top_k,
             telemetry_retention_days=telemetry_retention_days,
             enable_hyde=enable_hyde,

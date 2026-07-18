@@ -268,16 +268,6 @@ Log format (text/json) [text]:
 
 Type `text` or `json`, or press Enter to keep the default.
 
-**Conditional follow-up when you select `json`:**
-
-```
-Log to stderr only? [y/N]:
-  Routes all log output to stderr instead of a file.
-  Canonical container combo: --log-format json --log-to-stderr.
-```
-
-If you answer `y`, archon-search sets `log_file = ""` in the config, which routes all log output to stderr only (no log file written). This is the canonical container logging pattern. The follow-up is skipped if you pass `--log-to-stderr` (or `--log-format json --non-interactive`).
-
 #### 5h. AI query expansion (HyDE + RAG Fusion)
 
 This prompt is **always shown** (no API key precondition). **G10**
@@ -464,7 +454,6 @@ All flags for the `wizard` command:
 | `--port INTEGER` | Not set (uses `8765`) | HTTP port. Valid range: 1–65535. Port conflicts are not detected at wizard time; the OS will report an error at service start. |
 | `--db-path PATH` | Not set (uses `~/.archon-search/search`) | Database directory. The tilde is written as-is to the config file; `config.py` expands it at use sites. The wizard creates the directory (including parent dirs) and checks writability. If the existing config uses a different path, a migration note is printed. |
 | `--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}` | Not set (uses `INFO`) | Server log level. Case-sensitive. |
-| `--log-to-stderr` | False (flag) | Set `log_file = ""` in config, routing all logs to stderr only. Canonical container combo with `--log-format json`. |
 | `--top-k INTEGER` | Not set (uses `5`) | Number of results returned per query (`top_k_return`). Valid range: 1–100. Values > 100 are rejected with a message to edit TOML directly. The wizard also sets `top_k_retrieve = max(15, 3 × top_k)` automatically. This flag is flags-only; no interactive prompt. A hint appears in the "Next steps" block. |
 | `--telemetry-retention-days INTEGER` | Not set (uses `30`) | Days before telemetry log files are pruned. Must be ≥ 1. Only written to TOML when `--telemetry` is also passed; passing it without `--telemetry` prints a warning on stderr and writes nothing. |
 | **Tier 2 AI flags** | | |
@@ -494,7 +483,6 @@ Pass `--non-interactive` to run the wizard without any prompts. Combined with fe
 | Eager load | Disabled |
 | Routing strategy | `centroid` |
 | Log format | `text` |
-| Log to stderr follow-up | Skipped (use `--log-to-stderr` flag) |
 | AI query expansion (HyDE/RAG Fusion) | Skipped (use `--enable-hyde --enable-rag-fusion` to enable; configure provider in TOML or re-run the interactive wizard) |
 | GPU acceleration | Auto-enabled if detected |
 | Jina license | Declined (install aborts for multilingual balanced/max unless `--accept-jina-license` is passed) |
@@ -544,7 +532,6 @@ archon-search wizard \
   --port 9000 \
   --db-path /data/archon-search \
   --log-format json \
-  --log-to-stderr \
   --log-level INFO \
   --disable-gpu
 ```
@@ -640,7 +627,6 @@ The wizard writes to `~/.archon-search/archon-search.toml`. The following table 
 |---|---|---|
 | Log format (json only) | `format` | `"json"` |
 | `--log-level TEXT` | `level` | `"DEBUG"` |
-| `--log-to-stderr` | `log_file` | `""` (empty = stderr only) |
 
 ### `[hyde]` section
 
@@ -692,7 +678,7 @@ log_file = "~/.archon-search/logs/archon-search.log"
 backup_count = 7
 ```
 
-The wizard can set `level` (via `--log-level`), `format` (via `--log-format`), and `log_file = ""` (via `--log-to-stderr`), but not the explicit file path or rotation policy. To use a custom log file location, edit `[logging].log_file` directly.
+The wizard can set `level` (via `--log-level`) and `format` (via `--log-format`), but not the explicit file path or rotation policy. To use a custom log file location, edit `[logging].log_file` directly.
 
 ### Routing tuning parameters
 

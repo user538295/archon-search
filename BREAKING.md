@@ -8,6 +8,19 @@
 
 ## Changelog
 
+### [next release] — Removed `--log-to-stderr` wizard flag (2026-07-18)
+
+**What changed:** The `--log-to-stderr` flag and interactive wizard prompt have been removed.
+`WizardFeatures.log_to_stderr` field is also removed.
+
+**Why:** The flag's sole effect was setting `log_file = ""` in the generated TOML config,
+which disabled file logging. This was a bug (brief 2026-07-15-160). After the bug fix,
+the flag became an inert no-op, so it was removed rather than shipping a dead control.
+
+**Migration:** For stderr-only logging in containers, set `ARCHON_SEARCH_CONTAINER=1` in
+the service environment (already the canonical mechanism). For intentional file-logging
+opt-out, set `[logging] log_file = ""` directly in `archon-search.toml`.
+
 ### [next release] — CSP120: `archon-search collection add`, `collection reindex`, and `sync` are now HTTP proxies (require server running)
 
 **Surface**: `archon-search collection add`, `archon-search collection reindex`, and `archon-search sync` CLI commands.

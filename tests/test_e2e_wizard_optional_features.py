@@ -1305,18 +1305,6 @@ def test_wizard_log_level_invalid_rejects(runner: CliRunner, tmp_path: Path) -> 
 
 
 @pytest.mark.integration
-def test_wizard_log_to_stderr_does_not_disable_log_file(runner: CliRunner, tmp_path: Path) -> None:
-    """--log-to-stderr must NOT write log_file = '' — file logging must stay on."""
-    config_path = tmp_path / "archon-search.toml"
-    with _patched_wizard():
-        result = runner.invoke(main, _wizard_args(config_path, "--log-to-stderr"))
-    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
-    doc = tomlkit.parse(config_path.read_text())
-    log_file_val = doc.get("logging", {}).get("log_file")
-    assert log_file_val != "", f"log_file must not be '' when --log-to-stderr is passed; got {log_file_val!r}"
-
-
-@pytest.mark.integration
 def test_wizard_top_k_writes_both_keys(runner: CliRunner, tmp_path: Path) -> None:
     """--top-k 20 writes top_k_return=20 and top_k_retrieve=60."""
     config_path = tmp_path / "archon-search.toml"
@@ -1424,87 +1412,6 @@ def test_wizard_explicit_default_value_writes_to_toml(runner: CliRunner, tmp_pat
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     doc = tomlkit.parse(config_path.read_text())
     assert doc["server"]["port"] == 8765
-
-
-@pytest.mark.integration
-def test_wizard_log_format_json_prompts_log_to_stderr(runner: CliRunner, tmp_path: Path) -> None:
-    """Interactive mode: log-format json triggers 'Log to stderr only?' follow-up prompt; y does NOT disable log_file."""
-    config_path = tmp_path / "archon-search.toml"
-    # Input order: multilingual, code, reranker, watch, telemetry, eager, routing, log-format=json, stderr=y, HyDE/RAG Fusion=n, proceed
-    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "json", "y", "n", "y"]) + "\n"
-    with _no_anthropic_key():
-        with _patched_wizard():
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "minimal",
-                    "--config", str(config_path),
-                    "--skip-preload",
-                ],
-                input=stdin_responses,
-            )
-    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
-    doc = tomlkit.parse(config_path.read_text())
-    log_file_val = doc.get("logging", {}).get("log_file")
-    assert log_file_val != "", f"log_file must not be '' when stderr prompt answered y; got {log_file_val!r}"
-
-
-@pytest.mark.integration
-def test_wizard_log_format_text_does_not_prompt_log_to_stderr(runner: CliRunner, tmp_path: Path) -> None:
-    """Interactive mode: log-format text does NOT show stderr follow-up prompt."""
-    config_path = tmp_path / "archon-search.toml"
-    # Input order: multilingual, code, reranker, watch, telemetry, eager, routing, log-format=text, HyDE/RAG Fusion=n, proceed
-    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "text", "n", "y"]) + "\n"
-    with _no_anthropic_key():
-        with _patched_wizard():
-            result = runner.invoke(
-                main,
-                [
-                    "wizard",
-                    "--profile", "minimal",
-                    "--config", str(config_path),
-                    "--skip-preload",
-                ],
-                input=stdin_responses,
-            )
-    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
-    assert "stderr" not in result.output.lower() or "Log to stderr" not in result.output, (
-        f"Stderr prompt should not appear for text log format. Output: {result.output}"
-    )
-
-
-@pytest.mark.integration
-def test_wizard_non_interactive_json_does_not_prompt_log_to_stderr(runner: CliRunner, tmp_path: Path) -> None:
-    """--log-format json --non-interactive: no stderr prompt, log_file NOT set to '' (flag not passed)."""
-    config_path = tmp_path / "archon-search.toml"
-    with _patched_wizard():
-        result = runner.invoke(
-            main, _wizard_args(config_path, "--log-format", "json")
-        )
-    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
-    doc = tomlkit.parse(config_path.read_text())
-    # The profile template includes a default log_file path; what must NOT happen is
-    # log_file being set to "" (which only occurs when --log-to-stderr is enabled).
-    log_file_val = doc.get("logging", {}).get("log_file")
-    assert log_file_val != "", (
-        "log_file should not be '' in non-interactive mode without --log-to-stderr; "
-        f"got: {log_file_val!r}"
-    )
-
-
-@pytest.mark.integration
-def test_wizard_log_to_stderr_flag_bypasses_conditional_prompt(runner: CliRunner, tmp_path: Path) -> None:
-    """--log-format json --log-to-stderr --non-interactive: log_file must NOT be disabled."""
-    config_path = tmp_path / "archon-search.toml"
-    with _patched_wizard():
-        result = runner.invoke(
-            main, _wizard_args(config_path, "--log-format", "json", "--log-to-stderr")
-        )
-    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
-    doc = tomlkit.parse(config_path.read_text())
-    log_file_val = doc.get("logging", {}).get("log_file")
-    assert log_file_val != "", f"log_file must not be '' with --log-to-stderr; got {log_file_val!r}"
 
 
 @pytest.mark.integration

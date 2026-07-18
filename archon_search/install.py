@@ -159,7 +159,6 @@ class WizardFeatures:
     port: int | None = None
     db_path: str | None = None
     log_level: str | None = None
-    log_to_stderr: bool = False
     top_k: int | None = None
     telemetry_retention_days: int | None = None
     # C15 Tier 2 AI query expansion flags
@@ -1154,7 +1153,6 @@ def _prompt_optional_features(
     eager_load: bool | None = None,
     routing_strategy: str | None = None,
     log_format: str | None = None,
-    log_to_stderr: bool | None = None,
     enable_hyde: bool | None = None,
     enable_rag_fusion: bool | None = None,
     hyde_ollama_base_url_default: str = OLLAMA_BASE_URL_DEFAULT,
@@ -1311,21 +1309,6 @@ def _prompt_optional_features(
             default="text",
         )
 
-    # --- log_to_stderr conditional follow-up ---
-    # Only prompt when: json format chosen interactively AND not already answered by flag.
-    if log_to_stderr is not None:
-        # Flag pre-answered — use it directly
-        _log_to_stderr_val = log_to_stderr
-    elif _log_format_val == "json" and not non_interactive:
-        print(
-            "\nLog to stderr only?\n"
-            "  Routes all log output to stderr instead of a file.\n"
-            "  Canonical container combo: --log-format json --log-to-stderr."
-        )
-        _log_to_stderr_val = _ask_yn("Log to stderr only? [y/N]: ")
-    else:
-        _log_to_stderr_val = False
-
     # --- HyDE / RAG Fusion (C15 Tier 2 / G10 BE-8) ---
     # No API key gate — prompt whenever interactive and not pre-answered.
     _hyde_provider_val = "anthropic"
@@ -1383,7 +1366,6 @@ def _prompt_optional_features(
         eager_load_embedders=_eager_load_val,
         routing_strategy=_routing_val,
         log_format=_log_format_val,
-        log_to_stderr=_log_to_stderr_val,
         enable_hyde=_enable_hyde_val,
         enable_rag_fusion=_enable_rag_fusion_val,
         hyde_provider=_hyde_provider_val,
@@ -1986,7 +1968,6 @@ class SearchInstaller:
         port: int | None = None,
         db_path: str | None = None,
         log_level: str | None = None,
-        log_to_stderr: bool = False,
         top_k: int | None = None,
         telemetry_retention_days: int | None = None,
         # C15 Tier 2 AI query expansion flags
@@ -2061,7 +2042,6 @@ class SearchInstaller:
                 eager_load=eager_load,
                 routing_strategy=routing_strategy,
                 log_format=log_format,
-                log_to_stderr=log_to_stderr if log_to_stderr else None,
                 enable_hyde=enable_hyde if enable_hyde else None,
                 enable_rag_fusion=enable_rag_fusion if enable_rag_fusion else None,
                 hyde_ollama_base_url_default=self.cfg.hyde.ollama_base_url,
@@ -2077,8 +2057,6 @@ class SearchInstaller:
                 features.port = port
             if log_level is not None:
                 features.log_level = log_level
-            if log_to_stderr:
-                features.log_to_stderr = log_to_stderr
             if top_k is not None:
                 features.top_k = top_k
             if telemetry_retention_days is not None:

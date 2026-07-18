@@ -137,18 +137,6 @@ def test_run_passes_log_level_to_features(tmp_path: Path) -> None:
     assert doc["logging"]["level"] == "DEBUG"
 
 
-def test_run_passes_log_to_stderr_to_features(tmp_path: Path) -> None:
-    """run(log_to_stderr=True) → log_file must NOT be disabled (file logging stays on)."""
-    import tomlkit
-
-    rc, config_path = _run_installer(tmp_path, {"log_to_stderr": True})
-
-    assert rc == 0
-    doc = tomlkit.parse(config_path.read_text())
-    log_file_val = doc.get("logging", {}).get("log_file")
-    assert log_file_val != "", f"log_file must not be '' with log_to_stderr=True; got {log_file_val!r}"
-
-
 def test_run_passes_enable_hyde_to_features(tmp_path: Path) -> None:
     """run(enable_hyde=True) → [hyde].enabled = true written to TOML."""
     import tomlkit

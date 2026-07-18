@@ -814,6 +814,7 @@ def test_logging_log_file_empty_string_allowed(tmp_path: Path, monkeypatch: pyte
 def test_logging_log_file_empty_string_warns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """[logging].log_file = '' must emit a WARNING so operators know file logging is disabled."""
     monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
     toml_file = tmp_path / "cfg.toml"
     toml_file.write_text('[logging]\nlog_file = ""\n', encoding="utf-8")
     import logging
@@ -822,6 +823,37 @@ def test_logging_log_file_empty_string_warns(tmp_path: Path, monkeypatch: pytest
     assert any("log_file" in r.message and r.levelno == logging.WARNING for r in caplog.records), (
         f"Expected a WARNING about empty log_file, got: {[r.message for r in caplog.records]}"
     )
+
+
+def test_logging_log_file_empty_string_no_warn_in_container_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """log_file='' must NOT warn when ARCHON_SEARCH_CONTAINER=1 (intentional container mode)."""
+    import logging
+
+    monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[logging]\nlog_file = ""\n', encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        load_config(path=toml_file)
+    assert not any("log_file" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+
+
+def test_logging_log_file_empty_string_no_warn_when_data_dir_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """log_file='' in TOML must NOT warn when ARCHON_SEARCH_DATA_DIR overrides it to a real path."""
+    import logging
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[logging]\nlog_file = ""\n', encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        config = load_config(path=toml_file)
+    assert not any("log_file" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+    assert config.log_file, f"DATA_DIR should have set a real log_file path; got {config.log_file!r}"
 
 
 def test_logging_toml_key_format_maps_to_log_format_field(tmp_path: Path) -> None:
