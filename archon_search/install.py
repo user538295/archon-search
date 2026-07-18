@@ -306,10 +306,6 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         _ensure_section("logging")
         doc["logging"]["level"] = features.log_level
 
-    if features.log_to_stderr:
-        _ensure_section("logging")
-        doc["logging"]["log_file"] = ""
-
     if features.top_k is not None:
         _ensure_section("database")
         doc["database"]["top_k_return"] = features.top_k

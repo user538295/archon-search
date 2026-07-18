@@ -370,13 +370,14 @@ class TestApplyWizardFeaturesToToml:
         _apply_wizard_features_to_toml(doc, WizardFeatures(log_level="DEBUG"))
         assert doc["logging"]["level"] == "DEBUG"
 
-    def test_apply_log_to_stderr_writes_log_file_empty(self) -> None:
-        """log_to_stderr=True writes doc['logging']['log_file'] = ''."""
+    def test_apply_log_to_stderr_true_does_not_write_log_file(self) -> None:
+        """log_to_stderr=True must NOT write log_file — file logging stays on."""
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = self._empty_doc()
         _apply_wizard_features_to_toml(doc, WizardFeatures(log_to_stderr=True))
-        assert doc["logging"]["log_file"] == ""
+        if "logging" in doc:
+            assert "log_file" not in doc["logging"]
 
     def test_apply_log_to_stderr_false_does_not_write_log_file(self) -> None:
         """log_to_stderr=False does not write log_file key."""
@@ -486,7 +487,7 @@ class TestApplyWizardFeaturesToToml:
         assert doc["database"]["top_k_return"] == 20
         assert doc["database"]["top_k_retrieve"] == 60
         assert doc["logging"]["level"] == "WARNING"
-        assert doc["logging"]["log_file"] == ""
+        assert "log_file" not in doc["logging"]  # log_to_stderr no longer disables file logging
         assert doc["telemetry"]["retention_days"] == 14
         assert doc["hyde"]["enabled"] is True
         assert doc["rag_fusion"]["enabled"] is True

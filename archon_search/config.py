@@ -545,6 +545,11 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         config.level = raw_level
     if "log_file" in log_cfg:
         config.log_file = str(log_cfg["log_file"])
+        if not config.log_file:
+            _logger.warning(
+                "[logging].log_file is set to an empty string — file logging is disabled. "
+                "Remove this line or set it to a path to re-enable file logging."
+            )
     if "format" in log_cfg:
         fmt = str(log_cfg["format"])
         if fmt not in {"text", "json"}:

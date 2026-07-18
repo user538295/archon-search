@@ -811,6 +811,19 @@ def test_logging_log_file_empty_string_allowed(tmp_path: Path, monkeypatch: pyte
     assert config.log_file == ""
 
 
+def test_logging_log_file_empty_string_warns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """[logging].log_file = '' must emit a WARNING so operators know file logging is disabled."""
+    monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[logging]\nlog_file = ""\n', encoding="utf-8")
+    import logging
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        load_config(path=toml_file)
+    assert any("log_file" in r.message and r.levelno == logging.WARNING for r in caplog.records), (
+        f"Expected a WARNING about empty log_file, got: {[r.message for r in caplog.records]}"
+    )
+
+
 def test_logging_toml_key_format_maps_to_log_format_field(tmp_path: Path) -> None:
     toml_file = tmp_path / "cfg.toml"
     toml_file.write_text('[logging]\nformat = "text"\n', encoding="utf-8")
