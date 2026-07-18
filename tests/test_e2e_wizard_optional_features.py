@@ -1553,15 +1553,15 @@ def test_wizard_enable_rag_fusion_works_without_anthropic_key(runner: CliRunner,
 
 @pytest.mark.integration
 def test_wizard_non_interactive_skips_hyde_prompt_even_with_key(runner: CliRunner, tmp_path: Path) -> None:
-    """--non-interactive with ANTHROPIC_API_KEY set: neither [hyde] nor [rag_fusion] in TOML."""
+    """--non-interactive with ANTHROPIC_API_KEY set: [hyde] and [rag_fusion] written with enabled=false."""
     config_path = tmp_path / "archon-search.toml"
     with _patched_wizard():
         with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
             result = runner.invoke(main, _wizard_args(config_path))
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     doc = tomlkit.parse(config_path.read_text())
-    assert "enabled" not in doc.get("hyde", {}), "hyde.enabled should not be written in non-interactive mode"
-    assert "enabled" not in doc.get("rag_fusion", {}), "rag_fusion.enabled should not be written"
+    assert doc["hyde"]["enabled"] is False
+    assert doc["rag_fusion"]["enabled"] is False
 
 
 @pytest.mark.integration

@@ -219,13 +219,16 @@ class TestApplyWizardFeaturesToToml:
     def _empty_doc(self) -> tomlkit.TOMLDocument:
         return tomlkit.document()
 
-    def test_apply_defaults_writes_nothing(self) -> None:
-        """WizardFeatures() with all defaults leaves the document unchanged."""
+    def test_apply_defaults_writes_only_hyde_and_rag_fusion_disabled(self) -> None:
+        """WizardFeatures() always writes [hyde]/[rag_fusion] with enabled=false."""
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = self._empty_doc()
         _apply_wizard_features_to_toml(doc, WizardFeatures())
-        assert len(doc) == 0
+        assert doc["hyde"]["enabled"] is False
+        assert doc["rag_fusion"]["enabled"] is False
+        # No other sections written for default features
+        assert set(doc.keys()) == {"hyde", "rag_fusion"}
 
     def test_apply_disable_reranker(self) -> None:
         """disable_reranker=True writes doc['database']['reranker_model'] = ''."""
@@ -314,13 +317,11 @@ class TestApplyWizardFeaturesToToml:
 
         doc = self._empty_doc()
         _apply_wizard_features_to_toml(doc, WizardFeatures(install_code_extra=True))
-        # doc should remain empty — install_code_extra is not a config key
-        assert len(doc) == 0
         doc_str = tomlkit.dumps(doc)
         assert "install_code_extra" not in doc_str
 
     def test_apply_install_multilingual_extra_not_written_to_toml(self) -> None:
-        """WizardFeatures(install_multilingual_extra=True) writes no key — it controls a subprocess install.
+        """WizardFeatures(install_multilingual_extra=True) writes no 'install_multilingual_extra' key.
 
         The multilingual state the server reads is [database].multilingual, written
         separately from the profile. The install flag itself is not a config key.
@@ -329,7 +330,6 @@ class TestApplyWizardFeaturesToToml:
 
         doc = self._empty_doc()
         _apply_wizard_features_to_toml(doc, WizardFeatures(install_multilingual_extra=True))
-        assert len(doc) == 0
         assert "install_multilingual_extra" not in tomlkit.dumps(doc)
 
     # --- Task C15-1.2 tests ---
@@ -486,6 +486,48 @@ class TestApplyWizardFeaturesToToml:
         assert doc["telemetry"]["retention_days"] == 14
         assert doc["hyde"]["enabled"] is True
         assert doc["rag_fusion"]["enabled"] is True
+
+    def test_apply_hyde_false_writes_enabled_false(self) -> None:
+        """enable_hyde=False writes doc['hyde']['enabled'] = False (creates section if absent)."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(enable_hyde=False))
+        assert doc["hyde"]["enabled"] is False
+
+    def test_apply_rag_fusion_false_writes_enabled_false(self) -> None:
+        """enable_rag_fusion=False writes doc['rag_fusion']['enabled'] = False."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(enable_rag_fusion=False))
+        assert doc["rag_fusion"]["enabled"] is False
+
+    def test_rerun_disable_hyde_overwrites_existing_true(self) -> None:
+        """Re-run with enable_hyde=False overwrites a previously written enabled = true."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.parse("[hyde]\nenabled = true\n")
+        _apply_wizard_features_to_toml(doc, WizardFeatures(enable_hyde=False))
+        assert doc["hyde"]["enabled"] is False
+
+    def test_rerun_disable_rag_fusion_overwrites_existing_true(self) -> None:
+        """Re-run with enable_rag_fusion=False overwrites a previously written enabled = true."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.parse("[rag_fusion]\nenabled = true\n")
+        _apply_wizard_features_to_toml(doc, WizardFeatures(enable_rag_fusion=False))
+        assert doc["rag_fusion"]["enabled"] is False
+
+    def test_disable_hyde_preserves_other_keys(self) -> None:
+        """Disabling HyDE writes enabled=false but leaves provider/model intact."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.parse('[hyde]\nenabled = true\nprovider = "ollama"\nmodel = "llama3"\n')
+        _apply_wizard_features_to_toml(doc, WizardFeatures(enable_hyde=False))
+        assert doc["hyde"]["enabled"] is False
+        assert doc["hyde"]["provider"] == "ollama"
+        assert doc["hyde"]["model"] == "llama3"
 
 
 # ---------------------------------------------------------------------------

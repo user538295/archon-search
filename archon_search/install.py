@@ -248,10 +248,12 @@ def _reconcile_ollama_base_url(section: tomlkit.items.Table, base_url: str) -> N
 
 
 def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFeatures) -> None:
-    """Write non-default WizardFeatures fields to *doc* in-place.
+    """Write WizardFeatures fields to *doc* in-place.
 
-    Only fields that differ from WizardFeatures defaults are written, to avoid
-    TOML clutter for basic installs. Missing sections are created via tomlkit.table().
+    Most optional-flag fields are written only when non-default. Exceptions:
+    ``[hyde].enabled`` and ``[rag_fusion].enabled`` are ALWAYS written (true or
+    false) so a re-run that disables a previously enabled feature overwrites it
+    in the config file. Missing sections are created via tomlkit.table().
     ``install_code_extra`` itself is intentionally NOT written — it controls a
     subprocess install, not a config key. ``install_graph_extra`` also controls a
     subprocess install, but additionally writes ``graph.enabled = true`` (BE-11):
@@ -339,6 +341,9 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
                 doc["hyde"]["model"] = features.hyde_model
                 if features.hyde_provider == "ollama":
                     _reconcile_ollama_base_url(doc["hyde"], features.hyde_ollama_base_url)
+    else:
+        _ensure_section("hyde")
+        doc["hyde"]["enabled"] = False
 
     if features.enable_rag_fusion:
         _ensure_section("rag_fusion")
@@ -356,6 +361,9 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
                 doc["rag_fusion"]["model"] = features.rag_fusion_model
                 if features.rag_fusion_provider == "ollama":
                     _reconcile_ollama_base_url(doc["rag_fusion"], features.rag_fusion_ollama_base_url)
+    else:
+        _ensure_section("rag_fusion")
+        doc["rag_fusion"]["enabled"] = False
 
     # BE-11: [graph] enabled must be written whenever the [graph] extras were
     # auto-installed, or the install is inert — see C1-I-1 / C1-A-4.

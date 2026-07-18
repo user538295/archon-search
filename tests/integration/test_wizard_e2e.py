@@ -205,10 +205,11 @@ def test_wizard_non_interactive_hyde_accepted_writes_toml(
 def test_wizard_non_interactive_hyde_declined_omits_toml_key(
     tmp_path: Path,
 ) -> None:
-    """wizard --non-interactive without --enable-hyde omits [hyde] from TOML.
+    """wizard --non-interactive without --enable-hyde writes [hyde] enabled=false.
 
-    Verifies that HyDE is disabled by default and the wizard does not write
-    [hyde] to the config when the flag is absent.
+    Verifies that HyDE is disabled by default and the wizard writes
+    enabled=false to [hyde] so a re-run that disables a previously enabled
+    feature always wins over whatever was written before.
     """
     result = _run_wizard(
         tmp_path,
@@ -226,11 +227,12 @@ def test_wizard_non_interactive_hyde_declined_omits_toml_key(
 
     import tomlkit
     doc = tomlkit.parse(config_path.read_text())
-    assert "hyde" not in doc, (
-        f"Expected no [hyde] section in TOML (hyde not requested), "
+    assert doc["hyde"]["enabled"] is False, (
+        f"Expected [hyde].enabled=false (wizard 'no' path), "
         f"but found: {dict(doc.get('hyde', {}))}\n"
         f"TOML contents:\n{config_path.read_text()}"
     )
+    assert doc["rag_fusion"]["enabled"] is False
 
 
 # ---------------------------------------------------------------------------
