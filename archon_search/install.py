@@ -250,10 +250,9 @@ def _reconcile_ollama_base_url(section: tomlkit.items.Table, base_url: str) -> N
 def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFeatures) -> None:
     """Write WizardFeatures fields to *doc* in-place.
 
-    Most optional-flag fields are written only when non-default. Exceptions:
-    ``[hyde].enabled`` and ``[rag_fusion].enabled`` are ALWAYS written (true or
-    false) so a re-run that disables a previously enabled feature overwrites it
-    in the config file. Missing sections are created via tomlkit.table().
+    Re-run safe: every wizard-configurable field is ALWAYS written (true, false,
+    or its exact value) so a re-run that changes any setting always overwrites the
+    old value. Missing sections are created via tomlkit.table().
     ``install_code_extra`` itself is intentionally NOT written — it controls a
     subprocess install, not a config key. ``install_graph_extra`` also controls a
     subprocess install, but additionally writes ``graph.enabled = true`` (BE-11):
@@ -272,25 +271,20 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         _ensure_section("database")
         doc["database"]["reranker_model"] = ""
 
-    if features.eager_load_embedders:
-        _ensure_section("database")
-        doc["database"]["eager_load_embedders"] = True
+    _ensure_section("database")
+    doc["database"]["eager_load_embedders"] = features.eager_load_embedders
 
-    if features.enable_watch:
-        _ensure_section("collections")
-        doc["collections"]["watch"] = True
+    _ensure_section("collections")
+    doc["collections"]["watch"] = features.enable_watch
 
-    if features.enable_telemetry:
-        _ensure_section("telemetry")
-        doc["telemetry"]["enabled"] = True
+    _ensure_section("telemetry")
+    doc["telemetry"]["enabled"] = features.enable_telemetry
 
-    if features.routing_strategy != "centroid":
-        _ensure_section("routing")
-        doc["routing"]["routing_strategy"] = features.routing_strategy
+    _ensure_section("routing")
+    doc["routing"]["routing_strategy"] = features.routing_strategy
 
-    if features.log_format != "text":
-        _ensure_section("logging")
-        doc["logging"]["format"] = features.log_format
+    _ensure_section("logging")
+    doc["logging"]["format"] = features.log_format
 
     # C15 Tier 1 deployment flags
     if features.host is not None:

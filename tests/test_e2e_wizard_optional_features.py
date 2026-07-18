@@ -192,13 +192,11 @@ def test_e2e_defaults_produce_clean_config(runner: CliRunner, tmp_path: Path) ->
     assert config_path.exists()
     doc = tomlkit.parse(config_path.read_text())
 
-    # Optional wizard-added keys must not be written beyond profile defaults:
-    # - telemetry section and routing_strategy are not in the default profile
-    assert "enabled" not in doc.get("telemetry", {}), "telemetry.enabled should not be present"
-    assert "routing_strategy" not in doc.get("routing", {}), "routing_strategy should not be present"
-    # watch is in the profile template but should default to false
+    # Brief 150: all wizard-configurable keys are always written with their defaults.
+    assert doc.get("telemetry", {}).get("enabled") is False, "telemetry.enabled should be false"
+    assert doc.get("routing", {}).get("routing_strategy") == "centroid", "routing_strategy should default to centroid"
+    # watch and logging.format were already in the profile template:
     assert doc.get("collections", {}).get("watch") is False, "watch should default to false"
-    # logging.format is in the profile template at 'text'
     assert doc.get("logging", {}).get("format") == "text", "logging.format should default to text"
 
 
