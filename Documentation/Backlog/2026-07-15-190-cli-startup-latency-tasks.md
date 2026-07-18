@@ -67,7 +67,7 @@ flowchart LR
         - #unit_test — `test_imports_cleanly_with_sdk_absent` — `monkeypatch.setitem(sys.modules, "claude_agent_sdk", None)` + restore in `finally`; import `archon_search.description_generator`; assert no `ImportError` raised (S5; uses xdist-safe setitem pattern from learnings)
         - #integration_test — `test_call_haiku_imports_sdk_inside_function` — patch `claude_agent_sdk.ClaudeSDKClient` (retargeted from `archon_search.description_generator.ClaudeSDKClient` per [tests/test_description_generator.py](../../tests/test_description_generator.py):35,73); call `_call_haiku()`; assert patched client was constructed and called (S4)
 
-- [ ] **BE-2** — Move `run_server` import into `serve()` in [archon_search/cli/serve.py](../../archon_search/cli/serve.py) and retarget 11 patches in [tests/test_cli_serve.py](../../tests/test_cli_serve.py) #backend-role
+- [x] **BE-2** — Move `run_server` import into `serve()` in [archon_search/cli/serve.py](../../archon_search/cli/serve.py) and retarget 11 patches in [tests/test_cli_serve.py](../../tests/test_cli_serve.py) #backend-role
     - Presentation · 3.0h
     - needs K1 · completes S2, S9, S10, C1
     - Tests

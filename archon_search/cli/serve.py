@@ -22,7 +22,6 @@ from pathlib import Path
 import click
 
 from archon_search.config import ConfigError, load_config
-from archon_search.server.app import run_server
 
 logger = logging.getLogger(__name__)
 
@@ -52,5 +51,7 @@ def serve(config_path: Path | None) -> None:
 
     if os.environ.get("ARCHON_SEARCH_DATA_DIR") and not os.environ.get("ARCHON_SEARCH_CONFIG"):
         logger.warning(_CONTAINER_COLLECTION_WARNING)
+
+    from archon_search.server.app import run_server  # noqa: PLC0415
 
     run_server(config)

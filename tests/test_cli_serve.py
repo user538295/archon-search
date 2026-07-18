@@ -41,7 +41,7 @@ def test_serve_calls_run_server(runner: CliRunner) -> None:
     cfg = _config_with_host("0.0.0.0")
     with (
         patch("archon_search.cli.serve.load_config", return_value=cfg) as mock_load,
-        patch("archon_search.cli.serve.run_server") as mock_run,
+        patch("archon_search.server.app.run_server") as mock_run,
     ):
         result = runner.invoke(main, ["serve"])
     assert result.exit_code == 0, result.output
@@ -54,7 +54,7 @@ def test_serve_uses_serve_load_config(runner: CliRunner) -> None:
     cfg = _config_with_host("0.0.0.0")
     with (
         patch("archon_search.cli.serve.load_config", return_value=cfg) as mock_load,
-        patch("archon_search.cli.serve.run_server"),
+        patch("archon_search.server.app.run_server"),
     ):
         result = runner.invoke(main, ["serve"])
     assert result.exit_code == 0, result.output
@@ -77,7 +77,7 @@ def test_serve_host_defaults_to_0000(
     # Real load_config — but force the config path to a non-existent file inside tmp_path
     # so no TOML is read (load_config falls through `FileNotFoundError`).
     nonexistent = tmp_path / "nonexistent.toml"
-    with patch("archon_search.cli.serve.run_server", side_effect=_capture):
+    with patch("archon_search.server.app.run_server", side_effect=_capture):
         result = runner.invoke(main, ["serve", "--config", str(nonexistent)])
     assert result.exit_code == 0, result.output
     assert captured["cfg"].host == "0.0.0.0"
@@ -96,7 +96,7 @@ def test_serve_respects_host_env_var(
         captured["cfg"] = cfg
 
     nonexistent = tmp_path / "nonexistent.toml"
-    with patch("archon_search.cli.serve.run_server", side_effect=_capture):
+    with patch("archon_search.server.app.run_server", side_effect=_capture):
         result = runner.invoke(main, ["serve", "--config", str(nonexistent)])
     assert result.exit_code == 0, result.output
     assert captured["cfg"].host == "192.168.1.1"
@@ -116,7 +116,7 @@ def test_serve_forwards_config_path_to_load_config(
     cfg = _config_with_host("0.0.0.0")
     with (
         patch("archon_search.cli.serve.load_config", return_value=cfg) as mock_load,
-        patch("archon_search.cli.serve.run_server"),
+        patch("archon_search.server.app.run_server"),
     ):
         result = runner.invoke(main, ["serve", "--config", str(config_file)])
     assert result.exit_code == 0, result.output
@@ -133,7 +133,7 @@ def test_serve_config_error_exits_nonzero(
     """
     bad_config = tmp_path / "bad.toml"
     bad_config.write_text("[broken")  # malformed TOML
-    with patch("archon_search.cli.serve.run_server") as mock_run:
+    with patch("archon_search.server.app.run_server") as mock_run:
         result = runner.invoke(main, ["serve", "--config", str(bad_config)])
     assert result.exit_code != 0
     assert "Error" in result.output or "error" in result.output.lower()
@@ -147,7 +147,7 @@ def test_serve_config_error_message_propagated(runner: CliRunner) -> None:
             "archon_search.cli.serve.load_config",
             side_effect=ConfigError("port out of range"),
         ),
-        patch("archon_search.cli.serve.run_server") as mock_run,
+        patch("archon_search.server.app.run_server") as mock_run,
     ):
         result = runner.invoke(main, ["serve"])
     assert result.exit_code != 0
@@ -160,7 +160,7 @@ def test_serve_does_not_call_service_management(runner: CliRunner) -> None:
     cfg = _config_with_host("0.0.0.0")
     with (
         patch("archon_search.cli.serve.load_config", return_value=cfg),
-        patch("archon_search.cli.serve.run_server"),
+        patch("archon_search.server.app.run_server"),
         patch("archon_search.cli._helpers._get_service") as mock_get_service,
     ):
         result = runner.invoke(main, ["serve"])
@@ -199,7 +199,7 @@ def test_serve_warns_when_data_dir_set_without_config(
     cfg = _config_with_host("0.0.0.0")
     with (
         patch("archon_search.cli.serve.load_config", return_value=cfg),
-        patch("archon_search.cli.serve.run_server"),
+        patch("archon_search.server.app.run_server"),
         caplog.at_level(logging.WARNING, logger="archon_search.cli.serve"),
     ):
         result = runner.invoke(main, ["serve"])
@@ -225,7 +225,7 @@ def test_serve_no_warning_when_both_data_dir_and_config_set(
     cfg = _config_with_host("0.0.0.0")
     with (
         patch("archon_search.cli.serve.load_config", return_value=cfg),
-        patch("archon_search.cli.serve.run_server"),
+        patch("archon_search.server.app.run_server"),
         caplog.at_level(logging.WARNING, logger="archon_search.cli.serve"),
     ):
         result = runner.invoke(main, ["serve"])
@@ -246,7 +246,7 @@ def test_serve_no_warning_when_data_dir_unset(
     cfg = _config_with_host("0.0.0.0")
     with (
         patch("archon_search.cli.serve.load_config", return_value=cfg),
-        patch("archon_search.cli.serve.run_server"),
+        patch("archon_search.server.app.run_server"),
         caplog.at_level(logging.WARNING, logger="archon_search.cli.serve"),
     ):
         result = runner.invoke(main, ["serve"])
@@ -255,3 +255,42 @@ def test_serve_no_warning_when_data_dir_unset(
         "ARCHON_SEARCH_CONFIG" in r.message and "collection" in r.message.lower()
         for r in caplog.records
     ), f"Did not expect container-limitation warning, got: {[r.message for r in caplog.records]}"
+
+
+# ---------------------------------------------------------------------------
+# BE-2: run_server import moved into serve() body (lazy import)
+# ---------------------------------------------------------------------------
+
+def test_serve_invokes_run_server_with_config(runner: CliRunner) -> None:
+    """After BE-2, run_server is imported lazily inside serve().
+
+    - Patching at `archon_search.server.app.run_server` must intercept the call.
+    - `archon_search.cli.serve` must NOT expose `run_server` as a module attribute.
+    """
+    import archon_search.cli.serve as serve_mod
+
+    cfg = _config_with_host("0.0.0.0")
+    with (
+        patch("archon_search.cli.serve.load_config", return_value=cfg),
+        patch("archon_search.server.app.run_server") as mock_run,
+    ):
+        result = runner.invoke(main, ["serve"])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once_with(cfg)
+    # run_server must NOT be a module-level attribute after the lazy-import move.
+    assert not hasattr(serve_mod, "run_server"), (
+        "cli.serve must not expose run_server at module level after BE-2"
+    )
+
+
+@pytest.mark.archon_unset_data_dir
+def test_serve_output_and_exit_code_unchanged(runner: CliRunner) -> None:
+    """Invoking serve with a mocked run_server in a clean env (no DATA_DIR) exits 0 with no stdout/stderr output (S10 baseline)."""
+    cfg = _config_with_host("0.0.0.0")
+    with (
+        patch("archon_search.cli.serve.load_config", return_value=cfg),
+        patch("archon_search.server.app.run_server"),
+    ):
+        result = runner.invoke(main, ["serve"])
+    assert result.exit_code == 0
+    assert result.output == ""
