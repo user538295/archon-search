@@ -222,7 +222,7 @@ def test_render_summary_eager_load_and_watch():
 
 
 def test_render_summary_multilingual_extra():
-    """WizardFeatures with install_multilingual_extra=True shows multilingual bullet."""
+    """WizardFeatures with install_multilingual_extra=True shows language-detection bullet."""
     profile = get_profile("minimal", multilingual=False)
     output = _render_summary(
         "minimal",
@@ -232,20 +232,36 @@ def test_render_summary_multilingual_extra():
         features=WizardFeatures(install_multilingual_extra=True),
     )
     assert "Optional features" in output
-    assert "Multilingual" in output
+    assert "Language detection (fasttext)" in output
+
+
+def test_render_summary_multilingual_header_and_extra_bullet():
+    """multilingual=True + install_multilingual_extra=True: header and bullet both render."""
+    profile = get_profile("minimal", multilingual=True)
+    output = _render_summary(
+        "minimal",
+        profile,
+        multilingual=True,
+        providers=[],
+        features=WizardFeatures(install_multilingual_extra=True),
+    )
+    assert "· Multilingual" in output  # header separator+label (install.py:708)
+    assert "Language detection (fasttext)" in output  # feature bullet
+    assert "Optional features" in output
 
 
 def test_render_summary_multilingual_extra_absent_by_default():
-    """WizardFeatures() with install_multilingual_extra=False produces no extra multilingual bullet."""
+    """install_multilingual_extra=False: no language-detection bullet even when section renders."""
     profile = get_profile("minimal", multilingual=False)
     output = _render_summary(
         "minimal",
         profile,
         multilingual=False,
         providers=[],
-        features=WizardFeatures(),
+        features=WizardFeatures(enable_telemetry=True),
     )
-    assert "Optional features" not in output
+    assert "Optional features" in output  # section renders due to telemetry
+    assert "Language detection" not in output  # multilingual bullet absent
 
 
 def test_render_summary_base_content_preserved_with_features():
