@@ -32,7 +32,7 @@ class TestDescriptionGeneratorFallback:
         """When the SDK raises an exception, generate_description returns None."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-        with patch("archon_search.description_generator.ClaudeSDKClient") as mock_cls:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as mock_cls:
             mock_client = MagicMock()
             mock_client.connect = AsyncMock(side_effect=RuntimeError("SDK failure"))
             mock_cls.return_value = mock_client
@@ -70,7 +70,7 @@ class TestDescriptionGeneratorFallback:
 
         mock_client.receive_response = mock_receive
 
-        with patch("archon_search.description_generator.ClaudeSDKClient", return_value=mock_client):
+        with patch("claude_agent_sdk.ClaudeSDKClient", return_value=mock_client):
             from archon_search.description_generator import generate_description
 
             result = await generate_description(["chunk text"], "test-collection")
@@ -94,3 +94,78 @@ class TestDescriptionGeneratorFallback:
         assert "import archon." not in source
         assert "import archon\n" not in source
         assert "from archon import" not in source
+
+
+class TestSDKLazyImport:
+    def test_sdk_not_a_module_attribute(self) -> None:
+        """C3: All three claude_agent_sdk symbols must not be module-level attributes after the move."""
+        import archon_search.description_generator as dg
+
+        assert not hasattr(dg, "ClaudeSDKClient"), (
+            "ClaudeSDKClient must not be a module attribute — it must live inside _call_haiku()"
+        )
+        assert not hasattr(dg, "ClaudeAgentOptions"), (
+            "ClaudeAgentOptions must not be a module attribute — it must live inside _call_haiku()"
+        )
+        assert not hasattr(dg, "ResultMessage"), (
+            "ResultMessage must not be a module attribute — it must live inside _call_haiku()"
+        )
+
+    @pytest.mark.asyncio
+    async def test_sdk_absent_raises_at_call_not_at_import(self, monkeypatch) -> None:
+        """S5: SDK absence must be deferred to call time, not import time.
+
+        Masks claude_agent_sdk in sys.modules (the standard absent-dep pattern).
+        The module itself must already be importable (its body has no top-level SDK
+        import after BE-1). Calling _call_haiku() must raise ImportError because
+        the `from claude_agent_sdk import ...` inside the function body fires at
+        call time and sees the None sentinel.
+        """
+        import sys
+
+        import archon_search.description_generator as dg
+
+        # S5 invariant part 1: module is already in sys.modules as a successful import
+        # (not None), proving its body completed without the SDK.
+        assert sys.modules.get("archon_search.description_generator") is dg, (
+            "description_generator must be importable without claude_agent_sdk present "
+            "at module level — the SDK import must be deferred to _call_haiku()"
+        )
+
+        # Mask the SDK so that any `from claude_agent_sdk import ...` raises ImportError.
+        monkeypatch.setitem(sys.modules, "claude_agent_sdk", None)
+
+        # S5 invariant part 2: calling _call_haiku() must raise ImportError because
+        # the deferred `from claude_agent_sdk import ...` in the function body now sees
+        # the None sentinel — this proves deferral to call time, not import time.
+        with pytest.raises(ImportError):
+            await dg._call_haiku("test prompt")
+
+    @pytest.mark.asyncio
+    async def test_call_haiku_imports_sdk_inside_function(self, monkeypatch) -> None:
+        """S4: _call_haiku() imports and uses ClaudeSDKClient inside the function body."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+        from claude_agent_sdk import ResultMessage
+
+        mock_client = AsyncMock()
+        mock_client.connect = AsyncMock()
+        mock_client.query = AsyncMock()
+        mock_client.disconnect = AsyncMock()
+
+        result_msg = AsyncMock(spec=ResultMessage)
+        result_msg.result = "Description from inside _call_haiku"
+
+        async def mock_receive():
+            yield result_msg
+
+        mock_client.receive_response = mock_receive
+
+        with patch("claude_agent_sdk.ClaudeSDKClient", return_value=mock_client) as mock_cls:
+            from archon_search.description_generator import _call_haiku
+
+            result = await _call_haiku("test prompt")
+
+        mock_cls.assert_called_once()
+        mock_client.query.assert_awaited_once_with("test prompt")
+        assert result == "Description from inside _call_haiku"

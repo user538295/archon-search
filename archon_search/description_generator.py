@@ -6,8 +6,6 @@ import logging
 import os
 import random
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
-
 from archon_search.constants import DEFAULT_FAST_MODEL
 
 logger = logging.getLogger(__name__)
@@ -99,6 +97,8 @@ async def generate_description(chunks: list[str], collection_name: str) -> str |
 
 async def _call_haiku(prompt: str) -> str | None:
     """Create a fresh Haiku session, send the prompt, return the response text."""
+    from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage  # noqa: PLC0415
+
     client = ClaudeSDKClient(
         options=ClaudeAgentOptions(
             permission_mode="bypassPermissions",

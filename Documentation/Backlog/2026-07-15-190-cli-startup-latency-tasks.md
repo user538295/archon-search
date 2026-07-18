@@ -59,7 +59,7 @@ flowchart LR
 
 ### Phase 1 · Fast lightweight CLI *(walking skeleton: lightweight commands no longer import the ML/agent stack; full suite green)*
 
-- [ ] **BE-1** — Move `claude_agent_sdk` import into `_call_haiku()` in [archon_search/description_generator.py](../../archon_search/description_generator.py) and retarget 2 test patches #backend-role
+- [x] **BE-1** — Move `claude_agent_sdk` import into `_call_haiku()` in [archon_search/description_generator.py](../../archon_search/description_generator.py) and retarget 2 test patches #backend-role
     - Interface Adapters · 2.0h
     - needs K1 · completes S4, S5, S9, C3
     - Tests
