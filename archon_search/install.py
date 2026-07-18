@@ -250,9 +250,12 @@ def _reconcile_ollama_base_url(section: tomlkit.items.Table, base_url: str) -> N
 def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFeatures) -> None:
     """Write WizardFeatures fields to *doc* in-place.
 
-    Re-run safe: every wizard-configurable field is ALWAYS written (true, false,
-    or its exact value) so a re-run that changes any setting always overwrites the
-    old value. Missing sections are created via tomlkit.table().
+    Re-run safe: the five plain feature-flag fields (``eager_load_embedders``,
+    ``watch``, ``telemetry.enabled``, ``routing_strategy``, ``log_format``) are
+    ALWAYS written so a re-run that disables any of them overwrites the old value.
+    ``disable_reranker`` stays conditional — re-run safety there is provided by
+    the profile writer, which writes the profile's ``reranker_model`` default
+    *before* calling this function. Missing sections are created via tomlkit.table().
     ``install_code_extra`` itself is intentionally NOT written — it controls a
     subprocess install, not a config key. ``install_graph_extra`` also controls a
     subprocess install, but additionally writes ``graph.enabled = true`` (BE-11):
@@ -269,7 +272,7 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
 
     if features.disable_reranker:
         _ensure_section("database")
-        doc["database"]["reranker_model"] = ""
+        doc["database"]["reranker_model"] = ""  # stays conditional — profile writer pre-fills the default
 
     _ensure_section("database")
     doc["database"]["eager_load_embedders"] = features.eager_load_embedders
