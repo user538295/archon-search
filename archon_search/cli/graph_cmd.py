@@ -29,6 +29,13 @@ def graph_cmd() -> None:
 @click.argument("collection")
 @click.option("--wait", "wait_flag", is_flag=True, default=False, help="Poll the job until it reaches a terminal status.")
 @click.option(
+    "--namespace",
+    "-n",
+    default="default",
+    show_default=True,
+    help="Namespace the collection belongs to.",
+)
+@click.option(
     "--api-url",
     default=_DEFAULT_API_URL,
     show_default=True,
@@ -42,6 +49,7 @@ def graph_cmd() -> None:
 def build_communities_cmd(
     collection: str,
     wait_flag: bool,
+    namespace: str,
     api_url: str,
     api_key: str | None,
 ) -> None:
@@ -61,7 +69,11 @@ def build_communities_cmd(
     base_url = api_url.rstrip("/")
 
     try:
-        resp = httpx.post(f"{base_url}/graph/{collection}/rebuild-communities", headers=headers)
+        resp = httpx.post(
+            f"{base_url}/graph/{collection}/rebuild-communities",
+            headers=headers,
+            params={"namespace": namespace},
+        )
     except httpx.ConnectError as exc:
         click.echo("Server is not running. Start it first with: archon-search start", err=True)
         raise SystemExit(1) from exc
@@ -75,7 +87,8 @@ def build_communities_cmd(
 
     job_data = resp.json()
     job_id: str = job_data["job_id"]
-    click.echo(f"Community rebuild job submitted: {job_id}")
+    actual_ns: str = job_data.get("namespace") or namespace
+    click.echo(f"Community rebuild job submitted: {job_id} (namespace: {actual_ns})")
 
     if wait_flag:
         _poll_rebuild_job(job_id, base_url, headers)
@@ -89,7 +102,8 @@ def _poll_rebuild_job(job_id: str, base_url: str, headers: dict) -> None:
         return
     result = job.get("result") or {}
     count = result.get("communities_built") if isinstance(result, dict) else None
+    ns: str = job.get("namespace") or "default"
     if count is not None:
-        click.echo(f"Community rebuild complete: {count} communities built.")
+        click.echo(f"Community rebuild complete: {count} communities built (namespace: {ns}).")
     else:
-        click.echo("Community rebuild complete.")
+        click.echo(f"Community rebuild complete (namespace: {ns}).")

@@ -134,7 +134,11 @@ async def _community_rebuild_task(
     response_model=JobResponse,
     responses=_REBUILD_ERROR_RESPONSES,
 )
-async def rebuild_communities(collection: str, request: Request) -> JSONResponse:
+async def rebuild_communities(
+    collection: str,
+    request: Request,
+    namespace: str = Query(default="default"),
+) -> JSONResponse:
     """Enqueue an async Leiden community rebuild for a collection — BE-2.
 
     Follows the migrate route's pattern (``routes_collections.py``,
@@ -149,11 +153,16 @@ async def rebuild_communities(collection: str, request: Request) -> JSONResponse
     ``INVALID_NAMESPACE_SENTINEL`` never reaches this handler; the middleware
     returns a bare 500 first (S14).
 
+    The optional ``?namespace=`` query param lets the CLI explicitly confirm
+    which namespace it intends to target. If provided, it must match the
+    namespace resolved from the Bearer token; a mismatch returns 422 so the
+    caller knows to use the correct API key for the intended namespace.
+
     Returns:
     - 202: JobResponse-shaped body, status RUNNING.
     - 404: Collection not found in the caller's namespace.
     - 409: A rebuild is already in progress for this collection (BE-5).
-    - 422: graph.enabled=false.
+    - 422: graph.enabled=false, or ?namespace= does not match token namespace.
     """
     pipeline = request.app.state.pipeline
     config = request.app.state.config
@@ -161,6 +170,15 @@ async def rebuild_communities(collection: str, request: Request) -> JSONResponse
     job_store: "JobStore" = request.app.state.job_store
     search_store: "SearchStore" = request.app.state.search_store
     ns: str = request.state.namespace
+
+    # Guard 0: if the caller explicitly declared a ?namespace=, it must match
+    # the namespace their Bearer token authorises. This prevents a token for
+    # namespace A from accidentally triggering a rebuild in namespace B.
+    if namespace != ns:
+        raise HTTPException(
+            status_code=422,
+            detail=f"namespace mismatch: token authorises '{ns}', but ?namespace='{namespace}' was requested",
+        )
 
     # Guard 1: graph enabled (verbatim detail string, matches the other four guards in this file).
     if not config.graph.enabled:

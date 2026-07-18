@@ -6,6 +6,8 @@ QUEUED -> RUNNING, spawn the BE-3 task into _background_tasks, return 202 with
 the full JobResponse body. Relies solely on APIKeyMiddleware for auth — no
 graph-viewer ?token= branch. BE-5 adds the 409 duplicate-rebuild guard and its
 two clear mechanisms (active, in the task; lazy, in the guard's read-path).
+Brief 2026-07-15-130 adds the ?namespace= query param and namespace-mismatch
+validation (Guard 0).
 
 Covers:
 - #unit_test test_rebuild_route_returns_202_running_job
@@ -346,11 +348,11 @@ def test_rebuild_targets_token_namespace_tables(tmp_path: Path, monkeypatch: pyt
         asyncio.run(_seed_graph_node(cfg.db_path, col_a, "nsa", "concept:alpha-nsa"))
         asyncio.run(_seed_graph_node(cfg.db_path, col_b, "nsb", "concept:alpha-nsb"))
 
-        resp_a = client.post(f"/graph/{col_a}/rebuild-communities", headers=_auth(key_a))
+        resp_a = client.post(f"/graph/{col_a}/rebuild-communities?namespace=nsa", headers=_auth(key_a))
         assert resp_a.status_code == 202
         assert resp_a.json()["namespace"] == "nsa"
 
-        resp_b = client.post(f"/graph/{col_b}/rebuild-communities", headers=_auth(key_b))
+        resp_b = client.post(f"/graph/{col_b}/rebuild-communities?namespace=nsb", headers=_auth(key_b))
         assert resp_b.status_code == 202
         assert resp_b.json()["namespace"] == "nsb"
 
@@ -681,3 +683,50 @@ def test_user_request_during_gc_rebuild_returns_202_then_blocks(
             assert reloaded_meta.community_rebuild_job_id is None
         finally:
             _rebuild_locks.clear()
+
+
+# ---------------------------------------------------------------------------
+# ?namespace= query param (brief 2026-07-15-130, Guard 0)
+# ---------------------------------------------------------------------------
+
+
+def test_rebuild_namespace_query_param_matching_token_proceeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """?namespace= matching the token namespace is accepted; proceeds to 202 (Guard 0 pass)."""
+    _install_spacy_stub(monkeypatch)
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        asyncio.run(_seed_collection(cfg.db_path, "testcol"))
+
+        resp = client.post(
+            "/graph/testcol/rebuild-communities?namespace=default",
+            headers=_auth(api_key),
+        )
+
+    assert resp.status_code == 202
+    assert resp.json()["namespace"] == "default"
+
+
+def test_rebuild_namespace_query_param_mismatch_returns_422(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """?namespace= differing from the token namespace -> 422 with mismatch detail (Guard 0 fail).
+
+    A token authorising 'default' combined with ?namespace=other_ns would
+    target the wrong namespace; Guard 0 rejects it so the caller knows to use
+    the correct API key.
+    """
+    _install_spacy_stub(monkeypatch)
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        asyncio.run(_seed_collection(cfg.db_path, "testcol"))
+
+        resp = client.post(
+            "/graph/testcol/rebuild-communities?namespace=other_ns",
+            headers=_auth(api_key),
+        )
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "namespace mismatch" in detail
+    assert "default" in detail
+    assert "other_ns" in detail

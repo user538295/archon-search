@@ -15,6 +15,11 @@ Converted from an in-process command to an HTTP proxy against
   non-zero exit (acceptance criterion: CLI surfaces the 422 detail from the response body)
 - test_cli_wait_mid_poll_error_exits_nonzero: httpx.HTTPError during --wait polling ->
   error message + non-zero exit
+- test_cli_namespace_forwarded_as_query_param: --namespace passes ?namespace= to the POST
+- test_cli_namespace_defaults_to_default: omitting --namespace sends ?namespace=default
+- test_cli_namespace_in_submission_output: namespace from response body appears in the job-submitted line
+- test_cli_namespace_short_flag: -n alias works identically to --namespace
+- test_cli_wait_namespace_in_completion_output: namespace appears in the "Community rebuild complete" line
 """
 from __future__ import annotations
 
@@ -39,7 +44,7 @@ def test_cli_prints_job_id_without_wait() -> None:
     """Without --wait, the CLI posts to the rebuild endpoint, prints job_id, exits 0."""
     runner = CliRunner()
 
-    post_resp = _response(202, {"job_id": "job-123", "status": "RUNNING"})
+    post_resp = _response(202, {"job_id": "job-123", "status": "RUNNING", "namespace": "default"})
 
     with patch("archon_search.cli.graph_cmd.httpx.post", return_value=post_resp) as mock_post:
         result = runner.invoke(
@@ -59,10 +64,10 @@ def test_cli_wait_polls_until_done_exit_0() -> None:
     """--wait polls GET /jobs/{id} until DONE and exits 0 (S3 unit portion)."""
     runner = CliRunner()
 
-    post_resp = _response(202, {"job_id": "job-abc", "status": "RUNNING"})
-    running_resp = _response(200, {"job_id": "job-abc", "status": "RUNNING"})
+    post_resp = _response(202, {"job_id": "job-abc", "status": "RUNNING", "namespace": "default"})
+    running_resp = _response(200, {"job_id": "job-abc", "status": "RUNNING", "namespace": "default"})
     done_resp = _response(
-        200, {"job_id": "job-abc", "status": "DONE", "result": {"communities_built": 2}}
+        200, {"job_id": "job-abc", "status": "DONE", "result": {"communities_built": 2}, "namespace": "default"}
     )
 
     with (
@@ -80,7 +85,7 @@ def test_cli_wait_polls_until_done_exit_0() -> None:
 
     assert result.exit_code == 0, f"Unexpected exit code: {result.exit_code}\n{result.output}"
     assert "job-abc" in result.output
-    assert "Community rebuild complete: 2 communities built." in result.output
+    assert "Community rebuild complete: 2 communities built (namespace: default)." in result.output
 
 
 def test_cli_connect_error_prints_server_not_running() -> None:
@@ -190,3 +195,93 @@ def test_cli_wait_mid_poll_error_exits_nonzero() -> None:
 
     assert result.exit_code != 0, f"Expected non-zero exit, got {result.exit_code}"
     assert "error polling job" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# --namespace flag tests (brief 2026-07-15-130)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_namespace_forwarded_as_query_param() -> None:
+    """--namespace value is forwarded as ?namespace= query param in the POST request."""
+    runner = CliRunner()
+    post_resp = _response(202, {"job_id": "job-ns", "status": "RUNNING", "namespace": "my_ns"})
+
+    with patch("archon_search.cli.graph_cmd.httpx.post", return_value=post_resp) as mock_post:
+        result = runner.invoke(
+            graph_cmd,
+            ["build-communities", "my-col", "--namespace", "my_ns", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 0, result.output
+    call_kwargs = mock_post.call_args.kwargs
+    assert call_kwargs.get("params") == {"namespace": "my_ns"}
+
+
+def test_cli_namespace_defaults_to_default() -> None:
+    """Omitting --namespace sends ?namespace=default (backward compatibility)."""
+    runner = CliRunner()
+    post_resp = _response(202, {"job_id": "job-def", "status": "RUNNING", "namespace": "default"})
+
+    with patch("archon_search.cli.graph_cmd.httpx.post", return_value=post_resp) as mock_post:
+        result = runner.invoke(
+            graph_cmd,
+            ["build-communities", "my-col", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert mock_post.call_args.kwargs.get("params") == {"namespace": "default"}
+
+
+def test_cli_namespace_in_submission_output() -> None:
+    """Namespace from the response body appears in the job-submitted confirmation line."""
+    runner = CliRunner()
+    post_resp = _response(202, {"job_id": "job-out", "status": "RUNNING", "namespace": "my_ns"})
+
+    with patch("archon_search.cli.graph_cmd.httpx.post", return_value=post_resp):
+        result = runner.invoke(
+            graph_cmd,
+            ["build-communities", "my-col", "--namespace", "my_ns", "--api-key", "k"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "job-out" in result.output
+    assert "(namespace: my_ns)" in result.output
+
+
+def test_cli_namespace_short_flag() -> None:
+    """-n alias is equivalent to --namespace and forwarded as the same query param."""
+    runner = CliRunner()
+    post_resp = _response(202, {"job_id": "job-short", "status": "RUNNING", "namespace": "ns2"})
+
+    with patch("archon_search.cli.graph_cmd.httpx.post", return_value=post_resp) as mock_post:
+        result = runner.invoke(
+            graph_cmd,
+            ["build-communities", "my-col", "-n", "ns2", "--api-key", "k"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert mock_post.call_args.kwargs.get("params") == {"namespace": "ns2"}
+
+
+def test_cli_wait_namespace_in_completion_output() -> None:
+    """Namespace from the polled job appears in the 'Community rebuild complete' line."""
+    runner = CliRunner()
+    post_resp = _response(202, {"job_id": "job-wait-ns", "status": "RUNNING", "namespace": "prod"})
+    done_resp = _response(
+        200,
+        {"job_id": "job-wait-ns", "status": "DONE", "result": {"communities_built": 3}, "namespace": "prod"},
+    )
+
+    with (
+        patch("archon_search.cli.graph_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli._helpers.httpx.get", return_value=done_resp),
+        patch("archon_search.cli._helpers.time.sleep"),
+    ):
+        result = runner.invoke(
+            graph_cmd,
+            ["build-communities", "my-col", "--namespace", "prod", "--wait", "--api-key", "k"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Community rebuild complete: 3 communities built (namespace: prod)." in result.output

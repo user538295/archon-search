@@ -5302,7 +5302,7 @@
     },
     "/graph/{collection}/rebuild-communities": {
       "post": {
-        "description": "Enqueue an async Leiden community rebuild for a collection \u2014 BE-2.\n\nFollows the migrate route's pattern (``routes_collections.py``,\n``migrate_collection``): validate -> create job QUEUED -> transition\nQUEUED -> RUNNING -> spawn task -> return 202 with the full JobResponse\nbody (``job_to_dict(running_job)``), so the response reports RUNNING,\nnot PENDING (S1).\n\nAuth is handled solely by ``APIKeyMiddleware`` \u2014 this route does not\nimplement its own ``?token=`` fallback (unlike ``get_graph_view``, whose\nbranch exists only for HTML-iframe embedding). A token resolving to\n``INVALID_NAMESPACE_SENTINEL`` never reaches this handler; the middleware\nreturns a bare 500 first (S14).\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in the caller's namespace.\n- 409: A rebuild is already in progress for this collection (BE-5).\n- 422: graph.enabled=false.",
+        "description": "Enqueue an async Leiden community rebuild for a collection \u2014 BE-2.\n\nFollows the migrate route's pattern (``routes_collections.py``,\n``migrate_collection``): validate -> create job QUEUED -> transition\nQUEUED -> RUNNING -> spawn task -> return 202 with the full JobResponse\nbody (``job_to_dict(running_job)``), so the response reports RUNNING,\nnot PENDING (S1).\n\nAuth is handled solely by ``APIKeyMiddleware`` \u2014 this route does not\nimplement its own ``?token=`` fallback (unlike ``get_graph_view``, whose\nbranch exists only for HTML-iframe embedding). A token resolving to\n``INVALID_NAMESPACE_SENTINEL`` never reaches this handler; the middleware\nreturns a bare 500 first (S14).\n\nThe optional ``?namespace=`` query param lets the CLI explicitly confirm\nwhich namespace it intends to target. If provided, it must match the\nnamespace resolved from the Bearer token; a mismatch returns 422 so the\ncaller knows to use the correct API key for the intended namespace.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in the caller's namespace.\n- 409: A rebuild is already in progress for this collection (BE-5).\n- 422: graph.enabled=false, or ?namespace= does not match token namespace.",
         "operationId": "rebuild_communities_graph__collection__rebuild_communities_post",
         "parameters": [
           {
@@ -5311,6 +5311,16 @@
             "required": true,
             "schema": {
               "title": "Collection",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "default": "default",
+              "title": "Namespace",
               "type": "string"
             }
           }

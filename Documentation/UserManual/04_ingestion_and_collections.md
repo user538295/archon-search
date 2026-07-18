@@ -288,10 +288,12 @@ When multiple collections use different models, the server keeps a small LRU cac
 After entity extraction is populated (via graph extraction at ingest time with `[graph] enabled = true`), you can cluster entities into communities for richer graph-aware search:
 
 ```bash
-archon-search graph build-communities <collection>
+archon-search graph build-communities <collection> [--namespace <ns>]
 ```
 
-This proxies to the running server (`POST /graph/{collection}/rebuild-communities`), which enqueues an async job that runs Leiden community detection on the entity graph, selects MMR-diverse representative chunks per community, and persists results to `_archon_graph_{ns}__{col}_communities`. The server must be running — the CLI no longer builds communities in-process. Add `--wait` to block until the job completes; the command prints a `job_id` and exits `0` immediately otherwise. Run this command explicitly — it is never triggered automatically on ingest.
+This proxies to the running server (`POST /graph/{collection}/rebuild-communities`), which enqueues an async job that runs Leiden community detection on the entity graph, selects MMR-diverse representative chunks per community, and persists results to `_archon_graph_{ns}__{col}_communities`. The server must be running — the CLI no longer builds communities in-process. Add `--wait` to block until the job completes; the command prints a `job_id` and the target namespace, then exits `0` immediately. Run this command explicitly — it is never triggered automatically on ingest.
+
+`--namespace` / `-n` (default `"default"`) — target the named namespace. The Bearer token used (`--api-key`) must be authorised for that namespace; a mismatch returns `422` with a clear message. For multi-namespace deployments, use the API key for the namespace you want to rebuild.
 
 **When to re-run:** After any significant new ingest (e.g., many new documents), `GET /status` will show the old `last_built_at` timestamp, signalling stale communities. Re-run `build-communities` to refresh.
 

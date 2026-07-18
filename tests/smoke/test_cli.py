@@ -386,13 +386,16 @@ def test_e2e_graph_build_communities_wait_against_server(smoke_server_graph_enab
         f"build-communities --wait failed: stdout={result.stdout!r} stderr={result.stderr!r}"
     )
     assert "Community rebuild job submitted:" in result.stdout
+    # Assert "(namespace: " appears in the submission line (brief 2026-07-15-130).
+    assert "(namespace: " in result.stdout
     # "Community rebuild complete" alone is a prefix both the count-bearing and
     # count-less DONE branches print (graph_cmd.py's _poll_rebuild_job) — assert
-    # the "... communities built." suffix so this test proves Leiden actually
-    # produced a count on the fixture's real >=2-node/>=1-edge graph, not just
-    # that the job reached DONE.
+    # "communities built" so this test proves Leiden actually produced a count on
+    # the fixture's real >=2-node/>=1-edge graph, not just that the job reached
+    # DONE. The completion line now ends with "(namespace: <ns>)." so the period
+    # no longer immediately follows "built"; assert the token without the period.
     assert "Community rebuild complete: " in result.stdout
-    assert "communities built." in result.stdout
+    assert "communities built" in result.stdout
 
 
 # ---------------------------------------------------------------------------
