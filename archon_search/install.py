@@ -730,6 +730,8 @@ def _render_summary(
             feature_bullets.append("• Code enrichment (tree-sitter)")
         if features.install_graph_extra:
             feature_bullets.append("• Graph enrichment (code graphing)")
+        if features.install_multilingual_extra:
+            feature_bullets.append("• Multilingual language detection")
         if features.enable_hyde:
             feature_bullets.append(f"• HyDE: enabled (provider: {features.hyde_provider})")
         if features.enable_rag_fusion:

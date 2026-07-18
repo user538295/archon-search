@@ -221,6 +221,33 @@ def test_render_summary_eager_load_and_watch():
     assert "Watch" in output
 
 
+def test_render_summary_multilingual_extra():
+    """WizardFeatures with install_multilingual_extra=True shows multilingual bullet."""
+    profile = get_profile("minimal", multilingual=False)
+    output = _render_summary(
+        "minimal",
+        profile,
+        multilingual=False,
+        providers=[],
+        features=WizardFeatures(install_multilingual_extra=True),
+    )
+    assert "Optional features" in output
+    assert "Multilingual" in output
+
+
+def test_render_summary_multilingual_extra_absent_by_default():
+    """WizardFeatures() with install_multilingual_extra=False produces no extra multilingual bullet."""
+    profile = get_profile("minimal", multilingual=False)
+    output = _render_summary(
+        "minimal",
+        profile,
+        multilingual=False,
+        providers=[],
+        features=WizardFeatures(),
+    )
+    assert "Optional features" not in output
+
+
 def test_render_summary_base_content_preserved_with_features():
     """Base profile content (embedder, chunk size) is still present when features are non-None."""
     profile = get_profile("balanced", multilingual=False)
