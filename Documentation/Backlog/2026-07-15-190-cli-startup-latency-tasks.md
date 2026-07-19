@@ -81,7 +81,7 @@ flowchart LR
         - #integration_test — `test_list_cmd_builds_pipeline_in_process` — invoke `list_cmd` via CliRunner; confirm `create_pipeline` is called inside the command body and produces correct output (no patch retarget needed — [tests/test_cli_collection.py](../../tests/test_cli_collection.py) patches only `httpx.*`) (S3)
         - #integration_test — `test_info_builds_pipeline_in_process` — same for `info._run()` at [archon_search/cli/collection.py](../../archon_search/cli/collection.py):195; assert identical output to pre-change (S3, S10)
 
-- [ ] **BE-4** — Add import-boundary regression guard in `tests/test_cli_startup_latency.py` (new file) #backend-role
+- [x] **BE-4** — Add import-boundary regression guard in `tests/test_cli_startup_latency.py` (new file) #backend-role
     - Presentation · 2.0h
     - needs BE-1, BE-2, BE-3 · completes S1, S6, S8, S11
     - Tests
