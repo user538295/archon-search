@@ -74,7 +74,7 @@ flowchart LR
     - Tests
         - #unit_test — `test_add_400_bad_path_exits_1` — `patch("archon_search.cli.collection.httpx.post", return_value=MagicMock(status_code=400, text="unsafe path"))`, invoke `collection add /some/path --api-key test-key`, assert `result.exit_code == 1` and `"server returned 400"` in output
 
-- [ ] **FE-2** — Add `_resolve_api_key` precedence tests in [tests/test_cli_collection.py](../../tests/test_cli_collection.py) — covers all three branches of `_resolve_api_key` at [archon_search/cli/collection.py](../../archon_search/cli/collection.py):19–27 (currently zero tests for this function) #frontend-role
+- [x] **FE-2** — Add `_resolve_api_key` precedence tests in [tests/test_cli_collection.py](../../tests/test_cli_collection.py) — covers all three branches of `_resolve_api_key` at [archon_search/cli/collection.py](../../archon_search/cli/collection.py):19–27 (currently zero tests for this function) #frontend-role
     - Presentation · 1.0h
     - needs K1 · completes S7
     - Tests

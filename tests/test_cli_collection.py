@@ -749,6 +749,49 @@ def test_add_generic_http_error_exits_1() -> None:
 
 
 # ---------------------------------------------------------------------------
+# FE-2: _resolve_api_key precedence (S7) — covers all three branches at :19–27
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_api_key_arg_priority() -> None:
+    """Explicit --api-key arg wins even when ARCHON_SEARCH_API_KEY env var is set."""
+    from archon_search.cli.collection import _resolve_api_key
+
+    with patch.dict("os.environ", {"ARCHON_SEARCH_API_KEY": "env-key"}):
+        with patch("archon_search.cli.collection.load_or_generate_key") as mock_load:
+            result = _resolve_api_key("explicit-key")
+
+    assert result == "explicit-key"
+    mock_load.assert_not_called()
+
+
+def test_resolve_api_key_env_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """None arg + ARCHON_SEARCH_API_KEY set → returns env key without touching the key file."""
+    from archon_search.cli.collection import _resolve_api_key
+
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "env-key")
+
+    with patch("archon_search.cli.collection.load_or_generate_key") as mock_load:
+        result = _resolve_api_key(None)
+
+    assert result == "env-key"
+    mock_load.assert_not_called()
+
+
+def test_resolve_api_key_file_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """None arg + no env var → falls back to load_or_generate_key() key file result."""
+    from archon_search.cli.collection import _resolve_api_key
+
+    monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
+
+    with patch("archon_search.cli.collection.load_or_generate_key", return_value=("file-key", None)) as mock_load:
+        result = _resolve_api_key(None)
+
+    assert result == "file-key"
+    mock_load.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # BE-3: create_pipeline lazy-import (C2, S3, S10)
 # ---------------------------------------------------------------------------
 
