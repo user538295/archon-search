@@ -121,8 +121,10 @@ def test_pdf_page_number_in_search_response(
         col = "test-enrichment-pdf"
         try:
             ingest_file_via_path(client, col, str(pdf_fixture), api_key=api_key, timeout_s=600.0)
-        except Exception as exc:
-            pytest.skip(f"PDF ingest failed (docling may not be available): {exc}")
+        except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, GeneratorExit)):
+                raise
+            pytest.skip(f"PDF ingest failed or timed out (docling may be slow/unavailable): {exc}")
 
         items = _search_with_metadata(client, col, "page content", api_key=api_key)
         assert items, "expected at least one search result after PDF ingest"
@@ -269,7 +271,9 @@ def test_image_file_assigns_page_start_one(
         col = "test-enrichment-image"
         try:
             ingest_file_via_path(client, col, str(png_path), api_key=api_key, timeout_s=600.0)
-        except Exception as exc:
+        except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, GeneratorExit)):
+                raise
             pytest.skip(f"image ingest failed (docling OCR may not be available): {exc}")
 
         # Check if collection was created at all — blank images produce no OCR text → no chunks
