@@ -520,6 +520,44 @@ def test_e2e_collection_add_wait_against_server(smoke_server, tmp_path) -> None:
     )
 
 
+def test_e2e_collection_add_progress_hint(smoke_server, tmp_path) -> None:
+    """``archon-search collection add <dir>`` must print the progress hint
+    "Track progress with: archon-search jobs status {id}" to stdout (string 2,
+    collection.py:122 — the only approved string not yet asserted by the
+    existing ``test_e2e_collection_add_wait_against_server`` test).
+    """
+    col_dir = tmp_path / "smokehint"
+    col_dir.mkdir()
+    (col_dir / "doc.txt").write_text(
+        "Progress hint smoke test document with enough content to produce chunks."
+    )
+
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "archon-search",
+            "collection",
+            "add",
+            str(col_dir),
+            "--api-url",
+            smoke_server.base_url,
+            "--api-key",
+            smoke_server.api_key,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, (
+        f"collection add failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "Track progress with: archon-search jobs status" in result.stdout, (
+        f"expected progress hint in stdout; got: {result.stdout!r}"
+    )
+
+
 def test_add_without_server(smoke_server) -> None:
     """``archon-search collection add`` against a closed port must exit 1 and
     print the approved connect-error string to stderr (S4).

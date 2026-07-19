@@ -96,7 +96,7 @@ flowchart LR
     - Tests
         - #e2e_test — `test_add_without_server` — bind `sock = socket.socket(AF_INET, SOCK_STREAM); sock.bind(("127.0.0.1", 0))`, record `dead_port = sock.getsockname()[1]`, **keep sock bound** while subprocess runs (hold-while-running, not close-then-connect), then `sock.close()` after; invoke `uv run archon-search collection add /some/path --api-url http://127.0.0.1:{dead_port} --api-key {smoke_server.api_key}`; assert `returncode == 1` and `"archon-search serve is not running. Start it first."` in `result.stderr`; takes `smoke_server` fixture to inherit `xdist_group("smoke_e2e")` serialisation
 
-- [ ] **T-2** — Manual: verify 6 user-visible strings from `collection add` against the wording approved in Q2/Q3 resolution #tester-role
+- [x] **T-2** — Manual: verify 6 user-visible strings from `collection add` against the wording approved in Q2/Q3 resolution #tester-role
     - — · 0.5h
     - needs T-1 · completes S1, S2, S3, S5
     - Tests
