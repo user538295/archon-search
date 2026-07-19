@@ -4789,3 +4789,23 @@ def test_reindex_metadata_stale_job_id_clears_and_returns_202(
     )
     new_job_id = response.json()["job_id"]
     assert new_job_id != done_job.job_id, "New job must have a fresh job_id"
+
+
+# ---------------------------------------------------------------------------
+# AddCollectionRequest schema contract — BE-1 (brief 220)
+# ---------------------------------------------------------------------------
+
+
+def test_add_collection_request_has_no_collection_name_field() -> None:
+    """AddCollectionRequest must have exactly path and embedding_model — no collection_name.
+
+    Contract C1 (brief 220): the server derives the collection name via
+    path_to_collection_name; the client never sends a name override.
+    """
+    from archon_search.server.routes_collections import AddCollectionRequest
+
+    field_names = set(AddCollectionRequest.model_fields)
+    assert field_names == {"path", "embedding_model"}, (
+        f"AddCollectionRequest has unexpected fields: {field_names}. "
+        "collection_name must not be a field — the server derives it from path."
+    )

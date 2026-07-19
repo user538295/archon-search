@@ -62,7 +62,7 @@ flowchart LR
 
 ### Phase 1 · Error-handling coverage *(walking skeleton: fills the three missing unit tests that close S6/S7/S9 end-to-end; carries the BE route verification)*
 
-- [ ] **BE-1** — Verify `add_collection` route against Backend Done-when checklist: `202` + `JobResponse`, server-derived name, `_maybe_save_config`, no `collection_name` in `AddCollectionRequest`, `openapi.json` 202/400/401/409/503/422 confirmed, `BREAKING.md` drift-free #backend-role
+- [x] **BE-1** — Verify `add_collection` route against Backend Done-when checklist: `202` + `JobResponse`, server-derived name, `_maybe_save_config`, no `collection_name` in `AddCollectionRequest`, `openapi.json` 202/400/401/409/503/422 confirmed, `BREAKING.md` drift-free #backend-role
     - Interface Adapters · 1.0h
     - needs K1 · completes S1, S3, S8
     - Tests
