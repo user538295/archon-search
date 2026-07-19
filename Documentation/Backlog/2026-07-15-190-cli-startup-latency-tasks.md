@@ -88,12 +88,12 @@ flowchart LR
         - #unit_test — `test_lightweight_cmd_no_claude_agent_sdk` — spawn subprocess running `archon-search config show` with isolated `ARCHON_SEARCH_DATA_DIR` and `ARCHON_SEARCH_CONFIG` env vars; print `sys.modules` keys to stdout; parse output; assert `"claude_agent_sdk"` is absent (S1, S6; subprocess-only — in-process CliRunner shares sys.modules with test runner per plan Q4)
         - #unit_test — `test_lightweight_cmd_no_fastembed` — same subprocess; assert `"fastembed"` is absent from `sys.modules` output (S1; `mcp` is NOT guarded — it enters only via `server/mcp.py` lazy mount, never at CLI import-time; see plan Q4 and learnings 2026-07-18)
 
-- [ ] **T-1** — Manual: cold-cache heavy command + 0.2s timing measurement #tester-role
+- [x] **T-1** — Manual: cold-cache heavy command + 0.2s timing measurement #tester-role
     - — · 2.0h
     - needs BE-1, BE-2, BE-3, BE-4 · completes S7, S11
     - Tests
-        - #manual_test — Cold-cache heavy command — on a fresh system set `FASTEMBED_CACHE_PATH` to an empty temp dir; run `archon-search serve`; verify the server starts and the fastembed model downloads on demand without crashing; verify no heavy import happens before the serve command body executes (non-automatable: requires live network and first-model-download timing variance makes a CI assertion unreliable)
-        - #manual_test — Lightweight command timing — run `archon-search config show` five times on a fresh interpreter (direct invocation, not via `uv run`); measure median wall time; confirm median approaches `< 0.2s`; document the measurement result (non-automatable: `uv run` spawn overhead makes a hard `< 0.2s` automated assertion flaky per plan Q2 and learnings 2026-07-16 smoke timing entries)
+        - [x] #manual_test — Cold-cache heavy command — on a fresh system set `FASTEMBED_CACHE_PATH` to an empty temp dir; run `archon-search serve`; verify the server starts and the fastembed model downloads on demand without crashing; verify no heavy import happens before the serve command body executes (non-automatable: requires live network and first-model-download timing variance makes a CI assertion unreliable)
+        - [x] #manual_test — Lightweight command timing — run `archon-search config show` five times on a fresh interpreter (direct invocation, not via `uv run`); measure median wall time; confirm median approaches `< 0.2s`; document the measurement result (non-automatable: `uv run` spawn overhead makes a hard `< 0.2s` automated assertion flaky per plan Q2 and learnings 2026-07-16 smoke timing entries)
 
 ---
 
