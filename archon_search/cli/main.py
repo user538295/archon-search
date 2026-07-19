@@ -23,22 +23,28 @@ except PackageNotFoundError:
     _VERSION = "0.0.0+source"
 
 
-class _LazyGraphGroup(click.Group):
-    """click.Group that lazy-loads the ``graph`` subcommand on first access.
+_GRAPH_CMD_NAME = "graph"
 
-    The graph CLI module is an HTTP proxy (httpx + click only after GBC110
-    BE-8), but deferring its import keeps ``archon_search.cli.graph_cmd`` out
-    of sys.modules for every non-graph command (brief 200).
+
+class _LazyGraphGroup(click.Group):
+    """click.Group that defers import of ``graph_cmd`` and ``httpx``.
+
+    The import is deferred for direct subcommand invocations (e.g.
+    ``archon-search config show``).  It does NOT prevent the import during
+    ``--help`` rendering: Click's ``format_commands`` calls ``get_command``
+    for every listed command, so the graph module is loaded then.
+    ``_helpers`` and ``collection`` are already eagerly loaded by ``main.py``
+    and are therefore not deferred.
     """
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
-        if cmd_name == "graph":
+        if cmd_name == _GRAPH_CMD_NAME:
             from archon_search.cli.graph_cmd import graph_cmd  # noqa: PLC0415
             return graph_cmd
         return super().get_command(ctx, cmd_name)
 
     def list_commands(self, ctx: click.Context) -> list[str]:
-        return sorted([*super().list_commands(ctx), "graph"])
+        return sorted([*super().list_commands(ctx), _GRAPH_CMD_NAME])
 
 
 @click.group(cls=_LazyGraphGroup)
