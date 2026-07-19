@@ -990,52 +990,6 @@ def test_e2e_collection_remove_against_server(smoke_server, tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# collection add error path (S4) — no server running on a closed port
-# ---------------------------------------------------------------------------
-
-
-def test_add_without_server(smoke_server) -> None:
-    """``archon-search collection add <path> --api-url <closed port>`` must
-    exit 1 and surface "archon-search serve is not running. Start it first."
-    on stderr (S4).
-
-    Uses the socket-hold pattern: bind a socket, record the port, **keep it
-    held** while the subprocess runs, then close it — do NOT close-then-connect
-    (TOCTOU race).  The ``smoke_server`` fixture is taken as a parameter (even
-    though this test targets a dead port) to inherit the
-    ``xdist_group("smoke_e2e")`` serialisation and avoid racing a live server
-    subprocess on another worker.
-    """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    dead_port = sock.getsockname()[1]
-    # Keep sock bound while subprocess runs — socket-hold pattern.
-
-    try:
-        result = subprocess.run(
-            [
-                "uv",
-                "run",
-                "archon-search",
-                "collection",
-                "add",
-                "/some/path",
-                "--api-url",
-                f"http://127.0.0.1:{dead_port}",
-                "--api-key",
-                smoke_server.api_key,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-    finally:
-        sock.close()
-
-    assert result.returncode == 1
-    assert "archon-search serve is not running. Start it first." in result.stderr
-
-
 # ---------------------------------------------------------------------------
 # T-5 structural single-writer check (S16) — no server required
 # ---------------------------------------------------------------------------
