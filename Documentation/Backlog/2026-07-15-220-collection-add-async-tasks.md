@@ -68,7 +68,7 @@ flowchart LR
     - Tests
         - #unit_test — `test_add_collection_request_has_no_collection_name_field` — assert `AddCollectionRequest` fields are exactly `path` and `embedding_model` (no `collection_name`) in [archon_search/server/routes_collections.py](../../archon_search/server/routes_collections.py)
 
-- [ ] **FE-1** — Add `test_add_400_bad_path_exits_1` in [tests/test_cli_collection.py](../../tests/test_cli_collection.py) — mock `httpx.post` returning `status_code=400`; asserts exit 1 via the non-202 branch at [archon_search/cli/collection.py](../../archon_search/cli/collection.py):114 (currently untested — existing `test_add_generic_http_error_exits_1` hits the `httpx.HTTPError` transport path at :102, not the status-response branch) #frontend-role
+- [x] **FE-1** — Add `test_add_400_bad_path_exits_1` in [tests/test_cli_collection.py](../../tests/test_cli_collection.py) — mock `httpx.post` returning `status_code=400`; asserts exit 1 via the non-202 branch at [archon_search/cli/collection.py](../../archon_search/cli/collection.py):114 (currently untested — existing `test_add_generic_http_error_exits_1` hits the `httpx.HTTPError` transport path at :102, not the status-response branch) #frontend-role
     - Presentation · 0.5h
     - needs K1 · completes S6
     - Tests

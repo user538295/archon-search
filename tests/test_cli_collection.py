@@ -709,6 +709,28 @@ def test_add_503_prints_error_exits_1() -> None:
     assert result.exit_code == 1
 
 
+def test_add_400_bad_path_exits_1() -> None:
+    """400 from server (e.g. unsafe path) → 'server returned 400' in stderr, exit 1.
+
+    Covers the non-202 branch at collection.py:114 (status-response path), distinct from
+    test_add_generic_http_error_exits_1 which hits the transport-exception path at :102.
+    """
+    runner = CliRunner()
+
+    post_resp = MagicMock()
+    post_resp.status_code = 400
+    post_resp.text = "unsafe path"
+
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp):
+        result = runner.invoke(
+            collection,
+            ["add", "/some/path", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 1
+    assert "server returned 400" in result.output
+
+
 def test_add_generic_http_error_exits_1() -> None:
     """Generic HTTPError (e.g. ReadTimeout) → 'Error contacting server' message, exit 1."""
     runner = CliRunner()
