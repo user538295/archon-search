@@ -82,7 +82,7 @@ flowchart LR
         - #unit_test — `test_resolve_api_key_env_fallback` — call `_resolve_api_key(None)` with `ARCHON_SEARCH_API_KEY="env-key"` set via monkeypatch/environ; assert returns `"env-key"`
         - #unit_test — `test_resolve_api_key_file_fallback` — call `_resolve_api_key(None)` with env unset; patch `archon_search.cli.collection.load_or_generate_key` to return `("file-key", None)`; assert returns `"file-key"`
 
-- [ ] **FE-3** — Add `test_add_with_wait_exits_1_on_failed` in [tests/test_cli_collection.py](../../tests/test_cli_collection.py) — mirrors `test_migrate_cli_wait_exits_1_on_failed` at :441 but for the `add` command; covers the S9 path not tested through `add --wait` end-to-end (only `_poll_job` helper is tested in isolation) #frontend-role
+- [x] **FE-3** — Add `test_add_with_wait_exits_1_on_failed` in [tests/test_cli_collection.py](../../tests/test_cli_collection.py) — mirrors `test_migrate_cli_wait_exits_1_on_failed` at :441 but for the `add` command; covers the S9 path not tested through `add --wait` end-to-end (only `_poll_job` helper is tested in isolation) #frontend-role
     - Presentation · 0.5h
     - needs K1 · completes S9
     - Tests

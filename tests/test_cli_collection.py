@@ -692,6 +692,34 @@ def test_add_server_not_running_exits_1() -> None:
     assert "not running" in result.output.lower() or "start it first" in result.output.lower()
 
 
+def test_add_with_wait_exits_1_on_failed() -> None:
+    """--wait exits with code 1 when the job reaches FAILED status."""
+    runner = CliRunner()
+    job_id = "job-add-fail-001"
+
+    post_resp = MagicMock()
+    post_resp.status_code = 202
+    post_resp.json.return_value = _add_job_response(job_id, "QUEUED", "my_docs")
+
+    get_job_sequence = [
+        _mock_http_response(200, _job_response(job_id, "RUNNING")),
+        _mock_http_response(200, _job_response(job_id, "FAILED")),
+    ]
+
+    with (
+        patch("archon_search.cli.collection.httpx.post", return_value=post_resp),
+        patch("archon_search.cli._helpers.httpx.get", side_effect=get_job_sequence),
+        patch("archon_search.cli._helpers.time.sleep"),
+    ):
+        result = runner.invoke(
+            collection,
+            ["add", "/some/path", "--wait", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 1
+    assert "ingested successfully" not in result.output
+
+
 def test_add_503_prints_error_exits_1() -> None:
     """503 from server → error printed, exit 1."""
     runner = CliRunner()
