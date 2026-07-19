@@ -18,10 +18,13 @@ No user-visible flow change. The only observable difference:
 
 ## In Scope
 - Move `from archon_search.server.app import run_server` inside the `serve()` command function body (`cli/serve.py` line 25).
-- Move `from archon_search.pipeline import create_pipeline` inside each command function body in `cli/collection.py`, `cli/ingest.py`.
-- Move `from archon_search.install import SearchInstaller` (or equivalent heavy import) inside command bodies in `cli/install_cmd.py`.
+- Move `from archon_search.pipeline import create_pipeline` inside each command function body in `cli/collection.py` (was at line 15, not 18 — line 18 reference in original brief was stale).
 - Move `from claude_agent_sdk import ...` inside the function that uses it in `description_generator.py` (currently line 9 — fires on every CLI command that touches the pipeline).
 - All other imports in those files stay at module level — only the imports that trigger fastembed, onnxruntime, or the Claude SDK move.
+
+**Corrections from original brief (stale references, now resolved):**
+- `cli/ingest.py` does NOT have a `create_pipeline` import — it has been a pure `httpx` proxy since the CSP120 refactor. Dropped from scope.
+- `cli/install_cmd.py` imports `SearchInstaller` at line 11, which is cheap. The heavy transitive cost was `install.py:31`'s `create_pipeline`, eliminated by the `description_generator` fix without editing `install.py` — dropped from scope.
 
 ## Out of Scope
 - Making `serve` or `collection add` faster — those commands need the ML stack; that is a separate concern.
@@ -49,10 +52,10 @@ No user-visible flow change. The only observable difference:
 
 ## References
 - [[archon_search/cli/main.py]] `[code-agent]` — all 14 subcommand imports at lines 5–18; root cause
-- [[archon_search/cli/serve.py]] `[code-agent]` — `from archon_search.server.app import run_server` at line 25
-- [[archon_search/description_generator.py]] `[code-agent]` — `from claude_agent_sdk import ...` at line 9; fires on every pipeline import
-- [[archon_search/cli/collection.py]] `[code-agent]` — `from archon_search.pipeline import create_pipeline` at line 18
-- [[archon_search/cli/ingest.py]] `[code-agent]` — `from archon_search.pipeline import create_pipeline` at line 16
+- [[archon_search/cli/serve.py]] `[code-agent]` — `from archon_search.server.app import run_server` deferred into `serve()` body (was line 25)
+- [[archon_search/description_generator.py]] `[code-agent]` — `from claude_agent_sdk import ...` deferred into `_call_haiku()` at line 100 (was line 9 at module level)
+- [[archon_search/cli/collection.py]] `[code-agent]` — `from archon_search.pipeline import create_pipeline` deferred into `list_cmd._run()` and `info._run()` (was at line 15, not 18)
+- ~~[[archon_search/cli/ingest.py]]~~ — no `create_pipeline` import; pure httpx proxy since CSP120 (brief reference was stale)
 - **Team plan:** [2026-07-15-190-cli-startup-latency-team-plan.md](./2026-07-15-190-cli-startup-latency-team-plan.md)
 
 ## Recommendation

@@ -178,6 +178,24 @@ The code-lane eval gate (`tests/eval/test_e2e_graph_eval_gate_v2.py`) adds two n
 
 Latency p50/p95 for both code-lane collections are captured in `baselines/baseline.json` alongside the existing retrieval latency fields. No ceiling is enforced in v1.
 
+## CLI startup latency
+
+**Goal (feature 190):** lightweight commands (`config show`, `config get`, `status`, `stop`, `key list`) start without loading the ML/agent stack.
+
+**Import-boundary design:** Three module-level imports were moved into the function bodies that actually use them, using the repo's established `# noqa: PLC0415` lazy-import convention:
+
+| File | Import deferred | Benefit |
+|---|---|---|
+| `cli/serve.py` | `from archon_search.server.app import run_server` → inside `serve()` | `fastembed`/`onnxruntime` no longer load at CLI group-build time |
+| `cli/collection.py` | `from archon_search.pipeline import create_pipeline` → inside `list_cmd._run()` and `info._run()` | pipeline not constructed for lightweight commands |
+| `description_generator.py` | `from claude_agent_sdk import ...` → inside `_call_haiku()` | `claude_agent_sdk` removed from the import cost of every pipeline consumer |
+
+**Remaining floor:** After these changes, lightweight store-free commands approach the Python interpreter + Click startup floor. Measured on a warm machine via the venv binary (5 runs): ~0.23 s median (0.206–0.343 s range). Note: the plan's `< 0.2 s` target was a manual-measurement guideline; the `sys.modules`-absence assertion is the authoritative automated CI proof (see plan Q2). Commands that open LanceDB (`collection list`, `collection info`) face an additional ~900 ms first-import floor from `lancedb` plus the GPT-2 tokenizer cost (~1 s, from `SearchPipeline.__init__` constructing `DocumentChunker`) — both are accepted floors not addressed by feature 190. See brief [2026-07-15-210-cli-store-commands-slow-brief.md](../../Documentation/Backlog/2026-07-15-210-cli-store-commands-slow-brief.md) and debt entry CLI-1 in [530_technical_debt_refactoring_roadmap.md](./530_technical_debt_refactoring_roadmap.md).
+
+**Import-boundary regression guard (`tests/test_cli_startup_latency.py`):** Spawns a fresh Python subprocess running `archon-search config show` and asserts that `claude_agent_sdk` and `fastembed` are absent from `sys.modules`. This is the only reliable automated proof — in-process CliRunner shares `sys.modules` with the test runner and cannot prove absence (see plan Q4). The test is in the default CI suite (not smoke) and is serialised via `xdist_group("startup_latency")`. A positive-control assertion (`archon_search.cli.main` and `archon_search.cli.serve` present in `sys.modules`) prevents vacuous passes if the subprocess output is malformed. If either absence assertion fails, the import was promoted back to module scope in one of the three edited files.
+
+**Note on `mcp`:** `mcp` is NOT guarded by the regression test. It enters only via `server/mcp.py` (a lazy FastMCP mount at serve time) and was never present in `sys.modules` for lightweight commands before or after feature 190.
+
 ## See also
 
 - `Architecture/100_system_architecture_overview.md` — the pipeline these knobs affect.

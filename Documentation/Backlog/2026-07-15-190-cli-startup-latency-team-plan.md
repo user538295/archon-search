@@ -4,7 +4,7 @@ feature: cli-startup-latency
 brief: 2026-07-15-190-cli-startup-latency-brief.md
 purpose: team development plan
 audience: backend developer, tester
-status: planned      # draft (open questions remain) → planned → in-progress → done
+status: done      # draft (open questions remain) → planned → in-progress → done
 roles: [frontend, backend, tester]
 architecture: Clean Architecture
 ---
@@ -332,13 +332,13 @@ The smoke suite ([tests/smoke/test_cli.py](../../tests/smoke/test_cli.py)) alrea
 
 Docs the feature touches — the tasks file's close-out task works through this list. Each carries a reason.
 
-- [ ] [2026-07-15-190-cli-startup-latency-brief.md](./2026-07-15-190-cli-startup-latency-brief.md) — *contradiction with code* — correct the stale line references (`collection.py:15` not 18; drop the `ingest.py` bullet; clarify the `install.py:31` vs `install_cmd.py:11` cost)
-- [ ] [2026-07-15-190-cli-startup-latency-team-plan.md](./2026-07-15-190-cli-startup-latency-team-plan.md) — *new feature* (this file)
-- [ ] [110_component_catalog_and_layer_breakdown.md](../Architecture/110_component_catalog_and_layer_breakdown.md) — *new feature* — CLI section (lines 134–147): note the lazy-import timing for `serve`/`collection`/`description_generator` if newly described
-- [ ] [210_performance_and_scalability.md](../Architecture/210_performance_and_scalability.md) — *new feature* — currently silent on CLI startup; add the CLI startup budget / any import-time regression guard here
-- [ ] [530_technical_debt_refactoring_roadmap.md](../Architecture/530_technical_debt_refactoring_roadmap.md) — *new feature* — register the deferred "lazy chunker init in `SearchPipeline`" (bug-003 companion) if not fixed now
-- [ ] [2026-07-15-200-graph-imports-startup-brief.md](./2026-07-15-200-graph-imports-startup-brief.md) — *contradiction with code* — reconcile: its "optional step 2" is already done (GBC110 removed the `graph_cmd.py` heavy imports); state merge order vs. 190
-- [ ] [2026-07-15-210-cli-store-commands-slow-brief.md](./2026-07-15-210-cli-store-commands-slow-brief.md) — *no change needed* — shares the `pipeline.py:25` fix from the other end; note the overlap and the ~900ms lancedb floor
+- [x] [2026-07-15-190-cli-startup-latency-brief.md](./2026-07-15-190-cli-startup-latency-brief.md) — *contradiction with code* — correct the stale line references (`collection.py:15` not 18; drop the `ingest.py` bullet; clarify the `install.py:31` vs `install_cmd.py:11` cost)
+- [x] [2026-07-15-190-cli-startup-latency-team-plan.md](./2026-07-15-190-cli-startup-latency-team-plan.md) — *new feature* (this file)
+- [x] [110_component_catalog_and_layer_breakdown.md](../Architecture/110_component_catalog_and_layer_breakdown.md) — *new feature* — CLI section (lines 134–147): note the lazy-import timing for `serve`/`collection`/`description_generator` if newly described
+- [x] [210_performance_and_scalability.md](../Architecture/210_performance_and_scalability.md) — *new feature* — currently silent on CLI startup; add the CLI startup budget / any import-time regression guard here
+- [x] [530_technical_debt_refactoring_roadmap.md](../Architecture/530_technical_debt_refactoring_roadmap.md) — *new feature* — register the deferred "lazy chunker init in `SearchPipeline`" (bug-003 companion) if not fixed now
+- [x] [2026-07-15-200-graph-imports-startup-brief.md](./2026-07-15-200-graph-imports-startup-brief.md) — *contradiction with code* — reconcile: its "optional step 2" is already done (GBC110 removed the `graph_cmd.py` heavy imports); state merge order vs. 190
+- [x] [2026-07-15-210-cli-store-commands-slow-brief.md](./2026-07-15-210-cli-store-commands-slow-brief.md) — *no change needed* — shares the `pipeline.py:25` fix from the other end; note the overlap and the ~900ms lancedb floor
 
 **Consulted (read-only)**
 - [500_development_workflows_and_conventions.md](../Architecture/500_development_workflows_and_conventions.md) — entry point `archon_search.cli.main:main`; package-vs-distribution naming

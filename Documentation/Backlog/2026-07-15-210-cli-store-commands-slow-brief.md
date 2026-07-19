@@ -46,12 +46,21 @@ Operators and developers running quick administrative commands — checking what
 - Lazy-initialize `DocumentChunker` and `ASTChunker` inside `SearchPipeline.__init__` so all pipeline construction is fast regardless of caller — this would eliminate the chunker cost from `collection add` and `ingest` too.
 - Cache the lancedb connection across CLI invocations (not feasible without a daemon, but worth noting for a future connected-CLI mode).
 
+## Status — overlap with feature 190
+This brief proposes two changes. **One has already been delivered** by feature 190 (2026-07-18):
+
+- **`pipeline.py:25` — `from archon_search.description_generator import ...`**: This was the entry-point for the `claude_agent_sdk` cost on every CLI command. Feature 190 fixed this at the source: `description_generator.py` now defers `from claude_agent_sdk import ...` inside `_call_haiku()`. The `pipeline.py` module-level import of `description_generator` no longer drags in the SDK. This brief's proposed "move import inside `recompute_collection_meta`" is therefore unnecessary for the SDK-cost goal — the SDK cost is gone.
+
+- **Replacing `create_pipeline()` with a direct `SearchStore` path in `list_cmd` / `info`**: Still open. `collection list` and `collection info` still call `create_pipeline()`, which constructs `DocumentChunker` and `ASTChunker` (GPT-2 tokenizer, ~1 s). The remaining wall-time floor for these commands after feature 190 is: Python + Click (~0.2 s) + lancedb first-import (~900 ms, see below) + GPT-2 tokenizer (~1 s). The `_make_store` approach from this brief would eliminate the GPT-2 cost for these two commands.
+
+**The ~900 ms lancedb first-import floor is accepted and documented.** See `Documentation/Architecture/210_performance_and_scalability.md` (CLI startup latency section). This floor is irreducible without shipping a precompiled binary; it should be documented in release notes for operators who notice the delay on first-ever invocation.
+
 ## References
-- [[archon_search/cli/collection.py]] `[code-agent]` — `list_cmd` (line 45), `info` (line 211), `remove` (line 148) all call `create_pipeline(cfg)`
-- [[archon_search/pipeline.py:25]] `[code-agent]` — top-level `from archon_search.description_generator import ...` triggers `claude_agent_sdk` import on every CLI command
-- [[archon_search/pipeline.py:935]] `[code-agent]` — only call site for `generate_description` and `_should_regenerate`; safe to move import here
+- [[archon_search/cli/collection.py]] `[code-agent]` — `list_cmd` and `info` call `create_pipeline(cfg)`; `remove` is now an HTTP proxy (CSP120)
+- ~~[[archon_search/pipeline.py:25]]~~ — SDK cost at this import eliminated by feature 190 (`description_generator._call_haiku` lazy-imports the SDK)
+- [[archon_search/pipeline.py]] — `generate_description` / `_should_regenerate` call sites unchanged; SDK fires only inside `_call_haiku()`
 - [[archon_search/store.py:271]] `[code-agent]` — `SearchStore.__init__(db_path)` — direct construction, no ML deps
-- [[archon_search/cli/collection.py:105]] `[code-agent]` — `collection add` already does a lazy `from archon_search.sync import ...` inside the function body; same pattern applies here
+- [[archon_search/cli/collection.py:105]] `[code-agent]` — `collection add` is now an HTTP proxy (CSP120); the lazy-import pattern for read commands still applies to `list_cmd`/`info`
 
 ## Recommendation
-Build this. The fix is small (one helper function, two import relocations, three call-site swaps) and the user-visible improvement is dramatic — a 5-second wait becomes under 200ms for the most common administrative commands. The lancedb cold-start cost (~900ms) is the remaining irreducible floor and should be documented, not fixed. Do this before any other CLI performance work; it's the highest ratio of impact to risk in the codebase right now.
+Build this. The fix is small (one helper function, two import relocations, three call-site swaps). The SDK/agent-stack import cost has already been eliminated by feature 190; the remaining wall-time floor for `collection list`/`info` is the lancedb first-import (~900 ms) and the GPT-2 tokenizer (~1 s from `create_pipeline`). This brief's `_make_store` approach would remove the GPT-2 cost, bringing the floor down to ~900 ms + Python/Click overhead. The lancedb cold-start cost is the remaining irreducible floor and should be documented, not fixed.

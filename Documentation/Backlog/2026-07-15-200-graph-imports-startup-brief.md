@@ -13,12 +13,12 @@ Any user running any archon-search CLI command. The overhead is invisible but cu
 This is a code-only change with no user-facing steps. The fix is applied once and all CLI commands become faster automatically.
 
 1. Developer moves `from archon_search.cli.graph_cmd import graph_cmd` in `main.py` (line 7) to a lazy registration block — same pattern applied to all other subcommands in bug-004.
-2. Optionally: move the three module-level imports in `graph_cmd.py` (lines 18–20: `CommunityBuilder`, `GraphStore`, `SearchStore`) inside the `build_communities_cmd` function body, so even graph commands only pay the cost when the graph subcommand is actually invoked.
+2. ~~Optionally: move the three module-level imports in `graph_cmd.py` (lines 18–20: `CommunityBuilder`, `GraphStore`, `SearchStore`) inside the `build_communities_cmd` function body.~~ **Already done by GBC110 (BE-8, 2026-07-16):** `graph_cmd.py` was converted to a pure HTTP proxy — the old in-process `GraphStore`/`SearchStore`/`CommunityBuilder` call path was removed entirely, eliminating those heavy imports. The "optional step 2" is no longer applicable.
 3. Verify: `time archon-search config show` no longer includes the ~0.31s graph loading overhead.
 
 ## In Scope
 - Lazy-loading the graph CLI subcommand import in `main.py`
-- Optionally moving the three heavy imports inside `graph_cmd.py` function bodies
+- ~~Optionally moving the three heavy imports inside `graph_cmd.py` function bodies~~ — **already completed by GBC110 BE-8** (CLI converted to HTTP proxy, removed in-process imports entirely)
 
 ## Out of Scope
 - Changes to graph feature behaviour
@@ -26,6 +26,10 @@ This is a code-only change with no user-facing steps. The fix is applied once an
 
 ## Key Decisions
 - **Bundle with bug-004**: Same file (`archon_search/cli/main.py`), same fix pattern (lazy subcommand registration), same PR. No reason to ship separately.
+
+## Status
+- **Optional step 2 (moving `graph_cmd.py` heavy imports)** was completed by **GBC110 BE-8 (2026-07-16)**: `graph_cmd.py` became a pure HTTP proxy and the old in-process `CommunityBuilder`/`GraphStore`/`SearchStore` imports were removed entirely. This brief's "step 2" is no longer applicable.
+- **Step 1 (lazy-loading `graph_cmd` in `main.py`)**: still open — `main.py` still imports `graph_cmd` eagerly at module level. However, since `graph_cmd.py` itself is now import-cheap (no ML deps at module level after GBC110), this step's urgency is low. Feature 190 (the CLI startup latency fix) removed the dominant startup costs; the remaining `graph_cmd` import at `main.py` line 7 adds negligible overhead.
 
 ## Edge Cases & Constraints
 - If `main.py` uses a `LazyGroup` or similar Click pattern from bug-004, the graph_cmd import slots in automatically — no extra work.
