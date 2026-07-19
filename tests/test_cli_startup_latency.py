@@ -105,12 +105,10 @@ def _run_lightweight_cmd() -> set[str]:
     # the delimiter, making every absence assertion below vacuously true.
     #
     # Note on serve.py dependency: main.py eagerly imports all subcommand
-    # modules at group-build time (``from archon_search.cli.serve import
-    # serve``), so ``archon_search.cli.serve`` is always in sys.modules
-    # whenever main.py is imported — even for lightweight commands like
-    # ``config show``.  If main.py is ever changed to lazy-load subcommands,
-    # this guard will catch if serve.py is no longer transitively imported,
-    # preventing the fastembed absence test below from passing vacuously.
+    # modules at group-build time except ``graph_cmd`` (lazy via
+    # _LazyGraphGroup, brief 200).  ``archon_search.cli.serve`` remains eager,
+    # so it is always present — use it as the positive control.  If serve.py
+    # is ever lazy-loaded too, update this guard and the fastembed test comment.
     assert "archon_search.cli.main" in loaded, (
         "Positive control failed: 'archon_search.cli.main' not in sys.modules "
         f"output — the subprocess output may be malformed.\nmodules_line={modules_line!r}"
@@ -160,6 +158,23 @@ def test_lightweight_cmd_no_claude_agent_sdk(loaded_modules: set[str]) -> None:
         "This means the SDK import has leaked back to module scope — check "
         "archon_search/description_generator.py and ensure the import stays inside "
         "_call_haiku()."
+    )
+
+
+def test_lightweight_cmd_no_graph_cmd_module(loaded_modules: set[str]) -> None:
+    """Brief 200: ``archon_search.cli.graph_cmd`` must be absent from
+    sys.modules after ``archon-search config show``.
+
+    Before brief 200, main.py imported graph_cmd at module level, loading it
+    for every CLI command including lightweight ones.  After the fix, graph_cmd
+    is registered lazily via _LazyGraphGroup.get_command() and loaded only when
+    the 'graph' subcommand is actually invoked.
+    """
+    assert "archon_search.cli.graph_cmd" not in loaded_modules, (
+        "'archon_search.cli.graph_cmd' appeared in sys.modules after "
+        "'archon-search config show'.  The graph_cmd import has leaked back "
+        "to module scope — check archon_search/cli/main.py and ensure "
+        "_LazyGraphGroup.get_command() defers the import."
     )
 
 

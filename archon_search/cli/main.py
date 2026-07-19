@@ -4,7 +4,6 @@ import click
 
 from archon_search.cli.backup_cmd import backup_cmd
 from archon_search.cli.collection import collection
-from archon_search.cli.graph_cmd import graph_cmd
 from archon_search.cli.jobs_cmd import jobs
 from archon_search.cli.key_cmd import key_cmd
 from archon_search.cli.maintenance_cmd import maintenance_cmd
@@ -24,7 +23,25 @@ except PackageNotFoundError:
     _VERSION = "0.0.0+source"
 
 
-@click.group()
+class _LazyGraphGroup(click.Group):
+    """click.Group that lazy-loads the ``graph`` subcommand on first access.
+
+    The graph CLI module is an HTTP proxy (httpx + click only after GBC110
+    BE-8), but deferring its import keeps ``archon_search.cli.graph_cmd`` out
+    of sys.modules for every non-graph command (brief 200).
+    """
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        if cmd_name == "graph":
+            from archon_search.cli.graph_cmd import graph_cmd  # noqa: PLC0415
+            return graph_cmd
+        return super().get_command(ctx, cmd_name)
+
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        return sorted([*super().list_commands(ctx), "graph"])
+
+
+@click.group(cls=_LazyGraphGroup)
 @click.version_option(_VERSION, prog_name="archon-search")
 def main() -> None:
     """archon-search — standalone RAG search server."""
@@ -46,7 +63,6 @@ main.add_command(import_cmd)
 main.add_command(backup_cmd)
 main.add_command(maintenance_cmd)
 main.add_command(key_cmd)
-main.add_command(graph_cmd)
 main.add_command(jobs)
 
 

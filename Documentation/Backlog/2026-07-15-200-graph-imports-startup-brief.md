@@ -29,7 +29,7 @@ This is a code-only change with no user-facing steps. The fix is applied once an
 
 ## Status
 - **Optional step 2 (moving `graph_cmd.py` heavy imports)** was completed by **GBC110 BE-8 (2026-07-16)**: `graph_cmd.py` became a pure HTTP proxy and the old in-process `CommunityBuilder`/`GraphStore`/`SearchStore` imports were removed entirely. This brief's "step 2" is no longer applicable.
-- **Step 1 (lazy-loading `graph_cmd` in `main.py`)**: still open — `main.py` still imports `graph_cmd` eagerly at module level. However, since `graph_cmd.py` itself is now import-cheap (no ML deps at module level after GBC110), this step's urgency is low. Feature 190 (the CLI startup latency fix) removed the dominant startup costs; the remaining `graph_cmd` import at `main.py` line 7 adds negligible overhead.
+- **Step 1 (lazy-loading `graph_cmd` in `main.py`)**: **Done (2026-07-19)**. Added `_LazyGraphGroup` (a `click.Group` subclass) to `main.py` that overrides `get_command` and `list_commands` to defer the `graph_cmd` import until the `graph` subcommand is actually invoked. The module-level `from archon_search.cli.graph_cmd import graph_cmd` import and `main.add_command(graph_cmd)` call were removed. A regression guard (`test_lightweight_cmd_no_graph_cmd_module` in `tests/test_cli_startup_latency.py`) asserts `archon_search.cli.graph_cmd` is absent from `sys.modules` for lightweight commands.
 
 ## Edge Cases & Constraints
 - If `main.py` uses a `LazyGroup` or similar Click pattern from bug-004, the graph_cmd import slots in automatically — no extra work.
