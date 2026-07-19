@@ -90,7 +90,7 @@ flowchart LR
 
 ### Phase 2 · Closed-port path + string accuracy *(confirms server-not-running behavior via real subprocess; verifies approved wording)*
 
-- [ ] **T-1** — Add `test_add_without_server` in [tests/smoke/test_cli.py](../../tests/smoke/test_cli.py) — closed-port negative smoke test using socket-hold pattern #tester-role
+- [x] **T-1** — Add `test_add_without_server` in [tests/smoke/test_cli.py](../../tests/smoke/test_cli.py) — closed-port negative smoke test using socket-hold pattern #tester-role
     - — · 2.0h
     - needs BE-1, FE-1, FE-2, FE-3 · completes S4
     - Tests

@@ -520,6 +520,43 @@ def test_e2e_collection_add_wait_against_server(smoke_server, tmp_path) -> None:
     )
 
 
+def test_add_without_server(smoke_server) -> None:
+    """``archon-search collection add`` against a closed port must exit 1 and
+    print the approved connect-error string to stderr (S4).
+
+    Binds a socket to a random port and holds it bound while the subprocess
+    runs — connection is refused without binding a server (socket-hold pattern).
+    Takes ``smoke_server`` to inherit ``xdist_group("smoke_e2e")`` serialisation.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        dead_port = sock.getsockname()[1]
+        result = subprocess.run(
+            [
+                "uv",
+                "run",
+                "archon-search",
+                "collection",
+                "add",
+                "/some/path",
+                "--api-url",
+                f"http://127.0.0.1:{dead_port}",
+                "--api-key",
+                smoke_server.api_key,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    assert result.returncode == 1, (
+        f"expected exit 1; got {result.returncode}. stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "archon-search serve is not running. Start it first." in result.stderr, (
+        f"expected connect-error string in stderr; got: {result.stderr!r}"
+    )
+
+
 def test_e2e_ingest_wait_against_server(smoke_server, tmp_path) -> None:
     """``archon-search ingest --path <file> --collection smoke --wait`` against
     the smoke server must exit 0 and print the completion marker
@@ -950,6 +987,53 @@ def test_e2e_collection_remove_against_server(smoke_server, tmp_path) -> None:
     assert detail_resp.status_code == 404, (
         f"GET /collections/{collection_name} should return 404 after remove; got: {detail_resp.status_code}"
     )
+
+
+# ---------------------------------------------------------------------------
+# collection add error path (S4) — no server running on a closed port
+# ---------------------------------------------------------------------------
+
+
+def test_add_without_server(smoke_server) -> None:
+    """``archon-search collection add <path> --api-url <closed port>`` must
+    exit 1 and surface "archon-search serve is not running. Start it first."
+    on stderr (S4).
+
+    Uses the socket-hold pattern: bind a socket, record the port, **keep it
+    held** while the subprocess runs, then close it — do NOT close-then-connect
+    (TOCTOU race).  The ``smoke_server`` fixture is taken as a parameter (even
+    though this test targets a dead port) to inherit the
+    ``xdist_group("smoke_e2e")`` serialisation and avoid racing a live server
+    subprocess on another worker.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    dead_port = sock.getsockname()[1]
+    # Keep sock bound while subprocess runs — socket-hold pattern.
+
+    try:
+        result = subprocess.run(
+            [
+                "uv",
+                "run",
+                "archon-search",
+                "collection",
+                "add",
+                "/some/path",
+                "--api-url",
+                f"http://127.0.0.1:{dead_port}",
+                "--api-key",
+                smoke_server.api_key,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    finally:
+        sock.close()
+
+    assert result.returncode == 1
+    assert "archon-search serve is not running. Start it first." in result.stderr
 
 
 # ---------------------------------------------------------------------------
