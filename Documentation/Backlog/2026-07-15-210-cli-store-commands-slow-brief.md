@@ -62,5 +62,9 @@ This brief proposes two changes. **One has already been delivered** by feature 1
 - [[archon_search/store.py:271]] `[code-agent]` — `SearchStore.__init__(db_path)` — direct construction, no ML deps
 - [[archon_search/cli/collection.py:105]] `[code-agent]` — `collection add` is now an HTTP proxy (CSP120); the lazy-import pattern for read commands still applies to `list_cmd`/`info`
 
+## Status — **IMPLEMENTED (2026-07-19)**
+
+`_make_store(cfg)` added to `archon_search/cli/collection.py`. `list_cmd` and `info` now use it directly instead of `create_pipeline()`. Tests in `tests/cli/test_collection_list_info_210.py` (7 tests including two structural guards). Docs updated in `210_performance_and_scalability.md` and `530_technical_debt_refactoring_roadmap.md` (CLI-1 resolved).
+
 ## Recommendation
-Build this. The fix is small (one helper function, two import relocations, three call-site swaps). The SDK/agent-stack import cost has already been eliminated by feature 190; the remaining wall-time floor for `collection list`/`info` is the lancedb first-import (~900 ms) and the GPT-2 tokenizer (~1 s from `create_pipeline`). This brief's `_make_store` approach would remove the GPT-2 cost, bringing the floor down to ~900 ms + Python/Click overhead. The lancedb cold-start cost is the remaining irreducible floor and should be documented, not fixed.
+~~Build this.~~ Done. The GPT-2 tokenizer cost (~1 s) is eliminated from `collection list` and `collection info`. Remaining floor: lancedb first-import (~900 ms), accepted and documented.

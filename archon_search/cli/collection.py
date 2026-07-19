@@ -29,6 +29,12 @@ def _resolve_api_key(api_key: str | None) -> str:
 logger = logging.getLogger(__name__)
 
 
+def _make_store(cfg) -> "SearchStore":
+    from archon_search.store import SearchStore  # noqa: PLC0415
+    # ponytail: intentionally thin — no ML deps, just LanceDB
+    return SearchStore(cfg.db_path)
+
+
 @click.group()
 def collection() -> None:
     """Manage collections."""
@@ -45,18 +51,17 @@ def list_cmd(config_path: Path | None) -> None:
         raise SystemExit(1)
 
     async def _run() -> None:
-        from archon_search.pipeline import create_pipeline  # noqa: PLC0415
-        pipeline = create_pipeline(cfg)
+        store = _make_store(cfg)
         try:
-            await pipeline.store.connect()
-            collections = await pipeline.store.list_collections()
+            await store.connect()
+            collections = await store.list_collections()
             if not collections:
                 click.echo("No collections found.")
             else:
                 for c in collections:
                     click.echo(f"{c.name}  docs={c.doc_count}  chunks={c.chunk_count}")
         finally:
-            await pipeline.store.disconnect()
+            await store.disconnect()
 
     try:
         asyncio.run(_run())
@@ -192,17 +197,16 @@ def info(collection_name: str, config_path: Path | None) -> None:
         raise SystemExit(1)
 
     async def _run() -> None:
-        from archon_search.pipeline import create_pipeline  # noqa: PLC0415
-        pipeline = create_pipeline(cfg)
+        store = _make_store(cfg)
         try:
-            await pipeline.store.connect()
-            meta = await pipeline.store.get_collection_meta(collection_name)
+            await store.connect()
+            meta = await store.get_collection_meta(collection_name)
             if meta is None:
                 click.echo(f"Error: collection '{collection_name}' not found.", err=True)
                 raise SystemExit(1)
             click.echo(str(meta))
         finally:
-            await pipeline.store.disconnect()
+            await store.disconnect()
 
     try:
         asyncio.run(_run())
