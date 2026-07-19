@@ -74,7 +74,7 @@ flowchart LR
         - #integration_test — `test_serve_invokes_run_server_with_config` — CliRunner invoke `serve`, patch `archon_search.server.app.run_server` (retargeted from `archon_search.cli.serve.run_server`, 11 sites); assert `run_server` called once with loaded config; assert server module namespace no longer exposes `run_server` at import time (S2, C1)
         - #integration_test — `test_serve_output_and_exit_code_unchanged` — invoke `serve` via CliRunner with mocked `run_server`; assert stdout, stderr, and exit code are identical to pre-change baseline (S10)
 
-- [ ] **BE-3** — Move `create_pipeline` import into `list_cmd._run()` and `info._run()` in [archon_search/cli/collection.py](../../archon_search/cli/collection.py) #backend-role
+- [x] **BE-3** — Move `create_pipeline` import into `list_cmd._run()` and `info._run()` in [archon_search/cli/collection.py](../../archon_search/cli/collection.py) #backend-role
     - Presentation · 1.0h
     - needs K1 · completes S3, S10, C2
     - Tests

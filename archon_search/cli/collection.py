@@ -12,7 +12,6 @@ import httpx
 from archon_search.cli._helpers import _poll_job
 from archon_search.config import load_config
 from archon_search.key_manager import load_or_generate_key
-from archon_search.pipeline import create_pipeline
 
 _DEFAULT_API_URL = "http://localhost:8765"
 
@@ -46,6 +45,7 @@ def list_cmd(config_path: Path | None) -> None:
         raise SystemExit(1)
 
     async def _run() -> None:
+        from archon_search.pipeline import create_pipeline  # noqa: PLC0415
         pipeline = create_pipeline(cfg)
         try:
             await pipeline.store.connect()
@@ -192,6 +192,7 @@ def info(collection_name: str, config_path: Path | None) -> None:
         raise SystemExit(1)
 
     async def _run() -> None:
+        from archon_search.pipeline import create_pipeline  # noqa: PLC0415
         pipeline = create_pipeline(cfg)
         try:
             await pipeline.store.connect()

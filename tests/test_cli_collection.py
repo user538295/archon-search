@@ -724,3 +724,135 @@ def test_add_generic_http_error_exits_1() -> None:
 
     assert result.exit_code == 1
     assert "error contacting server" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# BE-3: create_pipeline lazy-import (C2, S3, S10)
+# ---------------------------------------------------------------------------
+
+
+def test_create_pipeline_not_a_module_attribute() -> None:
+    """C2: create_pipeline must not be a module-level attribute after the import move."""
+    import archon_search.cli.collection as col_mod
+
+    assert not hasattr(col_mod, "create_pipeline"), (
+        "create_pipeline must not be a module attribute — it must live inside the command bodies"
+    )
+
+
+@pytest.mark.integration
+def test_list_cmd_builds_pipeline_in_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """S3, S10: list_cmd builds a pipeline in-process and lists collections correctly."""
+    import asyncio
+
+    from archon_search.store import SearchStore
+
+    # ARCHON_SEARCH_DATA_DIR causes load_config to set db_path = data_dir / "search"
+    # ARCHON_SEARCH_CONFIG must be pinned to an empty file to prevent load_config(None)
+    # from reading the developer's ~/.archon-search/archon-search.toml, which could have
+    # multilingual=true or graph.enabled=true and change pipeline construction.
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(tmp_path / "config.toml"))
+    (tmp_path / "config.toml").write_text("")
+
+    db_path = tmp_path / "search"
+    store = SearchStore(db_path)
+    asyncio.run(store.connect())
+    asyncio.run(store.ensure_collection("mytest-list", _DIM))
+    asyncio.run(store.disconnect())
+
+    runner = CliRunner()
+    result = runner.invoke(collection, ["list"])
+
+    assert result.exit_code == 0, result.output
+    # S10: verify the exact output format: "{name}  docs={doc_count}  chunks={chunk_count}"
+    assert "mytest-list  docs=0  chunks=0" in result.output
+
+
+@pytest.mark.integration
+def test_info_builds_pipeline_in_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """S3, S10: info builds a pipeline in-process and displays collection metadata correctly."""
+    import asyncio
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.store import SearchStore
+
+    # ARCHON_SEARCH_DATA_DIR causes load_config to set db_path = data_dir / "search"
+    # ARCHON_SEARCH_CONFIG must be pinned to an empty file to prevent load_config(None)
+    # from reading the developer's ~/.archon-search/archon-search.toml, which could have
+    # multilingual=true or graph.enabled=true and change pipeline construction.
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(tmp_path / "config.toml"))
+    (tmp_path / "config.toml").write_text("")
+
+    db_path = tmp_path / "search"
+    store = SearchStore(db_path)
+    asyncio.run(store.connect())
+    asyncio.run(store.ensure_collection("mytest-info", _DIM))
+    asyncio.run(store.update_collection_meta(CollectionMeta(name="mytest-info")))
+    asyncio.run(store.disconnect())
+
+    runner = CliRunner()
+    result = runner.invoke(collection, ["info", "mytest-info"])
+
+    assert result.exit_code == 0, result.output
+    # S10: verify collection name and metadata fields appear in the dataclass repr output
+    assert "mytest-info" in result.output
+    assert "doc_count=0" in result.output
+    assert "chunk_count=0" in result.output
+
+
+@pytest.mark.integration
+def test_list_cmd_empty_store_returns_no_collections_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """S3: list_cmd completes (not short-circuits) on an empty store and prints the empty message."""
+    import asyncio
+
+    from archon_search.store import SearchStore
+
+    # Pin config to empty file — prevents load_config from reading developer's toml
+    # which could have multilingual=true or graph.enabled=true.
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(tmp_path / "config.toml"))
+    (tmp_path / "config.toml").write_text("")
+
+    # Ensure the store exists but has no collections.
+    db_path = tmp_path / "search"
+    store = SearchStore(db_path)
+    asyncio.run(store.connect())
+    asyncio.run(store.disconnect())
+
+    runner = CliRunner()
+    result = runner.invoke(collection, ["list"])
+
+    assert result.exit_code == 0, result.output
+    assert "No collections found." in result.output
+
+
+@pytest.mark.integration
+def test_info_not_found_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """info exits with code 1 and an error message when the collection does not exist."""
+    import asyncio
+
+    from archon_search.store import SearchStore
+
+    # Pin config to empty file — prevents load_config from reading developer's toml.
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(tmp_path / "config.toml"))
+    (tmp_path / "config.toml").write_text("")
+
+    db_path = tmp_path / "search"
+    store = SearchStore(db_path)
+    asyncio.run(store.connect())
+    asyncio.run(store.ensure_collection("existing-col", _DIM))
+    asyncio.run(store.disconnect())
+
+    runner = CliRunner()
+    # Verify existing-col IS reachable (so the store is valid) but a different name is not.
+    result_found = runner.invoke(collection, ["list"])
+    assert "existing-col" in result_found.output
+
+    result = runner.invoke(collection, ["info", "nonexistent-col"])
+
+    assert result.exit_code == 1, result.output
+    # Pin the queried name in the assertion to catch wrong-name regressions.
+    assert "collection 'nonexistent-col' not found" in result.output.lower()
