@@ -125,20 +125,17 @@ class TestSDKLazyImport:
 
         import archon_search.description_generator as dg
 
-        # S5 invariant part 1: module is already in sys.modules as a successful import
-        # (not None), proving its body completed without the SDK.
-        assert sys.modules.get("archon_search.description_generator") is dg, (
-            "description_generator must be importable without claude_agent_sdk present "
-            "at module level — the SDK import must be deferred to _call_haiku()"
-        )
+        # The module is already imported (cached in sys.modules) — its body has no
+        # top-level SDK import, so it loaded without touching claude_agent_sdk.
+        assert sys.modules.get("archon_search.description_generator") is dg
 
         # Mask the SDK so that any `from claude_agent_sdk import ...` raises ImportError.
         monkeypatch.setitem(sys.modules, "claude_agent_sdk", None)
 
-        # S5 invariant part 2: calling _call_haiku() must raise ImportError because
-        # the deferred `from claude_agent_sdk import ...` in the function body now sees
-        # the None sentinel — this proves deferral to call time, not import time.
-        with pytest.raises(ImportError):
+        # S5: calling _call_haiku() must raise ImportError from claude_agent_sdk
+        # because the deferred `from claude_agent_sdk import ...` in the function body
+        # fires at call time and sees the None sentinel — proving deferral to call time.
+        with pytest.raises(ImportError, match="claude_agent_sdk"):
             await dg._call_haiku("test prompt")
 
     @pytest.mark.asyncio
