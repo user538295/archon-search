@@ -72,6 +72,7 @@ Each search result optionally includes an `acl_gate` field that tells the caller
 
 ## References
 
+- **Team plan:** [2026-07-15-360-permission-aware-search-snippets-team-plan.md](./2026-07-15-360-permission-aware-search-snippets-team-plan.md)
 - [[Documentation/Backlog/03_world_class_roadmap.md]] `[user+docs-agent]` — Complete G15 specification: `acl_gate` field schema, effort/impact estimates (effort 0.28, impact 0.62, ratio 2.21), minimum acceptance criteria
 - [[Documentation/Architecture/150_security_and_privacy_architecture.md]] `[docs-agent]` — Foundational ACL semantics (three-state: null/open, empty/deny-all, list/allow); source resolution order; fail-open behavior; namespace isolation
 - [[Documentation/Completed/A4-explain-endpoint-brief.md]] `[docs-agent]` — Explain endpoint design; G15 adds `acl_gate` to this completed endpoint

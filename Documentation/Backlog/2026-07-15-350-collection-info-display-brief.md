@@ -39,9 +39,12 @@ Operators and developers who want to inspect a collection's state — checking d
 - **`description` is null:** Omit the description line rather than printing `None`.
 
 ## Open Questions
-- `CollectionDetail` in `schemas.py:444` does not include `default_ttl_seconds` or `schema_version` — verify whether these fields need to be added to the schema before implementation, or if they should be omitted from the display.
-- `GET /collections/{name}` route: confirm it returns a single `CollectionDetail` (not a list) and that namespace filtering is handled by the auth middleware, not a query param.
-- Formatting: key-value lines (`name: archon_search`) vs. a richer table layout (e.g. using `rich` if already a dependency) — check whether `rich` is in the dependency tree before deciding.
+
+_Resolved 2026-07-20._
+
+- **`default_ttl_seconds` and `schema_version` in `CollectionDetail`?** Verified absent. `CollectionDetail` (`schemas.py:444`) inherits from `CollectionSummary` and adds only `pending_embedding_model`, `reindex_job_id`, `centroid_present`, `last_indexed`, `acl_protected_count`, `acl_open_count`. Add both fields to `CollectionDetail` before implementing the CLI — they are operationally relevant (TTL governs new chunk expiry; schema version governs when `migrate` is needed). Requires route handler update to populate from `CollectionMeta`, plus OpenAPI snapshot regen.
+- **`GET /collections/{name}` shape and namespace auth?** Verify at `routes_collections.py` before implementing. Expected: returns a single `CollectionDetail`, namespace scoping via `request.state.namespace` set by `APIKeyMiddleware` (consistent with every other route). Confirm before writing the CLI call.
+- **Formatting?** Plain key-value lines. `rich` is not in `pyproject.toml` — do not add it. Consistent with existing CLI output style and zero new dependencies.
 
 ## Future Iterations
 - `--json` flag for machine-readable output (useful for scripting and CI checks)

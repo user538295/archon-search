@@ -32,8 +32,11 @@ API clients and CLI users who run a search and get a failure back. Currently the
 - Both the single-collection and multi-collection search paths (`routes_search.py:230` and `:275`) must be updated consistently.
 
 ## Open Questions
-- Should `ErrorDetail` gain a top-level optional `code` field, or should search-specific errors use a separate `SearchErrorDetail` schema? The former is simpler; the latter avoids polluting the shared schema.
-- Are there other `MetadataLookupError` sites in other route files that should get the same treatment in the same PR?
+
+_Resolved 2026-07-20._
+
+- **`ErrorDetail` vs `SearchErrorDetail`?** Add `code: str | None = None` to the shared `ErrorDetail` model (`schemas.py:490`). A subclass splits the schema for no gain and makes client error handling inconsistent. The OpenAPI snapshot regen is mechanical. All `ErrorDetail` sites leave `code=None` unless they explicitly set it — fully additive.
+- **Other `MetadataLookupError` sites?** Verified — three more files catch it and return 503: `routes_openai_shim.py:227`, `routes_explain.py:535`, `mcp.py:442` and `mcp.py:929`. Fix all four sites in one PR (consistent API; the changes are structural copies).
 
 ## Future Iterations
 - Extend the `code` field pattern to other 503-producing endpoints (store busy at `routes_collections.py:194`)

@@ -37,8 +37,11 @@ Any operator who submitted work through the CLI or REST API and wants to know wh
 - **Large job counts**: cap the summary at a reasonable ceiling (e.g. "50+ jobs queued") rather than fetching all pages
 
 ## Open Questions
-- Does `GET /status` already return any job queue field? If so, use it and avoid the second HTTP call. Check `archon_search/server/routes_status.py` and `StatusResponse` in `schemas.py`.
-- Does `GET /jobs` support `?status=RUNNING,PENDING` filtering, or only single-status filters?
+
+_Resolved 2026-07-20._
+
+- **Does `GET /status` already return any job queue field?** No. `routes_status.py` calls only `_count_failed_expired_ingest_jobs` — no active/running/queued count is exposed. A second call to `GET /jobs` is required. Decision: call `GET /jobs?status=RUNNING&status=PENDING` (Option A — no schema change, ships today).
+- **Does `GET /jobs` support `?status=RUNNING,PENDING` filtering?** Yes — multi-value confirmed. `routes_jobs.py:505` declares `status: list[str] = Query(default=[])`, so `?status=RUNNING&status=PENDING` works as-is.
 
 ## Future Iterations
 - Live-refreshing status (watch mode): `archon-search status --watch` that refreshes every N seconds

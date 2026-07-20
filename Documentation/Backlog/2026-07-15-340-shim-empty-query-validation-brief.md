@@ -33,8 +33,11 @@ Any client using the OpenAI-compatible endpoint — an SDK, a LangChain integrat
 - `OpenAI401Middleware` already rewrites bodyless 401s on `/v1/*`; the new 400 is body-bearing and unaffected.
 
 ## Open Questions
-- Does `routes_openai_shim.py` use a helper to extract the user message, or inline logic? If it's inline, the guard is one `if` block. If a helper exists, the guard goes there — check before implementing.
-- Should the `code` value be `"no_user_message"` or match a real OpenAI code? OpenAI uses `"invalid_request_error"` as the type and custom codes — confirm what OpenAI client SDKs actually key on.
+
+_Resolved 2026-07-20._
+
+- **Helper or inline logic?** Inline. `routes_openai_shim.py:164–168` loops over `messages` and sets `query` directly — no helper. Add the empty-string guard as a single `if query.strip() == "":` block immediately after the existing `if query is None:` check.
+- **`code` value?** Use `"no_user_message"` as `code` and `"invalid_request_error"` as `type`. The OpenAI Python SDK keys on `type` for `BadRequestError`, not `code`; custom `code` values are normal and self-documenting. Return shape: `{"error": {"message": "No user message provided", "type": "invalid_request_error", "code": "no_user_message"}}`.
 
 ## Future Iterations
 - Query length cap (e.g. reject > 10 000 characters) — not needed now.

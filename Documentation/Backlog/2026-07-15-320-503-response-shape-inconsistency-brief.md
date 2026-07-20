@@ -30,7 +30,10 @@ Developers integrating with the API — including anyone using a generated clien
 - `BREAKING.md` does not need an entry: the old shape was undocumented (missing from OpenAPI) so no client could reliably depend on `"error": "store_busy"`.
 
 ## Open Questions
-- Should the detail message include the actual retry delay in seconds (e.g., `"store busy; retry in 12 seconds"`) rather than a generic phrase? Resolve when implementing — the `retry_after` variable is already in scope.
+
+_Resolved 2026-07-20._
+
+- **Should the detail message include the actual retry delay in seconds?** Yes. `retry_after = str(math.ceil(e.timeout_s))` is already computed at `routes_collections.py:214` — zero extra code to embed it. Use `f"store busy; retry in {retry_after} seconds"`. The `Retry-After` header remains the authoritative signal for programmatic clients; the body message is for humans.
 
 ## Future Iterations
 - A broader audit for any other endpoints returning non-`ErrorDetail` shapes.

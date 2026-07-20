@@ -1,0 +1,307 @@
+openapi: 3.0.0
+info:
+  title: Archon Search Permission-Aware Snippets API
+  version: 0.0.0
+tags: []
+paths:
+  /explain:
+    post:
+      operationId: Explain_explain
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExplainResponse'
+        '401':
+          description: Access is unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '404':
+          description: The server cannot find the requested resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '422':
+          description: Client error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '503':
+          description: Service unavailable.
+          headers:
+            Retry-After:
+              required: true
+              schema:
+                type: integer
+                format: int32
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoreBusyError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExplainRequest'
+  /search:
+    post:
+      operationId: Search_search
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '401':
+          description: Access is unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '404':
+          description: The server cannot find the requested resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '422':
+          description: Client error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '503':
+          description: Service unavailable.
+          headers:
+            Retry-After:
+              required: true
+              schema:
+                type: integer
+                format: int32
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoreBusyError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+components:
+  schemas:
+    AclGate:
+      type: object
+      required:
+        - allowed_principals
+        - source
+        - warnings
+      properties:
+        allowed_principals:
+          type: array
+          items:
+            type: string
+          nullable: true
+        source:
+          type: string
+          enum:
+            - frontmatter
+            - sidecar
+            - collection_default
+          nullable: true
+        sidecar_path:
+          type: string
+          nullable: true
+        warnings:
+          type: array
+          items:
+            type: string
+          default: []
+    ErrorDetail:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+    ExplainNearMiss:
+      type: object
+      required:
+        - doc_id
+        - chunk_id
+        - score
+        - source_path
+        - acl
+        - collection
+        - acl_gate
+      properties:
+        doc_id:
+          type: string
+        chunk_id:
+          type: string
+        score:
+          type: number
+          format: float
+        source_path:
+          type: string
+        acl:
+          type: array
+          items:
+            type: string
+          nullable: true
+        collection:
+          type: string
+        acl_gate:
+          $ref: '#/components/schemas/AclGate'
+    ExplainRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+        collection:
+          type: string
+          nullable: true
+        collections:
+          type: array
+          items:
+            type: string
+          nullable: true
+        top_k:
+          type: integer
+          format: int32
+    ExplainResponse:
+      type: object
+      required:
+        - results
+        - near_misses
+        - acl_filtered
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExplainResult'
+        near_misses:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExplainNearMiss'
+        acl_filtered:
+          type: boolean
+    ExplainResult:
+      type: object
+      required:
+        - doc_id
+        - chunk_id
+        - text
+        - score
+        - source_path
+        - acl
+        - collection
+        - acl_gate
+      properties:
+        doc_id:
+          type: string
+        chunk_id:
+          type: string
+        text:
+          type: string
+        score:
+          type: number
+          format: float
+        source_path:
+          type: string
+        acl:
+          type: array
+          items:
+            type: string
+          nullable: true
+        collection:
+          type: string
+        acl_gate:
+          $ref: '#/components/schemas/AclGate'
+    SearchRequest:
+      type: object
+      required:
+        - query
+        - acl_context
+      properties:
+        query:
+          type: string
+        collection:
+          type: string
+          nullable: true
+        collections:
+          type: array
+          items:
+            type: string
+          nullable: true
+        top_k:
+          type: integer
+          format: int32
+        acl_context:
+          type: boolean
+          default: false
+    SearchResponse:
+      type: object
+      required:
+        - results
+        - acl_filtered
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResultSchema'
+        acl_filtered:
+          type: boolean
+    SearchResultSchema:
+      type: object
+      required:
+        - doc_id
+        - chunk_id
+        - text
+        - score
+        - source_path
+        - acl
+        - collection
+      properties:
+        doc_id:
+          type: string
+        chunk_id:
+          type: string
+        text:
+          type: string
+        score:
+          type: number
+          format: float
+        source_path:
+          type: string
+        acl:
+          type: array
+          items:
+            type: string
+          nullable: true
+        collection:
+          type: string
+        acl_gate:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/AclGate'
+          nullable: true
+    StoreBusyError:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
