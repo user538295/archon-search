@@ -1,7 +1,7 @@
 ---
 feature: Non-Blocking Collection Add
 plan: 2026-07-15-220-collection-add-async-team-plan.md
-status: draft
+status: done
 ---
 
 # 220 · Non-Blocking Collection Add — Task Breakdown
@@ -105,7 +105,7 @@ flowchart LR
 
 ### Phase 3 · Close-out
 
-- [ ] **T-3** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-3** — Project close-out & acceptance fact-check #tester-role
     - — · 3.0h
     - needs T-1, T-2 · completes (acceptance gate)
     - Tests

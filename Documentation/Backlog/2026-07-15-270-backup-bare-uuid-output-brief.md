@@ -38,7 +38,7 @@ Operators running scheduled or manual backups who need to know which collections
 - Changing backup scheduling or trigger logic
 
 ## Key Decisions
-- **Enhance `BackupTriggerResponse.queued` on the server side**: change `list[str]` (job IDs only) to `list[{collection, job_id}]` — this is the clean fix. The CLI then has the data it needs without extra HTTP calls. Alternative (CLI immediately polls each job ID for its collection name) works today but costs N extra HTTP calls and is a workaround for missing server data.
+- **Change `BackupTriggerResponse.queued` on the server from `list[str]` to `list[{collection, job_id}]`**: this is the clean fix — the CLI gets what it needs without extra HTTP calls, and `queued` becomes consistent with the `skipped` list which already returns `{collection, reason}` pairs. The CLI-only workaround (poll each job ID immediately) would cost N extra HTTP calls on every backup run. This is a breaking schema change; add to `BREAKING.md` and regenerate the OpenAPI snapshot. The `_wait_for_jobs` helper must be updated to accept a `{job_id: collection}` map so it can label progress lines by collection name rather than job ID.
 - **`--wait` output**: use collection name (not job ID) as the progress label — the job ID is already printed at queue time; the user doesn't need to see it again during polling.
 
 ## Edge Cases & Constraints
@@ -47,8 +47,7 @@ Operators running scheduled or manual backups who need to know which collections
 - The `skipped` list already shows `{collection, reason}` pairs — the fix makes `queued` consistent with `skipped`.
 
 ## Open Questions
-- Should the server change `BackupTriggerResponse.queued` to a list of objects, or should the CLI do immediate job lookups? Server change is cleaner; CLI workaround is faster to ship without a schema change.
-- Does `_wait_for_jobs` need to accept a `job_id → collection` map, or can it re-fetch collection from `GET /jobs/{id}` lazily on failure only?
+- Does `_wait_for_jobs` need to accept a full `job_id → collection` map upfront, or is a lazy `GET /jobs/{id}` re-fetch on failure sufficient? The map approach labels every progress line by collection name; the lazy approach labels only failures. Both work — decide based on how much per-cycle progress output `--wait` should show.
 
 ## Future Iterations
 - `backup status` could also show per-collection backup size and duration — deferred, not part of this fix.

@@ -22,7 +22,7 @@ Any operator who configured HyDE or RAG Fusion with `provider = "openai"` or `pr
 - Covers both `hyde` and `rag_fusion` warning paths.
 
 ## Out of Scope
-- Changing what the server returns — `HydeStatusDetail.provider` already exists (added in G10 BE-5).
+- Changing what the server returns — `HydeStatusDetail.provider: str` and `RagFusionStatusDetail.provider: str` are both declared (`schemas.py:299`, `313`) and populated in `_build_hyde_status` / `_build_rag_fusion_status` (`routes_status.py:283–285`, `302–304`); the field is already in the serialized response (verified).
 - Adding new provider types — only the three existing providers (`anthropic`, `openai`, `ollama`) are in scope.
 
 ## Key Decisions
@@ -33,9 +33,6 @@ Any operator who configured HyDE or RAG Fusion with `provider = "openai"` or `pr
 ## Edge Cases & Constraints
 - **Older server without `provider` field:** `hyde.get("provider", "anthropic")` defaults to Anthropic — same behavior as today, no regression.
 - **Unknown provider string:** Map unknown values to a generic "check your provider's API key" message rather than crashing.
-
-## Open Questions
-- Confirm `HydeStatusDetail` and `RagFusionStatusDetail` both serialize `provider` into the `/status` JSON response (verify `routes_status.py` / `_build_hyde_status`). If the field is present in the Pydantic model but excluded from the response serialization, the fix needs a server-side change too.
 
 ## Future Iterations
 - A follow-on improvement: include the exact env var name in the server response itself (in `HydeStatusDetail`), so any client — REST, CLI, MCP — can show the right message without per-client mapping logic.

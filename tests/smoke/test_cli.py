@@ -1060,16 +1060,18 @@ def test_cli_write_commands_contain_no_direct_store_imports() -> None:
     ``SearchPipeline``, ``SearchStore``, or ``create_pipeline`` directly,
     and write-command function bodies must not call ``asyncio.run()``.
 
-    ``collection.py`` is mixed: read commands (``list_cmd``, ``info``) still
-    use ``asyncio.run()`` + ``create_pipeline`` (in-process LanceDB reads).
-    Write commands are derived by excluding the known read commands from all
-    ``@collection.command``-decorated functions (fail-closed: new commands are
-    guarded by default).  Both ``async def`` and plain ``def`` functions are
-    checked for ``asyncio.run()`` calls.
+    ``collection.py`` is mixed: read commands (``list_cmd``, ``info``) use
+    ``asyncio.run()`` + ``_make_store()`` (in-process LanceDB reads via
+    ``SearchStore``). Write commands are derived by excluding the known read
+    commands from all ``@collection.command``-decorated functions (fail-closed:
+    new commands are guarded by default).  Both ``async def`` and plain ``def``
+    functions are checked for ``asyncio.run()`` calls.  A separate AST guard
+    (3c) ensures write-command bodies do not call ``_make_store()``.
 
     ``ingest.py`` and ``sync.py`` are purely write-command modules; they are
-    checked for ``asyncio.run()`` as whole-file text assertions (both currently
-    have no ``asyncio`` import at all, so aliasing is not a practical concern).
+    checked for ``asyncio.run()`` and ``SearchStore`` as whole-file text
+    assertions (both currently have no ``asyncio`` or store import at all,
+    so aliasing is not a practical concern).
 
     Non-automatable companion (S17): stop the server, run
     ``archon-search collection list`` and ``archon-search collection info <name>``,
@@ -1083,10 +1085,16 @@ def test_cli_write_commands_contain_no_direct_store_imports() -> None:
     sync_py = cli_dir / "sync.py"
 
     # ------------------------------------------------------------------
-    # 1. Forbidden import strings — check all three files.
+    # 1. Forbidden import strings — purely write-command files only.
     # Covers the canonical import forms (plan spec S16). The real in-process
     # gateway is create_pipeline; SearchPipeline/SearchStore are checked
     # per spec and as an extra future-regression guard.
+    #
+    # collection.py is a mixed file: read commands (list_cmd, info) use
+    # _make_store() which imports SearchStore at function scope (deferred,
+    # startup-deferral policy). The whole-file text check is therefore
+    # scoped to the purely write-command files (ingest.py, sync.py); the
+    # write-command body guard for collection.py is in section 3c below.
     # ------------------------------------------------------------------
     for fpath in (collection_py, ingest_py, sync_py):
         src = fpath.read_text()
@@ -1094,9 +1102,12 @@ def test_cli_write_commands_contain_no_direct_store_imports() -> None:
             f"{fpath.name}: 'from archon_search.pipeline import SearchPipeline' must be absent "
             f"from CLI write-command modules (S16)"
         )
+
+    for fpath in (ingest_py, sync_py):
+        src = fpath.read_text()
         assert "from archon_search.store import SearchStore" not in src, (
             f"{fpath.name}: 'from archon_search.store import SearchStore' must be absent "
-            f"from CLI write-command modules (S16)"
+            f"from a purely write-command module (S16)"
         )
 
     # create_pipeline is the actual in-process LanceDB gateway; it must not
@@ -1156,3 +1167,24 @@ def test_cli_write_commands_contain_no_direct_store_imports() -> None:
             f"if it was converted to an HTTP proxy, move it to the write-command set "
             f"by removing it from _COLLECTION_READ_CMDS"
         )
+
+    # 3c. Write-command bodies must not call _make_store().
+    # _make_store imports SearchStore and is the read-only LanceDB gateway for
+    # list_cmd/info; calling it from a write command would bypass the server proxy.
+    def _has_make_store_call(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        for subnode in ast.walk(node):
+            if isinstance(subnode, ast.Call):
+                func = subnode.func
+                if isinstance(func, ast.Name) and func.id == "_make_store":
+                    return True
+        return False
+
+    offending_store: list[str] = [
+        f"{name} (line {node.lineno})"
+        for name, node in write_cmds.items()
+        if _has_make_store_call(node)
+    ]
+    assert not offending_store, (
+        f"collection.py write-command bodies must not call _make_store() "
+        f"(SearchStore gateway reserved for read commands); found in: {offending_store} (S16)"
+    )

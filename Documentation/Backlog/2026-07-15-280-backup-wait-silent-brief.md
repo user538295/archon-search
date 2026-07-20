@@ -34,9 +34,10 @@ Operators and developers who trigger a manual backup and want to confirm it comp
 - `_POLL_INTERVAL_SECONDS` controls how often the line appears; no change needed to the interval itself.
 - If the server drops mid-wait, the existing `httpx.HTTPError` handler fires (line 171) — no change needed there.
 
-## Open Questions
-- Is `_POLL_INTERVAL_SECONDS` a constant or configurable? If it's long (>10s), consider printing elapsed time as well to reassure the user between lines.
-- Should `--no-progress` / `--quiet` suppress the progress lines for scripting use cases? Low priority — the existing `--wait` output is already minimal.
+## Key Decisions (continued)
+
+- **No elapsed time**: `_POLL_INTERVAL_SECONDS = 2` (constant, `backup_cmd.py:30`) — a line every 2 seconds is already a sufficient heartbeat. Elapsed time adds no value at this cadence.
+- **No `--quiet` flag**: output is one line per 2-second poll — minimal enough that suppression is not warranted. Other `--wait` commands (`collection migrate`, `export`) print progress without a quiet flag; adding one here would be an inconsistent UX surface. If suppression is ever needed, a global `--quiet` on the root command is the right scope.
 
 ## Future Iterations
 - Rich spinner / live-updating progress bar (requires `rich` or similar — out of scope for this fix)

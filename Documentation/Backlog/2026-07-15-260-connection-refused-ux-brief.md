@@ -36,10 +36,11 @@ Any operator running archon-search CLI commands in a terminal. Most likely to hi
 - **`--api-url` flag:** Some commands accept a custom server URL. The helper must use the resolved URL (after flag/env/config resolution), not a hardcoded default.
 - **Windows path separators in the start command:** The suggested command `archon-search start` is the same on all platforms — no OS-specific branching needed.
 
-## Open Questions
-- Full grep needed at implementation time: `grep -rn "Error contacting server\|ConnectError\|ConnectionRefused" archon_search/cli/` to find every affected call site beyond the three confirmed above.
-- Should the exit code be `1` (generic failure) or a dedicated code like `2` (misuse) or `3` (server unavailable)? Consistent with the rest of the CLI — check what `maintenance_cmd.py` currently uses.
-- Does `_require_server` belong in the existing `_helpers.py` or in a new `_http.py` CLI module?
+## Key Decisions (continued)
+
+- **Exit code `1`**: consistent with Unix convention and every other error exit in the CLI. A bespoke code `3` ("server unavailable") would require documenting and maintaining a new exit-code contract with no callers today.
+- **`_require_server` belongs in `_helpers.py`**: already imported by every CLI module that needs it; no new file justified for a single function.
+- **Implementer must grep at implementation time**: `grep -rn "Error contacting server\|ConnectError\|ConnectionRefused" archon_search/cli/` to confirm all affected call sites beyond the three confirmed in this brief.
 
 ## Future Iterations
 - A `archon-search doctor` command that checks server reachability, config validity, model availability, and disk space — a single diagnostic command that surfaces all of these at once.

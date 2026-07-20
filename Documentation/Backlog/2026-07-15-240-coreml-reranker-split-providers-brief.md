@@ -45,6 +45,7 @@ Mac users on Apple Silicon who run `archon-search wizard` to set up or reconfigu
 - **`reranker_providers` not `embedding_providers`**: Adding only `reranker_providers` is backward-compatible — existing configs need no migration. Adding `embedding_providers` as an alias for `providers` would break every config that sets `providers`. The asymmetry (`providers` = embedder default, `reranker_providers` = reranker override) is a minor papercut compared to a breaking migration.
 - **Silent split, one summary line**: No confirmation prompt. The split is always better than full-CPU fallback. The wizard communicates what it configured in the summary screen, matching the existing pattern for other partial states.
 - **`None` sentinel means "inherit from `providers`"**: A `reranker_providers` absent from the TOML (value `None` in code) falls back to `providers`. An explicit empty list (`[]`) means "use CPU". This keeps old configs working without code changes.
+- **Consolidate provider injection before adding the new field**: `app.py` (lines 587, 620) and `pipeline.py` (lines 3481/3486) both construct the embedder and reranker with provider settings. This PR consolidates both into a single construction path via `pipeline.py` first, then adds `reranker_providers` once. This prevents the new field from being silently ignored on one path, and ensures every future provider setting is a one-place change.
 
 ## Edge Cases & Constraints
 
@@ -55,11 +56,10 @@ Mac users on Apple Silicon who run `archon-search wizard` to set up or reconfigu
 - **Operator manually sets `reranker_providers`** in the TOML: respected at runtime. The wizard overwrites it on next run if it runs GPU detection.
 - **`validate_providers_shared` reranker-skip path**: passing `reranker_model = ""` to this function already skips the reranker probe cleanly — the embedder-only probe in step 4 above uses this mechanism without any changes to the shared validation function.
 
-## Open Questions
+## Key Decisions (continued)
 
-- Should `app.py`'s direct instantiation of `ModelEmbedder` / `ModelReranker` (lines 587, 620) be updated to use `reranker_providers`, or should this be unified into a single construction path via `pipeline.py`? The pipeline path already holds both instantiations (lines 3481/3486) — consolidation may be the right fix.
-- Should a startup warning be logged when `providers = ["CoreMLExecutionProvider"]` is set but `reranker_providers` is absent, to prompt users with old configs to re-run the wizard? This would help users who installed before this fix without needing them to know to re-run. Low priority, but the warning location (model_validation.py or app.py lifespan) needs a decision.
-- The D6 team plan (line 78) deferred per-model providers under the label "config-breaking change." This brief's approach avoids that break — should the D6 ADR be updated to reflect this, or is a note in BREAKING.md sufficient?
+- **Log a one-time WARNING at startup when `providers = ["CoreMLExecutionProvider"]` but `reranker_providers` is absent**: place the check in `model_validation.py` alongside the existing provider probe logic. Fires only in the narrow stale-config edge case; the only signal a pre-fix user gets before hitting a silent CoreML inference failure at runtime.
+- **Write a new superseding ADR and append a "Superseded by" note to D6**: the append-only ADR rule is respected (D6 is not edited), and the new ADR records the non-breaking per-model provider approach. `BREAKING.md` still gets the `reranker_providers` schema note. Leaving D6 as "deferred" would actively mislead future readers.
 
 ## Future Iterations
 

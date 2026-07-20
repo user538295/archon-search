@@ -33,9 +33,10 @@ Operators and developers who have configured multiple namespaces (e.g. `default`
 - **`CollectionBackupStatus` is part of `StatusResponse`:** Adding a field with a default (`namespace: str = "default"`) is non-breaking for existing clients.
 - **OpenAPI snapshot test will fail:** Adding a field to `CollectionBackupStatus` requires regenerating `tests/server/openapi_snapshot.json` with `uv run --python 3.12 pytest tests/server/test_openapi_snapshot.py --update-openapi-snapshot --no-cov -n0`.
 
-## Open Questions
-- Where exactly is `collection_status` populated on the server side? Likely in `routes_status.py` or `backup_loop.py` — implementer must locate the site that builds `CollectionBackupStatus` objects and add `namespace=` there.
-- Does `BackupLoop` track namespace per collection, or only collection name? If it stores only the name, the namespace must be looked up via `store.get_collection_meta()` at status-build time.
+## Key Decisions (continued)
+
+- **Fix site: `routes_status.py:362–368`, `_build_backup_status()`**: this function iterates `ns_collection_names`, builds one `CollectionBackupStatus` per collection, and already has `ns` in scope (used at line 353 for the backup archive path). The fix is adding `namespace=ns` to the `CollectionBackupStatus(...)` constructor call. No lookup via `store.get_collection_meta()` is needed.
+- **`BackupLoop` does track namespace**: it stores a `job_id → (namespace, collection)` map (line 69), uses `j.namespace` in the trigger loop, and keys the state file as `"{ns}/{col}"`. Namespace is available at every relevant call site.
 
 ## Future Iterations
 - `backup status --namespace team-a` filter flag to show only one namespace's collections

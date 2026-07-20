@@ -4,7 +4,7 @@ feature: Non-Blocking Collection Add
 brief: 2026-07-15-220-collection-add-async-brief.md
 purpose: Verification and gap-closing plan for bug-005 — the feature is already implemented on main (CSP120, commit 8c36a6f7); the remaining work is confirming it satisfies the brief and reconciling three brief-vs-reality contradictions.
 audience: backend developer and tester reconciling an already-shipped feature against a stale brief.
-status: planned      # draft → planned → in-progress → done
+status: done      # draft → planned → in-progress → done
 roles: [frontend, backend, tester]
 architecture: clean
 ---
@@ -59,7 +59,7 @@ Before CSP120, `archon-search collection add <path>` ran the ingest pipeline **i
 - Ctrl-C during `--wait` prints "Polling stopped — job continues on server" and leaves the server job running — verified.
 - Server not running → clear message + exit `1`; no in-process fallback — verified.
 - Duplicate collection → the decided semantics (currently `409` + exit 1) hold, and the brief + tests agree with the decision.
-- API key resolves via `--api-key` → `ARCHON_SEARCH_API_KEY` → key file — verified.
+- API key resolves via `--api-key` → `ARCHON_SEARCH_API_KEY` → key file — **not yet unit-tested** (see S7 allocation: needs a `_resolve_api_key` precedence test for all three branches).
 - The three contradictions are each resolved with an explicit brief-follows-code or code-follows-brief decision (see [Open questions](#open-questions)).
 - The brief is updated (or archived) so it no longer asserts a CLI-side TOML write, a `200` duplicate path, or an unshipped error string.
 - All tests pass with zero warnings (existing suite is already green).
@@ -78,7 +78,7 @@ Before CSP120, `archon-search collection add <path>` ran the ingest pipeline **i
 
 ## Known limitations / accepted trade-offs
 - Duplicate collection is surfaced as an error (`409` → exit 1), **not** an idempotent `200` "already up to date" — unless Q2 decides otherwise. `409` is the semantically correct signal and the CLI already handles it.
-- No distinct CLI messages for `400` / `422` / `500` — they fall through the generic non-`202` branch. The brief does not require distinct handling; accepted as-is.
+- No distinct CLI messages for `400` / `422` / `500` / `503` — all fall through the generic non-`202` branch (`Error: server returned {N}: {text}`). The CLI never reads `Retry-After` and never surfaces `store_busy` text distinctly. The brief does not require distinct handling; accepted as-is.
 - The name is always server-derived; a caller cannot pin a collection name.
 
 ---
@@ -175,7 +175,12 @@ sequenceDiagram
   participant P as GET /jobs/{id}
 
   U->>EP: POST {"path": path} (Bearer)
+  EP->>EP: validate path (400 if unsafe)
+  EP->>EP: dedup by resolved path → 409 if already registered
+  EP->>EP: dedup by derived name → 409 if name taken
   EP->>CFG: append path + _maybe_save_config (server-owned TOML)
+  EP->>EP: write stub meta (503/409/500 + config rollback on failure)
+  EP->>EP: acquire ingest lock (503 + full config+meta rollback on busy)
   EP->>JS: create IngestJob (PENDING) + dispatch ingest task
   EP-->>U: 202 JobResponse (job_id, collection)
   U->>P: --wait → poll GET /jobs/{id} every 2s
@@ -228,7 +233,7 @@ _No database schema change — this feature is a CLI↔server API surface; no La
 - `ErrorDetail` (`server/schemas.py`) — `{detail: str}` for `401`/`404`/`409`/`422` bodies.
 
 **Entity models (no change)**
-- `IngestJob` / `JobStatus` (`types.py`) — add creates a plain `IngestJob` in `PENDING` via `JobStore.create`; terminal set `{DONE, FAILED, FAILED_EXPIRED, CANCELLED}`.
+- `IngestJob` / `JobStatus` (`types.py`) — add creates a plain `IngestJob` in `PENDING` via `JobStore.create`; non-terminal states: `{PENDING, QUEUED, RUNNING, CANCELLING}`. Two distinct terminal sets: `_TERMINAL_STATUSES` in `_helpers.py` = `{DONE, FAILED, FAILED_EXPIRED, CANCELLED}` (poll-loop break); `_EXIT_1_STATUSES` in `jobs_cmd.py` = `{FAILED, FAILED_EXPIRED, CANCELLED}` (DONE excluded — exits 0, not 1, for a completed job).
 - `CollectionMeta` (`collection_meta.py`) — a stub is written during add via `update_collection_meta` with `schema_version=STORE_SCHEMA_VERSION` (to the LanceDB meta table, not TOML).
 
 ---
@@ -241,12 +246,13 @@ Because the feature is implemented, these are **verification scenarios** — the
 |----|--------------------------------|
 | **S1** | **Given** a running server and a valid path · **When** `collection add <path>` runs · **Then** it POSTs `{"path": path}` with a Bearer header, prints the job id + server-derived collection name, and exits `0` immediately (no block) |
 | **S2** | **Given** a submitted add job · **When** `collection add <path> --wait` runs · **Then** it polls `GET /jobs/{id}` to DONE via `_poll_job` and prints "ingested successfully." |
-| **S3** | **Given** a path/name already registered · **When** `collection add` runs · **Then** the server returns `409` and the CLI prints the detail and exits `1` (per current semantics; revisit if Q2 chooses `200`) |
+| **S3** | **Given** a path/name already registered · **When** `collection add` runs · **Then** the server returns `409` and the CLI prints the detail and exits `1`. Note: there are three distinct 409 paths in the route: (a) resolved-path already in config (`"collection already registered"`); (b) derived-name taken across namespaces (`"collection name already registered"`); (c) TOCTOU race in stub-meta write (name claimed between check and write — also triggers config rollback). The existing unit test covers path (a) only; paths (b) and (c) are untested. |
 | **S4** | **Given** no running server · **When** `collection add` runs · **Then** the CLI prints the not-running message and exits `1` with no in-process fallback |
 | **S5** | **Given** `collection add --wait` mid-poll · **When** the user presses Ctrl-C · **Then** the CLI prints "Polling stopped — job continues on server" and the server job keeps running |
 | **S6** | **Given** an unsafe or invalid path · **When** `collection add` runs · **Then** the server returns `400` and the CLI exits `1` (generic non-`202` branch) |
 | **S7** | **Given** `--api-key`, `ARCHON_SEARCH_API_KEY`, and a key file · **When** `collection add` runs · **Then** the key resolves in that precedence order via `_resolve_api_key` |
-| **S8** | **Given** the server holds the per-collection lock (busy) · **When** `collection add` runs · **Then** the server returns `503` with `Retry-After` and the CLI prints an error and exits `1` |
+| **S8** | **Given** the server holds the per-collection lock (busy) · **When** `collection add` runs · **Then** the server returns `503` with `Retry-After`; the CLI falls through the generic non-`202` branch, prints `"Error: server returned 503: ..."` and exits `1` (no Retry-After surfaced; no 503-distinct branch in CLI) |
+| **S9** | **Given** `collection add <path> --wait` is running and the server-side job transitions to `FAILED` · **When** `_poll_job` detects the terminal status · **Then** the CLI exits `1` (via `SystemExit(1)` raised by `_poll_job`); no "ingested successfully" line is printed |
 
 ---
 
@@ -289,12 +295,13 @@ Because the feature is implemented, these are **verification scenarios** — the
 | S1 | integration + e2e | e2e exists (`test_e2e_collection_add_wait_against_server`) |
 | S2 | unit + e2e | unit exists (`test_add_with_wait_polls_to_done`); e2e exists |
 | S3 | unit | exists (`test_add_409_collection_already_registered`) |
-| S4 | unit + **smoke (new, tester)** | unit exists (`test_add_server_not_running_exits_1`); **new** closed-port smoke negative test is the tester's task |
+| S4 | unit + **smoke (new, tester)** | unit exists (`test_add_server_not_running_exits_1`); **new** closed-port smoke negative test is the tester's task. **Implementation note:** (1) the test **must** take the `smoke_server` fixture as a parameter (even though it targets a dead port) to inherit the `xdist_group("smoke_e2e")` serialization — without it the test runs on any worker and can race a live server subprocess, causing OOM; (2) use a socket-hold pattern: bind a socket, record the port, **keep it held** while the subprocess runs, then close it — do NOT close-then-connect (TOCTOU race exists in the reference `test_maintenance_run_without_server` pattern). |
 | S5 | unit | exists (`test_poll_job_helper.py`, KeyboardInterrupt) |
-| S6 | unit | generic non-`202` branch (add if absent) |
-| S7 | unit | `_resolve_api_key` precedence |
+| S6 | unit **(add: 400-status-response test absent)** | The existing `test_add_generic_http_error_exits_1` exercises a transport `ReadTimeout` (hits `except httpx.HTTPError` at collection.py:102), which is a **different code path** from a `400` status response (hits collection.py:114). A unit test sending `status_code=400` against the add command is absent and must be added. |
+| S7 | unit **(needs test)** | `_resolve_api_key` precedence — no test currently exists for the three-branch ordering (arg → env → key file); must be added before S7 box can be checked |
 | S8 | unit | exists (`test_add_503_prints_error_exits_1`) |
-| — | **manual (tester)** | Manual checklist confirming user-visible strings once Q2/Q3 wording is decided |
+| S9 | unit **(needs test)** | `collection add --wait` on a FAILED job → exit 1; currently untested through the add command end-to-end (only `_poll_job` helper is tested in isolation) |
+| — | **manual (tester)** | Manual checklist confirming user-visible strings (Q2/Q3 already resolved — run now). Strings to verify: (1) submit line: `"Add collection job submitted: {id}. Collection: '{name}'"` (`collection.py:121`); (2) track hint: `"Track progress with: archon-search jobs status {id}"` (`:122`); (3) completion line: `"Collection '{name}' ingested successfully."` (`:127`); (4) not-running message: `"archon-search serve is not running. Start it first."` (`:98`); (5) 409 detail: `"Error: {detail from server}"` (`:111`); (6) Ctrl-C message: `"Polling stopped — job continues on server"` (`_helpers.py:60`) |
 
 ---
 
@@ -302,12 +309,12 @@ Because the feature is implemented, these are **verification scenarios** — the
 
 Docs the feature touches — the tasks file's close-out task works through this list. The docs agent confirmed all four already match the shipped code; the real remaining doc action is the **brief** itself.
 
-- [ ] [2026-07-15-220-collection-add-async-brief.md](./2026-07-15-220-collection-add-async-brief.md) — *contradiction with code* — update (or archive as "shipped in CSP120"): strike the CLI-side TOML write, the `200` "already up to date" path, and align the error-string reference to the resolved wording
-- [ ] [2026-07-15-220-collection-add-async-team-plan.md](./2026-07-15-220-collection-add-async-team-plan.md) — *new* (this file)
-- [ ] [Documentation/UserManual/04_ingestion_and_collections.md](../UserManual/04_ingestion_and_collections.md) — *no change needed* — already documents async `add`, `--wait`, server-owned TOML, and "requires `archon-search serve`"
-- [ ] [Documentation/Architecture/110_component_catalog_and_layer_breakdown.md](../Architecture/110_component_catalog_and_layer_breakdown.md) — *no change needed* — CLI row already reflects the CSP120 proxy
-- [ ] [Documentation/Architecture/120_services_and_integration_architecture.md](../Architecture/120_services_and_integration_architecture.md) — *no change needed* — proxy pattern + server-owned TOML already documented
-- [ ] [Documentation/Architecture/600_api_reference_or_public_interface.md](../Architecture/600_api_reference_or_public_interface.md) — *no change needed* — `POST /collections/` and CLI `collection add` already documented (CSP120 FE-4)
+- [x] [2026-07-15-220-collection-add-async-brief.md](./2026-07-15-220-collection-add-async-brief.md) — archived as "shipped in CSP120"; CLI-TOML write struck, `200` duplicate path removed, error-string reference corrected
+- [x] [2026-07-15-220-collection-add-async-team-plan.md](./2026-07-15-220-collection-add-async-team-plan.md) — status updated to `done`
+- [x] [Documentation/UserManual/04_ingestion_and_collections.md](../UserManual/04_ingestion_and_collections.md) — verified: no change needed — already documents async `add`, `--wait`, server-owned TOML, and "requires `archon-search serve`"
+- [x] [Documentation/Architecture/110_component_catalog_and_layer_breakdown.md](../Architecture/110_component_catalog_and_layer_breakdown.md) — verified: no change needed — CLI row already reflects the CSP120 proxy
+- [x] [Documentation/Architecture/120_services_and_integration_architecture.md](../Architecture/120_services_and_integration_architecture.md) — verified: no change needed — proxy pattern + server-owned TOML already documented
+- [x] [Documentation/Architecture/600_api_reference_or_public_interface.md](../Architecture/600_api_reference_or_public_interface.md) — verified: no change needed — `POST /collections/` and CLI `collection add` already documented (CSP120 FE-4)
 
 **Consulted (read-only)**
 - [CLAUDE.md](../../CLAUDE.md) — CSP120 CLI section confirms `collection add` proxies `POST /collections/` and `jobs status` exists
@@ -317,7 +324,7 @@ Docs the feature touches — the tasks file's close-out task works through this 
 
 ## Open questions
 
-*All questions resolved. Status: `planned`.*
+*All decision questions resolved. Two implementation actions remain (Q6 smoke test; S6 + S7 unit tests). Status: `planned`.*
 
 **Remaining action (Q6):** Add a closed-port negative smoke test for `collection add` — the tester's task. Modelled on the existing `maintenance run` negative smoke test. The error string to assert is confirmed as `"archon-search serve is not running. Start it first."` (Q3 resolved).
 
@@ -337,5 +344,6 @@ Docs the feature touches — the tasks file's close-out task works through this 
 ## References
 
 - **Brief:** [2026-07-15-220-collection-add-async-brief.md](./2026-07-15-220-collection-add-async-brief.md)
+- **Tasks:** [2026-07-15-220-collection-add-async-tasks.md](./2026-07-15-220-collection-add-async-tasks.md)
 - **Contract (TypeSpec):** [api-contracts/2026-07-15-220-collection-add-async.tsp](./api-contracts/2026-07-15-220-collection-add-async.tsp)
 - **Contract (OpenAPI):** [api-contracts/2026-07-15-220-collection-add-async.openapi.yaml](./api-contracts/2026-07-15-220-collection-add-async.openapi.yaml)

@@ -31,8 +31,9 @@ Operators running maintenance from a cron job, a script, or the terminal after r
 - **`--wait` flag with no server:** The `--wait` path also calls `httpx.get` for status polling — the same `httpx.HTTPError` catch covers it; no second change needed.
 - **Server running but auth wrong (401):** Not affected — that path reaches the `resp.status_code != 202` branch, which is handled separately and correctly.
 
-## Open Questions
-- Should the message include `archon-search start` (launchd/systemd install) or `archon-search serve` (foreground)? Both are valid. Suggest checking whether the platform service is installed and printing the appropriate command — or always printing `archon-search serve` as the safe default.
+## Key Decisions (continued)
+
+- **Always print `archon-search serve`**: `serve` is correct regardless of whether a system service is installed. Detecting launchd/systemd state at error-handler time adds complexity and a possible false-positive (service installed but disabled). No detection utility exists today.
 
 ## Future Iterations
 - In-process maintenance mode (`--in-process` flag) that runs `MaintenanceLoop._run_one_pass()` directly without a server — deferred because it requires constructing the full store stack and adds concurrent-write risk while Issue 8 (CLI/server coordination) is unresolved.

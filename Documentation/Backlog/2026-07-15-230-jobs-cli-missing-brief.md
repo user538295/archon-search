@@ -32,23 +32,20 @@ Any operator who has just run `archon-search collection add` (bug-005), `collect
 ## Out of Scope
 - `jobs cancel <job_id>` — no cancellation endpoint exists in the REST API today
 - Streaming live log output — the REST API does not expose job logs
-- Non-default namespaces — add `--namespace` in a follow-on once the pattern is established
+- `--namespace` flag — `GET /jobs` already scopes to the authenticated namespace (`routes_jobs.py:512–515`); multi-namespace listing is a follow-on
 
 ## Key Decisions
 - **REST proxy only, no in-process access:** Consistent with the bug-008 architecture direction; jobs are server-side state, the CLI has no business reading the job store directly.
 - **Reuse `export_cmd.py` polling template:** `export_cmd.py:101–150` already implements `--wait` with configurable poll interval and timeout — extract it into a shared `_poll_job(api_url, api_key, job_id)` helper rather than copy-pasting.
 - **Truncated IDs in list, full IDs in show:** UUIDs are 36 chars; list output truncates to first 8 chars for readability; `show` prints the full ID.
+- **Pass `--status` to the server, no client-side re-filtering:** `GET /jobs` already accepts `?status=` and filters before returning (`routes_jobs.py:505`, `517–520`); the CLI forwards the flag directly.
+- **Add `job_type: str` to `JobResponse` and `job_to_dict` before CLI work begins:** `JobResponse` has no type field today (`schemas.py:455–476`); the server already owns the twelve-case type→label mapping in `store.py:307–369` — surface it in the response rather than duplicating it in the CLI. Every future client gets the correct label automatically; the alternative (derive client-side) would duplicate the twelve-case mapping and require a second update site whenever a new job type is added.
 
 ## Edge Cases & Constraints
 - **Server not running:** Print `"Server is not running. Start it first with: archon-search start"` (consistent with bug-012).
 - **Unknown job ID:** Server returns 404; CLI prints `"Job <id> not found."` and exits 1.
 - **`--wait` timeout:** Default 10 minutes; configurable via `--timeout <seconds>`; prints elapsed time on exit.
 - **Large job list:** `GET /jobs` may return many entries on long-running servers; default to last 50, add `--limit` flag.
-
-## Open Questions
-- Does `GET /jobs` support `?status=` filtering server-side, or must the CLI filter client-side? (`routes_jobs.py:503` — check query params before implementing)
-- Does `JobResponse` include a human-readable `job_type` label or just an internal enum? Affects how the list table reads.
-- Should `jobs list` show all namespaces or only the authenticated namespace? (Check how `GET /jobs` scopes by namespace today.)
 
 ## Future Iterations
 - `jobs cancel <job_id>` once a cancellation endpoint is added
@@ -63,4 +60,8 @@ Any operator who has just run `archon-search collection add` (bug-005), `collect
 - [[Documentation/Backlog/bug-012-connection-refused-ux-brief.md]] `[user]` — shared error message pattern for server-not-running
 
 ## Recommendation
-Build this before shipping bug-005 and bug-016. Returning a job ID to a user who has no way to check it is worse UX than the current blocking behavior — it creates uncertainty instead of removing it. This is a 2–3 hour implementation (two Click commands, one shared polling helper extracted from `export_cmd.py`) with high payoff across every async operation the CLI exposes. The only hard part is verifying the `GET /jobs` query-param surface before writing the filter logic.
+Build this before shipping bug-005 and bug-016. Returning a job ID to a user who has no way to check it is worse UX than the current blocking behavior — it creates uncertainty instead of removing it.
+
+Implementation is now fully unblocked: status filtering is server-side (Q1), namespace scoping is automatic (Q3). The one prerequisite decision is Q2: add `job_type: str` to `JobResponse` and `job_to_dict` before starting CLI work — otherwise the list table has no type column to display.
+
+Estimated scope: add `job_type` to the server (30 min), two Click commands (1.5–2 h), extract `_poll_job` from `export_cmd.py:101–150` (30 min). Total: 2.5–3 h.

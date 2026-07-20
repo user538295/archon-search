@@ -22,7 +22,7 @@ A developer or operator adding a new directory to be indexed. They run the comma
 
 ## In Scope
 - `collection add` command rewritten to call `POST /collections/` REST endpoint
-- `--wait` flag: poll `GET /jobs/{job_id}` until terminal, print progress (reuse `_poll_migration_job` pattern from `migrate_cmd`)
+- `--wait` flag: poll `GET /jobs/{job_id}` until terminal, print progress (reuse `_poll_job` from `cli/_helpers.py`)
 - `--api-url` and `--api-key` options (same defaults as all other server-proxying commands)
 - Clear error if the server is not running: `"archon-search serve is not running. Start it first."`
 - The server writes the path to `archon-search.toml` server-side (`_maybe_save_config`) — the CLI writes nothing
