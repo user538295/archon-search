@@ -206,7 +206,7 @@ def test_poll_job_connect_error_exits_1(capsys) -> None:
 
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert "Error polling job" in captured.err
+    assert "not running" in captured.err.lower() or "start it first" in captured.err.lower()
 
 
 # ---------------------------------------------------------------------------

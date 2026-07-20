@@ -102,8 +102,11 @@ def test_cli_connect_error_prints_server_not_running() -> None:
         )
 
     assert result.exit_code != 0, f"Expected non-zero exit, got {result.exit_code}"
-    assert "Server is not running. Start it first with: archon-search start" in result.output, (
-        f"Expected exact server-not-running message in output: {result.output!r}"
+    assert "not running" in result.output.lower(), (
+        f"Expected server-not-running message in output: {result.output!r}"
+    )
+    assert "start it first" in result.output.lower(), (
+        f"Expected 'start it first' hint in output: {result.output!r}"
     )
 
 

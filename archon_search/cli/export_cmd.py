@@ -8,6 +8,7 @@ import click
 import httpx
 
 from archon_search.key_manager import load_or_generate_key
+from archon_search.cli._helpers import _SERVER_NOT_RUNNING_MSG
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
@@ -79,7 +80,14 @@ def export_cmd(
 
     url = f"{api_url.rstrip('/')}/collections/{collection}/export"
 
-    resp = httpx.post(url, json=body, headers=headers)
+    try:
+        resp = httpx.post(url, json=body, headers=headers)
+    except httpx.ConnectError:
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        raise SystemExit(1)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
+        raise SystemExit(1) from exc
 
     if resp.status_code != 202:
         click.echo(
@@ -119,6 +127,9 @@ def _poll_job(
         for _ in range(max_polls):
             try:
                 resp = httpx.get(url, headers=headers)
+            except httpx.ConnectError:
+                click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+                raise SystemExit(1)
             except httpx.HTTPError as exc:
                 click.echo(f"Error polling job: {exc}", err=True)
                 raise SystemExit(1) from exc
@@ -227,7 +238,14 @@ def import_cmd(
 
     url = f"{api_url.rstrip('/')}/collections/{collection}/import"
 
-    resp = httpx.post(url, json=body, headers=headers)
+    try:
+        resp = httpx.post(url, json=body, headers=headers)
+    except httpx.ConnectError:
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        raise SystemExit(1)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
+        raise SystemExit(1) from exc
 
     if resp.status_code == 409:
         click.echo(
@@ -263,7 +281,14 @@ def _poll_import_job(job_id: str, api_url: str, headers: dict) -> None:
 
     try:
         while True:
-            resp = httpx.get(url, headers=headers)
+            try:
+                resp = httpx.get(url, headers=headers)
+            except httpx.ConnectError:
+                click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+                raise SystemExit(1)
+            except httpx.HTTPError as exc:
+                click.echo(f"Error polling job: {exc}", err=True)
+                raise SystemExit(1) from exc
             if resp.status_code != 200:
                 click.echo(
                     f"Error polling job: server returned {resp.status_code}: {resp.text}",

@@ -9,7 +9,7 @@ from pathlib import Path
 import click
 import httpx
 
-from archon_search.cli._helpers import _poll_job
+from archon_search.cli._helpers import _poll_job, _SERVER_NOT_RUNNING_MSG
 from archon_search.config import load_config
 from archon_search.key_manager import load_or_generate_key
 
@@ -94,10 +94,7 @@ def add(path: str, wait_flag: bool, api_url: str, api_key: str | None) -> None:
     try:
         resp = httpx.post(post_url, json={"path": path}, headers=headers)
     except httpx.ConnectError:
-        click.echo(
-            "archon-search serve is not running. Start it first.",
-            err=True,
-        )
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -150,10 +147,7 @@ def remove(name: str, api_url: str, api_key: str | None) -> None:
     try:
         resp = httpx.delete(delete_url, headers=headers)
     except httpx.ConnectError:
-        click.echo(
-            "archon-search serve is not running. Start it first.",
-            err=True,
-        )
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -257,10 +251,7 @@ def reindex_metadata_cmd(
     try:
         resp = httpx.post(post_url, json=body, headers=headers)
     except httpx.ConnectError:
-        click.echo(
-            "archon-search serve is not running. Start it first.",
-            err=True,
-        )
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -362,6 +353,9 @@ def migrate_cmd(
         body: dict = {"dry_run": False, "backup_confirmed": backup_first}
         try:
             resp = httpx.post(post_url, json=body, headers=headers)
+        except httpx.ConnectError:
+            click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+            raise SystemExit(1)
         except httpx.HTTPError as exc:
             click.echo(f"Error contacting server: {exc}", err=True)
             raise SystemExit(1)
@@ -397,6 +391,9 @@ def migrate_cmd(
 
     try:
         resp = httpx.get(url, headers=headers)
+    except httpx.ConnectError:
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1)
@@ -454,10 +451,7 @@ def reindex(collection_name: str, wait_flag: bool, api_url: str, api_key: str | 
     try:
         resp = httpx.post(post_url, headers=headers)
     except httpx.ConnectError:
-        click.echo(
-            "archon-search serve is not running. Start it first.",
-            err=True,
-        )
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)

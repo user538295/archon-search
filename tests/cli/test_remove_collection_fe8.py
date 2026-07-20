@@ -136,8 +136,8 @@ def test_remove_server_not_running() -> None:
         )
 
     assert result.exit_code == 1
-    assert "archon-search serve is not running" in result.output
-    assert "Start it first" in result.output
+    assert "not running" in result.output.lower()
+    assert "start it first" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------

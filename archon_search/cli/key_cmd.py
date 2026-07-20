@@ -35,6 +35,7 @@ import click
 import httpx
 
 from archon_search.key_manager import load_or_generate_key
+from archon_search.cli._helpers import _SERVER_NOT_RUNNING_MSG
 
 _DEFAULT_API_URL = "http://localhost:8765"
 
@@ -178,6 +179,9 @@ def create_subcommand(
     try:
         with httpx.Client() as client:
             resp = client.post(url, headers=headers, json=body)
+    except httpx.ConnectError:
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1) from exc
@@ -275,6 +279,9 @@ def list_subcommand(
     try:
         with httpx.Client() as client:
             resp = client.get(url, headers=headers, params=params if params else None)
+    except httpx.ConnectError:
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1) from exc
@@ -399,6 +406,9 @@ def revoke_subcommand(
     try:
         with httpx.Client() as client:
             resp = client.delete(url, headers=headers)
+    except httpx.ConnectError:
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1) from exc
@@ -498,6 +508,9 @@ def rotate_subcommand(
     try:
         with httpx.Client() as client:
             resp = client.post(url, headers=headers, json=body)
+    except httpx.ConnectError:
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1) from exc

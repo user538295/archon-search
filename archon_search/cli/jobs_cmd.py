@@ -16,7 +16,7 @@ from __future__ import annotations
 import click
 import httpx
 
-from archon_search.cli._helpers import _poll_job
+from archon_search.cli._helpers import _poll_job, _SERVER_NOT_RUNNING_MSG
 from archon_search.cli.collection import _DEFAULT_API_URL, _resolve_api_key
 
 _EXIT_1_STATUSES = {"FAILED", "FAILED_EXPIRED", "CANCELLED"}
@@ -105,8 +105,8 @@ def list_cmd(status: tuple[str, ...], limit: int, api_url: str, api_key: str | N
     try:
         resp = httpx.get(f"{base_url}/jobs", params=query_params, headers=headers)
     except httpx.ConnectError as exc:
-        click.echo("Server is not running. Start it first with: archon-search start", err=True)
-        raise SystemExit(1) from exc
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1) from exc
@@ -192,8 +192,8 @@ def show_cmd(
     try:
         resp = httpx.get(f"{base_url}/jobs/{job_id}", headers=headers)
     except httpx.ConnectError as exc:
-        click.echo("Server is not running. Start it first with: archon-search start", err=True)
-        raise SystemExit(1) from exc
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1) from exc
@@ -239,12 +239,9 @@ def status_cmd(job_id: str, api_url: str, api_key: str | None) -> None:
 
     try:
         resp = httpx.get(f"{base_url}/jobs/{job_id}", headers=headers)
-    except httpx.ConnectError as exc:
-        click.echo(
-            "Server is not running. Start it first with: archon-search start",
-            err=True,
-        )
-        raise SystemExit(1) from exc
+    except httpx.ConnectError:
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1) from exc

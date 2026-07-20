@@ -23,14 +23,12 @@ import httpx
 from archon_search.config import ConfigError, load_config
 from archon_search.key_manager import load_or_generate_key
 from archon_search.paths import get_data_dir
+from archon_search.cli._helpers import _SERVER_NOT_RUNNING_MSG
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
 _DEFAULT_WAIT_TIMEOUT_SECONDS = 120
 _STATE_FILE_NAME = ".maintenance-state.json"
-_SERVER_NOT_RUNNING_MSG = (
-    "The server is not running. Start it first with: archon-search serve"
-)
 
 
 def _resolve_api_key(api_key: str | None) -> str:

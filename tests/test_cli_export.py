@@ -301,3 +301,35 @@ def test_export_wait_exits_2_on_failed() -> None:
 
     assert result.exit_code == 2, f"output={result.output!r}"
     assert "FAILED" in result.output or "disk full" in result.output
+
+
+# ---------------------------------------------------------------------------
+# ConnectError (Brief 260) — server not running UX
+# ---------------------------------------------------------------------------
+
+
+def test_export_server_not_running() -> None:
+    """ConnectError on export → friendly message, exit 1."""
+    import httpx as _httpx
+
+    runner = CliRunner()
+    with patch("archon_search.cli.export_cmd.httpx.post", side_effect=_httpx.ConnectError("refused")):
+        result = runner.invoke(export_cmd, ["my-collection", "--api-key", "deadbeef"])
+
+    assert result.exit_code == 1
+    assert "not running" in result.output.lower()
+
+
+def test_import_server_not_running() -> None:
+    """ConnectError on import → friendly message, exit 1."""
+    import httpx as _httpx
+
+    runner = CliRunner()
+    with patch("archon_search.cli.export_cmd.httpx.post", side_effect=_httpx.ConnectError("refused")):
+        result = runner.invoke(
+            import_cmd,
+            ["my-collection", "/data/exports/archive.tar.gz", "--api-key", "deadbeef"],
+        )
+
+    assert result.exit_code == 1
+    assert "not running" in result.output.lower()

@@ -384,6 +384,7 @@ class TestJobsList:
         with patch("httpx.get", side_effect=_httpx.ConnectError("refused")):
             result = runner.invoke(jobs, ["list", "--api-key", "test-key"])
         assert result.exit_code == 1
+        assert "not running" in result.output.lower() or "start it first" in result.output.lower()
 
     def test_list_empty_shows_no_rows(self):
         """Empty list prints no job rows."""
@@ -559,6 +560,15 @@ class TestJobsShow:
         with patch("archon_search.cli.jobs_cmd._poll_job", side_effect=SystemExit(1)):
             result = runner.invoke(jobs, ["show", "job-abc-123", "--wait", "--api-key", "test-key"])
         assert result.exit_code == 1
+
+    def test_show_connect_error_exits_1(self):
+        """jobs show non-wait ConnectError → friendly message + exit 1."""
+        import httpx as _httpx
+        runner = CliRunner()
+        with patch("archon_search.cli.jobs_cmd.httpx.get", side_effect=_httpx.ConnectError("refused")):
+            result = runner.invoke(jobs, ["show", "job-abc-123", "--api-key", "test-key"])
+        assert result.exit_code == 1
+        assert "not running" in result.output.lower() or "start it first" in result.output.lower()
 
     def test_show_wait_timeout_forwarded_to_poll_job(self):
         """--timeout is forwarded to _poll_job as timeout_seconds."""

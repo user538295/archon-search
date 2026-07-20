@@ -319,7 +319,7 @@ def test_migrate_cli_connection_error_exits_1() -> None:
         result = runner.invoke(collection, ["migrate", "mycol", "--api-key", "test-key"])
 
     assert result.exit_code == 1
-    assert "error contacting server" in result.output.lower()
+    assert "not running" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +388,7 @@ def test_migrate_cli_apply_connection_error_exits_1() -> None:
         result = runner.invoke(collection, ["migrate", "mycol", "--apply", "--api-key", "test-key"])
 
     assert result.exit_code == 1
-    assert "error contacting server" in result.output.lower()
+    assert "not running" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------

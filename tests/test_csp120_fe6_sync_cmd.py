@@ -98,7 +98,7 @@ def test_sync_server_not_running() -> None:
         )
 
     assert result.exit_code == 1
-    assert "archon-search serve is not running. Start it first." in result.output
+    assert "not running" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +119,7 @@ def test_sync_server_not_running_error_goes_to_stderr() -> None:
             ["--api-url", "http://localhost:8765", "--api-key", "testkey"],
         )
     assert result.exit_code == 1
-    assert "archon-search serve is not running" in result.output
+    assert "not running" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------

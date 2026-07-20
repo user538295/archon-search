@@ -11,6 +11,8 @@ from archon_search.platform.service import SearchServiceLifecycle
 
 _POLL_INTERVAL_SECONDS = 2
 _TERMINAL_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
+# ponytail: single source of truth — ConnectError before HTTPError is load-bearing; keep narrow.
+_SERVER_NOT_RUNNING_MSG = "The server is not running. Start it first with: archon-search serve"
 
 
 def _poll_job(
@@ -44,9 +46,9 @@ def _poll_job(
 
             try:
                 resp = httpx.get(url, headers=headers)
-            except httpx.ConnectError as exc:
-                click.echo(f"Error polling job: {exc}", err=True)
-                raise SystemExit(1) from exc
+            except httpx.ConnectError:
+                click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+                raise SystemExit(1)
             except httpx.HTTPError as exc:
                 click.echo(f"Error polling job: {exc}", err=True)
                 raise SystemExit(1) from exc
