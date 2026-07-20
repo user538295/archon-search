@@ -21,12 +21,15 @@ from examples.textual_design import (
 
 
 def test_palette_matches_approved_html_mockup() -> None:
-    assert PALETTE.background == "#07111b"
-    assert PALETTE.foreground == "#d8f6ff"
-    assert PALETTE.muted == "#6d9bad"
-    assert PALETTE.accent == "#56d9ff"
-    assert PALETTE.accent_foreground == "#04131a"
-    assert PALETTE.confirmed == "#82eea8"
+    assert PALETTE.background == "#181818"
+    assert PALETTE.foreground == "#ffffff"
+    assert PALETTE.muted == "#8b8b8b"
+    assert PALETTE.accent == "#7fa8d7"
+    assert PALETTE.accent_foreground == "#181818"
+    assert PALETTE.confirmed == "#7fa8d7"
+    assert PALETTE.meter == "#e89e63"
+    assert PALETTE.stack_label == "#8b8b8b"
+    assert PALETTE.stack_value == "#ffffff"
 
 
 def test_text_atoms_preserve_content_and_requested_emphasis() -> None:

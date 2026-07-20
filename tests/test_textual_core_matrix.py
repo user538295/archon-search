@@ -6,7 +6,7 @@ pytest.importorskip("textual")
 from textual.widgets import Button
 
 from examples.textual_core_matrix import CoreMatrixApp
-from examples.textual_design import TextTable, TitledFrame
+from examples.textual_design import PALETTE, TitledFrame
 
 
 async def test_cursor_moves_and_enter_commits_language() -> None:
@@ -45,6 +45,16 @@ async def test_next_button_arms_hardware_stage() -> None:
         await pilot.click("#next")
 
         assert app.status_text == "NEXT STAGE ARMED // HARDWARE CHECK"
+
+
+def test_masthead_uses_orange_for_the_signal_and_core_matrix_status() -> None:
+    app = CoreMatrixApp()
+    app._signal_index = len(app._signal_frames) - 1
+
+    masthead = app._masthead_text()
+
+    assert "● CORE MATRIX LINKED" in masthead.plain
+    assert any(PALETTE.meter in str(span.style) for span in masthead.spans)
 
 
 async def test_arrow_keys_navigate_the_bottom_bar_and_return_to_matching_options() -> None:
@@ -92,7 +102,23 @@ async def test_selector_fills_and_draws_to_the_available_terminal_width() -> Non
         assert all(len(line) == selector.size.width for line in lines)
 
         assert isinstance(app.preview, TitledFrame)
-        assert isinstance(app.loadout_table, TextTable)
         preview_lines = app.preview_text.splitlines()
         assert app.preview.size.width == 116
         assert all(len(line) == app.preview.size.width for line in preview_lines)
+        assert "Module" in preview_lines[1]
+        assert "Loadout" in preview_lines[1]
+        assert "Language stack" in preview_lines[2]
+
+
+async def test_panel_titles_headings_and_rows_share_the_left_content_edge() -> None:
+    app = CoreMatrixApp()
+
+    async with app.run_test(size=(120, 30)):
+        selector_lines = app.selector.render().plain.splitlines()
+        preview_lines = app.preview.render().plain.splitlines()
+
+        assert selector_lines[1][1] == "W"
+        assert selector_lines[2][1] == "▶"
+        assert selector_lines[6][1] == "P"
+        assert preview_lines[1][1] == "M"
+        assert preview_lines[2][1] == "L"

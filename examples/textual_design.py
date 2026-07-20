@@ -15,12 +15,15 @@ from textual.widgets import Static
 class Palette:
     """The exact colour system used by the approved HTML Core Matrix mockup."""
 
-    background: str = "#07111b"
-    foreground: str = "#d8f6ff"
-    muted: str = "#6d9bad"
-    accent: str = "#56d9ff"
-    accent_foreground: str = "#04131a"
-    confirmed: str = "#82eea8"
+    background: str = "#181818"
+    foreground: str = "#ffffff"
+    muted: str = "#8b8b8b"
+    accent: str = "#7fa8d7"
+    accent_foreground: str = "#181818"
+    confirmed: str = "#7fa8d7"
+    meter: str = "#e89e63"
+    stack_label: str = "#8b8b8b"
+    stack_value: str = "#ffffff"
 
 
 PALETTE = Palette()
