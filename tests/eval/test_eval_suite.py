@@ -8,6 +8,7 @@ Report-only tests run unconditionally; gated tests (those that call
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -579,103 +580,6 @@ async def test_eval_exercises_per_collection_dispatch(tmp_path: Path) -> None:
         assert alt_results.results, "Expected search results from alt-col"
     finally:
         await pipeline.store.disconnect()
-
-
-# ---------------------------------------------------------------------------
-# C3b page provenance tests
-# ---------------------------------------------------------------------------
-
-
-def test_eval_includes_page_provenance_query() -> None:
-    """queries.jsonl must include the page_provenance_001 query."""
-    queries_file = CORPUS_ROOT / "queries.jsonl"
-    query_ids = [
-        json.loads(line)["query_id"]
-        for line in queries_file.read_text().splitlines()
-        if line.strip()
-    ]
-    assert "page_provenance_001" in query_ids, (
-        "page_provenance_001 not found in queries.jsonl — "
-        "add it per Task 5.2 of the C3b plan"
-    )
-
-
-@pytest.mark.eval
-@pytest.mark.xdist_group("docling")
-async def test_eval_page_provenance_pdf_has_page_metadata(tmp_path: Path) -> None:
-    """The page_provenance_001 PDF document produces chunks with _page_start metadata after ingest.
-
-    NOTE: With chunk_size=256, the fixture PDF's short content (~20 words total across 3 pages)
-    fits in a single chunk starting at offset 0, so _page_start="1" not "2". This test verifies
-    that page metadata IS present and is a string — not that it equals "2". The primary purpose
-    is a coarse end-to-end ingest regression check; the _page_start=="2" boundary verification
-    is covered by Task 4.2's unit tests with a forced small chunk_size.
-    """
-    from archon_search.chunker import DocumentChunker
-    from archon_search.embedder import Embedder
-    from archon_search.eval.backends import EvalEmbedderBackend, EvalRerankerBackend
-    from archon_search.parser import DocumentParser
-    from archon_search.pipeline import SearchPipeline
-    from archon_search.reranker import Reranker
-    from archon_search.store import SearchStore
-
-    corpus_pdf = CORPUS_ROOT / "corpus" / "pdf-fixtures" / "three_page.pdf"
-    assert corpus_pdf.exists(), (
-        f"Eval corpus PDF not generated: {corpus_pdf}. "
-        "The autouse session-scoped fixture in tests/eval/conftest.py "
-        "should generate it before this test runs."
-    )
-
-    eval_backend = EvalEmbedderBackend()
-    embedder = Embedder(eval_backend)
-    reranker = Reranker(EvalRerankerBackend())
-    store = SearchStore(tmp_path / "lancedb")
-    await store.connect()
-    pipeline = SearchPipeline(
-        store=store,
-        embedder=embedder,
-        reranker=reranker,
-        chunker=DocumentChunker(chunk_size=256),
-        parser=DocumentParser(),
-        top_k_retrieve=10,
-        top_k_return=10,
-    )
-    try:
-        result = await pipeline.ingest_file(
-            corpus_pdf, "pdf-fixtures", rebuild_fts=True, embedder=embedder
-        )
-        assert result.error is None, f"Ingest failed: {result.error}"
-
-        # Search for "beta content" — should land in page 2.
-        # Use EvalEmbedderBackend.encode() directly to obtain the query vector
-        # (mirrors the approach from Task 4.2's integration test spec).
-        query_vec = eval_backend.encode(["beta content"])[0]
-        results = await store.hybrid_search(
-            collection="pdf-fixtures",
-            query_vector=query_vec,
-            query_text="beta content",
-            top_k=10,
-        )
-        pdf_chunks = [r for r in results if any(
-            kw in r.text.lower() for kw in ("alpha", "beta", "gamma")
-        )]
-        assert pdf_chunks, "No PDF content chunks found after ingest"
-        # With chunk_size=256 (eval runner default), the short page content
-        # ("alpha content", "beta content", "gamma content" ≈ 20 words total)
-        # fits in a single chunk starting at offset 0 → _page_start="1".
-        # The primary eval purpose is retrieval (the document IS found for the
-        # page_provenance_001 query). We verify page metadata IS present — the
-        # exact page number depends on chunk boundaries.
-        for chunk in pdf_chunks:
-            page = chunk.metadata.get("_page_start")
-            assert page is not None, (
-                f"_page_start missing from PDF chunk. Chunk text: {chunk.text!r}"
-            )
-            assert isinstance(page, str), (
-                f"_page_start should be a string, got {type(page)!r}"
-            )
-    finally:
-        await store.disconnect()
 
 
 # ---------------------------------------------------------------------------

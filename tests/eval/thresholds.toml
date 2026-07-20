@@ -33,12 +33,28 @@
 #     graph queries are excluded from the regular retrieval_traces set)
 # All drops are within max_floor_drop_without_waiver=0.05; no waiver entry required.
 # All floors set equal to new measured baseline so regressions are immediately gated.
-recall_at_1     = 0.8676470588235294
-recall_at_3     = 0.9705882352941176
-recall_at_5     = 0.9852941176470589
+#
+# Recalibrated 2026-07-20: removed the pdf-fixtures collection (three_page.pdf +
+# page_provenance_001 query) from the eval corpus. Real docling OCR on the PDF
+# took >230 s on macOS (Metal/RapidOCR), timing out the subprocess eval-gate test
+# and hanging the default suite; the eval harness uses deterministic backends, so
+# a real-OCR document does not belong in it. Page-provenance parsing is covered by
+# unit tests (test_enricher.py) and the opt-in `docling`-marked integration tests.
+# Removing 1 of 34 non-graph retrieval queries (33 remain):
+#   recall_at_1: 0.8676 -> 0.8636 (DELTA -0.0040)
+#   recall_at_3: 0.9706 -> 0.9697 (DELTA -0.0009)
+#   recall_at_5: 0.9853 -> 0.9848 (DELTA -0.0004)
+#   ndcg_at_5:   0.9852 -> 0.9847 (DELTA -0.0005)
+#   ndcg_at_10:  0.9879 -> 0.9875 (DELTA -0.0004)
+#   routing_mrr_centroid/hybrid: 0.7113 -> 0.7183 (DELTA +0.0070 — dropping the
+#     single-doc pdf-fixtures collection shifts router centroids favourably)
+# All retrieval drops within max_floor_drop_without_waiver=0.05; no waiver required.
+recall_at_1     = 0.8636363636363636
+recall_at_3     = 0.9696969696969697
+recall_at_5     = 0.9848484848484849
 mrr             = 1.0
-ndcg_at_5       = 0.98516679592094
-ndcg_at_10      = 0.98786690917953
+ndcg_at_5       = 0.9847173048882412
+ndcg_at_10      = 0.987499239760728
 routing_accuracy = 1.0
 # routing_mrr_centroid/hybrid: recalibrated 2026-07-10 (BE-10 code-lane corpora).
 # Adding code-chunking (6 docs) and code-defref (7 docs) collections shifts
@@ -46,8 +62,10 @@ routing_accuracy = 1.0
 # without_waiver=0.05; no waiver required). Retrieval metrics unaffected —
 # code-lane collections use graph_mode=naive retrieval queries, same pattern
 # as the E1a graph fixtures noted above.
-routing_mrr_centroid = 0.7113095238095238
-routing_mrr_hybrid = 0.7113095238095238
+# 2026-07-20: pdf-fixtures removal (see [quality_floors] header) shifts centroids
+# back up 0.7113 -> 0.7183; floor re-tightened to the new measured baseline.
+routing_mrr_centroid = 0.7182539682539683
+routing_mrr_hybrid = 0.7182539682539683
 # routing_precision_at_1_centroid — reported-only; no floor (P@1 report-only per Task 6.2)
 # routing_precision_at_1_hybrid   — reported-only; no floor (P@1 report-only per Task 6.2)
 # graph_mrr — reported-only; no floor set until calibration baseline exists (E1a BE-9)

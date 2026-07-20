@@ -108,6 +108,10 @@ norecursedirs = [
     # Explicit `uv run pytest tests/smoke/ --no-cov` still works (pytest always
     # collects explicitly-passed paths regardless of norecursedirs).
     "tests/smoke",
+    # live eval tests shadow the autouse API-key-clearing fixture so they run for real
+    # when ANTHROPIC_API_KEY is set; excluding them prevents the default suite from
+    # hanging on real model inference. Explicit `uv run pytest tests/eval/live/ --no-cov` works.
+    "tests/eval/live",
 ]
 # --cov-fail-under=85 is intended for the default single-run invocation.
 # Split / matrix CI runs MUST combine coverage data (coverage combine) before
@@ -118,18 +122,19 @@ norecursedirs = [
 # -n is capped at 4 — never "auto": auto meant 14 workers on this 14-core machine, and on
 # model-loading paths each worker holds ~2 GB (fastembed/onnxruntime/torch); stacked runs
 # OOM-crashed the 48 GB machine on 2026-07-05 (Jetsam + WindowServer watchdog kill).
-addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n 4 --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark and not smoke\""
+addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n 4 --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark and not smoke and not live_eval and not docling\""
 markers = [
     "benchmark: latency benchmark — serialized via xdist_group('benchmark'); server-dependent tests auto-skip when server is unreachable",
     "integration: integration tests requiring live infrastructure",
     "eval: deterministic full-corpus evaluation slice; gated tests skip gracefully without --thresholds-path",
     "live: tests that require live network or external services; skip gracefully when infrastructure is absent",
-    "live_eval: full live-model eval suite; skip gracefully when infrastructure is absent",
+    "live_eval: full live-model eval suite (tests/eval/live/, real fastembed weights via backend=live); excluded from default run via norecursedirs + -m filter; run with `uv run pytest tests/eval/live/ --no-cov`",
     "docker: tests that require a running Docker daemon and perform a real image build; excluded from default run, opt in with `-m docker`",
     "archon_unset_data_dir: opt out of the autouse ARCHON_SEARCH_DATA_DIR isolation; the test exercises the Path.home() default-fallback path. Apply to the pinned MARKER_ALLOWLIST in tests/test_no_hardcoded_path_home.py only.",
     "live_benchmark: real-model latency benchmark; requires fastembed model cache; serialised via xdist_group('live_benchmark'); excluded from default suite",
     "unit: plain unit tests with no infrastructure dependencies",
     "smoke: live subprocess smoke tests; require a real archon-search serve process; excluded from default run via norecursedirs + -m filter; run with `uv run pytest tests/smoke/ --no-cov`",
+    "docling: tests that invoke the real docling parser / RapidOCR (PDF & image OCR); a single parse takes minutes on macOS (Metal/RapidOCR), so excluded from the default run via the -m filter; run with `uv run pytest -m docling --no-cov`",
 ]
 
 [tool.uv]

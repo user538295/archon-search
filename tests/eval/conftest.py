@@ -9,13 +9,10 @@ This module:
 - Activates the deterministic eval backends from
   :mod:`archon_search.eval.backends` for every eval test so the suite never
   needs to download real embedding or reranker models.
-- Generates the three-page PDF eval corpus fixture (Task 5.2, C3b) at
-  session start so corpus contract tests and the eval runner both find it.
 """
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -25,56 +22,6 @@ from archon_search.eval.fixtures import EvalCorpus, load_eval_corpus
 
 
 CORPUS_ROOT = Path(__file__).resolve().parent
-
-_EVAL_PDF_PATH = CORPUS_ROOT / "corpus" / "pdf-fixtures" / "three_page.pdf"
-
-# Ensure tests/_pdf_fixture.py is importable from within the eval conftest.
-_TESTS_DIR = CORPUS_ROOT.parent
-if str(_TESTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_TESTS_DIR))
-
-
-# ---------------------------------------------------------------------------
-# PDF corpus fixture (autouse, session-scoped)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _generate_eval_corpus_pdf() -> None:
-    """Generate tests/eval/corpus/pdf-fixtures/three_page.pdf before any test.
-
-    Session-scoped and autouse so the PDF exists before corpus contract tests
-    (tests/eval/test_corpus_contract.py) call load_eval_corpus() and before
-    the eval runner ingests the corpus.  Reuses the shared generator from
-    tests/_pdf_fixture.py so the textual content is identical across fixture
-    copies.
-
-    Under xdist, multiple workers run this session fixture concurrently. To
-    avoid a race where one worker truncates the file while another reads it for
-    compute_eval_hash, we write to a temp file and rename atomically.  If the
-    file already exists (committed to git or previously generated), we skip
-    regeneration entirely — the PDF is byte-deterministic so the committed copy
-    is identical to what generate_three_page_pdf would produce.
-    """
-    if _EVAL_PDF_PATH.exists():
-        return  # already present; skip to avoid concurrent-write race with xdist workers
-
-    from _pdf_fixture import generate_three_page_pdf  # noqa: PLC0415
-
-    import tempfile  # noqa: PLC0415
-
-    _EVAL_PDF_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        dir=_EVAL_PDF_PATH.parent, suffix=".pdf.tmp", delete=False
-    ) as tmp:
-        tmp_path_obj = Path(tmp.name)
-    try:
-        generate_three_page_pdf(tmp_path_obj)
-        # Atomic rename: only one writer wins; others see a complete file.
-        tmp_path_obj.replace(_EVAL_PDF_PATH)
-    except Exception:
-        tmp_path_obj.unlink(missing_ok=True)
-        raise
 
 
 # ---------------------------------------------------------------------------

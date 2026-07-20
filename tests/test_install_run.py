@@ -656,8 +656,8 @@ def test_run_prompts_multilingual_question(tmp_path: Path) -> None:
         patch("archon_search.install._check_disk_space"),
         patch("archon_search.install._prompt_multilingual", prompt_multilingual_mock),
         patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
-            install_code_extra=False, disable_reranker=False, enable_watch=False,
-            enable_telemetry=False, eager_load_embedders=False,
+            install_code_extra=False, install_graph_extra=False, disable_reranker=False,
+            enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
             routing_strategy="centroid", log_format="text",
             host=None, port=None, db_path=None, log_level=None,
             top_k=None, telemetry_retention_days=None, enable_hyde=False, enable_rag_fusion=False,
@@ -693,8 +693,8 @@ def test_run_multilingual_flag_skips_prompt(tmp_path: Path) -> None:
         patch("archon_search.install._check_disk_space"),
         patch("archon_search.install._prompt_multilingual", prompt_multilingual_mock),
         patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
-            install_code_extra=False, disable_reranker=False, enable_watch=False,
-            enable_telemetry=False, eager_load_embedders=False,
+            install_code_extra=False, install_graph_extra=False, disable_reranker=False,
+            enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
             routing_strategy="centroid", log_format="text",
             host=None, port=None, db_path=None, log_level=None,
             top_k=None, telemetry_retention_days=None, enable_hyde=False, enable_rag_fusion=False,
@@ -1283,12 +1283,11 @@ def test_overwrite_warning_triggers_on_hand_edit(tmp_path: Path) -> None:
         patch("archon_search.install._write_profile_config", write_mock),
         patch("archon_search.install._detect_config_hand_edits", return_value=True),
         patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
-            install_code_extra=False, disable_reranker=False, enable_watch=False,
-            enable_telemetry=False, eager_load_embedders=False,
+            install_code_extra=False, install_graph_extra=False, disable_reranker=False,
+            enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
             routing_strategy="centroid", log_format="text",
             # Explicit False: a bare MagicMock returns a truthy attribute, which would
-            # trip the post-write HyDE/RAG Fusion persistence assertion (this test
-            # mocks _write_profile_config, so nothing is actually written).
+            # trip the post-write HyDE/RAG Fusion or graph-extra installation code.
             enable_hyde=False, enable_rag_fusion=False,
         )),
         # input() used for: overwrite prompt ("y") and Proceed? ("y")
@@ -1328,8 +1327,8 @@ def test_overwrite_warning_aborts_on_n(tmp_path: Path) -> None:
         patch("archon_search.install._write_profile_config", write_mock),
         patch("archon_search.install._detect_config_hand_edits", return_value=True),
         patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
-            install_code_extra=False, disable_reranker=False, enable_watch=False,
-            enable_telemetry=False, eager_load_embedders=False,
+            install_code_extra=False, install_graph_extra=False, disable_reranker=False,
+            enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
             routing_strategy="centroid", log_format="text"
         )),
         # "n" causes the overwrite prompt to abort
@@ -1366,8 +1365,8 @@ def test_overwrite_warning_bak_not_created_on_n(tmp_path: Path) -> None:
         patch("archon_search.install._check_disk_space"),
         patch("archon_search.install._detect_config_hand_edits", return_value=True),
         patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
-            install_code_extra=False, disable_reranker=False, enable_watch=False,
-            enable_telemetry=False, eager_load_embedders=False,
+            install_code_extra=False, install_graph_extra=False, disable_reranker=False,
+            enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
             routing_strategy="centroid", log_format="text"
         )),
         patch("builtins.input", return_value="n"),
@@ -1591,8 +1590,8 @@ def test_overwrite_eof_on_prompt_aborts(tmp_path: Path, capsys) -> None:
         patch("archon_search.install._write_profile_config", write_mock),
         patch("archon_search.install._detect_config_hand_edits", return_value=True),
         patch("archon_search.install._prompt_optional_features", return_value=MagicMock(
-            install_code_extra=False, disable_reranker=False, enable_watch=False,
-            enable_telemetry=False, eager_load_embedders=False,
+            install_code_extra=False, install_graph_extra=False, disable_reranker=False,
+            enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
             routing_strategy="centroid", log_format="text"
         )),
         # EOFError on the overwrite prompt (piped/non-tty stdin)

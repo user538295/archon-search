@@ -354,6 +354,7 @@ def test_parse_with_docling_kwarg_passes_page_break_marker(
 
 
 @pytest.mark.integration
+@pytest.mark.docling
 @pytest.mark.xdist_group("docling")
 def test_parse_with_docling_emits_page_marker(substantial_three_page_pdf: Path) -> None:
     """Integration: parser output from a substantial three-page PDF contains at least one PAGE_BREAK_MARKER.
@@ -366,14 +367,23 @@ def test_parse_with_docling_emits_page_marker(substantial_three_page_pdf: Path) 
     """
     pytest.importorskip("docling")
 
+    import concurrent.futures
+
     from archon_search.enricher import PAGE_BREAK_MARKER
     from archon_search.parser import ParseError
 
     parser = DocumentParser()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(parser._parse_with_docling, substantial_three_page_pdf)
     try:
-        result = parser._parse_with_docling(substantial_three_page_pdf)
+        result = future.result(timeout=300)
+    except concurrent.futures.TimeoutError:
+        executor.shutdown(wait=False, cancel_futures=True)
+        pytest.skip("docling OCR did not complete within 300s on this machine")
     except ParseError as exc:
+        executor.shutdown(wait=False)
         pytest.skip(f"docling not functional in this environment: {exc}")
+    executor.shutdown(wait=False)
 
     marker_count = result.count(PAGE_BREAK_MARKER)
     assert marker_count >= 1, (

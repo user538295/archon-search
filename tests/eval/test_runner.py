@@ -1954,9 +1954,9 @@ async def test_standard_metrics_unaffected_by_multihop_corpus() -> None:
     # queries). Pinned values guard against partition leakage: if a multihop-musique
     # query leaked into retrieval_traces the values would shift and this test would fail.
     # ndcg_at_5 is included per plan (misnamed test only asserted recall/mrr before).
-    assert report.metrics.recall_at_5 == pytest.approx(0.9852941176470589, rel=1e-6)
+    assert report.metrics.recall_at_5 == pytest.approx(0.9848484848484849, rel=1e-6)
     assert report.metrics.mrr == pytest.approx(1.0)
-    assert report.metrics.ndcg_at_5 == pytest.approx(0.98516679592094, rel=1e-6)
+    assert report.metrics.ndcg_at_5 == pytest.approx(0.9847173048882412, rel=1e-6)
 
 
 def test_negative_control_collection_constant_is_not_in_multihop_collections() -> None:

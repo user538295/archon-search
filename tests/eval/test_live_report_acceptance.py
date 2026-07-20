@@ -23,18 +23,30 @@ RUNTIME_CFG_PATH = CORPUS_ROOT / "runtime.toml"
 
 
 @pytest.mark.eval
-def test_live_eval_marker_included_in_default_run() -> None:
-    """live_eval must appear in the markers list and must NOT be excluded from addopts."""
+def test_live_eval_excluded_from_default_run() -> None:
+    """live_eval must be registered AND excluded from the default run.
+
+    The tests/eval/live/ suite uses real model backends (``backend="live"``,
+    real fastembed weights — see tests/eval/live/conftest.py) and hangs on
+    model inference if collected by default. It is therefore excluded exactly
+    like ``live_benchmark``: ``norecursedirs`` (primary guard, prevents
+    auto-traversal) plus the ``-m`` addopts filter (secondary guard). Run it
+    explicitly with ``uv run pytest tests/eval/live/ --no-cov``.
+    """
     with PYPROJECT_PATH.open("rb") as f:
         config = tomllib.load(f)
 
     pytest_cfg = config["tool"]["pytest"]["ini_options"]
     markers: list[str] = pytest_cfg["markers"]
     addopts: str = pytest_cfg["addopts"]
+    norecursedirs: list[str] = pytest_cfg["norecursedirs"]
 
     marker_names = [m.split(":")[0].strip() for m in markers]
     assert "live_eval" in marker_names, "live_eval marker must be registered in pyproject.toml [markers]"
-    assert "not live_eval" not in addopts, "live_eval must not be excluded from the default run"
+    assert "not live_eval" in addopts, "live_eval must be excluded from the default run (-m addopts filter)"
+    assert "tests/eval/live" in norecursedirs, (
+        "tests/eval/live must be in norecursedirs (primary exclusion guard; the suite loads real models)"
+    )
 
 
 @pytest.mark.eval

@@ -100,22 +100,20 @@ def test_markdown_heading_flows_through_to_search_response(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.docling
 @pytest.mark.xdist_group("docling")
 def test_pdf_page_number_in_search_response(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, three_page_pdf: Path
 ) -> None:
     """Ingest a multi-page PDF via the real docling parser (stub embedder).
     POST /search with include_metadata=true. Assert results carry
     metadata._page_start with an integer value.
 
-    Uses the three_page.pdf fixture from the eval corpus. Verifies C3b
-    enrichment wiring through the full HTTP path.
+    Uses the session-scoped ``three_page_pdf`` fixture (reportlab-generated,
+    "alpha/beta/gamma content"). Verifies C3b enrichment wiring through the full
+    HTTP path.
     """
-    pdf_fixture = (
-        Path(__file__).parent.parent / "eval" / "corpus" / "pdf-fixtures" / "three_page.pdf"
-    )
-    if not pdf_fixture.exists():
-        pytest.skip("three_page.pdf fixture not found — skipping PDF enrichment test")
+    pdf_fixture = three_page_pdf
 
     with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
         col = "test-enrichment-pdf"
@@ -239,6 +237,7 @@ def test_code_symbol_metadata_in_search_response(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.docling
 @pytest.mark.xdist_group("docling")
 def test_image_file_assigns_page_start_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

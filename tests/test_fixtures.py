@@ -20,6 +20,7 @@ class TestThreePagePdfFixture:
         assert three_page_pdf.stat().st_size > 0, f"Expected non-zero PDF at {three_page_pdf}"
 
     @pytest.mark.integration
+    @pytest.mark.docling
     def test_three_page_pdf_contains_expected_text(self, three_page_pdf: Path) -> None:
         """Parse via DocumentParser._parse_with_docling; assert expected page content.
 

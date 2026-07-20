@@ -37,6 +37,7 @@ MARKER_NAME = "archon_unset_data_dir"
 # apply this marker only to tests in this frozenset or update it with a C17-plan amendment.
 MARKER_ALLOWLIST: frozenset[str] = frozenset({
     "tests/test_cli_serve.py::test_serve_no_warning_when_data_dir_unset",
+    "tests/test_cli_serve.py::test_serve_output_and_exit_code_unchanged",
     "tests/test_job_store.py::test_jobs_file_default_path",
     "tests/test_jobs_paths.py::test_get_jobs_file_default",
     "tests/test_key_manager.py::TestGetKeyFile::test_get_key_file_default",
