@@ -313,10 +313,23 @@ def run_subcommand(
     original_last_run_at: str | None = None
     if wait:
         status_url = f"{api_url.rstrip('/')}/status"
-        original_last_run_at = _get_last_run_at(status_url, headers)
+        try:
+            original_last_run_at = _get_last_run_at(status_url, headers)
+        except httpx.ConnectError:
+            click.echo(
+                "The server is not running. Start it first with: archon-search serve",
+                err=True,
+            )
+            raise SystemExit(0)
 
     try:
         resp = httpx.post(trigger_url, headers=headers)
+    except httpx.ConnectError:
+        click.echo(
+            "The server is not running. Start it first with: archon-search serve",
+            err=True,
+        )
+        raise SystemExit(0)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1) from exc
@@ -369,7 +382,10 @@ def _wait_for_pass(
 
     for _ in range(max_polls):
         time.sleep(_POLL_INTERVAL_SECONDS)
-        current_last_run_at, has_errors = _get_maintenance_state(status_url, headers)
+        try:
+            current_last_run_at, has_errors = _get_maintenance_state(status_url, headers)
+        except httpx.ConnectError:
+            continue  # transient loss of connectivity mid-poll; keep waiting
         if current_last_run_at is None:
             # Could not reach server or maintenance=null.
             continue
@@ -407,6 +423,8 @@ def _get_maintenance_state(
     """
     try:
         resp = httpx.get(status_url, headers=headers, timeout=5.0)
+    except httpx.ConnectError:
+        raise  # propagate so callers can distinguish server-down from other errors
     except httpx.HTTPError as exc:
         click.echo(f"Error polling server: {exc}", err=True)
         raise SystemExit(1) from exc
