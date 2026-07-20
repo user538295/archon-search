@@ -646,7 +646,13 @@ def create_app(
         store=app.state.search_store,
         embedder=app.state.embedder,
         reranker=(
-            Reranker(ModelReranker(config.reranker_model, providers=config.providers or None))
+            Reranker(ModelReranker(
+                config.reranker_model,
+                providers=(
+                    (config.reranker_providers if config.reranker_providers is not None else config.providers)
+                    or None
+                ),
+            ))
             if config.reranker_model
             else None
         ),

@@ -100,6 +100,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         "chunk_size": 512,
         "auto_reindex_on_chunk_size_change": True,
         "providers": [],
+        "reranker_providers": None,
         "top_k_retrieve": 15,
         "top_k_return": 5,
         # [database] — D6 install-time / background provider validation

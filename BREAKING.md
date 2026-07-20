@@ -8,6 +8,20 @@
 
 ## Changelog
 
+### [next release] — New `reranker_providers` TOML field for CoreML split-provider support (2026-07-20)
+
+**What changed:** Added `reranker_providers` under `[database]` in `archon-search.toml`. When
+present, it overrides `providers` for the reranker model only; the embedder continues to use
+`providers`. When absent (the default), the reranker inherits `providers` — fully backward-compatible.
+
+**Why:** On some Apple Silicon configurations CoreML works for the embedder but not the reranker.
+The new field allows the wizard to write a split config (`providers = ["CoreMLExecutionProvider"]`,
+`reranker_providers = []`) instead of falling back entirely to CPU.
+
+**Migration:** No action required for existing configs. Existing `providers` settings continue
+to apply to both models. Re-run `archon-search wizard` on Apple Silicon to apply the optimised
+split configuration automatically.
+
 ### [next release] — Removed `--log-to-stderr` wizard flag (2026-07-18)
 
 **What changed:** The `--log-to-stderr` flag and interactive wizard prompt have been removed.

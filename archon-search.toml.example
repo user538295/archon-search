@@ -58,6 +58,7 @@ auto_reindex_on_chunk_size_change = true
 # providers = []                               # CPU (default)
 # providers = ["CUDAExecutionProvider"]        # NVIDIA GPU
 # providers = ["CoreMLExecutionProvider"]      # Apple Silicon
+# reranker_providers = []  # optional: override providers for the reranker only ([] = CPU)
 
 # Install profile ("minimal" | "balanced" | "max"; empty = legacy install).
 # Set by `archon-search install --profile <name>`; used by config.py to record which

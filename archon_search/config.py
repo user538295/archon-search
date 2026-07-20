@@ -206,6 +206,7 @@ class SearchConfig:
     chunk_size: int = 512
     auto_reindex_on_chunk_size_change: bool = True
     providers: list[str] = field(default_factory=list)
+    reranker_providers: list[str] | None = None
     top_k_retrieve: int = 15
     top_k_return: int = 5
     # [database] — D6 install-time / background provider validation
@@ -423,6 +424,8 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         )
     if "providers" in database:
         config.providers = list(database["providers"])
+    if "reranker_providers" in database:
+        config.reranker_providers = list(database["reranker_providers"])
     if "top_k_retrieve" in database:
         top_k_retrieve = _coerce_int(database["top_k_retrieve"], "top_k_retrieve")
         if top_k_retrieve <= 0:

@@ -52,6 +52,7 @@ The annotated reference is `archon-search.toml.example`. The sections below matc
 | `chunk_size` | int (>0) | `512` | Target chunk size in tokens. |
 | `auto_reindex_on_chunk_size_change` | bool | `true` | If `chunk_size` changes between starts, affected collections are reindexed automatically. #Unverified (reindex behaviour lives outside `config.py`). |
 | `providers` | list[string] | `[]` | ONNX Runtime execution providers. See [`01_installation.md`](./01_installation.md). |
+| `reranker_providers` | list[string] or absent | absent (`null`) | When present, overrides `providers` for the reranker only. `[]` forces CPU for the reranker while the embedder uses `providers`. Absent means inherit from `providers`. Written automatically by the wizard when CoreML works for the embedder but not the reranker (split-provider mode). |
 | `top_k_retrieve` | int (>0) | `15` | First-stage candidate pool size. |
 | `top_k_return` | int (>0) | `5` | Number of results returned by `/search` (per-request `top_k` is ignored — see `BREAKING.md`). |
 | `multilingual` | bool | `false` | **C2** — Enable per-document language detection using the fasttext `lid.176.ftz` model. Requires `pip install archon-search[multilingual]` and `lid.176.ftz` present at `~/.archon-search/models/`. Server startup fails with a clear error if either prerequisite is missing. When `true`, ingested documents receive a language tag on all chunks; the `language=<code>` search filter becomes active. |

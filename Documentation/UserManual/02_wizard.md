@@ -117,7 +117,13 @@ Immediately after profile selection, the wizard detects your GPU hardware and co
 
 - **No GPU detected:** No prompt is shown; CPU is used automatically.
 
-If Metal is selected but CoreML validation fails (e.g., the installed ONNX Runtime build does not support it), the wizard falls back to CPU with a warning:
+If Metal is selected but CoreML validation fails (e.g., the installed ONNX Runtime build does not support it), the wizard tries a split-provider probe: it checks whether the **embedder** works under CoreML even if the combined probe failed. If the embedder passes but the reranker does not:
+
+- `providers = ["CoreMLExecutionProvider"]` is written for the embedder.
+- `reranker_providers = []` is also written, forcing the reranker to CPU.
+- The install summary shows `CoreML — text search; CPU — result ranking`.
+
+If both probes fail, the wizard falls back to CPU entirely:
 ```
 Warning: CoreML validation failed — falling back to CPU.
 ```
@@ -593,7 +599,8 @@ The wizard writes to `~/.archon-search/archon-search.toml`. The following table 
 | Embedding model (from profile) | `embedding_model` | `"BAAI/bge-base-en-v1.5"` |
 | Reranker model (from profile) | `reranker_model` | `"Xenova/ms-marco-MiniLM-L-12-v2"` |
 | Chunk size (from profile) | `chunk_size` | `512` |
-| GPU (Metal) | `providers` | `["CoreMLExecutionProvider"]` |
+| GPU (Metal, full CoreML) | `providers` | `["CoreMLExecutionProvider"]` |
+| GPU (Metal, split: embedder CoreML / reranker CPU) | `providers` + `reranker_providers` | `["CoreMLExecutionProvider"]` + `[]` |
 | GPU (CUDA) | `providers` | `["CUDAExecutionProvider"]` |
 | GPU declined | `providers` | `[]` |
 | Reranker disabled (`--no-reranker`) | `reranker_model` | `""` |

@@ -743,6 +743,7 @@ class TestRun:
              patch("archon_search.install.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
              patch.object(installer, "validate_providers", return_value=False), \
+             patch.object(installer, "validate_embedder_only", return_value=False), \
              patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
@@ -1547,6 +1548,7 @@ class TestRunFlow:
              patch.object(installer, "install_deps"), \
              patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "validate_providers", return_value=False) as mock_validate, \
+             patch.object(installer, "validate_embedder_only", return_value=False), \
              patch.object(installer, "configure_providers") as mock_configure, \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "_bootstrap_collections", new=AsyncMock()), \

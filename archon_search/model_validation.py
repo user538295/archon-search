@@ -145,6 +145,19 @@ async def validate_models_async(
     has confirmed the global embedder is already exercised). Note: this is NOT the
     same as ``eager_load_embedders`` — see the brief's S9.
     """
+    # Stale-config advisory: CoreML providers set but reranker_providers not written
+    # (pre-fix wizard config). Warn once at startup so the operator knows to re-run
+    # the wizard to get the split configuration.
+    if (
+        "CoreMLExecutionProvider" in config.providers
+        and config.reranker_providers is None
+    ):
+        logger.warning(
+            "providers=[CoreMLExecutionProvider] is set but reranker_providers is absent "
+            "— the reranker may fail under CoreML. Re-run `archon-search wizard` to apply "
+            "the split configuration."
+        )
+
     embedding_model = "" if embedder_is_warm else config.embedding_model
     try:
         embedder_ok, reranker_ok, warnings = await asyncio.wait_for(

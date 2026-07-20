@@ -1820,6 +1820,23 @@ class SearchInstaller:
             logger.warning("validate_providers: %s", warning)
         return embedder_ok and reranker_ok
 
+    def validate_embedder_only(self, providers: list[str]) -> bool:
+        """Like validate_providers but only probes the embedder (reranker_model="")."""
+        try:
+            from archon_search.model_validation import validate_providers_shared
+
+            embedder_ok, _, warnings = validate_providers_shared(
+                providers,
+                self.cfg.embedding_model,
+                "",  # disabled reranker → always ok
+            )
+        except Exception as exc:
+            logger.warning("validate_embedder_only: %s", exc)
+            return False
+        for warning in warnings:
+            logger.warning("validate_embedder_only: %s", warning)
+        return embedder_ok
+
     # ------------------------------------------------------------------
     # Provider configuration
     # ------------------------------------------------------------------
@@ -1856,6 +1873,26 @@ class SearchInstaller:
                 return  # already set — skip to preserve user-extended chains
             database_section["providers"] = [target_provider]
 
+        atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
+
+    def configure_reranker_providers(self, providers: list[str]) -> None:
+        """Write reranker_providers to [database] section (empty list = CPU).
+
+        No-op when dry_run=True.
+        """
+        if self.dry_run:
+            return
+        config_path = Path(self.config_file) if self.config_file else Path.home() / ".archon-search" / "archon-search.toml"
+        if not config_path.exists():
+            logger.warning(
+                "Config file %s not found — skipping reranker_providers config",
+                config_path,
+            )
+            return
+        doc = tomlkit.parse(config_path.read_text())
+        if "database" not in doc:
+            doc["database"] = tomlkit.table()
+        doc["database"]["reranker_providers"] = tomlkit.array()
         atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
 
     # ------------------------------------------------------------------
@@ -2224,6 +2261,7 @@ class SearchInstaller:
             # plan, "Out of Scope"), so the CUDA branch deliberately leaves this
             # None — no post-prewarm probe runs for CUDA.
             gpu_provider: str | None = None
+            split_coreml: bool = False
             if not enable_gpu:
                 # User declined GPU — write providers = [] explicitly to override any previous setting
                 gpu_config_path = Path(self.config_file) if self.config_file else get_default_config_path()
@@ -2238,6 +2276,13 @@ class SearchInstaller:
                     self.configure_providers(gpu=gpu)
                     providers = ["CoreML (Apple Silicon)"]
                     gpu_provider = "CoreMLExecutionProvider"
+                elif self.validate_embedder_only(["CoreMLExecutionProvider"]):
+                    # Split: embedder on CoreML, reranker on CPU
+                    self.configure_providers(gpu=gpu)
+                    self.configure_reranker_providers([])
+                    providers = ["CoreML — text search; CPU — result ranking"]
+                    gpu_provider = "CoreMLExecutionProvider"
+                    split_coreml = True
                 else:
                     print("Warning: CoreML validation failed — falling back to CPU.")
             elif gpu == GpuType.CUDA:
@@ -2395,7 +2440,7 @@ class SearchInstaller:
                     # message names the provider rather than blaming the reranker
                     # alone (the embedder already passed the Step 9 gate, making
                     # the reranker the likely cause, but not the certain one).
-                    if gpu_provider is not None and prof.reranker is not None:
+                    if gpu_provider is not None and prof.reranker is not None and not split_coreml:
                         if not self.validate_providers([gpu_provider]):
                             logger.warning(
                                 "Model validation under provider %s failed after "
