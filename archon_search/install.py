@@ -1892,8 +1892,41 @@ class SearchInstaller:
         doc = tomlkit.parse(config_path.read_text())
         if "database" not in doc:
             doc["database"] = tomlkit.table()
-        doc["database"]["reranker_providers"] = tomlkit.array()
+        arr = tomlkit.array()
+        arr.extend(providers)
+        doc["database"]["reranker_providers"] = arr
         atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
+
+    def clear_reranker_providers(self) -> None:
+        """Remove reranker_providers from [database] if present (self-heal on upgrade)."""
+        if self.dry_run:
+            return
+        config_path = Path(self.config_file) if self.config_file else Path.home() / ".archon-search" / "archon-search.toml"
+        if not config_path.exists():
+            return
+        doc = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+        # Only clear the stale auto-written split marker ([]); preserve user-set values.
+        if "database" in doc and doc["database"].get("reranker_providers") == []:
+            del doc["database"]["reranker_providers"]
+            atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
+
+    def _probe_and_configure_coreml(
+        self, gpu: "GpuType"
+    ) -> "tuple[list[str], str | None, bool]":
+        """Probe CoreML, write config, return (provider_labels, gpu_provider, split_coreml)."""
+        if self.validate_providers(["CoreMLExecutionProvider"]):
+            self.configure_providers(gpu=gpu)
+            self.clear_reranker_providers()  # self-heal: clear stale split config
+            return ["CoreML (Apple Silicon)"], "CoreMLExecutionProvider", False
+        elif self.validate_embedder_only(["CoreMLExecutionProvider"]):
+            # Split: embedder on CoreML, reranker on CPU
+            self.configure_providers(gpu=gpu)
+            self.configure_reranker_providers([])
+            return ["CoreML — text search; CPU — result ranking"], "CoreMLExecutionProvider", True
+        else:
+            logger.warning("CoreML validation failed — falling back to CPU")
+            print("Warning: CoreML validation failed — falling back to CPU.")
+            return [], None, False
 
     # ------------------------------------------------------------------
     # Data directory
@@ -2272,19 +2305,7 @@ class SearchInstaller:
                     gpu_doc["database"]["providers"] = tomlkit.array()
                     atomic_write_bytes(gpu_config_path, tomlkit.dumps(gpu_doc).encode())
             elif not self.dry_run and gpu == GpuType.METAL:
-                if self.validate_providers(["CoreMLExecutionProvider"]):
-                    self.configure_providers(gpu=gpu)
-                    providers = ["CoreML (Apple Silicon)"]
-                    gpu_provider = "CoreMLExecutionProvider"
-                elif self.validate_embedder_only(["CoreMLExecutionProvider"]):
-                    # Split: embedder on CoreML, reranker on CPU
-                    self.configure_providers(gpu=gpu)
-                    self.configure_reranker_providers([])
-                    providers = ["CoreML — text search; CPU — result ranking"]
-                    gpu_provider = "CoreMLExecutionProvider"
-                    split_coreml = True
-                else:
-                    print("Warning: CoreML validation failed — falling back to CPU.")
+                providers, gpu_provider, split_coreml = self._probe_and_configure_coreml(gpu)
             elif gpu == GpuType.CUDA:
                 self.configure_providers(gpu=gpu)
                 providers = ["CUDA"]

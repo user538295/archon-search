@@ -399,3 +399,236 @@ async def test_validate_models_async_cancelled_returns_result():
     assert result.embedder_ok is False
     assert result.reranker_ok is False
     assert result.provider_warnings
+
+
+# ---------------------------------------------------------------------------
+# Stale-config warning tests
+# ---------------------------------------------------------------------------
+
+
+def _coreml_cfg(**kw) -> SearchConfig:
+    cfg = SearchConfig(
+        embedding_model=kw.get("embedding_model", "emb-model"),
+        reranker_model=kw.get("reranker_model", "rer-model"),
+        providers=kw.get("providers", ["CoreMLExecutionProvider"]),
+    )
+    cfg.reranker_providers = kw.get("reranker_providers", None)
+    return cfg
+
+
+@pytest.mark.asyncio
+async def test_stale_coreml_config_warning_fires(caplog: pytest.LogCaptureFixture) -> None:
+    """Warning fires when CoreML set, no reranker_providers, reranker enabled, AND reranker fails."""
+    import logging
+
+    with patch(
+        "archon_search.model_validation.validate_providers_shared",
+        return_value=(True, False, ["reranker probe failed"]),
+    ):
+        with caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+            await validate_models_async(_coreml_cfg(), timeout_seconds=5)
+
+    assert "split configuration" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stale_coreml_warning_no_fire_when_reranker_ok(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Warning does NOT fire when reranker_ok=True (both-pass case — not stale)."""
+    import logging
+
+    with patch(
+        "archon_search.model_validation.validate_providers_shared",
+        return_value=(True, True, []),
+    ):
+        with caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+            await validate_models_async(_coreml_cfg(), timeout_seconds=5)
+
+    assert "split configuration" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stale_coreml_warning_no_fire_when_reranker_disabled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Warning does NOT fire when reranker_model="" (disabled)."""
+    import logging
+
+    with patch(
+        "archon_search.model_validation.validate_providers_shared",
+        return_value=(True, True, []),
+    ):
+        with caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+            await validate_models_async(
+                _coreml_cfg(reranker_model=""), timeout_seconds=5
+            )
+
+    assert "split configuration" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stale_coreml_warning_no_fire_when_split_config(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Warning does NOT fire when reranker_providers is set (proper split config)."""
+    import logging
+
+    with patch(
+        "archon_search.model_validation.validate_providers_shared",
+        return_value=(True, False, ["reranker probe failed"]),
+    ):
+        with caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+            await validate_models_async(
+                _coreml_cfg(reranker_providers=[]), timeout_seconds=5
+            )
+
+    assert "split configuration" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Split-config reranker re-validation tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_split_config_reranker_validated_under_reranker_providers() -> None:
+    """When reranker_providers is set, reranker is re-validated under reranker_providers."""
+    calls: list[tuple] = []
+
+    def _shared(providers, embedding_model, reranker_model):
+        calls.append((providers, embedding_model, reranker_model))
+        # First call (combined): reranker fails under CoreML
+        if providers == ["CoreMLExecutionProvider"]:
+            return (True, False, ["reranker probe failed"])
+        # Second call (split reranker): reranker passes under []
+        return (True, True, [])
+
+    cfg = _coreml_cfg(reranker_providers=[])
+
+    with patch("archon_search.model_validation.validate_providers_shared", side_effect=_shared):
+        result = await validate_models_async(cfg, timeout_seconds=5)
+
+    assert result.embedder_ok is True
+    assert result.reranker_ok is True  # split re-validation overrides initial False
+    # Second call used reranker_providers (empty list), skipped embedder
+    assert calls[1] == ([], "", "rer-model")
+
+
+@pytest.mark.asyncio
+async def test_split_config_reranker_failure_propagates() -> None:
+    """When split reranker validation also fails, reranker_ok stays False."""
+    def _shared(providers, embedding_model, reranker_model):
+        return (True, False, ["probe failed"])
+
+    cfg = _coreml_cfg(reranker_providers=["CPUExecutionProvider"])
+
+    with patch("archon_search.model_validation.validate_providers_shared", side_effect=_shared):
+        result = await validate_models_async(cfg, timeout_seconds=5)
+
+    assert result.reranker_ok is False
+
+
+@pytest.mark.asyncio
+async def test_split_validation_passes_reduced_timeout_to_second_wait_for() -> None:
+    """Second asyncio.wait_for receives _remaining (< timeout_seconds), not the full budget."""
+    wait_for_timeouts: list[float] = []
+    real_wait_for = asyncio.wait_for
+
+    async def _capturing_wait_for(coro, timeout):
+        wait_for_timeouts.append(timeout)
+        return await real_wait_for(coro, timeout=timeout)
+
+    cfg = _coreml_cfg(reranker_providers=[])
+    # _start=100.0, second read=102.0 → _remaining = 5 - (102 - 100) = 3.0
+    # Using non-zero _start guards against dropping the "- _start" subtraction.
+    monotonic_calls = iter([100.0, 102.0])
+
+    with patch("archon_search.model_validation.validate_providers_shared", return_value=(True, True, [])), \
+         patch("archon_search.model_validation.time") as mock_time, \
+         patch.object(asyncio, "wait_for", side_effect=_capturing_wait_for):
+        mock_time.monotonic.side_effect = lambda: next(monotonic_calls)
+        await validate_models_async(cfg, timeout_seconds=5)
+
+    assert len(wait_for_timeouts) == 2, "expected exactly two wait_for calls (first + split)"
+    # First call gets full budget (5.0), split call gets _remaining (3.0).
+    # Assert on min/max rather than position to avoid brittle call-order coupling.
+    assert max(wait_for_timeouts) == pytest.approx(5.0, abs=0.1), "first wait_for must use full budget"
+    assert min(wait_for_timeouts) == pytest.approx(3.0, abs=0.1), (
+        "split wait_for must receive remaining budget (3.0s), not full timeout (5.0s)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_split_validation_skips_when_budget_exhausted() -> None:
+    """When elapsed time > timeout_seconds, second validation is skipped and reranker_ok=False."""
+    call_count = 0
+
+    def _shared(providers, embedding_model, reranker_model):
+        nonlocal call_count
+        call_count += 1
+        return (True, True, [])
+
+    cfg = _coreml_cfg(reranker_providers=[])
+    # Simulate 10 s elapsed against a 5 s budget: _remaining = 5 - 10 = -5 <= 0 → skip
+    monotonic_calls = iter([0.0, 10.0])
+
+    with patch("archon_search.model_validation.validate_providers_shared", side_effect=_shared), \
+         patch("archon_search.model_validation.time") as mock_time:
+        mock_time.monotonic.side_effect = lambda: next(monotonic_calls)
+        result = await validate_models_async(cfg, timeout_seconds=5)
+
+    assert call_count == 1, "second validation must be skipped when budget exhausted"
+    assert result.reranker_ok is False
+    assert any("exhausted" in w for w in result.provider_warnings)
+
+
+@pytest.mark.asyncio
+async def test_split_validation_skips_at_exact_zero_boundary() -> None:
+    """_remaining == 0.0 is treated as exhausted (proves <= not <)."""
+    call_count = 0
+
+    def _shared(providers, embedding_model, reranker_model):
+        nonlocal call_count
+        call_count += 1
+        return (True, True, [])
+
+    cfg = _coreml_cfg(reranker_providers=[])
+    # _start=0.0, second read=5.0 → _remaining = 5 - (5 - 0) = 0.0 exactly
+    monotonic_calls = iter([0.0, 5.0])
+
+    with patch("archon_search.model_validation.validate_providers_shared", side_effect=_shared), \
+         patch("archon_search.model_validation.time") as mock_time:
+        mock_time.monotonic.side_effect = lambda: next(monotonic_calls)
+        result = await validate_models_async(cfg, timeout_seconds=5)
+
+    assert call_count == 1, "second validation must be skipped at exactly zero remaining"
+    assert result.reranker_ok is False
+    assert any("exhausted" in w for w in result.provider_warnings)
+
+
+@pytest.mark.asyncio
+async def test_split_second_probe_timeout_sets_reranker_ok_false() -> None:
+    """When the split reranker probe times out, reranker_ok=False and warning mentions the timeout."""
+    call_count = 0
+    real_wait_for = asyncio.wait_for
+
+    async def _timeout_on_second(coro, timeout):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            coro.close()  # prevent leaked-coroutine ResourceWarning
+            raise asyncio.TimeoutError
+        return await real_wait_for(coro, timeout=timeout)
+
+    cfg = _coreml_cfg(reranker_providers=[])
+    monotonic_calls = iter([0.0, 4.95])  # _remaining = 5 - 4.95 > 0 → enters else branch
+
+    with patch("archon_search.model_validation.validate_providers_shared", return_value=(True, True, [])), \
+         patch("archon_search.model_validation.time") as mock_time, \
+         patch.object(asyncio, "wait_for", side_effect=_timeout_on_second):
+        mock_time.monotonic.side_effect = lambda: next(monotonic_calls)
+        result = await validate_models_async(cfg, timeout_seconds=5)
+
+    assert result.reranker_ok is False
+    assert any("timed out" in w for w in result.provider_warnings)

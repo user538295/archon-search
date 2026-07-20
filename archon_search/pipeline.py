@@ -3491,7 +3491,7 @@ def create_pipeline(
     if cfg.reranker_model:
         _reranker_backend: RerankerBackend = reranker_backend or ModelReranker(
             cfg.reranker_model,
-            providers=(cfg.reranker_providers if cfg.reranker_providers is not None else cfg.providers),
+            providers=((cfg.reranker_providers if cfg.reranker_providers is not None else cfg.providers) or None),
         )
         reranker: Reranker | None = Reranker(_reranker_backend)
     else:

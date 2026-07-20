@@ -66,6 +66,58 @@ class TestConfigureRerankerProviders:
         doc = tomlkit.parse(toml_file.read_text())
         assert doc["database"]["reranker_providers"] == []
 
+    def test_writes_nonempty_list_to_toml(self, tmp_path: Path) -> None:
+        toml_file = _make_toml(tmp_path)
+        installer = SearchInstaller(config_file=str(toml_file))
+        installer.configure_reranker_providers(["CPUExecutionProvider"])
+
+        doc = tomlkit.parse(toml_file.read_text())
+        assert doc["database"]["reranker_providers"] == ["CPUExecutionProvider"]
+
+
+# ---------------------------------------------------------------------------
+# clear_reranker_providers
+# ---------------------------------------------------------------------------
+
+
+class TestClearRerankerProviders:
+    def test_removes_key_from_toml(self, tmp_path: Path) -> None:
+        toml_file = _make_toml(tmp_path)
+        installer = SearchInstaller(config_file=str(toml_file))
+        installer.configure_reranker_providers([])  # write stale split
+        installer.clear_reranker_providers()
+
+        doc = tomlkit.parse(toml_file.read_text())
+        assert "reranker_providers" not in doc.get("database", {})
+
+    def test_no_op_when_key_absent(self, tmp_path: Path) -> None:
+        toml_file = _make_toml(tmp_path)
+        installer = SearchInstaller(config_file=str(toml_file))
+        installer.clear_reranker_providers()  # no reranker_providers present → no error
+
+        doc = tomlkit.parse(toml_file.read_text())
+        assert "reranker_providers" not in doc.get("database", {})
+
+    def test_dry_run_does_not_clear(self, tmp_path: Path) -> None:
+        toml_file = _make_toml(tmp_path)
+        installer = SearchInstaller(config_file=str(toml_file))
+        installer.configure_reranker_providers([])  # write split
+        installer_dry = SearchInstaller(config_file=str(toml_file), dry_run=True)
+        installer_dry.clear_reranker_providers()
+
+        doc = tomlkit.parse(toml_file.read_text())
+        assert doc["database"]["reranker_providers"] == []  # unchanged
+
+    def test_preserves_manual_value(self, tmp_path: Path) -> None:
+        """A user-set non-empty reranker_providers must not be deleted by the self-heal."""
+        toml_file = _make_toml(tmp_path)
+        installer = SearchInstaller(config_file=str(toml_file))
+        installer.configure_reranker_providers(["CPUExecutionProvider"])
+        installer.clear_reranker_providers()
+
+        doc = tomlkit.parse(toml_file.read_text())
+        assert doc["database"]["reranker_providers"] == ["CPUExecutionProvider"]
+
 
 # ---------------------------------------------------------------------------
 # validate_embedder_only
@@ -145,26 +197,21 @@ def _make_full_toml(tmp_path: Path) -> Path:
 
 
 class TestWizardCoreMlSplitLogic:
-    """Unit tests for the wizard's Step 9 CoreML split-detection branch.
-
-    We call validate_providers / validate_embedder_only / configure_providers /
-    configure_reranker_providers directly rather than running install_run() to
-    avoid the many irrelevant wizard steps.
-    """
+    """Unit tests for the wizard's CoreML split-detection branch via _probe_and_configure_coreml."""
 
     def test_combined_passes_no_split(self, tmp_path: Path) -> None:
         """When combined probe passes, no reranker_providers key is written."""
+        from archon_search.platform.types import GpuType
+
         toml_file = _make_toml(tmp_path)
         installer = SearchInstaller(config_file=str(toml_file))
 
         with patch.object(installer, "validate_providers", return_value=True):
-            # Simulate Step 9: combined passed → configure_providers only
-            installer.configure_providers(
-                __import__(
-                    "archon_search.platform.types", fromlist=["GpuType"]
-                ).GpuType.METAL
-            )
+            labels, gpu_prov, split = installer._probe_and_configure_coreml(GpuType.METAL)
 
+        assert split is False
+        assert gpu_prov == "CoreMLExecutionProvider"
+        assert labels == ["CoreML (Apple Silicon)"]
         doc = tomlkit.parse(toml_file.read_text())
         assert "reranker_providers" not in doc.get("database", {})
         assert doc["database"]["providers"] == ["CoreMLExecutionProvider"]
@@ -173,79 +220,65 @@ class TestWizardCoreMlSplitLogic:
         self, tmp_path: Path
     ) -> None:
         """When combined fails but embedder-only passes, split config is written."""
+        from archon_search.platform.types import GpuType
+
         toml_file = _make_toml(tmp_path)
         installer = SearchInstaller(config_file=str(toml_file))
 
-        # Step 9 logic: combined fails, embedder-only passes
-        combined_ok = False
-        embedder_only_ok = True
+        with patch.object(installer, "validate_providers", return_value=False):
+            with patch.object(installer, "validate_embedder_only", return_value=True):
+                labels, gpu_prov, split = installer._probe_and_configure_coreml(GpuType.METAL)
 
-        from archon_search.platform.types import GpuType
-
-        if combined_ok:
-            installer.configure_providers(gpu=GpuType.METAL)
-        elif embedder_only_ok:
-            installer.configure_providers(gpu=GpuType.METAL)
-            installer.configure_reranker_providers([])
-
+        assert split is True
+        assert gpu_prov == "CoreMLExecutionProvider"
+        assert "CPU — result ranking" in labels[0]
         doc = tomlkit.parse(toml_file.read_text())
         assert doc["database"]["providers"] == ["CoreMLExecutionProvider"]
         assert doc["database"]["reranker_providers"] == []
 
     def test_both_fail_no_split_written(self, tmp_path: Path) -> None:
         """When both probes fail, no provider config is written."""
+        from archon_search.platform.types import GpuType
+
         toml_file = _make_toml(tmp_path)
         installer = SearchInstaller(config_file=str(toml_file))
 
-        combined_ok = False
-        embedder_only_ok = False
+        with patch.object(installer, "validate_providers", return_value=False):
+            with patch.object(installer, "validate_embedder_only", return_value=False):
+                labels, gpu_prov, split = installer._probe_and_configure_coreml(GpuType.METAL)
 
-        from archon_search.platform.types import GpuType
-
-        if combined_ok:
-            installer.configure_providers(gpu=GpuType.METAL)
-        elif embedder_only_ok:
-            installer.configure_providers(gpu=GpuType.METAL)
-            installer.configure_reranker_providers([])
-        # else: CPU fallback — nothing written
-
+        assert split is False
+        assert gpu_prov is None
+        assert labels == []
         doc = tomlkit.parse(toml_file.read_text())
         assert "providers" not in doc.get("database", {})
         assert "reranker_providers" not in doc.get("database", {})
 
-    def test_split_summary_label(self) -> None:
-        """The split path sets providers label to the split-text string."""
-        providers: list[str] = []
-        split_coreml = False
-        combined_ok = False
-        embedder_only_ok = True
+    def test_combined_passes_clears_stale_split_config(self, tmp_path: Path) -> None:
+        """Re-run after upgrade: combined probe now passes → stale reranker_providers=[] is removed.
+        validate_embedder_only must NOT be called (proves the if-branch, not elif, did the work)."""
+        from archon_search.platform.types import GpuType
 
-        if combined_ok:
-            providers = ["CoreML (Apple Silicon)"]
-        elif embedder_only_ok:
-            providers = ["CoreML — text search; CPU — result ranking"]
-            split_coreml = True
-
-        assert providers == ["CoreML — text search; CPU — result ranking"]
-        assert split_coreml is True
-
-    def test_fe1_skips_reprobe_when_split_coreml(self, tmp_path: Path) -> None:
-        """FE-1 block skips validate_providers when split_coreml=True."""
         toml_file = _make_toml(tmp_path)
         installer = SearchInstaller(config_file=str(toml_file))
+        # Simulate an existing split config written by a prior wizard run
+        installer.configure_reranker_providers([])
 
-        called = []
+        with patch.object(installer, "validate_providers", return_value=True), \
+             patch.object(installer, "validate_embedder_only") as mock_embedder_only:
+            _, _, split = installer._probe_and_configure_coreml(GpuType.METAL)
 
-        def _fake_validate_providers(providers_arg: list[str]) -> bool:
-            called.append(providers_arg)
-            return False  # would fail
+        assert split is False
+        mock_embedder_only.assert_not_called()
+        doc = tomlkit.parse(toml_file.read_text())
+        assert "reranker_providers" not in doc.get("database", {})
 
-        split_coreml = True
-        gpu_provider = "CoreMLExecutionProvider"
-        has_reranker = True
+    def test_split_summary_label_in_source(self) -> None:
+        """The split label string exists in the wizard source (regression guard)."""
+        source = Path("archon_search/install.py").read_text(encoding="utf-8")
+        assert "CoreML — text search; CPU — result ranking" in source
 
-        # Simulate the FE-1 guard
-        if gpu_provider is not None and has_reranker and not split_coreml:
-            _fake_validate_providers([gpu_provider])
-
-        assert called == [], "validate_providers should not be called when split_coreml=True"
+    def test_fe1_guard_exists_in_source(self) -> None:
+        """The not split_coreml guard exists in the FE-1 block in the wizard source."""
+        source = Path("archon_search/install.py").read_text(encoding="utf-8")
+        assert "not split_coreml" in source

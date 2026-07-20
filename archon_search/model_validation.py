@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -145,20 +146,8 @@ async def validate_models_async(
     has confirmed the global embedder is already exercised). Note: this is NOT the
     same as ``eager_load_embedders`` — see the brief's S9.
     """
-    # Stale-config advisory: CoreML providers set but reranker_providers not written
-    # (pre-fix wizard config). Warn once at startup so the operator knows to re-run
-    # the wizard to get the split configuration.
-    if (
-        "CoreMLExecutionProvider" in config.providers
-        and config.reranker_providers is None
-    ):
-        logger.warning(
-            "providers=[CoreMLExecutionProvider] is set but reranker_providers is absent "
-            "— the reranker may fail under CoreML. Re-run `archon-search wizard` to apply "
-            "the split configuration."
-        )
-
     embedding_model = "" if embedder_is_warm else config.embedding_model
+    _start = time.monotonic()
     try:
         embedder_ok, reranker_ok, warnings = await asyncio.wait_for(
             asyncio.to_thread(
@@ -185,12 +174,60 @@ async def validate_models_async(
             validated_at=datetime.now(UTC),
         )
 
-    return ModelValidationResult(
+    # If split config, re-validate reranker under its actual providers.
+    # Use remaining budget so total wall time stays within timeout_seconds.
+    if config.reranker_providers is not None and config.reranker_model:
+        _remaining = timeout_seconds - (time.monotonic() - _start)
+        if _remaining <= 0:
+            reranker_ok = False
+            warnings = warnings + ["reranker split-provider validation skipped: timeout budget exhausted"]
+        else:
+            try:
+                _, reranker_ok_actual, split_warns = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        validate_providers_shared,
+                        config.reranker_providers,
+                        "",  # skip embedder (already validated above)
+                        config.reranker_model,
+                    ),
+                    timeout=_remaining,
+                )
+                reranker_ok = reranker_ok_actual
+                warnings = warnings + split_warns
+            except asyncio.TimeoutError:
+                reranker_ok = False
+                warnings = warnings + [f"reranker split-provider validation timed out after {_remaining:.1f}s"]
+            except BaseException as exc:  # includes CancelledError — never re-raise
+                logger.warning("reranker split-provider validation failed: %s", exc)
+                return ModelValidationResult(
+                    embedder_ok=embedder_ok,
+                    reranker_ok=False,
+                    provider_warnings=warnings + [f"reranker split-provider validation failed unexpectedly: {exc}"],
+                    validated_at=datetime.now(UTC),
+                )
+
+    result = ModelValidationResult(
         embedder_ok=embedder_ok,
         reranker_ok=reranker_ok,
         provider_warnings=warnings,
         validated_at=datetime.now(UTC),
     )
+
+    # Stale-config advisory: CoreML set, no split written, reranker enabled, AND
+    # CoreML actually failed for the reranker (distinguishes stale from both-pass)
+    if (
+        "CoreMLExecutionProvider" in config.providers
+        and config.reranker_providers is None
+        and config.reranker_model != ""
+        and not reranker_ok
+    ):
+        logger.warning(
+            "providers=[CoreMLExecutionProvider] is set but reranker_providers is absent "
+            "and the reranker failed under CoreML — re-run `archon-search wizard` to apply "
+            "the split configuration."
+        )
+
+    return result
 
 
 async def validate_embedding_model(
