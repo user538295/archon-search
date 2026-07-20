@@ -7,7 +7,29 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon_search.config import SearchConfig
+from archon_search.config import SearchConfig, resolve_reranker_providers
+
+
+# ---------------------------------------------------------------------------
+# resolve_reranker_providers unit tests (C1-I-20)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveRerankerProviders:
+    def test_none_reranker_providers_falls_back_to_providers(self) -> None:
+        cfg = SearchConfig(reranker_providers=None, providers=["CoreMLExecutionProvider"])
+        assert resolve_reranker_providers(cfg) == ["CoreMLExecutionProvider"]
+
+    def test_empty_reranker_providers_returns_none(self) -> None:
+        cfg = SearchConfig(reranker_providers=[], providers=["CoreMLExecutionProvider"])
+        assert resolve_reranker_providers(cfg) is None
+
+    def test_explicit_reranker_providers_overrides_providers(self) -> None:
+        cfg = SearchConfig(
+            reranker_providers=["CPUExecutionProvider"],
+            providers=["CoreMLExecutionProvider"],
+        )
+        assert resolve_reranker_providers(cfg) == ["CPUExecutionProvider"]
 
 
 def test_reranker_providers_default_is_none() -> None:

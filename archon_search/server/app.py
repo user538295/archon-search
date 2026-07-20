@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from archon_search.chunker import ASTChunker, DocumentChunker
-from archon_search.config import ConfigError, SearchConfig, warn_gc_cpu_priority
+from archon_search.config import ConfigError, SearchConfig, resolve_reranker_providers, warn_gc_cpu_priority
 from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, get_fasttext_models_dir
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.embedder_cache import EmbedderCache
@@ -648,10 +648,7 @@ def create_app(
         reranker=(
             Reranker(ModelReranker(
                 config.reranker_model,
-                providers=(
-                    (config.reranker_providers if config.reranker_providers is not None else config.providers)
-                    or None
-                ),
+                providers=resolve_reranker_providers(config),
             ))
             if config.reranker_model
             else None

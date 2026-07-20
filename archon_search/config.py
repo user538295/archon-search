@@ -270,6 +270,11 @@ class SearchConfig:
     openai_shim: OpenAIShimConfig = field(default_factory=OpenAIShimConfig)
 
 
+def resolve_reranker_providers(cfg: "SearchConfig") -> list[str] | None:
+    """Return providers to use for the reranker, normalising [] to None (CPU)."""
+    return (cfg.reranker_providers if cfg.reranker_providers is not None else cfg.providers) or None
+
+
 def save_config(config: SearchConfig, path: Path | str) -> None:
     """Write collections and pinned_collections back to the TOML file.
 

@@ -74,6 +74,15 @@ class TestConfigureRerankerProviders:
         doc = tomlkit.parse(toml_file.read_text())
         assert doc["database"]["reranker_providers"] == ["CPUExecutionProvider"]
 
+    def test_idempotent_does_not_rewrite_when_already_set(self, tmp_path: Path) -> None:
+        toml_file = _make_toml(tmp_path)
+        installer = SearchInstaller(config_file=str(toml_file))
+        installer.configure_reranker_providers([])
+        mtime1 = toml_file.stat().st_mtime_ns
+        installer.configure_reranker_providers([])  # second call
+        mtime2 = toml_file.stat().st_mtime_ns
+        assert mtime1 == mtime2  # file not rewritten
+
 
 # ---------------------------------------------------------------------------
 # clear_reranker_providers
@@ -273,12 +282,55 @@ class TestWizardCoreMlSplitLogic:
         doc = tomlkit.parse(toml_file.read_text())
         assert "reranker_providers" not in doc.get("database", {})
 
-    def test_split_summary_label_in_source(self) -> None:
-        """The split label string exists in the wizard source (regression guard)."""
-        source = Path("archon_search/install.py").read_text(encoding="utf-8")
-        assert "CoreML — text search; CPU — result ranking" in source
+    def test_split_summary_label_in_rendered_output(self, tmp_path: Path) -> None:
+        """When split_coreml=True, the rendered install summary contains the split label."""
+        from archon_search.install import _render_summary
+        from archon_search.profiles import InstallProfile
 
-    def test_fe1_guard_exists_in_source(self) -> None:
-        """The not split_coreml guard exists in the FE-1 block in the wizard source."""
-        source = Path("archon_search/install.py").read_text(encoding="utf-8")
-        assert "not split_coreml" in source
+        prof = InstallProfile(
+            name="minimal",
+            embedder="BAAI/bge-small-en-v1.5",
+            reranker="Xenova/ms-marco-MiniLM-L-6-v2",
+            chunk_size=512,
+            download_mb=147,
+            quality_stars="★★☆☆☆",
+            cpu_ms=40,
+            metal_ms=15,
+            memory_gb=0.5,
+        )
+        # providers list from _probe_and_configure_coreml when split_coreml=True
+        providers = ["CoreML — text search; CPU — result ranking"]
+        summary = _render_summary("minimal", prof, False, providers)
+        assert "CoreML — text search; CPU — result ranking" in summary
+
+    def test_fe1_reprobe_skipped_when_split_coreml(self, tmp_path: Path) -> None:
+        """_fe1_reprobe must NOT call validate_providers when split_coreml=True."""
+        from archon_search.profiles import InstallProfile
+
+        toml_file = _make_toml(tmp_path)
+        installer = SearchInstaller(config_file=str(toml_file))
+        prof = InstallProfile(
+            name="test", embedder="e", reranker="r", chunk_size=512,
+            download_mb=0, quality_stars="", cpu_ms=0, metal_ms=0, memory_gb=0,
+        )
+
+        with patch.object(installer, "validate_providers", return_value=True) as mock_probe:
+            installer._fe1_reprobe("CoreMLExecutionProvider", prof, split_coreml=True)
+
+        mock_probe.assert_not_called()
+
+    def test_fe1_reprobe_runs_when_not_split(self, tmp_path: Path) -> None:
+        """_fe1_reprobe must call validate_providers when split_coreml=False."""
+        from archon_search.profiles import InstallProfile
+
+        toml_file = _make_toml(tmp_path)
+        installer = SearchInstaller(config_file=str(toml_file))
+        prof = InstallProfile(
+            name="test", embedder="e", reranker="r", chunk_size=512,
+            download_mb=0, quality_stars="", cpu_ms=0, metal_ms=0, memory_gb=0,
+        )
+
+        with patch.object(installer, "validate_providers", return_value=True) as mock_probe:
+            installer._fe1_reprobe("CoreMLExecutionProvider", prof, split_coreml=False)
+
+        mock_probe.assert_called_once_with(["CoreMLExecutionProvider"])

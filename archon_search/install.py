@@ -1890,6 +1890,10 @@ class SearchInstaller:
             )
             return
         doc = tomlkit.parse(config_path.read_text())
+        # Check existing value first to avoid unnecessary TOML rewrites (comment reflow risk)
+        db = doc.get("database", {})
+        if isinstance(db, dict) and db.get("reranker_providers") == providers:
+            return
         if "database" not in doc:
             doc["database"] = tomlkit.table()
         arr = tomlkit.array()
@@ -1927,6 +1931,22 @@ class SearchInstaller:
             logger.warning("CoreML validation failed — falling back to CPU")
             print("Warning: CoreML validation failed — falling back to CPU.")
             return [], None, False
+
+    def _fe1_reprobe(self, gpu_provider: "str | None", prof: "InstallProfile", split_coreml: bool) -> None:
+        """Re-validate GPU provider after model download (FE-1). No-op in split mode."""
+        if gpu_provider is not None and prof.reranker is not None and not split_coreml:
+            if not self.validate_providers([gpu_provider]):
+                logger.warning(
+                    "Model validation under provider %s failed after "
+                    "download — the reranker (%r) will fall back to "
+                    "CPU at runtime.",
+                    gpu_provider,
+                    prof.reranker,
+                )
+                print(
+                    f"Warning: model validation failed under {gpu_provider} — "
+                    "the reranker will fall back to CPU."
+                )
 
     # ------------------------------------------------------------------
     # Data directory
@@ -2447,33 +2467,7 @@ class SearchInstaller:
                         # branch == "force": leave backup, new config stays
                         return 1
 
-                    # FE-1: re-validate the configured GPU provider now that the
-                    # reranker model files are downloaded. The Step 9 gate runs
-                    # before pre-warm, so the reranker model is not yet on disk
-                    # and probing it there would trigger a blocking download;
-                    # this is the first point it can be probed cheaply under the
-                    # GPU provider. Only the Metal/CoreML path reaches here
-                    # (gpu_provider is None for CUDA — out of scope). A failure
-                    # warns and continues: the providers list is a single shared
-                    # key, so no per-model config is rewritten and ONNX falls
-                    # back to CPU per-session at runtime. validate_providers
-                    # probes both models and returns a combined result, so the
-                    # message names the provider rather than blaming the reranker
-                    # alone (the embedder already passed the Step 9 gate, making
-                    # the reranker the likely cause, but not the certain one).
-                    if gpu_provider is not None and prof.reranker is not None and not split_coreml:
-                        if not self.validate_providers([gpu_provider]):
-                            logger.warning(
-                                "Model validation under provider %s failed after "
-                                "download — the reranker (%r) will fall back to "
-                                "CPU at runtime.",
-                                gpu_provider,
-                                prof.reranker,
-                            )
-                            print(
-                                f"Warning: model validation failed under {gpu_provider} — "
-                                "the reranker will fall back to CPU."
-                            )
+                    self._fe1_reprobe(gpu_provider, prof, split_coreml)
 
             # Step 15: register and start service
             print("[5/5] Starting search service...")

@@ -1,5 +1,7 @@
 # Feature Brief: D6 — Install-time / Background Provider Validation
 
+> **Status update (2026-07-20):** The per-model provider configuration feature described in "Future Iterations" below has been implemented. See [ADR-10](../ADRs/10_coreml_split_providers.md) for the accepted design.
+
 ## Problem
 
 When a user installs archon-search with a non-CPU provider (CoreML, CUDA) or a custom `reranker_model`, the first real search query triggers the ONNX session initialization — silently, 5–15 seconds into the user's request, with no prior warning that the configured model or provider is invalid. The reranker has no validation path at all; the embedder's provider check only runs during Metal GPU detection at install time and never again. Misconfigured providers cause search failures at query time rather than at install or startup.

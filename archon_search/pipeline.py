@@ -34,6 +34,7 @@ from archon_search.store import STORE_SCHEMA_VERSION, SearchStore, StoreBusyErro
 from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
 from archon_search.graph_types import ChunkInput, GraphNode
 from archon_search.graph_expander import build_expanded_text, tokenize_and_generate_ngrams
+from archon_search.config import resolve_reranker_providers
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig, RAGFusionConfig, SearchConfig
@@ -3491,7 +3492,7 @@ def create_pipeline(
     if cfg.reranker_model:
         _reranker_backend: RerankerBackend = reranker_backend or ModelReranker(
             cfg.reranker_model,
-            providers=((cfg.reranker_providers if cfg.reranker_providers is not None else cfg.providers) or None),
+            providers=resolve_reranker_providers(cfg),
         )
         reranker: Reranker | None = Reranker(_reranker_backend)
     else:
