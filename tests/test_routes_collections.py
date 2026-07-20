@@ -1242,9 +1242,14 @@ def test_remove_collection_success_drops_table_and_meta(
 
 
 def test_delete_collection_503_when_lock_held(
-    tmp_path: Path, tmp_store: JobStore
+    tmp_path: Path, tmp_store: JobStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """DELETE /collections/{name} returns 503 when the per-collection lock is already held."""
+    # Shrink the real lock-acquisition timeout so the 503 path fires in ~0.1s instead of the
+    # production 30s (which was ~30s of pure serial dead-time in the suite). The route helper
+    # _ingest_lock.acquire_collection_lock_or_503 reads _constants.INGEST_LOCK_TIMEOUT_S live,
+    # so patching the constants module takes effect without touching production defaults.
+    monkeypatch.setattr("archon_search.constants.INGEST_LOCK_TIMEOUT_S", 0.1)
     import asyncio as _asyncio
     from archon_search.collection_meta import CollectionMeta
 

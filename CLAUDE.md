@@ -23,8 +23,14 @@ uv run archon-search
 # Does not invoke launchd/systemd; blocks until SIGTERM/Ctrl-C.
 uv run archon-search serve
 
-# Full test suite — all markers except live_benchmark and smoke
+# Full test suite — all markers except live_benchmark, smoke, live_eval, docling
 uv run pytest
+
+# Fast local run on a RAM disk (macOS) — ~24s quicker; refuses to start if another
+# pytest is running (OOM guard) and always tears the RAM disk down, even on Ctrl-C.
+bash scripts/test-fast.sh              # extra pytest args pass through, e.g. --no-cov -q
+# Linux/CI equivalent (tmpfs, no script needed):
+#   TMPDIR=/dev/shm uv run pytest --basetemp=/dev/shm/archon-pt
 
 # Serial execution — reserved for developer debugging only (fail-fast, stdout passthrough)
 uv run pytest tests/test_router.py::test_name -n0 -x
@@ -56,7 +62,7 @@ Test markers (all run by default except `live_benchmark`, `smoke`, `live_eval`, 
 - `smoke` — excluded from default runs the same way as `live_benchmark` (`norecursedirs` primary, `-m` addopts filter secondary); every smoke test file sets `pytestmark = pytest.mark.xdist_group("smoke_e2e")` at module level to serialize onto one worker and prevent concurrent server subprocess instances; run separately with the command above.
 - `docling` — the four tests that invoke the **real** docling parser / RapidOCR (PDF & image OCR). A single parse takes minutes on macOS (Metal/RapidOCR), so these are excluded from the default run via the `-m` addopts filter only (they are not in a dedicated directory, so `norecursedirs` does not apply). Run separately with `uv run pytest -m docling --no-cov`. The eval corpus deliberately contains **no** PDF/OCR document so the deterministic eval harness never invokes docling.
 
-**PARALLEL TESTS ARE MANDATORY: Always run `uv run pytest` without `-n0`. The `addopts` in `pyproject.toml` already sets `-n 4 --dist=loadgroup`. The worker count is deliberately capped at 4 — never raise it back to `-n auto`: auto meant 14 workers on this 14-core machine, and on model-loading paths each worker holds ~2 GB (fastembed/onnxruntime/torch), which OOM-crashed the 48 GB machine on 2026-07-05. Never add `-n0` — it disables parallelism and is reserved for developer debugging only. To see more failure detail, use `--tb=short` or `--tb=long`, never `-n0 -s`.**
+**PARALLEL TESTS ARE MANDATORY: Always run `uv run pytest` without `-n0`. The `addopts` in `pyproject.toml` sets `-n 8 --dist=loadgroup`. The worker count was raised from 4 to 8 on 2026-07-20 after measuring the default suite's real footprint: fastembed is stubbed (`tests/_search_stubs.py`), so each worker holds only ~0.3 GB (measured peak ~450 MB total across all 8 workers), NOT the ~2 GB of real-model paths — so `-n 8` is memory-trivial on this 14-core/48 GB machine (full suite ~177 s at `-n 8` vs ~239 s at `-n 4`). Never raise it to `-n auto` (=14 here), and never bump `-n` for the real-model lanes (`live_benchmark`/`smoke`, which load real fastembed/onnxruntime/torch at ~2 GB/worker) — `-n auto` on those model-loading paths OOM-crashed the 48 GB machine on 2026-07-05. Never add `-n0` — it disables parallelism and is reserved for developer debugging only. To see more failure detail, use `--tb=short` or `--tb=long`, never `-n0 -s`.**
 
 **ONE TEST SUITE AT A TIME: Never launch `uv run pytest` in a fire-and-forget background call (i.e. `run_in_background` without Monitor). Exception: subagents may use `run_in_background: true` + `Monitor` to outlast the ~120 s Bash foreground ceiling — Monitor actively watches the process so nothing is abandoned. Never start a new suite run while a previous one may still be alive. Before any test run, verify with `ps -Ao comm=,args= | awk '$1 ~ /[Pp]ython/ && /\/pytest/'` that no pytest workers are alive (`pgrep -fl pytest` self-matches the shell and must not be used). Stacked suite runs multiply parallel workers and OOM-crashed the 48 GB machine on 2026-07-05. While iterating, run scoped paths (`uv run pytest tests/test_x.py --no-cov`); run the full suite once (via blocking call or background+Monitor) at task completion.**
 

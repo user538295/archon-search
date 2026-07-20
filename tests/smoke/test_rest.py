@@ -150,7 +150,7 @@ def test_smoke_excluded_from_default_run() -> None:
     ``"smoke"``, which would false-positive on ``tests/test_docker_smoke.py``).
 
     Uses ``-o addopts=`` (not ``-p no:xdist``) to override the ini's
-    ``addopts``: the ini bakes in ``-n 4 --dist=loadgroup`` (xdist flags), and
+    ``addopts``: the ini bakes in ``-n 8 --dist=loadgroup`` (xdist flags), and
     disabling the xdist plugin outright makes pytest reject those flags as
     unrecognized before collection even starts — that would make this
     assertion pass vacuously on a usage-error message rather than real
@@ -234,7 +234,7 @@ def test_full_smoke_suite_passes() -> None:
     cleared so the outer runner's own addopts cannot mask the child run.
 
     Uses ``-o addopts=`` (not ``-p no:xdist``) to override the ini's
-    ``addopts``: the ini bakes in ``-n 4 --dist=loadgroup`` (xdist flags), and
+    ``addopts``: the ini bakes in ``-n 8 --dist=loadgroup`` (xdist flags), and
     disabling the xdist plugin outright makes pytest reject those flags as
     unrecognized before collection even starts (matches the documented
     ``test_smoke_excluded_from_default_run`` gotcha above). This also strips

@@ -133,7 +133,7 @@ The default test command:
 uv run pytest
 ```
 
-This run excludes only the `live_benchmark` and `smoke` markers; `live`, `eval`, `benchmark`, and `integration` markers run in the default suite and skip gracefully when their infrastructure is absent. It enforces `--cov-fail-under=85` and runs tests in parallel via `pytest-xdist` (`-n 4 --dist=loadgroup`; the worker count is deliberately capped — do not raise it back to `-n auto`, see the testing policy in `CLAUDE.md`). To skip coverage while iterating locally:
+This run excludes only the `live_benchmark` and `smoke` markers; `live`, `eval`, `benchmark`, and `integration` markers run in the default suite and skip gracefully when their infrastructure is absent. It enforces `--cov-fail-under=85` and runs tests in parallel via `pytest-xdist` (`-n 8 --dist=loadgroup`; raised from 4 on 2026-07-20 — the default suite stubs fastembed so each worker is only ~0.3 GB; never `-n auto`, see the testing policy in `CLAUDE.md`). For an even faster local run on macOS, `bash scripts/test-fast.sh` runs the suite on a RAM disk. To skip coverage while iterating locally:
 
 ```bash
 uv run pytest --no-cov

@@ -122,7 +122,7 @@ norecursedirs = [
 # -n is capped at 4 — never "auto": auto meant 14 workers on this 14-core machine, and on
 # model-loading paths each worker holds ~2 GB (fastembed/onnxruntime/torch); stacked runs
 # OOM-crashed the 48 GB machine on 2026-07-05 (Jetsam + WindowServer watchdog kill).
-addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n 4 --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark and not smoke and not live_eval and not docling\""
+addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n 8 --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark and not smoke and not live_eval and not docling\""  # -n 8 (raised from 4, 2026-07-20): default suite stubs fastembed → measured ~0.3GB/worker, memory-safe on 14-core/48GB. NEVER -n auto (=14 → 2GB/worker on real-model lanes OOM'd 2026-07-05). See CLAUDE.md testing policy.
 markers = [
     "benchmark: latency benchmark — serialized via xdist_group('benchmark'); server-dependent tests auto-skip when server is unreachable",
     "integration: integration tests requiring live infrastructure",

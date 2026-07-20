@@ -69,7 +69,7 @@ bash release.sh --dry-run
 
 The default `pytest` invocation excludes only the `live_benchmark` and `smoke` markers via `addopts` in `pyproject.toml` (`-m "not live_benchmark and not smoke"`); `live`, `eval`, `benchmark`, and `integration` markers run in the default suite and skip gracefully when their required infrastructure is absent. See `200_testing_strategy.md` for the full marker layout.
 
-The default run is parallel by default (`-n 4 --dist=loadgroup` in `addopts`). The worker count is deliberately capped at 4 — never raise it back to `-n auto` (see `CLAUDE.md`). For debugging use `-n0` to run serially: `uv run pytest -n0`. Fail-fast requires `-n0 -x` and stdout passthrough requires `-n0 -s` (xdist suppresses both by default).
+The default run is parallel by default (`-n 8 --dist=loadgroup` in `addopts`; raised from 4 on 2026-07-20 after measuring ~0.3 GB/worker in the stubbed default suite). Never `-n auto` and never bump `-n` for the real-model lanes (`live_benchmark`/`smoke`) — see `CLAUDE.md`. `bash scripts/test-fast.sh` runs the suite on a macOS RAM disk for ~24 s more. For debugging use `-n0` to run serially: `uv run pytest -n0`. Fail-fast requires `-n0 -x` and stdout passthrough requires `-n0 -s` (xdist suppresses both by default).
 
 ## Naming Convention: Package vs. Distribution
 

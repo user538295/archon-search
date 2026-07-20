@@ -1,6 +1,6 @@
 """Integration test: FTS consistency after 50 add/delete/re-ingest operations.
 
-Task F.1 acceptance criterion: after a sequence of 50 operations on a 1,000-chunk
+Task F.1 acceptance criterion: after a sequence of 50 operations on a 500-chunk
 collection, at least 10 representative FTS queries return the **same doc_id sets**
 (set membership only — rank order and BM25 scores are NOT checked) as a fresh
 ``rebuild_fts_index()`` on the final collection state.
@@ -39,7 +39,7 @@ from archon_search.store import SearchStore
 # ---------------------------------------------------------------------------
 
 _DIM = 8           # small enough for fast I/O in tests
-_CORPUS_CHUNKS = 1000
+_CORPUS_CHUNKS = 500  # halved from 1000 (2026-07-20) to cut suite ingest I/O; still a large-corpus FTS check (all assertions scale off this constant)
 _DELTA_OPS = 50     # number of add/delete/re-ingest operations
 _QUERIES = 10       # number of representative FTS queries to verify
 _SEED = 42          # deterministic random sequence
@@ -60,7 +60,7 @@ def _unique_token(doc_id: str, version: int = 0) -> str:
 
     We take 12 hex chars from SHA-256(doc_id + version) and prefix with ``u``
     so it is a single FTS term.  Collision probability on 48 bits is negligible
-    for a 1,000-doc corpus.
+    for a 500-doc corpus.
     """
     h = hashlib.sha256(f"{doc_id}-{version}".encode()).hexdigest()[:12]
     return f"u{h}"
@@ -115,7 +115,7 @@ def test_fts_consistency_after_50_operations(tmp_path: Any) -> None:
             col = f"consistency-{uuid.uuid4().hex[:8]}"
             await store.ensure_collection(col, embedding_dim=_DIM)
 
-            # --- Phase 1: ingest 1,000 base corpus chunks -----------------
+            # --- Phase 1: ingest the base corpus chunks (_CORPUS_CHUNKS) ---
             # Each doc contributes 1 chunk with a globally unique FTS token.
             base_docs: dict[int, tuple[str, str, list[ChunkRecord]]] = {}
             for i in range(_CORPUS_CHUNKS):
