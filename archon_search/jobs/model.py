@@ -12,7 +12,19 @@ from __future__ import annotations
 from pathlib import Path
 
 from archon_search.paths import get_data_dir
-from archon_search.types import IngestJob, JobStatus
+from archon_search.types import (
+    CommunityRebuildJob,
+    DeleteJob,
+    ExportJob,
+    ImportJob,
+    IngestJob,
+    JobKind,
+    JobStatus,
+    MetadataReindexJob,
+    MigrationJob,
+    ReindexJob,
+    SyncJob,
+)
 
 
 def get_jobs_file() -> Path:
@@ -23,6 +35,27 @@ def get_jobs_file() -> Path:
     the Phase 2 env-var-scope note in the C9 plan).
     """
     return get_data_dir() / "archon-search-jobs.json"
+
+
+def _job_type(job: IngestJob) -> str:
+    """Return the canonical job_type string for any IngestJob subclass."""
+    if isinstance(job, MigrationJob):
+        return "migration"
+    if isinstance(job, ExportJob):
+        return "export"
+    if isinstance(job, ImportJob):
+        return "import"
+    if isinstance(job, ReindexJob):
+        return "reindex"
+    if isinstance(job, DeleteJob):
+        return "delete"
+    if isinstance(job, CommunityRebuildJob):
+        return "community_rebuild"
+    if isinstance(job, SyncJob):
+        return JobKind.sync.value
+    if isinstance(job, MetadataReindexJob):
+        return JobKind.metadata_reindex.value
+    return "ingest"
 
 
 def job_to_dict(job: IngestJob) -> dict:
@@ -55,6 +88,7 @@ def job_to_dict(job: IngestJob) -> dict:
         "kind": k.value if k is not None else None,
         "migrations_applied": getattr(job, "migrations_applied", None),
         "backup_confirmed": getattr(job, "backup_confirmed", None),
+        "job_type": _job_type(job),
     }
 
 

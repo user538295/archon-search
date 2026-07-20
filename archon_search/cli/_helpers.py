@@ -13,18 +13,35 @@ _POLL_INTERVAL_SECONDS = 2
 _TERMINAL_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
 
 
-def _poll_job(job_id: str, base_url: str, headers: dict) -> dict:
+def _poll_job(
+    job_id: str,
+    base_url: str,
+    headers: dict,
+    timeout_seconds: int | None = None,
+) -> dict:
     """Poll GET /jobs/{job_id} until terminal, printing progress.
 
     Returns the final job dict on DONE. Raises SystemExit(1) on FAILED/CANCELLED/FAILED_EXPIRED.
     On KeyboardInterrupt prints 'Polling stopped — job continues on server' and returns {}.
+    On timeout (when timeout_seconds is set) prints a hint and returns {}.
     """
     url = f"{base_url}/jobs/{job_id}"
+    max_polls = (max(1, timeout_seconds // _POLL_INTERVAL_SECONDS)
+                 if timeout_seconds is not None else None)
     status = "UNKNOWN"
     job: dict = {}
+    polls = 0
 
     try:
         while True:
+            polls += 1
+            if max_polls is not None and polls > max_polls:
+                click.echo(
+                    f"Timed out after {timeout_seconds}s. Job {job_id} continues on server.",
+                    err=True,
+                )
+                return {}
+
             try:
                 resp = httpx.get(url, headers=headers)
             except httpx.ConnectError as exc:
@@ -42,7 +59,10 @@ def _poll_job(job_id: str, base_url: str, headers: dict) -> dict:
                 raise SystemExit(1)
 
             job = resp.json()
-            status = job["status"]
+            status = job.get("status")
+            if status is None:
+                click.echo("Error polling job: response missing 'status' field", err=True)
+                raise SystemExit(1)
             progress = job.get("progress")
 
             if progress:

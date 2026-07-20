@@ -9,6 +9,7 @@ Covers:
 - test_poll_migration_job_does_not_print_complete_on_interrupt: migration wrapper guards KBI
 - test_poll_job_connect_error_exits_1: httpx.ConnectError → exit 1
 - test_poll_job_non200_exits_1: non-200 response → exit 1
+- test_poll_job_missing_status_exits_1: 200 with no status field → exit 1 (not infinite hang)
 """
 from __future__ import annotations
 
@@ -229,3 +230,21 @@ def test_poll_job_non200_exits_1(capsys) -> None:
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "500" in captured.err
+
+
+def test_poll_job_missing_status_exits_1(capsys) -> None:
+    """200 response with no 'status' field → exit 1 (not an infinite hang)."""
+    missing_status_resp = MagicMock()
+    missing_status_resp.status_code = 200
+    missing_status_resp.json.return_value = {"job_id": "job-123"}  # no 'status'
+
+    with (
+        patch("archon_search.cli._helpers.httpx.get", return_value=missing_status_resp),
+        patch("archon_search.cli._helpers.time.sleep"),
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            _poll_job("job-123", "http://localhost:8765", {"Authorization": "Bearer test-key"})
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "missing" in captured.err

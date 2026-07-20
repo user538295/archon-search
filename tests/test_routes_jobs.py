@@ -228,6 +228,29 @@ def test_job_to_dict_default_namespace() -> None:
     assert result["namespace"] == DEFAULT_NAMESPACE
 
 
+def test_job_to_dict_includes_job_type_ingest() -> None:
+    """job_to_dict() output includes 'job_type': 'ingest' for base IngestJob."""
+    job = IngestJob(
+        job_id="test-job-3",
+        status=JobStatus.PENDING,
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+    )
+    result = job_to_dict(job)
+    assert "job_type" in result
+    assert result["job_type"] == "ingest"
+
+
+def test_get_job_response_includes_job_type(client: TestClient, tmp_store: JobStore) -> None:
+    """GET /jobs/{id} response body includes 'job_type' field."""
+    job = tmp_store.create(path="/f.txt", collection="col", namespace="default")
+    resp = client.get(f"/jobs/{job.job_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "job_type" in body
+    assert body["job_type"] == "ingest"
+
+
 # ---------------------------------------------------------------------------
 # _default_ingest_task namespace parameter
 # ---------------------------------------------------------------------------

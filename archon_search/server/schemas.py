@@ -474,6 +474,7 @@ class JobResponse(BaseModel):
     kind: str | None = None
     migrations_applied: list[str] | None = None
     backup_confirmed: bool | None = None
+    job_type: str = "ingest"
 
 
 class JobListResponse(BaseModel):

@@ -2030,6 +2030,11 @@
             "title": "Job Id",
             "type": "string"
           },
+          "job_type": {
+            "default": "ingest",
+            "title": "Job Type",
+            "type": "string"
+          },
           "kind": {
             "anyOf": [
               {

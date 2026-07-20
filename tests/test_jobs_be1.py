@@ -221,6 +221,51 @@ def test_migration_job_kind_survives_round_trip_alongside_sync_jobs(tmp_path):
     assert isinstance(loaded_meta.kind, JobKind)
 
 
+def test_job_to_dict_includes_job_type_for_all_job_types(tmp_path):
+    """job_to_dict emits the correct 'job_type' string for every concrete subclass."""
+    from archon_search.types import (
+        DeleteJob,
+        ExportJob,
+        ImportJob,
+        MigrationJob,
+        MigrationKind,
+        ReindexJob,
+    )
+
+    store = _make_job_store(tmp_path)
+
+    ingest_job = store.create(path="/f.txt", collection="c", namespace="default")
+    assert job_to_dict(ingest_job)["job_type"] == "ingest"
+
+    sync_job = store.create_sync(namespace="default")
+    assert job_to_dict(sync_job)["job_type"] == "sync"
+
+    meta_job = store.create_metadata_reindex(collection="c", namespace="default")
+    assert job_to_dict(meta_job)["job_type"] == "metadata_reindex"
+
+    crj = store.create_community_rebuild(collection="c", namespace="default")
+    assert job_to_dict(crj)["job_type"] == "community_rebuild"
+
+    mig = store.create_migration(collection="c", kind=MigrationKind.IN_PLACE, backup_confirmed=None, namespace="default")
+    assert job_to_dict(mig)["job_type"] == "migration"
+
+    # Subclasses without factory helpers: construct directly.
+    import uuid
+    now = "2026-07-15T10:00:00+00:00"
+
+    export_job = ExportJob(job_id=str(uuid.uuid4()), status=JobStatus.QUEUED, created_at=now, updated_at=now, collection="c")
+    assert job_to_dict(export_job)["job_type"] == "export"
+
+    import_job = ImportJob(job_id=str(uuid.uuid4()), status=JobStatus.QUEUED, created_at=now, updated_at=now, collection="c", archive_path="/a.tar.gz")
+    assert job_to_dict(import_job)["job_type"] == "import"
+
+    reindex_job = ReindexJob(job_id=str(uuid.uuid4()), status=JobStatus.QUEUED, created_at=now, updated_at=now, collection="c")
+    assert job_to_dict(reindex_job)["job_type"] == "reindex"
+
+    delete_job = DeleteJob(job_id=str(uuid.uuid4()), status=JobStatus.QUEUED, created_at=now, updated_at=now, collection="c")
+    assert job_to_dict(delete_job)["job_type"] == "delete"
+
+
 def test_write_atomic_emits_correct_discriminator_string_on_disk(tmp_path):
     """_write_atomic emits job_type='sync'/'metadata_reindex' as the on-disk discriminator.
 
