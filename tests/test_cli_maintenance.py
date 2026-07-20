@@ -448,6 +448,27 @@ def test_maintenance_run_wait_server_not_running(tmp_path: Path) -> None:
     assert "archon-search serve" in result.stderr
 
 
+def test_maintenance_run_wait_post_connect_error(tmp_path: Path) -> None:
+    """--wait: pre-flight GET succeeds, but POST raises ConnectError → friendly message on stderr, exit 0."""
+    runner = CliRunner()
+    with (
+        patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
+        patch(
+            "archon_search.cli.maintenance_cmd.httpx.get",
+            return_value=_mock_response(200, _status_server_payload(last_run_at="2026-06-20T10:00:00+00:00")),
+        ),
+        patch(
+            "archon_search.cli.maintenance_cmd.httpx.post",
+            side_effect=httpx.ConnectError("nope"),
+        ),
+    ):
+        result = runner.invoke(maintenance_cmd, ["run", "--wait", "--api-key", "deadbeef"])
+
+    assert result.exit_code == 0
+    assert "The server is not running." in result.stderr
+    assert "archon-search serve" in result.stderr
+
+
 def test_maintenance_run_wait_preflight_read_timeout_exits_1(tmp_path: Path) -> None:
     """--wait: ReadTimeout on pre-flight GET → error exit 1 (not a connect error)."""
     runner = CliRunner()
@@ -461,7 +482,8 @@ def test_maintenance_run_wait_preflight_read_timeout_exits_1(tmp_path: Path) -> 
         result = runner.invoke(maintenance_cmd, ["run", "--wait", "--api-key", "deadbeef"])
 
     assert result.exit_code == 1
-    assert "The server is not running." not in result.output
+    assert "The server is not running." not in result.stderr
+    assert "Error polling server" in result.stderr
 
 
 def test_maintenance_run_wait_preflight_401_exits_1(tmp_path: Path) -> None:
@@ -477,7 +499,8 @@ def test_maintenance_run_wait_preflight_401_exits_1(tmp_path: Path) -> None:
         result = runner.invoke(maintenance_cmd, ["run", "--wait", "--api-key", "deadbeef"])
 
     assert result.exit_code == 1
-    assert "The server is not running." not in result.output
+    assert "The server is not running." not in result.stderr
+    assert "server returned 401" in result.stderr
 
 
 def test_maintenance_run_wait_mid_poll_connect_error_continues(tmp_path: Path) -> None:
@@ -513,7 +536,48 @@ def test_maintenance_run_wait_mid_poll_connect_error_continues(tmp_path: Path) -
         )
 
     assert result.exit_code == 0, result.output
-    assert new_run_at in result.output or "complete" in result.output.lower()
+    assert f"Maintenance pass complete. last_run_at={new_run_at}" in result.output
+    assert "Timed out" not in result.stderr
+
+
+def test_maintenance_run_wait_permanent_server_down_mid_poll(tmp_path: Path) -> None:
+    """--wait: server dies permanently mid-poll (all polls ConnectError) → timeout exit 0.
+
+    _POLL_INTERVAL_SECONDS=2, --timeout 5 → max_polls = max(1, 5 // 2) = 2 loop polls.
+    GET call count:
+      1 pre-flight GET (success — baseline)
+      2 loop GETs (ConnectError — server permanently down)
+      total = 3 responses consumed
+    """
+    runner = CliRunner()
+    old_run_at = "2026-06-20T10:00:00+00:00"
+    post_resp = _mock_response(202, {"status": "triggered"})
+
+    get_responses = [
+        _mock_response(200, _status_server_payload(last_run_at=old_run_at)),
+        httpx.ConnectError("server gone"),
+        httpx.ConnectError("server gone"),
+        httpx.ConnectError("server gone"),
+    ]
+    with (
+        patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
+        patch("archon_search.cli.maintenance_cmd.httpx.post", return_value=post_resp),
+        patch(
+            "archon_search.cli.maintenance_cmd.httpx.get",
+            side_effect=get_responses,
+        ) as mock_get,
+        patch("archon_search.cli.maintenance_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            maintenance_cmd, ["run", "--wait", "--timeout", "5", "--api-key", "deadbeef"]
+        )
+
+    # 1 pre-flight GET + 2 loop GETs (both ConnectError) = 3 total.
+    # Asserts the ConnectError-continue branch actually ran, not just a generic timeout.
+    assert mock_get.call_count == 3
+    assert result.exit_code == 0, result.output
+    assert "Timed out" in result.stderr
+    assert "Maintenance pass complete" not in result.output
 
 
 def test_maintenance_run_other_http_error_still_exits_1(tmp_path: Path) -> None:
@@ -529,7 +593,8 @@ def test_maintenance_run_other_http_error_still_exits_1(tmp_path: Path) -> None:
         result = runner.invoke(maintenance_cmd, ["run", "--api-key", "deadbeef"])
 
     assert result.exit_code == 1
-    assert "The server is not running." not in result.output
+    assert "The server is not running." not in result.stderr
+    assert "Error contacting server" in result.stderr
 
 
 def test_maintenance_run_server_error(tmp_path: Path) -> None:
@@ -878,7 +943,24 @@ def test_maintenance_run_wait_first_run_success(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    assert new_run_at in result.output or "complete" in result.output.lower()
+    assert f"Maintenance pass complete. last_run_at={new_run_at}" in result.output
+
+
+# ---------------------------------------------------------------------------
+# _get_maintenance_state unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_get_maintenance_state_propagates_connect_error(tmp_path: Path) -> None:
+    """_get_maintenance_state re-raises ConnectError so callers can distinguish server-down."""
+    from archon_search.cli.maintenance_cmd import _get_maintenance_state
+
+    with patch(
+        "archon_search.cli.maintenance_cmd.httpx.get",
+        side_effect=httpx.ConnectError("nope"),
+    ):
+        with pytest.raises(httpx.ConnectError):
+            _get_maintenance_state("http://localhost:9999/status", {"Authorization": "Bearer x"})
 
 
 # ---------------------------------------------------------------------------

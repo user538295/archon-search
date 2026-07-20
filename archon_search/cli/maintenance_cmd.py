@@ -28,6 +28,9 @@ _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
 _DEFAULT_WAIT_TIMEOUT_SECONDS = 120
 _STATE_FILE_NAME = ".maintenance-state.json"
+_SERVER_NOT_RUNNING_MSG = (
+    "The server is not running. Start it first with: archon-search serve"
+)
 
 
 def _resolve_api_key(api_key: str | None) -> str:
@@ -181,6 +184,8 @@ def _fetch_server_status(
     try:
         resp = httpx.get(url, headers=headers, timeout=2.0)
     except httpx.HTTPError:
+        # ponytail: broad catch is intentional — status is best-effort/offline-capable;
+        # unlike `run`, any transport error (including ReadTimeout) means "unavailable".
         return None
     if resp.status_code != 200:
         return None
@@ -316,19 +321,15 @@ def run_subcommand(
         try:
             original_last_run_at = _get_last_run_at(status_url, headers)
         except httpx.ConnectError:
-            click.echo(
-                "The server is not running. Start it first with: archon-search serve",
-                err=True,
-            )
+            click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
             raise SystemExit(0)
 
     try:
         resp = httpx.post(trigger_url, headers=headers)
     except httpx.ConnectError:
-        click.echo(
-            "The server is not running. Start it first with: archon-search serve",
-            err=True,
-        )
+        # ponytail: narrow ConnectError catch before broad HTTPError is intentional —
+        # ReadTimeout / ReadError must NOT be misreported as "server is not running".
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
         raise SystemExit(0)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -461,7 +462,11 @@ def _get_maintenance_state(
 
 
 def _get_last_run_at(status_url: str, headers: dict[str, str]) -> str | None:
-    """Fetch GET /status and return maintenance.last_run_at, or None on error.
+    """Fetch GET /status and return maintenance.last_run_at, or None on transient error.
+
+    Note: ``httpx.ConnectError`` propagates to the caller (re-raised by
+    ``_get_maintenance_state``) so the caller can distinguish server-down
+    from other transient errors.
 
     Thin wrapper around ``_get_maintenance_state`` for callers that only need
     the timestamp (e.g., capturing the baseline before POST /maintenance/trigger).
