@@ -87,7 +87,7 @@
         "properties": {
           "queued": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/QueuedBackupJob"
             },
             "title": "Queued",
             "type": "array"
@@ -3647,6 +3647,25 @@
           "running"
         ],
         "title": "WatcherReport",
+        "type": "object"
+      },
+      "QueuedBackupJob": {
+        "description": "One entry in BackupTriggerResponse.queued \u2014 collection name + job ID (brief 270).",
+        "properties": {
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "collection",
+          "job_id"
+        ],
+        "title": "QueuedBackupJob",
         "type": "object"
       }
     },

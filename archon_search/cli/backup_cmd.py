@@ -123,7 +123,7 @@ def _trigger_backup(
     if skipped:
         click.echo("Skipped collections:")
         for item in skipped:
-            click.echo(f"  {item.get('collection', '?')}: {item.get('reason', '?')}")
+            click.echo(f"  {item['collection']}: {item['reason']}")
 
     if not wait or not queued:
         return
@@ -142,12 +142,18 @@ def _wait_for_jobs(
 
     job_map maps job_id → collection_name so progress lines use the collection name.
 
+    Per-collection output format:
+    - DONE:      ``{col}: DONE``
+    - FAILED:    ``{col}: FAILED — {error}``
+    - CANCELLED: ``{col}: CANCELLED``
+
     Exit codes:
     - Exits 0 on success (all DONE) or timeout — prints a recovery hint on timeout.
     - Exits 2 when any job confirms FAILED.
     - Exits 1 on fatal errors (network, auth, HTTP errors).
     """
     failed: list[str] = []
+    cancelled: list[str] = []
     pending = set(job_map.keys())
     max_polls = max(1, timeout_seconds // _POLL_INTERVAL_SECONDS)
     polls = 0
@@ -171,7 +177,7 @@ def _wait_for_jobs(
             raise SystemExit(0)
 
         for job_id in list(pending):
-            col = job_map.get(job_id, job_id)
+            col = job_map[job_id]
             url = f"{api_url.rstrip('/')}/jobs/{job_id}"
             try:
                 resp = httpx.get(url, headers=headers)
@@ -193,17 +199,23 @@ def _wait_for_jobs(
                 pending.discard(job_id)
                 if status in {"FAILED", "FAILED_EXPIRED"}:
                     err = job.get("error") or "unknown error"
-                    click.echo(f"Backup FAILED for {col}: {err}", err=True)
-                    failed.append(job_id)
+                    click.echo(f"{col}: FAILED — {err}", err=True)
+                    failed.append(col)
                 elif status == "CANCELLED":
-                    click.echo(f"Backup cancelled: {col}")
+                    click.echo(f"{col}: CANCELLED")
+                    cancelled.append(col)
+                elif status == "DONE":
+                    click.echo(f"{col}: DONE")
         if pending:
             time.sleep(_POLL_INTERVAL_SECONDS)
             polls += 1
 
     if failed:
         raise SystemExit(2)
-    click.echo("Backup completed for all collections")
+    if cancelled:
+        click.echo(f"Backup finished ({len(cancelled)} collection(s) cancelled).")
+    else:
+        click.echo("Backup completed for all collections.")
 
 
 # ---------------------------------------------------------------------------
