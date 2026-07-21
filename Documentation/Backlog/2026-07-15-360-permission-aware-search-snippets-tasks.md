@@ -128,7 +128,7 @@ flowchart LR
 
 ### Phase 2 · Fail-open warnings surfaced *(any caller can now see exactly why a chunk fell open)*
 
-- [ ] **BE-6** — Refactor `parse_acl_value()` to return non-empty `warnings` for every remaining fail-open branch: invalid type (bool/other), non-string list elements, invalid namespace names, deny-all mixed with only invalid entries; refactor `read_acl_sidecar()` to return non-empty `warnings` for: symlink, UTF-8 decode failure, invalid namespace names in sidecar file #backend-role
+- [x] **BE-6** — Refactor `parse_acl_value()` to return non-empty `warnings` for every remaining fail-open branch: invalid type (bool/other), non-string list elements, invalid namespace names, deny-all mixed with only invalid entries; refactor `read_acl_sidecar()` to return non-empty `warnings` for: symlink, UTF-8 decode failure, invalid namespace names in sidecar file #backend-role
     - Interface Adapters · 3.0h
     - needs BE-2, BE-5 · completes S4a, S4b, S4c, S4d, S4e
     - Tests

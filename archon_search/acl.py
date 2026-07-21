@@ -187,8 +187,10 @@ def read_acl_sidecar(
     - ``source``: ``'sidecar'`` when a sidecar file exists (even if skipped/invalid);
       ``None`` when no sidecar file is present.
     - ``sidecar_path``: absolute path to the sidecar when source='sidecar'; ``None`` otherwise.
-    - ``warnings``: list of human-readable warning strings; non-empty only when
-      the sidecar exists but is skipped due to exceeding the 64 KB size limit.
+    - ``warnings``: list of human-readable warning strings; non-empty when any
+      of the following occur: (1) sidecar exceeds the 64 KB size limit,
+      (2) sidecar is a symlink, (3) sidecar is not valid UTF-8,
+      (4) sidecar contains invalid namespace names.
     """
     sidecar = doc_path.parent / (doc_path.name + ".acl")
 
@@ -196,8 +198,9 @@ def read_acl_sidecar(
         return None, None, None, []
 
     if sidecar.is_symlink():
+        warning_msg = f"ACL sidecar {sidecar} is a symlink; ignoring (ACL not applied)"
         logger.warning("ACL sidecar %s is a symlink; ignoring", sidecar)
-        return None, "sidecar", sidecar, []
+        return None, "sidecar", sidecar, [warning_msg]
 
     raw_bytes = sidecar.read_bytes()
     if len(raw_bytes) > _ACL_SIDECAR_MAX_BYTES:
@@ -215,8 +218,9 @@ def read_acl_sidecar(
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError:
+        warning_msg = f"ACL sidecar {sidecar} is not valid UTF-8; ignoring (ACL not applied)"
         logger.warning("ACL sidecar %s is not valid UTF-8; ignoring", sidecar)
-        return None, "sidecar", sidecar, []
+        return None, "sidecar", sidecar, [warning_msg]
 
     # Strip UTF-8 BOM if present
     text = text.lstrip("﻿")
@@ -237,15 +241,18 @@ def read_acl_sidecar(
         return [], "sidecar", sidecar, []
 
     valid: list[str] = []
+    sidecar_warnings: list[str] = []
     for line in non_empty:
         if is_acl_namespace_valid(line):
             valid.append(line)
         else:
+            warning_msg = f"ACL sidecar {sidecar}: invalid namespace name {line!r} (dropped)"
             logger.warning(
                 "ACL sidecar %s: invalid namespace name %r (dropped)", sidecar, line
             )
+            sidecar_warnings.append(warning_msg)
 
-    return (valid if valid else None), "sidecar", sidecar, []
+    return (valid if valid else None), "sidecar", sidecar, sidecar_warnings
 
 
 _T = TypeVar("_T")

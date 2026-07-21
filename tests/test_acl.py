@@ -1,6 +1,7 @@
 """Tests for archon_search.acl — ACL parsing utilities."""
 
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -219,7 +220,7 @@ def test_read_acl_sidecar_absent_returns_none(tmp_path: pytest.TempPathFactory) 
 
 
 def test_read_acl_sidecar_size_limit(
-    tmp_path: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     doc = tmp_path / "doc.md"
     doc.write_text("")
@@ -243,7 +244,7 @@ def test_read_acl_sidecar_bom_stripped(tmp_path: pytest.TempPathFactory) -> None
 
 
 def test_read_acl_sidecar_invalid_lines_dropped(
-    tmp_path: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     doc = tmp_path / "doc.md"
     doc.write_text("")
@@ -256,7 +257,7 @@ def test_read_acl_sidecar_invalid_lines_dropped(
 
 
 def test_read_acl_sidecar_symlink_returns_none(
-    tmp_path: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     doc = tmp_path / "doc.md"
     doc.write_text("")
@@ -271,7 +272,7 @@ def test_read_acl_sidecar_symlink_returns_none(
 
 
 def test_read_acl_sidecar_deny_all_with_trailing_lines(
-    tmp_path: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     doc = tmp_path / "doc.md"
     doc.write_text("")
@@ -284,7 +285,7 @@ def test_read_acl_sidecar_deny_all_with_trailing_lines(
 
 
 def test_read_acl_sidecar_invalid_utf8_returns_none(
-    tmp_path: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     doc = tmp_path / "doc.md"
     doc.write_text("")
@@ -302,7 +303,7 @@ def test_read_acl_sidecar_invalid_utf8_returns_none(
 
 
 def test_resolve_acl_front_matter_takes_precedence(
-    tmp_path: pytest.TempPathFactory, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     doc = tmp_path / "doc.md"
     doc.write_text("")
@@ -325,7 +326,7 @@ def test_resolve_acl_sidecar_used_when_no_front_matter(tmp_path: pytest.TempPath
 
 
 def test_resolve_acl_explicit_null_front_matter_falls_through_to_sidecar(
-    tmp_path: pytest.TempPathFactory,
+    tmp_path: Path,
 ) -> None:
     doc = tmp_path / "doc.md"
     doc.write_text("")
@@ -418,7 +419,7 @@ def test_apply_acl_filter_all_denied() -> None:
 
 
 def test_read_acl_sidecar_oversized_returns_warning(
-    tmp_path: pytest.TempPathFactory,
+    tmp_path: Path,
 ) -> None:
     """Sidecar > 64 KB must return (None, source, sidecar_path, [warning_str]) naming the file and limit."""
     doc = tmp_path / "doc.md"
@@ -433,7 +434,7 @@ def test_read_acl_sidecar_oversized_returns_warning(
 
 
 def test_read_acl_sidecar_normal_returns_no_warning(
-    tmp_path: pytest.TempPathFactory,
+    tmp_path: Path,
 ) -> None:
     """Sidecar ≤ 64 KB must return (acl_list, source, sidecar_path, []) with empty warnings."""
     doc = tmp_path / "doc.md"
@@ -446,7 +447,7 @@ def test_read_acl_sidecar_normal_returns_no_warning(
 
 
 def test_read_acl_sidecar_absent_returns_no_warning(
-    tmp_path: pytest.TempPathFactory,
+    tmp_path: Path,
 ) -> None:
     """No sidecar must return (None, None, None, []) with empty warnings."""
     doc = tmp_path / "doc.md"
@@ -457,7 +458,7 @@ def test_read_acl_sidecar_absent_returns_no_warning(
 
 
 def test_resolve_acl_sidecar_path_returns_result(
-    tmp_path: pytest.TempPathFactory,
+    tmp_path: Path,
 ) -> None:
     """resolve_acl() via sidecar path returns AclResolutionResult with empty warnings."""
     from archon_search.acl import AclResolutionResult
@@ -473,7 +474,7 @@ def test_resolve_acl_sidecar_path_returns_result(
 
 
 def test_resolve_acl_frontmatter_path_returns_result(
-    tmp_path: pytest.TempPathFactory,
+    tmp_path: Path,
 ) -> None:
     """resolve_acl() via front-matter path returns AclResolutionResult."""
     from archon_search.acl import AclResolutionResult
@@ -492,7 +493,7 @@ def test_resolve_acl_frontmatter_path_returns_result(
 
 
 def test_resolve_acl_oversized_sidecar_propagates_warning(
-    tmp_path: pytest.TempPathFactory,
+    tmp_path: Path,
 ) -> None:
     """resolve_acl() must propagate the oversized-sidecar warning from read_acl_sidecar()."""
     doc = tmp_path / "doc.md"
@@ -503,6 +504,109 @@ def test_resolve_acl_oversized_sidecar_propagates_warning(
     assert result.acl is None
     assert len(result.warnings) == 1
     assert "64" in result.warnings[0]
+
+
+# ---------------------------------------------------------------------------
+# BE-6: parse_acl_value warning branches
+# ---------------------------------------------------------------------------
+
+
+def test_parse_acl_bool_returns_warning() -> None:
+    """parse_acl_value with bool returns (None, [non-empty warning]) (S4a/S4e)."""
+    acl, warnings = parse_acl_value(True, "doc.md")
+    assert acl is None
+    assert len(warnings) >= 1
+    assert any(warnings), "warnings list must contain non-empty strings"
+
+
+def test_parse_acl_other_type_returns_warning() -> None:
+    """parse_acl_value with an int returns (None, [non-empty warning]) (S4a)."""
+    acl, warnings = parse_acl_value(42, "doc.md")
+    assert acl is None
+    assert len(warnings) >= 1
+    assert any(warnings), "warnings list must contain non-empty strings"
+
+
+def test_parse_acl_non_string_elements_returns_warning() -> None:
+    """list with non-string elements returns a warning."""
+    acl, warnings = parse_acl_value([42, None, "ns1"], "doc.md")
+    # Valid string elements are kept; non-string ones trigger a warning
+    assert acl == ["ns1"]
+    assert len(warnings) >= 1
+    assert any(warnings)
+
+
+def test_parse_acl_invalid_namespace_names_returns_warning() -> None:
+    """list with invalid namespace names returns a warning."""
+    acl, warnings = parse_acl_value(["!!!bad!!!", "ns1"], "doc.md")
+    # valid ns1 is kept; invalid one triggers a warning
+    assert acl == ["ns1"]
+    assert len(warnings) >= 1
+    assert any(warnings)
+
+
+def test_parse_acl_deny_all_mixed_invalid_returns_warning() -> None:
+    """deny-all plus only invalid entries → (None, [non-empty warning]) (S4d)."""
+    acl, warnings = parse_acl_value("deny-all,!!!bad!!!", "doc.md")
+    assert acl is None
+    assert len(warnings) >= 1
+    assert any(warnings)
+
+
+# ---------------------------------------------------------------------------
+# BE-6: read_acl_sidecar warning branches (symlink, UTF-8, invalid namespace)
+# ---------------------------------------------------------------------------
+
+
+def test_read_sidecar_symlink_returns_warning(
+    tmp_path: Path,
+) -> None:
+    """symlink sidecar yields (None, source, sidecar_path, [non-empty warning]) (S4b)."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    real_file = tmp_path / "real.acl"
+    real_file.write_text("ns1\n")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.symlink_to(real_file)
+    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+    assert acl_entries is None
+    assert source == "sidecar"
+    assert len(warnings) >= 1
+    assert any(warnings), "warnings must be non-empty for symlink sidecar"
+    assert "symlink" in warnings[0].lower()
+
+
+def test_read_sidecar_utf8_failure_returns_warning(
+    tmp_path: Path,
+) -> None:
+    """non-UTF-8 sidecar bytes yield (None, source, sidecar_path, [non-empty warning]) (S4c)."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_bytes(b"\xff\xfe invalid bytes")
+    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+    assert acl_entries is None
+    assert source == "sidecar"
+    assert len(warnings) >= 1
+    assert any(warnings), "warnings must be non-empty for UTF-8 decode failure"
+    assert "utf" in warnings[0].lower()
+
+
+def test_read_sidecar_invalid_namespace_returns_warning(
+    tmp_path: Path,
+) -> None:
+    """sidecar with invalid namespace lines yields non-empty warnings."""
+    doc = tmp_path / "doc.md"
+    doc.write_text("")
+    sidecar = tmp_path / "doc.md.acl"
+    sidecar.write_text("!!!bad!!!\n")
+    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
+    # All entries invalid → fail-open (None)
+    assert acl_entries is None
+    assert source == "sidecar"
+    assert len(warnings) >= 1
+    assert any(warnings), "warnings must be non-empty for invalid namespace in sidecar"
+    assert "invalid" in warnings[0].lower() or "namespace" in warnings[0].lower()
 
 
 # ---------------------------------------------------------------------------

@@ -348,3 +348,161 @@ async def test_multi_collection_each_result_has_own_gate(tmp_path):
 
     finally:
         await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# BE-6 integration tests: fail-open warnings surfaced through full pipeline
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_search_acl_gate_warnings_surfaced_for_invalid_frontmatter(tmp_path):
+    """S4e: ingest a doc with invalid-type _acl (bool), search with acl_context=true;
+    acl_gate.warnings must be non-empty."""
+    from archon_search.filters import SearchFilters
+
+    doc = tmp_path / "invalid_fm.md"
+    # bool value for _acl is an invalid type — triggers fail-open + warning
+    doc.write_text("---\n_acl: true\n---\n\nContent about archon-search.\n")
+
+    store, pipeline = _make_store_and_pipeline(tmp_path)
+    collection = "col_be6_fm"
+    await store.connect()
+    await store.ensure_collection(collection, embedding_dim=4)
+    try:
+        ingest_result = await pipeline.ingest_file(
+            doc,
+            collection,
+            embedder=pipeline._global_embedder,
+        )
+        assert ingest_result.status == "ok"
+        assert ingest_result.chunks_created > 0
+
+        search_result = await pipeline.search(
+            "archon-search",
+            collection,
+            namespace="default",
+            embedder=pipeline._global_embedder,
+            filters=SearchFilters(),
+        )
+        results = search_result.results
+        assert results, "Expected search results after ingest"
+
+        # Every result should carry non-empty warnings because _acl=True is invalid
+        for r in results:
+            assert r.acl_source == "frontmatter", (
+                f"Expected acl_source='frontmatter' for frontmatter _acl=True, got {r.acl_source!r}"
+            )
+            assert r.acl_warning, (
+                f"Expected non-empty acl_warning for invalid frontmatter _acl=True, "
+                f"got {r.acl_warning!r}"
+            )
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_search_acl_gate_warnings_surfaced_for_symlink_sidecar(tmp_path):
+    """S4b: ingest a doc with a symlinked sidecar; acl_gate.warnings must be non-empty."""
+    from archon_search.filters import SearchFilters
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+
+    doc = corpus / "symlinked.txt"
+    doc.write_text("Content about archon-search and symlinks.\n")
+
+    # Create a real file, then a symlink sidecar pointing to it
+    real_acl = corpus / "real.acl"
+    real_acl.write_text("ns1\n")
+    sidecar = corpus / "symlinked.txt.acl"
+    sidecar.symlink_to(real_acl)
+
+    store, pipeline = _make_store_and_pipeline(tmp_path)
+    collection = "col_be6_sym"
+    await store.connect()
+    await store.ensure_collection(collection, embedding_dim=4)
+    try:
+        ingest_result = await pipeline.ingest_file(
+            doc,
+            collection,
+            embedder=pipeline._global_embedder,
+        )
+        assert ingest_result.status == "ok"
+        assert ingest_result.chunks_created > 0
+
+        search_result = await pipeline.search(
+            "archon-search",
+            collection,
+            namespace="default",
+            embedder=pipeline._global_embedder,
+            filters=SearchFilters(),
+        )
+        results = search_result.results
+        assert results, "Expected search results after ingest"
+
+        for r in results:
+            assert r.acl_source == "sidecar", (
+                f"Expected acl_source='sidecar' for symlinked sidecar, got {r.acl_source!r}"
+            )
+            assert r.acl_warning, (
+                f"Expected non-empty acl_warning for symlinked sidecar, got {r.acl_warning!r}"
+            )
+    finally:
+        await store.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_search_acl_gate_warnings_deny_all_mixed_invalid(tmp_path):
+    """S4d: ingest a doc whose sidecar has deny-all mixed with invalid entries;
+    acl_gate.warnings must be non-empty (fail-open branch)."""
+    from archon_search.filters import SearchFilters
+
+    doc = tmp_path / "deny_mixed.txt"
+    doc.write_text("Content about archon-search and deny-all.\n")
+
+    # Sidecar: invalid name first (not the deny-all sentinel position), then deny-all as a
+    # non-sentinel entry → both are rejected by is_acl_namespace_valid, all entries invalid
+    # → fail-open (None) with warnings (S4d).
+    # Note: "deny-all" on the FIRST line would be treated as the deny-all sentinel (acl=[]),
+    # so we place !!!bad!!! first so the sentinel check is bypassed and all lines go through
+    # the is_acl_namespace_valid loop where deny-all is rejected like any invalid name.
+    sidecar = tmp_path / "deny_mixed.txt.acl"
+    sidecar.write_text("!!!bad!!!\ndeny-all\n")
+
+    store, pipeline = _make_store_and_pipeline(tmp_path)
+    collection = "col_be6_deny"
+    await store.connect()
+    await store.ensure_collection(collection, embedding_dim=4)
+    try:
+        ingest_result = await pipeline.ingest_file(
+            doc,
+            collection,
+            embedder=pipeline._global_embedder,
+        )
+        assert ingest_result.status == "ok"
+        assert ingest_result.chunks_created > 0
+
+        search_result = await pipeline.search(
+            "archon-search",
+            collection,
+            namespace="default",
+            embedder=pipeline._global_embedder,
+            filters=SearchFilters(),
+        )
+        results = search_result.results
+        assert results, "Expected search results — deny+invalid is fail-open, so chunk is accessible"
+
+        for r in results:
+            assert r.acl_source == "sidecar", (
+                f"Expected acl_source='sidecar', got {r.acl_source!r}"
+            )
+            assert r.acl_warning, (
+                f"Expected non-empty acl_warning for deny-all mixed with invalid entries, "
+                f"got {r.acl_warning!r}"
+            )
+    finally:
+        await store.disconnect()
