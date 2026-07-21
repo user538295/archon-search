@@ -141,6 +141,10 @@ def test_backup_trigger_queued_jobs_eventually_complete(
             f"expected at least one queued backup job; trigger response: {body}"
         )
         queued_ids: list[str] = [item["job_id"] for item in queued_items]
+        # Verify the collection field is populated (brief 270: queued items carry collection name)
+        assert all(item["collection"] == col for item in queued_items), (
+            f"expected all queued items to have collection={col!r}; got: {queued_items}"
+        )
 
         # Poll until all backup jobs reach DONE.
         _poll_all_backup_jobs_done(job_store, queued_ids)
@@ -246,6 +250,9 @@ def test_backup_trigger_post_status_reflects_completion(
         queued_items: list[dict] = trigger_resp.json().get("queued", [])
         assert queued_items, "expected at least one queued backup job"
         queued_ids: list[str] = [item["job_id"] for item in queued_items]
+        assert all(item["collection"] == col for item in queued_items), (
+            f"expected all queued items to have collection={col!r}; got: {queued_items}"
+        )
 
         # Wait for all backup jobs to complete (job_store poll — avoids REST 500 on dict result).
         _poll_all_backup_jobs_done(job_store, queued_ids)

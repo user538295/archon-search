@@ -116,9 +116,7 @@ def _trigger_backup(
     if queued:
         click.echo("Queued jobs:")
         for item in queued:
-            col = item.get("collection", "?")
-            jid = item.get("job_id", "?")
-            click.echo(f"  {col} → {jid}")
+            click.echo(f"  {item['collection']} → {item['job_id']}")
     else:
         click.echo("No jobs queued.")
 
@@ -130,7 +128,7 @@ def _trigger_backup(
     if not wait or not queued:
         return
 
-    job_map = {item["job_id"]: item["collection"] for item in queued if "job_id" in item}
+    job_map = {item["job_id"]: item["collection"] for item in queued}
     _wait_for_jobs(job_map, api_url, headers, timeout_seconds)
 
 

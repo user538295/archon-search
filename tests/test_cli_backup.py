@@ -186,6 +186,64 @@ def test_backup_wait_shows_collection_name_on_failed() -> None:
     assert "disk full" in result.output
 
 
+def test_backup_wait_shows_collection_name_on_cancelled() -> None:
+    """--wait CANCELLED output uses collection name (brief 270)."""
+    runner = CliRunner()
+    post_resp = _mock_response(
+        202,
+        {"queued": [{"collection": "my_docs", "job_id": "job-c"}], "skipped": []},
+    )
+    get_resp = _mock_response(200, _job_payload("job-c", "CANCELLED"))
+    with (
+        patch("archon_search.cli.backup_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.backup_cmd.httpx.get", return_value=get_resp),
+        patch("archon_search.cli.backup_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            backup_cmd, ["--now", "--wait", "--api-key", "deadbeef"]
+        )
+    assert result.exit_code == 0, result.output
+    assert "my_docs" in result.output
+    assert "cancelled" in result.output.lower()
+
+
+def test_backup_wait_multi_collection_one_done_one_failed() -> None:
+    """Two collections queued: one DONE, one FAILED — exit 2, both collection names in output."""
+    runner = CliRunner()
+    post_resp = _mock_response(
+        202,
+        {
+            "queued": [
+                {"collection": "col_a", "job_id": "job-a"},
+                {"collection": "col_b", "job_id": "job-b"},
+            ],
+            "skipped": [],
+        },
+    )
+    get_done = _mock_response(200, _job_payload("job-a", "DONE"))
+    get_failed = _mock_response(200, _job_payload("job-b", "FAILED", error="write error"))
+    # side_effect cycles: first call is for one job, second for the other (order may vary)
+    # Use side_effect as a dict-keyed mock via a helper
+    responses_by_id = {"job-a": get_done, "job-b": get_failed}
+
+    def _get_side_effect(url, headers):
+        job_id = url.rsplit("/", 1)[-1]
+        return responses_by_id[job_id]
+
+    with (
+        patch("archon_search.cli.backup_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.backup_cmd.httpx.get", side_effect=_get_side_effect),
+        patch("archon_search.cli.backup_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            backup_cmd, ["--now", "--wait", "--api-key", "deadbeef"]
+        )
+    assert result.exit_code == 2, f"output={result.output!r}"
+    assert "col_b" in result.output, "failed collection name must appear"
+    assert "write error" in result.output
+    # DONE collection does not generate an explicit per-job message; only final "completed" or error
+
+
 def test_backup_bare_prints_help() -> None:
     runner = CliRunner()
     result = runner.invoke(backup_cmd, [])
@@ -310,8 +368,10 @@ def test_backup_wait_timeout_exits_0() -> None:
         )
 
     assert result.exit_code == 0, f"output={result.output!r}"
-    # job_id appears in the queued output (collection → job_id) and in the timeout message
-    assert job_id in result.output, f"expected job ID in output: {result.output!r}"
+    # job_id appears in the queued listing ("  timeout-col → job-timeout-backup"), not the timeout message
+    assert job_id in result.output, f"expected job ID in queued output: {result.output!r}"
+    # timeout message now shows collection names (not job IDs)
+    assert "timeout-col" in result.output, f"expected collection name in timeout output: {result.output!r}"
     assert "Timed out" in result.output, f"expected timeout message in output: {result.output!r}"
     assert "poll with" in result.output, f"expected recovery hint in output: {result.output!r}"
 
