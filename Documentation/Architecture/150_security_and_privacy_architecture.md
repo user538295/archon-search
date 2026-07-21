@@ -102,9 +102,38 @@ For each document, the effective ACL is:
 
 If both exist, front-matter wins and a warning is logged.
 
+`resolve_acl()` returns a named `AclResolutionResult` dataclass (`acl`, `source`, `sidecar_path`, `warnings`). The `source` field is a three-way enum: `"frontmatter"` | `"sidecar"` | `None` (no rule configured). `pipeline.py` synthesizes `"collection_default"` when `resolve_acl` returns `source=None` — this distinguishes "intentionally open by default" from "pre-G15 chunk with unknown provenance" (`source=null`).
+
+### ACL provenance columns (g15)
+
+Three nullable per-chunk columns capture ACL provenance at ingest time so the information is available without re-reading the source file at query time:
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `acl_source` | `utf8 \| null` | `"frontmatter"`, `"sidecar"`, `"collection_default"`, or `null` (pre-G15 chunk) |
+| `acl_sidecar_path` | `utf8 \| null` | Path to the `.acl` sidecar relative to `collection_root`; basename-only for REST/MCP ingests; `null` when source is not `"sidecar"` |
+| `acl_warning` | `list<utf8> \| null` | Structured warnings from all fail-open branches (see below) |
+
+Added via `migrate_acl_provenance` — an idempotent `IN_PLACE add_columns` migration applied automatically at server startup (same pattern as `migrate_acl`). No `STORE_SCHEMA_VERSION` bump (chunk-table-only change). Pre-G15 chunks read `null` for all three; no backfill.
+
+### `acl_gate` — per-result ACL audit object (g15)
+
+`POST /search` accepts `acl_context: bool = false`. When `true`, every result carries an `acl_gate: AclGateSchema` object:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `allowed_principals` | `list[str] \| null` | Namespaces on the allow-list (`null` = open to all) |
+| `source` | `"frontmatter" \| "sidecar" \| "collection_default" \| null` | Where the ACL rule came from (`null` for pre-G15 chunks) |
+| `sidecar_path` | `str \| null` | Relative path to the `.acl` sidecar (when `source="sidecar"`) |
+| `warnings` | `list[str]` | Non-empty for any fail-open case; always a list, never `null` on the wire |
+
+`POST /explain` always populates `acl_gate` on every `ExplainResult` (no flag required). `ExplainNearMiss` does not carry `acl_gate` — near-misses are ranking rejects, not ACL rejects.
+
+**Security note**: `allowed_principals` exposes the full allow-list to any authenticated caller with `acl_context=true`. This intentionally leaks cross-tenant principal names in multi-tenant deployments. Accepted trade-off; no privilege gate exists in the current auth model.
+
 ### Robustness (fail-open with warning)
 
-`parse_acl_value` and `read_acl_sidecar` are intentionally permissive. Invalid types, non-string list elements, invalid namespace names, ACL sidecars larger than `_ACL_SIDECAR_MAX_BYTES = 65536`, symlinked sidecars, non-UTF-8 content — all degrade to `None` (open) with a warning. The reserved word `deny-all` cannot be used as a namespace identifier (`is_acl_namespace_valid`).
+`parse_acl_value` and `read_acl_sidecar` are intentionally permissive. All fail-open branches now surface as structured `warnings` (returned, not only logged) in `AclResolutionResult.warnings` and stored in the `acl_warning` column: invalid types, non-string list elements, invalid namespace names, ACL sidecars larger than `_ACL_SIDECAR_MAX_BYTES = 65536`, symlinked sidecars, non-UTF-8 content, deny-all mixed with only invalid entries, and simultaneous front-matter + sidecar (shadowing case) — all degrade to `None` (open) with a non-empty `warnings` list. The reserved word `deny-all` cannot be used as a namespace identifier (`is_acl_namespace_valid`).
 
 ```mermaid
 flowchart TD
