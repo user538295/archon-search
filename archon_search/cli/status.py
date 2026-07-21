@@ -121,6 +121,57 @@ def _print_telemetry_status(telemetry: dict[str, Any]) -> None:
     click.echo(f"  hash_doc_ids_enabled: {hash_doc_ids_enabled}")
 
 
+_ACTIVE_JOB_DISPLAY_CAP = 50
+
+
+def _fetch_active_job_counts(api_url: str, api_key: str | None) -> tuple[int, int] | None:
+    """Return (running_count, pending_count) from GET /jobs, or None on any error.
+
+    Makes two GET /jobs calls (one per status) with limit=1 and reads the
+    ``total`` field, which the server computes before pagination — so the count
+    is accurate regardless of how many jobs exist.  A 401 on /jobs silently
+    returns None; the caller treats this the same as "no active jobs."
+    """
+    try:
+        key = _resolve_api_key(api_key)
+    except Exception:  # noqa: BLE001 — offline mode
+        return None
+    headers = {"Authorization": f"Bearer {key}"}
+    base = api_url.rstrip("/")
+    try:
+        r_resp = httpx.get(f"{base}/jobs", params=[("status", "RUNNING"), ("limit", 1)], headers=headers, timeout=2.0)
+        p_resp = httpx.get(f"{base}/jobs", params=[("status", "PENDING"), ("limit", 1)], headers=headers, timeout=2.0)
+    except httpx.HTTPError:
+        return None
+    if r_resp.status_code != 200 or p_resp.status_code != 200:
+        return None
+    try:
+        # Coerce to int: a non-int total (e.g. "5") would crash at the > comparison below.
+        running = int(r_resp.json().get("total", 0) or 0)
+        pending = int(p_resp.json().get("total", 0) or 0)
+    except (ValueError, AttributeError, TypeError):
+        return None
+    return running, pending
+
+
+def _print_active_jobs(api_url: str, api_key: str | None) -> None:
+    """Print job queue summary when any active jobs exist.
+
+    Unlike its ``_print_*(server_payload)`` siblings, this function makes its
+    own HTTP calls — necessary because ``GET /status`` readiness.jobs is not
+    namespace-filtered.
+    """
+    counts = _fetch_active_job_counts(api_url, api_key)
+    if counts is None:
+        return
+    running, pending = counts
+    if running + pending == 0:
+        return
+    r_str = f"{_ACTIVE_JOB_DISPLAY_CAP}+" if running > _ACTIVE_JOB_DISPLAY_CAP else str(running)
+    p_str = f"{_ACTIVE_JOB_DISPLAY_CAP}+" if pending > _ACTIVE_JOB_DISPLAY_CAP else str(pending)
+    click.echo(f"\nJobs: {r_str} running, {p_str} queued — run `archon-search jobs list` for details")
+
+
 def _print_graph_gc_status(server_payload: dict[str, Any]) -> None:
     """Render the graph GC status (stale_mention_count and last_graph_gc_at) from GET /status.
 
@@ -191,6 +242,7 @@ def status(api_url: str, api_key: str | None) -> None:
     _print_expansion_key_warnings(server_payload)
     _print_failed_expired_count(server_payload)
     _print_graph_gc_status(server_payload)
+    _print_active_jobs(api_url, api_key)
     _print_collections(server_payload)
 
     telemetry = server_payload.get("telemetry")
