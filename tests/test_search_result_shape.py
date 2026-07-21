@@ -23,6 +23,9 @@ _EXPECTED_FIELDS = {
     "metadata",
     "acl",
     "collection",  # B3 addition — multi-collection provenance
+    "acl_source",  # G15 — ACL provenance
+    "acl_sidecar_path",  # G15 — ACL provenance
+    "acl_warning",  # G15 — ACL provenance
 }
 
 

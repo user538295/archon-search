@@ -45,13 +45,24 @@ class ChunkRecord:
 
     - **system** — identity, content, position, embedding, lifecycle:
       ``doc_id``, ``chunk_id``, ``text``, ``vector``, ``source_path``,
-      ``indexed_at``, ``acl``.
+      ``indexed_at``, ``acl``, ``acl_source``, ``acl_sidecar_path``, ``acl_warning``.
     - **filterable** — A2 query-side filter dimensions:
       ``file_type``, ``language``, ``updated_at``, ``metadata``.
     - **ranking** — scoring inputs:
       ``custom_score`` (reserved; A1 schema-only).
     - **audit** — call-site identity for writes:
       ``ingested_by``.
+
+    Attributes:
+        acl_source: Provenance of the ACL rule — one of ``'frontmatter'``,
+            ``'sidecar'``, or ``'collection_default'``; ``None`` for pre-G15
+            chunks. Typed ``str`` (not ``Literal``) at entity level; enum
+            enforced at wire layer (planned G15 BE-5 / ``AclGateSchema``).
+        acl_sidecar_path: Relative path to the ``.acl`` sidecar file (relative
+            to ``collection_root`` when available, else basename-only); ``None``
+            when not sidecar-sourced.
+        acl_warning: Structured warnings emitted during ACL loading (e.g.
+            fail-open cases); empty list = no issues.
     """
 
     doc_id: str
@@ -90,6 +101,14 @@ class ChunkRecord:
     """transient: character offset of chunk start in the post-front-matter text. Not persisted to LanceDB."""
     end_offset: int = -1
     """transient: character offset of chunk end (exclusive) in the post-front-matter text. Not persisted to LanceDB."""
+    acl_source: str | None = None
+    """system: provenance of the ACL rule — 'frontmatter', 'sidecar', or 'collection_default'; null for pre-G15 chunks.
+    Typed str (not Literal) at entity level — unlike IngestedBy — because AclGateSchema (planned G15 BE-5) enforces
+    the enum at the wire boundary, and nullable utf8 persistence allows values outside the enum in pre-G15 rows."""
+    acl_sidecar_path: str | None = None
+    """system: relative path to the .acl sidecar file (relative to collection_root when available, else basename-only); null when not sidecar-sourced."""
+    acl_warning: list[str] = field(default_factory=list)
+    """system: structured warnings emitted during ACL loading (e.g. fail-open cases); empty list = no issues."""
 
 
 @dataclass
@@ -107,6 +126,13 @@ class SearchResult:
     metadata: dict[str, str] = field(default_factory=dict)
     acl: list[str] | None = None
     collection: str = ""
+    acl_source: str | None = None
+    """Provenance of the ACL rule — 'frontmatter', 'sidecar', or 'collection_default'; null for pre-G15 chunks.
+    Typed str (not Literal) at entity level; enum enforced at wire layer (planned G15 BE-5 / AclGateSchema)."""
+    acl_sidecar_path: str | None = None
+    """Relative path to the .acl sidecar file; null when not sidecar-sourced."""
+    acl_warning: list[str] = field(default_factory=list)
+    """Structured warnings emitted during ACL loading; empty list = no issues."""
 
 
 @dataclass

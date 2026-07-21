@@ -70,13 +70,13 @@ flowchart LR
 
 ### Phase 1 · Search with ACL provenance *(walking skeleton: ingest a doc, search with `acl_context=true`, get `acl_gate` with correct source — end-to-end through all layers)*
 
-- [ ] **BE-1** — Add `acl_source`, `acl_sidecar_path`, `acl_warning` fields to `ChunkRecord`, `SearchResult`, `ScoredSearchCandidate` #backend-role
+- [x] **BE-1** — Add `acl_source`, `acl_sidecar_path`, `acl_warning` fields to `ChunkRecord`, `SearchResult`, `ScoredSearchCandidate` #backend-role
     - Entities · 1.5h
     - needs K1 · completes C5
     - Tests
-        - #unit_test — `test_chunk_record_has_provenance_fields` — `ChunkRecord` accepts and stores all three provenance fields; `acl_warning` defaults to `[]` via `field(default_factory=list)`, never bare `= []`
-        - #unit_test — `test_search_result_has_provenance_fields` — `SearchResult` carries the three fields with correct defaults
-        - #unit_test — `test_scored_candidate_has_provenance_fields` — `ScoredSearchCandidate` carries the three fields with correct defaults
+        - [x] #unit_test — `test_chunk_record_has_provenance_fields` — `ChunkRecord` accepts and stores all three provenance fields; `acl_warning` defaults to `[]` via `field(default_factory=list)`, never bare `= []`
+        - [x] #unit_test — `test_search_result_has_provenance_fields` — `SearchResult` carries the three fields with correct defaults
+        - [x] #unit_test — `test_scored_candidate_has_provenance_fields` — `ScoredSearchCandidate` carries the three fields with correct defaults
 
 - [ ] **BE-2** — Refactor `acl.py`: add `AclResolutionResult` dataclass; change `resolve_acl()` to return it; change `read_acl_sidecar()` to include `source` and `sidecar_path` in its return; change `parse_acl_value()` to return `(acl, warnings)`; wire the both-present shadowing warning into `AclResolutionResult.warnings` #backend-role
     - Interface Adapters · 3.0h

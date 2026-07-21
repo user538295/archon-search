@@ -112,6 +112,14 @@ class ScoredSearchCandidate:
         metadata: Parsed key/value metadata dict (empty when absent).
         graph_provenance: Graph traversal chain that produced this candidate.
             ``None`` for standard hybrid-search results (non-graph path).
+        acl_source: Provenance of the ACL rule — one of ``'frontmatter'``,
+            ``'sidecar'``, or ``'collection_default'``; ``None`` for pre-G15
+            chunks. Typed ``str`` (not ``Literal``) at entity level; enum
+            enforced at wire layer (planned G15 BE-5 / ``AclGateSchema``).
+        acl_sidecar_path: Relative path to the ``.acl`` sidecar file; ``None``
+            when not sidecar-sourced.
+        acl_warning: Structured warnings emitted during ACL loading (e.g.
+            fail-open cases); empty list = no issues.
     """
 
     doc_id: str
@@ -129,3 +137,10 @@ class ScoredSearchCandidate:
     metadata: dict[str, str] = field(default_factory=dict)
     graph_provenance: GraphProvenance | None = None
     scopes: list[str] | None = None
+    acl_source: str | None = None
+    """Provenance of the ACL rule — 'frontmatter', 'sidecar', or 'collection_default'; null for pre-G15 chunks.
+    Typed str (not Literal) at entity level; enum enforced at wire layer (planned G15 BE-5 / AclGateSchema)."""
+    acl_sidecar_path: str | None = None
+    """Relative path to the .acl sidecar file; null when not sidecar-sourced."""
+    acl_warning: list[str] = field(default_factory=list)
+    """Structured warnings emitted during ACL loading; empty list = no issues."""

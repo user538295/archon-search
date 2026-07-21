@@ -2683,6 +2683,7 @@ def test_mcp_search_response_schema_matches_public_contract_without_eval_provena
         "doc_id", "chunk_id", "text", "score", "source_path",
         "file_type", "language", "indexed_at", "updated_at", "ingested_by", "metadata",
         "acl", "collection",
+        "acl_source", "acl_sidecar_path", "acl_warning",
     }
     # No eval provenance keys
     for forbidden in ("vector_score", "fts_score", "vector_rank", "fts_rank", "score_breakdown"):
@@ -2712,6 +2713,7 @@ def test_mcp_search_with_context_response_schema_matches_public_contract_without
             "doc_id", "chunk_id", "text", "score", "source_path",
             "file_type", "language", "indexed_at", "updated_at", "ingested_by", "metadata",
             "acl", "collection",
+            "acl_source", "acl_sidecar_path", "acl_warning",
         }
         for forbidden in ("vector_score", "fts_score", "vector_rank", "fts_rank", "score_breakdown"):
             assert forbidden not in payload
