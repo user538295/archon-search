@@ -42,10 +42,11 @@ def test_key_create_server_not_running_friendly_message() -> None:
     from archon_search.cli.key_cmd import key_cmd
 
     runner = CliRunner()
-    with patch(
-        "archon_search.cli.key_cmd.httpx.Client",
-        side_effect=httpx.ConnectError("Connection refused"),
-    ):
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.side_effect = httpx.ConnectError("Connection refused")
+    with patch("archon_search.cli.key_cmd.httpx.Client", return_value=mock_client):
         result = runner.invoke(
             key_cmd,
             ["create", "--namespace", "default", "--api-key", "test-key"],
@@ -61,10 +62,11 @@ def test_key_create_server_not_running_no_raw_errno() -> None:
     from archon_search.cli.key_cmd import key_cmd
 
     runner = CliRunner()
-    with patch(
-        "archon_search.cli.key_cmd.httpx.Client",
-        side_effect=httpx.ConnectError("[Errno 61] Connection refused"),
-    ):
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.side_effect = httpx.ConnectError("[Errno 61] Connection refused")
+    with patch("archon_search.cli.key_cmd.httpx.Client", return_value=mock_client):
         result = runner.invoke(
             key_cmd,
             ["create", "--namespace", "default", "--api-key", "test-key"],
@@ -84,10 +86,11 @@ def test_key_list_server_not_running_friendly_message() -> None:
     from archon_search.cli.key_cmd import key_cmd
 
     runner = CliRunner()
-    with patch(
-        "archon_search.cli.key_cmd.httpx.Client",
-        side_effect=httpx.ConnectError("Connection refused"),
-    ):
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.get.side_effect = httpx.ConnectError("Connection refused")
+    with patch("archon_search.cli.key_cmd.httpx.Client", return_value=mock_client):
         result = runner.invoke(key_cmd, ["list", "--api-key", "test-key"])
 
     assert result.exit_code == 1
@@ -104,10 +107,11 @@ def test_key_revoke_server_not_running_friendly_message() -> None:
     from archon_search.cli.key_cmd import key_cmd
 
     runner = CliRunner()
-    with patch(
-        "archon_search.cli.key_cmd.httpx.Client",
-        side_effect=httpx.ConnectError("Connection refused"),
-    ):
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.delete.side_effect = httpx.ConnectError("Connection refused")
+    with patch("archon_search.cli.key_cmd.httpx.Client", return_value=mock_client):
         result = runner.invoke(
             key_cmd,
             ["revoke", "key-abc123", "--yes", "--api-key", "test-key"],
@@ -127,10 +131,11 @@ def test_key_rotate_server_not_running_friendly_message() -> None:
     from archon_search.cli.key_cmd import key_cmd
 
     runner = CliRunner()
-    with patch(
-        "archon_search.cli.key_cmd.httpx.Client",
-        side_effect=httpx.ConnectError("Connection refused"),
-    ):
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.side_effect = httpx.ConnectError("Connection refused")
+    with patch("archon_search.cli.key_cmd.httpx.Client", return_value=mock_client):
         result = runner.invoke(key_cmd, ["rotate", "--api-key", "test-key"])
 
     assert result.exit_code == 1
@@ -142,10 +147,11 @@ def test_key_rotate_server_not_running_no_raw_errno() -> None:
     from archon_search.cli.key_cmd import key_cmd
 
     runner = CliRunner()
-    with patch(
-        "archon_search.cli.key_cmd.httpx.Client",
-        side_effect=httpx.ConnectError("[Errno 61] Connection refused"),
-    ):
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.side_effect = httpx.ConnectError("[Errno 61] Connection refused")
+    with patch("archon_search.cli.key_cmd.httpx.Client", return_value=mock_client):
         result = runner.invoke(key_cmd, ["rotate", "--api-key", "test-key"])
 
     assert result.exit_code == 1
@@ -252,8 +258,9 @@ def test_message_consistent_across_modules() -> None:
     import archon_search.cli.graph_cmd as gm
     import archon_search.cli.jobs_cmd as jm
     import archon_search.cli.collection as cm
+    import archon_search.cli.export_cmd as em
 
-    for mod in (km, bm, mm, sm, im, gm, jm, cm):
+    for mod in (km, bm, mm, sm, im, gm, jm, cm, em):
         assert hasattr(mod, "_SERVER_NOT_RUNNING_MSG"), (
             f"{mod.__name__} must import _SERVER_NOT_RUNNING_MSG from _helpers"
         )

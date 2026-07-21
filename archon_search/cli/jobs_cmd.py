@@ -104,7 +104,7 @@ def list_cmd(status: tuple[str, ...], limit: int, api_url: str, api_key: str | N
 
     try:
         resp = httpx.get(f"{base_url}/jobs", params=query_params, headers=headers)
-    except httpx.ConnectError as exc:
+    except httpx.ConnectError:
         click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
@@ -191,7 +191,7 @@ def show_cmd(
 
     try:
         resp = httpx.get(f"{base_url}/jobs/{job_id}", headers=headers)
-    except httpx.ConnectError as exc:
+    except httpx.ConnectError:
         click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
