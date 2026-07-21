@@ -674,6 +674,201 @@ def test_status_cli_prints_collections_when_telemetry_disabled(runner: CliRunner
     assert "3" in result.output
 
 
+# ---------------------------------------------------------------------------
+# Brief 300 — provider-aware expansion key warnings
+# ---------------------------------------------------------------------------
+
+
+def test_expansion_warning_openai_hyde_shows_openai_key(runner: CliRunner) -> None:
+    """provider=openai + key_available=false → OPENAI_API_KEY in stderr, not ANTHROPIC."""
+    server_payload = {
+        "hyde": {"key_available": False, "provider": "openai"},
+        "rag_fusion": None,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "OPENAI_API_KEY" in result.stderr
+    assert "ANTHROPIC_API_KEY" not in result.stderr
+
+
+def test_expansion_warning_openai_rag_fusion_shows_openai_key(runner: CliRunner) -> None:
+    """provider=openai + key_available=false on rag_fusion → OPENAI_API_KEY in stderr."""
+    server_payload = {
+        "hyde": None,
+        "rag_fusion": {"key_available": False, "provider": "openai"},
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "OPENAI_API_KEY" in result.stderr
+    assert "ANTHROPIC_API_KEY" not in result.stderr
+
+
+def test_expansion_warning_explicit_anthropic_provider(runner: CliRunner) -> None:
+    """provider=anthropic explicitly → ANTHROPIC_API_KEY (same as the default/fallback)."""
+    server_payload = {
+        "hyde": {"key_available": False, "provider": "anthropic"},
+        "rag_fusion": None,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "ANTHROPIC_API_KEY" in result.stderr
+
+
+def test_expansion_warning_unknown_provider_no_crash(runner: CliRunner) -> None:
+    """Unknown provider string → no crash; some warning is still emitted."""
+    server_payload = {
+        "hyde": {"key_available": False, "provider": "myservice"},
+        "rag_fusion": None,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "HyDE enabled but the 'myservice' API key is not set" in result.stderr
+
+
+def test_expansion_warning_both_openai_shows_two_openai_keys(runner: CliRunner) -> None:
+    """Both hyde and rag_fusion with openai provider → OPENAI_API_KEY appears twice."""
+    server_payload = {
+        "hyde": {"key_available": False, "provider": "openai"},
+        "rag_fusion": {"key_available": False, "provider": "openai"},
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert result.stderr.count("OPENAI_API_KEY") == 2
+    assert "ANTHROPIC_API_KEY" not in result.stderr
+
+
+def test_expansion_warning_missing_provider_field_defaults_to_anthropic(runner: CliRunner) -> None:
+    """Older server without 'provider' field → defaults to ANTHROPIC_API_KEY (no regression)."""
+    server_payload = {
+        "hyde": {"key_available": False},  # no 'provider' field
+        "rag_fusion": None,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "ANTHROPIC_API_KEY" in result.stderr
+
+
+def test_expansion_warning_null_provider_defaults_to_anthropic(runner: CliRunner) -> None:
+    """provider field present but null → defaults to ANTHROPIC_API_KEY (no crash)."""
+    server_payload = {
+        "hyde": {"key_available": False, "provider": None},  # null, not absent
+        "rag_fusion": None,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "ANTHROPIC_API_KEY" in result.stderr
+
+
+def test_expansion_warning_key_available_absent_no_warning(runner: CliRunner) -> None:
+    """hyde sub-object present but key_available field absent → no warning (silent-on-absent contract)."""
+    server_payload = {
+        "hyde": {"provider": "anthropic"},  # key_available intentionally absent
+        "rag_fusion": None,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert result.stderr == ""
+
+
+def test_expansion_warning_non_dict_hyde_no_crash(runner: CliRunner) -> None:
+    """hyde field present as non-dict (e.g. string from a mismatched server) → no crash, no warning."""
+    server_payload = {
+        "hyde": "enabled",  # non-dict truthy — should not crash
+        "rag_fusion": None,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert result.stderr == ""
+
+
+def test_expansion_warning_ollama_no_warning(runner: CliRunner) -> None:
+    """provider=ollama + key_available=True → no warning (Ollama is keyless; key always available)."""
+    server_payload = {
+        "hyde": {"key_available": True, "provider": "ollama"},
+        "rag_fusion": None,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert result.stderr == ""
+
+
+def test_expansion_warning_claude_cli_generic_message(runner: CliRunner) -> None:
+    """provider=claude_cli + key_available=True → no warning (claude_cli is keyless like ollama)."""
+    server_payload = {
+        "hyde": {"key_available": True, "provider": "claude_cli"},
+        "rag_fusion": None,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert result.stderr == ""
+
+
+def test_expansion_warning_mixed_providers(runner: CliRunner) -> None:
+    """hyde=openai + rag_fusion=anthropic, both key_unavailable → each gets the correct env var."""
+    server_payload = {
+        "hyde": {"key_available": False, "provider": "openai"},
+        "rag_fusion": {"key_available": False, "provider": "anthropic"},
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "OPENAI_API_KEY" in result.stderr
+    assert "ANTHROPIC_API_KEY" in result.stderr
+    assert result.stderr.count("OPENAI_API_KEY") == 1
+    assert result.stderr.count("ANTHROPIC_API_KEY") == 1
+    assert "HyDE" in result.stderr
+    assert "RAG Fusion" in result.stderr
+
+
+def test_expansion_warning_openai_key_available_no_warning(runner: CliRunner) -> None:
+    """provider=openai + key_available=True → no warning emitted."""
+    server_payload = {
+        "hyde": {"key_available": True, "provider": "openai"},
+        "rag_fusion": None,
+        "telemetry": None,
+    }
+    with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=server_payload):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert result.stderr == ""
+
+
 def test_status_cli_renders_empty_path_without_error(runner: CliRunner) -> None:
     """S7: a collection with an empty path is still listed and the command exits cleanly."""
     server_payload = {

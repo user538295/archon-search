@@ -51,6 +51,29 @@ def _fetch_server_status(api_url: str, api_key: str | None) -> dict[str, Any] | 
         return None
 
 
+# ponytail: only key-gated providers; ollama and claude_cli are keyless
+# (key_available always True server-side — query_expansion_protocol.py:26)
+_PROVIDER_ENV_VAR: dict[str, str] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
+
+
+def _warn_if_expansion_key_absent(sub: Any, label: str) -> None:
+    """Warn on stderr when a feature sub-object reports key_available=False."""
+    if not isinstance(sub, dict):
+        return
+    if sub.get("key_available") is not False:
+        return
+    provider = sub.get("provider") or "anthropic"
+    env_var = _PROVIDER_ENV_VAR.get(provider, f"the '{provider}' API key")
+    click.echo(
+        f"Warning: {label} enabled but {env_var} is not set — "
+        "expansion will fall back to plain search.",
+        err=True,
+    )
+
+
 def _print_expansion_key_warnings(server_payload: dict[str, Any]) -> None:
     """Emit a stderr warning when HyDE or RAG Fusion is enabled but the API key is absent.
 
@@ -58,20 +81,8 @@ def _print_expansion_key_warnings(server_payload: dict[str, Any]) -> None:
     ``key_available`` is explicitly ``False``.  ``None`` (feature disabled)
     and ``True`` (key present) are both silent.
     """
-    hyde = server_payload.get("hyde")
-    if hyde is not None and hyde.get("key_available") is False:
-        click.echo(
-            "Warning: HyDE enabled but ANTHROPIC_API_KEY is not set — "
-            "expansion will fall back to plain search.",
-            err=True,
-        )
-    rag_fusion = server_payload.get("rag_fusion")
-    if rag_fusion is not None and rag_fusion.get("key_available") is False:
-        click.echo(
-            "Warning: RAG Fusion enabled but ANTHROPIC_API_KEY is not set — "
-            "expansion will fall back to plain search.",
-            err=True,
-        )
+    _warn_if_expansion_key_absent(server_payload.get("hyde"), "HyDE")
+    _warn_if_expansion_key_absent(server_payload.get("rag_fusion"), "RAG Fusion")
 
 
 def _print_failed_expired_count(server_payload: dict[str, Any]) -> None:
