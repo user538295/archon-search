@@ -90,15 +90,15 @@ flowchart LR
         - #unit_test — `test_sidecar_too_large_warning_surfaced` — sidecar exceeding 64 KB yields non-empty `warnings` propagated into `AclResolutionResult` (S4)
         - #unit_test — `test_parse_acl_value_returns_tuple` — `parse_acl_value()` now returns `(list | None, list[str])` in all branches
 
-- [ ] **BE-3** — Add three nullable columns to `_schema()`; implement `migrate_acl_provenance()`; wire it into `_run_startup_migrations()` and `_all_migrations()`; update `_do_ingest` with `has_acl_provenance_cols` guard; update `_hybrid_search_with_trace` candidate builder to read the three columns from LanceDB rows #backend-role
+- [x] **BE-3** — Add three nullable columns to `_schema()`; implement `migrate_acl_provenance()`; wire it into `_run_startup_migrations()` and `_all_migrations()`; update `_do_ingest` with `has_acl_provenance_cols` guard; update `_hybrid_search_with_trace` candidate builder to read the three columns from LanceDB rows #backend-role
     - Frameworks & Drivers · 3.0h
     - needs BE-1 · completes C6, S10, S11, S12
     - Tests
-        - #unit_test — `test_schema_contains_acl_provenance_fields` — `_schema()` includes `acl_source` (utf8 nullable), `acl_sidecar_path` (utf8 nullable), `acl_warning` (list<utf8> nullable)
-        - #integration_test — `test_migrate_acl_provenance_idempotent` — running migration twice on a real LanceDB collection leaves columns present exactly once and does not raise (S10)
-        - #integration_test — `test_do_ingest_guard_drops_provenance_on_unmigrated_table` — `_do_ingest` on a table lacking provenance columns logs WARNING and does not crash; ingest succeeds (S11)
-        - #integration_test — `test_startup_migration_runs_on_server_start` — `make_real_app` lifespan triggers migration; old rows survive with `acl_source=null`; new ingest populates columns (S12)
-        - #integration_test — `test_candidate_builder_reads_provenance_from_row` — `ScoredSearchCandidate` built from a row with provenance values carries them; pre-migration null row yields `None`/`[]` without error
+        - [x] #unit_test — `test_schema_contains_acl_provenance_fields` — `_schema()` includes `acl_source` (utf8 nullable), `acl_sidecar_path` (utf8 nullable), `acl_warning` (list<utf8> nullable)
+        - [x] #integration_test — `test_migrate_acl_provenance_idempotent` — running migration twice on a real LanceDB collection leaves columns present exactly once and does not raise (S10)
+        - [x] #integration_test — `test_do_ingest_guard_drops_provenance_on_unmigrated_table` — `_do_ingest` on a table lacking provenance columns logs WARNING and does not crash; ingest succeeds (S11)
+        - [x] #integration_test — `test_startup_migration_runs_on_server_start` — `make_real_app` lifespan triggers migration; old rows survive with `acl_source=null`; new ingest populates columns (S12)
+        - [x] #integration_test — `test_candidate_builder_reads_provenance_from_row` — `ScoredSearchCandidate` built from a row with provenance values carries them; pre-migration null row yields `None`/`[]` without error
 
 - [ ] **BE-4** — Update `pipeline.py` `ingest_file` (line 457) to handle `AclResolutionResult`: set `acl_source`, `acl_sidecar_path`, `acl_warning` on every `ChunkRecord`; synthesize `source='collection_default'` when no rule was configured; relativize `acl_sidecar_path` to `collection_root` or fall back to basename; update `_candidate_to_search_result` to propagate the three provenance fields into `SearchResult` #backend-role
     - Use Cases · 3.0h

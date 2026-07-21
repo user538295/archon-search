@@ -7429,7 +7429,7 @@ async def test_run_startup_migrations_applies_in_place_on_startup(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
-    """_run_startup_migrations() calls all 8 methods in the correct order."""
+    """_run_startup_migrations() calls all 9 methods in the correct order."""
     from archon_search.store import SearchStore
 
     call_order: list[str] = []
@@ -7448,6 +7448,7 @@ async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
     store._migrate_schema_version = make_recorder("_migrate_schema_version")
     store._migrate_community_rebuild_job_id = make_recorder("_migrate_community_rebuild_job_id")
     store._migrate_metadata_reindex_job_id = make_recorder("_migrate_metadata_reindex_job_id")
+    store.migrate_acl_provenance = make_recorder("migrate_acl_provenance")
 
     await store._run_startup_migrations()
 
@@ -7460,6 +7461,7 @@ async def test_run_startup_migrations_calls_all_methods_in_order() -> None:
         "_migrate_schema_version",
         "_migrate_community_rebuild_job_id",
         "_migrate_metadata_reindex_job_id",
+        "migrate_acl_provenance",
     ], f"Unexpected call order: {call_order}"
 
 

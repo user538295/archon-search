@@ -384,6 +384,9 @@ class SearchStore:
                 pa.field("acl", pa.list_(pa.utf8()), nullable=True),
                 pa.field("expires_at", pa.utf8(), nullable=True),
                 pa.field("scopes", pa.list_(pa.utf8()), nullable=True),
+                pa.field("acl_source", pa.utf8(), nullable=True),
+                pa.field("acl_sidecar_path", pa.utf8(), nullable=True),
+                pa.field("acl_warning", pa.list_(pa.utf8()), nullable=True),
             ]
         )
 
@@ -906,6 +909,62 @@ class SearchStore:
             else:
                 raise
 
+    async def migrate_acl_provenance(self) -> None:
+        """Idempotent: adds acl_source (utf8|null), acl_sidecar_path (utf8|null), and
+        acl_warning (list<utf8>|null) to each per-collection chunk table (G15 migration).
+
+        Mirrors migrate_acl: scans _archon_collection_meta, adds missing columns per
+        collection.  Safe to call multiple times (concurrent-startup RuntimeError is caught
+        and logged).
+        """
+        import pyarrow as pa  # noqa: PLC0415
+
+        db = self._require_connected()
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        meta_table = await db.open_table(_META_TABLE)
+        rows = await meta_table.query().to_list()
+        collection_names = [r["name"] for r in rows]
+
+        acl_source_field = pa.field("acl_source", pa.utf8(), nullable=True)
+        acl_sidecar_path_field = pa.field("acl_sidecar_path", pa.utf8(), nullable=True)
+        acl_warning_field = pa.field("acl_warning", pa.list_(pa.utf8()), nullable=True)
+
+        for name in collection_names:
+            if name not in all_names:
+                continue
+            try:
+                table = await db.open_table(name)
+                schema_names = (await table.schema()).names
+                for field in (acl_source_field, acl_sidecar_path_field, acl_warning_field):
+                    if field.name in schema_names:
+                        continue
+                    try:
+                        await table.add_columns(field)
+                        logger.info(
+                            "G15 migration: added %s column to chunk table %r", field.name, name
+                        )
+                    except RuntimeError as exc:
+                        if "already exists" in str(exc).lower():
+                            logger.warning(
+                                "Concurrent G15 migration for %r: %s already added — %s",
+                                name,
+                                field.name,
+                                exc,
+                            )
+                        else:
+                            logger.warning(
+                                "G15 migration: skipping %s for %r due to RuntimeError — %s",
+                                field.name,
+                                name,
+                                exc,
+                            )
+            except RuntimeError as exc:
+                logger.warning(
+                    "G15 migration: skipping %r due to RuntimeError — %s", name, exc
+                )
+
     async def _migrate_schema_version(self) -> None:
         """Idempotent: adds schema_version column to _archon_collection_meta if absent."""
         db = self._require_connected()
@@ -980,6 +1039,7 @@ class SearchStore:
         await self._migrate_schema_version()
         await self._migrate_community_rebuild_job_id()
         await self._migrate_metadata_reindex_job_id()
+        await self.migrate_acl_provenance()
 
     # Catalog of all known migrations.  Each entry is a MigrationSpec that describes
     # one idempotent structural change.  The five existing migrate_*() methods are
@@ -1021,6 +1081,12 @@ class SearchStore:
                 name="migrate_per_collection_model",
                 kind=MigrationKind.IN_PLACE,
                 description="Add active_embedding_model, pending_embedding_model, needs_reindex, reindex_job_id columns to _archon_collection_meta; backfill from legacy embedding_model column and drop it (C1 structural migration).",
+                introduced_at=0,
+            ),
+            MigrationSpec(
+                name="migrate_acl_provenance",
+                kind=MigrationKind.IN_PLACE,
+                description="Add acl_source (utf8|null), acl_sidecar_path (utf8|null), acl_warning (list<utf8>|null) columns to per-collection chunk tables (G15 ACL provenance migration).",
                 introduced_at=0,
             ),
             MigrationSpec(
@@ -1691,6 +1757,23 @@ class SearchStore:
                 collection,
                 collection,
             )
+        # All-or-nothing: require all 3 columns to be present. If only 1-2 exist (partial migration
+        # failure), drop all provenance rather than write to a mismatched schema. Startup re-run
+        # of migrate_acl_provenance() heals partial-column state idempotently.
+        has_acl_provenance_cols = (
+            "acl_source" in _schema_names
+            and "acl_sidecar_path" in _schema_names
+            and "acl_warning" in _schema_names
+        )
+        if not has_acl_provenance_cols and any(
+            c.acl_source is not None or c.acl_sidecar_path is not None or c.acl_warning
+            for c in chunks
+        ):
+            logger.warning(
+                "_do_ingest: collection %r has not been migrated to G15 schema (missing acl_source/acl_sidecar_path/acl_warning columns); "
+                "ACL provenance data will be silently dropped.",
+                collection,
+            )
         rows = [
             {
                 "doc_id": c.doc_id,
@@ -1707,6 +1790,8 @@ class SearchStore:
                 "updated_at": c.updated_at or c.indexed_at,
                 "acl": c.acl,
                 **({"expires_at": normalize_iso_utc(c.expires_at) if c.expires_at is not None else None, "scopes": c.scopes} if has_ttl_cols else {}),
+                # acl_warning or None: collapse [] to null on storage; reader re-widens null→[] (see candidate builder).
+                **({"acl_source": c.acl_source, "acl_sidecar_path": c.acl_sidecar_path, "acl_warning": c.acl_warning or None} if has_acl_provenance_cols else {}),
             }
             for c in chunks
         ]
@@ -2933,6 +3018,10 @@ async def _hybrid_search_with_trace(
             row_scopes: list[str] | None = list(raw_scopes) if isinstance(raw_scopes, list) else None
             indexed_at = row.get("indexed_at") or ""
 
+            # ACL provenance — added by G15 migrate_acl_provenance; null for pre-G15 rows
+            raw_acl_warning = row.get("acl_warning")
+            row_acl_warning: list[str] = list(raw_acl_warning) if isinstance(raw_acl_warning, list) else []
+
             candidates.append(
                 ScoredSearchCandidate(
                     doc_id=row["doc_id"],
@@ -2958,6 +3047,9 @@ async def _hybrid_search_with_trace(
                     language=row.get("language") or "",
                     metadata=parse_metadata(row.get("metadata") or "{}"),
                     scopes=row_scopes,
+                    acl_source=row.get("acl_source"),
+                    acl_sidecar_path=row.get("acl_sidecar_path"),
+                    acl_warning=row_acl_warning,
                 )
             )
 
