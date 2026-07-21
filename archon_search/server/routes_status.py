@@ -362,6 +362,7 @@ def _build_backup_status(
         collection_status.append(
             CollectionBackupStatus(
                 collection=col,
+                namespace=ns,
                 last_backup_at=last_backup_at,
                 archive_count=archive_count,
             )

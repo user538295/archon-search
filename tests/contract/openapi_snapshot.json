@@ -140,6 +140,11 @@
               }
             ],
             "title": "Last Backup At"
+          },
+          "namespace": {
+            "default": "default",
+            "title": "Namespace",
+            "type": "string"
           }
         },
         "required": [

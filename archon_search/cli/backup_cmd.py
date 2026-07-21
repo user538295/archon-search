@@ -309,7 +309,7 @@ def _gather_status(api_url: str, api_key: str | None) -> dict[str, Any]:
             collection_status = [
                 {
                     "collection": item.get("collection", ""),
-                    "namespace": "default",
+                    "namespace": item.get("namespace", "default"),
                     "last_backup_at": item.get("last_backup_at"),
                     "archive_count": item.get("archive_count", 0),
                 }

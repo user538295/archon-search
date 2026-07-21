@@ -192,3 +192,18 @@ def test_status_backup_null_without_backup_loop(
     assert response.status_code == 200
     body = response.json()
     assert body["backup"] is None
+
+
+@pytest.mark.integration
+def test_status_collection_status_includes_namespace_field(
+    tmp_path: Path, auth_headers: dict[str, str]
+) -> None:
+    """collection_status entries carry the correct namespace (brief 290)."""
+    collections = [CollectionInfo(name="docs", doc_count=1, chunk_count=1, namespace=DEFAULT_NAMESPACE)]
+    client = _make_client(tmp_path, auth_headers, collections, interval_hours=1)
+    with client:
+        response = client.get("/status")
+    body = response.json()
+    cs = body["backup"]["collection_status"]
+    assert len(cs) == 1
+    assert cs[0]["namespace"] == DEFAULT_NAMESPACE

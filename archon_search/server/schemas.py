@@ -113,6 +113,7 @@ class CollectionBackupStatus(BaseModel):
     """Per-collection backup state surfaced under StatusResponse.backup (D2 Task 4.2)."""
 
     collection: str
+    namespace: str = "default"
     last_backup_at: str | None = None
     archive_count: int = 0
 
