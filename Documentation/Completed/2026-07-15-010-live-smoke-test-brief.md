@@ -83,9 +83,9 @@ Developers working on archon-search CLI commands, the wizard, or server routes �
 - [[archon_search/server/routes_*.py]] `[code-agent]` — all REST endpoints
 - [[learnings.md]] (lines 47, 68) `[docs-agent]` — prior smoke test design decisions and OOM constraints
 - [[pyproject.toml]] (lines 96–116) `[docs-agent]` — `norecursedirs` and `addopts` conventions for excluded test dirs
-- [[Documentation/Backlog/2026-07-15-210-cli-store-commands-slow-brief.md]] `[user]` — bug this suite would catch
-- [[Documentation/Backlog/2026-07-15-190-cli-startup-latency-brief.md]] `[user]` — timing regression this suite gates
-- [[Documentation/Backlog/2026-07-15-350-collection-info-display-brief.md]] `[user]` — output format this suite asserts
+- [[Documentation/Completed/2026-07-15-210-cli-store-commands-slow-brief.md]] `[user]` — bug this suite would catch
+- [[Documentation/Completed/2026-07-15-190-cli-startup-latency-brief.md]] `[user]` — timing regression this suite gates
+- [[Documentation/Completed/2026-07-15-350-collection-info-display-brief.md]] `[user]` — output format this suite asserts
 
 ## Recommendation
 

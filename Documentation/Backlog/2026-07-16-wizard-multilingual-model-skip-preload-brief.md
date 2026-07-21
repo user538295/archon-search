@@ -46,7 +46,7 @@ Anyone who runs the wizard with a multilingual profile **and** `--skip-preload` 
 - The unified "install/download all missing dependencies at server start" recovery path (deferred from `2026-07-15-040`), which would also cover the graph and code extras and turn a startup crash into a self-heal.
 
 ## References
-- `Documentation/Backlog/2026-07-15-040-wizard-multilingual-extra-not-installed-brief.md` `[user+docs-agent]` — the multilingual package-extra fix; explicitly scoped the model-download step OUT, naming this as its deferred follow-up; source of the `_revert_multilingual_flag` rollback pattern reused here
+- `Documentation/Completed/2026-07-15-040-wizard-multilingual-extra-not-installed-brief.md` `[user+docs-agent]` — the multilingual package-extra fix; explicitly scoped the model-download step OUT, naming this as its deferred follow-up; source of the `_revert_multilingual_flag` rollback pattern reused here
 - `archon_search/install.py` `[user+code-agent]` — `_download_fasttext_model` (~line 874, the reusable helper), the Step 3b license+download gate `if is_multilingual and not skip_preload` (~line 1925), and the config-write branches that write `multilingual=true`
 - `archon_search/server/app.py` `[user+code-agent]` — `_check_multilingual_deps` (line 86, called at startup ~line 258) hard-crashes when the model file is absent; `_multilingual_model_path()` and the `LanguageDetector` instantiation
 - `archon_search/language_detector.py` `[code-agent]` — `LanguageDetector.__init__` raises `FileNotFoundError` if the model is missing; confirms there is no lazy-load at runtime

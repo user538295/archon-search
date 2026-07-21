@@ -1,6 +1,6 @@
 # Feature Brief: Missing Anthropic Package Check at Server Startup
 
-> **STATUS: SUPERSEDED — resolved by [[Documentation/Backlog/2026-07-15-060-hyde-ragfusion-wizard-brief.md]].**
+> **STATUS: SUPERSEDED — resolved by [[Documentation/Completed/2026-07-15-060-hyde-ragfusion-wizard-brief.md]].**
 > The `anthropic` branch of `_check_provider_deps()` was implemented there
 > (`archon_search/server/app.py`), with one deliberate deviation from the spec below:
 > the guard is **enabled-gated** (`elif provider == "anthropic" and enabled:`), NOT

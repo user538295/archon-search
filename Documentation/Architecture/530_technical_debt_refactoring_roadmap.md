@@ -90,7 +90,7 @@ For architectural context, see [`100_system_architecture_overview.md`](./100_sys
 
 | ID | Item | Category | Severity | Trigger | Refs |
 | --- | --- | --- | --- | --- | --- |
-| CLI-1 | ~~**RESOLVED (feature 210):** `collection list` and `collection info` now open `SearchStore` directly via `_make_store()` instead of calling `create_pipeline()`, eliminating the GPT-2 tokenizer cost (~1 s). The remaining floor is the `lancedb` first-import (~900 ms). Lazy chunker init in `SearchPipeline` is still deferred (wider blast-radius) but no longer blocks these commands.~~ | Performance | Resolved | — | `archon_search/cli/collection.py` (`_make_store`, `list_cmd`, `info`); [2026-07-15-210-cli-store-commands-slow-brief.md](../../Documentation/Backlog/2026-07-15-210-cli-store-commands-slow-brief.md) |
+| CLI-1 | ~~**RESOLVED (feature 210):** `collection list` and `collection info` now open `SearchStore` directly via `_make_store()` instead of calling `create_pipeline()`, eliminating the GPT-2 tokenizer cost (~1 s). The remaining floor is the `lancedb` first-import (~900 ms). Lazy chunker init in `SearchPipeline` is still deferred (wider blast-radius) but no longer blocks these commands.~~ | Performance | Resolved | — | `archon_search/cli/collection.py` (`_make_store`, `list_cmd`, `info`); [2026-07-15-210-cli-store-commands-slow-brief.md](../../Documentation/Completed/2026-07-15-210-cli-store-commands-slow-brief.md) |
 
 ### Query expansion provider matrix
 
