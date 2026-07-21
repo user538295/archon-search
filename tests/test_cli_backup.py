@@ -821,3 +821,61 @@ def test_backup_status_namespace_fallback_when_field_absent(tmp_path: Path) -> N
     # Default namespace is not printed as a prefix.
     assert "docs" in result.output
     assert "team-a" not in result.output
+
+
+def test_backup_status_json_includes_namespace(tmp_path: Path) -> None:
+    """--json output includes namespace in each collection_status entry (brief 290)."""
+    server_payload = {
+        "backup": {
+            "enabled": True,
+            "interval_hours": 24,
+            "last_tick_at": None,
+            "next_run_at": None,
+            "collections_excluded": [],
+            "collection_status": [
+                {
+                    "collection": "docs",
+                    "namespace": "team-a",
+                    "last_backup_at": None,
+                    "archive_count": 0,
+                }
+            ],
+        }
+    }
+    runner = CliRunner()
+    with (
+        patch("archon_search.cli.backup_cmd.get_data_dir", return_value=tmp_path),
+        patch(
+            "archon_search.cli.backup_cmd.httpx.get",
+            return_value=_mock_response(200, server_payload),
+        ),
+    ):
+        result = runner.invoke(
+            backup_cmd, ["status", "--json", "--api-key", "deadbeef"]
+        )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    entry = payload["collection_status"][0]
+    assert entry["namespace"] == "team-a"
+
+
+def test_backup_status_offline_non_default_namespace(tmp_path: Path) -> None:
+    """Offline path shows correct namespace prefix for non-default namespaces."""
+    state_file = tmp_path / ".backup-state.json"
+    state_file.write_text(
+        json.dumps({"team-b/reports": "2026-03-01T00:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    with (
+        patch("archon_search.cli.backup_cmd.get_data_dir", return_value=tmp_path),
+        patch(
+            "archon_search.cli.backup_cmd.httpx.get",
+            side_effect=httpx.ConnectError("nope"),
+        ),
+    ):
+        result = runner.invoke(backup_cmd, ["status", "--api-key", "deadbeef"])
+
+    assert result.exit_code == 0, result.output
+    assert "team-b/reports" in result.output

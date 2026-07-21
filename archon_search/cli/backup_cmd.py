@@ -325,6 +325,7 @@ def _gather_status(api_url: str, api_key: str | None) -> dict[str, Any]:
         "collection_status": [
             {
                 "collection": row["collection"],
+                "namespace": row["namespace"],
                 "last_backup_at": row["last_backup_at"],
                 "archive_count": row["archive_count"],
             }

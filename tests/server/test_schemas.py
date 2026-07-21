@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.server.schemas import (
+    CollectionBackupStatus,
     CollectionDetail,
     CollectionHealthEntry,
     CollectionSummary,
@@ -322,3 +323,17 @@ def test_status_response_model_validation_field_optional() -> None:
     entry = StatusCollectionEntry(name="col", path="/p", status="DONE", watching=False)
     response = StatusResponse(running=True, pid=1, version="1.0.0", collections=[entry])
     assert response.model_validation is None
+
+
+def test_collection_backup_status_fields_and_defaults() -> None:
+    """CollectionBackupStatus has expected fields with correct defaults."""
+    assert set(CollectionBackupStatus.model_fields.keys()) == {
+        "collection",
+        "namespace",
+        "last_backup_at",
+        "archive_count",
+    }
+    entry = CollectionBackupStatus(collection="docs")
+    assert entry.namespace == "default"
+    assert entry.last_backup_at is None
+    assert entry.archive_count == 0

@@ -207,3 +207,37 @@ def test_status_collection_status_includes_namespace_field(
     cs = body["backup"]["collection_status"]
     assert len(cs) == 1
     assert cs[0]["namespace"] == DEFAULT_NAMESPACE
+
+
+def _make_client_with_ns(
+    tmp_path: Path,
+    ns: str,
+    collections: list[CollectionInfo],
+    interval_hours: int = 1,
+) -> TestClient:
+    tenant_key = "b" * 64
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    Path(cfg.db_path).mkdir(parents=True, exist_ok=True)
+    cfg.backup.output_dir = str(tmp_path / "backups")
+    cfg.backup.interval_hours = interval_hours
+    cfg.namespaces = {tenant_key: ns}
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    app = create_app(cfg, job_store)
+    app.state.search_store = _make_mock_search_store(collections=collections)
+    return TestClient(app, headers={"Authorization": f"Bearer {tenant_key}"})
+
+
+@pytest.mark.integration
+def test_status_collection_status_namespace_non_default(
+    tmp_path: Path,
+) -> None:
+    """namespace=ns is not confused with the old hardcoded 'default' (brief 290)."""
+    collections = [CollectionInfo(name="docs", doc_count=1, chunk_count=1, namespace="team-b")]
+    client = _make_client_with_ns(tmp_path, "team-b", collections, interval_hours=1)
+    with client:
+        response = client.get("/status")
+    body = response.json()
+    cs = body["backup"]["collection_status"]
+    assert len(cs) == 1
+    assert cs[0]["namespace"] == "team-b"
