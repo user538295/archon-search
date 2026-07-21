@@ -150,7 +150,7 @@ _ERROR_400_401_409_503 = {
     400: {"model": ErrorDetail, "description": "Ingest path failed safety validation"},
     401: {"model": ErrorDetail},
     409: {"model": ErrorDetail},
-    503: {"description": "Store busy — reindex in progress"},
+    503: {"model": ErrorDetail, "description": "Store busy — reindex in progress"},
 }
 
 
@@ -213,7 +213,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
         _maybe_save_config(config, request)
         retry_after = str(math.ceil(e.timeout_s))
         return JSONResponse(
-            {"error": "store_busy", "detail": "reindex in progress; retry after Retry-After seconds"},
+            {"detail": f"store busy; retry in {retry_after} seconds"},
             status_code=503,
             headers={"Retry-After": retry_after},
         )
@@ -243,7 +243,12 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
             await search_store.delete_collection_meta(collection_name, ns)
         except Exception:
             logger.exception("Failed to rollback meta after ingest-lock timeout")
-        return lock_result
+        retry_after_val = lock_result.headers.get("Retry-After", "")
+        return JSONResponse(
+            {"detail": f"store busy; retry in {retry_after_val} seconds"},
+            status_code=503,
+            headers={"Retry-After": retry_after_val},
+        )
 
     ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     try:

@@ -97,7 +97,7 @@ For deployments using only the env var / `.search.env` file path (no managed key
 
 **Symptoms**: `/search` may surface a LanceDB lock/IO condition as either a `503` (from the meta-lookup branch) or an `HTTP 500` (pipeline-path exception); or `archon-search start` fails to connect to the store; or two processes started against the same `db_path`. Check the log for LanceDB lock/IO messages — do not rely on the HTTP status alone.
 
-Distinct from the above: `POST /ingest` or `POST /collections/` returning `503` with body `{"error": "store_busy", ...}` and header `Retry-After: 30` is **not** a fault — it is the expected, intentional signal that a reindex currently holds the per-collection ingest lock. The caller should honour `Retry-After` and retry; ingest to a *different* collection is unaffected. Treat a sustained `store_busy` window the same as a stuck reindex (see "Stuck job" above).
+Distinct from the above: `POST /collections/` returning `503` with body `{"detail": "store busy; retry in N seconds"}` and header `Retry-After: N`, or `POST /ingest` returning `503` with body `{"error": "store_busy", ...}` and header `Retry-After: 30`, is **not** a fault — it is the expected, intentional signal that a reindex currently holds the per-collection ingest lock. The caller should honour `Retry-After` and retry; ingest to a *different* collection is unaffected. Treat a sustained store-busy window the same as a stuck reindex (see "Stuck job" above).
 
 **Triage**:
 

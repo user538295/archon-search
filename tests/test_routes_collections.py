@@ -7,6 +7,7 @@ from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from archon_search.config import SearchConfig
@@ -2003,10 +2004,57 @@ def test_create_collection_returns_503_on_lock_timeout(
     response = c.post("/collections/", json={"path": str(src)})
 
     assert response.status_code == 503
-    assert "Retry-After" in response.headers
+    assert response.headers["Retry-After"] == "30"
+    # Body must use standard {"detail": "..."} shape — no "error" key
+    data = response.json()
+    assert "error" not in data
+    assert data["detail"] == "store busy; retry in 30 seconds"
     # Config must be reverted — path should not be persisted on busy lock
     updated_config: SearchConfig = app.state.config
     assert str(src.resolve()) not in updated_config.collections
+
+
+def test_create_collection_returns_503_on_ingest_lock_timeout(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ returns standard 503 shape when the ingest lock is held."""
+    import asyncio as _asyncio
+
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.delete_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
+
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    busy_response = JSONResponse(
+        {"error": "store_busy", "detail": "reindex in progress; retry after Retry-After seconds"},
+        status_code=503,
+        headers={"Retry-After": "30"},
+    )
+    with patch(
+        "archon_search.server.routes_collections.acquire_collection_lock_or_503",
+        new_callable=AsyncMock,
+        return_value=busy_response,
+    ):
+        response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "30"
+    data = response.json()
+    assert "error" not in data
+    assert data["detail"] == "store busy; retry in 30 seconds"
 
 
 # ---------------------------------------------------------------------------

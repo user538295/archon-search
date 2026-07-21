@@ -170,7 +170,8 @@ def test_post_collections_returns_503_when_lock_held(
     assert response.status_code == 503
     assert response.headers.get("Retry-After") == "30"
     body = response.json()
-    assert body.get("error") == "store_busy"
+    assert "error" not in body
+    assert body["detail"] == "store busy; retry in 30 seconds"
 
 
 def test_post_collections_503_leaves_no_orphaned_state(
@@ -198,7 +199,8 @@ def test_post_collections_503_leaves_no_orphaned_state(
 
     assert response.status_code == 503
     body = response.json()
-    assert body.get("error") == "store_busy"
+    assert "error" not in body
+    assert body["detail"] == "store busy; retry in 30 seconds"
 
     # Config must NOT contain the path — no orphaned config entry.
     resolved = str(src.resolve())

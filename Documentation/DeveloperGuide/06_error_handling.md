@@ -32,7 +32,8 @@ Verified against the route modules under `archon_search/server/`:
 | `422` | FastAPI body validation (e.g. empty `collection` / `query` in `/search`) | FastAPI's structured error body | Fix the request; never retry as-is. |
 | `500` | Unmapped internal failure; `POST /search` — pipeline stage exception (embedder, store, reranker) (`routes_search.py`); `APIKeyMiddleware` returns a bare `500` (no body) if the resolved namespace fails revalidation (`middleware_auth.py:55-59`) | `{"detail": "..."}` for the routes that build a `JSONResponse({"detail": ...}, status_code=500)` (e.g. `routes_collections.py`, `routes_jobs.py`). **Exception: `POST /search` pipeline-failure 500 has a plain-text body `Internal Server Error` (Content-Type `text/plain`)** — the route bare-re-raises and Starlette's `ServerErrorMiddleware` renders the default response, not a JSON envelope. `APIKeyMiddleware`'s 500 path returns an empty body. | Backoff + retry once; surface to operator if it recurs. |
 | `503` | `POST /search` — any exception raised by `pipeline.get_collection_meta` (`routes_search.py:67-71`) | `{"detail": "service unavailable"}` | Retry with exponential backoff. |
-| `503` | `POST /collections/`, `POST /ingest` — a reindex holds the per-collection ingest lock | `{"error": "store_busy", "detail": "..."}` + header `Retry-After: 30` (note: `error` key, not `detail`-only) | Honour `Retry-After`, then retry. Ingest to a *different* collection is unaffected. |
+| `503` | `POST /collections/` — a reindex holds the per-collection ingest lock | `{"detail": "store busy; retry in N seconds"}` + header `Retry-After: N` | Honour `Retry-After`, then retry. Ingest to a *different* collection is unaffected. |
+| `503` | `POST /ingest` — a reindex holds the per-collection ingest lock | `{"error": "store_busy", "detail": "..."}` + header `Retry-After: 30` (note: `error` key, not `detail`-only — normalisation deferred) | Honour `Retry-After`, then retry. |
 | `504` | `POST /route` — 30 s routing timeout; `POST /search` — pipeline call timed out (~30 s) | `{"detail": "routing timed out"}` / `{"detail": "Search timed out"}` | Retry at most once; if persistent, check CPU pressure or model load. |
 
 The full server-side mapping with file:line citations is in `Architecture/140_error_handling_strategy.md`.
@@ -43,7 +44,8 @@ The full server-side mapping with file:line citations is in `Architecture/140_er
 | --- | --- | --- |
 | Transient network | connection reset, `httpx.RemoteProtocolError` | Yes — short backoff (e.g. 200ms, 500ms, 1s). |
 | `503` from `/search` | Meta lookup race during reindex | Yes — same backoff. |
-| `503` `store_busy` from `/collections/` or `/ingest` | Reindex holds the per-collection lock | Yes — honour `Retry-After` (30s), then retry. |
+| `503` from `POST /collections/` (store busy) | Reindex holds the per-collection lock | Yes — honour `Retry-After`, then retry. Body: `{"detail": "store busy; retry in N seconds"}`. |
+| `503` `store_busy` from `POST /ingest` | Reindex holds the per-collection lock | Yes — honour `Retry-After` (30s), then retry. Body: `{"error": "store_busy", ...}`. |
 | `504` from `/route` | Embedder warm-up, slow centroid load | Once, then surface. |
 | `500` | Unhandled exception | Once, then surface — log the response. |
 | `401` | Token rotated underneath the client | Reload key, retry once. After that, fail loudly. |

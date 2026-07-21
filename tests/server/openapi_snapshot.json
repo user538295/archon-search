@@ -4078,6 +4078,13 @@
             "description": "Unprocessable Entity"
           },
           "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
             "description": "Store busy \u2014 reindex in progress"
           }
         },

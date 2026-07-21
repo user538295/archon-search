@@ -134,7 +134,7 @@ What is **not** validated (accepted trade-offs, deferred to a future `allowed_di
 
 ## Ingest concurrency — synchronous store-busy signalling (A5c)
 
-While a reindex holds a collection's per-collection ingest lock, `POST /jobs/ingest` and `POST /collections` pre-acquire that lock in the request handler and, on a 30s acquisition timeout, return HTTP 503 with `Retry-After: 30` and `{"error": "store_busy", ...}` synchronously (rather than a 202 followed by a failed job). Ingest into a different collection is unaffected. The MCP `ingest_file` / `ingest_directory` tools surface the same condition as `McpErrorResponse(code="store_busy")`.
+While a reindex holds a collection's per-collection ingest lock, `POST /jobs/ingest` and `POST /collections` pre-acquire that lock in the request handler and, on a 30s acquisition timeout, return HTTP 503 with `Retry-After: 30` synchronously (rather than a 202 followed by a failed job). Ingest into a different collection is unaffected. The MCP `ingest_file` / `ingest_directory` tools surface the same condition as `McpErrorResponse(code="store_busy")`. Note: `POST /collections/` returns a standard `{"detail": "store busy; retry in N seconds"}` body (`ErrorDetail` shape); `POST /jobs/ingest` returns `{"error": "store_busy", "detail": ...}` (normalisation deferred).
 
 ## Privacy
 
