@@ -3,9 +3,9 @@
 // Validated with `tsp compile <file> --no-emit`. No OpenAPI is emitted.
 //
 // They capture WHAT crosses each seam logically after G15:
-//   C2 — resolve_acl() return type gains source + sidecar_path.
-//   C3 — SearchResult / ChunkRecord / ScoredSearchCandidate gain 3 provenance fields.
-//   C4 — LanceDB chunk table gains 3 nullable columns (persistence boundary).
+//   C4 — resolve_acl() return type gains source + sidecar_path.
+//   C5 — SearchResult / ChunkRecord / ScoredSearchCandidate gain 3 provenance fields.
+//   C6 — LanceDB chunk table gains 3 nullable columns (persistence boundary).
 
 namespace ArchonSearchG15InternalSeams;
 
@@ -17,13 +17,13 @@ enum AclSource {
   collection_default,
 }
 
-// C2 — resolve_acl(doc_path, front_matter_acl) return.
+// C4 — resolve_acl(doc_path, front_matter_acl) return.
 // Today returns (acl_entries, warnings). G15 widens it to also convey source and
 // sidecar_path. Recommended shape: a named result (option (b) in findings).
 model AclResolutionResult {
   acl_entries: string[] | null; // None=open, []=deny-all, [..]=allow-list
   source: AclSource | null;
-  sidecar_path: string | null; // absolute-vs-relative is Q3 (open)
+  sidecar_path: string | null; // relative to collection_root when available; basename-only when collection_root is None (Q3 resolved)
   warnings: string[];
 }
 
@@ -32,13 +32,13 @@ interface AclResolver {
   resolveAcl(docPath: string, frontMatterAcl: unknown): AclResolutionResult;
 }
 
-// C3 — provenance fields added identically to the three dataclasses so the
+// C5 — provenance fields added identically to the three dataclasses so the
 // values flow store -> pipeline -> route without re-reading the store.
-// acl_warning is a single nullable string per chunk (Q5: scalar vs list).
+// acl_warning is a list of warning strings (Q5 resolved: list, not scalar).
 model AclProvenanceFields {
   acl_source: string | null;
   acl_sidecar_path: string | null;
-  acl_warning: string | null;
+  acl_warning: string[];
 }
 
 // ChunkRecord (persistence entity) + G15 provenance.
@@ -61,13 +61,13 @@ model ScoredSearchCandidate {
   ...AclProvenanceFields;
 }
 
-// C4 — the LanceDB chunk-table persistence boundary: three new nullable columns.
+// C6 — the LanceDB chunk-table persistence boundary: three new nullable columns.
 // Migration is IN_PLACE add_columns, per-collection, no STORE_SCHEMA_VERSION bump
-// (Q1 decides lazy-startup vs operator-triggered).
+// lazy-startup via _run_startup_migrations() (Q1 resolved).
 model ChunkTableAclColumns {
   acl_source: string | null;
   acl_sidecar_path: string | null;
-  acl_warning: string | null;
+  acl_warning: string[] | null;
 }
 
 interface ChunkStore {

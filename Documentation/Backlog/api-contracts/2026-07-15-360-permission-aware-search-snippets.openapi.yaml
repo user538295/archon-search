@@ -143,7 +143,6 @@ components:
         - source_path
         - acl
         - collection
-        - acl_gate
       properties:
         doc_id:
           type: string
@@ -161,8 +160,6 @@ components:
           nullable: true
         collection:
           type: string
-        acl_gate:
-          $ref: '#/components/schemas/AclGate'
     ExplainRequest:
       type: object
       required:

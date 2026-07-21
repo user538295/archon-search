@@ -73,8 +73,8 @@ model ExplainResult {
   acl_gate: AclGate;
 }
 
-// Mirrors ExplainNearMiss (routes_explain.py) — omits text. acl_gate presence on
-// near-misses is Q6 (open); modelled as always-present pending resolution.
+// Mirrors ExplainNearMiss (routes_explain.py) — omits text. Per Q6 (resolved),
+// ExplainNearMiss does NOT carry acl_gate — near-misses are ranking rejects, not ACL rejects.
 model ExplainNearMiss {
   doc_id: string;
   chunk_id: string;
@@ -82,7 +82,6 @@ model ExplainNearMiss {
   source_path: string;
   acl: string[] | null;
   collection: string;
-  acl_gate: AclGate;
 }
 
 model ExplainRequest {
@@ -130,7 +129,7 @@ interface Search {
 
 @route("/explain")
 interface Explain {
-  // Debug endpoint. acl_gate is ALWAYS included on results (and near-misses);
+  // Debug endpoint. acl_gate is ALWAYS included on ExplainResult; ExplainNearMiss does NOT carry acl_gate (Q6).
   // no acl_context flag on the request.
   //   200 — explanation (ExplainResponse).
   //   401 — missing/invalid Bearer token.

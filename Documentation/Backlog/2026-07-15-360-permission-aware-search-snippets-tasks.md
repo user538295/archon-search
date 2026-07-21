@@ -1,7 +1,7 @@
 ---
 feature: Permission-Aware Search Snippets
 plan: 2026-07-15-360-permission-aware-search-snippets-team-plan.md
-status: draft
+status: in-progress
 ---
 
 # g15 · Permission-Aware Search Snippets — Task Breakdown
@@ -63,7 +63,7 @@ flowchart LR
 
 ### Phase 0 · Kickoff *(prerequisite; the one cross-cutting step)*
 
-- [ ] **K1** — Agree the Contracts and Scenarios with the team #team
+- [x] **K1** — Agree the Contracts and Scenarios with the team #team
     - — · 0.5h
     - completes C1, C2, C3, C4, C5, C6
     - Tests

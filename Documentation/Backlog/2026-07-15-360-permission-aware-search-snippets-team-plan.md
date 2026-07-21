@@ -4,7 +4,7 @@ feature: Permission-Aware Search Snippets
 brief: 2026-07-15-360-permission-aware-search-snippets-brief.md
 purpose: A caller can add acl_context to a search and see, per result, who can access each chunk, where the access rule came from, and whether it failed to load — and /explain shows this always.
 audience: Operators and developers auditing ACL setup via curl/scripts, and application developers driving client behaviour from allowed_principals.
-status: planned      # draft → planned (all open questions resolved) → in-progress → done
+status: in-progress  # draft → planned (all open questions resolved) → in-progress → done
 roles: [backend, tester]
 architecture: Clean Architecture
 ---
@@ -488,7 +488,7 @@ Docs the feature touches — the tasks file's close-out task works through this 
 
 ## Open questions
 
-All questions resolved. Status: `planned`.
+All questions resolved. Status: `in-progress`.
 
 | id | Area | Decision |
 |----|------|----------|
