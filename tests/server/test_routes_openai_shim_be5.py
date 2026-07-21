@@ -725,3 +725,125 @@ class TestAllCollectionsExcludedReturnsEmpty200:
         warning_text = " ".join(caplog.messages)
         assert "col-one" in warning_text
         assert "col-two" in warning_text
+
+
+# ---------------------------------------------------------------------------
+# Brief 340 — empty / whitespace query validation
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyQueryReturns400:
+    """Whitespace-only user message must return 400 in OpenAI error shape before retrieval."""
+
+    def _post(self, client, messages):
+        return client.post(
+            "/v1/chat/completions",
+            json={"model": "archon-search", "messages": messages},
+            headers=_auth_headers(),
+        )
+
+    def test_whitespace_only_user_message_returns_400(self, tmp_path, monkeypatch):
+        app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
+        with TestClient(app) as client:
+            resp = self._post(client, [{"role": "user", "content": "   "}])
+
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["type"] == "invalid_request_error"
+        assert err["code"] == "no_user_message"
+        assert "No user message provided" in err["message"]
+
+    def test_empty_string_user_message_returns_400(self, tmp_path, monkeypatch):
+        app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
+        with TestClient(app) as client:
+            resp = self._post(client, [{"role": "user", "content": ""}])
+
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "no_user_message"
+
+    def test_system_only_messages_returns_422(self, tmp_path, monkeypatch):
+        """System-only messages hit the existing no-user-message 422, not the new 400."""
+        app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
+        with TestClient(app) as client:
+            resp = self._post(client, [{"role": "system", "content": "sys prompt"}])
+
+        assert resp.status_code == 422
+        err = resp.json()["error"]
+        assert err["type"] == "invalid_request_error"
+        assert err.get("code") is None  # existing path — no code set
+
+    def test_empty_query_does_not_reach_pipeline(self, tmp_path, monkeypatch):
+        """Retrieval must not be called when the query is empty."""
+        app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
+        app.state.pipeline.search_many = AsyncMock()
+        app.state.pipeline.search = AsyncMock()
+
+        with TestClient(app) as client:
+            resp = self._post(client, [{"role": "user", "content": "\t\n"}])
+
+        assert resp.status_code == 400
+        app.state.pipeline.search_many.assert_not_awaited()
+        app.state.pipeline.search.assert_not_awaited()
+
+    def test_last_whitespace_user_message_in_multi_turn_returns_400(self, tmp_path, monkeypatch):
+        """Last user message blank even with a valid earlier user message → 400."""
+        app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True)
+        with TestClient(app) as client:
+            resp = self._post(
+                client,
+                [
+                    {"role": "user", "content": "real query"},
+                    {"role": "assistant", "content": "answer"},
+                    {"role": "user", "content": "   "},
+                ],
+            )
+
+        assert resp.status_code == 400
+        err = resp.json()["error"]
+        assert err["code"] == "no_user_message"
+
+    def test_streaming_with_empty_query_returns_400_not_stream(self, tmp_path, monkeypatch):
+        """stream=True with a whitespace query must return 400 JSON, not open an SSE stream."""
+        app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True)
+        with TestClient(app) as client:
+            resp = client.post(
+                "/v1/chat/completions",
+                json={"model": "archon-search", "messages": [{"role": "user", "content": "  "}], "stream": True},
+                headers=_auth_headers(),
+            )
+
+        assert resp.status_code == 400
+        assert "application/json" in resp.headers.get("content-type", "")
+        assert resp.json()["error"]["code"] == "no_user_message"
+
+    def test_direct_collection_empty_query_short_circuits_before_meta_lookup(self, tmp_path, monkeypatch):
+        """model='archon-search/col' with empty query must 400 before get_collection_meta."""
+        app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True)
+        app.state.pipeline.get_collection_meta = AsyncMock()
+        app.state.pipeline.search = AsyncMock()
+
+        with TestClient(app) as client:
+            resp = client.post(
+                "/v1/chat/completions",
+                json={"model": "archon-search/mycol", "messages": [{"role": "user", "content": "\n"}]},
+                headers=_auth_headers(),
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "no_user_message"
+        app.state.pipeline.get_collection_meta.assert_not_awaited()
+        app.state.pipeline.search.assert_not_awaited()
+
+    def test_empty_query_guard_fires_before_model_prefix_check(self, tmp_path, monkeypatch):
+        """Blank query with an invalid model → 400, not 404; guard ordering is pinned."""
+        app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True)
+        with TestClient(app) as client:
+            resp = client.post(
+                "/v1/chat/completions",
+                json={"model": "gpt-4", "messages": [{"role": "user", "content": "   "}]},
+                headers=_auth_headers(),
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "no_user_message"

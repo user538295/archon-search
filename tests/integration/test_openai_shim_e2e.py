@@ -293,6 +293,25 @@ def test_no_user_message_raises_unprocessable_error(tmp_path, monkeypatch):
         asyncio.run(_run())
 
 
+def test_whitespace_user_message_raises_bad_request_error(tmp_path, monkeypatch):
+    """Whitespace-only user message → 400 surfaced as openai.BadRequestError."""
+    import openai
+
+    app = _make_stub_app(tmp_path, monkeypatch, collections=["docs"])
+
+    async def _run():
+        client = await _openai_client(app)
+        return await client.chat.completions.create(
+            model="archon-search/docs",
+            messages=[{"role": "user", "content": "   "}],
+        )
+
+    with pytest.raises(openai.BadRequestError) as exc_info:
+        asyncio.run(_run())
+
+    assert exc_info.value.code == "no_user_message"
+
+
 # ---------------------------------------------------------------------------
 # Real user scenarios
 # ---------------------------------------------------------------------------

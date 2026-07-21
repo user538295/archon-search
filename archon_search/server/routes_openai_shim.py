@@ -65,9 +65,9 @@ _SEARCH_TIMEOUT_SECONDS = 30.0
 # ---------------------------------------------------------------------------
 
 
-def _openai_error(status: int, message: str, error_type: str) -> JSONResponse:
+def _openai_error(status: int, message: str, error_type: str, *, code: str | None = None) -> JSONResponse:
     """Return a JSON response in the OpenAI error envelope shape."""
-    body = OpenAIErrorResponse(error=OpenAIError(message=message, type=error_type))
+    body = OpenAIErrorResponse(error=OpenAIError(message=message, type=error_type, code=code))
     return JSONResponse(status_code=status, content=body.model_dump())
 
 
@@ -151,7 +151,8 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
     - Any other value — 404 with OpenAI error shape.
 
     The last ``role="user"`` message is extracted as the search query.
-    A 422 is returned when no user message is present.
+    A 422 is returned when no user message is present; a 400 with
+    ``code="no_user_message"`` is returned when the message is empty or whitespace-only.
 
     When ``stream=True``: retrieval is materialized in full first (so errors return
     JSON, not a broken SSE stream), then a ``StreamingResponse`` is returned that
@@ -169,6 +170,8 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
             break
     if query is None:
         return _openai_error(422, "messages must contain at least one user message", "invalid_request_error")
+    if query.strip() == "":
+        return _openai_error(400, "No user message provided", "invalid_request_error", code="no_user_message")
 
     # --- Parse model field ---
     model = body.model
