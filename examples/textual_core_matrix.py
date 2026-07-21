@@ -15,9 +15,9 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.message import Message
-from textual.widgets import Button, Footer, Static
+from textual.widgets import Button, Static
 
-from examples.textual_design import PALETTE, TableColumn, TitledFrame, bold, italic, table_lines
+from examples.textual_design import PALETTE, bold, italic
 
 
 @dataclass(frozen=True)
@@ -89,9 +89,6 @@ CHOICES = (
 
 PROFILE_COLUMNS = (14, 31, 16, 16, 8)
 PROFILE_HEADINGS = ("Profile", "Best for", "Download", "Memory", "Quality")
-MODEL_STACK_COLUMNS = (TableColumn("Module"), TableColumn("Loadout", weight=3))
-
-
 class CoreSelector(Static, can_focus=True):
     """Terminal-native cursor and selection control for the two core decisions."""
 
@@ -158,14 +155,24 @@ class CoreSelector(Static, can_focus=True):
         """Use the allocated terminal width; no virtual canvas width is imposed."""
         return max(3, self.size.width)
 
+    @property
+    def _frame_padding(self) -> str:
+        """Inset frame content where the allocated width can accommodate it."""
+        return " " if self._width >= 5 else ""
+
+    @property
+    def _content_width(self) -> int:
+        return self._width - 2 - 2 * len(self._frame_padding)
+
     def _top_edge(self, label: str) -> str:
         interior = self._width - 2
         title = f"─ {label} "
         return f"┌{title[:interior].ljust(interior, '─')}┐\n"
 
     def _content_line(self, content: str) -> Text:
-        interior = self._width - 2
-        return Text(f"│{content[:interior].ljust(interior)}│\n", style=PALETTE.accent)
+        padding = self._frame_padding
+        interior = self._content_width
+        return Text(f"│{padding}{content[:interior].ljust(interior)}{padding}│\n", style=PALETTE.accent)
 
     def _choice_line(self, choice: CoreChoice, index: int) -> Text:
         selected = self.language_index == index if choice.kind == "language" else self.profile_index == index
@@ -178,7 +185,8 @@ class CoreSelector(Static, can_focus=True):
             row = " ".join(value[:width].ljust(width) for value, width in zip(values, PROFILE_COLUMNS))
         else:
             row = f"{cursor}{marker} {choice.label:<{label_width}} {choice.detail}"
-        interior = self._width - 2
+        padding = self._frame_padding
+        interior = self._content_width
         style = (
             f"bold {PALETTE.accent_foreground} on {PALETTE.accent}"
             if self.cursor_visible and self.cursor == index
@@ -186,28 +194,73 @@ class CoreSelector(Static, can_focus=True):
             if selected
             else PALETTE.muted
         )
-        text = Text("│", style=PALETTE.accent)
+        text = Text(f"│{padding}", style=PALETTE.accent)
         visible_row = row[:interior].ljust(interior)
         text.append(visible_row, style=style)
         for position, glyph in enumerate(visible_row):
             if glyph in "■□":
-                text.stylize(PALETTE.meter, 1 + position, 2 + position)
-        text.append("│\n", style=PALETTE.accent)
+                start = 1 + len(padding) + position
+                text.stylize(PALETTE.meter, start, start + 1)
+        text.append(f"{padding}│\n", style=PALETTE.accent)
+        return text
+
+    def _info_choice(self, kind: str) -> CoreChoice:
+        if self.cursor_visible and self.focused_choice.kind == kind:
+            return self.focused_choice
+        index = self.language_index if kind == "language" else self.profile_index
+        return CHOICES[index]
+
+    def _info_rows(self, choice: CoreChoice) -> tuple[tuple[str, str], ...]:
+        if choice.kind == "language":
+            details = (choice.line_one, choice.line_two, choice.line_three)
+        else:
+            details = (choice.line_one, choice.line_two, choice.line_three)
+        rows: list[tuple[str, str]] = []
+        for detail in details:
+            if isinstance(detail, tuple):
+                rows.append(detail)
+                continue
+            label, separator, value = detail.partition("  ")
+            rows.append((label, value.lstrip() if separator else ""))
+        return tuple(rows)
+
+    def _info_line(self, label: str, value: str) -> Text:
+        label_width = 16
+        label_text = label[:label_width].ljust(label_width)
+        line = self._content_line(f"{label_text} {value}")
+        start = 1 + len(self._frame_padding)
+        line.stylize(PALETTE.stack_label, start, start + len(label_text))
+        if value:
+            value_start = start + len(label_text) + 1
+            line.stylize(PALETTE.stack_value, value_start, value_start + len(value))
+        return line
+
+    def _info_text(self, kind: str) -> Text:
+        choice = self._info_choice(kind)
+        text = self._content_line(f"{choice.label.upper()} // INFO")
+        info_start = 1 + len(self._frame_padding)
+        text.stylize(f"bold {PALETTE.confirmed}", info_start, info_start + len(choice.label) + len(" // INFO"))
+        for label, value in self._info_rows(choice):
+            text += self._info_line(label, value)
         return text
 
     def render(self) -> Text:
         text = Text(self._top_edge("YOUR CORPUS"), style=f"bold {PALETTE.accent}")
+        text += self._content_line("")
         text += self._content_line("What languages will you search?")
         text += self._choice_line(CHOICES[0], 0)
         text += self._choice_line(CHOICES[1], 1)
+        text += self._info_text("language")
         text.append(f"└{'─' * (self._width - 2)}┘\n", style=f"bold {PALETTE.accent}")
         text.append(self._top_edge("SELECT SEARCH CORE"), style=f"bold {PALETTE.accent}")
+        text += self._content_line("")
         text += self._content_line(
             " ".join(value.ljust(width) for value, width in zip(PROFILE_HEADINGS, PROFILE_COLUMNS))
         )
         text += self._choice_line(CHOICES[2], 2)
         text += self._choice_line(CHOICES[3], 3)
         text += self._choice_line(CHOICES[4], 4)
+        text += self._info_text("profile")
         text.append(f"└{'─' * (self._width - 2)}┘", style=f"bold {PALETTE.accent}")
         return text
 
@@ -239,42 +292,10 @@ class NavigationButton(Button):
         selector._notify_changed(committed=False)
 
 
-class FocusPreview(TitledFrame):
-    """Model-stack panel composed from the reusable responsive frame brick."""
-
-    def __init__(self) -> None:
-        super().__init__("MODEL STACK // ENGLISH", id="preview")
-        self.choice = CHOICES[0]
-
-    def show_choice(self, choice: CoreChoice) -> None:
-        self.choice = choice
-        self.title = f"MODEL STACK // {choice.preview_name}"
-        self.refresh()
-
-    def _table_rows(self) -> tuple[tuple[str, str], ...]:
-        rows: list[tuple[str, str]] = []
-        for detail in (self.choice.line_one, self.choice.line_two, self.choice.line_three):
-            label, separator, value = detail.partition("  ")
-            rows.append((label, value if separator else ""))
-        return tuple(rows)
-
-    def render(self) -> Text:
-        self.lines = table_lines(MODEL_STACK_COLUMNS, self._table_rows(), max(self.size.width - 2, 2))
-        rendered = super().render()
-        for label, value in self._table_rows():
-            row_start = rendered.plain.find(label)
-            if row_start < 0:
-                continue
-            label_start = row_start
-            rendered.stylize(PALETTE.stack_label, label_start, label_start + len(label))
-            if value:
-                value_start = rendered.plain.find(value, label_start + len(label))
-                rendered.stylize(PALETTE.stack_value, value_start, value_start + len(value))
-        return rendered
-
-
 class CoreMatrixApp(App[None]):
     """Live, non-production prototype of the first Archon Search wizard screen."""
+
+    ALLOW_SELECT = True
 
     CSS = """
     Screen {
@@ -282,7 +303,7 @@ class CoreMatrixApp(App[None]):
         color: #ffffff;
     }
 
-    #masthead, #status, #preview, CoreSelector, #navigation {
+    #masthead, #status, CoreSelector, #navigation {
         width: 100%;
         margin: 0 2;
     }
@@ -299,13 +320,8 @@ class CoreMatrixApp(App[None]):
     }
 
     CoreSelector {
-        height: 12;
+        height: 21;
         margin: 0 2;
-    }
-
-    #preview {
-        height: 6;
-        color: #7fa8d7;
     }
 
     #navigation {
@@ -332,18 +348,13 @@ class CoreMatrixApp(App[None]):
         text-style: bold;
     }
 
-    Footer {
-        background: #181818;
-        color: #8b8b8b;
-    }
     """
 
-    BINDINGS = [Binding("q", "quit", "Quit")]
+    BINDINGS = [Binding("q", "quit", "Quit"), Binding("escape", "quit", "Quit")]
 
     def __init__(self) -> None:
         super().__init__()
         self.selector = CoreSelector()
-        self.preview = FocusPreview()
         self.status_text = "CORE MATRIX LINKED"
         self._signal_frames = ("◌", "◔", "◑", "◕", "●")
         self._signal_index = 0
@@ -351,10 +362,6 @@ class CoreMatrixApp(App[None]):
         self._boost_ticks = 0
         self._ui_active = False
 
-
-    @property
-    def preview_text(self) -> str:
-        return self.preview.render().plain
 
     def _masthead_text(self) -> Text:
         masthead = bold("◇ ARCHON SEARCH", color=PALETTE.accent)
@@ -370,17 +377,13 @@ class CoreMatrixApp(App[None]):
             yield Static(self._masthead_text(), id="masthead")
             yield Static(italic(self.status_text, color=PALETTE.meter), id="status")
             yield self.selector
-            yield self.preview
             with Horizontal(id="navigation"):
                 yield NavigationButton("[ ◀ PREVIOUS ]", id="previous")
                 yield Static("", id="nav-spacer")
                 yield NavigationButton("[ NEXT ▶ ]", id="next")
-            yield Footer()
 
     def on_mount(self) -> None:
         self._ui_active = True
-        self._refresh_preview()
-        self.call_after_refresh(self._refresh_preview)
         self.selector.focus()
         self.set_interval(0.1, self._tick_signal)
 
@@ -391,7 +394,7 @@ class CoreMatrixApp(App[None]):
         if message.committed:
             self.status_text = f"{message.selector.focused_choice.label.upper()} EQUIPPED // CORE MATRIX LINKED"
             self._boost_ticks = 12
-        self._refresh_preview()
+        self._refresh_status()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "previous":
@@ -401,9 +404,7 @@ class CoreMatrixApp(App[None]):
             self._boost_ticks = 12
         self.query_one("#status", Static).update(italic(self.status_text, color=PALETTE.meter))
 
-    def _refresh_preview(self) -> None:
-        choice = self.selector.focused_choice
-        self.preview.show_choice(choice)
+    def _refresh_status(self) -> None:
         self.query_one("#status", Static).update(italic(self.status_text, color=PALETTE.meter))
 
     def _tick_signal(self) -> None:

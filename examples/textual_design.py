@@ -63,7 +63,9 @@ def frame_lines(title: str, lines: Iterable[str], width: int) -> tuple[str, ...]
     interior = width - 2
     label = f"─ {title} "
     top = f"┌{label[:interior].ljust(interior, '─')}┐"
-    body = tuple(f"│{line[:interior].ljust(interior)}│" for line in lines)
+    padding = " " if width >= 5 else ""
+    content_width = width - 2 - 2 * len(padding)
+    body = tuple(f"│{padding}{line[:content_width].ljust(content_width)}{padding}│" for line in lines)
     return (top, *body, f"└{'─' * interior}┘")
 
 
