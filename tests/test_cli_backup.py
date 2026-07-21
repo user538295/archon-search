@@ -636,6 +636,92 @@ def test_backup_wait_non200_poll_response_exits_1() -> None:
     assert "my_docs" in result.output
 
 
+# ---------------------------------------------------------------------------
+# Brief 280: --wait progress line
+# ---------------------------------------------------------------------------
+
+
+def test_backup_wait_progress_line_appears_while_pending() -> None:
+    """Each poll cycle prints 'Backing up... (N/total complete)' while jobs are pending."""
+    runner = CliRunner()
+    post_resp = _mock_response(
+        202,
+        {"queued": [{"collection": "docs", "job_id": "job-w"}], "skipped": []},
+    )
+    get_responses = [
+        _mock_response(200, _job_payload("job-w", "RUNNING")),
+        _mock_response(200, _job_payload("job-w", "DONE")),
+    ]
+    with (
+        patch("archon_search.cli.backup_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.backup_cmd.httpx.get", side_effect=get_responses),
+        patch("archon_search.cli.backup_cmd.time.sleep"),
+    ):
+        result = runner.invoke(backup_cmd, ["--now", "--wait", "--api-key", "deadbeef"])
+
+    assert result.exit_code == 0, result.output
+    assert "Backing up... (0/1 complete)" in result.output
+
+
+def test_backup_wait_progress_line_multi_collection() -> None:
+    """With 2 collections, progress line tracks partial completion: (1/2 complete)."""
+    runner = CliRunner()
+    post_resp = _mock_response(
+        202,
+        {
+            "queued": [
+                {"collection": "col_a", "job_id": "job-a"},
+                {"collection": "col_b", "job_id": "job-b"},
+            ],
+            "skipped": [],
+        },
+    )
+    responses_by_id: dict[str, list] = {
+        "job-a": [
+            _mock_response(200, _job_payload("job-a", "DONE")),
+        ],
+        "job-b": [
+            _mock_response(200, _job_payload("job-b", "RUNNING")),
+            _mock_response(200, _job_payload("job-b", "DONE")),
+        ],
+    }
+
+    def _get_side_effect(url, headers):
+        job_id = url.rsplit("/", 1)[-1]
+        resps = responses_by_id[job_id]
+        return resps.pop(0) if len(resps) > 1 else resps[0]
+
+    with (
+        patch("archon_search.cli.backup_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.backup_cmd.httpx.get", side_effect=_get_side_effect),
+        patch("archon_search.cli.backup_cmd.time.sleep"),
+    ):
+        result = runner.invoke(backup_cmd, ["--now", "--wait", "--api-key", "deadbeef"])
+
+    assert result.exit_code == 0, result.output
+    # After col_a finishes but col_b is still running, 1/2 shown
+    assert "Backing up... (1/2 complete)" in result.output
+
+
+def test_backup_wait_no_progress_line_when_all_done_first_poll() -> None:
+    """No progress line when all jobs complete in the first poll (no sleep needed)."""
+    runner = CliRunner()
+    post_resp = _mock_response(
+        202,
+        {"queued": [{"collection": "docs", "job_id": "job-w"}], "skipped": []},
+    )
+    get_responses = [_mock_response(200, _job_payload("job-w", "DONE"))]
+    with (
+        patch("archon_search.cli.backup_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.backup_cmd.httpx.get", side_effect=get_responses),
+        patch("archon_search.cli.backup_cmd.time.sleep"),
+    ):
+        result = runner.invoke(backup_cmd, ["--now", "--wait", "--api-key", "deadbeef"])
+
+    assert result.exit_code == 0, result.output
+    assert "Backing up..." not in result.output
+
+
 def test_backup_status_uses_server_data_when_reachable(tmp_path: Path) -> None:
     server_payload = {
         "backup": {

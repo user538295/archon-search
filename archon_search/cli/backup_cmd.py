@@ -155,6 +155,7 @@ def _wait_for_jobs(
     failed: list[str] = []
     cancelled: list[str] = []
     pending = set(job_map.keys())
+    total = len(job_map)
     max_polls = max(1, timeout_seconds // _POLL_INTERVAL_SECONDS)
     polls = 0
 
@@ -207,6 +208,7 @@ def _wait_for_jobs(
                 elif status == "DONE":
                     click.echo(f"{col}: DONE")
         if pending:
+            click.echo(f"Backing up... ({total - len(pending)}/{total} complete)")
             time.sleep(_POLL_INTERVAL_SECONDS)
             polls += 1
 
