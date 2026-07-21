@@ -150,11 +150,11 @@ flowchart LR
     - Presentation · 2.0h
     - needs BE-5 · completes C2, S6, S7a
     - Tests
-        - #unit_test — `test_explain_result_has_acl_gate` — `ExplainResult` carries `acl_gate` (non-nullable); `ExplainNearMiss` does not
-        - #unit_test — `test_explain_result_from_candidate_builds_gate` — `ExplainResult.from_candidate()` populates all `AclGateSchema` fields from candidate provenance
-        - #integration_test — `test_explain_acl_gate_unconditional` — `POST /explain` returns `acl_gate` on every `ExplainResult` with no flag required; `ExplainNearMiss` items carry no `acl_gate` (S6)
-        - #integration_test — `test_explain_excluded_chunks_absent` — chunks the caller cannot see are absent from `ExplainResult` and `ExplainNearMiss` when `POST /explain` is called (S7a)
-        - #unit_test — `test_openapi_snapshot_updated_explain` — `test_openapi_snapshot.py` passes after regenerating with `--update-openapi-snapshot`
+        - [x] #unit_test — `test_explain_result_has_acl_gate` — `ExplainResult` carries `acl_gate` (non-nullable); `ExplainNearMiss` does not
+        - [x] #unit_test — `test_explain_result_from_candidate_builds_gate` — `ExplainResult.from_candidate()` populates all `AclGateSchema` fields from candidate provenance
+        - [x] #integration_test — `test_explain_acl_gate_unconditional` — `POST /explain` returns `acl_gate` on every `ExplainResult` with no flag required; `ExplainNearMiss` items carry no `acl_gate` (S6)
+        - [x] #integration_test — `test_explain_excluded_chunks_absent` — chunks the caller cannot see are absent from `ExplainResult` and `ExplainNearMiss` when `POST /explain` is called (S7a)
+        - [x] #unit_test — `test_openapi_snapshot_updated_explain` — `test_openapi_snapshot.py` passes after regenerating with `--update-openapi-snapshot`
 
 - [ ] **T-1** — e2e smoke: `POST /explain` always returns `acl_gate` on every `ExplainResult`; `ExplainNearMiss` items do not carry it #tester-role
     - — · 1.5h
