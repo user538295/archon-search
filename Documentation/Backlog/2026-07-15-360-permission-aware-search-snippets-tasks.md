@@ -113,7 +113,7 @@ flowchart LR
         - #integration_test — `test_pre_g15_chunk_source_null` — a chunk written without provenance columns returns `acl_source=None` from search, no error (S8)
         - #integration_test — `test_multi_collection_each_result_has_own_gate` — multi-collection search; each result carries its own provenance (S9)
 
-- [ ] **BE-5** — Add `AclGateSchema` to `archon_search/server/schemas.py`; add `acl_context: bool = False` to `SearchRequest` in `routes_search.py`; add `acl_gate: AclGateSchema | None = None` to `SearchResultSchema`; build `acl_gate` conditionally from `SearchResult` provenance when `acl_context=true` in the search handler; regenerate OpenAPI snapshot #backend-role
+- [x] **BE-5** — Add `AclGateSchema` to `archon_search/server/schemas.py`; add `acl_context: bool = False` to `SearchRequest` in `routes_search.py`; add `acl_gate: AclGateSchema | None = None` to `SearchResultSchema`; build `acl_gate` conditionally from `SearchResult` provenance when `acl_context=true` in the search handler; regenerate OpenAPI snapshot #backend-role
     - Presentation · 3.0h
     - needs BE-4 · completes C1, C3, S5, S7, S13
     - Tests

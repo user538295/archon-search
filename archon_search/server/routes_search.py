@@ -22,13 +22,15 @@ from archon_search.pipeline import (
     MetadataLookupError,
 )
 from archon_search.rag_fusion import RAGFusionDependencyError
-from archon_search.server.schemas import ErrorDetail, ExcludedCollectionSchema
+from archon_search.server.schemas import AclGateSchema, ErrorDetail, ExcludedCollectionSchema
 from archon_search.server._validators import validate_scope_filter as _check_scope_filter
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 
 # TODO: make configurable via config.py (see /route for parity)
 _SEARCH_TIMEOUT_SECONDS = 30.0
+
+_VALID_ACL_SOURCES = frozenset({"frontmatter", "sidecar", "collection_default"})
 
 _HYDE_EXPANSION_FAILED_WARNING = "HyDE expansion failed"
 
@@ -47,6 +49,7 @@ class SearchRequest(BaseModel):
     rag_fusion: bool = False
     graph_mode: Literal["naive", "local", "global", "ppr"] | None = None
     scope_filter: str | None = None
+    acl_context: bool = False
 
     @field_validator("collection")
     @classmethod
@@ -103,9 +106,18 @@ class SearchResultSchema(BaseModel):
     metadata: dict[str, str] = Field(default_factory=dict)
     acl: list[str] | None = None
     collection: str = ""
+    acl_gate: AclGateSchema | None = None
 
     @classmethod
-    def from_result(cls, r: SearchResult) -> "SearchResultSchema":
+    def from_result(cls, r: SearchResult, *, include_acl_gate: bool = False) -> "SearchResultSchema":
+        gate: AclGateSchema | None = None
+        if include_acl_gate:
+            gate = AclGateSchema(
+                allowed_principals=r.acl,
+                source=r.acl_source if r.acl_source in _VALID_ACL_SOURCES else None,
+                sidecar_path=r.acl_sidecar_path,
+                warnings=list(r.acl_warning),
+            )
         return cls(
             doc_id=r.doc_id,
             chunk_id=r.chunk_id,
@@ -120,6 +132,7 @@ class SearchResultSchema(BaseModel):
             metadata=r.metadata,
             acl=r.acl,
             collection=r.collection,
+            acl_gate=gate,
         )
 
 
@@ -233,7 +246,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             )
         except FanoutTimeoutError:
             raise HTTPException(status_code=504, detail="Search timed out")
-        schemas = [SearchResultSchema.from_result(r) for r in result.results]
+        schemas = [SearchResultSchema.from_result(r, include_acl_gate=body.acl_context) for r in result.results]
         if writer is not None:
             try:
                 excluded_count = len(result.excluded_collections)
@@ -327,7 +340,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
             include_metadata = body.filters is not None and body.filters.include_metadata
-            schemas = [SearchResultSchema.from_result(r) for r in result.results]
+            schemas = [SearchResultSchema.from_result(r, include_acl_gate=body.acl_context) for r in result.results]
             if not include_metadata:
                 for schema in schemas:
                     schema.metadata = {}

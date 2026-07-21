@@ -276,7 +276,7 @@ def test_serialization_error_in_response_construction_enqueues_telemetry(
         return_value=SearchPipelineResult(results=[fake_result], acl_filtered=False)
     )
 
-    monkeypatch.setattr(SearchResultSchema, "from_result", staticmethod(lambda r: (_ for _ in ()).throw(ValueError("bad row"))))
+    monkeypatch.setattr(SearchResultSchema, "from_result", staticmethod(lambda r, **_kw: (_ for _ in ()).throw(ValueError("bad row"))))
 
     app = _make_test_app(writer=writer_mock, pipeline_mock=pipeline_mock)
 

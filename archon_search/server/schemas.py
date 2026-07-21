@@ -775,6 +775,20 @@ class ImpactGroupResponse(BaseModel):
     """Number of entries excluded by the group-size cap; ``0`` when ``truncated`` is ``False``."""
 
 
+class AclGateSchema(BaseModel):
+    """ACL provenance envelope returned per search result when acl_context=true (g15 BE-5).
+
+    Present only when the caller requests ``acl_context=true`` in ``POST /search``.
+    ``warnings`` is always a non-null list (C3); the other fields may be null for
+    pre-G15 chunks whose provenance was not recorded.
+    """
+
+    allowed_principals: list[str] | None = None
+    source: Literal["frontmatter", "sidecar", "collection_default"] | None = None
+    sidecar_path: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class GraphImpactResponse(BaseModel):
     """Response body for GET /graph/{collection}/impact/{symbol} (E2g BE-9)."""
 

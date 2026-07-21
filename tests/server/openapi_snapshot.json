@@ -1,6 +1,61 @@
 {
   "components": {
     "schemas": {
+      "AclGateSchema": {
+        "description": "ACL provenance envelope returned per search result when acl_context=true (g15 BE-5).\n\nPresent only when the caller requests ``acl_context=true`` in ``POST /search``.\n``warnings`` is always a non-null list (C3); the other fields may be null for\npre-G15 chunks whose provenance was not recorded.",
+        "properties": {
+          "allowed_principals": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Principals"
+          },
+          "sidecar_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sidecar Path"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "frontmatter",
+                  "sidecar",
+                  "collection_default"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "title": "AclGateSchema",
+        "type": "object"
+      },
       "AddCollectionRequest": {
         "properties": {
           "embedding_model": {
@@ -3155,6 +3210,11 @@
       },
       "SearchRequest": {
         "properties": {
+          "acl_context": {
+            "default": false,
+            "title": "Acl Context",
+            "type": "boolean"
+          },
           "collection": {
             "anyOf": [
               {
@@ -3355,6 +3415,16 @@
               }
             ],
             "title": "Acl"
+          },
+          "acl_gate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AclGateSchema"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "chunk_id": {
             "title": "Chunk Id",
