@@ -100,7 +100,7 @@ flowchart LR
         - [x] #integration_test — `test_startup_migration_runs_on_server_start` — `make_real_app` lifespan triggers migration; old rows survive with `acl_source=null`; new ingest populates columns (S12)
         - [x] #integration_test — `test_candidate_builder_reads_provenance_from_row` — `ScoredSearchCandidate` built from a row with provenance values carries them; pre-migration null row yields `None`/`[]` without error
 
-- [ ] **BE-4** — Update `pipeline.py` `ingest_file` (line 457) to handle `AclResolutionResult`: set `acl_source`, `acl_sidecar_path`, `acl_warning` on every `ChunkRecord`; synthesize `source='collection_default'` when no rule was configured; relativize `acl_sidecar_path` to `collection_root` or fall back to basename; update `_candidate_to_search_result` to propagate the three provenance fields into `SearchResult` #backend-role
+- [x] **BE-4** — Update `pipeline.py` `ingest_file` (line 457) to handle `AclResolutionResult`: set `acl_source`, `acl_sidecar_path`, `acl_warning` on every `ChunkRecord`; synthesize `source='collection_default'` when no rule was configured; relativize `acl_sidecar_path` to `collection_root` or fall back to basename; update `_candidate_to_search_result` to propagate the three provenance fields into `SearchResult` #backend-role
     - Use Cases · 3.0h
     - needs BE-2, BE-3 · completes S1, S2, S3, S8, S9, S14
     - Tests

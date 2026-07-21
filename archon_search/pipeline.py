@@ -454,9 +454,27 @@ class SearchPipeline:
         else:
             _acl = None
 
-        # Resolve effective ACL for this document
+        # Resolve effective ACL for this document (G15 BE-4)
         acl_result = resolve_acl(path, _acl)
         resolved_acl, acl_warnings = acl_result.acl, acl_result.warnings
+        # Derive provenance triple for every ChunkRecord (G15 C4 / C5)
+        # synthesis: 'collection_default' when resolve_acl found no rule at all
+        if acl_result.source is not None:
+            _acl_source: str | None = acl_result.source
+        else:
+            _acl_source = "collection_default"
+        # Relativize sidecar_path to collection_root; fall back to basename when unavailable
+        _acl_sidecar_path: str | None = None
+        _provenance_warnings: list[str] = list(acl_warnings)
+        if acl_result.sidecar_path is not None:
+            try:
+                _rel = Path(acl_result.sidecar_path).relative_to(collection_root)
+                _acl_sidecar_path = _rel.as_posix()
+            except (ValueError, TypeError):
+                _acl_sidecar_path = Path(acl_result.sidecar_path).name
+                _provenance_warnings.append(
+                    "acl_sidecar_path truncated to filename: sidecar outside collection_root or collection_root unavailable"
+                )
 
         # Derive metadata fields at the call site (Task 3.3).
         file_type = path.suffix.lower().lstrip(".")
@@ -570,10 +588,13 @@ class SearchPipeline:
                 )
             record.metadata.update(enrichment)
 
-        # Assign sequential chunk IDs and propagate ACL
+        # Assign sequential chunk IDs and propagate ACL + provenance (G15 BE-4)
         for idx, record in enumerate(records):
             record.chunk_id = f"{doc_id}-{idx:06d}"
             record.acl = resolved_acl
+            record.acl_source = _acl_source
+            record.acl_sidecar_path = _acl_sidecar_path
+            record.acl_warning = list(_provenance_warnings)
 
         # Collect chunk texts if requested (before batching)
         if _chunk_collector is not None:
@@ -3201,6 +3222,9 @@ class SearchPipeline:
             metadata=c.metadata,
             acl=c.acl,
             collection=c.collection,
+            acl_source=c.acl_source,
+            acl_sidecar_path=c.acl_sidecar_path,
+            acl_warning=list(c.acl_warning or []),
         )
 
     async def search_with_context(
