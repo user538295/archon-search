@@ -385,14 +385,14 @@ async def test_mcp_search_deduplicates_collections() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mcp_search_meta_lookup_failure_returns_internal_error() -> None:
+async def test_mcp_search_meta_lookup_failure_returns_metadata_store_error() -> None:
     from archon_search.pipeline import MetadataLookupError
 
     _pipeline, result = await _call_mcp_search_multi(
         collections=["a"], search_many_raises=MetadataLookupError(RuntimeError("x"))
     )
-    assert result["code"] == "internal_error"
-    assert result["error"] == "service unavailable"
+    assert result["code"] == "metadata_store_error"
+    assert "metadata store" in result["error"]
 
 
 @pytest.mark.asyncio

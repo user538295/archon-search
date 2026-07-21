@@ -491,6 +491,7 @@ class DeleteResponse(BaseModel):
 
 class ErrorDetail(BaseModel):
     detail: str
+    code: str | None = None
 
 
 class ExcludedCollectionSchema(BaseModel):

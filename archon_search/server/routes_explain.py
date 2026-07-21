@@ -34,7 +34,7 @@ from archon_search.pipeline import (
     MetadataLookupError,
 )
 from archon_search.router import MultiCollectionRouter
-from archon_search.server.schemas import ExcludedCollectionSchema
+from archon_search.server.schemas import ErrorDetail, ExcludedCollectionSchema
 from archon_search.server._validators import validate_scope_filter as _check_scope_filter
 from archon_search.telemetry.entry import TelemetryEntry
 
@@ -376,7 +376,7 @@ class ExplainResponse(BaseModel):
         )
 
 
-@router.post("/explain", response_model=ExplainResponse)
+@router.post("/explain", response_model=ExplainResponse, responses={503: {"model": ErrorDetail}})
 async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainResponse | JSONResponse:
     """Return the per-stage retrieval/reranking trace for a query, plus the
     routing decision when no collection is pinned.
@@ -534,7 +534,10 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 return JSONResponse({"detail": "collection not found"}, status_code=404)
             except MetadataLookupError:
                 _emit_err()
-                return JSONResponse({"detail": "service unavailable"}, status_code=503)
+                return JSONResponse(
+                    {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"},
+                    status_code=503,
+                )
             except FanoutTimeoutError:
                 _emit_err()
                 return JSONResponse({"detail": "Search timed out"}, status_code=504)
@@ -594,7 +597,10 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             except Exception as exc:
                 logger.error("explain: meta lookup failed for %r: %s", body.collection, type(exc).__name__)
                 _emit_err()
-                return JSONResponse({"detail": "service unavailable"}, status_code=503)
+                return JSONResponse(
+                    {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"},
+                    status_code=503,
+                )
             if meta is None:
                 return JSONResponse({"detail": "collection not found"}, status_code=404)
             chosen = body.collection
@@ -605,7 +611,10 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             except Exception as exc:
                 logger.error("explain: meta lookup failed: %s", type(exc).__name__)
                 _emit_err()
-                return JSONResponse({"detail": "service unavailable"}, status_code=503)
+                return JSONResponse(
+                    {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"},
+                    status_code=503,
+                )
             if not all_meta:
                 return JSONResponse({"detail": "no collections available"}, status_code=404)
             # all_meta is already namespace-filtered, which IS the collection-level ACL
@@ -624,7 +633,10 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             except Exception as exc:
                 logger.error("explain: routing failed: %s", type(exc).__name__)
                 _emit_err()
-                return JSONResponse({"detail": "service unavailable"}, status_code=503)
+                return JSONResponse(
+                    {"detail": "service unavailable: routing could not be completed", "code": "service_unavailable"},
+                    status_code=503,
+                )
             # rank_with_scores returns every supplied collection, so ranked is non-empty.
             chosen_meta, chosen_score = ranked[0]
             chosen = chosen_meta.name

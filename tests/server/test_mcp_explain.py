@@ -348,3 +348,18 @@ async def test_mcp_explain_telemetry_no_query(tmp_path: Path) -> None:
                 assert "query" not in json.loads(line)
 
     await pipeline.store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_mcp_explain_metadata_lookup_error_returns_metadata_store_error() -> None:
+    """MetadataLookupError during multi-collection explain → code=metadata_store_error."""
+    from archon_search.pipeline import MetadataLookupError
+
+    pipeline = MagicMock()
+    pipeline.explain = AsyncMock(side_effect=MetadataLookupError(RuntimeError("db boom")))
+    app = _make_mcp_app(pipeline)
+
+    result = await app.tools["explain"](query="q", collections=["a", "b"])
+
+    assert result["code"] == "metadata_store_error"
+    assert "metadata store" in result["error"]

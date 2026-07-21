@@ -22,7 +22,7 @@ from archon_search.pipeline import (
     MetadataLookupError,
 )
 from archon_search.rag_fusion import RAGFusionDependencyError
-from archon_search.server.schemas import ExcludedCollectionSchema
+from archon_search.server.schemas import ErrorDetail, ExcludedCollectionSchema
 from archon_search.server._validators import validate_scope_filter as _check_scope_filter
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
@@ -140,7 +140,7 @@ class SearchResponse(BaseModel):
     ppr_entities_matched: int | None = None
 
 
-@router.post("/search", response_model=SearchResponse)
+@router.post("/search", response_model=SearchResponse, responses={503: {"model": ErrorDetail}})
 async def search(body: SearchRequest, request: Request) -> SearchResponse | JSONResponse:
     pipeline = request.app.state.pipeline
     ns = request.state.namespace
@@ -227,7 +227,10 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         except CollectionNotFoundError:
             return JSONResponse({"detail": "collection not found"}, status_code=404)
         except MetadataLookupError:
-            return JSONResponse({"detail": "service unavailable"}, status_code=503)
+            return JSONResponse(
+                {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"},
+                status_code=503,
+            )
         except FanoutTimeoutError:
             raise HTTPException(status_code=504, detail="Search timed out")
         schemas = [SearchResultSchema.from_result(r) for r in result.results]
@@ -272,7 +275,10 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
     except Exception as exc:
         logger.error("search: meta lookup failed for collection %r: %s", body.collection, exc, exc_info=True)
-        return JSONResponse({"detail": "service unavailable"}, status_code=503)
+        return JSONResponse(
+            {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"},
+            status_code=503,
+        )
 
     if meta is None:
         return JSONResponse({"detail": "collection not found"}, status_code=404)

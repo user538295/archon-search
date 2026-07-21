@@ -8,6 +8,22 @@
 
 ## Changelog
 
+### [next release] — `ErrorDetail` gains optional `code` field; 503 meta-lookup responses now include `code` (2026-07-21)
+
+**What changed:** `ErrorDetail` (the Pydantic schema used by documented 4xx/5xx responses on
+`POST /search`, `POST /explain`, and several other endpoints) gains an optional `code: string | null`
+field. `POST /search` and `POST /explain` 503 responses for `MetadataLookupError` failures now
+include `"code": "metadata_store_error"` and a more specific `detail` message. The MCP `search`
+and `explain` tools similarly use `code: "metadata_store_error"` (previously `"internal_error"`)
+for `MetadataLookupError` failures. The routing-failure 503 in the collectionless `POST /explain`
+path uses `"code": "service_unavailable"`.
+
+**Why:** Clients benefit from a machine-readable error code to distinguish error categories without
+parsing the `detail` string.
+
+**Migration:** This is additive — `code` is optional and absent on non-503 error responses.
+Existing clients that don't read `code` are unaffected.
+
 ### [next release] — New `reranker_providers` TOML field for CoreML split-provider support (2026-07-20)
 
 **What changed:** Added `reranker_providers` under `[database]` in `archon-search.toml`. When

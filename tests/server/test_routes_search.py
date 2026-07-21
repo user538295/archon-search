@@ -175,6 +175,7 @@ def test_search_collection_not_found_returns_404(tmp_path: Path) -> None:
     response = client.post("/search", json={"collection": "nonexistent", "query": "test"})
 
     assert response.status_code == 404
+    assert "code" not in response.json()
 
 
 def test_search_pipeline_error_returns_500(tmp_path: Path) -> None:
@@ -433,6 +434,9 @@ def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCa
         response = client.post("/search", json={"collection": "col", "query": "test"})
 
     assert response.status_code == 503
+    body = response.json()
+    assert body["code"] == "metadata_store_error"
+    assert "metadata store" in body["detail"]
     app.state.pipeline.search.assert_not_called()
     assert any("service unavailable" in record.message.lower() or "lancedb" in record.message.lower() or "col" in record.message for record in caplog.records)
     # 503 meta-lookup path must not enqueue telemetry.
@@ -893,7 +897,9 @@ def test_search_handler_meta_lookup_failure_returns_503(tmp_path: Path) -> None:
     response = client.post("/search", json={"collections": ["a", "b"], "query": "q"})
 
     assert response.status_code == 503
-    assert response.json()["detail"] == "service unavailable"
+    body = response.json()
+    assert body["code"] == "metadata_store_error"
+    assert "metadata store" in body["detail"]
 
 
 def test_search_response_includes_excluded_collections(tmp_path: Path) -> None:

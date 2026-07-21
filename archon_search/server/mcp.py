@@ -442,7 +442,7 @@ def create_app(
             except MetadataLookupError:
                 # Transient infrastructure error (store unavailable); mirror REST's
                 # 503 semantics with a clean message rather than leaking the cause.
-                return McpErrorResponse(error="service unavailable", code="internal_error")
+                return McpErrorResponse(error="service unavailable: metadata store could not be reached", code="metadata_store_error")
             except Exception as exc:
                 logger.exception("multi-collection search failed")
                 return McpErrorResponse(error=str(exc), code="internal_error")
@@ -927,7 +927,7 @@ def create_app(
             except FanoutTimeoutError:
                 return McpErrorResponse(error="search timed out", code="timeout")
             except MetadataLookupError:
-                return McpErrorResponse(error="service unavailable", code="internal_error")
+                return McpErrorResponse(error="service unavailable: metadata store could not be reached", code="metadata_store_error")
             except ExplainMultiCollectionNoRerankError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
             except ExplainStageError as exc:

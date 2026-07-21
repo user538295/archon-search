@@ -293,7 +293,9 @@ def test_post_explain_pinned_meta_lookup_failure_returns_503(tmp_path: Path) -> 
     app.state.pipeline = pipeline
     response = client.post("/explain", json={"query": "hello", "collection": "col"})
     assert response.status_code == 503
-    assert response.json()["detail"] == "service unavailable"
+    body = response.json()
+    assert body["code"] == "metadata_store_error"
+    assert "metadata store" in body["detail"]
 
 
 def test_post_explain_collectionless_no_collections_returns_404(tmp_path: Path) -> None:
@@ -305,6 +307,20 @@ def test_post_explain_collectionless_no_collections_returns_404(tmp_path: Path) 
     response = client.post("/explain", json={"query": "hello"})
     assert response.status_code == 404
     assert response.json()["detail"] == "no collections available"
+    assert "code" not in response.json()
+
+
+def test_post_explain_collectionless_meta_lookup_failure_returns_503(tmp_path: Path) -> None:
+    """Collectionless: get_all_collections_meta raises → 503 with code=metadata_store_error."""
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    pipeline.get_all_collections_meta = AsyncMock(side_effect=RuntimeError("db boom"))
+    app.state.pipeline = pipeline
+    response = client.post("/explain", json={"query": "hello"})
+    assert response.status_code == 503
+    body = response.json()
+    assert body["code"] == "metadata_store_error"
+    assert "metadata store" in body["detail"]
 
 
 def test_post_explain_collectionless_router_failure_returns_503(
@@ -328,7 +344,9 @@ def test_post_explain_collectionless_router_failure_returns_503(
 
     response = client.post("/explain", json={"query": "hello"})
     assert response.status_code == 503
-    assert response.json()["detail"] == "service unavailable"
+    body = response.json()
+    assert body["code"] == "service_unavailable"
+    assert "routing" in body["detail"]
 
 
 def test_post_explain_store_failure_returns_500(tmp_path: Path) -> None:
@@ -2068,6 +2086,23 @@ def test_post_explain_rerank_false_multi_collections_http_422(tmp_path: Path) ->
         "/explain", json={"query": "hello", "collections": ["A", "B"], "rerank": False}
     )
     assert response.status_code == 422
+
+
+def test_post_explain_multi_collection_metadata_lookup_failure_returns_503(tmp_path: Path) -> None:
+    """Multi-collection explain: MetadataLookupError → 503 with code=metadata_store_error."""
+    from archon_search.pipeline import MetadataLookupError
+
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    pipeline.explain = AsyncMock(side_effect=MetadataLookupError(RuntimeError("db boom")))
+    app.state.pipeline = pipeline
+
+    response = client.post("/explain", json={"query": "hello", "collections": ["A", "B"]})
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["code"] == "metadata_store_error"
+    assert "metadata store" in body["detail"]
 
 
 # ---------------------------------------------------------------------------

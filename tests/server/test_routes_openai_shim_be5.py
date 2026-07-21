@@ -520,6 +520,7 @@ class TestMetadataLookupErrorReturnsOpenAI503:
         body = resp.json()
         assert "error" in body
         assert body["error"]["type"] == "server_error"
+        assert "code" not in body  # shim uses OpenAI envelope, not ErrorDetail
 
 
 class TestDirectSearchStoreErrorReturnsOpenAI503:
@@ -542,6 +543,7 @@ class TestDirectSearchStoreErrorReturnsOpenAI503:
         body = resp.json()
         assert "error" in body
         assert body["error"]["type"] == "server_error"
+        assert "code" not in body  # shim uses OpenAI envelope, not ErrorDetail
 
 
 class TestTopKRequestFieldIgnored:
