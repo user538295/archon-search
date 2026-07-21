@@ -156,7 +156,7 @@ flowchart LR
         - [x] #integration_test — `test_explain_excluded_chunks_absent` — chunks the caller cannot see are absent from `ExplainResult` and `ExplainNearMiss` when `POST /explain` is called (S7a)
         - [x] #unit_test — `test_openapi_snapshot_updated_explain` — `test_openapi_snapshot.py` passes after regenerating with `--update-openapi-snapshot`
 
-- [ ] **T-1** — e2e smoke: `POST /explain` always returns `acl_gate` on every `ExplainResult`; `ExplainNearMiss` items do not carry it #tester-role
+- [x] **T-1** — e2e smoke: `POST /explain` always returns `acl_gate` on every `ExplainResult`; `ExplainNearMiss` items do not carry it #tester-role
     - — · 1.5h
     - needs BE-7 · completes S6
     - Tests

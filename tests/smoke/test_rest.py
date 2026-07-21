@@ -193,6 +193,97 @@ def test_smoke_excluded_from_default_run() -> None:
 
 
 # ---------------------------------------------------------------------------
+# g15 T-1 — /explain always returns acl_gate on ExplainResult; ExplainNearMiss
+# items do not carry it. HTTP-level assertion against the live smoke server.
+# ---------------------------------------------------------------------------
+
+
+def test_e2e_explain_acl_gate_always_present(smoke_server) -> None:
+    """``POST /explain`` must include ``acl_gate`` on every ``ExplainResult``
+    with no flag required (S6) — ``ExplainRequest`` has no ``acl_context`` field
+    by design (C2); ``acl_gate`` is unconditional on ``/explain``.
+    ``near_misses[]`` items must not carry an ``acl_gate`` key.
+
+    Uses the pre-seeded ``smoke`` collection. Because those docs have no ACL
+    rule configured, every result's ``acl_gate.source`` is ``"collection_default"``.
+    ``top_k=1`` is intentional: it forces the remaining indexed chunks into
+    ``near_misses`` so the no-``acl_gate`` assertion is non-vacuous.
+
+    Assertions (in order):
+    - ``POST /explain`` returns 200.
+    - ``results`` is a non-empty list (positive control: pre-condition for the
+      per-result loop — an empty list would make the loop vacuously pass).
+    - Every item in ``results[]`` carries the key ``"acl_gate"``.
+    - Every ``acl_gate`` object has all four fields: ``allowed_principals``,
+      ``source``, ``sidecar_path``, ``warnings``.
+    - ``acl_gate.source == "collection_default"`` for plain docs with no ACL rule.
+    - ``acl_gate.allowed_principals`` is ``None`` for the collection_default case.
+    - ``acl_gate.sidecar_path`` is ``None`` for the collection_default case.
+    - ``acl_gate.warnings`` is ``[]`` for plain docs with no ACL issues.
+    - ``near_misses`` is non-empty (pre-condition: smoke corpus must have > 1 chunk).
+    - No item in ``near_misses[]`` carries an ``"acl_gate"`` key.
+    """
+    headers = {"Authorization": f"Bearer {smoke_server.api_key}"}
+
+    response = httpx.post(
+        f"{smoke_server.base_url}/explain",
+        json={"query": "vector search retrieval", "collection": "smoke", "top_k": 1},
+        headers=headers,
+        timeout=30,
+    )
+
+    assert response.status_code == 200, (
+        f"POST /explain failed: {response.status_code} {response.text}"
+    )
+    body = response.json()
+
+    results = body.get("results", [])
+    assert results, (
+        "POST /explain returned an empty 'results' list — cannot assert per-result "
+        "acl_gate presence on an empty set (fixture pre-condition failure)"
+    )
+
+    for i, result in enumerate(results):
+        assert "acl_gate" in result, (
+            f"results[{i}] is missing 'acl_gate' (S6 — /explain must always include it): "
+            f"{result.keys()!r}"
+        )
+        gate = result["acl_gate"]
+        for field in ("allowed_principals", "source", "sidecar_path", "warnings"):
+            assert field in gate, (
+                f"results[{i}].acl_gate is missing field '{field}': {gate!r}"
+            )
+        assert gate["source"] == "collection_default", (
+            f"results[{i}].acl_gate.source must be 'collection_default' for plain "
+            f"docs with no ACL rule (S3); got: {gate['source']!r}"
+        )
+        assert gate["allowed_principals"] is None, (
+            f"results[{i}].acl_gate.allowed_principals must be null for plain docs; "
+            f"got: {gate['allowed_principals']!r}"
+        )
+        assert gate["sidecar_path"] is None, (
+            f"results[{i}].acl_gate.sidecar_path must be null for collection_default "
+            f"case; got: {gate['sidecar_path']!r}"
+        )
+        assert gate["warnings"] == [], (
+            f"results[{i}].acl_gate.warnings must be [] for plain docs with no ACL "
+            f"issues; got: {gate['warnings']!r}"
+        )
+
+    near_misses = body.get("near_misses", [])
+    assert near_misses, (
+        "POST /explain with top_k=1 must produce near_misses from the remaining "
+        "indexed chunks (pre-condition: smoke corpus must have > 1 chunk); "
+        "acl_gate absence on near_misses cannot be proven against an empty set"
+    )
+    for i, miss in enumerate(near_misses):
+        assert "acl_gate" not in miss, (
+            f"near_misses[{i}] must NOT carry 'acl_gate' (near-misses are ranking "
+            f"rejects, not ACL results — C2, Q6): keys={miss.keys()!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Full-suite e2e meta-test (T-1) — no smoke_server dependency (spawns its own)
 # ---------------------------------------------------------------------------
 
@@ -203,14 +294,16 @@ def test_smoke_excluded_from_default_run() -> None:
 _RECURSION_GUARD_ENV = "_ARCHON_E2E_SUBPROCESS"
 
 # Number of tests in tests/smoke/ that pass outright inside the child run.
-# 18 tests collected total: 1 expected xfail (test_collection_info_no_repr,
-# S4/bug-007) + 1 expected skip (this very test, skipped inside the child via
-# the recursion guard above) + 16 passed. Verified empirically: "16 passed,
-# 1 skipped, 1 xfailed" on a machine with the fastembed model cache populated.
-# A drop below this floor means the child suite silently collected fewer
-# tests than expected (subset-collection regression) even though it still
-# exited 0.
-_EXPECTED_MIN_PASSED = 16
+# 31 test functions collected total (test_cli.py: 18, test_conftest.py: 4,
+# test_rest.py: 9). Conditional skips that reduce the count:
+# - 1 recursion-guard skip: test_full_smoke_suite_passes itself
+# - 1 leidenalg/spacy importorskip: test_e2e_graph_build_communities_wait_against_server
+# - 2 smoke_server_graph_enabled consumers in test_conftest.py (same importorskip)
+# - 5 SMOKE_NO_TIMING-gated tests (skipped only when that env var is set)
+# On a machine with graph extras installed: ~30 pass. Conservative floor of 25
+# guards against a subset-collection regression that silently drops > 5 tests
+# while tolerating environment-dependent skips (graph extra absent, etc.).
+_EXPECTED_MIN_PASSED = 25
 
 # Child budget: fixture startup (30s health/ready poll + 60s ingest job poll,
 # tests/smoke/conftest.py) plus ~17 tests, several of which spawn their own

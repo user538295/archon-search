@@ -60,6 +60,9 @@ def test_titled_frame_lines_follow_available_width() -> None:
     assert all(len(line) == 24 for line in lines)
     assert lines[0].startswith("┌─ CORE ")
     assert lines[-1] == "└──────────────────────┘"
+    assert lines[1][1:7] == " alpha"
+    assert lines[2][1:6] == " beta"
+    assert lines[1][-2] == lines[2][-2] == " "
 
 
 def test_radio_group_keeps_cursor_and_committed_value_separate() -> None:
