@@ -168,35 +168,25 @@ def test_collection_list_no_repr(smoke_server) -> None:
     assert "smoke" in result.stdout
 
 
-@pytest.mark.xfail(strict=False, reason="bug-007: collection info prints raw repr")
 def test_collection_info_no_repr(smoke_server) -> None:
-    """``archon-search collection info smoke`` should print human-readable
-    detail, not the raw ``CollectionMeta(...)`` dataclass repr.
+    """``archon-search collection info smoke`` prints human-readable key-value output.
 
-    Written as ``xfail(strict=False)`` (S4): ``archon_search/cli/collection.py``
-    ``info()`` currently does ``click.echo(str(meta))``, which prints the raw
-    repr (bug-007). ``strict=False`` keeps CI green while the bug exists and
-    surfaces the fix as ``xpass`` (prompting removal of this marker) — never
-    use ``strict=True`` here.
+    Fixed in brief 350: info now proxies GET /collections/{name} — no raw repr.
     """
     result = subprocess.run(
-        ["uv", "run", "archon-search", "collection", "info", "smoke"],
-        env=_direct_store_env(smoke_server.data_dir),
+        [
+            "uv", "run", "archon-search", "collection", "info", "smoke",
+            "--api-url", smoke_server.base_url,
+            "--api-key", smoke_server.api_key,
+        ],
         capture_output=True,
         text=True,
         timeout=20,
     )
 
-    # NOTE: pytest's xfail granularity is per-test-function, not per-assertion —
-    # if EITHER assertion below fails, the whole test is reported as the
-    # "expected" bug-007 failure. A non-zero returncode would in fact be a
-    # DIFFERENT bug (not bug-007) that this xfail marker would incorrectly
-    # mask as expected. This is a known, accepted limitation of function-level
-    # xfail; there is no clean way to scope xfail to only the second assertion
-    # within a single test function, so it is documented here rather than
-    # worked around.
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stderr
     assert "CollectionMeta(" not in result.stdout
+    assert "name: smoke" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -1033,11 +1023,12 @@ def test_e2e_collection_remove_against_server(smoke_server, tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 # Read commands in collection.py that legitimately retain asyncio.run() +
-# create_pipeline because they open LanceDB in-process.  All other @collection.command
-# functions are write commands (HTTP proxies) and are checked by the guard.
+# _make_store() because they open LanceDB in-process.  All other @collection.command
+# functions are write commands or HTTP proxies and are checked by the guard.
 # Fail-closed design: new commands are guarded by default; only explicitly
 # blessed read commands are excluded.
-_COLLECTION_READ_CMDS = frozenset({"list_cmd", "info"})
+# brief 350: info was converted to an HTTP proxy — removed from this set.
+_COLLECTION_READ_CMDS = frozenset({"list_cmd"})
 
 
 def _has_asyncio_run_call(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -1060,9 +1051,10 @@ def test_cli_write_commands_contain_no_direct_store_imports() -> None:
     ``SearchPipeline``, ``SearchStore``, or ``create_pipeline`` directly,
     and write-command function bodies must not call ``asyncio.run()``.
 
-    ``collection.py`` is mixed: read commands (``list_cmd``, ``info``) use
+    ``collection.py`` is mixed: read commands (``list_cmd``) use
     ``asyncio.run()`` + ``_make_store()`` (in-process LanceDB reads via
-    ``SearchStore``). Write commands are derived by excluding the known read
+    ``SearchStore``). ``info`` was converted to an HTTP proxy in brief 350.
+    Write commands (including ``info``) are derived by excluding the known read
     commands from all ``@collection.command``-decorated functions (fail-closed:
     new commands are guarded by default).  Both ``async def`` and plain ``def``
     functions are checked for ``asyncio.run()`` calls.  A separate AST guard
@@ -1074,10 +1066,8 @@ def test_cli_write_commands_contain_no_direct_store_imports() -> None:
     so aliasing is not a practical concern).
 
     Non-automatable companion (S17): stop the server, run
-    ``archon-search collection list`` and ``archon-search collection info <name>``,
-    verify both succeed.  The server is not needed — those commands open LanceDB
-    in-process — but stopping the session-scoped ``smoke_server`` mid-session
-    would break sibling smoke tests in this file.
+    ``archon-search collection list``, verify it succeeds without a server.
+    ``info`` now requires the server (HTTP proxy) — tested in smoke.
     """
     cli_dir = REPO_ROOT / "archon_search" / "cli"
     collection_py = cli_dir / "collection.py"

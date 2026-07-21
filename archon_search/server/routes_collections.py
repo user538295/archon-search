@@ -425,6 +425,8 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
         "namespace": meta.namespace if meta is not None else DEFAULT_NAMESPACE,
         "acl_protected_count": acl_protected,
         "acl_open_count": acl_open,
+        "default_ttl_seconds": meta.default_ttl_seconds if meta is not None else None,
+        "schema_version": meta.schema_version if meta is not None else 0,
     }
     return CollectionDetail(**data)
 
@@ -666,6 +668,8 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
         namespace=meta.namespace,
         acl_protected_count=acl_protected,
         acl_open_count=acl_open,
+        default_ttl_seconds=meta.default_ttl_seconds,
+        schema_version=meta.schema_version,
     )
 
 

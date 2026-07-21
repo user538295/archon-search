@@ -206,6 +206,17 @@
             "title": "Chunk Count",
             "type": "integer"
           },
+          "default_ttl_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Ttl Seconds"
+          },
           "description": {
             "default": "",
             "title": "Description",
@@ -265,6 +276,11 @@
               }
             ],
             "title": "Reindex Job Id"
+          },
+          "schema_version": {
+            "default": 0,
+            "title": "Schema Version",
+            "type": "integer"
           },
           "status": {
             "title": "Status",

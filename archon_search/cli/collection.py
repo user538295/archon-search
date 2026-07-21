@@ -181,32 +181,55 @@ def remove(name: str, api_url: str, api_key: str | None) -> None:
 
 @collection.command("info")
 @click.argument("collection_name")
-@click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
-def info(collection_name: str, config_path: Path | None) -> None:
-    """Show details for a collection."""
-    try:
-        cfg = load_config(config_path)
-    except Exception as exc:
-        click.echo(f"Error loading config: {exc}", err=True)
-        raise SystemExit(1)
-
-    async def _run() -> None:
-        store = _make_store(cfg)
-        try:
-            await store.connect()
-            meta = await store.get_collection_meta(collection_name)
-            if meta is None:
-                click.echo(f"Error: collection '{collection_name}' not found.", err=True)
-                raise SystemExit(1)
-            click.echo(str(meta))
-        finally:
-            await store.disconnect()
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def info(collection_name: str, api_url: str, api_key: str | None) -> None:
+    """Show details for a collection (proxies GET /collections/{name}; requires server running)."""
+    key = _resolve_api_key(api_key)
+    headers = {"Authorization": f"Bearer {key}"}
+    url = f"{api_url.rstrip('/')}/collections/{collection_name}"
 
     try:
-        asyncio.run(_run())
-    except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
+        resp = httpx.get(url, headers=headers)
+    except httpx.ConnectError:
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
         raise SystemExit(1)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
+        raise SystemExit(1)
+
+    if resp.status_code == 404:
+        click.echo(f"Collection '{collection_name}' not found.", err=True)
+        raise SystemExit(1)
+
+    if resp.status_code != 200:
+        click.echo(f"Error: server returned {resp.status_code}: {resp.text}", err=True)
+        raise SystemExit(1)
+
+    data = resp.json()
+    _OMIT_NULL = {"pending_embedding_model", "reindex_job_id", "description"}
+    fields = [
+        "name", "description", "namespace", "doc_count", "chunk_count",
+        "active_embedding_model", "pending_embedding_model", "needs_reindex",
+        "reindex_job_id", "last_indexed", "default_ttl_seconds", "schema_version",
+        "centroid_present",
+    ]
+    for field in fields:
+        val = data.get(field)
+        if (val is None or val == "") and field in _OMIT_NULL:
+            continue
+        if field == "last_indexed" and val is None:
+            val = "never"
+        click.echo(f"{field}: {val}")
 
 
 @collection.command("reindex-metadata")

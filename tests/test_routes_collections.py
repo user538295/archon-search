@@ -2788,6 +2788,8 @@ def test_patch_collection_response_chunk_count_real(
     response = client.patch(f"/collections/{name}", json={"default_ttl_seconds": 3600})
     assert response.status_code == 200, f"expected 200, got {response.status_code}: {response.text}"
     assert response.json()["chunk_count"] == 9
+    assert response.json()["default_ttl_seconds"] == 3600
+    assert response.json()["schema_version"] == 0
 
 
 def test_patch_null_embedding_model_accepted(
@@ -4862,3 +4864,84 @@ def test_add_collection_request_has_no_collection_name_field() -> None:
         f"AddCollectionRequest has unexpected fields: {field_names}. "
         "collection_name must not be a field — the server derives it from path."
     )
+
+
+# ---------------------------------------------------------------------------
+# CollectionDetail schema — default_ttl_seconds + schema_version (brief 350)
+# ---------------------------------------------------------------------------
+
+
+def test_get_collection_info_includes_ttl_and_schema_version(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name} returns default_ttl_seconds and schema_version (brief 350)."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(
+        name=name,
+        namespace="default",
+        active_embedding_model=cfg.embedding_model,
+        default_ttl_seconds=3600,
+        schema_version=1,
+    )
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=0)
+    mock_store.count_chunks = AsyncMock(return_value=0)
+    mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["default_ttl_seconds"] == 3600
+    assert data["schema_version"] == 1
+
+
+def test_get_collection_info_ttl_null_when_not_set(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """GET /collections/{name} returns default_ttl_seconds=null when unset (brief 350)."""
+    from archon_search.collection_meta import CollectionMeta
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    name = path_to_collection_name(str(src))
+    meta = CollectionMeta(name=name, namespace="default", active_embedding_model=cfg.embedding_model)
+    mock_store = MagicMock()
+    mock_store.count_documents = AsyncMock(return_value=0)
+    mock_store.count_chunks = AsyncMock(return_value=0)
+    mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.get(f"/collections/{name}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["default_ttl_seconds"] is None
+    assert data["schema_version"] == 0

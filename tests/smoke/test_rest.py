@@ -314,17 +314,16 @@ def test_full_smoke_suite_passes() -> None:
     assert not re.search(r"\d+ errors?\b", output), (
         f"child suite reported one or more errors:\n{output}"
     )
+    # brief 350: test_collection_info_no_repr is no longer xfail — it passes cleanly.
     assert "test_collection_info_no_repr" in output, (
-        "positive control failed: the S4 xfail test name is missing from the "
-        "output (child run uses -v so test names must appear), so collection "
-        "did not genuinely include it"
+        "positive control failed: the test name is missing from the "
+        "output (child run uses -v so test names must appear)"
     )
-    assert re.search(r"test_collection_info_no_repr\b.*\bXFAIL\b", output), (
-        "S4 must report as xfail (bug-007 still open), not pass or fail "
-        f"outright:\n{output}"
-    )
-    assert not re.search(r"test_collection_info_no_repr\b.*\bXPASS\b", output), (
-        "collection info repr bug (bug-007) appears fixed (xpass) — "
-        "remove the xfail marker on test_collection_info_no_repr:\n"
+    assert not re.search(r"test_collection_info_no_repr\b.*\bXFAIL\b", output), (
+        "test_collection_info_no_repr is still marked xfail — "
+        "brief 350 removed the xfail marker (bug-007 fixed):\n"
         f"{output}"
+    )
+    assert not re.search(r"test_collection_info_no_repr\b.*\bFAILED\b", output), (
+        f"test_collection_info_no_repr reported as FAILED:\n{output}"
     )

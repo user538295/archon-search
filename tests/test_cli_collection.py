@@ -862,37 +862,39 @@ def test_list_cmd_builds_pipeline_in_process(tmp_path: Path, monkeypatch: pytest
     assert "mytest-list  docs=0  chunks=0" in result.output
 
 
-@pytest.mark.integration
-def test_info_builds_pipeline_in_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """S3, S10: info builds a pipeline in-process and displays collection metadata correctly."""
-    import asyncio
+def test_info_displays_formatted_output() -> None:
+    """info prints labeled key-value lines from GET /collections/{name} (replaces S3/S10)."""
+    detail = {
+        "name": "mytest-info",
+        "description": None,
+        "namespace": "default",
+        "doc_count": 0,
+        "chunk_count": 0,
+        "active_embedding_model": "BAAI/bge-small-en-v1.5",
+        "pending_embedding_model": None,
+        "needs_reindex": False,
+        "reindex_job_id": None,
+        "last_indexed": None,
+        "default_ttl_seconds": None,
+        "schema_version": 0,
+        "centroid_present": False,
+        "path": "/data/mytest-info",
+        "status": "ready",
+        "acl_protected_count": 0,
+        "acl_open_count": 0,
+    }
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = detail
 
-    from archon_search.collection_meta import CollectionMeta
-    from archon_search.store import SearchStore
-
-    # ARCHON_SEARCH_DATA_DIR causes load_config to set db_path = data_dir / "search"
-    # ARCHON_SEARCH_CONFIG must be pinned to an empty file to prevent load_config(None)
-    # from reading the developer's ~/.archon-search/archon-search.toml, which could have
-    # multilingual=true or graph.enabled=true and change pipeline construction.
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(tmp_path / "config.toml"))
-    (tmp_path / "config.toml").write_text("")
-
-    db_path = tmp_path / "search"
-    store = SearchStore(db_path)
-    asyncio.run(store.connect())
-    asyncio.run(store.ensure_collection("mytest-info", _DIM))
-    asyncio.run(store.update_collection_meta(CollectionMeta(name="mytest-info")))
-    asyncio.run(store.disconnect())
-
-    runner = CliRunner()
-    result = runner.invoke(collection, ["info", "mytest-info"])
+    with patch("archon_search.cli.collection.httpx.get", return_value=mock_resp):
+        runner = CliRunner()
+        result = runner.invoke(collection, ["info", "mytest-info", "--api-key", "testkey"])
 
     assert result.exit_code == 0, result.output
-    # S10: verify collection name and metadata fields appear in the dataclass repr output
     assert "mytest-info" in result.output
-    assert "doc_count=0" in result.output
-    assert "chunk_count=0" in result.output
+    assert "doc_count: 0" in result.output
+    assert "chunk_count: 0" in result.output
 
 
 @pytest.mark.integration
@@ -921,31 +923,158 @@ def test_list_cmd_empty_store_returns_no_collections_message(tmp_path: Path, mon
     assert "No collections found." in result.output
 
 
-@pytest.mark.integration
-def test_info_not_found_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """info exits with code 1 and an error message when the collection does not exist."""
-    import asyncio
+def test_info_not_found_exits_1_via_http() -> None:
+    """info exits 1 with 'not found' when server returns 404 (HTTP proxy path)."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404
+    mock_resp.text = '{"detail": "Collection not found"}'
 
-    from archon_search.store import SearchStore
-
-    # Pin config to empty file — prevents load_config from reading developer's toml.
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(tmp_path / "config.toml"))
-    (tmp_path / "config.toml").write_text("")
-
-    db_path = tmp_path / "search"
-    store = SearchStore(db_path)
-    asyncio.run(store.connect())
-    asyncio.run(store.ensure_collection("existing-col", _DIM))
-    asyncio.run(store.disconnect())
-
-    runner = CliRunner()
-    # Verify existing-col IS reachable (so the store is valid) but a different name is not.
-    result_found = runner.invoke(collection, ["list"])
-    assert "existing-col" in result_found.output
-
-    result = runner.invoke(collection, ["info", "nonexistent-col"])
+    with patch("archon_search.cli.collection.httpx.get", return_value=mock_resp):
+        runner = CliRunner()
+        result = runner.invoke(collection, ["info", "nonexistent-col", "--api-key", "k"])
 
     assert result.exit_code == 1, result.output
-    # Pin the queried name in the assertion to catch wrong-name regressions.
-    assert "collection 'nonexistent-col' not found" in result.output.lower()
+    assert "nonexistent-col" in result.output
+    assert "not found" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# collection info — HTTP proxy (brief 350)
+# ---------------------------------------------------------------------------
+
+
+def test_info_proxies_get_to_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    """info calls GET /collections/{name} and prints formatted key-value lines (brief 350)."""
+    detail = {
+        "name": "mycol",
+        "description": "A test collection",
+        "namespace": "default",
+        "doc_count": 7,
+        "chunk_count": 42,
+        "active_embedding_model": "BAAI/bge-small-en-v1.5",
+        "pending_embedding_model": None,
+        "needs_reindex": False,
+        "reindex_job_id": None,
+        "last_indexed": "2026-01-15T10:00:00.000000Z",
+        "default_ttl_seconds": None,
+        "schema_version": 1,
+        "centroid_present": True,
+        "path": "/data/mycol",
+        "status": "ready",
+        "acl_protected_count": 0,
+        "acl_open_count": 0,
+    }
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = detail
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=mock_resp) as mock_get:
+        runner = CliRunner()
+        result = runner.invoke(collection, ["info", "mycol", "--api-key", "testkey"])
+
+    assert result.exit_code == 0, result.output
+    assert "mycol" in result.output
+    assert "doc_count: 7" in result.output
+    assert "chunk_count: 42" in result.output
+    assert "centroid_present: True" in result.output
+    assert "schema_version: 1" in result.output
+    assert "last_indexed: 2026-01-15T10:00:00.000000Z" in result.output
+    # null optional fields are omitted (pending_embedding_model, reindex_job_id, description)
+    assert "pending_embedding_model" not in result.output
+    # default_ttl_seconds=None is shown (not an omitted field per brief 350)
+    assert "default_ttl_seconds: None" in result.output
+    assert "description: A test collection" in result.output
+
+    # Confirm the GET call went to the right URL
+    called_url = mock_get.call_args[0][0]
+    assert called_url.endswith("/collections/mycol")
+
+    # Confirm Authorization header sent
+    _, call_kwargs = mock_get.call_args
+    assert call_kwargs["headers"]["Authorization"] == "Bearer testkey"
+
+
+def test_info_server_not_running_exits_1() -> None:
+    """info exits 1 with a 'not running' message when server is unreachable (brief 350)."""
+    with patch("archon_search.cli.collection.httpx.get", side_effect=httpx.ConnectError("refused")):
+        runner = CliRunner()
+        result = runner.invoke(collection, ["info", "mycol"])
+
+    assert result.exit_code == 1
+    assert "not running" in result.output.lower()
+
+
+def test_info_http_error_exits_1() -> None:
+    """info exits 1 with 'Error contacting server' on non-ConnectError network errors (brief 350)."""
+    import httpx as _httpx
+    with patch("archon_search.cli.collection.httpx.get", side_effect=_httpx.ReadTimeout("timeout")):
+        runner = CliRunner()
+        result = runner.invoke(collection, ["info", "mycol"])
+
+    assert result.exit_code == 1
+    assert "error contacting server" in result.output.lower()
+
+
+def test_info_non_200_exits_1() -> None:
+    """info exits 1 with 'server returned 500' for unexpected status codes (brief 350)."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 500
+    mock_resp.text = "Internal Server Error"
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=mock_resp):
+        runner = CliRunner()
+        result = runner.invoke(collection, ["info", "mycol", "--api-key", "testkey"])
+
+    assert result.exit_code == 1
+    assert "server returned 500" in result.output
+
+
+def test_info_404_exits_1() -> None:
+    """info exits 1 with 'not found' when server returns 404 (brief 350)."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404
+    mock_resp.text = '{"detail": "Collection not found"}'
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=mock_resp):
+        runner = CliRunner()
+        result = runner.invoke(collection, ["info", "missing-col"])
+
+    assert result.exit_code == 1
+    assert "missing-col" in result.output
+    assert "not found" in result.output.lower()
+
+
+def test_info_last_indexed_null_shows_never() -> None:
+    """last_indexed=null is displayed as 'never' (brief 350)."""
+    detail = {
+        "name": "mycol",
+        "description": "",
+        "namespace": "default",
+        "doc_count": 0,
+        "chunk_count": 0,
+        "active_embedding_model": "BAAI/bge-small-en-v1.5",
+        "pending_embedding_model": None,
+        "needs_reindex": False,
+        "reindex_job_id": None,
+        "last_indexed": None,
+        "default_ttl_seconds": 7200,
+        "schema_version": 0,
+        "centroid_present": False,
+        "path": "/data/mycol",
+        "status": "ready",
+        "acl_protected_count": 0,
+        "acl_open_count": 0,
+    }
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = detail
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=mock_resp):
+        runner = CliRunner()
+        result = runner.invoke(collection, ["info", "mycol", "--api-key", "testkey"])
+
+    assert result.exit_code == 0, result.output
+    assert "last_indexed: never" in result.output
+    assert "default_ttl_seconds: 7200" in result.output
+    # empty string is omitted
+    assert "description" not in result.output

@@ -1,4 +1,6 @@
-"""Tests for brief 210: collection list/info use SearchStore directly, not create_pipeline.
+"""Tests for brief 210: collection list uses SearchStore directly, not create_pipeline.
+
+brief 350: info was converted to an HTTP proxy (see test_cli_collection.py for new tests).
 
 Tests:
 - test_list_cmd_shows_collections: mocked store → names/counts printed, exit 0
@@ -6,13 +8,12 @@ Tests:
 - test_list_cmd_config_error_exits_1: load_config raises → exit 1
 - test_list_cmd_uses_store_with_correct_db_path: structural guard — _make_store called with cfg
 - test_list_cmd_disconnect_called_on_store_error: finally disconnect even when list_collections raises
-- test_info_shows_meta: mocked store → str(meta) printed, exit 0
-- test_info_collection_not_found_exits_1: meta=None → error + exit 1
-- test_info_uses_store_with_correct_db_path: structural guard — _make_store called with cfg
-- test_info_config_error_exits_1: load_config raises → exit 1
+- test_info_proxies_to_server: mocked httpx.get → formatted output, exit 0  (brief 350)
+- test_info_server_not_running: ConnectError → exit 1  (brief 350)
 """
 from __future__ import annotations
 
+import httpx
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from click.testing import CliRunner
@@ -118,82 +119,40 @@ def test_list_cmd_disconnect_called_on_store_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# info
+# info — HTTP proxy (brief 350)
 # ---------------------------------------------------------------------------
 
 
-def test_info_shows_meta() -> None:
-    cfg = _make_cfg()
-    meta = CollectionMeta(name="my-col", doc_count=5, chunk_count=20, description="test desc")
-    store = _make_store_mock(meta=meta)
+def test_info_proxies_to_server() -> None:
+    """brief 350: info proxies GET /collections/{name} and prints formatted key-value output."""
+    detail = {
+        "name": "my-col", "description": "test desc", "namespace": "default",
+        "doc_count": 5, "chunk_count": 20, "active_embedding_model": "BAAI/bge-small-en-v1.5",
+        "pending_embedding_model": None, "needs_reindex": False, "reindex_job_id": None,
+        "last_indexed": None, "default_ttl_seconds": None, "schema_version": 0,
+        "centroid_present": False, "path": "/data/my-col", "status": "ready",
+        "acl_protected_count": 0, "acl_open_count": 0,
+    }
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = detail
 
-    with (
-        patch("archon_search.cli.collection.load_config", return_value=cfg),
-        patch("archon_search.cli.collection._make_store", return_value=store),
-    ):
-        result = CliRunner().invoke(collection, ["info", "my-col"])
+    with patch("archon_search.cli.collection.httpx.get", return_value=mock_resp):
+        result = CliRunner().invoke(collection, ["info", "my-col", "--api-key", "testkey"])
 
     assert result.exit_code == 0, result.output
-    assert result.output.strip() == str(meta)
-    store.connect.assert_awaited_once()
-    store.disconnect.assert_awaited_once()
-    store.get_collection_meta.assert_awaited_once_with("my-col")
+    assert "my-col" in result.output
+    assert "doc_count: 5" in result.output
+    assert "description: test desc" in result.output
 
 
-def test_info_collection_not_found_exits_1() -> None:
-    cfg = _make_cfg()
-    store = _make_store_mock(meta=None)
-
-    with (
-        patch("archon_search.cli.collection.load_config", return_value=cfg),
-        patch("archon_search.cli.collection._make_store", return_value=store),
-    ):
-        result = CliRunner().invoke(collection, ["info", "missing-col"])
-
-    assert result.exit_code == 1
-    assert "missing-col" in result.output
-    assert "not found" in result.output.lower()
-    store.disconnect.assert_awaited_once()
-
-
-def test_info_disconnect_called_on_store_error() -> None:
-    """finally: disconnect is awaited even when get_collection_meta raises."""
-    cfg = _make_cfg()
-    store = _make_store_mock(meta=None)
-    store.get_collection_meta = AsyncMock(side_effect=RuntimeError("db error"))
-
-    with (
-        patch("archon_search.cli.collection.load_config", return_value=cfg),
-        patch("archon_search.cli.collection._make_store", return_value=store),
-    ):
-        result = CliRunner().invoke(collection, ["info", "any-col"])
-
-    assert result.exit_code == 1
-    store.disconnect.assert_awaited_once()
-
-
-def test_info_uses_store_with_correct_db_path() -> None:
-    """Structural guard: info constructs SearchStore with cfg.db_path, not create_pipeline."""
-    cfg = _make_cfg(db_path="/tmp/guard-db")
-    meta = CollectionMeta(name="my-col")
-    store = _make_store_mock(meta=meta)
-
-    with (
-        patch("archon_search.cli.collection.load_config", return_value=cfg),
-        patch("archon_search.cli.collection._make_store", return_value=store) as mock_make_store,
-    ):
+def test_info_server_not_running() -> None:
+    """brief 350: info exits 1 with 'not running' when server is unreachable."""
+    with patch("archon_search.cli.collection.httpx.get", side_effect=httpx.ConnectError("refused")):
         result = CliRunner().invoke(collection, ["info", "my-col"])
 
-    assert result.exit_code == 0
-    mock_make_store.assert_called_once_with(cfg)
-
-
-def test_info_config_error_exits_1() -> None:
-    with patch("archon_search.cli.collection.load_config", side_effect=RuntimeError("bad config")):
-        result = CliRunner().invoke(collection, ["info", "any-col"])
-
     assert result.exit_code == 1
-    assert "bad config" in result.output
+    assert "not running" in result.output.lower()
 
 
 def test_make_store_constructs_search_store_with_db_path() -> None:

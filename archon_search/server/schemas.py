@@ -451,6 +451,8 @@ class CollectionDetail(CollectionSummary):
     last_indexed: str | None = None
     acl_protected_count: int = 0
     acl_open_count: int = 0
+    default_ttl_seconds: int | None = None
+    schema_version: int = 0
 
 
 class JobResponse(BaseModel):
