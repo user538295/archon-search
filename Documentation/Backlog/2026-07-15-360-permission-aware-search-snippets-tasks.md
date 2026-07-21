@@ -117,14 +117,14 @@ flowchart LR
     - Presentation · 3.0h
     - needs BE-4 · completes C1, C3, S5, S7, S13
     - Tests
-        - #unit_test — `test_acl_gate_schema_fields` — `AclGateSchema` has `allowed_principals`, `source`, `sidecar_path`, `warnings`; `warnings` is always a non-null list; `source` is `Literal["frontmatter","sidecar","collection_default"] | None`
-        - #unit_test — `test_search_request_acl_context_default_false` — `SearchRequest` without `acl_context` defaults to `False`
-        - #unit_test — `test_search_result_schema_acl_gate_absent_by_default` — `SearchResultSchema.acl_gate` is `None` when `acl_context=False` (S5)
-        - #integration_test — `test_search_acl_context_false_no_gate` — `POST /search` without `acl_context` returns no `acl_gate`; response byte-for-byte compatible with pre-G15 (S5)
-        - #integration_test — `test_search_acl_context_true_has_gate` — `POST /search` with `acl_context=true` returns `acl_gate` on every result with all four fields present
-        - #integration_test — `test_acl_context_and_include_metadata_independent` — `acl_context=true` with `include_metadata=false` still returns `acl_gate`; `metadata` field absent (S13)
-        - #integration_test — `test_excluded_chunks_absent_with_acl_context` — chunks the caller cannot see are absent from results even when `acl_context=true` (S7)
-        - #unit_test — `test_openapi_snapshot_updated` — `test_openapi_snapshot.py` passes after regenerating with `--update-openapi-snapshot`
+        - [x] #unit_test — `test_acl_gate_schema_fields` — `AclGateSchema` has `allowed_principals`, `source`, `sidecar_path`, `warnings`; `warnings` is always a non-null list; `source` is `Literal["frontmatter","sidecar","collection_default"] | None`
+        - [x] #unit_test — `test_search_request_acl_context_default_false` — `SearchRequest` without `acl_context` defaults to `False`
+        - [x] #unit_test — `test_search_result_schema_acl_gate_absent_by_default` — `SearchResultSchema.acl_gate` is `None` when `acl_context=False` (S5)
+        - [x] #integration_test — `test_search_acl_context_false_no_gate` — `POST /search` without `acl_context` returns no `acl_gate`; response byte-for-byte compatible with pre-G15 (S5)
+        - [x] #integration_test — `test_search_acl_context_true_has_gate` — `POST /search` with `acl_context=true` returns `acl_gate` on every result with all four fields present
+        - [x] #integration_test — `test_acl_context_and_include_metadata_independent` — `acl_context=true` with `include_metadata=false` still returns `acl_gate`; `metadata` field absent (S13)
+        - [x] #integration_test — `test_excluded_chunks_absent_with_acl_context` — chunks the caller cannot see are absent from results even when `acl_context=true` (S7)
+        - [x] #unit_test — `test_openapi_snapshot_updated` — `test_openapi_snapshot.py` passes after regenerating with `--update-openapi-snapshot`
 
 ### Phase 2 · Fail-open warnings surfaced *(any caller can now see exactly why a chunk fell open)*
 
