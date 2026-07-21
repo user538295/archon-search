@@ -110,13 +110,15 @@ def _trigger_backup(
         raise SystemExit(1)
 
     body = resp.json()
-    queued: list[str] = body.get("queued", [])
+    queued: list[dict[str, str]] = body.get("queued", [])
     skipped: list[dict[str, str]] = body.get("skipped", [])
 
     if queued:
         click.echo("Queued jobs:")
-        for job_id in queued:
-            click.echo(job_id)
+        for item in queued:
+            col = item.get("collection", "?")
+            jid = item.get("job_id", "?")
+            click.echo(f"  {col} → {jid}")
     else:
         click.echo("No jobs queued.")
 
@@ -128,16 +130,19 @@ def _trigger_backup(
     if not wait or not queued:
         return
 
-    _wait_for_jobs(queued, api_url, headers, timeout_seconds)
+    job_map = {item["job_id"]: item["collection"] for item in queued if "job_id" in item}
+    _wait_for_jobs(job_map, api_url, headers, timeout_seconds)
 
 
 def _wait_for_jobs(
-    job_ids: list[str],
+    job_map: dict[str, str],
     api_url: str,
     headers: dict[str, str],
     timeout_seconds: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
 ) -> None:
     """Poll each job until terminal; exit 2 if any FAILED, exit 0 on timeout or success.
+
+    job_map maps job_id → collection_name so progress lines use the collection name.
 
     Exit codes:
     - Exits 0 on success (all DONE) or timeout — prints a recovery hint on timeout.
@@ -145,7 +150,7 @@ def _wait_for_jobs(
     - Exits 1 on fatal errors (network, auth, HTTP errors).
     """
     failed: list[str] = []
-    pending = set(job_ids)
+    pending = set(job_map.keys())
     max_polls = max(1, timeout_seconds // _POLL_INTERVAL_SECONDS)
     polls = 0
 
@@ -158,16 +163,17 @@ def _wait_for_jobs(
                     err=True,
                 )
                 raise SystemExit(2)
-            pending_ids = " ".join(sorted(pending))
+            pending_cols = " ".join(sorted(job_map[jid] for jid in pending))
             click.echo(
                 f"Timed out after {timeout_seconds}s waiting for backup jobs to complete. "
-                f"Pending job IDs: {pending_ids} — "
+                f"Pending: {pending_cols} — "
                 "poll with 'archon-search backup status' to check progress.",
                 err=True,
             )
             raise SystemExit(0)
 
         for job_id in list(pending):
+            col = job_map.get(job_id, job_id)
             url = f"{api_url.rstrip('/')}/jobs/{job_id}"
             try:
                 resp = httpx.get(url, headers=headers)
@@ -175,11 +181,11 @@ def _wait_for_jobs(
                 click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
                 raise SystemExit(1)
             except httpx.HTTPError as exc:
-                click.echo(f"Error polling job {job_id}: {exc}", err=True)
+                click.echo(f"Error polling job for {col}: {exc}", err=True)
                 raise SystemExit(1) from exc
             if resp.status_code != 200:
                 click.echo(
-                    f"Error polling job {job_id}: server returned {resp.status_code}",
+                    f"Error polling job for {col}: server returned {resp.status_code}",
                     err=True,
                 )
                 raise SystemExit(1)
@@ -189,10 +195,10 @@ def _wait_for_jobs(
                 pending.discard(job_id)
                 if status in {"FAILED", "FAILED_EXPIRED"}:
                     err = job.get("error") or "unknown error"
-                    click.echo(f"Backup FAILED for {job_id}: {err}", err=True)
+                    click.echo(f"Backup FAILED for {col}: {err}", err=True)
                     failed.append(job_id)
                 elif status == "CANCELLED":
-                    click.echo(f"Backup cancelled: {job_id}")
+                    click.echo(f"Backup cancelled: {col}")
         if pending:
             time.sleep(_POLL_INTERVAL_SECONDS)
             polls += 1

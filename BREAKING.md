@@ -974,3 +974,21 @@ For tolerant JSON consumers: fully additive — no client changes required. For 
 **Migration**: regenerate client types from `GET /openapi.json`. No behavior changes to existing graph traversal or search.
 
 **Announced in**: this release.
+
+---
+
+### [next release] — brief 270: `BackupTriggerResponse.queued` changed from `list[string]` to `list[QueuedBackupJob]`
+
+**Surface**: REST `POST /backup/trigger` response body field `queued`.
+
+**Change**: `queued` was `string[]` (bare job IDs); it is now `QueuedBackupJob[]` where each entry has:
+- `collection: string` — the collection name being backed up
+- `job_id: string` — the job ID to track
+
+The `skipped` field is unchanged.
+
+For tolerant JSON consumers: the array element type changed from `string` to `object` — this is NOT additive; clients iterating `queued` as strings will break. For strict-validating REST clients: regenerate from the updated OpenAPI snapshot.
+
+**Migration**: update any client that reads `response.queued[i]` as a string to read `response.queued[i].job_id` for the job ID and `response.queued[i].collection` for the collection name.
+
+**Announced in**: this release.

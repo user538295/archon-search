@@ -44,7 +44,13 @@ def _job_payload(job_id: str, status: str, **extra) -> dict:
 
 def test_backup_now_prints_job_ids() -> None:
     runner = CliRunner()
-    body = {"queued": ["job-a", "job-b"], "skipped": []}
+    body = {
+        "queued": [
+            {"collection": "coll-a", "job_id": "job-a"},
+            {"collection": "coll-b", "job_id": "job-b"},
+        ],
+        "skipped": [],
+    }
     post_resp = _mock_response(202, body)
 
     with patch("archon_search.cli.backup_cmd.httpx.post", return_value=post_resp):
@@ -52,6 +58,29 @@ def test_backup_now_prints_job_ids() -> None:
 
     assert result.exit_code == 0, result.output
     assert "job-a" in result.output
+    assert "job-b" in result.output
+
+
+def test_backup_now_prints_collection_alongside_job_id() -> None:
+    """New format: each queued item shows 'collection → job_id' (brief 270)."""
+    runner = CliRunner()
+    body = {
+        "queued": [
+            {"collection": "my_docs", "job_id": "job-a"},
+            {"collection": "project_code", "job_id": "job-b"},
+        ],
+        "skipped": [],
+    }
+    post_resp = _mock_response(202, body)
+
+    with patch("archon_search.cli.backup_cmd.httpx.post", return_value=post_resp):
+        result = runner.invoke(backup_cmd, ["--now", "--api-key", "deadbeef"])
+
+    assert result.exit_code == 0, result.output
+    assert "my_docs" in result.output
+    assert "job-a" in result.output
+    assert "→" in result.output
+    assert "project_code" in result.output
     assert "job-b" in result.output
 
 
@@ -78,7 +107,7 @@ def test_backup_now_prints_skipped() -> None:
 
 def test_backup_now_wait_polls_until_done() -> None:
     runner = CliRunner()
-    post_resp = _mock_response(202, {"queued": ["job-w"], "skipped": []})
+    post_resp = _mock_response(202, {"queued": [{"collection": "docs", "job_id": "job-w"}], "skipped": []})
     get_responses = [
         _mock_response(200, _job_payload("job-w", "QUEUED")),
         _mock_response(200, _job_payload("job-w", "RUNNING")),
@@ -97,10 +126,31 @@ def test_backup_now_wait_polls_until_done() -> None:
     assert "completed" in result.output.lower()
 
 
+def test_backup_wait_shows_collection_name_on_done() -> None:
+    """--wait output uses collection name, not job_id, for done status (brief 270)."""
+    runner = CliRunner()
+    post_resp = _mock_response(
+        202,
+        {"queued": [{"collection": "my_docs", "job_id": "job-w"}], "skipped": []},
+    )
+    get_responses = [_mock_response(200, _job_payload("job-w", "DONE"))]
+    with (
+        patch("archon_search.cli.backup_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.backup_cmd.httpx.get", side_effect=get_responses),
+        patch("archon_search.cli.backup_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            backup_cmd, ["--now", "--wait", "--api-key", "deadbeef"]
+        )
+    assert result.exit_code == 0, result.output
+    assert "completed" in result.output.lower()
+    assert "my_docs" in result.output
+
+
 def test_backup_now_wait_exits_2_on_failed() -> None:
     """E0b: exit code on FAILED changed from 1 → 2."""
     runner = CliRunner()
-    post_resp = _mock_response(202, {"queued": ["job-f"], "skipped": []})
+    post_resp = _mock_response(202, {"queued": [{"collection": "docs", "job_id": "job-f"}], "skipped": []})
     get_resp = _mock_response(200, _job_payload("job-f", "FAILED", error="boom"))
     with (
         patch("archon_search.cli.backup_cmd.httpx.post", return_value=post_resp),
@@ -113,6 +163,27 @@ def test_backup_now_wait_exits_2_on_failed() -> None:
 
     assert result.exit_code == 2
     assert "FAILED" in result.output or "boom" in result.output
+
+
+def test_backup_wait_shows_collection_name_on_failed() -> None:
+    """--wait FAILED output uses collection name (brief 270)."""
+    runner = CliRunner()
+    post_resp = _mock_response(
+        202,
+        {"queued": [{"collection": "my_docs", "job_id": "job-f"}], "skipped": []},
+    )
+    get_resp = _mock_response(200, _job_payload("job-f", "FAILED", error="disk full"))
+    with (
+        patch("archon_search.cli.backup_cmd.httpx.post", return_value=post_resp),
+        patch("archon_search.cli.backup_cmd.httpx.get", return_value=get_resp),
+        patch("archon_search.cli.backup_cmd.time.sleep"),
+    ):
+        result = runner.invoke(
+            backup_cmd, ["--now", "--wait", "--api-key", "deadbeef"]
+        )
+    assert result.exit_code == 2
+    assert "my_docs" in result.output
+    assert "disk full" in result.output
 
 
 def test_backup_bare_prints_help() -> None:
@@ -216,7 +287,7 @@ def test_backup_status_server_unavailable_degrades_gracefully(tmp_path: Path) ->
 
 
 def test_backup_wait_timeout_exits_0() -> None:
-    """--now --wait --timeout N exits 0 on poll timeout with job IDs + recovery hint in output.
+    """--now --wait --timeout N exits 0 on poll timeout with recovery hint in output.
 
     Monkeypatches httpx.get to always return RUNNING so the poll loop exhausts
     the timeout. Do NOT monkeypatch _wait_for_jobs itself — the test exercises
@@ -224,7 +295,7 @@ def test_backup_wait_timeout_exits_0() -> None:
     """
     runner = CliRunner()
     job_id = "job-timeout-backup"
-    post_resp = _mock_response(202, {"queued": [job_id], "skipped": []})
+    post_resp = _mock_response(202, {"queued": [{"collection": "timeout-col", "job_id": job_id}], "skipped": []})
     running_resp = _mock_response(200, _job_payload(job_id, "RUNNING"))
 
     with (
@@ -239,7 +310,7 @@ def test_backup_wait_timeout_exits_0() -> None:
         )
 
     assert result.exit_code == 0, f"output={result.output!r}"
-    # Recovery hint must appear in output and include the job ID
+    # job_id appears in the queued output (collection → job_id) and in the timeout message
     assert job_id in result.output, f"expected job ID in output: {result.output!r}"
     assert "Timed out" in result.output, f"expected timeout message in output: {result.output!r}"
     assert "poll with" in result.output, f"expected recovery hint in output: {result.output!r}"
@@ -249,7 +320,7 @@ def test_backup_wait_exits_2_on_failed() -> None:
     """--now --wait exits 2 when any backup job transitions to FAILED (E0b contract)."""
     runner = CliRunner()
     job_id = "job-fail-backup"
-    post_resp = _mock_response(202, {"queued": [job_id], "skipped": []})
+    post_resp = _mock_response(202, {"queued": [{"collection": "fail-col", "job_id": job_id}], "skipped": []})
     failed_resp = _mock_response(200, _job_payload(job_id, "FAILED", error="storage error"))
 
     with (
@@ -269,7 +340,7 @@ def test_backup_wait_exits_2_on_failed_expired() -> None:
     """--now --wait exits 2 when any backup job transitions to FAILED_EXPIRED (treated same as FAILED)."""
     runner = CliRunner()
     job_id = "job-fail-expired-backup"
-    post_resp = _mock_response(202, {"queued": [job_id], "skipped": []})
+    post_resp = _mock_response(202, {"queued": [{"collection": "expired-col", "job_id": job_id}], "skipped": []})
     failed_expired_resp = _mock_response(200, _job_payload(job_id, "FAILED_EXPIRED", error="job expired"))
 
     with (

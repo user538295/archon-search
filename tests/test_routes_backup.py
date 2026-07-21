@@ -120,6 +120,24 @@ def test_trigger_backup_already_queued_skipped(
 
 
 @pytest.mark.integration
+def test_trigger_backup_queued_contains_collection_and_job_id(
+    tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str]
+) -> None:
+    """queued list entries must have 'collection' and 'job_id' keys (brief 270)."""
+    collections = [CollectionInfo(name="docs", doc_count=1, chunk_count=1, namespace=DEFAULT_NAMESPACE)]
+    client = _make_client(tmp_path, tmp_store, auth_headers, collections)
+    with client:
+        response = client.post("/backup/trigger")
+    assert response.status_code == 202
+    body = response.json()
+    assert len(body["queued"]) == 1
+    item = body["queued"][0]
+    assert item["collection"] == "docs"
+    assert "job_id" in item
+    assert isinstance(item["job_id"], str)
+
+
+@pytest.mark.integration
 def test_trigger_backup_namespace_scoped(
     tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str]
 ) -> None:
@@ -134,9 +152,9 @@ def test_trigger_backup_namespace_scoped(
     assert response.status_code == 202
     body = response.json()
     assert len(body["queued"]) == 1
-    # Verify the queued job is for the default namespace
-    job_id = body["queued"][0]
-    job = tmp_store.get(job_id)
+    item = body["queued"][0]
+    assert item["collection"] == "docs"
+    job = tmp_store.get(item["job_id"])
     assert job is not None
     assert job.namespace == DEFAULT_NAMESPACE
     assert job.collection == "docs"

@@ -504,10 +504,17 @@ class SkippedItem(BaseModel):
     reason: str
 
 
+class QueuedBackupJob(BaseModel):
+    """One entry in BackupTriggerResponse.queued — collection name + job ID (brief 270)."""
+
+    collection: str
+    job_id: str
+
+
 class BackupTriggerResponse(BaseModel):
     """Response body for POST /backup/trigger (D2 Task 4.1)."""
 
-    queued: list[str]
+    queued: list[QueuedBackupJob]
     skipped: list[SkippedItem]
 
 

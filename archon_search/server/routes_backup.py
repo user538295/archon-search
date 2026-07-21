@@ -19,6 +19,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.server.schemas import (
     BackupTriggerResponse,
     ErrorDetail,
+    QueuedBackupJob,
     SkippedItem,
 )
 from archon_search.store import SearchStore
@@ -57,7 +58,7 @@ async def trigger_backup(request: Request) -> BackupTriggerResponse:
     }
 
     ts = datetime.now(timezone.utc).strftime(_ARCHIVE_TIMESTAMP_FORMAT)
-    queued_ids: list[str] = []
+    queued_jobs: list[QueuedBackupJob] = []
     skipped: list[SkippedItem] = []
 
     for info in collections:
@@ -88,6 +89,6 @@ async def trigger_backup(request: Request) -> BackupTriggerResponse:
             skipped.append(SkippedItem(collection=col, reason="enqueue_failed"))
             continue
         backup_loop.track(job.job_id, ns, col)
-        queued_ids.append(job.job_id)
+        queued_jobs.append(QueuedBackupJob(collection=col, job_id=job.job_id))
 
-    return BackupTriggerResponse(queued=queued_ids, skipped=skipped)
+    return BackupTriggerResponse(queued=queued_jobs, skipped=skipped)
