@@ -14,6 +14,7 @@ from archon_search.server.routes_explain import (
     RoutingCandidate,
     RoutingExplain,
 )
+from archon_search.server.schemas import AclGateSchema
 
 
 def _breakdown(*, rrf: float = 0.03, reranker: float | None = None) -> SearchScoreBreakdown:
@@ -229,6 +230,12 @@ def test_explain_response_round_trips_brief_example() -> None:
                 "text": "body",
                 "score": 0.91,
                 "breakdown": breakdown,
+                "acl_gate": {
+                    "allowed_principals": None,
+                    "source": None,
+                    "sidecar_path": None,
+                    "warnings": [],
+                },
             }
         ],
         "near_misses": [
@@ -257,3 +264,120 @@ def test_explain_response_round_trips_brief_example() -> None:
     assert set(dumped.keys()) == set(payload.keys())
     assert set(dumped["results"][0].keys()) >= set(payload["results"][0].keys())
     assert "text" not in dumped["near_misses"][0]
+
+
+# ---------------------------------------------------------------------------
+# BE-7 — acl_gate on ExplainResult; absent from ExplainNearMiss (C2, S6)
+# ---------------------------------------------------------------------------
+
+
+def test_explain_result_has_acl_gate() -> None:
+    """ExplainResult carries acl_gate (non-nullable); ExplainNearMiss does not."""
+    assert "acl_gate" in ExplainResult.model_fields
+    field_info = ExplainResult.model_fields["acl_gate"]
+    # Non-nullable: field must be required (no default) and annotation must be exactly AclGateSchema
+    assert field_info.is_required(), "acl_gate must be a required field on ExplainResult"
+    assert field_info.annotation is AclGateSchema, (
+        "acl_gate annotation must be AclGateSchema, not a Union that could include None"
+    )
+
+    assert "acl_gate" not in ExplainNearMiss.model_fields
+
+
+def test_explain_near_miss_rejects_acl_gate_field() -> None:
+    """ExplainNearMiss with extra='forbid' must reject an acl_gate key."""
+    with pytest.raises(ValidationError):
+        ExplainNearMiss(
+            doc_id="d1",
+            chunk_id="d1-000000",
+            source_path="/tmp/x.md",
+            score=0.4,
+            breakdown=ExplainResult.from_candidate(_candidate()).breakdown,
+            acl_gate={"allowed_principals": None, "source": None, "sidecar_path": None, "warnings": []},
+        )
+
+
+def test_explain_result_from_candidate_builds_gate() -> None:
+    """ExplainResult.from_candidate() populates all AclGateSchema fields from provenance."""
+    candidate = ScoredSearchCandidate(
+        doc_id="doc1",
+        chunk_id="doc1-000000",
+        text="some text",
+        source_path="/tmp/doc1.md",
+        score_breakdown=_breakdown(rrf=0.05),
+        collection="docs",
+        acl=["ns1"],
+        acl_source="sidecar",
+        acl_sidecar_path="docs/doc1.md.acl",
+        acl_warning=["truncated to filename"],
+    )
+    result = ExplainResult.from_candidate(candidate)
+
+    assert isinstance(result.acl_gate, AclGateSchema)
+    assert result.acl_gate.allowed_principals == ["ns1"]
+    assert result.acl_gate.source == "sidecar"
+    assert result.acl_gate.sidecar_path == "docs/doc1.md.acl"
+    assert result.acl_gate.warnings == ["truncated to filename"]
+
+
+def test_explain_result_from_candidate_builds_gate_null_acl() -> None:
+    """acl_gate built even when acl is None (collection_default case)."""
+    candidate = ScoredSearchCandidate(
+        doc_id="doc2",
+        chunk_id="doc2-000000",
+        text="open doc",
+        source_path="/tmp/doc2.md",
+        score_breakdown=_breakdown(),
+        collection="docs",
+        acl=None,
+        acl_source="collection_default",
+        acl_sidecar_path=None,
+        acl_warning=[],
+    )
+    result = ExplainResult.from_candidate(candidate)
+
+    assert isinstance(result.acl_gate, AclGateSchema)
+    assert result.acl_gate.allowed_principals is None
+    assert result.acl_gate.source == "collection_default"
+    assert result.acl_gate.sidecar_path is None
+    assert result.acl_gate.warnings == []
+
+
+def test_explain_result_from_candidate_builds_gate_pre_g15() -> None:
+    """Pre-G15 candidate (all provenance None/[]) builds acl_gate with null source."""
+    candidate = ScoredSearchCandidate(
+        doc_id="doc3",
+        chunk_id="doc3-000000",
+        text="old chunk",
+        source_path="/tmp/doc3.md",
+        score_breakdown=_breakdown(),
+        collection="docs",
+        acl=None,
+        acl_source=None,
+        acl_sidecar_path=None,
+        acl_warning=[],
+    )
+    result = ExplainResult.from_candidate(candidate)
+
+    assert isinstance(result.acl_gate, AclGateSchema)
+    assert result.acl_gate.source is None
+    assert result.acl_gate.warnings == []
+
+
+def test_explain_result_from_candidate_coerces_unknown_acl_source() -> None:
+    """Unknown acl_source strings are coerced to None, not raised as ValidationError."""
+    candidate = ScoredSearchCandidate(
+        doc_id="doc4",
+        chunk_id="doc4-000000",
+        text="chunk",
+        source_path="/tmp/doc4.md",
+        score_breakdown=_breakdown(),
+        collection="docs",
+        acl=None,
+        acl_source="bogus-unknown-value",
+        acl_sidecar_path=None,
+        acl_warning=[],
+    )
+    result = ExplainResult.from_candidate(candidate)
+    # Unknown source must be coerced to None, not raise ValidationError
+    assert result.acl_gate.source is None

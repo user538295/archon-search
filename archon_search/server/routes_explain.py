@@ -34,7 +34,7 @@ from archon_search.pipeline import (
     MetadataLookupError,
 )
 from archon_search.router import MultiCollectionRouter
-from archon_search.server.schemas import ErrorDetail, ExcludedCollectionSchema
+from archon_search.server.schemas import AclGateSchema, ErrorDetail, ExcludedCollectionSchema
 from archon_search.server._validators import validate_scope_filter as _check_scope_filter
 from archon_search.telemetry.entry import TelemetryEntry
 
@@ -49,6 +49,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_VALID_ACL_SOURCES = frozenset({"frontmatter", "sidecar", "collection_default"})
 
 
 def _final_score(b: SearchScoreBreakdown) -> float:
@@ -155,6 +157,8 @@ class ExplainResult(BaseModel):
     acl: list[str] | None = None
     collection: str = ""
     graph_provenance: GraphProvenanceResponse | None = None
+    # g15 BE-7 — ACL provenance gate; always present on /explain (no flag required)
+    acl_gate: AclGateSchema
 
     @classmethod
     def from_candidate(cls, c: ScoredSearchCandidate) -> ExplainResult:
@@ -177,6 +181,12 @@ class ExplainResult(BaseModel):
             acl=c.acl,
             collection=c.collection,
             graph_provenance=graph_prov,
+            acl_gate=AclGateSchema(
+                allowed_principals=c.acl,
+                source=c.acl_source if c.acl_source in _VALID_ACL_SOURCES else None,
+                sidecar_path=c.acl_sidecar_path,
+                warnings=c.acl_warning,
+            ),
         )
 
 

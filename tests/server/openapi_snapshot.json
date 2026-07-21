@@ -1226,6 +1226,9 @@
             ],
             "title": "Acl"
           },
+          "acl_gate": {
+            "$ref": "#/components/schemas/AclGateSchema"
+          },
           "breakdown": {
             "$ref": "#/components/schemas/ExplainScoreBreakdown"
           },
@@ -1309,7 +1312,8 @@
           "source_path",
           "text",
           "score",
-          "breakdown"
+          "breakdown",
+          "acl_gate"
         ],
         "title": "ExplainResult",
         "type": "object"

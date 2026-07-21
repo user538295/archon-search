@@ -146,7 +146,7 @@ flowchart LR
 
 ### Phase 3 · `/explain` always shows ACL gate *(explain callers always get full ACL provenance without a flag)*
 
-- [ ] **BE-7** — Add `acl_gate: AclGateSchema` (non-nullable) to `ExplainResult` in `routes_explain.py`; update `ExplainResult.from_candidate()` to build `AclGateSchema` unconditionally from `ScoredSearchCandidate` provenance fields; confirm `ExplainNearMiss` does not carry `acl_gate` (`extra="forbid"` already enforced); regenerate OpenAPI snapshot #backend-role
+- [x] **BE-7** — Add `acl_gate: AclGateSchema` (non-nullable) to `ExplainResult` in `routes_explain.py`; update `ExplainResult.from_candidate()` to build `AclGateSchema` unconditionally from `ScoredSearchCandidate` provenance fields; confirm `ExplainNearMiss` does not carry `acl_gate` (`extra="forbid"` already enforced); regenerate OpenAPI snapshot #backend-role
     - Presentation · 2.0h
     - needs BE-5 · completes C2, S6, S7a
     - Tests
