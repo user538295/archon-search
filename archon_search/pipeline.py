@@ -455,7 +455,8 @@ class SearchPipeline:
             _acl = None
 
         # Resolve effective ACL for this document
-        resolved_acl, acl_warnings = resolve_acl(path, _acl)
+        acl_result = resolve_acl(path, _acl)
+        resolved_acl, acl_warnings = acl_result.acl, acl_result.warnings
 
         # Derive metadata fields at the call site (Task 3.3).
         file_type = path.suffix.lower().lstrip(".")

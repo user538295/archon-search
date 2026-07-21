@@ -3,6 +3,7 @@
 import logging
 import re
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -13,33 +14,60 @@ _ACL_SIDECAR_MAX_BYTES = 65536
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class AclResolutionResult:
+    """Result of resolving the effective ACL for a document.
+
+    Attributes:
+        acl: None (fail-open), [] (deny-all), or list of allowed namespace names.
+        source: 'frontmatter', 'sidecar', or None (no rule).
+        sidecar_path: absolute path to the sidecar file when source='sidecar'; None otherwise.
+        warnings: human-readable warning strings (e.g. oversized sidecar, shadowing).
+    """
+
+    acl: list[str] | None
+    source: str | None
+    sidecar_path: Path | None
+    warnings: list[str] = field(default_factory=list)
+
+
 def is_acl_namespace_valid(name: str) -> bool:
     """Return True if name matches _NAMESPACE_RE and is not 'deny-all'."""
     return _NAMESPACE_RE.fullmatch(name) is not None and name != "deny-all"
 
 
-def parse_acl_value(raw: Any, doc_path: str) -> list[str] | None:
+def parse_acl_value(raw: Any, doc_path: str) -> tuple[list[str] | None, list[str]]:
     """Normalize and validate an _acl YAML value.
 
     Returns:
-        - None: fail-open (no ACL restriction)
-        - []: deny-all (no namespace may access this chunk)
-        - [str, ...]: list of valid namespace names that may access the chunk
+        A tuple of ``(acl_entries, warnings)``:
+
+        - ``acl_entries``:
+            - ``None``: fail-open (no ACL restriction)
+            - ``[]``: deny-all (no namespace may access this chunk)
+            - ``[str, ...]``: list of valid namespace names that may access the chunk
+        - ``warnings``: list of human-readable warning strings; non-empty when a
+          fail-open branch is triggered due to an invalid or ambiguous value.
     """
     if raw is None:
-        return None
+        return None, []
 
     # Build candidate list from the raw value
     candidates: list[str]
+    warnings: list[str] = []
 
     if isinstance(raw, bool):
         # bool must be checked before int (bool is subclass of int)
+        msg = (
+            f"_acl in {doc_path} has invalid type {type(raw).__name__} (ignored); "
+            "chunk defaults to open"
+        )
         logger.warning(
             "_acl in %s has invalid type %s (ignored); chunk defaults to open",
             doc_path,
             type(raw).__name__,
         )
-        return None
+        return None, [msg]
 
     if isinstance(raw, str):
         tokens = re.split(r"[,\n]", raw.strip())
@@ -47,23 +75,32 @@ def parse_acl_value(raw: Any, doc_path: str) -> list[str] | None:
 
     elif isinstance(raw, list):
         if len(raw) == 0:
-            return []
+            return [], []
         non_str_count = sum(1 for item in raw if not isinstance(item, str))
         if non_str_count:
+            msg = (
+                f"_acl in {doc_path} has {non_str_count} non-string element(s) (dropped); "
+                "chunk defaults to open"
+            )
             logger.warning(
                 "_acl in %s has %d non-string element(s) (dropped); chunk defaults to open",
                 doc_path,
                 non_str_count,
             )
+            warnings.append(msg)
         candidates = [item for item in raw if isinstance(item, str)]
 
     else:
+        msg = (
+            f"_acl in {doc_path} has invalid type {type(raw).__name__} (ignored); "
+            "chunk defaults to open"
+        )
         logger.warning(
             "_acl in %s has invalid type %s (ignored); chunk defaults to open",
             doc_path,
             type(raw).__name__,
         )
-        return None
+        return None, [msg]
 
     # Separate deny-all entries from the rest
     deny_all_entries = [c for c in candidates if c == "deny-all"]
@@ -74,68 +111,93 @@ def parse_acl_value(raw: Any, doc_path: str) -> list[str] | None:
     invalid_count = len(non_deny_all) - len(valid)
 
     if invalid_count:
+        msg = (
+            f"_acl in {doc_path} has {invalid_count} invalid namespace names (dropped); "
+            "chunk defaults to open"
+        )
         logger.warning(
             "_acl in %s has %d invalid namespace names (dropped); chunk defaults to open",
             doc_path,
             invalid_count,
         )
+        warnings.append(msg)
 
     if deny_all_entries:
         if valid:
             # deny-all mixed with valid names — drop deny-all, use valid names
+            msg = (
+                f"_acl in {doc_path} contains 'deny-all' mixed with valid namespaces; "
+                "'deny-all' dropped, using valid namespaces only"
+            )
             logger.warning(
                 "_acl in %s contains 'deny-all' mixed with valid namespaces; "
                 "'deny-all' dropped, using valid namespaces only",
                 doc_path,
             )
-            return valid
+            warnings.append(msg)
+            return valid, warnings
         else:
             # deny-all with no valid names
             if non_deny_all:
                 # deny-all mixed with only invalid names — fail-open (not deny-all)
+                msg = (
+                    f"_acl in {doc_path} contains 'deny-all' mixed with invalid names; "
+                    "ambiguous — chunk defaults to open"
+                )
                 logger.warning(
                     "_acl in %s contains 'deny-all' mixed with invalid names; "
                     "ambiguous — chunk defaults to open",
                     doc_path,
                 )
-                return None
+                warnings.append(msg)
+                return None, warnings
             else:
                 # deny-all is the sole kind of entry — interpret as deny-all
+                msg = (
+                    f"_acl in {doc_path} contains the reserved word 'deny-all' as a namespace name; "
+                    "interpreting as deny-all (acl: [])"
+                )
                 logger.warning(
                     "_acl in %s contains the reserved word 'deny-all' as a namespace name; "
                     "interpreting as deny-all (acl: [])",
                     doc_path,
                 )
-                return []
+                warnings.append(msg)
+                return [], warnings
 
     # No deny-all entries
     if valid:
-        return valid
+        return valid, warnings
 
     # No valid names at all — fail-open
-    return None
+    return None, warnings
 
 
-def read_acl_sidecar(doc_path: Path) -> tuple[list[str] | None, list[str]]:
+def read_acl_sidecar(
+    doc_path: Path,
+) -> tuple[list[str] | None, str | None, Path | None, list[str]]:
     """Read ACL from a sidecar file (<doc_path>.acl).
 
-    Returns a tuple of ``(acl_entries, warnings)``:
+    Returns a tuple of ``(acl_entries, source, sidecar_path, warnings)``:
 
     - ``acl_entries``:
         - ``None``: no sidecar, empty sidecar, or unreadable (fail-open)
         - ``[]``: deny-all sentinel found
         - ``[str, ...]``: list of valid namespace names
+    - ``source``: ``'sidecar'`` when a sidecar file exists (even if skipped/invalid);
+      ``None`` when no sidecar file is present.
+    - ``sidecar_path``: absolute path to the sidecar when source='sidecar'; ``None`` otherwise.
     - ``warnings``: list of human-readable warning strings; non-empty only when
       the sidecar exists but is skipped due to exceeding the 64 KB size limit.
     """
     sidecar = doc_path.parent / (doc_path.name + ".acl")
 
     if not sidecar.exists():
-        return None, []
+        return None, None, None, []
 
     if sidecar.is_symlink():
         logger.warning("ACL sidecar %s is a symlink; ignoring", sidecar)
-        return None, []
+        return None, "sidecar", sidecar, []
 
     raw_bytes = sidecar.read_bytes()
     if len(raw_bytes) > _ACL_SIDECAR_MAX_BYTES:
@@ -148,13 +210,13 @@ def read_acl_sidecar(doc_path: Path) -> tuple[list[str] | None, list[str]]:
             sidecar,
             _ACL_SIDECAR_MAX_BYTES,
         )
-        return None, [warning_msg]
+        return None, "sidecar", sidecar, [warning_msg]
 
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError:
         logger.warning("ACL sidecar %s is not valid UTF-8; ignoring", sidecar)
-        return None, []
+        return None, "sidecar", sidecar, []
 
     # Strip UTF-8 BOM if present
     text = text.lstrip("﻿")
@@ -163,7 +225,7 @@ def read_acl_sidecar(doc_path: Path) -> tuple[list[str] | None, list[str]]:
     non_empty = [line for line in lines if line]
 
     if not non_empty:
-        return None, []
+        return None, "sidecar", sidecar, []
 
     first = non_empty[0]
     if first.upper() == "DENY-ALL":
@@ -172,7 +234,7 @@ def read_acl_sidecar(doc_path: Path) -> tuple[list[str] | None, list[str]]:
                 "ACL sidecar %s has content after 'deny-all' sentinel; extra lines ignored",
                 sidecar,
             )
-        return [], []
+        return [], "sidecar", sidecar, []
 
     valid: list[str] = []
     for line in non_empty:
@@ -183,7 +245,7 @@ def read_acl_sidecar(doc_path: Path) -> tuple[list[str] | None, list[str]]:
                 "ACL sidecar %s: invalid namespace name %r (dropped)", sidecar, line
             )
 
-    return (valid if valid else None), []
+    return (valid if valid else None), "sidecar", sidecar, []
 
 
 _T = TypeVar("_T")
@@ -222,9 +284,7 @@ def apply_acl_filter(
     return passing, dropped
 
 
-def resolve_acl(
-    doc_path: Path, front_matter_acl: Any
-) -> tuple[list[str] | None, list[str]]:
+def resolve_acl(doc_path: Path, front_matter_acl: Any) -> AclResolutionResult:
     """Resolve the effective ACL for a document.
 
     Precedence: front-matter _acl key > sidecar file.
@@ -235,25 +295,41 @@ def resolve_acl(
             the key was absent.
 
     Returns:
-        A tuple of ``(acl_entries, warnings)``:
+        An ``AclResolutionResult`` with:
 
-        - ``acl_entries``:
-            - ``None``: fail-open (no ACL restriction)
-            - ``[]``: deny-all
-            - ``[str, ...]``: allowed namespace names
-        - ``warnings``: list of human-readable warning strings; non-empty only
-          when the sidecar exceeds the 64 KB size limit.
+        - ``acl``: None (fail-open), [] (deny-all), or list of allowed namespace names.
+        - ``source``: ``'frontmatter'``, ``'sidecar'``, or ``None`` (no rule).
+        - ``sidecar_path``: absolute path to the sidecar when source='sidecar'; None otherwise.
+        - ``warnings``: human-readable warning strings (oversized sidecar, shadowing, etc.).
     """
     sidecar = doc_path.parent / (doc_path.name + ".acl")
 
     if front_matter_acl is not None:
+        acl, parse_warnings = parse_acl_value(front_matter_acl, str(doc_path))
+        warnings = list(parse_warnings)
         if sidecar.exists():
+            shadow_msg = (
+                f"Both front-matter _acl and sidecar {sidecar} exist for {doc_path}; "
+                "front-matter takes precedence"
+            )
             logger.warning(
                 "Both front-matter _acl and sidecar %s exist for %s; "
                 "front-matter takes precedence",
                 sidecar,
                 doc_path,
             )
-        return parse_acl_value(front_matter_acl, str(doc_path)), []
+            warnings.append(shadow_msg)
+        return AclResolutionResult(
+            acl=acl,
+            source="frontmatter",
+            sidecar_path=None,
+            warnings=warnings,
+        )
 
-    return read_acl_sidecar(doc_path)
+    acl, source, sidecar_path, sidecar_warnings = read_acl_sidecar(doc_path)
+    return AclResolutionResult(
+        acl=acl,
+        source=source,
+        sidecar_path=sidecar_path,
+        warnings=sidecar_warnings,
+    )

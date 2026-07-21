@@ -78,7 +78,7 @@ flowchart LR
         - [x] #unit_test — `test_search_result_has_provenance_fields` — `SearchResult` carries the three fields with correct defaults
         - [x] #unit_test — `test_scored_candidate_has_provenance_fields` — `ScoredSearchCandidate` carries the three fields with correct defaults
 
-- [ ] **BE-2** — Refactor `acl.py`: add `AclResolutionResult` dataclass; change `resolve_acl()` to return it; change `read_acl_sidecar()` to include `source` and `sidecar_path` in its return; change `parse_acl_value()` to return `(acl, warnings)`; wire the both-present shadowing warning into `AclResolutionResult.warnings` #backend-role
+- [x] **BE-2** — Refactor `acl.py`: add `AclResolutionResult` dataclass; change `resolve_acl()` to return it; change `read_acl_sidecar()` to include `source` and `sidecar_path` in its return; change `parse_acl_value()` to return `(acl, warnings)`; wire the both-present shadowing warning into `AclResolutionResult.warnings` #backend-role
     - Interface Adapters · 3.0h
     - needs BE-1 · completes C4, S4, S4f
     - Tests

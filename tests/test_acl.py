@@ -45,19 +45,20 @@ def test_is_acl_namespace_valid_rejects_empty() -> None:
 
 
 def test_parse_acl_value_none() -> None:
-    assert parse_acl_value(None, "doc.md") is None
+    acl, warnings = parse_acl_value(None, "doc.md")
+    assert acl is None
 
 
 def test_parse_acl_value_int_defaults_open_with_warning(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = parse_acl_value(42, "doc.md")
+        result, warnings = parse_acl_value(42, "doc.md")
     assert result is None
     assert "invalid type" in caplog.text.lower() or "int" in caplog.text
 
 
 def test_parse_acl_value_bool_defaults_open_with_warning(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = parse_acl_value(True, "doc.md")
+        result, warnings = parse_acl_value(True, "doc.md")
     assert result is None
     assert any("bool" in r.message or "invalid type" in r.message.lower() for r in caplog.records)
 
@@ -68,22 +69,25 @@ def test_parse_acl_value_bool_defaults_open_with_warning(caplog: pytest.LogCaptu
 
 
 def test_parse_acl_value_string_comma_separated() -> None:
-    assert parse_acl_value("tenantA,tenantB", "doc.md") == ["tenantA", "tenantB"]
+    acl, _ = parse_acl_value("tenantA,tenantB", "doc.md")
+    assert acl == ["tenantA", "tenantB"]
 
 
 def test_parse_acl_value_newline_separated() -> None:
-    assert parse_acl_value("tenantA\ntenantB", "doc.md") == ["tenantA", "tenantB"]
+    acl, _ = parse_acl_value("tenantA\ntenantB", "doc.md")
+    assert acl == ["tenantA", "tenantB"]
 
 
 def test_parse_acl_value_strips_whitespace() -> None:
-    assert parse_acl_value(" tenantA , tenantB ", "doc.md") == ["tenantA", "tenantB"]
+    acl, _ = parse_acl_value(" tenantA , tenantB ", "doc.md")
+    assert acl == ["tenantA", "tenantB"]
 
 
 def test_parse_acl_value_invalid_names_dropped_with_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = parse_acl_value("!!!bad!!!", "doc.md")
+        result, warnings = parse_acl_value("!!!bad!!!", "doc.md")
     assert result is None
 
 
@@ -93,29 +97,30 @@ def test_parse_acl_value_invalid_names_dropped_with_warning(
 
 
 def test_parse_acl_value_list() -> None:
-    assert parse_acl_value(["tenantA", "tenantB"], "doc.md") == ["tenantA", "tenantB"]
+    acl, _ = parse_acl_value(["tenantA", "tenantB"], "doc.md")
+    assert acl == ["tenantA", "tenantB"]
 
 
 def test_parse_acl_value_all_invalid_defaults_open() -> None:
-    result = parse_acl_value(["!!!bad1!!!", "!!!bad2!!!"], "doc.md")
+    result, _ = parse_acl_value(["!!!bad1!!!", "!!!bad2!!!"], "doc.md")
     assert result is None
 
 
 def test_parse_acl_value_empty_list_returns_deny_all() -> None:
-    result = parse_acl_value([], "doc.md")
+    result, _ = parse_acl_value([], "doc.md")
     assert result == []
 
 
 def test_parse_acl_value_mixed_valid_and_invalid(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = parse_acl_value(["tenantA", "!!!bad!!!", "tenantB"], "doc.md")
+        result, warnings = parse_acl_value(["tenantA", "!!!bad!!!", "tenantB"], "doc.md")
     assert result == ["tenantA", "tenantB"]
     assert caplog.records  # a warning was emitted
 
 
 def test_parse_acl_value_list_with_nonstring_elements(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = parse_acl_value([42, "tenantA", None], "doc.md")
+        result, warnings = parse_acl_value([42, "tenantA", None], "doc.md")
     assert result == ["tenantA"]
     assert caplog.records  # a warning was emitted
 
@@ -127,7 +132,7 @@ def test_parse_acl_value_list_with_nonstring_elements(caplog: pytest.LogCaptureF
 
 def test_parse_acl_value_deny_all_name_rejected() -> None:
     """deny-all as sole string entry → empty list (deny-all interpretation)."""
-    result = parse_acl_value("deny-all", "doc.md")
+    result, _ = parse_acl_value("deny-all", "doc.md")
     assert result == []
 
 
@@ -135,7 +140,7 @@ def test_parse_acl_value_deny_all_sole_entry_returns_deny_all(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = parse_acl_value("deny-all", "doc.md")
+        result, _ = parse_acl_value("deny-all", "doc.md")
     assert result == []
     assert any("deny-all" in r.message for r in caplog.records)
 
@@ -145,7 +150,7 @@ def test_parse_acl_value_deny_all_mixed_with_valid_drops_deny_all(
 ) -> None:
     """deny-all mixed with valid names → valid names only, deny-all dropped with warning."""
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = parse_acl_value("deny-all,tenantA", "doc.md")
+        result, _ = parse_acl_value("deny-all,tenantA", "doc.md")
     assert result == ["tenantA"]
     assert caplog.records
 
@@ -155,7 +160,7 @@ def test_parse_acl_value_deny_all_mixed_with_invalid_fails_open(
 ) -> None:
     """deny-all + only invalid names → fail-open (None), not deny-all."""
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        result = parse_acl_value("deny-all,!!!bad!!!", "doc.md")
+        result, _ = parse_acl_value("deny-all,!!!bad!!!", "doc.md")
     assert result is None
     assert caplog.records
 
@@ -170,7 +175,7 @@ def test_read_acl_sidecar_namespace_list(tmp_path: pytest.TempPathFactory) -> No
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns1\nns2\n")
-    acl_entries, warnings = read_acl_sidecar(doc)
+    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries == ["ns1", "ns2"]
     assert warnings == []
 
@@ -180,7 +185,7 @@ def test_read_acl_sidecar_deny_all_sentinel(tmp_path: pytest.TempPathFactory) ->
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("deny-all\n")
-    acl_entries, warnings = read_acl_sidecar(doc)
+    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries == []
     assert warnings == []
 
@@ -190,7 +195,7 @@ def test_read_acl_sidecar_deny_all_case_insensitive(tmp_path: pytest.TempPathFac
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("DENY-ALL\n")
-    acl_entries, warnings = read_acl_sidecar(doc)
+    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries == []
     assert warnings == []
 
@@ -200,7 +205,7 @@ def test_read_acl_sidecar_empty_returns_none(tmp_path: pytest.TempPathFactory) -
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("   \n\n  \n")
-    acl_entries, warnings = read_acl_sidecar(doc)
+    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries is None
     assert warnings == []
 
@@ -208,7 +213,7 @@ def test_read_acl_sidecar_empty_returns_none(tmp_path: pytest.TempPathFactory) -
 def test_read_acl_sidecar_absent_returns_none(tmp_path: pytest.TempPathFactory) -> None:
     doc = tmp_path / "doc.md"
     doc.write_text("")
-    acl_entries, warnings = read_acl_sidecar(doc)
+    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries is None
     assert warnings == []
 
@@ -221,7 +226,7 @@ def test_read_acl_sidecar_size_limit(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"ns1\n" * 20000)  # > 64 KB
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        acl_entries, warnings = read_acl_sidecar(doc)
+        acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries is None
     assert len(warnings) == 1
     assert caplog.records
@@ -232,7 +237,7 @@ def test_read_acl_sidecar_bom_stripped(tmp_path: pytest.TempPathFactory) -> None
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"\xef\xbb\xbfns1\n")  # UTF-8 BOM + ns1
-    acl_entries, warnings = read_acl_sidecar(doc)
+    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries == ["ns1"]
     assert warnings == []
 
@@ -245,7 +250,7 @@ def test_read_acl_sidecar_invalid_lines_dropped(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns1\n!!!bad!!!\n")
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        acl_entries, warnings = read_acl_sidecar(doc)
+        acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries == ["ns1"]
     assert caplog.records
 
@@ -260,7 +265,7 @@ def test_read_acl_sidecar_symlink_returns_none(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.symlink_to(real_file)
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        acl_entries, warnings = read_acl_sidecar(doc)
+        acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries is None
     assert caplog.records
 
@@ -273,7 +278,7 @@ def test_read_acl_sidecar_deny_all_with_trailing_lines(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("deny-all\nns1\nns2\n")
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        acl_entries, warnings = read_acl_sidecar(doc)
+        acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries == []
     assert caplog.records
 
@@ -286,7 +291,7 @@ def test_read_acl_sidecar_invalid_utf8_returns_none(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"\xff\xfe invalid bytes")
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        acl_entries, warnings = read_acl_sidecar(doc)
+        acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries is None
     assert caplog.records
 
@@ -304,9 +309,8 @@ def test_resolve_acl_front_matter_takes_precedence(
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns2\n")
     with caplog.at_level(logging.WARNING, logger="archon_search"):
-        acl_entries, warnings = resolve_acl(doc, "ns1")
-    assert acl_entries == ["ns1"]
-    assert warnings == []
+        result = resolve_acl(doc, "ns1")
+    assert result.acl == ["ns1"]
     assert caplog.records  # warning about both existing
 
 
@@ -315,9 +319,9 @@ def test_resolve_acl_sidecar_used_when_no_front_matter(tmp_path: pytest.TempPath
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns2\n")
-    acl_entries, warnings = resolve_acl(doc, None)
-    assert acl_entries == ["ns2"]
-    assert warnings == []
+    result = resolve_acl(doc, None)
+    assert result.acl == ["ns2"]
+    assert result.warnings == []
 
 
 def test_resolve_acl_explicit_null_front_matter_falls_through_to_sidecar(
@@ -327,9 +331,9 @@ def test_resolve_acl_explicit_null_front_matter_falls_through_to_sidecar(
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns3\n")
-    acl_entries, warnings = resolve_acl(doc, None)
-    assert acl_entries == ["ns3"]
-    assert warnings == []
+    result = resolve_acl(doc, None)
+    assert result.acl == ["ns3"]
+    assert result.warnings == []
 
 
 # ---------------------------------------------------------------------------
@@ -416,12 +420,12 @@ def test_apply_acl_filter_all_denied() -> None:
 def test_read_acl_sidecar_oversized_returns_warning(
     tmp_path: pytest.TempPathFactory,
 ) -> None:
-    """Sidecar > 64 KB must return (None, [warning_str]) with message naming the file and limit."""
+    """Sidecar > 64 KB must return (None, source, sidecar_path, [warning_str]) naming the file and limit."""
     doc = tmp_path / "doc.md"
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"ns1\n" * 20000)  # > 64 KB
-    acl_entries, warnings = read_acl_sidecar(doc)
+    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries is None
     assert len(warnings) == 1
     assert "64" in warnings[0]  # mentions the limit
@@ -431,12 +435,12 @@ def test_read_acl_sidecar_oversized_returns_warning(
 def test_read_acl_sidecar_normal_returns_no_warning(
     tmp_path: pytest.TempPathFactory,
 ) -> None:
-    """Sidecar ≤ 64 KB must return (acl_list, []) with empty warnings."""
+    """Sidecar ≤ 64 KB must return (acl_list, source, sidecar_path, []) with empty warnings."""
     doc = tmp_path / "doc.md"
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns1\nns2\n")
-    acl_entries, warnings = read_acl_sidecar(doc)
+    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries == ["ns1", "ns2"]
     assert warnings == []
 
@@ -444,40 +448,42 @@ def test_read_acl_sidecar_normal_returns_no_warning(
 def test_read_acl_sidecar_absent_returns_no_warning(
     tmp_path: pytest.TempPathFactory,
 ) -> None:
-    """No sidecar must return (None, []) with empty warnings."""
+    """No sidecar must return (None, None, None, []) with empty warnings."""
     doc = tmp_path / "doc.md"
     doc.write_text("")
-    acl_entries, warnings = read_acl_sidecar(doc)
+    acl_entries, source, sidecar_path, warnings = read_acl_sidecar(doc)
     assert acl_entries is None
     assert warnings == []
 
 
-def test_resolve_acl_sidecar_path_returns_tuple(
+def test_resolve_acl_sidecar_path_returns_result(
     tmp_path: pytest.TempPathFactory,
 ) -> None:
-    """resolve_acl() via sidecar path returns tuple[list[str] | None, list[str]] with empty warnings."""
+    """resolve_acl() via sidecar path returns AclResolutionResult with empty warnings."""
+    from archon_search.acl import AclResolutionResult
+
     doc = tmp_path / "doc.md"
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_text("ns1\n")
     result = resolve_acl(doc, None)
-    assert isinstance(result, tuple)
-    acl_entries, warnings = result
-    assert acl_entries == ["ns1"]
-    assert warnings == []
+    assert isinstance(result, AclResolutionResult)
+    assert result.acl == ["ns1"]
+    assert result.warnings == []
 
 
-def test_resolve_acl_frontmatter_path_returns_tuple(
+def test_resolve_acl_frontmatter_path_returns_result(
     tmp_path: pytest.TempPathFactory,
 ) -> None:
-    """resolve_acl() via front-matter path returns (parsed_acl, []) tuple."""
+    """resolve_acl() via front-matter path returns AclResolutionResult."""
+    from archon_search.acl import AclResolutionResult
+
     doc = tmp_path / "doc.md"
     doc.write_text("")
     result = resolve_acl(doc, "ns1")
-    assert isinstance(result, tuple)
-    acl_entries, warnings = result
-    assert acl_entries == ["ns1"]
-    assert warnings == []
+    assert isinstance(result, AclResolutionResult)
+    assert result.acl == ["ns1"]
+    assert result.warnings == []
 
 
 # ---------------------------------------------------------------------------
@@ -493,10 +499,10 @@ def test_resolve_acl_oversized_sidecar_propagates_warning(
     doc.write_text("")
     sidecar = tmp_path / "doc.md.acl"
     sidecar.write_bytes(b"ns1\n" * 20000)  # > 64 KB
-    acl_entries, warnings = resolve_acl(doc, None)
-    assert acl_entries is None
-    assert len(warnings) == 1
-    assert "64" in warnings[0]
+    result = resolve_acl(doc, None)
+    assert result.acl is None
+    assert len(result.warnings) == 1
+    assert "64" in result.warnings[0]
 
 
 # ---------------------------------------------------------------------------
