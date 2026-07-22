@@ -1,6 +1,35 @@
 # Changelog
 
 
+## [26.7.1682] - 2026-07-22
+
+**Permission-Aware Search Snippets + ACL provenance tracking + improved release tooling**
+
+**Permission-Aware Search (G15)**
+
+`POST /search` and `POST /explain` now expose ACL context and decision provenance via the `acl_gate` field (when `acl_context: true` is passed to search). The `acl_gate` field includes `allowed_principals`, `source` (one of `"frontmatter"`, `"sidecar"`, `"collection_default"`, `None`), `sidecar_path`, and structured `warnings` — letting clients understand why a chunk was accessible and which ACL rule applied. `POST /explain` always populates `acl_gate` unconditionally on every `ExplainResult` (near-misses do not carry the field). All fail-open branches in ACL parsing (`parse_acl_value` and `read_acl_sidecar`) now surface structured warnings: invalid types, non-string elements, invalid namespace names, symlink detection, UTF-8 decode failures, and deny-all edge cases. Three new nullable columns (`acl_source`, `acl_sidecar_path`, `acl_warning`) are added to the store via startup migration and propagated through `ChunkRecord`, `SearchResult`, and `ScoredSearchCandidate` — the full pipeline from ingest through search carries the provenance.
+
+**Release tooling**
+
+`release.sh` now prints which synthesis path it is using (`"release notes: using Anthropic API key"` or `"release notes: using claude -p CLI"`) to stderr before attempting to generate notes, raising the Claude CLI synthesis timeout from 2 to 5 minutes, replacing `head` with `awk` to avoid SIGPIPE under `set -o pipefail`, and running synthesis in dry-run mode to catch errors before commit. The `synthesize_release_notes.py` script receives visibility into both success and fallback paths, eliminating silent failures.
+
+**Testing and CI**
+
+Fixed a long-standing gap where tests calling `leidenalg`-dependent code at runtime (e.g. `CommunityBuilder.build()`) raised `ImportError` in CI even when they never imported `leidenalg` directly — the lazy import fires at the call site, not module load. Any test body that triggers a leidenalg code path now uses `pytest.importorskip("leidenalg")` as its first line, regardless of whether it imports the package directly. This keeps the suite green in CI when the `[graph]` extra is absent.
+
+**Textual UI examples**
+
+The `examples/` prototype wizard was rebuilt as a two-step setup flow: device calibration (step 01) and core matrix selection (step 02) on the new colour system (`#141414` bg, `#80C0F8` blue, `#F09850` orange, `#62C9C3` cyan, `#86C08A` green). Step 01 runs a 5-phase animated benchmark (probe → throughput → headroom → disk → derive factor) with braille spinner and live measured values, then shows the factor derivation and MAX SAFE LOAD verdict. Step 02 selects corpora and profiles with animated gauge sweeps and live EST LOAD sparkline in braille dots (`⣀⣤⣶⣿`). Animation was split into `sweep_corpus` and `sweep_profile` clocks so changing the corpus only re-animates the corpus section, leaving profile gauges stationary — fixing jittery reveals where unrelated widgets flickered on every input. Tests rewritten to cover calibration completion, device cycling, cross-screen navigation, per-section animation isolation, and braille EST LOAD rendering.
+
+**CLI**
+
+`archon-search collection info <name>` is now an HTTP proxy to `GET /collections/{name}` instead of dumping a raw Python `CollectionMeta(...)` repr (which included 384-element embedding vectors and internal details). Output is human-readable and consistent with the REST API: 13 fixed fields in order (`name`, `description`, `namespace`, `doc_count`, `chunk_count`, `active_embedding_model`, `pending_embedding_model`, `needs_reindex`, `reindex_job_id`, `last_indexed`, `default_ttl_seconds`, `schema_version`, `centroid_present`), with null/empty fields omitted and `last_indexed: never` when the server returns null.
+
+**Documentation**
+
+Graduated 63 completed briefs, plans, and tasks from `Documentation/Backlog/` to `Documentation/Completed/` (features shipped across briefs 010–350: smoke suite, wizard fixes, CLI proxy, community rebuild, collection-add-async, permission-aware snippets, and every UX/error fix through brief 330). Updated cross-references in docs and roadmap links to point to the new locations, keeping the active queue focused on in-flight work.
+
+
 ## [26.7.1681] - 2026-07-22
 
 **Test CI robustness for optional graph extras**
