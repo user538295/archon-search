@@ -1,6 +1,40 @@
 # Changelog
 
 
+## [26.7.1678] - 2026-07-22
+
+**Permission-aware search snippets, Textual UI wizard, and CLI collection info proxy**
+
+**Permission-Aware Search Snippets**
+
+G15 adds end-to-end ACL provenance tracking through ingest and search:
+
+- Added `acl_source`, `acl_sidecar_path`, `acl_warning` fields to `ChunkRecord`, `SearchResult`, and `ScoredSearchCandidate` to track how each chunk's ACL was resolved (frontmatter, sidecar file, or collection default)
+- Refactored `resolve_acl()`, `parse_acl_value()`, and `read_acl_sidecar()` to return structured `AclResolutionResult` with warnings for all fail-open branches (invalid types, non-string list elements, invalid namespace names, UTF-8 decode failures)
+- Added three new nullable columns (`acl_source`, `acl_sidecar_path`, `acl_warning`) to the LanceDB chunk table via startup migration `migrate_acl_provenance()`
+- New `AclGateSchema` in `POST /search` — pass `acl_context: true` to receive `acl_gate` with `allowed_principals`, `source`, `sidecar_path`, and `warnings` on each result (null when omitted)
+- `POST /explain` now unconditionally includes `acl_gate` on every `ExplainResult`; near-misses carry no `acl_gate` field
+- All ACL parsing warnings are now surfaced as structured data, making ACL resolution transparent to clients
+
+**Textual Examples Wizard**
+
+Rebuilt the `examples/` prototype as a two-screen calibration→core-selection wizard:
+
+- New color palette from design handoff: `#141414` background, `#80C0F8` blue, `#F09850` orange, `#62C9C3` cyan, `#86C08A` green
+- New `textual_calibration.py` — step 01 device benchmark with 5-phase animated sequence (probe → throughput → headroom → disk → derive factor), live measured values, braille spinner, and MAX SAFE LOAD verdict; press `r` to re-run, `d` to cycle device, `n` to advance
+- Rewrote `textual_core_matrix.py` — step 02 core matrix (2 corpus + 3 profile choices, cursor-follows-info, gauge sweep, EST LOAD sparkline, breadcrumb, LOCKED flash) plus `WizardApp` wiring both screens with NEXT/BACK navigation
+- Split animation clocks into `sweep_corpus` and `sweep_profile` so only the changed section re-animates
+- Render EST LOAD sparkline with braille dots (`⣀⣤⣶⣿` ramp) instead of block bars
+
+**CLI Collection Info**
+
+`archon-search collection info <name>` is now an HTTP proxy to `GET /collections/{name}`:
+
+- Displays 13 human-readable fields in fixed order: `name`, `description`, `namespace`, `doc_count`, `chunk_count`, `active_embedding_model`, `pending_embedding_model`, `needs_reindex`, `reindex_job_id`, `last_indexed`, `default_ttl_seconds`, `schema_version`, `centroid_present`
+- Omits null or empty fields; shows `last_indexed: never` when null
+- Accepts `--api-url` / `--api-key` options consistent with other proxy commands
+
+
 ## [26.7.1533] - 2026-07-14
 
 **Add dry_run support to service lifecycle and implement get_search_service**
