@@ -110,8 +110,17 @@ def test_dockerfile_chown_before_user_switch(dockerfile_text: str) -> None:
 
 
 def test_dockerfile_has_tini_entrypoint(dockerfile_text: str) -> None:
-    assert 'ENTRYPOINT ["tini", "--"]' in dockerfile_text, (
-        'Dockerfile must use ENTRYPOINT ["tini", "--"] to forward signals'
+    assert 'ENTRYPOINT ["tini", "--", "/entrypoint.sh"]' in dockerfile_text, (
+        'Dockerfile must use ENTRYPOINT ["tini", "--", "/entrypoint.sh"] to forward signals'
+    )
+
+
+def test_dockerfile_copies_and_chmod_entrypoint(dockerfile_text: str) -> None:
+    assert "COPY scripts/docker-entrypoint.sh /entrypoint.sh" in dockerfile_text, (
+        "Dockerfile must COPY the entrypoint script before switching to USER appuser"
+    )
+    assert "chmod +x /entrypoint.sh" in dockerfile_text, (
+        "Dockerfile must chmod +x the entrypoint script so it is executable"
     )
 
 
@@ -196,6 +205,13 @@ def test_dockerfile_has_fastembed_cache_env(dockerfile_text: str) -> None:
     assert "FASTEMBED_CACHE_PATH=/data/fastembed-cache" in dockerfile_text, (
         "Dockerfile must set FASTEMBED_CACHE_PATH so fastembed weights "
         "persist on the mounted volume"
+    )
+
+
+def test_dockerfile_sets_home_to_data(dockerfile_text: str) -> None:
+    assert "HOME=/data" in dockerfile_text, (
+        "Dockerfile must set HOME=/data so pip and other tools write caches "
+        "to the persistent volume (appuser is created --no-create-home)"
     )
 
 

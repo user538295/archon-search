@@ -93,8 +93,8 @@ RUN set -eux; \
 # correct ownership: anonymous-volume runs (`docker run` without `-v`)
 # rely on this so UID 1000 can write the auto-generated key file.
 RUN useradd --uid 1000 --no-create-home --shell /usr/sbin/nologin appuser; \
-    mkdir -p /data; \
-    chown appuser:appuser /data
+    mkdir -p /data /pip-packages; \
+    chown appuser:appuser /data /pip-packages
 
 # Runtime configuration. `ARCHON_SEARCH_DATA_DIR` redirects every runtime
 # path (db, logs, telemetry, key file, jobs, fasttext models, ingest
@@ -105,7 +105,11 @@ RUN useradd --uid 1000 --no-create-home --shell /usr/sbin/nologin appuser; \
 # instead of the ephemeral container layer.
 ENV ARCHON_SEARCH_DATA_DIR=/data \
     ARCHON_SEARCH_CONTAINER=1 \
-    FASTEMBED_CACHE_PATH=/data/fastembed-cache
+    FASTEMBED_CACHE_PATH=/data/fastembed-cache \
+    HOME=/data
+
+COPY scripts/docker-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 USER appuser
 
@@ -115,10 +119,10 @@ EXPOSE 8765
 # `/ready` is the readiness probe exposed by the FastAPI app. urllib is
 # used to avoid pulling curl into the slim base image. Exit non-zero on
 # any error so the orchestrator can mark the container unhealthy.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=360s --retries=3 \
     CMD python3 -c "import urllib.request, sys; urllib.request.urlopen('http://localhost:8765/ready')" || exit 1
 
 # tini reaps zombies and forwards SIGTERM/SIGINT to uvicorn so the server
 # exits cleanly during `docker stop` (within the compose `stop_grace_period`).
-ENTRYPOINT ["tini", "--"]
+ENTRYPOINT ["tini", "--", "/entrypoint.sh"]
 CMD ["archon-search", "serve"]

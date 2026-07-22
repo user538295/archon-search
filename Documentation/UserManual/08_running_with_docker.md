@@ -1,7 +1,7 @@
 **Purpose**: Run `archon-search` from the published Docker image — `docker run`, `docker compose`, and the build-arg matrix for CPU/GPU images.
 **Audience**: End users / operators who want a portable, reproducible deployment unit.
 **Status**: Stable
-**Last reviewed**: 2026-06-12 / **Next review**: 2027-06-12
+**Last reviewed**: 2026-07-22 / **Next review**: 2027-07-22
 
 # Running with Docker
 
@@ -14,6 +14,37 @@ The Docker image is the only deployment unit that does not require a host-level 
 3. **Stderr is the only log sink by default.** `ARCHON_SEARCH_CONTAINER=1` is baked into the image; `logging_setup.configure_logging()` attaches a `StreamHandler(sys.stderr)` so `docker logs` (and Kubernetes log collectors) capture every line.
 4. **Non-root by default.** The image runs as UID 1000 (`appuser`). `/data` is pre-`chown`ed so anonymous-volume runs (`docker run` without `-v`) work. If you bind-mount a host directory, make sure UID 1000 can write to it (`chown 1000:1000 /path/to/data` or `chmod 0777`).
 5. **Single writer.** LanceDB is single-writer per `db_path`. Do not mount the same volume into more than one running container.
+6. **Optional extras are installed at runtime, not bake-time.** The base image ships only the core package. Optional feature sets (`graph`, `code`, `multilingual`) are pip-installed by the entrypoint script on first start into a `/pip-packages` named volume, so the image stays lean and extras are cached across restarts.
+
+## Entrypoint and runtime extras installation
+
+The container entrypoint is `scripts/docker-entrypoint.sh` (copied to `/entrypoint.sh` in the image). Before handing off to `archon-search serve`, it:
+
+1. Reads `ARCHON_EXTRAS` (default `graph,code,multilingual`; empty string = core-only, no install).
+2. Checks a stamp file at `/pip-packages/.extras-installed`. If the stamp is absent or the extras list has changed, runs `python3 -m pip install --no-cache-dir --target /pip-packages ".[${ARCHON_EXTRAS}]"`.
+3. If `graph` is in `ARCHON_EXTRAS`, downloads the spaCy model `en_core_web_sm` into `/pip-packages` if not already present (required by `graph.enabled = true`).
+4. Prepends `/pip-packages` to `PYTHONPATH` and execs the CMD (`archon-search serve`).
+
+**First start** triggers a pip install that can take 3–5 minutes depending on network speed. Subsequent starts are instant (stamp matches). Mount `/pip-packages` as a named volume to persist the install across container recreates:
+
+```bash
+docker volume create archon-search-packages
+docker run -d \
+  --name archon-search \
+  -e ARCHON_SEARCH_API_KEY=$ARCHON_SEARCH_API_KEY \
+  -v archon-search-data:/data \
+  -v archon-search-packages:/pip-packages \
+  -p 8765:8765 \
+  ghcr.io/user538295/archon-search:latest
+```
+
+To skip extras entirely (lean core-only deployment), pass an empty value:
+
+```bash
+docker run ... -e ARCHON_EXTRAS="" ...
+```
+
+When `ARCHON_EXTRAS` is set to an empty string, the entrypoint skips the pip install block and proceeds directly to exec. Note: if `ARCHON_EXTRAS` is **unset** (not passed at all), the default `graph,code,multilingual` applies.
 
 ## Image variants
 
@@ -58,7 +89,7 @@ curl http://127.0.0.1:8765/ready     # readiness — 200 once storage is connect
 curl -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY" http://127.0.0.1:8765/status
 ```
 
-The image declares a `HEALTHCHECK` that polls `/ready` every 15s after a 30s start-period, so `docker ps` shows `(healthy)` once the storage layer is up.
+The image declares a `HEALTHCHECK` that polls `/ready` every 15s after a 360s start-period. The generous start-period accommodates the first-start extras install (up to 3–5 minutes); subsequent starts are instant (stamp matches) but the start-period is fixed at image level. `docker ps` shows `(healthy)` once the storage layer is up.
 
 ## `docker compose`
 
@@ -106,7 +137,9 @@ The container reads the same env vars as a host-installed server, plus two that 
 | `ARCHON_SEARCH_CONTAINER` | `1` (baked into image) | Adds `StreamHandler(sys.stderr)` to the `archon_search` logger so `docker logs` captures output. |
 | `FASTEMBED_CACHE_PATH` | `/data/fastembed-cache` (baked into image) | Persists fastembed-downloaded model weights on the mounted volume instead of the ephemeral container layer. |
 | `ARCHON_SEARCH_KEY_FILE` | unset | Overrides the key file path. Takes precedence over `ARCHON_SEARCH_DATA_DIR` for the key file only. |
-| `ARCHON_SEARCH_CONFIG` | unset | Points at a TOML config file. Required if you want `archon-search collection add` to work inside the container — that command sends the path to the server which writes it to TOML, and without `ARCHON_SEARCH_CONFIG=/data/archon-search.toml` the server will try to write outside the mounted volume. `collection remove` now proxies to the server (no direct TOML write on the CLI side). The `serve` subcommand logs a warning at startup when `ARCHON_SEARCH_DATA_DIR` is set but `ARCHON_SEARCH_CONFIG` is not. |
+| `ARCHON_SEARCH_CONFIG` | unset | Points at a TOML config file. Required if you want `archon-search collection add` to work inside the container — that command sends the path to the server which writes it to TOML, and without `ARCHON_SEARCH_CONFIG=/data/archon-search.toml` the server will try to write outside the mounted volume. `collection remove` also proxies through the server. The `serve` subcommand logs a warning at startup when `ARCHON_SEARCH_DATA_DIR` is set but `ARCHON_SEARCH_CONFIG` is not. |
+| `ARCHON_EXTRAS` | `graph,code,multilingual` | Comma-separated list of optional package extras installed by the entrypoint on first start into `/pip-packages`. Set to `""` to skip extras and run core-only. Change the value and the entrypoint will re-install on the next start (stamp-based detection). |
+| `HOME` | `/data` (baked into image) | Required so pip operations inside the container write to the persistent volume rather than the ephemeral layer. Do not override unless you also relocate `/data`. |
 
 ## Persistence layout
 
@@ -128,6 +161,63 @@ When `/data` is mounted, the volume looks like this after a few requests:
 └── history/
     └── sessions/                # history sessions directory
 ```
+
+When `/pip-packages` is mounted (recommended), it holds the optional-extras install:
+
+```
+/pip-packages
+├── .extras-installed            # stamp file: contents = last installed ARCHON_EXTRAS value
+├── en_core_web_sm/              # spaCy model (present when graph extra is installed)
+└── <wheel contents …>           # graph, code, multilingual extras and their transitive deps
+```
+
+## Development workflow (claude_cli + full extras)
+
+`docker-compose.override.yml` in the repo root defines an `archon-dev` service that wires up a full-featured dev container: multilingual embeddings, graph extraction, HyDE + RAG Fusion via the `claude_cli` provider, and a fastembed model cache bind-mounted from the Mac host.
+
+### Prerequisites
+
+- `~/.cache/fastembed` populated (run `uv run archon-search serve` once on the host, or copy from another machine).
+- Claude Code installed on the Mac host and logged in.
+
+### Steps
+
+1. **Start the host-side claude proxy** in a separate terminal:
+
+   ```bash
+   python3 scripts/claude-proxy.py
+   # claude proxy listening on 127.0.0.1:18766
+   ```
+
+   This HTTP server accepts `POST /` from inside the container, runs the real `claude` binary on the Mac host, and streams stdout back. The container mounts `scripts/claude-container-wrapper` at `/usr/local/bin/claude` — a minimal Python shim that POSTs to `http://host.docker.internal:18766`.
+
+2. **Start the dev container:**
+
+   ```bash
+   docker compose up archon-dev
+   ```
+
+   The override file mounts:
+   - `archon-dev-data:/data` — persistent LanceDB index and key file
+   - `archon-dev-packages:/pip-packages` — cached optional extras
+   - `./archon-search.docker-dev.toml:/config/archon-search.toml:ro` — dev config (full profile, graph enabled, claude_cli HyDE/RAG Fusion)
+   - `~/.cache/fastembed:/data/fastembed-cache` — host fastembed model cache (avoids re-downloading ~500 MB)
+   - `~/.archon-search/models:/data/models` — host fasttext model cache
+
+3. **First start only:** the entrypoint installs graph + code + multilingual extras and downloads `en_core_web_sm` (~3–5 min). Watch progress with `docker compose logs -f archon-dev`.
+
+4. **Smoke-test:**
+
+   ```bash
+   KEY=$(docker compose exec archon-dev cat /data/.search.env | grep -o '[^=]*$')
+   curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8765/status
+   ```
+
+The dev config (`archon-search.docker-dev.toml`) enables:
+- `[database] profile = "max"` with `multilingual-e5-large` embeddings and `jina-reranker-v2-base-multilingual`
+- `[graph] enabled = true`
+- `[hyde] provider = "claude_cli" model = "haiku"`
+- `[rag_fusion] provider = "claude_cli" model = "haiku"`
 
 ## TLS termination
 

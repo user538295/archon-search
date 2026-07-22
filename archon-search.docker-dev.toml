@@ -1,0 +1,45 @@
+[server]
+host = "0.0.0.0"
+port = 8765
+
+[database]
+db_path = "/data/search"
+embedding_model = "intfloat/multilingual-e5-large"
+reranker_model = "jinaai/jina-reranker-v2-base-multilingual"
+chunk_size = 1024
+auto_reindex_on_chunk_size_change = true
+profile = "max"
+multilingual = true
+eager_load_embedders = true
+
+[routing]
+routing_shortlist_size = 8
+routing_confidence_threshold = 0.3
+max_parallel_collections = 3
+routing_strategy = "hybrid"
+
+[collections]
+pinned_collections = []
+collections = []
+watch = true
+
+[logging]
+level = "INFO"
+log_file = "/data/logs/archon-search.log"
+format = "json"
+
+[telemetry]
+enabled = true
+
+[hyde]
+enabled = true
+provider = "claude_cli"
+model = "haiku"
+
+[rag_fusion]
+enabled = true
+provider = "claude_cli"
+model = "haiku"
+
+[graph]
+enabled = true

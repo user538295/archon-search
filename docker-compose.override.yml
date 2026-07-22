@@ -1,0 +1,26 @@
+# Dev overrides — lean image, extras installed at runtime into a named volume,
+# config from repo, claude CLI proxied to Mac host.
+# Usage:
+#   1. python3 scripts/claude-proxy.py   # run on Mac host (separate terminal)
+#   2. docker compose up archon-dev
+services:
+  archon-dev:
+    build:
+      context: .
+    image: archon-search:dev
+    environment:
+      ARCHON_SEARCH_CONFIG: /config/archon-search.toml
+      CLAUDE_PROXY_URL: "http://host.docker.internal:18766"
+      ARCHON_EXTRAS: "graph,code,multilingual"
+      PYTHONPATH: "/pip-packages"
+      FASTEMBED_CACHE_PATH: "/data/fastembed-cache"
+    volumes:
+      - archon-dev-data:/data
+      - archon-dev-packages:/pip-packages
+      - ./archon-search.docker-dev.toml:/config/archon-search.toml:ro
+      - ./scripts/claude-container-wrapper:/usr/local/bin/claude:ro
+      - ~/.cache/fastembed:/data/fastembed-cache
+      - ~/.archon-search/models:/data/models
+
+volumes:
+  archon-dev-packages:

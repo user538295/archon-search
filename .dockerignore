@@ -39,3 +39,8 @@ archon-search-jobs.json
 # The Dockerfile itself does not need to ship into the image
 Dockerfile
 .dockerignore
+
+# Dev-only scripts that must not ship in the production image
+scripts/claude-proxy.py
+scripts/claude-container-wrapper
+docker-compose.override.yml
