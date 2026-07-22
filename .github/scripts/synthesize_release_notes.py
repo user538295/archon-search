@@ -75,7 +75,7 @@ def _via_cli() -> str:
         capture_output=True,
         text=True,
         env=env,
-        timeout=60,
+        timeout=300,
         check=True,
     )
     return result.stdout
