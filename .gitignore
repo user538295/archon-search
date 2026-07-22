@@ -34,6 +34,7 @@ venv/
 # Claude Code and Serena agent state
 .claude/
 .serena/
+.tokensave/
 
 # Generated PDF fixtures (not committed — created at test time via reportlab)
 tests/fixtures/pdfs/*.pdf
