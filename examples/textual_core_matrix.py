@@ -1,426 +1,429 @@
-"""A runnable Textual prototype for the Archon Search core-selection screen.
+"""Core matrix — step 02 of the Archon Search setup wizard, and the wizard app.
 
-Run with:
-    uv run --with textual python examples/textual_core_matrix.py
+Pick the corpus (what you search) and the search core (embedder/reranker profile).
+A live telemetry sparkline projects engine load; gauge bars sweep whenever the
+highlighted configuration changes. Mirrors ``Core Step.dc.html``.
+
+Run the whole wizard from the repo root with:
+    uv run --with textual python -m examples.textual_core_matrix
 """
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
-import re
 
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.css.query import NoMatches
-from textual.message import Message
-from textual.widgets import Button, Static
+from textual.screen import Screen
+from textual.widgets import Static
 
-from examples.textual_design import PALETTE, bold, italic
+from examples.textual_design import (
+    BRAILLE,
+    PALETTE,
+    NextScreenRequest,
+    PrevScreenRequest,
+    box_bottom,
+    box_row,
+    box_top,
+    dashed,
+    gauge_color,
+    spread,
+    stack,
+)
 
 
 @dataclass(frozen=True)
-class CoreChoice:
-    """One selectable corpus language or search-profile choice."""
-
-    kind: str
+class Corpus:
     label: str
-    detail: str
-    preview_name: str
-    meters: str
-    line_one: str
-    line_two: str
-    line_three: str
+    meta: str
+    stack: str
+    dl: str
+    mem: str
+    note: str
 
 
-CHOICES = (
-    CoreChoice(
-        "language",
-        "English only",
-        "~330 MB download · 1–1.5 GB RAM",
-        "ENGLISH",
-        "■■■□□ QUALITY     ■■■■□ SPEED      ■■■□□ FOOTPRINT",
-        "Language stack  English models",
-        "Balanced profile  ~330 MB · 1–1.5 GB RAM",
-        "Next stage       Hardware acceleration check",
-    ),
-    CoreChoice(
-        "language",
-        "Multiple languages",
-        "~2.1 GB download · 1–1.5 GB RAM + detector",
-        "MULTILINGUAL",
-        "■■■□□ QUALITY     ■■■□□ SPEED      ■■■■□ COVERAGE",
-        "Language stack  Multilingual models + detector",
-        "Balanced profile  ~2.1 GB · 1–1.5 GB RAM",
-        "Requirement      License confirmation follows",
-    ),
-    CoreChoice(
-        "profile",
-        "Minimal",
-        "Personal / <10k docs      150 MB         ~0.5 GB    ■■□□□",
-        "MINIMAL",
-        "■■□□□ QUALITY     ■■■■■ SPEED      ■■■■■ FOOTPRINT",
-        "Embedder        bge-small-en-v1.5",
-        "Reranker        MiniLM-L6 · Chunk size 512",
-        "Download        ~150 MB · Memory ~0.5 GB",
-    ),
-    CoreChoice(
-        "profile",
-        "Balanced",
-        "Team / 10k–200k docs     ~330 MB        1–1.5 GB  ■■■□□",
-        "BALANCED",
-        "■■■□□ QUALITY     ■■■■□ SPEED      ■■■□□ FOOTPRINT",
-        "Embedder        bge-base-en-v1.5",
-        "Reranker        MiniLM-L12 · Chunk size 512",
-        "Download        ~330 MB · Memory 1–1.5 GB",
-    ),
-    CoreChoice(
-        "profile",
-        "Maximum",
-        "Large / 200k+ docs         ~2.3 GB        2.5–3 GB  ■■■■□",
-        "MAXIMUM",
-        "■■■■□ QUALITY     ■■□□□ SPEED      ■■□□□ FOOTPRINT",
-        "Embedder        bge-large-en-v1.5",
-        "Reranker        BGE reranker · Chunk size 1024",
-        "Download        ~2.3 GB · Memory 2.5–3 GB",
-    ),
+@dataclass(frozen=True)
+class Profile:
+    name: str
+    best: str
+    dl: str
+    mem: str
+    emb: str
+    rer: str
+    chunk: str
+    lat: str
+    retr: int
+    speed: int
+    foot: int
+
+
+CORPUS = (
+    Corpus("English only", "~330 MB", "English models", "~330 MB", "1–1.5 GB",
+           "› Single-language pipeline · fastest indexing and lowest overhead."),
+    Corpus("Multiple languages", "~2.1 GB", "Multilingual + language detector", "~2.1 GB", "1–1.5 GB + detector",
+           "› Cross-lingual recall · adds a language-detection pass per query."),
 )
 
-PROFILE_COLUMNS = (14, 31, 16, 16, 8)
-PROFILE_HEADINGS = ("Profile", "Best for", "Download", "Memory", "Quality")
-class CoreSelector(Static, can_focus=True):
-    """Terminal-native cursor and selection control for the two core decisions."""
+PROFILES = (
+    Profile("Minimal", "Personal · <10k docs", "150 MB", "~0.5 GB", "bge-small-en-v1.5", "— none —", "384 tok", "~90 ms", 4, 10, 2),
+    Profile("Balanced", "Team · 10k–200k docs", "~330 MB", "1–1.5 GB", "bge-base-en-v1.5", "MiniLM-L12", "512 tok", "~150 ms", 7, 6, 5),
+    Profile("Maximum", "Large · 200k+ docs", "~2.3 GB", "2.5–3 GB", "bge-large-en-v1.5", "bge-reranker-large", "768 tok", "~320 ms", 10, 2, 9),
+)
 
-    BINDINGS = [
-        Binding("up", "cursor_up", "Move up"),
-        Binding("down", "cursor_down", "Move down"),
-        Binding("space,enter", "select", "Select"),
-    ]
+STEP_LABELS = ("CALIBRATE", "CORE", "CAPABILITIES", "REVIEW", "INSTALL", "ONLINE")
+NAV = 7            # 0,1 corpus · 2,3,4 profiles · 5 BACK · 6 NEXT
+SPARK_WIDTH = 26
+NAV_BACK = 5
+NAV_NEXT = 6
 
-    class Changed(Message):
-        """Posted whenever the focused or committed core configuration changes."""
+BEST_WIDTH = 22
+DL_WIDTH = 11
+MEM_WIDTH = 12
 
-        def __init__(self, selector: CoreSelector, committed: bool) -> None:
-            super().__init__()
-            self.selector = selector
-            self.committed = committed
+
+class CoreView(Static, can_focus=True):
+    """The core-matrix panel. Owns telemetry + gauge animation and all rendering."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.cursor = 0
-        self.language_index = 0
-        self.profile_index = 3
-        self.cursor_visible = True
+        self.cur = 3               # start on the committed "Balanced" profile
+        self.sel_corpus = 0
+        self.sel_profile = 1
+        self.sweep_corpus = 10     # 0..10 corpus-info reveal (10 = settled)
+        self.sweep_profile = 10    # 0..10 profile-info + gauge reveal (10 = settled)
+        self.load = 27
+        self.spark: list[int] = []
+        self.lock: str | None = None
+        self.blink = True
+        self._lock_timer = None
 
-    @property
-    def focused_choice(self) -> CoreChoice:
-        return CHOICES[self.cursor]
+    # --- lifecycle ---------------------------------------------------------
+    def on_mount(self) -> None:
+        base = self._base_load()
+        self.spark = [max(0, min(8, round(base + random.random() * 1.6 - 0.8))) for _ in range(SPARK_WIDTH)]
+        self.set_interval(0.12, self._telemetry)
+        self.set_interval(0.034, self._sweep_tick)
+        self.set_interval(0.5, self._toggle_blink)
 
-    def action_cursor_up(self) -> None:
-        if self.cursor == 0:
-            self._focus_navigation("previous")
-            return
-        self.cursor_visible = True
-        self.cursor -= 1
-        self._notify_changed(committed=False)
-
-    def action_cursor_down(self) -> None:
-        if self.cursor == len(CHOICES) - 1:
-            self._focus_navigation("next")
-            return
-        self.cursor_visible = True
-        self.cursor += 1
-        self._notify_changed(committed=False)
-
-    def action_select(self) -> None:
-        if self.focused_choice.kind == "language":
-            self.language_index = self.cursor
-        else:
-            self.profile_index = self.cursor
-        self._notify_changed(committed=True)
-
-    def _notify_changed(self, *, committed: bool) -> None:
+    def _telemetry(self) -> None:
+        recomputing = self.sweep_corpus < 10 or self.sweep_profile < 10
+        value = self._base_load() + (random.random() * 2.4 - 1.2) + (2.6 if recomputing else 0)
+        value = max(0, min(8, round(value)))
+        self.spark = (self.spark + [value])[-SPARK_WIDTH:]
+        self.load = round(sum(self.spark) / (len(self.spark) * 8) * 88 + 6)
         self.refresh()
-        self.post_message(self.Changed(self, committed))
 
+    def _sweep_tick(self) -> None:
+        changed = False
+        if self.sweep_corpus < 10:
+            self.sweep_corpus += 1
+            changed = True
+        if self.sweep_profile < 10:
+            self.sweep_profile += 1
+            changed = True
+        if changed:
+            self.refresh()
 
-    def _focus_navigation(self, button_id: str) -> None:
-        self.cursor_visible = False
+    def _toggle_blink(self) -> None:
+        self.blink = not self.blink
         self.refresh()
-        self.app.query_one(f"#{button_id}", NavigationButton).focus()
 
-    @property
-    def _width(self) -> int:
-        """Use the allocated terminal width; no virtual canvas width is imposed."""
-        return max(3, self.size.width)
+    def on_focus(self) -> None:
+        self.refresh()
 
-    @property
-    def _frame_padding(self) -> str:
-        """Inset frame content where the allocated width can accommodate it."""
-        return " " if self._width >= 5 else ""
+    def on_blur(self) -> None:
+        self.refresh()
 
-    @property
-    def _content_width(self) -> int:
-        return self._width - 2 - 2 * len(self._frame_padding)
-
-    def _top_edge(self, label: str) -> str:
-        interior = self._width - 2
-        title = f"─ {label} "
-        return f"┌{title[:interior].ljust(interior, '─')}┐\n"
-
-    def _content_line(self, content: str) -> Text:
-        padding = self._frame_padding
-        interior = self._content_width
-        return Text(f"│{padding}{content[:interior].ljust(interior)}{padding}│\n", style=PALETTE.accent)
-
-    def _choice_line(self, choice: CoreChoice, index: int) -> Text:
-        selected = self.language_index == index if choice.kind == "language" else self.profile_index == index
-        marker = "[●]" if selected else "[ ]"
-        cursor = "▶ " if self.cursor_visible and self.cursor == index else "  "
-        label_width = 20 if choice.kind == "language" else 14
-        if choice.kind == "profile":
-            parts = re.split(r" {2,}", choice.detail)
-            values = (f"{cursor}{marker} {choice.label}", *parts)
-            row = " ".join(value[:width].ljust(width) for value, width in zip(values, PROFILE_COLUMNS))
+    # --- input -------------------------------------------------------------
+    def on_key(self, event) -> None:
+        key = event.key
+        if key in ("up", "left"):
+            self._set_cur((self.cur - 1) % NAV)
+        elif key in ("down", "right"):
+            self._set_cur((self.cur + 1) % NAV)
+        elif key in ("space", "enter"):
+            self._activate()
         else:
-            row = f"{cursor}{marker} {choice.label:<{label_width}} {choice.detail}"
-        padding = self._frame_padding
-        interior = self._content_width
-        style = (
-            f"bold {PALETTE.accent_foreground} on {PALETTE.accent}"
-            if self.cursor_visible and self.cursor == index
-            else f"bold {PALETTE.confirmed}"
-            if selected
-            else PALETTE.muted
-        )
-        text = Text(f"│{padding}", style=PALETTE.accent)
-        visible_row = row[:interior].ljust(interior)
-        text.append(visible_row, style=style)
-        for position, glyph in enumerate(visible_row):
-            if glyph in "■□":
-                start = 1 + len(padding) + position
-                text.stylize(PALETTE.meter, start, start + 1)
-        text.append(f"{padding}│\n", style=PALETTE.accent)
-        return text
+            return
+        event.stop()
+        event.prevent_default()
 
-    def _info_choice(self, kind: str) -> CoreChoice:
-        if self.cursor_visible and self.focused_choice.kind == kind:
-            return self.focused_choice
-        index = self.language_index if kind == "language" else self.profile_index
-        return CHOICES[index]
+    def _set_cur(self, target: int) -> None:
+        before_corpus, before_profile = self._corpus_idx(), self._profile_idx()
+        self.cur = target
+        # Re-animate only the section whose highlighted item actually changed.
+        if self._corpus_idx() != before_corpus:
+            self._start_sweep("corpus")
+        if self._profile_idx() != before_profile:
+            self._start_sweep("profile")
+        self.refresh()
 
-    def _info_rows(self, choice: CoreChoice) -> tuple[tuple[str, str], ...]:
-        if choice.kind == "language":
-            details = (choice.line_one, choice.line_two, choice.line_three)
+    def _activate(self) -> None:
+        if self.cur <= 1:
+            self.sel_corpus = self.cur
+            self._flash("corpus")
+            self._start_sweep("corpus")
+        elif self.cur <= 4:
+            self.sel_profile = self.cur - 2
+            self._flash("profile")
+            self._start_sweep("profile")
+        elif self.cur == NAV_BACK:
+            self.post_message(PrevScreenRequest())
+        # ponytail: NAV_NEXT (step 03 CAPABILITIES) is not built in this prototype — inert on purpose.
+        self.refresh()
+
+    def _start_sweep(self, which: str) -> None:
+        # Reset one section's clock; the always-on _sweep_tick refills it.
+        if which == "corpus":
+            self.sweep_corpus = 0
         else:
-            details = (choice.line_one, choice.line_two, choice.line_three)
-        rows: list[tuple[str, str]] = []
-        for detail in details:
-            if isinstance(detail, tuple):
-                rows.append(detail)
-                continue
-            label, separator, value = detail.partition("  ")
-            rows.append((label, value.lstrip() if separator else ""))
-        return tuple(rows)
+            self.sweep_profile = 0
 
-    def _info_line(self, label: str, value: str) -> Text:
-        label_width = 16
-        label_text = label[:label_width].ljust(label_width)
-        line = self._content_line(f"{label_text} {value}")
-        start = 1 + len(self._frame_padding)
-        line.stylize(PALETTE.stack_label, start, start + len(label_text))
-        if value:
-            value_start = start + len(label_text) + 1
-            line.stylize(PALETTE.stack_value, value_start, value_start + len(value))
+    def _flash(self, which: str) -> None:
+        self.lock = which
+        if self._lock_timer is not None:
+            self._lock_timer.stop()
+        self._lock_timer = self.set_timer(0.9, self._clear_lock)
+
+    def _clear_lock(self) -> None:
+        self.lock = None
+        self.refresh()
+
+    # --- derived state -----------------------------------------------------
+    def _profile_idx(self) -> int:
+        return self.cur - 2 if 2 <= self.cur <= 4 else self.sel_profile
+
+    def _corpus_idx(self) -> int:
+        return self.cur if self.cur <= 1 else self.sel_corpus
+
+    def _base_load(self) -> float:
+        foot = PROFILES[self._profile_idx()].foot
+        return 1.2 + foot * 0.5 + (0.9 if self._corpus_idx() == 1 else 0)
+
+    def _row_styles(self, is_cur: bool, is_sel: bool) -> tuple[str, str]:
+        if is_cur:
+            return f"bold {PALETTE.on_accent} on {PALETTE.accent}", f"{PALETTE.on_accent} on {PALETTE.accent}"
+        return (PALETTE.text if is_sel else PALETTE.dim), PALETTE.faint
+
+    def _bar(self, value: int, sweep: int) -> list[tuple[str, str]]:
+        cells: list[tuple[str, str]] = []
+        for i in range(10):
+            revealed = i < sweep
+            on = i < value
+            if not revealed:
+                cells.append(("░", PALETTE.cell_hidden))
+            elif on and i == sweep - 1 and sweep < 10:
+                cells.append(("█", PALETTE.text))  # charging leading edge
+            elif on:
+                cells.append(("█", gauge_color(i)))
+            else:
+                cells.append(("░", PALETTE.border))
+        return cells
+
+    # --- rendering ---------------------------------------------------------
+    def _sparkline(self) -> Text:
+        """Live load sparkline; each sample is a braille dot-fill glyph (0..4 rows)."""
+        line = Text()
+        for value in self.spark:
+            level = max(0, min(4, round(value / 2)))  # 0..8 sample -> 0..4 dot-rows
+            colour = PALETTE.red if value >= 7 else PALETTE.yellow if value >= 5 else PALETTE.green
+            line.append(BRAILLE[level], style=colour)
         return line
 
-    def _info_text(self, kind: str) -> Text:
-        choice = self._info_choice(kind)
-        text = self._content_line(f"{choice.label.upper()} // INFO")
-        info_start = 1 + len(self._frame_padding)
-        text.stylize(f"bold {PALETTE.confirmed}", info_start, info_start + len(choice.label) + len(" // INFO"))
-        for label, value in self._info_rows(choice):
-            text += self._info_line(label, value)
-        return text
+    def _header(self, width: int) -> Text:
+        left = Text("◆ ARCHON SEARCH", style=f"bold {PALETTE.accent}")
+        left.append(" :: ", style=PALETTE.border)
+        left.append("◉ CORE MATRIX LINKED", style=PALETTE.orange)
+        right = Text("EST LOAD ", style=PALETTE.cyan)
+        right.append_text(self._sparkline())
+        right.append(f" {self.load}%", style=PALETTE.cyan)
+        right.append(" │ ", style=PALETTE.border)
+        right.append("SETUP 02/06", style=PALETTE.dim)
+        return spread(left, right, width)
+
+    def _breadcrumb(self, width: int) -> Text:
+        line = Text()
+        for index, label in enumerate(STEP_LABELS):
+            if index == 0:
+                line.append(f"● {label}", style=PALETTE.green)
+            elif index == 1:
+                line.append(f"◆ {label}", style=f"bold {PALETTE.accent}")
+            else:
+                line.append(f"◇ {label}", style=PALETTE.faint)
+            if index < len(STEP_LABELS) - 1:
+                line.append(" ─── ", style=PALETTE.border)
+        line.truncate(max(width, 1), overflow="crop", pad=True)
+        return line
+
+    def _corpus_row(self, index: int, width: int) -> Text:
+        corpus = CORPUS[index]
+        is_cur, is_sel = self.cur == index, self.sel_corpus == index
+        main, sub = self._row_styles(is_cur, is_sel)
+        row = Text()
+        row.append(f"{'›' if is_cur else ' '} ", style=main)
+        row.append(f"{'(●)' if is_sel else '( )'} ", style=main)
+        row.append(corpus.label, style=main)
+        inner = max(width - 4, 0)
+        fill = inner - row.cell_len - len(corpus.meta)
+        row.append(" " * max(fill, 1), style=main)
+        row.append(corpus.meta, style=sub)
+        return box_row(row, width, color=PALETTE.border)
+
+    def _profile_row(self, index: int, width: int) -> Text:
+        profile = PROFILES[index]
+        is_cur, is_sel = self.cur == index + 2, self.sel_profile == index
+        main, sub = self._row_styles(is_cur, is_sel)
+        row = Text()
+        row.append(f"{'›' if is_cur else ' '} ", style=main)
+        row.append(f"{'(●)' if is_sel else '( )'} ", style=main)
+        row.append(profile.name, style=main)
+        right = Text(profile.best[:BEST_WIDTH].ljust(BEST_WIDTH), style=sub)
+        right.append(f" {profile.dl.rjust(DL_WIDTH)} {profile.mem.rjust(MEM_WIDTH)}", style=sub)
+        inner = max(width - 4, 0)
+        fill = inner - row.cell_len - right.cell_len
+        row.append(" " * max(fill, 1), style=main)
+        row.append_text(right)
+        return box_row(row, width, color=PALETTE.border)
+
+    def _profile_head(self, width: int) -> Text:
+        head = Text(" " * 6, style=PALETTE.accent)  # marker + radio columns
+        head.append("Profile", style=PALETTE.accent)
+        right = "Best for".ljust(BEST_WIDTH) + " " + "Download".rjust(DL_WIDTH) + " " + "Memory".rjust(MEM_WIDTH)
+        inner = max(width - 4, 0)
+        head.append(" " * max(inner - head.cell_len - len(right), 1))
+        head.append(right, style=PALETTE.accent)
+        return box_row(head, width, color=PALETTE.border)
+
+    def _info_name(self, name: str, width: int) -> Text:
+        return box_row(Text(f"{name.upper()} // INFO", style=f"bold {PALETTE.orange}"), width, color=PALETTE.border)
+
+    def _kv_line(self, pairs: tuple[tuple[str, str], ...], width: int, computing: bool) -> Text:
+        value_style = f"bold {PALETTE.accent}" if computing else PALETTE.text
+        line = Text()
+        for index, (key, value) in enumerate(pairs):
+            if index:
+                line.append("    ")
+            line.append(f"{key} ", style=PALETTE.faint)
+            line.append(value, style=value_style)
+        return box_row(line, width, color=PALETTE.border)
+
+    def _gauge_line(self, label: str, value: int, width: int) -> Text:
+        line = Text(label.ljust(12), style=PALETTE.faint)
+        for glyph, colour in self._bar(value, self.sweep_profile):
+            line.append(glyph, style=colour)
+        return box_row(line, width, color=PALETTE.border)
+
+    def _corpus_box(self, width: int) -> list[Text]:
+        computing = self.sweep_corpus < 10
+        corpus = CORPUS[self._corpus_idx()]
+        lock = "● LOCKED" if self.lock == "corpus" else ""
+        lines = [box_top("CORPUS", width, chip=lock, chip_style=f"bold {PALETTE.orange}")]
+        lines.append(box_row(Text("What will you search?", style=PALETTE.dim), width, color=PALETTE.border))
+        lines.append(self._corpus_row(0, width))
+        lines.append(self._corpus_row(1, width))
+        lines.append(dashed(width))
+        lines.append(self._info_name(corpus.label, width))
+        lines.append(self._kv_line((("Language stack", corpus.stack), ("Download", corpus.dl), ("Peak memory", corpus.mem)), width, computing))
+        lines.append(box_row(Text(corpus.note, style=PALETTE.dim), width, color=PALETTE.border))
+        lines.append(box_bottom(width))
+        return lines
+
+    def _core_box(self, width: int) -> list[Text]:
+        computing = self.sweep_profile < 10
+        profile = PROFILES[self._profile_idx()]
+        lock = "● LOCKED" if self.lock == "profile" else ""
+        lines = [box_top("SEARCH CORE", width, chip=lock, chip_style=f"bold {PALETTE.orange}")]
+        lines.append(self._profile_head(width))
+        for index in range(len(PROFILES)):
+            lines.append(self._profile_row(index, width))
+        lines.append(dashed(width))
+        lines.append(self._info_name(profile.name, width))
+        lines.append(self._kv_line(
+            (("Embedder", profile.emb), ("Reranker", profile.rer), ("Chunk size", profile.chunk), ("CPU query", f"{profile.lat} est.")),
+            width, computing,
+        ))
+        lines.append(self._gauge_line("RETRIEVAL", profile.retr, width))
+        lines.append(self._gauge_line("SPEED", profile.speed, width))
+        lines.append(self._gauge_line("FOOTPRINT", profile.foot, width))
+        lines.append(box_row(Text("› Estimates rescaled by the device factor measured in CALIBRATE (step 01).", style=PALETTE.faint), width, color=PALETTE.border))
+        lines.append(box_bottom(width))
+        return lines
+
+    def _command_bar(self, width: int) -> list[Text]:
+        left = Text("archon> ", style=f"bold {PALETTE.accent}")
+        left.append("configure core ", style=PALETTE.dim)
+        left.append("· ", style=PALETTE.border)
+        left.append("corpus=", style=PALETTE.dim)
+        left.append(CORPUS[self.sel_corpus].label, style=PALETTE.text)
+        left.append(" core=", style=PALETTE.dim)
+        left.append(PROFILES[self.sel_profile].name, style=PALETTE.text)
+
+        def nav(text: str, is_cur: bool, accent: str) -> Text:
+            style = f"bold {PALETTE.on_accent} on {PALETTE.accent}" if is_cur else accent
+            return Text(text, style=style)
+
+        right = Text("↑↓←→ · ⏎ select  ", style=PALETTE.faint)
+        right.append_text(nav("[ ◀ BACK ]", self.cur == NAV_BACK, PALETTE.faint))
+        right.append("  ")
+        right.append_text(nav("[ NEXT ▶ ]", self.cur == NAV_NEXT, PALETTE.orange))
+        right.append("  ")
+        if self.has_focus:
+            right.append("● LIVE ", style=PALETTE.green)
+        else:
+            right.append("◯ CLICK TO FOCUS ", style=PALETTE.faint)
+        right.append("█" if self.blink else " ", style=PALETTE.green if self.has_focus else PALETTE.faint)
+        return [
+            box_top("", width, color=PALETTE.border_dim),
+            box_row(spread(left, right, max(width - 4, 1)), width, color=PALETTE.border_dim),
+            box_bottom(width, color=PALETTE.border_dim),
+        ]
 
     def render(self) -> Text:
-        text = Text(self._top_edge("YOUR CORPUS"), style=f"bold {PALETTE.accent}")
-        text += self._content_line("")
-        text += self._content_line("What languages will you search?")
-        text += self._choice_line(CHOICES[0], 0)
-        text += self._choice_line(CHOICES[1], 1)
-        text += self._info_text("language")
-        text.append(f"└{'─' * (self._width - 2)}┘\n", style=f"bold {PALETTE.accent}")
-        text.append(self._top_edge("SELECT SEARCH CORE"), style=f"bold {PALETTE.accent}")
-        text += self._content_line("")
-        text += self._content_line(
-            " ".join(value.ljust(width) for value, width in zip(PROFILE_HEADINGS, PROFILE_COLUMNS))
-        )
-        text += self._choice_line(CHOICES[2], 2)
-        text += self._choice_line(CHOICES[3], 3)
-        text += self._choice_line(CHOICES[4], 4)
-        text += self._info_text("profile")
-        text.append(f"└{'─' * (self._width - 2)}┘", style=f"bold {PALETTE.accent}")
-        return text
+        width = max(self.size.width, 8)
+        lines: list[Text] = [self._header(width), Text(), self._breadcrumb(width), Text()]
+        lines.extend(self._corpus_box(width))
+        lines.append(Text())
+        lines.extend(self._core_box(width))
+        lines.append(Text())
+        lines.extend(self._command_bar(width))
+        return stack(lines)
 
 
-class NavigationButton(Button):
-    """Bottom-bar button with horizontal sibling navigation and vertical return."""
+class CoreScreen(Screen):
+    """Hosts the core matrix and forwards its BACK request to the wizard."""
 
-    BINDINGS = [
-        Binding("space,enter", "activate", "Activate"),
-        Binding("left", "focus_previous", "Previous"),
-        Binding("right", "focus_next", "Next"),
-        Binding("up,down", "return_to_selector", "Return to options"),
-    ]
+    def compose(self) -> ComposeResult:
+        yield CoreView()
 
-    def action_activate(self) -> None:
-        self.press()
+    def on_mount(self) -> None:
+        self.query_one(CoreView).focus()
 
-    def action_focus_previous(self) -> None:
-        self.app.query_one("#previous", NavigationButton).focus()
+    def on_prev_screen_request(self, message: PrevScreenRequest) -> None:
+        message.stop()
+        from examples.textual_calibration import CalibrationScreen
 
-    def action_focus_next(self) -> None:
-        self.app.query_one("#next", NavigationButton).focus()
-
-    def action_return_to_selector(self) -> None:
-        selector = self.app.query_one(CoreSelector)
-        selector.cursor = 0 if self.id == "previous" else len(CHOICES) - 1
-        selector.cursor_visible = True
-        selector.focus()
-        selector._notify_changed(committed=False)
+        self.app.switch_screen(CalibrationScreen())
 
 
-class CoreMatrixApp(App[None]):
-    """Live, non-production prototype of the first Archon Search wizard screen."""
+class WizardApp(App[None]):
+    """The two-step Archon Search setup wizard: calibrate → core matrix."""
 
     ALLOW_SELECT = True
 
     CSS = """
-    Screen {
-        background: #181818;
-        color: #ffffff;
-    }
-
-    #masthead, #status, CoreSelector, #navigation {
-        width: 100%;
-        margin: 0 2;
-    }
-
-    #masthead {
-        color: #7fa8d7;
-        text-style: bold;
-        height: 1;
-    }
-
-    #status {
-        color: #e89e63;
-        height: 1;
-    }
-
-    CoreSelector {
-        height: 21;
-        margin: 0 2;
-    }
-
-    #navigation {
-        height: 1;
-        margin: 0 2;
-        align: left middle;
-    }
-
-    #nav-spacer {
-        width: 1fr;
-    }
-
-    Button {
-        background: #181818;
-        border: none;
-        color: #7fa8d7;
-        height: 1;
-        min-width: 16;
-    }
-
-    Button:focus {
-        background: #7fa8d7;
-        color: #181818;
-        text-style: bold;
-    }
-
+    Screen { background: #141414; color: #ECEFF0; }
+    CalibrationView, CoreView { width: 100%; height: auto; padding: 1 2; }
     """
 
     BINDINGS = [Binding("q", "quit", "Quit"), Binding("escape", "quit", "Quit")]
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.selector = CoreSelector()
-        self.status_text = "CORE MATRIX LINKED"
-        self._signal_frames = ("◌", "◔", "◑", "◕", "●")
-        self._signal_index = 0
-        self._tick_count = 0
-        self._boost_ticks = 0
-        self._ui_active = False
-
-
-    def _masthead_text(self) -> Text:
-        masthead = bold("◇ ARCHON SEARCH", color=PALETTE.accent)
-        masthead.append(
-            f"   {self._signal_frames[self._signal_index]} CORE MATRIX LINKED",
-            style=f"bold {PALETTE.meter}",
-        )
-        masthead.append("   SETUP // 01 OF 05", style=PALETTE.muted)
-        return masthead
-
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Static(self._masthead_text(), id="masthead")
-            yield Static(italic(self.status_text, color=PALETTE.meter), id="status")
-            yield self.selector
-            with Horizontal(id="navigation"):
-                yield NavigationButton("[ ◀ PREVIOUS ]", id="previous")
-                yield Static("", id="nav-spacer")
-                yield NavigationButton("[ NEXT ▶ ]", id="next")
-
     def on_mount(self) -> None:
-        self._ui_active = True
-        self.selector.focus()
-        self.set_interval(0.1, self._tick_signal)
+        from examples.textual_calibration import CalibrationScreen
 
-    def on_unmount(self) -> None:
-        self._ui_active = False
-
-    def on_core_selector_changed(self, message: CoreSelector.Changed) -> None:
-        if message.committed:
-            self.status_text = f"{message.selector.focused_choice.label.upper()} EQUIPPED // CORE MATRIX LINKED"
-            self._boost_ticks = 12
-        self._refresh_status()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "previous":
-            self.status_text = "FIRST SCREEN // NO PREVIOUS STAGE"
-        elif event.button.id == "next":
-            self.status_text = "NEXT STAGE ARMED // HARDWARE CHECK"
-            self._boost_ticks = 12
-        self.query_one("#status", Static).update(italic(self.status_text, color=PALETTE.meter))
-
-    def _refresh_status(self) -> None:
-        self.query_one("#status", Static).update(italic(self.status_text, color=PALETTE.meter))
-
-    def _tick_signal(self) -> None:
-        if not self._ui_active:
-            return
-        self._tick_count += 1
-        if self._boost_ticks or self._tick_count % 3 == 0:
-            self._signal_index = (self._signal_index + 1) % len(self._signal_frames)
-            try:
-                masthead = self.query_one("#masthead", Static)
-            except NoMatches:
-                return
-            masthead.update(self._masthead_text())
-        if self._boost_ticks:
-            self._boost_ticks -= 1
+        self.push_screen(CalibrationScreen())
 
 
 if __name__ == "__main__":
-    CoreMatrixApp().run()
+    WizardApp().run()

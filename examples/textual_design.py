@@ -1,4 +1,8 @@
-"""Reusable terminal-native design bricks for Archon Search experiments."""
+"""Shared terminal-native design primitives for the Archon Search setup wizard.
+
+Colours and glyphs mirror the Claude Design handoff bundle (``Calibration.dc.html``
+and ``Core Step.dc.html``). These are runnable, non-production UI experiments.
+"""
 
 from __future__ import annotations
 
@@ -7,217 +11,134 @@ from typing import Iterable
 
 from rich.text import Text
 from textual.message import Message
-from textual.widget import Widget
-from textual.widgets import Static
 
 
 @dataclass(frozen=True)
 class Palette:
-    """The exact colour system used by the approved HTML Core Matrix mockup."""
+    """The exact colour system used by the handoff HTML mockups."""
 
-    background: str = "#181818"
-    foreground: str = "#ffffff"
-    muted: str = "#8b8b8b"
-    accent: str = "#7fa8d7"
-    accent_foreground: str = "#181818"
-    confirmed: str = "#7fa8d7"
-    meter: str = "#e89e63"
-    stack_label: str = "#8b8b8b"
-    stack_value: str = "#ffffff"
+    background: str = "#141414"
+    panel: str = "#101010"       # command-bar background
+    border: str = "#3a3f43"
+    border_dim: str = "#2c3033"  # command-bar border
+    text: str = "#ECEFF0"
+    dim: str = "#8b9195"
+    faint: str = "#565b5f"
+    accent: str = "#80C0F8"      # ARCHON blue
+    on_accent: str = "#141414"   # text on an accent background
+    orange: str = "#F09850"
+    cyan: str = "#62C9C3"
+    green: str = "#86C08A"
+    yellow: str = "#E8C87E"
+    amber: str = "#F0A860"
+    red: str = "#E88A78"
+    cell_off: str = "#2a2d30"    # unfilled benchmark cell
+    cell_hidden: str = "#242628"  # un-revealed gauge cell
 
 
 PALETTE = Palette()
 
+# 10-frame braille spinner, indexed by floor(elapsed) % 10 (matches the mockups).
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
-def text(value: str, *, color: str | None = None) -> Text:
-    """Create a plain terminal text atom in the shared foreground colour."""
-    return Text(value, style=color or PALETTE.foreground)
-
-
-def bold(value: str, *, color: str | None = None) -> Text:
-    """Create a bold text atom."""
-    return Text(value, style=f"bold {color or PALETTE.foreground}")
+# Braille dot-fill ramp for the EST LOAD bar: blank, one-, two-, three-, four-dot rows.
+BRAILLE = " ⣀⣤⣶⣿"
 
 
-def italic(value: str, *, color: str | None = None) -> Text:
-    """Create an italic text atom."""
-    return Text(value, style=f"italic {color or PALETTE.foreground}")
+def gauge_color(index: int, total: int = 10) -> str:
+    """Green→yellow→amber→red gradient across a ``total``-wide gauge."""
+    ratio = index / (total - 1)
+    if ratio < 0.4:
+        return PALETTE.green
+    if ratio < 0.7:
+        return PALETTE.yellow
+    if ratio < 0.88:
+        return PALETTE.amber
+    return PALETTE.red
 
 
-def underlined(value: str, *, color: str | None = None) -> Text:
-    """Create an underlined text atom."""
-    return Text(value, style=f"underline {color or PALETTE.foreground}")
+def stack(lines: Iterable[Text]) -> Text:
+    """Join rendered lines with newlines into one renderable ``Text``."""
+    out = Text()
+    for index, line in enumerate(lines):
+        if index:
+            out.append("\n")
+        out.append_text(line)
+    return out
 
 
-def meter(value: int, total: int = 5) -> str:
-    """Render a clamped square meter suitable for any terminal font."""
-    if total < 1:
-        raise ValueError("total must be positive")
-    value = min(max(value, 0), total)
-    return "■" * value + "□" * (total - value)
+def spread(left: Text, right: Text, width: int) -> Text:
+    """Lay ``left`` and ``right`` on one line, ``right`` flushed to ``width``."""
+    gap = max(width - left.cell_len - right.cell_len, 1)
+    line = left.copy()
+    line.append(" " * gap)
+    line.append_text(right)
+    line.truncate(max(width, 1), overflow="crop", pad=True)
+    return line
 
 
-def frame_lines(title: str, lines: Iterable[str], width: int) -> tuple[str, ...]:
-    """Build a responsive UTF-8 frame exactly ``width`` cells wide."""
-    width = max(width, 3)
-    interior = width - 2
-    label = f"─ {title} "
-    top = f"┌{label[:interior].ljust(interior, '─')}┐"
-    padding = " " if width >= 5 else ""
-    content_width = width - 2 - 2 * len(padding)
-    body = tuple(f"│{padding}{line[:content_width].ljust(content_width)}{padding}│" for line in lines)
-    return (top, *body, f"└{'─' * interior}┘")
+def box_top(
+    title: str,
+    width: int,
+    *,
+    color: str = PALETTE.border,
+    title_color: str = PALETTE.accent,
+    chip: str = "",
+    chip_style: str | None = None,
+) -> Text:
+    """Top border of a titled panel; ``title`` gets ``title_color``, border ``color``.
+
+    An optional right-aligned ``chip`` (styled with ``chip_style``) floats near the
+    right edge, matching the LOCKED badge in the mockups.
+    """
+    interior = max(width - 2, 1)
+    left = f"─ {title} "
+    if chip:
+        chip_seg = f" {chip} "
+        fill = max(interior - len(left) - len(chip_seg), 0)
+        mid = (left + "─" * fill + chip_seg)[:interior].ljust(interior, "─")
+    else:
+        mid = left[:interior].ljust(interior, "─")
+    line = Text(f"┌{mid}┐", style=color)
+    if title:
+        start = line.plain.find(title)
+        if start != -1:
+            line.stylize(title_color, start, start + len(title))
+    if chip and chip_style:
+        start = line.plain.find(chip)
+        if start != -1:
+            line.stylize(chip_style, start, start + len(chip))
+    return line
 
 
-class TitledFrame(Static):
-    """A responsive UTF-8 panel whose width comes from Textual's layout."""
-
-    def __init__(self, title: str, lines: Iterable[str] = (), *, id: str | None = None) -> None:
-        super().__init__(id=id)
-        self.title = title
-        self.lines = tuple(lines)
-
-    def set_lines(self, lines: Iterable[str]) -> None:
-        self.lines = tuple(lines)
-        self.refresh()
-
-    def render(self) -> Text:
-        width = max(self.size.width, 3)
-        return Text("\n".join(frame_lines(self.title, self.lines, width)), style=PALETTE.accent)
+def box_bottom(width: int, *, color: str = PALETTE.border) -> Text:
+    """Bottom border of a titled panel."""
+    interior = max(width - 2, 1)
+    return Text(f"└{'─' * interior}┘", style=color)
 
 
-@dataclass(frozen=True)
-class RadioOption:
-    """A single label/detail pair in a reusable terminal radio group."""
-
-    label: str
-    detail: str = ""
-
-
-class RadioGroup(Static, can_focus=True):
-    """Keyboard-operated radio group with independent cursor and committed state."""
-
-    class Changed(Message):
-        def __init__(self, group: RadioGroup, *, committed: bool) -> None:
-            super().__init__()
-            self.group = group
-            self.committed = committed
-
-    def __init__(self, options: Iterable[RadioOption], selected: int = 0) -> None:
-        super().__init__()
-        self.options = tuple(options)
-        if not self.options:
-            raise ValueError("a radio group needs at least one option")
-        self.cursor = min(max(selected, 0), len(self.options) - 1)
-        self.selected = self.cursor
-        self.cursor_visible = True
-
-    def move(self, delta: int) -> bool:
-        """Move without wrapping; return whether the cursor changed."""
-        target = min(max(self.cursor + delta, 0), len(self.options) - 1)
-        if target == self.cursor:
-            return False
-        self.cursor = target
-        self.cursor_visible = True
-        self.refresh()
-        self.post_message(self.Changed(self, committed=False))
-        return True
-
-    def commit(self) -> None:
-        self.selected = self.cursor
-        self.refresh()
-        self.post_message(self.Changed(self, committed=True))
-
-    def hide_cursor(self) -> None:
-        self.cursor_visible = False
-        self.refresh()
-
-    def show_cursor(self, index: int | None = None) -> None:
-        if index is not None:
-            self.cursor = min(max(index, 0), len(self.options) - 1)
-        self.cursor_visible = True
-        self.refresh()
-
-    def render(self) -> Text:
-        text = Text()
-        for index, option in enumerate(self.options):
-            marker = "[●]" if index == self.selected else "[ ]"
-            pointer = "▶ " if self.cursor_visible and index == self.cursor else "  "
-            content = f"{pointer}{marker} {option.label}  {option.detail}".rstrip()
-            style = (
-                f"bold {PALETTE.accent_foreground} on {PALETTE.accent}"
-                if self.cursor_visible and index == self.cursor
-                else f"bold {PALETTE.confirmed}"
-                if index == self.selected
-                else PALETTE.muted
-            )
-            text.append(content + "\n", style=style)
-        return text
+def box_row(interior: Text, width: int, *, color: str = PALETTE.border) -> Text:
+    """Wrap ``interior`` in side borders with a one-cell inset, clipped to ``width``."""
+    inner = max(width - 4, 0)
+    body = interior.copy()
+    body.truncate(inner, overflow="crop", pad=True)
+    line = Text("│ ", style=color)
+    line.append_text(body)
+    line.append(" │", style=color)
+    return line
 
 
-class NavigationBar(Widget):
-    """State-only navigation brick for a Previous/Next pair."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.active = "previous"
-
-    def move_horizontal(self, direction: int) -> str:
-        if direction:
-            self.active = "next" if direction > 0 else "previous"
-        return self.active
+def dashed(width: int, *, inset: int = 2, color: str = PALETTE.border) -> Text:
+    """A dashed divider inset from the panel interior."""
+    inner = max(width - 4 - 2 * inset, 0)
+    line = Text(" " * inset)
+    line.append("╌" * inner, style=color)
+    return box_row(line, width, color=PALETTE.border)
 
 
-@dataclass(frozen=True)
-class TableColumn:
-    """A semantic table column with a proportional share of available width."""
-
-    heading: str
-    weight: int = 1
-    align: str = "left"
+class NextScreenRequest(Message):
+    """Bubbled by a wizard screen asking the app to advance to the next step."""
 
 
-def table_lines(
-    columns: tuple[TableColumn, ...], rows: Iterable[tuple[str, ...]], width: int
-) -> tuple[str, ...]:
-    """Render a clipped, responsive monospaced table with no fixed canvas width."""
-    if not columns:
-        raise ValueError("a table needs at least one column")
-    if any(column.weight < 1 for column in columns):
-        raise ValueError("column weights must be positive")
-    if any(column.align not in {"left", "right"} for column in columns):
-        raise ValueError("column alignment must be left or right")
-
-    width = max(width, len(columns))
-    gaps = len(columns) - 1
-    available = width - gaps
-    total_weight = sum(column.weight for column in columns)
-    sizes = [available * column.weight // total_weight for column in columns]
-    for index in range(available - sum(sizes)):
-        sizes[index % len(sizes)] += 1
-
-    def format_row(values: tuple[str, ...]) -> str:
-        cells: list[str] = []
-        for index, column in enumerate(columns):
-            value = values[index] if index < len(values) else ""
-            value = value[: sizes[index]]
-            cells.append(value.rjust(sizes[index]) if column.align == "right" else value.ljust(sizes[index]))
-        return " ".join(cells)
-
-    return (format_row(tuple(column.heading for column in columns)), *(format_row(row) for row in rows))
-
-
-class TextTable(Static):
-    """Responsive terminal table for metadata rows and loadout readouts."""
-
-    def __init__(self, columns: tuple[TableColumn, ...], rows: Iterable[tuple[str, ...]] = ()) -> None:
-        super().__init__()
-        self.columns = columns
-        self.rows = tuple(rows)
-
-    def set_rows(self, rows: Iterable[tuple[str, ...]]) -> None:
-        self.rows = tuple(rows)
-        self.refresh()
-
-    def render(self) -> Text:
-        return Text("\n".join(table_lines(self.columns, self.rows, max(self.size.width, 3))), style=PALETTE.foreground)
+class PrevScreenRequest(Message):
+    """Bubbled by a wizard screen asking the app to return to the previous step."""
