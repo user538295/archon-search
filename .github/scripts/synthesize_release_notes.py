@@ -84,6 +84,7 @@ def _via_cli() -> str:
 api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
 if api_key:
+    print("release notes: using Anthropic API key", file=sys.stderr)
     try:
         print(_via_api(api_key), end="")
         sys.exit(0)
@@ -92,6 +93,7 @@ if api_key:
     except Exception as e:
         print(f"API call failed ({e}) — trying claude CLI", file=sys.stderr)
 
+print("release notes: using claude -p CLI", file=sys.stderr)
 try:
     print(_via_cli(), end="")
 except subprocess.TimeoutExpired:
