@@ -1,6 +1,13 @@
 # Changelog
 
 
+## [26.7.1681] - 2026-07-22
+
+**Test CI robustness for optional graph extras**
+
+- Graph-dependent tests now skip gracefully when the `[graph]` extra (`leidenalg`, `igraph`) is absent, instead of raising `ImportError` at runtime. Tests that invoke graph code paths (e.g., `CommunityBuilder.build()`) now use `pytest.importorskip("leidenalg")` as their first line to catch the missing dependency early, ensuring CI reliability across different installation configurations.
+
+
 ## [26.7.1678] - 2026-07-22
 
 **Permission-aware search snippets, Textual UI wizard, and CLI collection info proxy**
