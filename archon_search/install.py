@@ -137,6 +137,20 @@ _SEARCH_PACKAGES = ["lancedb", "fastembed", "docling", "markitdown", "trafilatur
 _WAIT_FOR_SERVICE_TIMEOUT = 60
 
 
+def _compute_svc_timeout(eager_load: bool, download_mb: int) -> int:
+    """Return the service-ready wait timeout in seconds.
+
+    With eager_load_embedders=True the server runs ONNX reconstruction before
+    accepting requests; that can take several minutes for large models.  Scale
+    to ~100ms per MB, capped at 10 minutes.  Without eager load the default
+    60 s is sufficient.
+    # ponytail: linear scale is fine; a smarter heuristic adds no value here
+    """
+    if not eager_load:
+        return _WAIT_FOR_SERVICE_TIMEOUT
+    return min(600, max(_WAIT_FOR_SERVICE_TIMEOUT, download_mb * 100 // 1000))
+
+
 # ---------------------------------------------------------------------------
 # WizardFeatures dataclass (Task C8-1.1)
 # ---------------------------------------------------------------------------
@@ -1485,10 +1499,20 @@ def _install_graph_extra(dry_run: bool = False) -> None:
         return
     click.echo("Downloading spaCy model en_core_web_sm...")
     try:
+        # When running as a uv tool the subprocess inherits no VIRTUAL_ENV, so
+        # uv's pip shim refuses to install.  Derive the venv root from the
+        # interpreter path and inject it so the download succeeds.
+        # ponytail: only set if absent and confirmed by pyvenv.cfg — safe no-op otherwise
+        _spacy_env = {**os.environ}
+        if "VIRTUAL_ENV" not in _spacy_env:
+            _venv_root = str(Path(sys.executable).parent.parent)
+            if (Path(_venv_root) / "pyvenv.cfg").exists():
+                _spacy_env["VIRTUAL_ENV"] = _venv_root
         subprocess.run(
             [sys.executable, "-m", "spacy", "download", "en_core_web_sm"],
             check=True,
             capture_output=True,
+            env=_spacy_env,
         )
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         detail = ""
@@ -2479,9 +2503,10 @@ class SearchInstaller:
 
             # Step 16: wait for readiness
             if not self.dry_run:
-                ready = self._wait_for_service()
+                _svc_timeout = _compute_svc_timeout(features.eager_load_embedders, prof.download_mb)
+                ready = self._wait_for_service(timeout=_svc_timeout)
                 if not ready:
-                    print(f"Warning: Search service did not become ready within {_WAIT_FOR_SERVICE_TIMEOUT} seconds.")
+                    print(f"Warning: Search service did not become ready within {_svc_timeout} seconds.")
                     return 1
 
             # Step 16b: next steps guidance (non-dry-run only)
@@ -2543,11 +2568,13 @@ class SearchInstaller:
             return rc
 
         if not self.dry_run:
-            ready = self._wait_for_service()
+            _start_cfg = load_config(config_path)
+            _start_prof = get_profile(_start_cfg.profile or "minimal", _start_cfg.multilingual)
+            _svc_timeout = _compute_svc_timeout(_start_cfg.eager_load_embedders, _start_prof.download_mb)
+            ready = self._wait_for_service(timeout=_svc_timeout)
             if not ready:
                 click.echo(
-                    f"Warning: Search service did not become ready within"
-                    f" {_WAIT_FOR_SERVICE_TIMEOUT} seconds.",
+                    f"Warning: Search service did not become ready within {_svc_timeout} seconds.",
                     err=True,
                 )
                 return 1
