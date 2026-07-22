@@ -149,12 +149,12 @@ if [ "${NO_SYNTHESIS:-0}" != "1" ]; then
     echo "Synthesizing release notes with Claude..."
     PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
     if [ -n "$PREV_TAG" ]; then
-        RAW_COMMITS=$(git log --format="  %s%n%b" "${PREV_TAG}..HEAD" | sed '/^[[:space:]]*$/d' | head -300)
+        RAW_COMMITS=$(git log --format="  %s%n%b" "${PREV_TAG}..HEAD" | sed '/^[[:space:]]*$/d' | awk 'NR<=300')
     else
-        RAW_COMMITS=$(git log --format="  %s%n%b" | sed '/^[[:space:]]*$/d' | head -300)
+        RAW_COMMITS=$(git log --format="  %s%n%b" | sed '/^[[:space:]]*$/d' | awk 'NR<=300')
     fi
     # Keep the ## [version] - date header from cliff; replace only the body.
-    CLIFF_HEADER=$(printf '%s\n' "$CLIFF_NOTES" | head -2)
+    CLIFF_HEADER=$(printf '%s\n' "$CLIFF_NOTES" | awk 'NR<=2')
     if BODY=$(printf '%s' "$RAW_COMMITS" | python3 .github/scripts/synthesize_release_notes.py "$TAG"); then
         NOTES=$(printf '%s\n\n%s' "$CLIFF_HEADER" "$BODY")
     else
