@@ -77,6 +77,7 @@ def _clear_rebuild_locks():
 
 @pytest.mark.asyncio
 async def test_two_builders_same_key_serialise():
+    pytest.importorskip("leidenalg")
     """Two distinct CommunityBuilder instances on the same (ns, col) key serialise.
 
     Fails against a per-instance lock: without the shared registry, both builds
@@ -201,6 +202,7 @@ async def test_different_namespaces_do_not_serialise():
 
 @pytest.mark.asyncio
 async def test_lock_released_after_successful_build():
+    pytest.importorskip("leidenalg")
     """After a successful build(), the (ns, col) lock is free for the next build."""
     from archon_search.community_builder import CommunityBuilder
 
