@@ -143,9 +143,9 @@ fi
 
 # Synthesize quality notes with Claude (API key → direct call; fallback → claude CLI).
 # Falls back to git-cliff output silently if both paths fail.
-# Set NO_SYNTHESIS=1 to skip and use git-cliff output directly.
+# Set NO_SYNTHESIS=1 to skip (always uses git-cliff output directly).
 NOTES="$CLIFF_NOTES"
-if [ "${NO_SYNTHESIS:-0}" != "1" ] && [ "${DRY_RUN:-0}" != "1" ]; then
+if [ "${NO_SYNTHESIS:-0}" != "1" ]; then
     echo "Synthesizing release notes with Claude..."
     PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
     if [ -n "$PREV_TAG" ]; then
