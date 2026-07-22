@@ -25,7 +25,7 @@ import httpx
 from archon_search.config import ConfigError, load_config
 from archon_search.key_manager import load_or_generate_key
 from archon_search.paths import get_data_dir
-from archon_search.cli._helpers import _SERVER_NOT_RUNNING_MSG
+from archon_search.cli._helpers import _CONNECT_FAIL, _SERVER_NOT_RUNNING_MSG
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
@@ -96,7 +96,7 @@ def _trigger_backup(
 
     try:
         resp = httpx.post(url, headers=headers)
-    except httpx.ConnectError:
+    except _CONNECT_FAIL:
         click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
@@ -182,7 +182,7 @@ def _wait_for_jobs(
             url = f"{api_url.rstrip('/')}/jobs/{job_id}"
             try:
                 resp = httpx.get(url, headers=headers)
-            except httpx.ConnectError:
+            except _CONNECT_FAIL:
                 click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
                 raise SystemExit(1)
             except httpx.HTTPError as exc:

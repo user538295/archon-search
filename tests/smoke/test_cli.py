@@ -232,8 +232,7 @@ def test_config_show_timing_and_format() -> None:
 
 def test_maintenance_run_without_server(smoke_server) -> None:
     """``archon-search maintenance run --api-url <closed port>`` must exit 1
-    and surface "Error contacting server" on stderr (S6) — asserts today's
-    behaviour (bug-006 not yet fixed); update when briefs 250/260 land.
+    and surface the "not running" message on stderr.
 
     The closed port is obtained by binding then immediately releasing a
     socket — guaranteed unused at the moment the subprocess starts, and
@@ -267,7 +266,7 @@ def test_maintenance_run_without_server(smoke_server) -> None:
     )
 
     assert result.returncode == 1
-    assert "Error contacting server" in result.stderr
+    assert "archon-search serve is not running." in result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -580,7 +579,7 @@ def test_add_without_server(smoke_server) -> None:
     assert result.returncode == 1, (
         f"expected exit 1; got {result.returncode}. stdout={result.stdout!r} stderr={result.stderr!r}"
     )
-    assert "archon-search serve is not running. Start it first." in result.stderr, (
+    assert "archon-search serve is not running." in result.stderr, (
         f"expected connect-error string in stderr; got: {result.stderr!r}"
     )
 

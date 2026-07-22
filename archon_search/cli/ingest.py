@@ -6,7 +6,7 @@ from pathlib import Path
 import click
 import httpx
 
-from archon_search.cli._helpers import _poll_job, _SERVER_NOT_RUNNING_MSG
+from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _SERVER_NOT_RUNNING_MSG
 from archon_search.cli.collection import _DEFAULT_API_URL, _resolve_api_key
 from archon_search.sync import path_to_collection_name
 
@@ -43,7 +43,7 @@ def ingest(ingest_path: Path | None, collection: str | None, wait_flag: bool, ap
 
     try:
         resp = httpx.post(post_url, json=body, headers=headers)
-    except httpx.ConnectError:
+    except _CONNECT_FAIL:
         click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:

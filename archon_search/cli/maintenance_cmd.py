@@ -23,7 +23,7 @@ import httpx
 from archon_search.config import ConfigError, load_config
 from archon_search.key_manager import load_or_generate_key
 from archon_search.paths import get_data_dir
-from archon_search.cli._helpers import _SERVER_NOT_RUNNING_MSG
+from archon_search.cli._helpers import _CONNECT_FAIL, _SERVER_NOT_RUNNING_MSG
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
@@ -318,17 +318,17 @@ def run_subcommand(
         status_url = f"{api_url.rstrip('/')}/status"
         try:
             original_last_run_at = _get_last_run_at(status_url, headers)
-        except httpx.ConnectError:
+        except _CONNECT_FAIL:
             click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
-            raise SystemExit(0)
+            raise SystemExit(1)
 
     try:
         resp = httpx.post(trigger_url, headers=headers)
-    except httpx.ConnectError:
-        # ponytail: narrow ConnectError catch before broad HTTPError is intentional —
-        # ReadTimeout / ReadError must NOT be misreported as "server is not running".
+    except _CONNECT_FAIL:
+        # ponytail: narrow connect-fail catch before broad HTTPError — ReadTimeout must NOT
+        # be misreported as "server not running"; ConnectTimeout (no listener) is fine.
         click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
-        raise SystemExit(0)
+        raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1) from exc
@@ -383,7 +383,7 @@ def _wait_for_pass(
         time.sleep(_POLL_INTERVAL_SECONDS)
         try:
             current_last_run_at, has_errors = _get_maintenance_state(status_url, headers)
-        except httpx.ConnectError:
+        except _CONNECT_FAIL:
             continue  # transient loss of connectivity mid-poll; keep waiting
         if current_last_run_at is None:
             # Could not reach server or maintenance=null.
@@ -422,7 +422,7 @@ def _get_maintenance_state(
     """
     try:
         resp = httpx.get(status_url, headers=headers, timeout=5.0)
-    except httpx.ConnectError:
+    except _CONNECT_FAIL:
         raise  # propagate so callers can distinguish server-down from other errors
     except httpx.HTTPError as exc:
         click.echo(f"Error polling server: {exc}", err=True)
