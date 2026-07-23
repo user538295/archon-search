@@ -1,4 +1,4 @@
-"""Docker-mode CLI smoke tests (BE-1, BE-2, BE-3, BE-4, T-1).
+"""Docker-mode CLI smoke tests (BE-1, BE-2, BE-3, BE-4, BE-5, T-1).
 
 Tests in this module exercise the ``archon-search`` CLI from a subprocess with
 ``ARCHON_SEARCH_CONTAINER=1`` injected into the environment, mirroring how the
@@ -13,7 +13,14 @@ Covers:
 - S6 — ``stop`` in container mode emits clean message, exit 1 (BE-3)
 - S7 — ``install`` in container mode emits clean message, exit 1 (BE-4)
 - S8 — ``uninstall`` in container mode emits clean message, exit 1 (BE-4)
+- S9 — ``key list`` exits 0 (BE-5)
+- S10 — ``collection list`` reports "smoke" in output, exit 0 (BE-5)
+- S11 — ``collection add --wait`` completes with "ingested successfully.", exit 0 (BE-5)
+- S12 — ``collection info smoke`` reports "name: smoke", exit 0 (BE-5)
 - S13 — ``config show`` prints TOML config, exit 0, no server required
+- S14 — ``ingest --wait`` completes with "Ingest complete for 'smoke'.", exit 0 (BE-5)
+- S15 — ``jobs status <id>`` reports terminal status, exit 0 (BE-5)
+- S16 — ``maintenance run`` exits 0 (BE-5)
 - S18 — ``--help`` completes within 5 s (advisory)
 
 T-1 manual spot-check checklist (human verification):
@@ -515,4 +522,277 @@ def test_uninstall_emits_clean_container_mode_message(tmp_path):
     )
     assert _CONTAINER_MSG in result.stderr, (
         f"Expected container-mode message in stderr; got:\n{result.stderr}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# BE-5: server-dependent proofs (S9, S10, S11, S12, S14, S15, S16)
+# ---------------------------------------------------------------------------
+
+
+def test_key_list_exits_0(smoke_docker_server_seeded, tmp_path):
+    """``key list`` exits 0 against a running server (S9)."""
+    env = _make_docker_env(
+        port=smoke_docker_server_seeded.port,
+        data_dir=tmp_path,
+        api_key=smoke_docker_server_seeded.api_key,
+    )
+    result = subprocess.run(
+        [
+            "uv", "run", "archon-search", "key", "list",
+            "--api-url", smoke_docker_server_seeded.base_url,
+            "--api-key", smoke_docker_server_seeded.api_key,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, (
+        f"archon-search key list exited {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "Traceback" not in combined, (
+        f"archon-search key list printed a traceback:\n{combined}"
+    )
+
+
+def test_collection_list_exits_0(smoke_docker_server_seeded, tmp_path):
+    """``collection list`` reports "smoke" in output, exits 0 (S10).
+
+    ``collection list`` is offline-capable — it reads the store directly via
+    ``ARCHON_SEARCH_DATA_DIR``, so it does not need ``--api-url`` / ``--api-key``.
+    The "smoke" collection was seeded by the ``smoke_docker_server_seeded`` fixture.
+    """
+    env = _make_docker_env(
+        port=smoke_docker_server_seeded.port,
+        data_dir=smoke_docker_server_seeded.data_dir,
+        api_key=smoke_docker_server_seeded.api_key,
+    )
+    env["ARCHON_SEARCH_DATA_DIR"] = str(smoke_docker_server_seeded.data_dir)
+    result = subprocess.run(
+        ["uv", "run", "archon-search", "collection", "list"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, (
+        f"archon-search collection list exited {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "Traceback" not in combined, (
+        f"archon-search collection list printed a traceback:\n{combined}"
+    )
+    assert "smoke" in result.stdout, (
+        f"Expected 'smoke' collection in output; got:\n{result.stdout}"
+    )
+
+
+def test_collection_add_wait_completes(smoke_docker_server_seeded, tmp_path):
+    """``collection add --wait`` completes with "ingested successfully.", exit 0 (S11)."""
+    # Write a unique corpus directory so the server doesn't return 409 (already registered).
+    new_corpus = tmp_path / "be5_add_corpus"
+    new_corpus.mkdir()
+    (new_corpus / "doc.txt").write_text(
+        "BE-5 collection add proof: this document is ingested via the CLI --wait path "
+        "inside the Docker-mode smoke test suite to verify the HTTP-backed command works."
+    )
+
+    env = _make_docker_env(
+        port=smoke_docker_server_seeded.port,
+        data_dir=tmp_path,
+        api_key=smoke_docker_server_seeded.api_key,
+    )
+    result = subprocess.run(
+        [
+            "uv", "run", "archon-search", "collection", "add",
+            str(new_corpus),
+            "--wait",
+            "--api-url", smoke_docker_server_seeded.base_url,
+            "--api-key", smoke_docker_server_seeded.api_key,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, (
+        f"archon-search collection add --wait exited {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "Traceback" not in combined, (
+        f"archon-search collection add --wait printed a traceback:\n{combined}"
+    )
+    assert "ingested successfully." in result.stdout, (
+        f"Expected 'ingested successfully.' in stdout; got:\n{result.stdout}"
+    )
+
+
+def test_collection_info_exits_0(smoke_docker_server_seeded, tmp_path):
+    """``collection info smoke`` reports "name: smoke", exits 0 (S12)."""
+    env = _make_docker_env(
+        port=smoke_docker_server_seeded.port,
+        data_dir=tmp_path,
+        api_key=smoke_docker_server_seeded.api_key,
+    )
+    result = subprocess.run(
+        [
+            "uv", "run", "archon-search", "collection", "info", "smoke",
+            "--api-url", smoke_docker_server_seeded.base_url,
+            "--api-key", smoke_docker_server_seeded.api_key,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, (
+        f"archon-search collection info smoke exited {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "Traceback" not in combined, (
+        f"archon-search collection info smoke printed a traceback:\n{combined}"
+    )
+    assert "name: smoke" in result.stdout, (
+        f"Expected 'name: smoke' in stdout; got:\n{result.stdout}"
+    )
+
+
+def test_ingest_wait_completes(smoke_docker_server_seeded, tmp_path):
+    """``ingest --wait`` completes with "Ingest complete for 'smoke'.", exits 0 (S14)."""
+    ingest_file = tmp_path / "be5_ingest.txt"
+    ingest_file.write_text(
+        "BE-5 ingest proof: this file is ingested via the CLI --wait path "
+        "inside the Docker-mode smoke test suite to verify the HTTP-backed ingest command works."
+    )
+
+    env = _make_docker_env(
+        port=smoke_docker_server_seeded.port,
+        data_dir=tmp_path,
+        api_key=smoke_docker_server_seeded.api_key,
+    )
+    result = subprocess.run(
+        [
+            "uv", "run", "archon-search", "ingest",
+            "--path", str(ingest_file),
+            "--collection", "smoke",
+            "--wait",
+            "--api-url", smoke_docker_server_seeded.base_url,
+            "--api-key", smoke_docker_server_seeded.api_key,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, (
+        f"archon-search ingest --wait exited {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "Traceback" not in combined, (
+        f"archon-search ingest --wait printed a traceback:\n{combined}"
+    )
+    assert "Ingest complete for 'smoke'." in result.stdout, (
+        f"Expected \"Ingest complete for 'smoke'.\" in stdout; got:\n{result.stdout}"
+    )
+
+
+def test_jobs_status_reports_status(smoke_docker_server_seeded, tmp_path):
+    """``jobs status <id>`` reports "status:     DONE", exits 0 (S15).
+
+    Submits a reindex job via REST, polls until it reaches a terminal status,
+    then calls ``archon-search jobs status <id>`` and asserts the output
+    contains "status:     DONE".
+    """
+    headers = {"Authorization": f"Bearer {smoke_docker_server_seeded.api_key}"}
+    base_url = smoke_docker_server_seeded.base_url
+
+    # Submit a reindex job for the smoke collection
+    resp = httpx.post(
+        f"{base_url}/collections/smoke/reindex",
+        headers=headers,
+        timeout=10,
+    )
+    assert resp.status_code == 202, (
+        f"POST /collections/smoke/reindex failed: {resp.status_code} {resp.text}"
+    )
+    job_id = resp.json()["job_id"]
+
+    # Poll until terminal
+    deadline = time.monotonic() + 60.0
+    job_status = "UNKNOWN"
+    while time.monotonic() < deadline:
+        job_resp = httpx.get(f"{base_url}/jobs/{job_id}", headers=headers, timeout=5)
+        assert job_resp.status_code == 200, (
+            f"GET /jobs/{job_id} failed: {job_resp.status_code} {job_resp.text}"
+        )
+        job_status = job_resp.json().get("status", "UNKNOWN")
+        if job_status in {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}:
+            break
+        time.sleep(0.5)
+    assert job_status == "DONE", (
+        f"Reindex job {job_id} did not reach DONE within 60s; final status: {job_status}"
+    )
+
+    # Now call the CLI jobs status command
+    env = _make_docker_env(
+        port=smoke_docker_server_seeded.port,
+        data_dir=tmp_path,
+        api_key=smoke_docker_server_seeded.api_key,
+    )
+    result = subprocess.run(
+        [
+            "uv", "run", "archon-search", "jobs", "status", job_id,
+            "--api-url", smoke_docker_server_seeded.base_url,
+            "--api-key", smoke_docker_server_seeded.api_key,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, (
+        f"archon-search jobs status exited {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "Traceback" not in combined, (
+        f"archon-search jobs status printed a traceback:\n{combined}"
+    )
+    assert "status:     DONE" in result.stdout, (
+        f"Expected 'status:     DONE' in stdout; got:\n{result.stdout}"
+    )
+
+
+def test_maintenance_run_exits_0(smoke_docker_server_seeded, tmp_path):
+    """``maintenance run`` exits 0 (S16)."""
+    env = _make_docker_env(
+        port=smoke_docker_server_seeded.port,
+        data_dir=tmp_path,
+        api_key=smoke_docker_server_seeded.api_key,
+    )
+    result = subprocess.run(
+        [
+            "uv", "run", "archon-search", "maintenance", "run",
+            "--api-url", smoke_docker_server_seeded.base_url,
+            "--api-key", smoke_docker_server_seeded.api_key,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, (
+        f"archon-search maintenance run exited {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "Traceback" not in combined, (
+        f"archon-search maintenance run printed a traceback:\n{combined}"
     )

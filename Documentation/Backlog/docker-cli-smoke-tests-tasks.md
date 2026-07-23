@@ -118,7 +118,7 @@ flowchart LR
         - #integration_test — `test_uninstall_emits_clean_container_mode_message` — subprocess `archon-search uninstall` with `_docker_env()`; `returncode == 1`, clean message, no traceback (S8)
 
 ### Phase 4 · Run HTTP-backed commands in Docker *(the read/write CLI surface works against a server inside the container — no production code change; the suite guards it)*
-- [ ] **BE-5** — Extend `test_docker_cli.py` with server-dependent proofs driving the HTTP-backed commands against the `smoke_server` fixture #backend-role
+- [x] **BE-5** — Extend `test_docker_cli.py` with server-dependent proofs driving the HTTP-backed commands against the `smoke_server` fixture #backend-role
     - Frameworks & Drivers · 4.0h
     - needs K1, BE-1 · completes S9, S10, S11, S12, S14, S15, S16
     - Tests

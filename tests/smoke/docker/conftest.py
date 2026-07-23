@@ -6,10 +6,8 @@ Provides:
 - ``smoke_docker_server`` — a session-scoped fixture that spawns a real
   ``archon-search serve`` process with the Docker env, waits for it to
   become healthy+ready, then tears it down cleanly via SIGTERM.
-
-Unlike the parent ``smoke_server`` fixture, this fixture does NOT seed a
-corpus.  Server-dependent tests requiring a pre-seeded corpus live in BE-5
-and will use a separate fixture once that task is implemented.
+- ``smoke_docker_server_seeded`` — like ``smoke_docker_server`` but also
+  pre-seeds a "smoke" collection, for BE-5 server-dependent CLI proofs.
 """
 
 from __future__ import annotations
@@ -25,8 +23,10 @@ from tests.smoke.conftest import (
     _TEARDOWN_TIMEOUT_S,
     _free_port,
     _poll_health_and_ready,
+    _seed_corpus,
     _subprocess_env,
     _terminate,
+    _write_corpus,
 )
 
 
@@ -99,3 +99,62 @@ def smoke_docker_server(tmp_path_factory) -> Iterator[SmokeServer]:
         proc.kill()
         proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
         pytest.fail("docker smoke server did not stop cleanly on SIGTERM")
+
+
+@pytest.fixture(scope="session")
+def smoke_docker_server_seeded(tmp_path_factory) -> Iterator[SmokeServer]:
+    """Like ``smoke_docker_server`` but with a pre-seeded "smoke" collection.
+
+    Session-scoped fixture for BE-5 server-dependent CLI proofs.  Seeds the
+    same three-document corpus as the parent ``smoke_server`` fixture so
+    ``collection list`` reports "smoke" in its output and ``collection info``
+    can find the collection.
+
+    Teardown: SIGTERM, wait up to 10s, SIGKILL on timeout.
+    """
+    port = _free_port()
+    data_dir = tmp_path_factory.mktemp("smoke_docker_seeded_data")
+    # corpus_dir must have basename "smoke" so path_to_collection_name() derives
+    # "smoke" — matching the _seed_corpus default collection= kwarg.
+    corpus_dir = tmp_path_factory.mktemp("smoke_docker_seeded_corpus_parent") / "smoke"
+    corpus_dir.mkdir()
+    api_key = secrets.token_hex(32)
+
+    _write_corpus(corpus_dir)
+    (data_dir / "archon-search.toml").write_text("[telemetry]\nenabled = true\n")
+
+    env = _docker_env(port=port, data_dir=data_dir, api_key=api_key)
+
+    proc = subprocess.Popen(
+        ["uv", "run", "archon-search", "serve"],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        _poll_health_and_ready(proc, base_url)
+        _seed_corpus(base_url, api_key, corpus_dir, proc)
+    except Exception:
+        _terminate(proc)
+        raise
+
+    server = SmokeServer(
+        proc=proc,
+        port=port,
+        base_url=base_url,
+        api_key=api_key,
+        data_dir=data_dir,
+        corpus_dir=corpus_dir,
+    )
+
+    yield server
+
+    proc.terminate()
+    try:
+        proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
+        pytest.fail("docker smoke seeded server did not stop cleanly on SIGTERM")
