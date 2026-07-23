@@ -8,7 +8,7 @@ Covers:
 - S1 — ``--help`` and ``--version`` complete without error, exit 0
 - S2 — ``serve`` starts and shuts down cleanly (``smoke_docker_server`` fixture)
 - S3 — ``status`` with running server shows HTTP telemetry, exit 0 (BE-2)
-- S4 — ``status`` with unreachable server shows clean output, exit 0 (BE-2)
+- S4 — ``status`` with unreachable server exits 0 cleanly, no "stopped" line (BE-2)
 - S13 — ``config show`` prints TOML config, exit 0, no server required
 - S18 — ``--help`` completes within 5 s (advisory)
 """
@@ -254,18 +254,17 @@ def test_status_with_server_shows_http_telemetry(smoke_docker_server, tmp_path):
     # We check for common fields that GET /status always returns.
     assert any(
         field in combined
-        for field in ("Collections:", "Telemetry:", "server", "collections")
-    ) or result.returncode == 0, (
-        f"Expected at least one HTTP telemetry field; got:\n{combined}"
-    )
+        for field in ("Collections:", "Telemetry:")
+    ), f"Expected at least one HTTP telemetry field; got:\n{combined}"
 
 
-def test_status_without_server_shows_not_reachable(tmp_path):
-    """``status`` with unreachable server shows clean output, no traceback, exit 0 (S4).
+def test_status_without_server_clean_exit_0(tmp_path):
+    """``status`` with unreachable server exits 0 with no traceback, no "stopped" (S4).
 
     Points ``--api-url`` at a port with no listener so ``_fetch_server_status``
-    returns ``None`` via the ``ConnectError`` path.  Asserts no traceback and
-    clean exit 0.
+    returns ``None`` via the ``ConnectError`` path.  In container mode the
+    service-section line is suppressed and the telemetry section is silently
+    omitted — the result is empty stdout, exit 0, no traceback.
     """
     from tests.smoke.conftest import _free_port
 

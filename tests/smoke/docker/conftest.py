@@ -48,11 +48,22 @@ def smoke_docker_server(tmp_path_factory) -> Iterator[SmokeServer]:
 
     Session-scoped and serialised via the ``xdist_group("smoke_e2e")`` marker
     each test module in ``tests/smoke/docker/`` carries.  No corpus is seeded
-    here — this fixture exists only to prove the serve lifecycle (S2).
+    here — this fixture exists only to prove the serve lifecycle (S2) and the
+    status HTTP-fallback path (S3, BE-2).
+
+    Telemetry is enabled via the config file so ``archon-search status`` has a
+    visible field to print when the HTTP fallback fires — without this the
+    default server returns ``telemetry: null`` and the CLI prints nothing even
+    when the HTTP call succeeds, making S3's "≥1 telemetry field present"
+    assertion impossible.
     """
     port = _free_port()
     data_dir = tmp_path_factory.mktemp("smoke_docker_data")
     api_key = secrets.token_hex(32)
+
+    # Write a config enabling telemetry so GET /status returns a non-null
+    # telemetry sub-object and the CLI status command has something to print.
+    (data_dir / "archon-search.toml").write_text("[telemetry]\nenabled = true\n")
 
     env = _docker_env(port=port, data_dir=data_dir, api_key=api_key)
 

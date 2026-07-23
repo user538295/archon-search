@@ -217,6 +217,8 @@ def status(api_url: str, api_key: str | None) -> None:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)
 
+    container_mode = os.environ.get("ARCHON_SEARCH_CONTAINER") == "1"
+
     if svc_status.running:
         pid_part = f" (PID {svc_status.pid}" if svc_status.pid is not None else ""
         uptime_part = (
@@ -225,7 +227,7 @@ def status(api_url: str, api_key: str | None) -> None:
             else (")" if pid_part else "")
         )
         click.echo(f"running{pid_part}{uptime_part}")
-    else:
+    elif not container_mode:
         click.echo("stopped")
 
     server_payload = _fetch_server_status(api_url, api_key)

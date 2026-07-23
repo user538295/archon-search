@@ -79,7 +79,7 @@ flowchart LR
         - #integration_test — `test_serve_health_and_ready` — bring up the `serve` fixture; assert `GET /health` and `GET /ready` reachable, then clean SIGTERM shutdown (S2)
 
 ### Phase 2 · Report status correctly in Docker *(the marquee fix ships with its container proof: `status` shows real HTTP telemetry instead of a misleading "stopped")*
-- [ ] **BE-2** — Fix [status.py](../../archon_search/cli/status.py): detect `ARCHON_SEARCH_CONTAINER=1` and suppress the `"stopped"` service-section line; `_fetch_server_status()` already runs unconditionally at [status.py:231](../../archon_search/cli/status.py). Extend `test_docker_cli.py` with the status-in-container proof #backend-role
+- [x] **BE-2** — Fix [status.py](../../archon_search/cli/status.py): detect `ARCHON_SEARCH_CONTAINER=1` and suppress the `"stopped"` service-section line; `_fetch_server_status()` already runs unconditionally at [status.py:231](../../archon_search/cli/status.py). Extend `test_docker_cli.py` with the status-in-container proof #backend-role
     - Presentation · 3.5h
     - needs K1, BE-1 · completes C2, S3, S4
     - Tests

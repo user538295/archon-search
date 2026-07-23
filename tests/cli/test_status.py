@@ -886,3 +886,89 @@ def test_status_cli_renders_empty_path_without_error(runner: CliRunner) -> None:
     assert "adhoc" in result.output
     assert "7" in result.output
     assert "(no configured path)" in result.output
+
+
+# ---------------------------------------------------------------------------
+# BE-2 — Container-mode status suppression (C2, S3, S4, S17)
+# ---------------------------------------------------------------------------
+
+
+def test_status_container_mode_suppresses_stopped_when_reachable(runner: CliRunner, monkeypatch) -> None:
+    """ARCHON_SEARCH_CONTAINER=1 + server reachable → 'stopped' NOT in output; telemetry shown; exit 0 (S3, C2)."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    svc = MagicMock()
+    svc.status.return_value = ServiceStatus(running=False, pid=None, uptime_seconds=None)
+    server_payload = {
+        "telemetry": {"enabled": True, "hash_doc_ids_enabled": False},
+        "collections": [{"name": "docs", "path": "/data/docs", "doc_count": 5}],
+    }
+    with patch("archon_search.cli.status._get_service", return_value=svc):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=server_payload,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "stopped" not in result.output, (
+        f"'stopped' should be suppressed in container mode; got:\n{result.output}"
+    )
+    assert "hash_doc_ids_enabled" in result.output, (
+        f"Telemetry should be shown; got:\n{result.output}"
+    )
+
+
+def test_status_container_mode_no_traceback_when_unreachable(runner: CliRunner, monkeypatch) -> None:
+    """ARCHON_SEARCH_CONTAINER=1 + server not reachable → no traceback, clean output, exit 0 (S4)."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    svc = MagicMock()
+    svc.status.return_value = ServiceStatus(running=False, pid=None, uptime_seconds=None)
+    with patch("archon_search.cli.status._get_service", return_value=svc):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=None,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "Traceback" not in (result.output + (result.stderr or "")), (
+        f"No traceback expected in container mode; got:\n{result.output}\n{result.stderr}"
+    )
+    assert "stopped" not in result.output, (
+        f"'stopped' should be suppressed in container mode; got:\n{result.output}"
+    )
+
+
+def test_status_native_path_unchanged(runner: CliRunner, monkeypatch) -> None:
+    """ARCHON_SEARCH_CONTAINER unset → 'stopped' IS printed (S17 regression guard)."""
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    svc = MagicMock()
+    svc.status.return_value = ServiceStatus(running=False, pid=None, uptime_seconds=None)
+    with patch("archon_search.cli.status._get_service", return_value=svc):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=None,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "stopped" in result.output, (
+        f"Native path must still print 'stopped'; got:\n{result.output}"
+    )
+
+
+def test_status_container_mode_running_service_shows_running(runner: CliRunner, monkeypatch) -> None:
+    """ARCHON_SEARCH_CONTAINER=1 + service running → 'running' IS shown; container mode does not suppress it."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    svc = MagicMock()
+    svc.status.return_value = ServiceStatus(running=True, pid=42, uptime_seconds=None)
+    with patch("archon_search.cli.status._get_service", return_value=svc):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value=None,
+        ):
+            result = runner.invoke(main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "running" in result.output, (
+        f"Container mode must not suppress 'running'; got:\n{result.output}"
+    )
+    assert "42" in result.output, (
+        f"PID should appear in running output; got:\n{result.output}"
+    )
