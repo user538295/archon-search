@@ -872,3 +872,57 @@ def test_sameNameDifferentFiles_produceDistinctNodes() -> None:
     expected_id_a = make_stable_entity_id(EntityType.code_symbol.value, "run::/repo/a.py")
     expected_id_b = make_stable_entity_id(EntityType.code_symbol.value, "run::/repo/b.py")
     assert ids == {expected_id_a, expected_id_b}
+
+
+# ---------------------------------------------------------------------------
+# Regression: spacy.cli.download raises SystemExit when no package installer
+# ---------------------------------------------------------------------------
+
+
+def test_extractor_download_systemexit_returns_fatal_error_not_crash() -> None:
+    """When spacy.cli.download raises SystemExit (no pip/uv found), extract() must
+    return a fatal_error result instead of propagating SystemExit and crashing the server.
+
+    Regression for the production incident where `uv tool install archon-search` placed
+    the server in an environment where spaCy could not find pip or uv, causing
+    SystemExit(1) to escape the `except Exception` handler and kill the uvicorn process.
+    """
+    import types
+
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    config = GraphConfig()
+    extractor = GraphExtractor(config)
+    extractor._nlp = None  # force lazy load path
+
+    # Simulate: model not installed → download attempted → no package installer → SystemExit
+    fake_util = types.ModuleType("spacy.util")
+    fake_util.get_installed_models = lambda: []  # type: ignore[attr-defined]
+
+    fake_cli = types.ModuleType("spacy.cli")
+    fake_cli.download = lambda model: (_ for _ in ()).throw(SystemExit(1))  # type: ignore[attr-defined]
+
+    fake_spacy = types.ModuleType("spacy")
+    fake_spacy.util = fake_util  # type: ignore[attr-defined]
+    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
+    # spacy.load should never be reached in this test
+    fake_spacy.load = lambda model: (_ for _ in ()).throw(AssertionError("spacy.load must not be called"))  # type: ignore[attr-defined]
+
+    stub = {"spacy": fake_spacy, "spacy.util": fake_util, "spacy.cli": fake_cli}
+
+    chunk = ChunkInput(chunk_id="c1", text="Alice met Bob.", symbol_type=None, symbol_subtype=None)
+
+    async def _run():
+        with patch.dict(sys.modules, stub):
+            return await extractor.extract([chunk], "doc-1", "col")
+
+    result = asyncio.run(_run())
+
+    assert result.fatal_error is not None, "Expected fatal_error when download raises SystemExit"
+    assert "download" in result.fatal_error.lower() or "installer" in result.fatal_error.lower(), (
+        f"fatal_error message should mention download/installer, got: {result.fatal_error!r}"
+    )
+    # Server must survive — no SystemExit propagated
+    assert result.nodes == []
+    assert result.edges == []

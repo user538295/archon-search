@@ -114,7 +114,16 @@ class GraphExtractor:
                 "spaCy model %r not found; auto-downloading (first call only).",
                 _SPACY_MODEL,
             )
-            spacy.cli.download(_SPACY_MODEL)
+            try:
+                spacy.cli.download(_SPACY_MODEL)
+            except SystemExit as exc:
+                # spaCy calls sys.exit(1) when no package installer (pip/uv) is found.
+                # SystemExit is BaseException, not Exception, so it escapes the caller's
+                # `except Exception` and crashes the server. Convert to RuntimeError here.
+                raise RuntimeError(
+                    f"spaCy model download failed (no package installer found; exit code {exc.code}). "
+                    f"Download the model manually: python -m spacy download {_SPACY_MODEL}"
+                ) from exc
 
         return spacy.load(_SPACY_MODEL)
 
