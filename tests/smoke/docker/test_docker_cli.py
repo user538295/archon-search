@@ -249,13 +249,15 @@ def test_status_with_server_shows_http_telemetry(smoke_docker_server, tmp_path):
     assert "stopped" not in result.stdout, (
         f"'stopped' should be suppressed in container mode; stdout:\n{result.stdout}"
     )
-    # At least one field from the /status HTTP response should be present.
-    # The server is always running at this point so the HTTP fallback fires.
-    # We check for common fields that GET /status always returns.
-    assert any(
-        field in combined
-        for field in ("Collections:", "Telemetry:")
-    ), f"Expected at least one HTTP telemetry field; got:\n{combined}"
+    # The smoke_docker_server fixture enables telemetry ([telemetry] enabled=true)
+    # so GET /status returns a non-null telemetry sub-object and the CLI prints
+    # the "Telemetry:" section header.  "Collections:" is never present because
+    # the docker fixture seeds no corpus.  We assert on result.stdout (not
+    # combined) because _print_telemetry_status uses click.echo without err=True
+    # — telemetry output is a stdout contract, not a stderr one.
+    assert "Telemetry:" in result.stdout, (
+        f"Expected 'Telemetry:' in stdout from the HTTP /status response; got:\n{result.stdout}"
+    )
 
 
 def test_status_without_server_clean_exit_0(tmp_path):
@@ -291,4 +293,11 @@ def test_status_without_server_clean_exit_0(tmp_path):
     )
     assert "stopped" not in result.stdout, (
         f"'stopped' should be suppressed in container mode; stdout:\n{result.stdout}"
+    )
+    # Positive assertion: the unreachable path results in empty stdout (the
+    # service-section line is suppressed and the telemetry section is silently
+    # omitted).  An empty stdout distinguishes this path from every other exit-0
+    # branch (401, empty-but-non-None payload, etc. all produce some output).
+    assert result.stdout.strip() == "", (
+        f"Expected empty stdout when server unreachable in container mode; got:\n{result.stdout}"
     )
