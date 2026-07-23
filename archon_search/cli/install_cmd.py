@@ -1,13 +1,14 @@
 """archon-search install and uninstall subcommands."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from shutil import rmtree
 
 import click
 
-from archon_search.cli._helpers import _get_service
+from archon_search.cli._helpers import _CONTAINER_MSG, _get_service
 from archon_search.install import SearchInstaller
 from archon_search.key_manager import _HEX_RE
 
@@ -201,11 +202,20 @@ def install(dry_run: bool, config_path: Path | None) -> None:
 
     Run 'archon-search wizard' first to choose a profile and download models.
     """
-    import sys
-    rc = SearchInstaller(
-        config_file=str(config_path) if config_path else None,
-        dry_run=dry_run,
-    ).run_register_and_start()
+    if os.environ.get("ARCHON_SEARCH_CONTAINER") == "1":
+        click.echo(_CONTAINER_MSG, err=True)
+        raise SystemExit(1)
+    try:
+        rc = SearchInstaller(
+            config_file=str(config_path) if config_path else None,
+            dry_run=dry_run,
+        ).run_register_and_start()
+    except RuntimeError as exc:
+        if "systemctl binary not found" in str(exc):
+            click.echo(_CONTAINER_MSG, err=True)
+        else:
+            click.echo(f"Error during install: {exc}", err=True)
+        raise SystemExit(1)
     sys.exit(rc)
 
 
@@ -214,10 +224,19 @@ def install(dry_run: bool, config_path: Path | None) -> None:
 @click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
 def uninstall(delete_db: bool, config_path: Path | None) -> None:
     """Uninstall archon-search service."""
+    if os.environ.get("ARCHON_SEARCH_CONTAINER") == "1":
+        click.echo(_CONTAINER_MSG, err=True)
+        raise SystemExit(1)
     try:
         service = _get_service()
         service.stop()
         service.unregister()
+    except RuntimeError as exc:
+        if "systemctl binary not found" in str(exc):
+            click.echo(_CONTAINER_MSG, err=True)
+        else:
+            click.echo(f"Error during service teardown: {exc}", err=True)
+        raise SystemExit(1)
     except Exception as exc:
         click.echo(f"Error during service teardown: {exc}", err=True)
         raise SystemExit(1)

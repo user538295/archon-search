@@ -1,4 +1,4 @@
-"""Docker-mode CLI smoke tests (BE-1, BE-2, BE-3, T-1).
+"""Docker-mode CLI smoke tests (BE-1, BE-2, BE-3, BE-4, T-1).
 
 Tests in this module exercise the ``archon-search`` CLI from a subprocess with
 ``ARCHON_SEARCH_CONTAINER=1`` injected into the environment, mirroring how the
@@ -11,6 +11,8 @@ Covers:
 - S4 — ``status`` with unreachable server exits 0 cleanly, no "stopped" line (BE-2)
 - S5 — ``start`` in container mode emits clean message, exit 1 (BE-3)
 - S6 — ``stop`` in container mode emits clean message, exit 1 (BE-3)
+- S7 — ``install`` in container mode emits clean message, exit 1 (BE-4)
+- S8 — ``uninstall`` in container mode emits clean message, exit 1 (BE-4)
 - S13 — ``config show`` prints TOML config, exit 0, no server required
 - S18 — ``--help`` completes within 5 s (advisory)
 
@@ -459,6 +461,57 @@ def test_stop_emits_clean_container_mode_message(tmp_path):
     )
     assert "Traceback" not in combined, (
         f"archon-search stop printed a traceback:\n{combined}"
+    )
+    assert _CONTAINER_MSG in result.stderr, (
+        f"Expected container-mode message in stderr; got:\n{result.stderr}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# BE-4: install/uninstall in container mode (S7, S8)
+# ---------------------------------------------------------------------------
+
+
+def test_install_emits_clean_container_mode_message(tmp_path):
+    """``install`` in container mode exits 1 with clean message, no traceback (S7)."""
+    env = _make_docker_env(data_dir=tmp_path)
+    result = subprocess.run(
+        ["uv", "run", "archon-search", "install"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1, (
+        f"archon-search install expected returncode 1, got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "Traceback" not in combined, (
+        f"archon-search install printed a traceback:\n{combined}"
+    )
+    assert _CONTAINER_MSG in result.stderr, (
+        f"Expected container-mode message in stderr; got:\n{result.stderr}"
+    )
+
+
+def test_uninstall_emits_clean_container_mode_message(tmp_path):
+    """``uninstall`` in container mode exits 1 with clean message, no traceback (S8)."""
+    env = _make_docker_env(data_dir=tmp_path)
+    result = subprocess.run(
+        ["uv", "run", "archon-search", "uninstall"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1, (
+        f"archon-search uninstall expected returncode 1, got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "Traceback" not in combined, (
+        f"archon-search uninstall printed a traceback:\n{combined}"
     )
     assert _CONTAINER_MSG in result.stderr, (
         f"Expected container-mode message in stderr; got:\n{result.stderr}"

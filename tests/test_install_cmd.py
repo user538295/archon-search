@@ -309,6 +309,99 @@ def test_wizard_help_contains_server_key(runner: CliRunner) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Container-mode tests (BE-4)
+# ---------------------------------------------------------------------------
+
+def test_install_container_env_emits_clean_message_exits_1(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ARCHON_SEARCH_CONTAINER=1 → clean message on stderr, exit 1, no SearchInstaller constructed (S7)."""
+    from archon_search.cli._helpers import _CONTAINER_MSG
+
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    with patch("archon_search.cli.install_cmd.SearchInstaller") as mock_installer_cls:
+        result = runner.invoke(main, ["install"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert _CONTAINER_MSG in result.output
+    mock_installer_cls.assert_not_called()
+
+
+def test_install_systemctl_absent_emits_clean_message_exits_1(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RuntimeError('systemctl binary not found') → clean message, exit 1."""
+    from archon_search.cli._helpers import _CONTAINER_MSG
+
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    run_mock = MagicMock(side_effect=RuntimeError("systemctl binary not found"))
+    with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
+        installer_cls.return_value.run_register_and_start = run_mock
+        result = runner.invoke(main, ["install"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert _CONTAINER_MSG in result.output
+
+
+def test_uninstall_container_env_emits_clean_message_exits_1(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ARCHON_SEARCH_CONTAINER=1 → clean message on stderr, exit 1 (S8)."""
+    from archon_search.cli._helpers import _CONTAINER_MSG
+
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    with patch("archon_search.cli.install_cmd._get_service") as mock_get_svc:
+        result = runner.invoke(main, ["uninstall"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert _CONTAINER_MSG in result.output
+    mock_get_svc.assert_not_called()
+
+
+def test_uninstall_systemctl_absent_emits_clean_message_exits_1(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RuntimeError('systemctl binary not found') → clean message, exit 1."""
+    from archon_search.cli._helpers import _CONTAINER_MSG
+
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    mock_service = MagicMock()
+    mock_service.stop.side_effect = RuntimeError("systemctl binary not found")
+    with patch("archon_search.cli.install_cmd._get_service", return_value=mock_service):
+        result = runner.invoke(main, ["uninstall"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert _CONTAINER_MSG in result.output
+    mock_service.unregister.assert_not_called()
+
+
+def test_install_native_path_unchanged(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """env unset + run_register_and_start() succeeds → exit 0 (S17 regression guard)."""
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    config_path = tmp_path / "archon-search.toml"
+    config_path.write_text("[database]\n")
+
+    run_mock = MagicMock(return_value=0)
+    with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
+        installer_cls.return_value.run_register_and_start = run_mock
+        result = runner.invoke(main, ["install", "--config", str(config_path)], catch_exceptions=False)
+    assert result.exit_code == 0
+    run_mock.assert_called_once()
+
+
+def test_uninstall_native_path_unchanged(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """env unset + service teardown succeeds → 'uninstalled', exit 0 (S17 regression guard)."""
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    mock_service = MagicMock()
+    with patch("archon_search.cli.install_cmd._get_service", return_value=mock_service):
+        result = runner.invoke(main, ["uninstall"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert "uninstalled" in result.output.lower()
+    mock_service.stop.assert_called_once()
+    mock_service.unregister.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # uninstall command — stop and unregister are called
 # ---------------------------------------------------------------------------
 

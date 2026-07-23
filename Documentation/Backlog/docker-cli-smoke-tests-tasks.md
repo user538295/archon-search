@@ -106,7 +106,7 @@ flowchart LR
         - #unit_test — `test_start_native_path_unchanged` — env unset; `_get_service().start` → 0; "archon-search started", `exit_code == 0` (S17 regression guard)
         - #integration_test — `test_start_emits_clean_container_mode_message` — subprocess `archon-search start` with `_docker_env()`; `returncode == 1`, clean message, no traceback (S5)
         - #integration_test — `test_stop_emits_clean_container_mode_message` — subprocess `archon-search stop` with `_docker_env()`; `returncode == 1`, clean message, no traceback (S6)
-- [ ] **BE-4** — Fix [install_cmd.py](../../archon_search/cli/install_cmd.py): check `ARCHON_SEARCH_CONTAINER=1` before calling `SearchInstaller.run_register_and_start()` ([install.py:2550](../../archon_search/install.py)) for `install`, and catch `RuntimeError("systemctl binary not found")` in `uninstall`'s existing `except Exception`; emit the container-mode message + exit 1. Extend `test_docker_cli.py` with the install/uninstall proofs #backend-role
+- [x] **BE-4** — Fix [install_cmd.py](../../archon_search/cli/install_cmd.py): check `ARCHON_SEARCH_CONTAINER=1` before calling `SearchInstaller.run_register_and_start()` ([install.py:2550](../../archon_search/install.py)) for `install`, and catch `RuntimeError("systemctl binary not found")` in `uninstall`'s existing `except Exception`; emit the container-mode message + exit 1. Extend `test_docker_cli.py` with the install/uninstall proofs #backend-role
     - Presentation · 2.5h
     - needs K1, BE-1 · completes C1, S7, S8
     - Tests
