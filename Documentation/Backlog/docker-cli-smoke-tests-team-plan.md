@@ -422,3 +422,4 @@ Resolve before committing (status moves `draft → planned`).
 
 - **Brief:** [docker-cli-smoke-tests-brief.md](./docker-cli-smoke-tests-brief.md)
 - **Contract:** [service-lifecycle.tsp](./service-lifecycle.tsp)
+- **Tasks:** [docker-cli-smoke-tests-tasks.md](./docker-cli-smoke-tests-tasks.md)
