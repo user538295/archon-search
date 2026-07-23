@@ -1,4 +1,4 @@
-"""Docker-mode CLI smoke tests (BE-1, BE-2, T-1).
+"""Docker-mode CLI smoke tests (BE-1, BE-2, BE-3, T-1).
 
 Tests in this module exercise the ``archon-search`` CLI from a subprocess with
 ``ARCHON_SEARCH_CONTAINER=1`` injected into the environment, mirroring how the
@@ -9,11 +9,14 @@ Covers:
 - S2 — ``serve`` starts and shuts down cleanly (``smoke_docker_server`` fixture)
 - S3 — ``status`` with running server shows HTTP telemetry, exit 0 (BE-2, T-1)
 - S4 — ``status`` with unreachable server exits 0 cleanly, no "stopped" line (BE-2)
+- S5 — ``start`` in container mode emits clean message, exit 1 (BE-3)
+- S6 — ``stop`` in container mode emits clean message, exit 1 (BE-3)
 - S13 — ``config show`` prints TOML config, exit 0, no server required
 - S18 — ``--help`` completes within 5 s (advisory)
 
 T-1 manual spot-check checklist (human verification):
-- Run: ``ARCHON_SEARCH_CONTAINER=1 archon-search status --api-url <url> --api-key <key>``
+- Real container invocation: ``docker compose run --rm archon-test-runner archon-search status --api-url <url> --api-key <key>``
+- Host-side approximation (env-var only, not a full container): ``ARCHON_SEARCH_CONTAINER=1 archon-search status --api-url <url> --api-key <key>``
 - Fetch: ``GET /status`` with the same key and inspect the ``telemetry`` sub-object
 - Confirm: the ``enabled`` field is rendered as the value word on the ``Telemetry:`` header
   line (e.g. ``Telemetry: enabled``); ``hash_doc_ids_enabled`` appears as an indented field
@@ -31,6 +34,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from archon_search.cli._helpers import _CONTAINER_MSG
 from tests.smoke.conftest import _free_port
 
 pytestmark = [pytest.mark.smoke, pytest.mark.xdist_group("smoke_e2e")]
@@ -318,20 +322,23 @@ def test_status_without_server_clean_exit_0(tmp_path):
 
 
 def test_docker_status_renders_telemetry_payload_fields(smoke_docker_server, tmp_path):
-    """Container-mode ``status`` renders telemetry payload fields correctly, "stopped" suppressed (T-1, S3, C2).
+    """Telemetry payload-value coupling: rendered fields match HTTP payload values (T-1, S3).
 
-    Fetches the raw GET /status payload to obtain the actual telemetry field
-    values, then asserts each field is rendered correctly in the container-mode
-    CLI output.  Does not run a native subprocess — telemetry rendering in
-    ``_print_telemetry_status`` is driven purely by the HTTP payload; the
-    ``ARCHON_SEARCH_CONTAINER=1`` env var only gates the "stopped" line.
+    Sole unique contribution: asserts that ``enabled`` is rendered as the value
+    word on the ``Telemetry:`` header line, and that ``hash_doc_ids_enabled`` is
+    rendered as an indented field label with its actual payload value
+    (C1 / C2-MAJOR-2).
 
-    Asserts:
-    1. The ``enabled`` field is rendered as the value word on the ``Telemetry:``
-       header line (e.g. ``Telemetry: enabled``).
-       ``hash_doc_ids_enabled`` is rendered as an indented field label with its
-       value (e.g. ``  hash_doc_ids_enabled: True``).
-    2. "stopped" is absent as a whole line from the container-mode output (C2).
+    Telemetry rendering (``_print_telemetry_status``) is driven purely by the
+    HTTP payload; it is identical in native and container mode.  This test uses
+    ``ARCHON_SEARCH_CONTAINER=1`` only because the scenario (S3) calls for it —
+    not because the assertions are container-specific.
+
+    The "stopped" assertion below is a belt-and-suspenders corroboration (not a
+    C2 guard): because ``smoke_docker_server`` has a running server
+    (``svc_status.running is True``), the suppression branch in ``status.py``
+    is never exercised here.  Primary C2 proof lives in the sibling
+    ``test_status_without_server_clean_exit_0``.
 
     Manual spot-check documented in this module's docstring.
     """
@@ -347,6 +354,12 @@ def test_docker_status_renders_telemetry_payload_fields(smoke_docker_server, tmp
     telemetry_payload = status_resp.json().get("telemetry")
     assert telemetry_payload is not None, (
         "GET /status returned null telemetry — smoke_docker_server must have telemetry enabled"
+    )
+    # Pre-condition: hash_doc_ids_enabled must be present in the payload;
+    # if absent, the server schema has changed and we want a clear failure
+    # before paying the ~30s subprocess cost.
+    assert "hash_doc_ids_enabled" in telemetry_payload, (
+        f"GET /status telemetry payload missing 'hash_doc_ids_enabled' field: {telemetry_payload}"
     )
 
     # --- Container-mode run ---
@@ -377,18 +390,12 @@ def test_docker_status_renders_telemetry_payload_fields(smoke_docker_server, tmp
     )
     container_stdout = container_result.stdout
 
-    # C2: "stopped" must be absent as a whole line from container-mode output
-    # (_print_telemetry_status suppresses the service-section line when
-    # ARCHON_SEARCH_CONTAINER=1 is set)
+    # Belt-and-suspenders: "stopped" should be absent from output (running server
+    # never reaches the suppression branch — see docstring for C2 proof location).
     assert "stopped" not in container_stdout.splitlines(), (
         f"'stopped' must be suppressed in container mode; stdout:\n{container_stdout}"
     )
 
-    # Pre-condition: hash_doc_ids_enabled must be present in the payload;
-    # if absent, the server schema has changed and we want a clear failure.
-    assert "hash_doc_ids_enabled" in telemetry_payload, (
-        f"GET /status telemetry payload missing 'hash_doc_ids_enabled' field: {telemetry_payload}"
-    )
     # 'enabled' is rendered as the value word on the Telemetry: header line,
     # not as a label — couple the payload value to the expected rendered header.
     # (Subsumes the bare "Telemetry:" header check — if this passes, the header is present.)
@@ -398,8 +405,61 @@ def test_docker_status_renders_telemetry_payload_fields(smoke_docker_server, tmp
         f"Container stdout:\n{container_stdout}"
     )
     # C2-MAJOR-2: hash_doc_ids_enabled is rendered as an indented label with its value.
+    # The 2-space prefix is load-bearing: it couples to _print_telemetry_status's
+    # indent format in status.py:121 — changing that indent breaks this assertion.
     expected_hash_line = f"  hash_doc_ids_enabled: {telemetry_payload['hash_doc_ids_enabled']}"
     assert expected_hash_line in container_stdout, (
         f"Expected '{expected_hash_line}' in container status stdout.\n"
         f"Container stdout:\n{container_stdout}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# BE-3: start/stop in container mode (S5, S6)
+# ---------------------------------------------------------------------------
+
+
+def test_start_emits_clean_container_mode_message(tmp_path):
+    """``start`` in container mode exits 1 with clean message, no traceback (S5)."""
+    env = _make_docker_env(data_dir=tmp_path)
+    result = subprocess.run(
+        ["uv", "run", "archon-search", "start"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1, (
+        f"archon-search start expected returncode 1, got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "Traceback" not in combined, (
+        f"archon-search start printed a traceback:\n{combined}"
+    )
+    assert _CONTAINER_MSG in result.stderr, (
+        f"Expected container-mode message in stderr; got:\n{result.stderr}"
+    )
+
+
+def test_stop_emits_clean_container_mode_message(tmp_path):
+    """``stop`` in container mode exits 1 with clean message, no traceback (S6)."""
+    env = _make_docker_env(data_dir=tmp_path)
+    result = subprocess.run(
+        ["uv", "run", "archon-search", "stop"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1, (
+        f"archon-search stop expected returncode 1, got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "Traceback" not in combined, (
+        f"archon-search stop printed a traceback:\n{combined}"
+    )
+    assert _CONTAINER_MSG in result.stderr, (
+        f"Expected container-mode message in stderr; got:\n{result.stderr}"
     )

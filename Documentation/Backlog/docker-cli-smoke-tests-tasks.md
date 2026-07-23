@@ -96,7 +96,7 @@ flowchart LR
         - #manual_test — Telemetry output comparison — run `docker compose run --rm archon-test-runner archon-search status --api-url <url> --api-key <key>` and eyeball that the HTTP-fallback telemetry section reads the same as native `archon-search status` (layout/completeness human spot-check; field-presence is automated by the companion e2e above)
 
 ### Phase 3 · Fail service commands cleanly in Docker *(each service-command fix ships with its container proof: one actionable message, exit 1, no traceback)*
-- [ ] **BE-3** — Fix [start.py](../../archon_search/cli/start.py) and [stop.py](../../archon_search/cli/stop.py): short-circuit on `ARCHON_SEARCH_CONTAINER=1` and catch `RuntimeError("systemctl binary not found")` from `_get_service().start()`/`.stop()`; emit the container-mode message + exit 1. Extend `test_docker_cli.py` with the start/stop proofs #backend-role
+- [x] **BE-3** — Fix [start.py](../../archon_search/cli/start.py) and [stop.py](../../archon_search/cli/stop.py): short-circuit on `ARCHON_SEARCH_CONTAINER=1` and catch `RuntimeError("systemctl binary not found")` from `_get_service().start()`/`.stop()`; emit the container-mode message + exit 1. Extend `test_docker_cli.py` with the start/stop proofs #backend-role
     - Presentation · 3.5h
     - needs K1, BE-1 · completes C1, S5, S6, S17
     - Tests

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
+from archon_search.cli._helpers import _CONTAINER_MSG
 from archon_search.cli.main import main
 from archon_search.platform.service import ServiceStatus
 
@@ -167,3 +168,78 @@ def test_get_service_returns_correct_type_for_current_platform() -> None:
 
     svc = _get_service()
     assert isinstance(svc, SearchServiceLifecycle)
+
+
+# ---------------------------------------------------------------------------
+# Container-mode tests (BE-3)
+# ---------------------------------------------------------------------------
+
+
+def test_start_container_env_emits_clean_message_exits_1(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ARCHON_SEARCH_CONTAINER=1 → clean message on stderr, exit 1 (S5)."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    with (
+        patch("archon_search.cli.start.load_config") as mock_load_config,
+        patch("archon_search.cli.start._get_service") as mock_get_svc,
+    ):
+        result = runner.invoke(main, ["start"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert _CONTAINER_MSG in result.output
+    mock_get_svc.assert_not_called()
+    mock_load_config.assert_not_called()
+
+
+def test_start_systemctl_absent_emits_clean_message_exits_1(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, mock_service: MagicMock
+) -> None:
+    """RuntimeError('systemctl binary not found') → clean message, exit 1."""
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    mock_service.start.side_effect = RuntimeError("systemctl binary not found")
+    with (
+        patch("archon_search.cli.start._get_service", return_value=mock_service),
+        patch("archon_search.cli.start.load_config"),
+    ):
+        result = runner.invoke(main, ["start"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert _CONTAINER_MSG in result.output
+
+
+def test_stop_container_env_emits_clean_message_exits_1(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ARCHON_SEARCH_CONTAINER=1 → clean message on stderr, exit 1 (S6)."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    with patch("archon_search.cli.stop._get_service") as mock_get_svc:
+        result = runner.invoke(main, ["stop"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert _CONTAINER_MSG in result.output
+    mock_get_svc.assert_not_called()
+
+
+def test_stop_systemctl_absent_emits_clean_message_exits_1(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, mock_service: MagicMock
+) -> None:
+    """RuntimeError('systemctl binary not found') → clean message, exit 1."""
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    mock_service.stop.side_effect = RuntimeError("systemctl binary not found")
+    with patch("archon_search.cli.stop._get_service", return_value=mock_service):
+        result = runner.invoke(main, ["stop"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert _CONTAINER_MSG in result.output
+
+
+def test_start_native_path_unchanged(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, mock_service: MagicMock
+) -> None:
+    """env unset + service.start() succeeds → 'started', exit 0 (S17 regression guard)."""
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    with (
+        patch("archon_search.cli.start._get_service", return_value=mock_service),
+        patch("archon_search.cli.start.load_config"),
+    ):
+        result = runner.invoke(main, ["start"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert "started" in result.output.lower()
+    mock_service.start.assert_called_once()

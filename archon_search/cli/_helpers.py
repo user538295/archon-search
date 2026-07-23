@@ -14,6 +14,10 @@ _TERMINAL_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
 # ponytail: ConnectTimeout (bound-not-listening) and ConnectError (refused) both mean server absent.
 _SERVER_NOT_RUNNING_MSG = "archon-search serve is not running. Start it first with: archon-search serve"
 _CONNECT_FAIL = (httpx.ConnectError, httpx.ConnectTimeout)
+_CONTAINER_MSG = (
+    "Service management is not available in container mode. "
+    "Use 'archon-search serve' to run the server."
+)
 
 
 def _poll_job(
