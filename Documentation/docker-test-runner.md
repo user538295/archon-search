@@ -196,7 +196,7 @@ The install command pulls in three optional extras — `hyde`, `rag-fusion`, and
 - **`graph`** installs the graph subsystem's dependencies, including `spacy` (named-entity recognition for entity extraction) and `leidenalg` + `python-igraph` (the Leiden clustering algorithm used to build graph communities).
 - **`en_core_web_sm`** is spaCy's small English model. `graph.enabled = true` needs it at runtime for entity extraction; without it the graph code path can't run.
 
-Why bother? Because two of the smoke tests exercise the graph feature end-to-end (entity extraction plus a community rebuild via Leiden). Without `graph` + the spaCy model installed, those two tests **skip**. With them installed, they run and pass — which is why the smoke suite reports `31 passed` rather than `29 passed, 2 skipped`. `hyde` and `rag-fusion` are installed for completeness of the dev/test dependency surface.
+Why bother? Because two of the smoke tests exercise the graph feature end-to-end (entity extraction plus a community rebuild via Leiden). Without `graph` + the spaCy model installed, those two tests **skip**. With them installed, they run and pass — which is why the base smoke suite (pre-DCS) reported `31 passed` rather than `29 passed, 2 skipped`. The DCS feature added `tests/smoke/docker/` with 20 additional Docker-mode CLI tests, bringing the smoke-suite total to approximately 51 tests. `hyde` and `rag-fusion` are installed for completeness of the dev/test dependency surface.
 
 ---
 
@@ -295,7 +295,7 @@ flowchart TB
     end
     subgraph phase2["Phase 2 — smoke suite (tests/smoke/)"]
         direction TB
-        B1["31 tests, serialized onto one worker"]
+        B1["~51 tests, serialized onto one worker"]
         B2["Starts a REAL archon-search serve subprocess"]
         B3["Talks to it over HTTP like a real client"]
         B4["~128 seconds"]
@@ -315,14 +315,48 @@ When you run the full suite in Docker, you should see roughly:
 
 ```
 7806 passed, 41 skipped — 92% coverage        # default suite, ~122s
-31 passed                                       # smoke suite, ~128s
+~51 passed                                      # smoke suite (31 base + 20 Docker CLI), ~128s
 ```
 
-**Zero failures in both phases.** Because the test runner runs as a non-root user (uid 1000), the permission tests that used to fail under root now pass. And because the `graph` extra + spaCy model are installed, the two graph smoke tests run instead of skipping — hence `31 passed` rather than `29 passed, 2 skipped`.
+**Zero failures in both phases.** Because the test runner runs as a non-root user (uid 1000), the permission tests that used to fail under root now pass. And because the `graph` extra + spaCy model are installed, the two graph smoke tests run instead of skipping. The Docker CLI smoke tests (`tests/smoke/docker/`) add ~20 additional tests covering container-mode CLI behavior.
 
 The 41 skips in the default suite are the usual markers excluded by default (`live_benchmark`, `smoke`, `live_eval`, `docling`, and `live` tests that need real infrastructure) — see `CLAUDE.md` for the marker rules. **Any actual failure — in either phase — is a real signal worth investigating.**
 
 > **Historical note.** Earlier versions ran as `root` without the `graph` extra, producing ~9 "expected" failures (permission and service-install tests) and 2 skipped graph smoke tests. The non-root user and the graph extra fixed that; a clean run today is `0 failed`.
+
+---
+
+## The `tests/smoke/docker/` subdirectory
+
+`tests/smoke/docker/` (added in DCS — Docker CLI Smoke Tests) is a subdirectory of the smoke suite that targets **container-mode CLI behavior** specifically. It runs inside the same `archon-test-runner` container alongside the rest of `tests/smoke/`, requiring no separate image or setup.
+
+What it covers:
+
+| Scenario | Test |
+|---|---|
+| `--help` / `--version` exit 0 (S1) | `test_help_exits_0`, `test_version_exits_0` |
+| `serve` starts and shuts down cleanly (S2) | `test_serve_health_and_ready` |
+| `status` shows HTTP telemetry when server running (S3) | `test_status_with_server_shows_http_telemetry` |
+| `status` exits 0 cleanly when server unreachable (S4) | `test_status_without_server_clean_exit_0` |
+| `start` / `stop` emit clean container-mode message, exit 1 (S5, S6) | `test_start_emits_clean_container_mode_message`, `test_stop_emits_clean_container_mode_message` |
+| `install` / `uninstall` emit clean container-mode message, exit 1 (S7, S8) | `test_install_emits_clean_container_mode_message`, `test_uninstall_emits_clean_container_mode_message` |
+| `key list` exits 0 (S9) | `test_key_list_exits_0` |
+| `collection list` / `info` exits 0 (S10, S12) | `test_collection_list_exits_0`, `test_collection_info_exits_0` |
+| `collection add --wait` completes (S11) | `test_collection_add_wait_completes` |
+| `config show` exits 0 offline (S13) | `test_config_show_exits_0` |
+| `ingest --wait` completes (S14) | `test_ingest_wait_completes` |
+| `jobs status <id>` reports status (S15) | `test_jobs_status_reports_status` |
+| `maintenance run` exits 0 (S16) | `test_maintenance_run_exits_0` |
+| `--help` completes within 5s advisory (S18) | `test_help_completes_within_5s` |
+| Telemetry field parity (T-1) | `test_docker_status_renders_telemetry_payload_fields` |
+
+Every test in `tests/smoke/docker/` injects `ARCHON_SEARCH_CONTAINER=1` into the subprocess environment via the `_docker_env()` helper in `tests/smoke/docker/conftest.py`. All tests carry `pytestmark = [pytest.mark.smoke, pytest.mark.xdist_group("smoke_e2e")]` so they are collected under the `smoke` marker and serialize onto the same xdist worker as the rest of the smoke suite.
+
+To run only the Docker CLI smoke tests:
+
+```bash
+docker compose run --rm archon-test-runner uv run pytest tests/smoke/docker/ --no-cov
+```
 
 ---
 
@@ -344,8 +378,11 @@ docker compose exec archon-dev-shell bash       # shell in
 docker compose stop archon-dev-shell            # stop when done
 
 # ── Targeted one-shot runs (override the default command) ─────
-# Only the smoke tests:
+# Only the smoke tests (includes tests/smoke/docker/):
 docker compose run --rm archon-test-runner uv run pytest tests/smoke/ --no-cov
+
+# Only the Docker CLI smoke tests:
+docker compose run --rm archon-test-runner uv run pytest tests/smoke/docker/ --no-cov
 
 # Only the default suite (no smoke):
 docker compose run --rm archon-test-runner uv run pytest

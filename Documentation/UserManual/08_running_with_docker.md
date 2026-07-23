@@ -219,6 +219,52 @@ The dev config (`archon-search.docker-dev.toml`) enables:
 - `[hyde] provider = "claude_cli" model = "haiku"`
 - `[rag_fusion] provider = "claude_cli" model = "haiku"`
 
+## CLI behavior in Docker
+
+When `ARCHON_SEARCH_CONTAINER=1` is set (baked into the image), the CLI adapts its behavior to the container context.
+
+### What works
+
+All commands that contact the running server via HTTP work identically inside the container:
+
+| Command | Notes |
+|---|---|
+| `archon-search --help`, `--version` | Offline; always exit 0 |
+| `archon-search config show` | Reads local TOML; no server required |
+| `archon-search status --api-url <url> --api-key <key>` | HTTP fallback — shows telemetry from `GET /status` |
+| `archon-search key list --api-url <url> --api-key <key>` | HTTP |
+| `archon-search collection list` | Reads store directly via `ARCHON_SEARCH_DATA_DIR`; no server required |
+| `archon-search collection info <name> --api-url <url> --api-key <key>` | HTTP |
+| `archon-search collection add <path> --wait --api-url <url> --api-key <key>` | HTTP; use `--wait` to confirm job completion |
+| `archon-search ingest --path <file> --collection <name> --wait --api-url <url> --api-key <key>` | HTTP; use `--wait` to confirm job completion |
+| `archon-search jobs status <id> --api-url <url> --api-key <key>` | HTTP |
+| `archon-search maintenance run --api-url <url> --api-key <key>` | HTTP |
+
+### Service management commands (clean error, not a traceback)
+
+`start`, `stop`, `install`, and `uninstall` manage the host-level service (systemd/launchd) and are meaningless in a container. In container mode they emit a single actionable message and exit 1 — no Python traceback:
+
+```
+Service management is not available in container mode. Use 'archon-search serve' to run the server.
+```
+
+### `status` HTTP fallback
+
+`status` has two information sources: the platform service layer (systemctl) and the HTTP `/status` endpoint. In container mode, systemctl is absent and the service-section line (`stopped`) is suppressed. The `_fetch_server_status()` call runs unconditionally — when the server is reachable, the full HTTP telemetry is shown; when unreachable, the command exits 0 silently (no traceback).
+
+Example (server running inside the container):
+
+```bash
+archon-search status --api-url http://127.0.0.1:8765 --api-key $ARCHON_SEARCH_API_KEY
+# Telemetry: enabled
+#   hash_doc_ids_enabled: False
+# Collections: 2
+#   smoke (1 document)
+# ...
+```
+
+The exact fields rendered depend on the server's telemetry config and the ingested corpus. When no collections are present, the `Collections:` line is omitted entirely.
+
 ## TLS termination
 
 The container speaks plaintext HTTP only. Put a reverse proxy (nginx, Caddy, Traefik) in front of it for any non-loopback exposure. See [`OperatorGuide/01_deployment_topologies.md`](../OperatorGuide/01_deployment_topologies.md) for the reverse-proxy patterns.

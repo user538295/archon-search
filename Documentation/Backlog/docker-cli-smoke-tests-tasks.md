@@ -136,7 +136,7 @@ flowchart LR
     - needs BE-1, BE-2, BE-3, BE-4, BE-5 · completes S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13, S14, S15, S16, S18
     - Tests
         - #e2e_test — `test_docker_smoke_suite_exits_0` — `docker compose run --rm archon-test-runner uv run pytest tests/smoke/docker/ --no-cov`; the full suite exits 0 inside the container, covering S1–S16 and S18
-- [ ] **T-3** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-3** — Project close-out & acceptance fact-check #tester-role
     - — · 3.0h
     - needs T-1, T-2 · completes (acceptance gate)
     - Tests
