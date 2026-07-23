@@ -18,6 +18,7 @@ that registration.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -244,3 +245,103 @@ def test_uid_1000_can_write_data_dir(cpu_image: str) -> None:
                 timeout=30,
             )
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# T-2: whole-feature Docker compose smoke suite (DCS)
+# ---------------------------------------------------------------------------
+
+
+# 20 test functions in tests/smoke/docker/test_docker_cli.py; 1 is xfail(strict=False)
+# for the advisory timing test. xfail counts as "1 xfailed", not "1 passed", so a
+# fully-green run reports 19 passed. Floor is 19 to catch any silent skip regression.
+_DOCKER_SMOKE_MIN_PASSED = 19
+
+
+@pytest.fixture(scope="module")
+def test_runner_image() -> str:
+    """Build the Dockerfile.test image once per module; return a sentinel.
+
+    Uses ``docker compose build archon-test-runner`` so the compose service
+    definition (volumes, env vars) is fully honoured.  Image is not removed on
+    teardown — the named volumes (``archon-docker-venv``, ``archon-uv-cache``)
+    persist and speed up subsequent runs.
+    """
+    if not _smoke_opted_in():
+        pytest.skip(f"{SMOKE_OPT_IN_ENV} not set; opt in to run the docker compose smoke suite")
+    if not _docker_available():
+        pytest.skip("docker not available")
+    subprocess.run(
+        ["docker", "compose", "build", "archon-test-runner"],
+        check=True,
+        cwd=str(REPO_ROOT),
+        timeout=1500,
+    )
+    return "archon-test-runner"
+
+
+@pytest.mark.docker
+@pytest.mark.xdist_group("docker")
+@pytest.mark.skipif(
+    not _smoke_opted_in(),
+    reason=f"{SMOKE_OPT_IN_ENV} not set; opt in to run the docker compose smoke suite",
+)
+@pytest.mark.skipif(not _docker_available(), reason="docker not available")
+def test_docker_smoke_suite_exits_0(test_runner_image: str) -> None:
+    """Run ``tests/smoke/docker/`` inside the compose test-runner; assert exit 0.
+
+    Builds the ``archon-test-runner`` image from ``Dockerfile.test``, then
+    runs::
+
+        docker compose run --rm archon-test-runner \\
+            sh -c "uv sync ... && uv run pytest tests/smoke/docker/ ..."
+
+    inside the container.  The ``-o addopts=`` flag strips the ini-level
+    ``addopts`` (which contains ``-m "not smoke"`` and ``-n 8``) so the
+    smoke-marked tests are collected and run serially on a single worker.
+
+    Asserts:
+    - ``returncode == 0`` (the whole suite passed)
+    - at least ``_DOCKER_SMOKE_MIN_PASSED`` tests reported as passed (guards
+      against silent collection-failure where pytest exits 0 with 0 tests)
+
+    ``--extra graph`` and the spaCy model download are intentionally omitted:
+    the docker smoke tests spawn ``archon-search serve`` without graph enabled
+    (the default), so spaCy is never imported during these tests.
+    """
+    result = subprocess.run(
+        [
+            "docker", "compose",
+            "run", "--rm", "archon-test-runner",
+            "sh", "-c",
+            (
+                "uv sync --dev --extra hyde --extra rag-fusion --quiet && "
+                "uv run pytest tests/smoke/docker/ --no-cov -o addopts= -v"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        timeout=600,
+    )
+    combined = result.stdout + result.stderr
+
+    # Parse pytest summary counts for diagnostic output in the failure message.
+    # returncode is the authoritative pass/fail signal; parsed counts add context.
+    passed_match = re.search(r"(\d+) passed", combined)
+    passed_count = int(passed_match.group(1)) if passed_match else 0
+    failed_match = re.search(r"(\d+) failed\b", combined)
+    error_match = re.search(r"(\d+) error[s]?\b", combined)
+    failed_count = int(failed_match.group(1)) if failed_match else 0
+    error_count = int(error_match.group(1)) if error_match else 0
+
+    assert result.returncode == 0, (
+        f"docker compose smoke suite exited {result.returncode} "
+        f"(passed={passed_count}, failed={failed_count}, errors={error_count})\n"
+        f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+    )
+    assert passed_count >= _DOCKER_SMOKE_MIN_PASSED, (
+        f"Expected >= {_DOCKER_SMOKE_MIN_PASSED} passed tests; got {passed_count}. "
+        f"If passed_count=0, the pytest summary line was not found in the output.\n"
+        f"combined output:\n{combined}"
+    )

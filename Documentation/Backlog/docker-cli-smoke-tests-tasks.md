@@ -131,7 +131,7 @@ flowchart LR
         - #integration_test — `test_maintenance_run_exits_0` — subprocess `maintenance run --api-url ... --api-key ...`; `returncode == 0` (S16)
 
 ### Phase 5 · Close-out
-- [ ] **T-2** — Whole-feature e2e: run the Docker smoke suite through the container orchestration and confirm every scenario holds inside the real image #tester-role
+- [x] **T-2** — Whole-feature e2e: run the Docker smoke suite through the container orchestration and confirm every scenario holds inside the real image #tester-role
     - — · 2.0h
     - needs BE-1, BE-2, BE-3, BE-4, BE-5 · completes S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11, S12, S13, S14, S15, S16, S18
     - Tests

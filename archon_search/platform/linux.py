@@ -84,7 +84,7 @@ class SystemdSearchService(SearchServiceLifecycle):
 
             return ServiceStatus(running=True, pid=pid, uptime_seconds=None)
         except Exception:
-            log.exception("Failed to query archon-search systemd service status")
+            log.debug("Failed to query archon-search systemd service status", exc_info=True)
             return ServiceStatus(running=False, pid=None, uptime_seconds=None)
 
     @staticmethod
