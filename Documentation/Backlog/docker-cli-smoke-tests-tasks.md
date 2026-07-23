@@ -63,8 +63,8 @@ flowchart LR
 ### Phase 0 · Kickoff *(prerequisite; the one cross-cutting step)*
 - [x] **K1** — Agree Contracts C1/C2; verify `SystemdSearchService.status()` already returns `ServiceStatus(running=False)` when systemctl is absent (confirm no change to [linux.py](../../archon_search/platform/linux.py) is needed) #team
     - — · 1.0h
-    - completes C1, C2
-    - Tests
+    - completes C1 (status-path invariant — agreed, no code change needed), C2 (agreed — code change in BE-2)
+    - Tests — None new; C1 status-path proven by existing `test_status_returns_stopped_on_exception` (tests/test_service_linux.py)
 
 ### Phase 1 · Drive the CLI in the container *(walking skeleton: stand up the Docker smoke harness — the foundation every later slice's proof reuses — and prove the thinnest end-to-end path, a CLI command running inside the real container)*
 - [ ] **BE-1** — Scaffold `tests/smoke/docker/` (`__init__.py`, `conftest.py` with a `_docker_env()` helper injecting `ARCHON_SEARCH_CONTAINER=1` into the subprocess env, and a self-contained `serve` subprocess fixture mirroring [tests/smoke/conftest.py](../../tests/smoke/conftest.py)); add the offline + serve-lifecycle tests to `test_docker_cli.py`; set `@pytest.mark.smoke` + `pytestmark = pytest.mark.xdist_group("smoke_e2e")` at module level #backend-role
