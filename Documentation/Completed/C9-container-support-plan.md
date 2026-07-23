@@ -1,7 +1,7 @@
 # C9 — Container Support
 **Purpose**: Ship a `docker run`-ready archon-search image that is fully configurable via env vars, persists data on a mounted volume, and integrates cleanly into the existing GitHub Actions release pipeline.
 **Audience**: Developers, operators, and CI pipelines that need portable, reproducible archon-search deployments.
-**Status**: To Do
+**Status**: Done — core deliverables (Dockerfile, `serve` command, env vars, release CI) shipped in C9; service-module graceful degradation and Docker smoke suite completed by DCS (Docker CLI Smoke Tests).
 
 ---
 

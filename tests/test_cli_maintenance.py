@@ -427,7 +427,7 @@ def test_maintenance_run_connection_error(tmp_path: Path) -> None:
         result = runner.invoke(maintenance_cmd, ["run", "--api-key", "deadbeef"])
 
     assert result.exit_code == 0
-    assert "The server is not running." in result.stderr
+    assert "is not running" in result.stderr
     assert "archon-search serve" in result.stderr
 
 
@@ -444,7 +444,7 @@ def test_maintenance_run_wait_server_not_running(tmp_path: Path) -> None:
         result = runner.invoke(maintenance_cmd, ["run", "--wait", "--api-key", "deadbeef"])
 
     assert result.exit_code == 0
-    assert "The server is not running." in result.stderr
+    assert "is not running" in result.stderr
     assert "archon-search serve" in result.stderr
 
 
@@ -465,7 +465,7 @@ def test_maintenance_run_wait_post_connect_error(tmp_path: Path) -> None:
         result = runner.invoke(maintenance_cmd, ["run", "--wait", "--api-key", "deadbeef"])
 
     assert result.exit_code == 0
-    assert "The server is not running." in result.stderr
+    assert "is not running" in result.stderr
     assert "archon-search serve" in result.stderr
 
 
@@ -482,7 +482,7 @@ def test_maintenance_run_wait_preflight_read_timeout_exits_1(tmp_path: Path) -> 
         result = runner.invoke(maintenance_cmd, ["run", "--wait", "--api-key", "deadbeef"])
 
     assert result.exit_code == 1
-    assert "The server is not running." not in result.stderr
+    assert "is not running" not in result.stderr
     assert "Error polling server" in result.stderr
 
 
@@ -499,7 +499,7 @@ def test_maintenance_run_wait_preflight_401_exits_1(tmp_path: Path) -> None:
         result = runner.invoke(maintenance_cmd, ["run", "--wait", "--api-key", "deadbeef"])
 
     assert result.exit_code == 1
-    assert "The server is not running." not in result.stderr
+    assert "is not running" not in result.stderr
     assert "server returned 401" in result.stderr
 
 
@@ -593,7 +593,7 @@ def test_maintenance_run_other_http_error_still_exits_1(tmp_path: Path) -> None:
         result = runner.invoke(maintenance_cmd, ["run", "--api-key", "deadbeef"])
 
     assert result.exit_code == 1
-    assert "The server is not running." not in result.stderr
+    assert "is not running" not in result.stderr
     assert "Error contacting server" in result.stderr
 
 

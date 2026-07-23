@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1.7
+# Test runner image — source is mounted at /workspace via compose volume.
+# Not for production: ships uv, runs as non-root to match permission-test expectations.
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+RUN useradd --uid 1000 --create-home --shell /bin/sh runner && \
+    mkdir -p /cache/uv /cache/fastembed /venv && \
+    chown runner:runner /cache/uv /cache/fastembed /venv
+USER runner
+WORKDIR /workspace
+ENV PATH="/venv/bin:$PATH" \
+    HOME=/home/runner \
+    ARCHON_SEARCH_CONTAINER=1 \
+    ARCHON_SEARCH_DATA_DIR=/tmp/archon-test \
+    # Persistent named volume so uv sync + spaCy model download survive container restarts.
+    UV_PROJECT_ENVIRONMENT=/venv \
+    UV_CACHE_DIR=/cache/uv \
+    FASTEMBED_CACHE_PATH=/cache/fastembed \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1

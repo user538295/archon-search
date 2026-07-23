@@ -137,6 +137,7 @@ Security-focused documentation for security engineers, IT admins, and reviewers 
 | --- | --- |
 | [`roadmap.md`](../roadmap.md) | Active roadmap and milestones. |
 | [`quick_start.md`](../quick_start.md) | 5-minute onboarding for new contributors. |
+| [`docker-test-runner.md`](../docker-test-runner.md) | Docker test runner and dev-shell — running the full test suite (including smoke + graph extras) in a container; `archon-test-runner` and `archon-dev-shell` services. |
 | [`../../BREAKING.md`](../../BREAKING.md) | BREAKING.md — compatibility contract; every release that changes an existing API contract adds an entry here. |
 | [`../../CHANGELOG.md`](../../CHANGELOG.md) | Per-release changelog; generated and prepended by `release.sh` via git-cliff. Do not edit by hand. |
 | [`../../cliff.toml`](../../cliff.toml) | git-cliff configuration — commit grouping, tag pattern, and CHANGELOG.md rendering rules. |

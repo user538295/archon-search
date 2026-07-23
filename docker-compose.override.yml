@@ -22,5 +22,63 @@ services:
       - ~/.cache/fastembed:/data/fastembed-cache
       - ~/.archon-search/models:/data/models
 
+  # Test runner — mounts source from host, runs full suite + smoke tests.
+  # Usage:
+  #   docker compose run --rm archon-test-runner              # full suite + smoke
+  #   docker compose run --rm archon-test-runner uv run pytest tests/smoke/ --no-cov
+  archon-test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      - .:/workspace
+      - archon-uv-cache:/cache/uv
+      - archon-docker-venv:/venv
+      - ~/.cache/fastembed:/cache/fastembed
+    environment:
+      FASTEMBED_CACHE_PATH: /cache/fastembed
+    # ponytail: sh -c to run two suites in sequence without a wrapper script
+    command:
+      - sh
+      - -c
+      - >-
+          uv sync --dev --extra hyde --extra rag-fusion --extra graph &&
+          uv run python -m spacy download en_core_web_sm --quiet;
+          uv run pytest;
+          uv run pytest tests/smoke/ --no-cov
+
+  # Long-running dev shell — same image as the test runner, shares its deps volumes.
+  # First start runs `uv sync` + spaCy download once, then stays alive.
+  # Usage:
+  #   docker compose up -d archon-dev-shell            # start (setup runs once)
+  #   docker compose exec archon-dev-shell bash        # shell in; run tests/server interactively
+  #   docker compose stop archon-dev-shell             # stop when done
+  archon-dev-shell:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      - .:/workspace
+      - archon-uv-cache:/cache/uv
+      - archon-docker-venv:/venv
+      - ~/.cache/fastembed:/cache/fastembed
+    environment:
+      ARCHON_SEARCH_CONTAINER: "1"
+      ARCHON_SEARCH_DATA_DIR: /data
+      UV_PROJECT_ENVIRONMENT: /venv
+      UV_CACHE_DIR: /cache/uv
+      FASTEMBED_CACHE_PATH: /cache/fastembed
+    command:
+      - sh
+      - -c
+      - >-
+          if [ ! -f /venv/bin/activate ]; then
+          uv sync --dev --extra hyde --extra rag-fusion --extra graph &&
+          uv run python -m spacy download en_core_web_sm --quiet;
+          fi;
+          exec sleep infinity
+
 volumes:
   archon-dev-packages:
+  archon-uv-cache:
+  archon-docker-venv:

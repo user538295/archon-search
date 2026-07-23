@@ -320,7 +320,7 @@ def run_subcommand(
             original_last_run_at = _get_last_run_at(status_url, headers)
         except _CONNECT_FAIL:
             click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
-            raise SystemExit(1)
+            raise SystemExit(0)
 
     try:
         resp = httpx.post(trigger_url, headers=headers)
@@ -328,7 +328,7 @@ def run_subcommand(
         # ponytail: narrow connect-fail catch before broad HTTPError — ReadTimeout must NOT
         # be misreported as "server not running"; ConnectTimeout (no listener) is fine.
         click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
-        raise SystemExit(1)
+        raise SystemExit(0)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
         raise SystemExit(1) from exc

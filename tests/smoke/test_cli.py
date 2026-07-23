@@ -231,8 +231,9 @@ def test_config_show_timing_and_format() -> None:
 
 
 def test_maintenance_run_without_server(smoke_server) -> None:
-    """``archon-search maintenance run --api-url <closed port>`` must exit 1
-    and surface the "not running" message on stderr.
+    """``archon-search maintenance run --api-url <closed port>`` must exit 0
+    (server not running is informational, not a program error) and surface
+    the "not running" message on stderr.
 
     The closed port is obtained by binding then immediately releasing a
     socket — guaranteed unused at the moment the subprocess starts, and
@@ -265,7 +266,7 @@ def test_maintenance_run_without_server(smoke_server) -> None:
         timeout=20,
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 0
     assert "archon-search serve is not running." in result.stderr
 
 

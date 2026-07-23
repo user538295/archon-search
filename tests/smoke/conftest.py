@@ -100,7 +100,9 @@ def _subprocess_env(*, port: int, data_dir: Path, api_key: str) -> dict[str, str
         # would make the smoke server fail to start on that machine.
         "ARCHON_SEARCH_CONFIG": str(data_dir / "archon-search.toml"),
         "ARCHON_SEARCH_API_KEY": api_key,
-        "FASTEMBED_CACHE_PATH": str(Path.home() / ".cache/fastembed"),
+        # Inherit FASTEMBED_CACHE_PATH from the process env (e.g. Docker bind-mount)
+        # but fall back to the default home-dir path when not set.
+        "FASTEMBED_CACHE_PATH": os.environ.get("FASTEMBED_CACHE_PATH", str(Path.home() / ".cache/fastembed")),
         "PYTEST_ADDOPTS": "",
     }
     # An operator's exported ARCHON_SEARCH_HOST would otherwise leak in via

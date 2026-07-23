@@ -1442,7 +1442,8 @@ class TestRunServiceReadiness:
              patch.object(installer, "_is_service_running", return_value=False):
             installer.run(non_interactive=True)
 
-        assert mock_wait.call_args == call()
+        from archon_search.install import _WAIT_FOR_SERVICE_TIMEOUT
+        assert mock_wait.call_args.kwargs["timeout"] == _WAIT_FOR_SERVICE_TIMEOUT
 
     def test_run_returns_error_code_when_load_service_fails(self, tmp_path: Path) -> None:
         """run() must return the error code from load_service() and not call _wait_for_service."""

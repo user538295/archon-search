@@ -230,6 +230,29 @@ The container speaks plaintext HTTP only. Put a reverse proxy (nginx, Caddy, Tra
 - **`archon-search collection add` writes to the TOML file via the server** — see `ARCHON_SEARCH_CONFIG` above. `collection remove` also proxies through the server. Operators who need dynamic collection management inside the container must mount a config file under `/data` and point `ARCHON_SEARCH_CONFIG` at it.
 - **No Apple Silicon / Metal GPU image.** Apple GPUs are not supported in v1.
 
+## Development and testing with Docker
+
+Separate from the production image above, `docker-compose.override.yml` defines two containers — built from `Dockerfile.test`, not the production `Dockerfile` — for running the test suite in a clean Linux environment. They mount your source live and run as a non-root user (uid 1000).
+
+- **`archon-test-runner`** — one-shot. Runs the full suite plus the smoke tests, then exits:
+
+  ```bash
+  docker compose build archon-test-runner        # one-time
+  docker compose run --rm archon-test-runner      # full suite + smoke
+  ```
+
+- **`archon-dev-shell`** — persistent. Start it, shell in to work interactively, stop it when done:
+
+  ```bash
+  docker compose up -d archon-dev-shell
+  docker compose exec archon-dev-shell bash       # run pytest / serve inside
+  docker compose stop archon-dev-shell
+  ```
+
+Both share a named venv volume (`archon-docker-venv`), so the one-time install (core + `graph` extra + spaCy model) is paid once and reused across both services and across restarts. Model weights are bind-mounted from your host `~/.cache/fastembed`.
+
+For the full explanation — volume architecture, the two-phase test split, and why the graph extra matters — see [`../docker-test-runner.md`](../docker-test-runner.md).
+
 ## See also
 
 - [`03_running_the_server.md`](03_running_the_server.md) — the `serve` subcommand and the rest of the CLI lifecycle.
