@@ -527,6 +527,29 @@ def test_edge_count_zero_before_ingest() -> None:
     assert count == 0
 
 
+def test_edge_count_zero_on_lancedb_valueerror() -> None:
+    """edge_count returns 0 (no WARNING) when LanceDB raises ValueError for missing table.
+
+    Regression: LanceDB raises ValueError('Table ... was not found') not FileNotFoundError.
+    """
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-edge-count-ve")
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(
+        side_effect=ValueError("Table '_archon_graph_default__empty-col_edges' was not found")
+    )
+
+    async def _run() -> int:
+        store._db = mock_db
+        return await store.edge_count("empty-col", ns="default")
+
+    count = asyncio.run(_run())
+    assert count == 0
+
+
 # ---------------------------------------------------------------------------
 # find_nodes_by_name — case-insensitive
 # ---------------------------------------------------------------------------
@@ -661,6 +684,29 @@ def test_find_nodes_by_name_multi_word() -> None:
 # ---------------------------------------------------------------------------
 # node_count
 # ---------------------------------------------------------------------------
+
+
+def test_node_count_zero_on_lancedb_valueerror() -> None:
+    """node_count returns 0 (no WARNING) when LanceDB raises ValueError for missing table.
+
+    Regression: LanceDB raises ValueError('Table ... was not found') not FileNotFoundError.
+    """
+    import asyncio
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-node-count-ve")
+    mock_db = AsyncMock()
+    mock_db.open_table = AsyncMock(
+        side_effect=ValueError("Table '_archon_graph_default__empty-col_nodes' was not found")
+    )
+
+    async def _run() -> int:
+        store._db = mock_db
+        return await store.node_count("empty-col", ns="default")
+
+    count = asyncio.run(_run())
+    assert count == 0
 
 
 def test_node_count_zero_before_ingest() -> None:

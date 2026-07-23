@@ -1014,7 +1014,7 @@ class GraphStore:
         try:
             edges_table = await db.open_table(self._edges_table_name(collection, ns))
             return await edges_table.count_rows()
-        except FileNotFoundError:
+        except (FileNotFoundError, ValueError):
             return 0
         except Exception:
             logger.warning(
@@ -1030,7 +1030,7 @@ class GraphStore:
         try:
             nodes_table = await db.open_table(self._nodes_table_name(collection, ns))
             return await nodes_table.count_rows()
-        except FileNotFoundError:
+        except (FileNotFoundError, ValueError):
             return 0
         except Exception:
             logger.warning(
