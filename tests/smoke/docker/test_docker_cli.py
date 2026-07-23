@@ -1,4 +1,4 @@
-"""Docker-mode CLI smoke tests (BE-1, BE-2).
+"""Docker-mode CLI smoke tests (BE-1, BE-2, T-1).
 
 Tests in this module exercise the ``archon-search`` CLI from a subprocess with
 ``ARCHON_SEARCH_CONTAINER=1`` injected into the environment, mirroring how the
@@ -7,10 +7,19 @@ CLI runs inside the Docker image.
 Covers:
 - S1 — ``--help`` and ``--version`` complete without error, exit 0
 - S2 — ``serve`` starts and shuts down cleanly (``smoke_docker_server`` fixture)
-- S3 — ``status`` with running server shows HTTP telemetry, exit 0 (BE-2)
+- S3 — ``status`` with running server shows HTTP telemetry, exit 0 (BE-2, T-1)
 - S4 — ``status`` with unreachable server exits 0 cleanly, no "stopped" line (BE-2)
 - S13 — ``config show`` prints TOML config, exit 0, no server required
 - S18 — ``--help`` completes within 5 s (advisory)
+
+T-1 manual spot-check checklist (human verification):
+- Run: ``ARCHON_SEARCH_CONTAINER=1 archon-search status --api-url <url> --api-key <key>``
+- Fetch: ``GET /status`` with the same key and inspect the ``telemetry`` sub-object
+- Confirm: the ``enabled`` field is rendered as the value word on the ``Telemetry:`` header
+  line (e.g. ``Telemetry: enabled``); ``hash_doc_ids_enabled`` appears as an indented field
+  label with its value (e.g. ``  hash_doc_ids_enabled: True``)
+- Confirm: "stopped" is absent from the container-mode output (whole-line check)
+- Status: completed — automated by ``test_docker_status_renders_telemetry_payload_fields``
 """
 
 from __future__ import annotations
@@ -300,4 +309,97 @@ def test_status_without_server_clean_exit_0(tmp_path):
     # branch (401, empty-but-non-None payload, etc. all produce some output).
     assert result.stdout.strip() == "", (
         f"Expected empty stdout when server unreachable in container mode; got:\n{result.stdout}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-1: telemetry parity — container mode output matches native telemetry fields
+# ---------------------------------------------------------------------------
+
+
+def test_docker_status_renders_telemetry_payload_fields(smoke_docker_server, tmp_path):
+    """Container-mode ``status`` renders telemetry payload fields correctly, "stopped" suppressed (T-1, S3, C2).
+
+    Fetches the raw GET /status payload to obtain the actual telemetry field
+    values, then asserts each field is rendered correctly in the container-mode
+    CLI output.  Does not run a native subprocess — telemetry rendering in
+    ``_print_telemetry_status`` is driven purely by the HTTP payload; the
+    ``ARCHON_SEARCH_CONTAINER=1`` env var only gates the "stopped" line.
+
+    Asserts:
+    1. The ``enabled`` field is rendered as the value word on the ``Telemetry:``
+       header line (e.g. ``Telemetry: enabled``).
+       ``hash_doc_ids_enabled`` is rendered as an indented field label with its
+       value (e.g. ``  hash_doc_ids_enabled: True``).
+    2. "stopped" is absent as a whole line from the container-mode output (C2).
+
+    Manual spot-check documented in this module's docstring.
+    """
+    # --- Fetch the raw /status payload to obtain actual telemetry fields ---
+    status_resp = httpx.get(
+        f"{smoke_docker_server.base_url}/status",
+        headers={"Authorization": f"Bearer {smoke_docker_server.api_key}"},
+        timeout=5,
+    )
+    assert status_resp.status_code == 200, (
+        f"GET /status returned {status_resp.status_code}: {status_resp.text}"
+    )
+    telemetry_payload = status_resp.json().get("telemetry")
+    assert telemetry_payload is not None, (
+        "GET /status returned null telemetry — smoke_docker_server must have telemetry enabled"
+    )
+
+    # --- Container-mode run ---
+    container_env = _make_docker_env(
+        port=smoke_docker_server.port,
+        data_dir=tmp_path,
+        api_key=smoke_docker_server.api_key,
+    )
+
+    container_result = subprocess.run(
+        [
+            "uv", "run", "archon-search", "status",
+            "--api-url", smoke_docker_server.base_url,
+            "--api-key", smoke_docker_server.api_key,
+        ],
+        env=container_env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert container_result.returncode == 0, (
+        f"container archon-search status exited {container_result.returncode}\n"
+        f"stdout: {container_result.stdout}\nstderr: {container_result.stderr}"
+    )
+    assert "Traceback" not in (container_result.stdout + container_result.stderr), (
+        f"container archon-search status printed a traceback:\n"
+        f"{container_result.stdout + container_result.stderr}"
+    )
+    container_stdout = container_result.stdout
+
+    # C2: "stopped" must be absent as a whole line from container-mode output
+    # (_print_telemetry_status suppresses the service-section line when
+    # ARCHON_SEARCH_CONTAINER=1 is set)
+    assert "stopped" not in container_stdout.splitlines(), (
+        f"'stopped' must be suppressed in container mode; stdout:\n{container_stdout}"
+    )
+
+    # Pre-condition: hash_doc_ids_enabled must be present in the payload;
+    # if absent, the server schema has changed and we want a clear failure.
+    assert "hash_doc_ids_enabled" in telemetry_payload, (
+        f"GET /status telemetry payload missing 'hash_doc_ids_enabled' field: {telemetry_payload}"
+    )
+    # 'enabled' is rendered as the value word on the Telemetry: header line,
+    # not as a label — couple the payload value to the expected rendered header.
+    # (Subsumes the bare "Telemetry:" header check — if this passes, the header is present.)
+    expected_header = f"Telemetry: {'enabled' if telemetry_payload['enabled'] else 'disabled'}"
+    assert expected_header in container_stdout, (
+        f"Expected '{expected_header}' in container status stdout.\n"
+        f"Container stdout:\n{container_stdout}"
+    )
+    # C2-MAJOR-2: hash_doc_ids_enabled is rendered as an indented label with its value.
+    expected_hash_line = f"  hash_doc_ids_enabled: {telemetry_payload['hash_doc_ids_enabled']}"
+    assert expected_hash_line in container_stdout, (
+        f"Expected '{expected_hash_line}' in container status stdout.\n"
+        f"Container stdout:\n{container_stdout}"
     )

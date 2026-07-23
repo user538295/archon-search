@@ -88,7 +88,7 @@ flowchart LR
         - #unit_test — `test_status_native_path_unchanged` — env unset; `ServiceStatus(running=False)` → "stopped" IS printed (S17 regression guard)
         - #integration_test — `test_status_with_server_shows_http_telemetry` — subprocess `status --api-url <smoke_server.base_url> --api-key <key>` with `_docker_env()`; `returncode == 0`, "stopped" absent, ≥1 telemetry field present (S3)
         - #integration_test — `test_status_without_server_shows_not_reachable` — subprocess `status --api-url <dead-port>` with `_docker_env()`; `returncode == 0`, no traceback, unreachable path taken (S4)
-- [ ] **T-1** — Spot-check that the container `status` HTTP-fallback telemetry matches the native telemetry section #tester-role
+- [x] **T-1** — Spot-check that the container `status` HTTP-fallback telemetry matches the native telemetry section #tester-role
     - — · 1.5h
     - needs BE-2 · completes S3
     - Tests
