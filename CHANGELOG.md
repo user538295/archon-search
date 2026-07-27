@@ -1,6 +1,39 @@
 # Changelog
 
 
+## [26.7.1708] - 2026-07-27
+
+canary
+
+**All `collection` subcommands now proxy the server; Docker dev/test workflows; container-mode CLI guards; spaCy resilience**
+
+**CLI: collection list → HTTP proxy + key management**
+
+`archon-search collection list` now proxies `GET /collections/` instead of opening LanceDB directly, making all `collection` subcommands server-based. This fixes startup failures in Docker when `/data` is not yet mounted. The `--config` flag is removed; use `--api-key` / `ARCHON_SEARCH_API_KEY` / the key file instead (same as every other command). New CLI functions `load_key()` (returns key from env or file, never generates) and `persist_key(key)` (atomic key file write) let commands work in read-only mounts. When a key comes from the environment, it's now persisted to disk so CLI processes in the same shell don't need the env var re-exported.
+
+**Container mode: install / uninstall / start / stop / status guards**
+
+CLI commands that modify system services now detect container environments (`ARCHON_SEARCH_CONTAINER=1`) and exit cleanly with an instructional message instead of failing. Affected: `install`, `uninstall`, `start`, `stop`. The `status` command suppresses the "stopped" service line when containerized (HTTP telemetry still shows if the server is reachable). The `maintenance run` command exits 0 when the server is not running, making it safe for provisioning scripts.
+
+**Docker: test runner, dev shell, and optimized image**
+
+New `docker-compose.override.yml` services for development: `archon-test-runner` runs the full suite including smoke tests in a clean Linux environment, and `archon-dev-shell` offers an interactive shell. Both mount source at `/workspace` and reuse named volumes for incremental builds. A new `Dockerfile.test` (Python 3.12 bookworm-slim with uv) removes the need for local Python when running tests or developing on macOS. The production image now installs graph/code/multilingual extras at runtime via an entrypoint script instead of baking them in, reducing base-image size for core-only deployments.
+
+**Docker smoke tests: CLI behavior proofs**
+
+New test suite at `tests/smoke/docker/` verifies archon-search CLI behavior inside containers: `--help` / `--version` / `config show` work offline, `serve` starts and shuts down cleanly, `install` / `uninstall` / `start` / `stop` emit clean container-mode messages, `status` renders telemetry payloads correctly. Smoke tests run serially in the `archon-test-runner` service; the full suite (`7842` passed) includes both fast parallel tests and the new serial Docker proofs.
+
+**Graph: spaCy download failures no longer crash the server**
+
+`spacy.cli.download()` calls `sys.exit(1)` when no package installer is available (common in `uv tool install` environments). This `SystemExit` bypassed exception handlers and killed the server, leaving ingest jobs unretrieved. Now caught and re-raised as `RuntimeError` with an actionable message, so ingest failures are logged as graceful errors and the server stays alive.
+
+**Other**
+
+- Fixed spurious WARNING logs on `GET /status` for fresh collections with no graph data yet: LanceDB raises `ValueError` (not `FileNotFoundError`) when graph tables don't exist; `node_count` and `edge_count` now catch both.
+- `.dockerignore` extended to exclude large agent-state directories (`.claude/`, `.tokensave/`, `.hypothesis/`, etc.) from Docker builds.
+- `.gitignore` now excludes `.tokensave/` agent state.
+
+
 ## [26.7.1682] - 2026-07-22
 
 **Permission-Aware Search Snippets + ACL provenance tracking + improved release tooling**
