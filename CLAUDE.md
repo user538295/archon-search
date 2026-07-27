@@ -187,13 +187,13 @@ Do not add:
 - General best practices (only project-specific ones)
 - Redundant restatements of existing entries
 
-**Size cap — 100 lines, non-negotiable:**
-`learnings.md` must always stay **under 100 lines**. If it is already at or
-above 100 lines when you open it, compact before adding anything. After every
+**Size cap — 60 lines, non-negotiable:**
+`learnings.md` must always stay **under 60 lines**. If it is already at or
+above 60 lines when you open it, compact before adding anything. After every
 update review the whole file and re-compact so it stays under the cap:
 - Merge overlapping or same-theme entries into one dense entry.
 - update the date of the entry to to actual date.
 - Delete entries that are stale, superseded, or now enforced elsewhere (code guards, tests, this CLAUDE.md).
 - Compress kept entries — collapse to a single action-first bullet (keep the date + `(×N)` tag) when space demands it.
-- Only evict when the file would still exceed 100 lines after compression — never proactively. When eviction is needed, remove lowest `N` first; break ties by oldest date. Add new entries after eviction, not before.
-If an update would push the file past 100 lines, compress first, then add.
+- Only evict when the file would still exceed 60 lines after compression — never proactively. When eviction is needed, remove lowest `N` first; break ties by oldest date. Add new entries after eviction, not before.
+If an update would push the file past 60 lines, compress first, then add.
