@@ -12,7 +12,6 @@ Provides two operator-facing subcommands:
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any
@@ -21,7 +20,7 @@ import click
 import httpx
 
 from archon_search.config import ConfigError, load_config
-from archon_search.key_manager import load_or_generate_key
+from archon_search.key_manager import load_key
 from archon_search.paths import get_data_dir
 from archon_search.cli._helpers import _CONNECT_FAIL, _SERVER_NOT_RUNNING_MSG
 
@@ -35,11 +34,15 @@ def _resolve_api_key(api_key: str | None) -> str:
     """Return the API key from the option, env var, or the key file."""
     if api_key:
         return api_key
-    env_key = os.environ.get("ARCHON_SEARCH_API_KEY")
-    if env_key:
-        return env_key
-    key, _ = load_or_generate_key()
-    return key
+    key = load_key()
+    if key:
+        return key
+    click.echo(
+        "No API key found. Pass --api-key, set ARCHON_SEARCH_API_KEY, or run the server "
+        "once to auto-generate a key file.",
+        err=True,
+    )
+    raise SystemExit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +177,10 @@ def _fetch_server_status(
 ) -> dict[str, Any] | None:
     """Return ``/status`` JSON or None if the server is unreachable."""
     try:
-        key = _resolve_api_key(api_key)
-    except Exception:  # noqa: BLE001 — offline mode is the whole point
+        key = api_key or load_key()
+    except (ValueError, OSError):
+        return None
+    if key is None:
         return None
     headers = {"Authorization": f"Bearer {key}"}
     url = f"{api_url.rstrip('/')}/status"

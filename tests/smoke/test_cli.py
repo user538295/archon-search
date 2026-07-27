@@ -117,39 +117,20 @@ def test_help_completes_within_2s() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _direct_store_env(data_dir: Path) -> dict[str, str]:
-    """Env for CLI commands that open LanceDB directly via ``create_pipeline``.
-
-    Points ``ARCHON_SEARCH_CONFIG`` at a non-existent file under the isolated
-    data dir (mirrors ``conftest._subprocess_env``) so ``load_config()`` never
-    reads the developer's real ``~/.archon-search/archon-search.toml`` — an
-    operator TOML enabling e.g. multilingual support with fasttext-wheel
-    uninstalled would otherwise break this subprocess on that machine.
-    """
-    env = {
-        **os.environ,
-        "ARCHON_SEARCH_DATA_DIR": str(data_dir),
-        "ARCHON_SEARCH_CONFIG": str(data_dir / "archon-search.toml"),
-    }
-    # Mirror conftest._subprocess_env's defensive pop: an operator's exported
-    # ARCHON_SEARCH_HOST would otherwise leak in via **os.environ above.
-    env.pop("ARCHON_SEARCH_HOST", None)
-    return env
-
-
 @pytest.mark.skipif(
     os.environ.get("SMOKE_NO_TIMING") == "1", reason="timing disabled"
 )
 def test_collection_list_no_repr(smoke_server) -> None:
-    """``archon-search collection list`` connects to LanceDB directly via
-    ``create_pipeline`` (not through the server's HTTP API) and must print
-    plain ``name  docs=N  chunks=N`` lines, not a ``CollectionMeta(`` repr (S3,
-    S16 partial).
+    """``archon-search collection list`` proxies GET /collections/ and must print
+    plain ``name  docs=N  chunks=N`` lines, not a ``CollectionMeta(`` repr.
     """
     start = time.monotonic()
     result = subprocess.run(
-        ["uv", "run", "archon-search", "collection", "list"],
-        env=_direct_store_env(smoke_server.data_dir),
+        [
+            "uv", "run", "archon-search", "collection", "list",
+            "--api-url", smoke_server.base_url,
+            "--api-key", smoke_server.api_key,
+        ],
         capture_output=True,
         text=True,
         timeout=20,
@@ -162,9 +143,6 @@ def test_collection_list_no_repr(smoke_server) -> None:
     )
     assert "CollectionMeta(" not in result.stdout
     assert "[0." not in result.stdout
-    # Positive assertion: the pre-seeded "smoke" collection must actually
-    # appear in the output — otherwise a broken data-dir isolation (CLI
-    # reading an empty/wrong LanceDB) would also pass this test.
     assert "smoke" in result.stdout
 
 
@@ -1022,15 +1000,6 @@ def test_e2e_collection_remove_against_server(smoke_server, tmp_path) -> None:
 # T-5 structural single-writer check (S16) — no server required
 # ---------------------------------------------------------------------------
 
-# Read commands in collection.py that legitimately retain asyncio.run() +
-# _make_store() because they open LanceDB in-process.  All other @collection.command
-# functions are write commands or HTTP proxies and are checked by the guard.
-# Fail-closed design: new commands are guarded by default; only explicitly
-# blessed read commands are excluded.
-# brief 350: info was converted to an HTTP proxy — removed from this set.
-_COLLECTION_READ_CMDS = frozenset({"list_cmd"})
-
-
 def _has_asyncio_run_call(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Return True if ``node``'s body (and nested defs) contains ``asyncio.run(...)``."""
     for subnode in ast.walk(node):
@@ -1051,23 +1020,16 @@ def test_cli_write_commands_contain_no_direct_store_imports() -> None:
     ``SearchPipeline``, ``SearchStore``, or ``create_pipeline`` directly,
     and write-command function bodies must not call ``asyncio.run()``.
 
-    ``collection.py`` is mixed: read commands (``list_cmd``) use
-    ``asyncio.run()`` + ``_make_store()`` (in-process LanceDB reads via
-    ``SearchStore``). ``info`` was converted to an HTTP proxy in brief 350.
-    Write commands (including ``info``) are derived by excluding the known read
-    commands from all ``@collection.command``-decorated functions (fail-closed:
-    new commands are guarded by default).  Both ``async def`` and plain ``def``
-    functions are checked for ``asyncio.run()`` calls.  A separate AST guard
-    (3c) ensures write-command bodies do not call ``_make_store()``.
+    All ``collection.py`` commands are now server proxies (``list_cmd``
+    converted from direct-store to HTTP proxy alongside ``info``).  Both
+    ``async def`` and plain ``def`` functions are checked for
+    ``asyncio.run()`` calls.  A separate AST guard (3c) ensures command
+    bodies do not call ``_make_store()``.
 
     ``ingest.py`` and ``sync.py`` are purely write-command modules; they are
     checked for ``asyncio.run()`` and ``SearchStore`` as whole-file text
     assertions (both currently have no ``asyncio`` or store import at all,
     so aliasing is not a practical concern).
-
-    Non-automatable companion (S17): stop the server, run
-    ``archon-search collection list``, verify it succeeds without a server.
-    ``info`` now requires the server (HTTP proxy) — tested in smoke.
     """
     cli_dir = REPO_ROOT / "archon_search" / "cli"
     collection_py = cli_dir / "collection.py"
@@ -1076,15 +1038,9 @@ def test_cli_write_commands_contain_no_direct_store_imports() -> None:
 
     # ------------------------------------------------------------------
     # 1. Forbidden import strings — purely write-command files only.
-    # Covers the canonical import forms (plan spec S16). The real in-process
-    # gateway is create_pipeline; SearchPipeline/SearchStore are checked
-    # per spec and as an extra future-regression guard.
-    #
-    # collection.py is a mixed file: read commands (list_cmd, info) use
-    # _make_store() which imports SearchStore at function scope (deferred,
-    # startup-deferral policy). The whole-file text check is therefore
-    # scoped to the purely write-command files (ingest.py, sync.py); the
-    # write-command body guard for collection.py is in section 3c below.
+    # collection.py is all server proxies now; the whole-file text check
+    # for SearchStore/SearchPipeline/create_pipeline is scoped to the
+    # purely write-command files (ingest.py, sync.py).
     # ------------------------------------------------------------------
     for fpath in (collection_py, ingest_py, sync_py):
         src = fpath.read_text()
@@ -1119,48 +1075,29 @@ def test_cli_write_commands_contain_no_direct_store_imports() -> None:
         )
 
     # ------------------------------------------------------------------
-    # 3. collection.py AST checks: write-command bodies must not call
-    #    asyncio.run(); read commands must still do so (positive control).
+    # 3. collection.py AST checks: no command body may call asyncio.run()
+    #    or _make_store() — all commands are now server proxies.
     # ------------------------------------------------------------------
     collection_src = collection_py.read_text()
     tree = ast.parse(collection_src)
 
-    # Collect all top-level Click command functions (both def and async def).
     all_cmd_fns: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             all_cmd_fns[node.name] = node
 
-    write_cmds = {name: node for name, node in all_cmd_fns.items() if name not in _COLLECTION_READ_CMDS}
-
-    # 3a. No asyncio.run() in any write-command body.
+    # 3a. No asyncio.run() in any command body.
     offending: list[str] = [
         f"{name} (line {node.lineno})"
-        for name, node in write_cmds.items()
+        for name, node in all_cmd_fns.items()
         if _has_asyncio_run_call(node)
     ]
     assert not offending, (
-        f"collection.py write-command bodies must not call asyncio.run(); "
+        f"collection.py command bodies must not call asyncio.run(); "
         f"found in: {offending} (S16)"
     )
 
-    # 3b. Positive control: read commands must still call asyncio.run()
-    # (confirms the read/write partition is real, not vacuously satisfied).
-    for read_name in _COLLECTION_READ_CMDS:
-        read_node = all_cmd_fns.get(read_name)
-        assert read_node is not None, (
-            f"collection.py: expected read command '{read_name}' to exist — "
-            f"update _COLLECTION_READ_CMDS if it was renamed or removed"
-        )
-        assert _has_asyncio_run_call(read_node), (
-            f"collection.py: read command '{read_name}' no longer calls asyncio.run() — "
-            f"if it was converted to an HTTP proxy, move it to the write-command set "
-            f"by removing it from _COLLECTION_READ_CMDS"
-        )
-
-    # 3c. Write-command bodies must not call _make_store().
-    # _make_store imports SearchStore and is the read-only LanceDB gateway for
-    # list_cmd/info; calling it from a write command would bypass the server proxy.
+    # 3b. No _make_store() calls — the direct-store gateway is fully removed.
     def _has_make_store_call(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
         for subnode in ast.walk(node):
             if isinstance(subnode, ast.Call):
@@ -1171,10 +1108,10 @@ def test_cli_write_commands_contain_no_direct_store_imports() -> None:
 
     offending_store: list[str] = [
         f"{name} (line {node.lineno})"
-        for name, node in write_cmds.items()
+        for name, node in all_cmd_fns.items()
         if _has_make_store_call(node)
     ]
     assert not offending_store, (
-        f"collection.py write-command bodies must not call _make_store() "
-        f"(SearchStore gateway reserved for read commands); found in: {offending_store} (S16)"
+        f"collection.py command bodies must not call _make_store(); "
+        f"found in: {offending_store} (S16)"
     )

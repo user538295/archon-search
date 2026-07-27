@@ -88,6 +88,20 @@ opt-out, set `[logging] log_file = ""` directly in `archon-search.toml`.
 
 ---
 
+### [next release] — DCS: `archon-search collection list` is now an HTTP proxy (requires server running)
+
+**Surface**: `archon-search collection list` CLI command.
+
+**Breaking changes**:
+
+1. **`--config` option removed.** The `--config PATH` flag no longer exists. Use `--api-key` / `ARCHON_SEARCH_API_KEY` / `--api-url` for authentication.
+
+2. **Server must be running.** `archon-search collection list` now proxies the request to `GET /collections/` on the running archon-search server (default `http://localhost:8765`). The command exits `1` when the server is not reachable. Previously the command read LanceDB directly without a server.
+
+**Migration**: ensure `archon-search serve` is running before invoking `collection list`. Pass `--api-key` or set `ARCHON_SEARCH_API_KEY`.
+
+---
+
 ### [next release] — FE-8: `archon-search collection remove` is now an HTTP proxy (requires server running)
 
 **Surface**: `archon-search collection remove` CLI command.

@@ -2515,7 +2515,13 @@ class SearchInstaller:
 
             # Step 17: completion message
             if not self.dry_run:
-                _api_key, _key_source = load_or_generate_key()
+                if server_key is not None:
+                    # Key was already written at step 14b — report it directly so
+                    # load_or_generate_key() doesn't overwrite the key file via persist_key.
+                    _api_key = server_key
+                    _key_source = f"file: {get_key_file()}"
+                else:
+                    _api_key, _key_source = load_or_generate_key()
                 if _key_source == "env var":
                     print(
                         f"  API key: {_api_key}"

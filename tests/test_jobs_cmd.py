@@ -287,7 +287,8 @@ class TestJobsStatusEdgeCases:
 
     def test_env_var_api_key_fallback(self, monkeypatch):
         """ARCHON_SEARCH_API_KEY env var is used when --api-key is not provided."""
-        monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "env-key-value")
+        valid_key = "a" * 64  # must be a valid 64-char lowercase hex string
+        monkeypatch.setenv("ARCHON_SEARCH_API_KEY", valid_key)
         runner = CliRunner()
         job_data = _make_job_response(status="DONE")
         mock_resp = _mock_httpx_get(job_data)
@@ -297,7 +298,7 @@ class TestJobsStatusEdgeCases:
 
         assert result.exit_code == 0
         called_headers = mock_get.call_args[1]["headers"]
-        assert called_headers.get("Authorization") == "Bearer env-key-value"
+        assert called_headers.get("Authorization") == f"Bearer {valid_key}"
 
     def test_jobs_status_done_called_once(self):
         """httpx.get is called exactly once (one-shot, no polling)."""

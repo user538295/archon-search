@@ -120,15 +120,11 @@ def test_status_cli_sends_bearer_token(runner: CliRunner) -> None:
         return mock_resp
 
     with patch("archon_search.cli.status._get_service", return_value=_make_svc()):
-        # Patch _resolve_api_key so the test does not require a real key file on disk
-        # (CI environments may lack ~/.archon-search/.search.env). The real function would
-        # return the --api-key value immediately, so this is a no-op equivalent.
-        with patch("archon_search.cli.status._resolve_api_key", return_value="test-token-abc"):
-            with patch("archon_search.cli.status.httpx.get", side_effect=fake_httpx_get):
-                result = runner.invoke(
-                    main,
-                    ["status", "--api-key", "test-token-abc", "--api-url", "http://localhost:9999"],
-                )
+        with patch("archon_search.cli.status.httpx.get", side_effect=fake_httpx_get):
+            result = runner.invoke(
+                main,
+                ["status", "--api-key", "test-token-abc", "--api-url", "http://localhost:9999"],
+            )
     assert result.exit_code == 0, result.output
     assert captured_headers, "Expected httpx.get to be called"
     assert captured_headers[0].get("Authorization") == "Bearer test-token-abc"
@@ -179,14 +175,17 @@ def test_status_cli_omits_telemetry_when_disabled_on_server(runner: CliRunner) -
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_server_status_returns_none_when_key_resolution_fails() -> None:
-    """_resolve_api_key exception → returns None (offline-mode fallback)."""
+def test_fetch_server_status_returns_none_when_no_key() -> None:
+    """No key available (load_key returns None) → returns None, no SystemExit.
+
+    Regression: _fetch_server_status called _resolve_api_key which raises
+    SystemExit(1) when no key is found. SystemExit is not caught by
+    'except Exception', so offline-capable commands exited instead of
+    falling back to local state files.
+    """
     import archon_search.cli.status as status_mod
 
-    with patch(
-        "archon_search.cli.status._resolve_api_key",
-        side_effect=OSError("no key file"),
-    ):
+    with patch("archon_search.cli.status.load_key", return_value=None):
         result = status_mod._fetch_server_status("http://localhost:8765", None)
     assert result is None
 
@@ -195,7 +194,7 @@ def test_fetch_server_status_returns_none_on_http_error() -> None:
     """httpx.HTTPError → returns None (server unreachable)."""
     import archon_search.cli.status as status_mod
 
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch(
             "archon_search.cli.status.httpx.get",
             side_effect=httpx.ConnectError("connection refused"),
@@ -210,7 +209,7 @@ def test_fetch_server_status_returns_auth_failed_on_401() -> None:
 
     mock_resp = MagicMock()
     mock_resp.status_code = 401
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", return_value=mock_resp):
             result = status_mod._fetch_server_status("http://localhost:8765", None)
     assert result == {"_auth_failed": True}
@@ -222,7 +221,7 @@ def test_fetch_server_status_returns_none_on_non_200_non_401() -> None:
 
     mock_resp = MagicMock()
     mock_resp.status_code = 500
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", return_value=mock_resp):
             result = status_mod._fetch_server_status("http://localhost:8765", None)
     assert result is None
@@ -235,7 +234,7 @@ def test_fetch_server_status_returns_none_on_invalid_json() -> None:
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.side_effect = ValueError("not JSON")
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", return_value=mock_resp):
             result = status_mod._fetch_server_status("http://localhost:8765", None)
     assert result is None
@@ -249,7 +248,7 @@ def test_fetch_server_status_returns_payload_on_200() -> None:
     mock_resp.status_code = 200
     expected = {"telemetry": {"enabled": True, "hash_doc_ids_enabled": True}}
     mock_resp.json.return_value = expected
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", return_value=mock_resp):
             result = status_mod._fetch_server_status("http://localhost:8765", None)
     assert result == expected
@@ -267,7 +266,7 @@ def test_fetch_server_status_constructs_url_correctly() -> None:
         mock_resp.status_code = 503
         return mock_resp
 
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", side_effect=fake_get):
             status_mod._fetch_server_status("http://localhost:9999/", None)
     assert captured_urls == ["http://localhost:9999/status"]

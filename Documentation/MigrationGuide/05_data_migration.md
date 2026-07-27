@@ -80,7 +80,7 @@ archon-search collection list | awk '{print $1}' | \
   while read -r c; do archon-search collection reindex "$c"; done
 ```
 
-`collection list` and `collection info` read LanceDB directly (no server required). `collection add`, `collection remove`, `collection reindex`, and `collection reindex-metadata` are HTTP proxies — they route through the running archon-search server. Ensure `archon-search serve` is running before invoking those write commands.
+All `collection` subcommands (`list`, `info`, `add`, `remove`, `reindex`, `reindex-metadata`) are HTTP proxies — they route through the running archon-search server. Ensure `archon-search serve` is running before invoking any collection command.
 
 ## Backup and restore
 

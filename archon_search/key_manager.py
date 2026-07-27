@@ -433,9 +433,14 @@ def load_or_generate_key() -> tuple[str, str]:
     branches and threaded through so the reported source path always matches
     the path that was actually read or written (no TOCTOU between resolve
     and report).
+
+    When the key comes from the env var, it is also written to the key file so
+    that CLI commands running in the same environment (Docker terminal,
+    docker exec) can authenticate without any manual setup.
     """
     key = _load_from_env()
     if key is not None:
+        persist_key(key)
         return key, "env var"
 
     key_file = get_key_file()
@@ -445,6 +450,34 @@ def load_or_generate_key() -> tuple[str, str]:
 
     key = _generate_and_write(key_file)
     return key, "auto-generated"
+
+
+def load_key() -> str | None:
+    """Return the API key from env or key file, or None if not found.
+
+    Never generates or writes a new key — safe to call in read-only environments.
+    """
+    key = _load_from_env()
+    if key is not None:
+        return key
+    return _load_from_file(get_key_file())
+
+
+def persist_key(key: str) -> None:
+    """Write *key* to the key file so local CLI commands can authenticate.
+
+    Called by the server at startup when the key comes from an env var —
+    the env var is not visible to CLI processes that weren't given it
+    explicitly, but the key file is always readable from the data dir.
+
+    Silently swallows all I/O errors (PermissionError, EROFS, ENOSPC, …)
+    so a read-only or full data dir never crashes the server startup path.
+    """
+    try:
+        key_file = get_key_file()
+        _generate_and_write(key_file, key=key)
+    except (ValueError, OSError, RuntimeError):  # noqa: BLE001 — best-effort convenience write
+        pass
 
 
 def _load_from_env() -> str | None:
@@ -498,15 +531,16 @@ def _validate_key(value: str) -> bool:
     return bool(value) and bool(_HEX_RE.fullmatch(value))
 
 
-def _generate_and_write(key_file: Path) -> str:
-    """Atomically write a freshly generated key to *key_file* and return it.
+def _generate_and_write(key_file: Path, key: str | None = None) -> str:
+    """Atomically write *key* (or a freshly generated one) to *key_file*.
 
     *key_file* must be the path resolved by ``get_key_file()`` at the start
     of the current call to ``load_or_generate_key()`` — see
     ``_load_from_file`` for the same contract.
     """
     os.makedirs(key_file.parent, exist_ok=True)
-    key = secrets.token_hex(32)  # 64 hex chars
+    if key is None:
+        key = secrets.token_hex(32)  # 64 hex chars
     payload = f"{ENV_VAR}={key}\n".encode()
     tmp = key_file.with_suffix(key_file.suffix + ".tmp")
 

@@ -35,14 +35,14 @@ def _mock_jobs_resp(items: list[dict], total: int | None = None) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_active_job_counts_returns_none_on_key_resolution_failure() -> None:
-    with patch("archon_search.cli.status._resolve_api_key", side_effect=OSError("no key")):
+def test_fetch_active_job_counts_returns_none_on_key_load_error() -> None:
+    with patch("archon_search.cli.status.load_key", side_effect=OSError("no key")):
         result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result is None
 
 
 def test_fetch_active_job_counts_returns_none_on_http_error() -> None:
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch(
             "archon_search.cli.status.httpx.get",
             side_effect=httpx.ConnectError("refused"),
@@ -58,7 +58,7 @@ def test_fetch_active_job_counts_returns_none_on_non_200() -> None:
     err_resp = MagicMock()
     err_resp.status_code = 503
     # First call (RUNNING) returns 200, second (PENDING) returns 503 → None
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", side_effect=[ok_resp, err_resp]):
             result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result is None
@@ -71,7 +71,7 @@ def test_fetch_active_job_counts_returns_none_on_non_200_first_call() -> None:
     ok_resp.status_code = 200
     ok_resp.json.return_value = {"total": 0}
     # First call (RUNNING) returns 503 → None immediately
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", side_effect=[err_resp, ok_resp]):
             result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result is None
@@ -84,7 +84,7 @@ def test_fetch_active_job_counts_returns_none_on_invalid_json() -> None:
     p_resp = MagicMock()
     p_resp.status_code = 200
     p_resp.json.return_value = {"total": 0}
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
             result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result is None
@@ -97,7 +97,7 @@ def test_fetch_active_job_counts_returns_none_on_attribute_error() -> None:
     p_resp = MagicMock()
     p_resp.status_code = 200
     p_resp.json.return_value = {"total": 0}
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
             result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result is None
@@ -106,7 +106,7 @@ def test_fetch_active_job_counts_returns_none_on_attribute_error() -> None:
 def test_fetch_active_job_counts_returns_zero_zero_when_no_active_jobs() -> None:
     r_resp = _mock_jobs_resp([], total=0)
     p_resp = _mock_jobs_resp([], total=0)
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
             result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result == (0, 0)
@@ -115,7 +115,7 @@ def test_fetch_active_job_counts_returns_zero_zero_when_no_active_jobs() -> None
 def test_fetch_active_job_counts_counts_running_and_pending_separately() -> None:
     r_resp = _mock_jobs_resp([], total=2)
     p_resp = _mock_jobs_resp([], total=1)
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
             result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result == (2, 1)
@@ -128,7 +128,7 @@ def test_fetch_active_job_counts_sends_correct_url_and_params() -> None:
         captured.append({"url": url, "params": list(params)})
         return _mock_jobs_resp([], total=0)
 
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", side_effect=fake_get):
             status_mod._fetch_active_job_counts("http://localhost:9999/", None)
 
@@ -148,7 +148,7 @@ def test_fetch_active_job_counts_sends_bearer_token() -> None:
         captured_headers.append(dict(headers))
         return _mock_jobs_resp([], total=0)
 
-    with patch("archon_search.cli.status._resolve_api_key", return_value="my-secret"):
+    with patch("archon_search.cli.status.load_key", return_value="my-secret"):
         with patch("archon_search.cli.status.httpx.get", side_effect=fake_get):
             status_mod._fetch_active_job_counts("http://localhost:8765", None)
 
@@ -161,7 +161,7 @@ def test_fetch_active_job_counts_uses_total_not_items_count() -> None:
     """total field is used even when items list is empty (e.g. limit=1 returns 1 item but total=150)."""
     r_resp = _mock_jobs_resp([], total=150)
     p_resp = _mock_jobs_resp([], total=75)
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
             result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result == (150, 75)
@@ -171,7 +171,7 @@ def test_fetch_active_job_counts_total_above_page_cap_returns_accurate_count() -
     """total > 200 (server page cap) returns the real total, not the page size."""
     r_resp = _mock_jobs_resp([], total=500)
     p_resp = _mock_jobs_resp([], total=300)
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
             result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result == (500, 300)
@@ -183,7 +183,7 @@ def test_fetch_active_job_counts_returns_none_on_non_int_total() -> None:
     r_resp.status_code = 200
     r_resp.json.return_value = {"total": [1, 2]}  # list total — int([1,2]) → TypeError
     p_resp = _mock_jobs_resp([], total=0)
-    with patch("archon_search.cli.status._resolve_api_key", return_value="key"):
+    with patch("archon_search.cli.status.load_key", return_value="key"):
         with patch("archon_search.cli.status.httpx.get", side_effect=[r_resp, p_resp]):
             result = status_mod._fetch_active_job_counts("http://localhost:8765", None)
     assert result is None

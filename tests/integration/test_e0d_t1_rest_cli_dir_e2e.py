@@ -114,7 +114,7 @@ def test_e2e_cli_single_file_over_limit_exits_nonzero(
     mock_resp.text = f'{{"detail": "{err.message}"}}'
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key")
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "a" * 64)  # must be valid 64-char lowercase hex
 
     runner = CliRunner()
     with patch("archon_search.cli.ingest.httpx.post", return_value=mock_resp):

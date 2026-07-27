@@ -8,20 +8,9 @@ import click
 import httpx
 
 from archon_search.cli._helpers import _get_service
-from archon_search.key_manager import load_or_generate_key
+from archon_search.key_manager import load_key
 
 _DEFAULT_API_URL = "http://localhost:8765"
-
-
-def _resolve_api_key(api_key: str | None) -> str:
-    """Return the API key from the option, env var, or the key file."""
-    if api_key:
-        return api_key
-    env_key = os.environ.get("ARCHON_SEARCH_API_KEY")
-    if env_key:
-        return env_key
-    key, _ = load_or_generate_key()
-    return key
 
 
 def _fetch_server_status(api_url: str, api_key: str | None) -> dict[str, Any] | None:
@@ -32,8 +21,10 @@ def _fetch_server_status(api_url: str, api_key: str | None) -> dict[str, Any] | 
     rather than silently omitting the telemetry section).
     """
     try:
-        key = _resolve_api_key(api_key)
-    except Exception:  # noqa: BLE001 — offline mode
+        key = api_key or load_key()
+    except (ValueError, OSError):
+        return None
+    if key is None:
         return None
     headers = {"Authorization": f"Bearer {key}"}
     url = f"{api_url.rstrip('/')}/status"
@@ -133,8 +124,10 @@ def _fetch_active_job_counts(api_url: str, api_key: str | None) -> tuple[int, in
     returns None; the caller treats this the same as "no active jobs."
     """
     try:
-        key = _resolve_api_key(api_key)
-    except Exception:  # noqa: BLE001 — offline mode
+        key = api_key or load_key()
+    except (ValueError, OSError):
+        return None
+    if key is None:
         return None
     headers = {"Authorization": f"Bearer {key}"}
     base = api_url.rstrip("/")

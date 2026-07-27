@@ -1,13 +1,12 @@
 """archon-search export and import CLI commands (Tasks 8.1, 8.2)."""
 from __future__ import annotations
 
-import os
 import time
 
 import click
 import httpx
 
-from archon_search.key_manager import load_or_generate_key
+from archon_search.key_manager import load_key
 from archon_search.cli._helpers import _CONNECT_FAIL, _SERVER_NOT_RUNNING_MSG
 
 _DEFAULT_API_URL = "http://localhost:8765"
@@ -20,11 +19,15 @@ def _resolve_api_key(api_key: str | None) -> str:
     """Return the API key from the option, env var, or the key file."""
     if api_key:
         return api_key
-    env_key = os.environ.get("ARCHON_SEARCH_API_KEY")
-    if env_key:
-        return env_key
-    key, _ = load_or_generate_key()
-    return key
+    key = load_key()
+    if key:
+        return key
+    click.echo(
+        "No API key found. Pass --api-key, set ARCHON_SEARCH_API_KEY, or run the server "
+        "once to auto-generate a key file.",
+        err=True,
+    )
+    raise SystemExit(1)
 
 
 @click.command("export")

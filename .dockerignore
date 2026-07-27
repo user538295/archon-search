@@ -44,3 +44,11 @@ Dockerfile
 scripts/claude-proxy.py
 scripts/claude-container-wrapper
 docker-compose.override.yml
+
+# Large hidden directories that must never enter the build context
+.claude/
+.uv-cache/
+.tokensave/
+.serena/
+.hypothesis/
+.code-review-graph/

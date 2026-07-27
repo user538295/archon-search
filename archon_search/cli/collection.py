@@ -1,17 +1,14 @@
 """archon-search collection subcommands: list, add, remove, info, reindex."""
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
 from pathlib import Path
 
 import click
 import httpx
 
 from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _SERVER_NOT_RUNNING_MSG
-from archon_search.config import load_config
-from archon_search.key_manager import load_or_generate_key
+from archon_search.key_manager import load_key
 
 _DEFAULT_API_URL = "http://localhost:8765"
 
@@ -20,19 +17,17 @@ def _resolve_api_key(api_key: str | None) -> str:
     """Return the API key from the option, env var, or the key file."""
     if api_key:
         return api_key
-    env_key = os.environ.get("ARCHON_SEARCH_API_KEY")
-    if env_key:
-        return env_key
-    key, _ = load_or_generate_key()
-    return key
+    key = load_key()
+    if key:
+        return key
+    click.echo(
+        "No API key found. Pass --api-key, set ARCHON_SEARCH_API_KEY, or run the server "
+        "once to auto-generate a key file.",
+        err=True,
+    )
+    raise SystemExit(1)
 
 logger = logging.getLogger(__name__)
-
-
-def _make_store(cfg) -> "SearchStore":
-    from archon_search.store import SearchStore  # noqa: PLC0415
-    # ponytail: intentionally thin — no ML deps, just LanceDB
-    return SearchStore(cfg.db_path)
 
 
 @click.group()
@@ -41,33 +36,46 @@ def collection() -> None:
 
 
 @collection.command("list")
-@click.option("--config", "config_path", default=None, type=click.Path(path_type=Path), help="Path to archon-search.toml")
-def list_cmd(config_path: Path | None) -> None:
-    """List all collections."""
-    try:
-        cfg = load_config(config_path)
-    except Exception as exc:
-        click.echo(f"Error loading config: {exc}", err=True)
-        raise SystemExit(1)
-
-    async def _run() -> None:
-        store = _make_store(cfg)
-        try:
-            await store.connect()
-            collections = await store.list_collections()
-            if not collections:
-                click.echo("No collections found.")
-            else:
-                for c in collections:
-                    click.echo(f"{c.name}  docs={c.doc_count}  chunks={c.chunk_count}")
-        finally:
-            await store.disconnect()
+@click.option(
+    "--api-url",
+    default=_DEFAULT_API_URL,
+    show_default=True,
+    help="Base URL of the archon-search server.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
+)
+def list_cmd(api_url: str, api_key: str | None) -> None:
+    """List all collections (proxies GET /collections/; requires server running)."""
+    key = _resolve_api_key(api_key)
+    headers = {"Authorization": f"Bearer {key}"}
+    url = f"{api_url.rstrip('/')}/collections/"
 
     try:
-        asyncio.run(_run())
-    except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
+        resp = httpx.get(url, headers=headers)
+    except _CONNECT_FAIL:
+        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
         raise SystemExit(1)
+    except httpx.HTTPError as exc:
+        click.echo(f"Error contacting server: {exc}", err=True)
+        raise SystemExit(1)
+
+    if resp.status_code != 200:
+        click.echo(f"Error: server returned {resp.status_code}: {resp.text}", err=True)
+        raise SystemExit(1)
+
+    try:
+        collections = resp.json()
+    except ValueError as exc:
+        click.echo(f"Error: server returned unexpected response: {exc}", err=True)
+        raise SystemExit(1)
+    if not collections:
+        click.echo("No collections found.")
+    else:
+        for c in collections:
+            click.echo(f"{c['name']}  docs={c.get('doc_count', 0)}  chunks={c.get('chunk_count', 0)}")
 
 
 @collection.command("add")

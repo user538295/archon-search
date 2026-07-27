@@ -638,22 +638,22 @@ def test_add_with_wait_polls_to_done() -> None:
 
 
 def test_add_does_not_call_load_config() -> None:
-    """add must not call load_config — it is a pure HTTP proxy."""
+    """add must not import load_config — it is a pure HTTP proxy."""
     import archon_search.cli.collection as col_mod
+
+    assert not hasattr(col_mod, "load_config"), (
+        "load_config must not be imported in collection.py — add is a pure HTTP proxy"
+    )
 
     post_resp = MagicMock()
     post_resp.status_code = 202
     post_resp.json.return_value = _add_job_response("job-add-003", "QUEUED", "mypath")
 
-    with (
-        patch("archon_search.cli.collection.httpx.post", return_value=post_resp),
-        patch.object(col_mod, "load_config") as mock_load_config,
-    ):
+    with patch("archon_search.cli.collection.httpx.post", return_value=post_resp):
         runner = CliRunner()
         result = runner.invoke(collection, ["add", "/some/path", "--api-key", "test-key"])
 
     assert result.exit_code == 0, result.output
-    mock_load_config.assert_not_called()
 
 
 def test_add_409_collection_already_registered() -> None:
@@ -786,7 +786,7 @@ def test_resolve_api_key_arg_priority() -> None:
     from archon_search.cli.collection import _resolve_api_key
 
     with patch.dict("os.environ", {"ARCHON_SEARCH_API_KEY": "env-key"}):
-        with patch("archon_search.cli.collection.load_or_generate_key") as mock_load:
+        with patch("archon_search.cli.collection.load_key") as mock_load:
             result = _resolve_api_key("explicit-key")
 
     assert result == "explicit-key"
@@ -799,11 +799,11 @@ def test_resolve_api_key_env_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "env-key")
 
-    with patch("archon_search.cli.collection.load_or_generate_key") as mock_load:
+    with patch("archon_search.cli.collection.load_key", return_value="env-key") as mock_load:
         result = _resolve_api_key(None)
 
     assert result == "env-key"
-    mock_load.assert_not_called()
+    mock_load.assert_called_once()
 
 
 def test_resolve_api_key_file_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -812,11 +812,32 @@ def test_resolve_api_key_file_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
 
-    with patch("archon_search.cli.collection.load_or_generate_key", return_value=("file-key", None)) as mock_load:
+    with patch("archon_search.cli.collection.load_key", return_value="file-key") as mock_load:
         result = _resolve_api_key(None)
 
     assert result == "file-key"
     mock_load.assert_called_once()
+
+
+def test_resolve_api_key_no_key_no_write(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """None arg + no env var + no key file → exits 1 without touching the filesystem.
+
+    Regression for: PermissionError: [Errno 13] Permission denied: '/data'
+    In a container, load_or_generate_key() tries to makedirs('/data') when
+    no key exists — the CLI must never generate keys, only load them.
+    """
+    from archon_search.cli.collection import _resolve_api_key
+
+    monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
+    # Point key file at a path inside tmp_path that does NOT exist — no key on disk.
+    monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", str(tmp_path / "missing.env"))
+
+    with pytest.raises(SystemExit) as exc:
+        _resolve_api_key(None)
+
+    assert exc.value.code == 1
+    # Must not have written anything to disk.
+    assert not any(tmp_path.iterdir())
 
 
 # ---------------------------------------------------------------------------
@@ -833,32 +854,20 @@ def test_create_pipeline_not_a_module_attribute() -> None:
     )
 
 
-@pytest.mark.integration
-def test_list_cmd_builds_pipeline_in_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """S3, S10: list_cmd builds a pipeline in-process and lists collections correctly."""
-    import asyncio
+def test_list_cmd_displays_collections() -> None:
+    """list_cmd proxies GET /collections/ and prints name/docs/chunks."""
+    collections_data = [
+        {"name": "mytest-list", "doc_count": 0, "chunk_count": 0, "namespace": "default", "status": "ready", "path": "/data/mytest-list", "active_embedding_model": "", "needs_reindex": False},
+    ]
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = collections_data
 
-    from archon_search.store import SearchStore
-
-    # ARCHON_SEARCH_DATA_DIR causes load_config to set db_path = data_dir / "search"
-    # ARCHON_SEARCH_CONFIG must be pinned to an empty file to prevent load_config(None)
-    # from reading the developer's ~/.archon-search/archon-search.toml, which could have
-    # multilingual=true or graph.enabled=true and change pipeline construction.
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(tmp_path / "config.toml"))
-    (tmp_path / "config.toml").write_text("")
-
-    db_path = tmp_path / "search"
-    store = SearchStore(db_path)
-    asyncio.run(store.connect())
-    asyncio.run(store.ensure_collection("mytest-list", _DIM))
-    asyncio.run(store.disconnect())
-
-    runner = CliRunner()
-    result = runner.invoke(collection, ["list"])
+    with patch("archon_search.cli.collection.httpx.get", return_value=mock_resp):
+        runner = CliRunner()
+        result = runner.invoke(collection, ["list", "--api-key", "testkey"])
 
     assert result.exit_code == 0, result.output
-    # S10: verify the exact output format: "{name}  docs={doc_count}  chunks={chunk_count}"
     assert "mytest-list  docs=0  chunks=0" in result.output
 
 
@@ -897,27 +906,15 @@ def test_info_displays_formatted_output() -> None:
     assert "chunk_count: 0" in result.output
 
 
-@pytest.mark.integration
-def test_list_cmd_empty_store_returns_no_collections_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """S3: list_cmd completes (not short-circuits) on an empty store and prints the empty message."""
-    import asyncio
+def test_list_cmd_empty_returns_no_collections_message() -> None:
+    """list_cmd prints the empty message when server returns an empty list."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = []
 
-    from archon_search.store import SearchStore
-
-    # Pin config to empty file — prevents load_config from reading developer's toml
-    # which could have multilingual=true or graph.enabled=true.
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(tmp_path / "config.toml"))
-    (tmp_path / "config.toml").write_text("")
-
-    # Ensure the store exists but has no collections.
-    db_path = tmp_path / "search"
-    store = SearchStore(db_path)
-    asyncio.run(store.connect())
-    asyncio.run(store.disconnect())
-
-    runner = CliRunner()
-    result = runner.invoke(collection, ["list"])
+    with patch("archon_search.cli.collection.httpx.get", return_value=mock_resp):
+        runner = CliRunner()
+        result = runner.invoke(collection, ["list", "--api-key", "testkey"])
 
     assert result.exit_code == 0, result.output
     assert "No collections found." in result.output

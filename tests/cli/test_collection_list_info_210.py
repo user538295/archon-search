@@ -1,121 +1,97 @@
-"""Tests for brief 210: collection list uses SearchStore directly, not create_pipeline.
+"""Tests for list_cmd and info HTTP proxy behaviour (brief 210 → DCS proxy conversion).
 
-brief 350: info was converted to an HTTP proxy (see test_cli_collection.py for new tests).
+DCS converted list_cmd from a direct-store path to an HTTP proxy (GET /collections/),
+matching the existing info proxy.  These tests cover list_cmd's proxy contract and
+error paths not already exercised in test_cli_collection.py.
 
 Tests:
-- test_list_cmd_shows_collections: mocked store → names/counts printed, exit 0
-- test_list_cmd_empty: mocked store returns [] → "No collections found", exit 0
-- test_list_cmd_config_error_exits_1: load_config raises → exit 1
-- test_list_cmd_uses_store_with_correct_db_path: structural guard — _make_store called with cfg
-- test_list_cmd_disconnect_called_on_store_error: finally disconnect even when list_collections raises
+- test_list_cmd_shows_collections: httpx.get returns list → names/counts printed, exit 0
+- test_list_cmd_empty: httpx.get returns [] → "No collections found", exit 0
+- test_list_cmd_server_not_running: ConnectError → exit 1, "not running" message
+- test_list_cmd_url_contains_collections_path: structural guard — URL ends with /collections/
+- test_list_cmd_non_200_exits_1: server returns 500 → exit 1
+- test_list_cmd_no_make_store_in_module: structural guard — _make_store removed from module
 - test_info_proxies_to_server: mocked httpx.get → formatted output, exit 0  (brief 350)
 - test_info_server_not_running: ConnectError → exit 1  (brief 350)
 """
 from __future__ import annotations
 
 import httpx
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
-from archon_search._types import CollectionInfo
+import archon_search.cli.collection as collection_mod
 from archon_search.cli.collection import collection
-from archon_search.collection_meta import CollectionMeta
-
-
-def _make_cfg(db_path: str = "/tmp/test-db") -> MagicMock:
-    cfg = MagicMock()
-    cfg.db_path = db_path
-    return cfg
-
-
-def _make_store_mock(collections: list | None = None, meta: CollectionMeta | None = None) -> MagicMock:
-    store = MagicMock()
-    store.connect = AsyncMock()
-    store.disconnect = AsyncMock()
-    store.list_collections = AsyncMock(return_value=collections or [])
-    store.get_collection_meta = AsyncMock(return_value=meta)
-    return store
 
 
 # ---------------------------------------------------------------------------
-# list_cmd
+# list_cmd — HTTP proxy (DCS)
 # ---------------------------------------------------------------------------
+
+
+def _mock_list_resp(collections: list) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = collections
+    return resp
 
 
 def test_list_cmd_shows_collections() -> None:
-    cfg = _make_cfg()
-    info1 = CollectionInfo(name="col-a", doc_count=3, chunk_count=12)
-    info2 = CollectionInfo(name="col-b", doc_count=0, chunk_count=0)
-    store = _make_store_mock(collections=[info1, info2])
-
-    with (
-        patch("archon_search.cli.collection.load_config", return_value=cfg),
-        patch("archon_search.cli.collection._make_store", return_value=store),
-    ):
-        result = CliRunner().invoke(collection, ["list"])
+    data = [
+        {"name": "col-a", "doc_count": 3, "chunk_count": 12},
+        {"name": "col-b", "doc_count": 0, "chunk_count": 0},
+    ]
+    with patch("archon_search.cli.collection.httpx.get", return_value=_mock_list_resp(data)):
+        result = CliRunner().invoke(collection, ["list", "--api-key", "testkey"])
 
     assert result.exit_code == 0, result.output
     assert "col-a" in result.output
     assert "col-b" in result.output
     assert "docs=3" in result.output
     assert "chunks=12" in result.output
-    store.connect.assert_awaited_once()
-    store.disconnect.assert_awaited_once()
-    store.list_collections.assert_awaited_once()
 
 
 def test_list_cmd_empty() -> None:
-    cfg = _make_cfg()
-    store = _make_store_mock(collections=[])
-
-    with (
-        patch("archon_search.cli.collection.load_config", return_value=cfg),
-        patch("archon_search.cli.collection._make_store", return_value=store),
-    ):
-        result = CliRunner().invoke(collection, ["list"])
+    with patch("archon_search.cli.collection.httpx.get", return_value=_mock_list_resp([])):
+        result = CliRunner().invoke(collection, ["list", "--api-key", "testkey"])
 
     assert result.exit_code == 0, result.output
     assert "No collections found" in result.output
 
 
-def test_list_cmd_config_error_exits_1() -> None:
-    with patch("archon_search.cli.collection.load_config", side_effect=RuntimeError("bad config")):
-        result = CliRunner().invoke(collection, ["list"])
+def test_list_cmd_server_not_running() -> None:
+    with patch("archon_search.cli.collection.httpx.get", side_effect=httpx.ConnectError("refused")):
+        result = CliRunner().invoke(collection, ["list", "--api-key", "testkey"])
 
     assert result.exit_code == 1
-    assert "bad config" in result.output
+    assert "not running" in result.output.lower() or "not running" in getattr(result, "stderr", "").lower()
 
 
-def test_list_cmd_uses_store_with_correct_db_path() -> None:
-    """Structural guard: list constructs SearchStore with cfg.db_path, not create_pipeline."""
-    cfg = _make_cfg(db_path="/tmp/guard-db")
-    store = _make_store_mock(collections=[])
+def test_list_cmd_url_contains_collections_path() -> None:
+    """Structural guard: list_cmd calls GET /collections/ (trailing slash)."""
+    with patch("archon_search.cli.collection.httpx.get", return_value=_mock_list_resp([])) as mock_get:
+        CliRunner().invoke(collection, ["list", "--api-key", "testkey"])
 
-    with (
-        patch("archon_search.cli.collection.load_config", return_value=cfg),
-        patch("archon_search.cli.collection._make_store", return_value=store) as mock_make_store,
-    ):
-        result = CliRunner().invoke(collection, ["list"])
-
-    assert result.exit_code == 0
-    mock_make_store.assert_called_once_with(cfg)
+    called_url = mock_get.call_args[0][0]
+    assert called_url.endswith("/collections/"), f"Expected URL ending /collections/, got {called_url}"
 
 
-def test_list_cmd_disconnect_called_on_store_error() -> None:
-    """finally: disconnect is awaited even when list_collections raises."""
-    cfg = _make_cfg()
-    store = _make_store_mock(collections=[])
-    store.list_collections = AsyncMock(side_effect=RuntimeError("db error"))
-
-    with (
-        patch("archon_search.cli.collection.load_config", return_value=cfg),
-        patch("archon_search.cli.collection._make_store", return_value=store),
-    ):
-        result = CliRunner().invoke(collection, ["list"])
+def test_list_cmd_non_200_exits_1() -> None:
+    resp = MagicMock()
+    resp.status_code = 500
+    resp.text = "internal error"
+    with patch("archon_search.cli.collection.httpx.get", return_value=resp):
+        result = CliRunner().invoke(collection, ["list", "--api-key", "testkey"])
 
     assert result.exit_code == 1
-    store.disconnect.assert_awaited_once()
+
+
+def test_list_cmd_no_make_store_in_module() -> None:
+    """Structural guard: _make_store was removed from collection.py by the DCS proxy conversion."""
+    assert not hasattr(collection_mod, "_make_store"), (
+        "_make_store still present in collection.py — DCS proxy conversion incomplete"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -153,12 +129,3 @@ def test_info_server_not_running() -> None:
 
     assert result.exit_code == 1
     assert "not running" in result.output.lower()
-
-
-def test_make_store_constructs_search_store_with_db_path() -> None:
-    """Body guard: _make_store must call SearchStore(cfg.db_path), not a different attribute."""
-    cfg = _make_cfg(db_path="/tmp/body-guard")
-    with patch("archon_search.store.SearchStore") as MockStore:
-        from archon_search.cli.collection import _make_store  # noqa: PLC0415
-        _make_store(cfg)
-    MockStore.assert_called_once_with("/tmp/body-guard")
