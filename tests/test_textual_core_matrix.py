@@ -38,9 +38,15 @@ async def test_benchmark_clock_advances_from_zero() -> None:
     async with WizardApp().run_test(size=SIZE) as pilot:
         await pilot.pause()
         view = pilot.app.screen.query_one(CalibrationView)
-        assert view.tick == 0.0
-        await pilot.pause(0.3)
-        assert view.tick > 0.0
+        # The on_mount interval starts advancing tick immediately, so under load
+        # the first pause() may already have let one tick fire — don't assert an
+        # exact 0.0 (racy). tick is monotonic; assert it climbs from its start.
+        start = view.tick
+        for _ in range(50):
+            await pilot.pause(0.05)
+            if view.tick > start:
+                break
+        assert view.tick > start
 
 
 async def test_calibration_completion_shows_factor_and_verdict() -> None:
