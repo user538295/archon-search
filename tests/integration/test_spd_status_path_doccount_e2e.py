@@ -40,6 +40,8 @@ def test_status_shows_real_path_and_doc_count(tmp_path: Path, monkeypatch) -> No
         assert entry is not None, f"mydocs missing from /status: {data['collections']}"
         assert entry["path"] == str(docs_dir.resolve())
         assert entry["doc_count"] == 1
+        # S42: chunk_count is the live store count, not a hard-coded 0.
+        assert entry["chunk_count"] >= 1
 
 
 def test_status_two_collections_each_get_own_path_and_count(tmp_path: Path, monkeypatch) -> None:
