@@ -1,5 +1,6 @@
 """Tests for BE-8: local/global recall computation and backend wiring."""
 import inspect
+from pathlib import Path
 
 import pytest
 
@@ -7,6 +8,10 @@ from archon_search.eval.runner import (
     _build_pipeline_with_eval_backends,
     run_eval_suite,
 )
+
+CORPUS_ROOT = Path(__file__).resolve().parent
+RUNTIME_CONFIG_PATH = CORPUS_ROOT / "runtime.toml"
+BASELINE_JSON = CORPUS_ROOT / "baselines" / "baseline.json"
 
 
 # Unit test: run_eval_suite accepts lancedb_root parameter
@@ -68,14 +73,24 @@ def test_existing_graph_collection_stub_unaffected():
 
 # Integration test: run_eval_suite reports local/global recall at 5
 @pytest.mark.integration
-@pytest.mark.skipif(
-    True,  # Skip until leidenalg is available and communities are pre-built
-    reason="requires leidenalg and pre-built communities"
-)
-async def test_eval_suite_reports_local_global_recall_at_5():
+async def test_eval_suite_reports_local_global_recall_at_5(
+    thresholds_path: Path,
+    build_communities_for_eval: tuple,
+    eval_tmp_lancedb_root: Path,
+):
     """run_eval_suite produces non-None graph_local_recall_at_5 and graph_global_recall_at_5.
 
-    Must pass lancedb_root=eval_tmp_lancedb_root fixture value so the pipeline
-    reads communities from the pre-built store.
+    Passes lancedb_root=eval_tmp_lancedb_root so the pipeline reads the real
+    Leiden communities built by build_communities_for_eval. This is the wiring
+    smoke (metrics are populated at all); the floor-enforcing variants live in
+    test_e2e_graph_eval_gate_v2.py.
     """
-    pass
+    report = await run_eval_suite(
+        CORPUS_ROOT,
+        RUNTIME_CONFIG_PATH,
+        thresholds_path=thresholds_path,
+        baseline_path=BASELINE_JSON,
+        lancedb_root=eval_tmp_lancedb_root,
+    )
+    assert report.metrics.graph_local_recall_at_5 is not None
+    assert report.metrics.graph_global_recall_at_5 is not None

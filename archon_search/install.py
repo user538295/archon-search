@@ -1883,7 +1883,7 @@ class SearchInstaller:
         if target_provider is None or self.dry_run:
             return
 
-        config_path = Path(self.config_file) if self.config_file else Path.home() / ".archon-search" / "archon-search.toml"
+        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
         if not config_path.exists():
             logger.warning("Config file %s not found — skipping provider config", config_path)
             return
@@ -1908,7 +1908,7 @@ class SearchInstaller:
         """
         if self.dry_run:
             return
-        config_path = Path(self.config_file) if self.config_file else Path.home() / ".archon-search" / "archon-search.toml"
+        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
         if not config_path.exists():
             logger.warning(
                 "Config file %s not found — skipping reranker_providers config",
@@ -1931,7 +1931,7 @@ class SearchInstaller:
         """Remove reranker_providers from [database] if present (self-heal on upgrade)."""
         if self.dry_run:
             return
-        config_path = Path(self.config_file) if self.config_file else Path.home() / ".archon-search" / "archon-search.toml"
+        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
         if not config_path.exists():
             return
         doc = tomlkit.parse(config_path.read_text(encoding="utf-8"))
@@ -2149,7 +2149,7 @@ class SearchInstaller:
                     print("[DRY RUN] Would download fasttext model.")
                 else:
                     try:
-                        _download_fasttext_model(Path.home() / ".archon-search" / "models")
+                        _download_fasttext_model(get_data_dir() / "models")
                     except InstallError as exc:
                         # Degrade to English-only rather than aborting, so the
                         # server still boots (mirrors _revert_multilingual_flag's

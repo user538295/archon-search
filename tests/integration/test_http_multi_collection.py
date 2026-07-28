@@ -292,7 +292,7 @@ def test_post_route_hybrid_strategy_returns_200_and_uses_blended_ranking(
         all_meta = asyncio.run(_get_meta())
         embedder = client.app.state.embedder
 
-        def _patched_build_router(config, shortlist_size, embedder=None):
+        def _patched_build_router(config, shortlist_size, embedder=None, initial_metadata=None):
             """Build a hybrid router pre-seeded with real metadata to bypass HTTP fetch."""
             embedder_to_use = embedder or client.app.state.embedder
             return MultiCollectionRouter(

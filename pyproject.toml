@@ -60,6 +60,15 @@ dev = [
     "reportlab>=4.5.1",
     "openai>=1.0",
     "ollama>=0.3",
+    "textual>=0.80",
+    "xlwt>=1.3",
+    # Pull all feature extras into the default `uv sync` so no test skips for a
+    # missing optional dep (uv 0.11 has no config to auto-install extras).
+    "archon-search[multilingual,hyde,rag_fusion,ollama,openai-provider,graph,code]",
+    # spaCy NER model for graph tests. Can't be a locked index dep (not on PyPI);
+    # pulled via the URL in [tool.uv.sources]. Dev-only, so publish rules (no URL
+    # deps in the published wheel) don't apply.
+    "en-core-web-sm",
 ]
 
 [build-system]
@@ -139,3 +148,6 @@ markers = [
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
