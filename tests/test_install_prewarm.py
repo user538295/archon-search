@@ -5,6 +5,7 @@ import sys
 import time
 import threading
 import types
+import warnings
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -76,6 +77,55 @@ def test_prewarm_skips_cross_encoder_when_reranker_none():
     with patch.dict(sys.modules, {"fastembed": fe_mod}):
         _prewarm_models(profile, timeout=300)
     mock_tce.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _prewarm_models — fastembed mean-pooling UserWarning suppression (Bug B)
+# ---------------------------------------------------------------------------
+
+def test_prewarm_suppresses_mean_pooling_userwarning():
+    """The mean-pooling UserWarning fired by TextEmbedding.__init__ must not surface."""
+    profile = MULTILINGUAL_PROFILES["minimal"]
+
+    def warn_mean_pooling(*args, **kwargs):
+        warnings.warn(
+            "This model does not have CLS token; switching to mean pooling.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return MagicMock()
+
+    mock_te = MagicMock(side_effect=warn_mean_pooling)
+    mock_tce = MagicMock()
+    fe_mod = _make_fastembed_mock(mock_te, mock_tce)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with patch.dict(sys.modules, {"fastembed": fe_mod}):
+            _prewarm_models(profile, timeout=300)
+
+    mean_pooling = [w for w in caught if "mean pooling" in str(w.message)]
+    assert mean_pooling == [], "mean-pooling UserWarning leaked to wizard output"
+
+
+def test_prewarm_does_not_suppress_unrelated_userwarning():
+    """The filter is narrow: an unrelated UserWarning must still surface."""
+    profile = MULTILINGUAL_PROFILES["minimal"]
+
+    def warn_other(*args, **kwargs):
+        warnings.warn("some other actionable warning", UserWarning, stacklevel=2)
+        return MagicMock()
+
+    mock_te = MagicMock(side_effect=warn_other)
+    mock_tce = MagicMock()
+    fe_mod = _make_fastembed_mock(mock_te, mock_tce)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with patch.dict(sys.modules, {"fastembed": fe_mod}):
+            _prewarm_models(profile, timeout=300)
+
+    assert any("some other actionable warning" in str(w.message) for w in caught)
 
 
 # ---------------------------------------------------------------------------

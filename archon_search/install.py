@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import warnings
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -505,7 +506,15 @@ def _prewarm_models(profile: InstallProfile, timeout: int | None = None) -> None
 
     try:
         try:
-            TextEmbedding(profile.embedder, lazy_load=True)
+            # Some multilingual embedders (e.g. intfloat/multilingual-e5-large)
+            # emit a UserWarning about switching to mean pooling on __init__.
+            # Mean pooling is the correct behavior for these models; the warning
+            # is not actionable, so suppress it narrowly at this prewarm site.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", category=UserWarning, message=".*mean pooling.*"
+                )
+                TextEmbedding(profile.embedder, lazy_load=True)
         except Exception as exc:
             raise InstallError(f"Failed to pre-warm embedder model {profile.embedder!r}: {exc}") from exc
 
@@ -1490,29 +1499,22 @@ def _install_graph_extra(dry_run: bool = False) -> None:
     """Install ``archon-search[graph]`` and the spaCy model.
 
     PyPI prohibits direct URL dependencies, so ``en_core_web_sm`` cannot be
-    declared in the package extras. It must be downloaded separately via
-    ``python -m spacy download`` after the extras are installed.
+    declared in the package extras. It is installed separately as the
+    ``en-core-web-sm`` PyPI wheel via ``uv pip install`` — the same route
+    :func:`_install_extra` uses for every other package, avoiding the
+    virtual-environment-detection assumption that ``python -m spacy download``
+    makes (which fails in a uv-tool install context).
     """
     _install_extra("archon-search[graph]", "graph enrichment", dry_run)
     if dry_run:
-        click.echo("[dry-run] Would run: python -m spacy download en_core_web_sm")
+        click.echo("[dry-run] Would run: uv pip install en-core-web-sm")
         return
     click.echo("Downloading spaCy model en_core_web_sm...")
     try:
-        # When running as a uv tool the subprocess inherits no VIRTUAL_ENV, so
-        # uv's pip shim refuses to install.  Derive the venv root from the
-        # interpreter path and inject it so the download succeeds.
-        # ponytail: only set if absent and confirmed by pyvenv.cfg — safe no-op otherwise
-        _spacy_env = {**os.environ}
-        if "VIRTUAL_ENV" not in _spacy_env:
-            _venv_root = str(Path(sys.executable).parent.parent)
-            if (Path(_venv_root) / "pyvenv.cfg").exists():
-                _spacy_env["VIRTUAL_ENV"] = _venv_root
         subprocess.run(
-            [sys.executable, "-m", "spacy", "download", "en_core_web_sm"],
+            ["uv", "pip", "install", "--python", sys.executable, "en-core-web-sm"],
             check=True,
             capture_output=True,
-            env=_spacy_env,
         )
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         detail = ""

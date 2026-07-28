@@ -184,18 +184,21 @@ class TestInstallGraphExtra:
     """Unit tests for _install_graph_extra() — spaCy download logic."""
 
     def test_install_graph_extra_spacy_download_called(self):
-        """On success: subprocess.run is called with the spaCy download command."""
+        """On success: the spaCy model installs via ``uv pip install en-core-web-sm``.
+
+        The old ``python -m spacy download`` route assumed a virtual environment
+        and failed in a uv-tool install context — assert we no longer use it.
+        """
         with patch("archon_search.install._install_extra"), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             _install_graph_extra(dry_run=False)
             mock_run.assert_called_once()
             cmd = mock_run.call_args[0][0]
-            assert cmd[0] == sys.executable
-            assert cmd[1] == "-m"
-            assert cmd[2] == "spacy"
-            assert cmd[3] == "download"
-            assert cmd[4] == "en_core_web_sm"
+            assert cmd == ["uv", "pip", "install", "--python", sys.executable, "en-core-web-sm"]
+            # Must NOT use the venv-dependent `python -m spacy download` route.
+            assert "download" not in cmd
+            assert "en_core_web_sm" not in cmd
             assert mock_run.call_args[1].get("check") is True
             assert mock_run.call_args[1].get("capture_output") is True
 
