@@ -48,12 +48,23 @@ def _make_client(
 
     mock_store = MagicMock()
     mock_store.get_all_collections_meta = AsyncMock(return_value=pinned_meta)
-    mock_store.get_collection_meta = AsyncMock(
-        side_effect=lambda name, namespace="default": CollectionMeta(name=name, namespace=namespace)
-    )
+    # Stateful meta so a deleted collection stops resolving — mirrors the real
+    # store, where delete_collection_meta removes the row and a subsequent
+    # get_collection_meta returns None (so a second DELETE 404s).
+    _deleted_meta: set[tuple[str, str]] = set()
+
+    async def _get_meta(name: str, namespace: str = "default") -> CollectionMeta | None:
+        if (name, namespace) in _deleted_meta:
+            return None
+        return CollectionMeta(name=name, namespace=namespace)
+
+    async def _delete_meta(name: str, namespace: str = "default") -> None:
+        _deleted_meta.add((name, namespace))
+
+    mock_store.get_collection_meta = AsyncMock(side_effect=_get_meta)
     mock_store.update_collection_meta = AsyncMock()
     mock_store.drop_collection = AsyncMock()
-    mock_store.delete_collection_meta = AsyncMock()
+    mock_store.delete_collection_meta = AsyncMock(side_effect=_delete_meta)
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
