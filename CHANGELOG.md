@@ -1,6 +1,24 @@
 # Changelog
 
 
+## [26.7.1727] - 2026-07-28
+
+**Single-file ingest collections now fully functional; installation wizard improvements**
+
+**Collections and routing**
+- Single-file `POST /ingest` collections can now be listed (`GET /collections/`), inspected, deleted, reindexed (`POST /collections/{name}/reindex`), and routed via `POST /route` — previously these returned 404 or empty results because they relied on `config.collections` paths that single-file ingest never creates. The router now seeds its collection cache with `initial_metadata` from the store on startup instead of fetching it via an incorrect internal HTTP call.
+
+**Installation wizard**
+- Multilingual profiles with `--skip-preload` now download the required ~1 MB language-detection model (`lid.176.ftz`) instead of deferring it; download failure gracefully falls back to English-only.
+- spaCy model (`en_core_web_sm`) now installs via `uv pip` in tool-install contexts instead of `python -m spacy download`, fixing "No virtual environment found" errors when no active venv exists.
+- `--dry-run` mode no longer registers or starts the service; the wizard prints "[DRY RUN]" and skips mutations, making behavior predictable regardless of platform layer.
+- fastembed's mean-pooling UserWarning (harmless, multilingual embedders only) is now suppressed during model prewarm to reduce alarm during setup.
+
+**Documentation and testing**
+- `GET /status` endpoint now correctly documented: `path`, `doc_count`, and `chunk_count` return real values sourced from configuration, cached metadata, and live chunk counts — not hard-coded empty.
+- Test suite improvements: benchmark clock test de-flaked under parallel concurrency, 23 previously-skipped tests now run (optional deps `textual`, tree-sitter, `xlwt` now provision on `uv sync`), Leiden local/global recall test fully implemented, CI integration step now excludes eval-gated tests to prevent fixture failures.
+
+
 ## [26.7.1725] - 2026-07-28
 
 **Single-file ingest collections now fully integrated; install wizard reliability improvements**
