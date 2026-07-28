@@ -2494,12 +2494,15 @@ class SearchInstaller:
                     self._fe1_reprobe(gpu_provider, prof, split_coreml)
 
             # Step 15: register and start service
-            print("[5/5] Starting search service...")
-            self.write_service_file()
-            rc = self.load_service()
-            if rc != 0:
-                print(f"Service start returned exit code {rc}.", file=sys.stderr)
-                return rc
+            if self.dry_run:
+                print("[DRY RUN] Would register and start the search service.")
+            else:
+                print("[5/5] Starting search service...")
+                self.write_service_file()
+                rc = self.load_service()
+                if rc != 0:
+                    print(f"Service start returned exit code {rc}.", file=sys.stderr)
+                    return rc
 
             # Step 16: wait for readiness
             if not self.dry_run:

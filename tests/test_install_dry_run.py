@@ -359,6 +359,46 @@ def test_dry_run_force_no_service_stop(tmp_path: Path) -> None:
     mock_service.stop.assert_not_called()
 
 
+def test_dry_run_does_not_register_or_start_service(tmp_path: Path, monkeypatch) -> None:
+    """S37: `wizard --profile minimal --non-interactive --skip-preload --dry-run`
+    must NOT register the service (write_service_file) nor start the server
+    (load_service). Step 15 must be gated on dry_run — a dry-run only describes
+    what it would do, it never touches the launchd/systemd service.
+    """
+    # Isolate the data dir so the run never touches the real ~/.archon-search.
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"  # does NOT exist
+
+    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+
+    with (
+        patch("archon_search.install.get_default_config_path", return_value=config_path),
+        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install._remove_legacy_service"),
+        patch("archon_search.install._prewarm_models"),
+        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install.get_search_service", return_value=MagicMock()),
+        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(SearchInstaller, "validate_providers", return_value=False),
+        patch.object(SearchInstaller, "configure_providers"),
+        patch.object(SearchInstaller, "write_service_file") as mock_write_service,
+        patch.object(SearchInstaller, "load_service", return_value=0) as mock_load_service,
+        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
+        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    ):
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+        )
+
+    assert rc == 0
+    mock_write_service.assert_not_called()
+    mock_load_service.assert_not_called()
+
+
 @pytest.mark.parametrize("scenario", ["fresh", "idempotent", "force"])
 def test_dry_run_all_three_branches_no_files(tmp_path: Path, scenario: str) -> None:
     """--dry-run must leave the filesystem state unchanged for all three install branches."""
