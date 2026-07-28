@@ -57,7 +57,7 @@ jobs:
         run: mkdir -p /var/tmp/archon-search-it
 
       - name: Run integration suite on disk-backed basetemp, coverage append
-        run: uv run pytest --basetemp=/var/tmp/archon-search-it -o addopts= --strict-markers --strict-config --cov=archon_search --cov-append -m integration tests/
+        run: uv run pytest --basetemp=/var/tmp/archon-search-it -o addopts= --strict-markers --strict-config --cov=archon_search --cov-append -m "integration and not eval" tests/
 
       - name: Enforce coverage fail-under=85
         run: uv run coverage report --fail-under=85

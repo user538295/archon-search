@@ -9,6 +9,7 @@ they execute fast and remain hermetic.
 """
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -132,7 +133,7 @@ def test_eval_conftest_provides_corpus_and_lancedb_fixtures() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Marker discipline — says no full-corpus markers added here
+# Marker discipline
 # ---------------------------------------------------------------------------
 
 
@@ -155,3 +156,74 @@ def test_package_default_suite_covers_unmarked_eval_units() -> None:
             continue
         text = path.read_text()
         assert "pytest.mark.eval" not in text
+
+
+# ---------------------------------------------------------------------------
+# CI guard: no integration-only test may consume thresholds_path
+# ---------------------------------------------------------------------------
+
+_FIXTURE_NAME = "thresholds_path"
+
+
+def _get_marker_names(decorators: list[ast.expr]) -> set[str]:
+    names: set[str] = set()
+    for dec in decorators:
+        if (
+            isinstance(dec, ast.Attribute)
+            and isinstance(dec.value, ast.Attribute)
+            and dec.value.attr == "mark"
+            and isinstance(dec.value.value, ast.Name)
+            and dec.value.value.id == "pytest"
+        ):
+            names.add(dec.attr)
+        elif (
+            isinstance(dec, ast.Call)
+            and isinstance(dec.func, ast.Attribute)
+            and isinstance(dec.func.value, ast.Attribute)
+            and dec.func.value.attr == "mark"
+            and isinstance(dec.func.value.value, ast.Name)
+            and dec.func.value.value.id == "pytest"
+        ):
+            names.add(dec.func.attr)
+    return names
+
+
+def test_no_integration_only_thresholds_path_test() -> None:
+    """Any test using `thresholds_path` must not be integration-only (needs eval too).
+
+    The CI integration step runs without --thresholds-path; the thresholds_path
+    fixture calls pytest.fail() in CI when that flag is absent. Tests gated on
+    thresholds_path belong in the eval step, which supplies the flag.
+    """
+    violations: list[str] = []
+
+    for path in sorted(EVAL_DIR.rglob("*.py")):
+        if path.name.startswith("conftest"):
+            continue
+        source = path.read_text(encoding="utf-8")
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError:
+            continue
+
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            param_names = {arg.arg for arg in node.args.args}
+            if _FIXTURE_NAME not in param_names:
+                continue
+            markers = _get_marker_names(node.decorator_list)
+            if "integration" in markers and "eval" not in markers:
+                rel = path.relative_to(PACKAGE_ROOT)
+                violations.append(
+                    f"  {rel}::{node.name} -- @pytest.mark.integration without"
+                    " @pytest.mark.eval while consuming `thresholds_path`"
+                )
+
+    assert not violations, (
+        "The following tests use `thresholds_path` and carry @pytest.mark.integration"
+        " without @pytest.mark.eval.\n"
+        "The CI integration step runs without --thresholds-path → pytest.fail() in CI.\n"
+        "Fix: add @pytest.mark.eval or remove @pytest.mark.integration.\n\n"
+        + "\n".join(violations)
+    )

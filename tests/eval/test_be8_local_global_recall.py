@@ -71,8 +71,8 @@ def test_existing_graph_collection_stub_unaffected():
     pass
 
 
-# Integration test: run_eval_suite reports local/global recall at 5
-@pytest.mark.integration
+# Eval test: run_eval_suite reports local/global recall at 5
+@pytest.mark.eval
 async def test_eval_suite_reports_local_global_recall_at_5(
     thresholds_path: Path,
     build_communities_for_eval: tuple,
