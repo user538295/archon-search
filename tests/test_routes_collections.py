@@ -34,6 +34,7 @@ def client(config: SearchConfig, tmp_store: JobStore, auth_headers: dict[str, st
     app = create_app(config, tmp_store)
     mock_store = MagicMock()
     mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()

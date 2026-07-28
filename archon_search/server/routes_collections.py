@@ -99,8 +99,12 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
     meta_by_name = {m.name: m for m in all_meta}
 
     path_to_name = _all_collection_paths(config)
+    # Include namespace-visible collections that exist only in the meta store
+    # (e.g. created by a single-file `POST /ingest`, which never adds a config path).
+    all_names = list(dict.fromkeys([*path_to_name, *ns_names]))
     result = []
-    for name, resolved in path_to_name.items():
+    for name in all_names:
+        resolved = path_to_name.get(name, "")
         if name in ns_names:
             namespace = meta_by_name[name].namespace
         elif name not in meta_by_name and ns == DEFAULT_NAMESPACE:
@@ -365,18 +369,21 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
     ns: str = request.state.namespace
 
     path_to_name = _all_collection_paths(config)
-    if name not in path_to_name:
-        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
     # Namespace gate: 404 for cross-namespace access; also fetches meta for centroid/namespace.
+    # A collection is visible if it has a meta row in this namespace (which a
+    # single-file `POST /ingest` writes, even without a config path). When the
+    # store is absent, fall back to config membership.
     search_store = getattr(request.app.state, "search_store", None)
     meta = None
     if search_store is not None:
         meta = await search_store.get_collection_meta(name, namespace=ns)
         if meta is None:
             raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+    elif name not in path_to_name:
+        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
-    resolved = path_to_name[name]
+    resolved = path_to_name.get(name, "")
     status = _collection_status(config, state_store, name)
 
     # Pull extra detail from state if available
