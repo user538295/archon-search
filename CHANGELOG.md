@@ -1,6 +1,31 @@
 # Changelog
 
 
+## [26.7.1725] - 2026-07-28
+
+**Single-file ingest collections now fully integrated; install wizard reliability improvements**
+
+**Collection visibility and operations**
+
+- `GET /collections/` and `GET /collections/{name}` now show collections created by single-file `POST /ingest`, which previously only persisted metadata but remained invisible. The endpoints now union config-based collections with metadata-only rows from the store.
+- `DELETE /collections/{name}` and `POST /collections/{name}/reindex` now accept metadata-only single-file ingest collections instead of returning 404.
+- `POST /route` now includes single-file ingest collections in `routable_names`, using direct metadata instead of an ineffective self-referencing HTTP fetch.
+
+**Install wizard**
+
+- Multilingual profiles now always download the required `lid.176.ftz` language-detection model even with `--skip-preload` (which defers only heavy embedder/reranker weights). Failed downloads gracefully degrade to English-only instead of aborting.
+- spaCy model downloads now use `uv pip install` instead of `python -m spacy download`, fixing failures when the install subprocess lacks virtual environment context.
+- `--dry-run` flag now correctly skips service registration and startup entirely, printing `[DRY RUN] Would register and start the search service.` instead of relying on platform-layer short-circuits.
+- Suppressed harmless fastembed `UserWarning` about mean pooling in multilingual embedders during model pre-download.
+
+**Test suite and documentation**
+
+- `GET /status` documentation corrected to reflect actual behavior: `path`, `doc_count`, and `chunk_count` return config-resolved values and live counts, not hard-coded zeros.
+- Default test suite now installs all feature extras (`textual`, `xlwt`, language grammars, `leidenalg`) on `uv sync`, fixing 23 previously-skipped tests.
+- Implemented graph-based local and global recall evaluation test.
+- De-flaked benchmark clock test under parallel load and migrated data-path callsites to centralized config helpers.
+
+
 ## [26.7.1708] - 2026-07-27
 
 canary
