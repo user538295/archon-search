@@ -165,7 +165,7 @@ def test_route_whitespace_only_query_returns_400(tmp_path: Path) -> None:
 def test_slots_overrides_shortlist_size(tmp_path: Path) -> None:
     captured: dict = {}
 
-    def fake_build_router(config: SearchConfig, shortlist_size: int, embedder=None) -> MagicMock:
+    def fake_build_router(config: SearchConfig, shortlist_size: int, embedder=None, initial_metadata=None) -> MagicMock:
         captured["shortlist_size"] = shortlist_size
         return _patch_router(pre_context=None, routable_names=[], decomposer_invoked=False)
 
@@ -184,7 +184,7 @@ def test_slots_overrides_shortlist_size(tmp_path: Path) -> None:
 def test_slots_default_uses_config_shortlist(tmp_path: Path) -> None:
     captured: dict = {}
 
-    def fake_build_router(config: SearchConfig, shortlist_size: int, embedder=None) -> MagicMock:
+    def fake_build_router(config: SearchConfig, shortlist_size: int, embedder=None, initial_metadata=None) -> MagicMock:
         captured["shortlist_size"] = shortlist_size
         return _patch_router(pre_context=None, routable_names=[], decomposer_invoked=False)
 
@@ -224,7 +224,7 @@ def test_pinned_always_included(tmp_path: Path) -> None:
 def test_confidence_gate_filters_low_similarity(tmp_path: Path) -> None:
     captured: dict = {}
 
-    def fake_build_router(config: SearchConfig, shortlist_size: int, embedder=None) -> MagicMock:
+    def fake_build_router(config: SearchConfig, shortlist_size: int, embedder=None, initial_metadata=None) -> MagicMock:
         captured["confidence_threshold"] = config.routing_confidence_threshold
         captured["shortlist_size"] = shortlist_size
         # Simulate confidence gate filtered all out
@@ -252,7 +252,7 @@ def test_confidence_gate_filters_low_similarity(tmp_path: Path) -> None:
 def test_centroid_none_bypasses_confidence_gate(tmp_path: Path) -> None:
     captured: dict = {}
 
-    def fake_build_router(config: SearchConfig, shortlist_size: int, embedder=None) -> MagicMock:
+    def fake_build_router(config: SearchConfig, shortlist_size: int, embedder=None, initial_metadata=None) -> MagicMock:
         captured["confidence_threshold"] = config.routing_confidence_threshold
         # All-None centroid case: router still returns collections and decomposer may be invoked
         return _patch_router(

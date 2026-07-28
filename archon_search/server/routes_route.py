@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
@@ -39,8 +40,14 @@ def _build_router(
     config: SearchConfig,
     shortlist_size: int,
     embedder: Embedder | None = None,
+    initial_metadata: list[CollectionMeta] | None = None,
 ) -> MultiCollectionRouter:
-    """Build a MultiCollectionRouter from config. Extracted for test injection."""
+    """Build a MultiCollectionRouter from config. Extracted for test injection.
+
+    ``initial_metadata`` seeds the router's collection cache so it ranks over the
+    caller's namespace-scoped meta rows directly instead of issuing a self-call
+    HTTP fetch (which posts to the bare REST root, not ``/mcp``, and returns []).
+    """
     if embedder is None:
         backend = ModelEmbedder(config.embedding_model, providers=config.providers or None)
         embedder = Embedder(backend)
@@ -51,6 +58,7 @@ def _build_router(
         shortlist_size=shortlist_size,
         confidence_threshold=config.routing_confidence_threshold,
         embedding_model=config.embedding_model,
+        initial_metadata=initial_metadata,
         strategy=config.routing_strategy,
         description_weight=config.routing_description_weight,
     )
@@ -105,12 +113,19 @@ async def route(body: RouteRequest, request: Request) -> Any:
 
             shortlist_size = body.slots if body.slots is not None else config.routing_shortlist_size
             embedder: Embedder | None = getattr(request.app.state, "embedder", None)
-            col_router = _build_router(config, shortlist_size, embedder=embedder)
 
             ns: str = request.state.namespace
             store = request.app.state.search_store
             all_meta = await store.get_all_collections_meta()
-            ns_names = {m.name for m in all_meta if m.namespace == ns}
+            ns_meta = [m for m in all_meta if m.namespace == ns]
+            ns_names = {m.name for m in ns_meta}
+
+            # Seed the router with this namespace's meta rows so routable collections
+            # created by single-file ingest (meta row only, never a config path) are
+            # visible — without this the router self-calls HTTP and gets nothing.
+            col_router = _build_router(
+                config, shortlist_size, embedder=embedder, initial_metadata=ns_meta
+            )
 
             all_pinned = [path_to_collection_name(p) for p in config.pinned_collections]
             pinned_names = [n for n in all_pinned if n in ns_names]

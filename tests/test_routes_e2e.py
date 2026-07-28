@@ -122,7 +122,7 @@ def test_H3_2_pinned_collections_always_in_pinned_names(tmp_path: Path) -> None:
 def test_H3_3_slots_sets_shortlist_size(tmp_path: Path) -> None:
     captured: dict = {}
 
-    def fake_build(config: SearchConfig, shortlist_size: int, embedder=None) -> MagicMock:
+    def fake_build(config: SearchConfig, shortlist_size: int, embedder=None, initial_metadata=None) -> MagicMock:
         captured["shortlist_size"] = shortlist_size
         return _patch_router()
 
