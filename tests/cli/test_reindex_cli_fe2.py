@@ -101,6 +101,40 @@ def test_reindex_wait_polls_to_done() -> None:
 
 
 # ---------------------------------------------------------------------------
+# test_reindex_wait_completion_message_exact (S22 regression)
+# ---------------------------------------------------------------------------
+
+
+def test_reindex_wait_completion_message_exact() -> None:
+    """S22 regression: --wait on a reindexable collection prints the EXACT
+    completion message with the collection name and exits 0.
+
+    Pins the backlog bug ``202607280906-S22-completion_message_present``: the
+    reindex command previously errored with "collection not found" (404 from a
+    meta-only single-file-ingest collection), so no completion message was ever
+    printed. With the route fix (202 → DONE), the CLI must emit the exact
+    ``Reindex complete for '<name>'.`` line — asserted verbatim rather than as a
+    substring so a truncated or reworded message fails the guard.
+    """
+    runner = CliRunner()
+    post_resp = _mock_response(202, {"job_id": "job-s22-done", "status": "RUNNING"})
+    get_job_sequence = [_job_response("DONE")]
+
+    with (
+        patch("archon_search.cli.collection.httpx.post", return_value=post_resp),
+        patch("archon_search.cli._helpers.httpx.get", side_effect=get_job_sequence),
+        patch("archon_search.cli._helpers.time.sleep"),
+    ):
+        result = runner.invoke(
+            collection,
+            ["reindex", "archon_test_docs", "--wait", "--api-key", "test-key"],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Reindex complete for 'archon_test_docs'." in result.output
+
+
+# ---------------------------------------------------------------------------
 # test_reindex_server_not_running
 # ---------------------------------------------------------------------------
 
