@@ -297,16 +297,18 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
     ns: str = request.state.namespace
 
     path_to_name = _all_collection_paths(config)
-    if name not in path_to_name:
-        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
-    # Namespace check: meta row must exist and belong to the caller's namespace
+    # A collection is visible (and removable) if it has a meta row in this
+    # namespace — which a single-file `POST /ingest` writes even without adding
+    # a config path. When the store is absent, fall back to config membership.
     if search_store is not None:
         meta = await search_store.get_collection_meta(name, namespace=ns)
         if meta is None:
             raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+    elif name not in path_to_name:
+        raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
-    resolved = path_to_name[name]
+    resolved = path_to_name.get(name, "")
 
     # Resolve config lists for comparison
     collections_resolved = [str(Path(p).expanduser().resolve()) for p in config.collections]
