@@ -2134,8 +2134,13 @@ class SearchInstaller:
                 except SystemExit as e:
                     return int(e.code) if e.code is not None else 1
 
-            # Step 3b: fasttext license gate + model download
-            if is_multilingual and not skip_preload:
+            # Step 3b: fasttext license gate + model download.
+            # NOT gated by skip_preload: lid.176.ftz is a ~1 MB *required* runtime
+            # asset (app.py's _check_multilingual_deps hard-fails without it), not
+            # one of the heavy embedder/reranker weights that --skip-preload defers.
+            # The license gate is unchanged — non-interactive still requires
+            # --accept-fasttext-license (SystemExit stops the install).
+            if is_multilingual:
                 try:
                     _prompt_fasttext_license(non_interactive, accept_fasttext_license=accept_fasttext_license)
                 except SystemExit as e:
@@ -2146,8 +2151,19 @@ class SearchInstaller:
                     try:
                         _download_fasttext_model(Path.home() / ".archon-search" / "models")
                     except InstallError as exc:
-                        print(f"fasttext model download failed: {exc}", file=sys.stderr)
-                        return 1
+                        # Degrade to English-only rather than aborting, so the
+                        # server still boots (mirrors _revert_multilingual_flag's
+                        # philosophy). The config is not written until Step 6/7/8,
+                        # so setting is_multilingual=False here is the rollback:
+                        # the config writer emits multilingual=false and the
+                        # [multilingual] extra install is skipped.
+                        print(
+                            f"Warning: fasttext model download failed: {exc}\n"
+                            "Continuing in English-only mode. Re-run the wizard "
+                            "to enable multilingual language detection.",
+                            file=sys.stderr,
+                        )
+                        is_multilingual = False
 
             # Step 3c: collect optional-feature choices (after all license gates)
             features = _prompt_optional_features(

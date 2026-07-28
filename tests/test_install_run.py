@@ -1990,3 +1990,150 @@ def test_wizard_fe1_skipped_when_profile_has_no_reranker(
     assert rc == 0
     # Step 9 gate only — the FE-1 block is skipped (no reranker in the profile).
     assert validate_mock.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Multilingual + --skip-preload: the required lid.176.ftz model is still
+# downloaded (2026-07-16), while the heavy embedder/reranker preload is skipped.
+# ---------------------------------------------------------------------------
+
+
+def _multilingual_run_patches(config_path: Path, fake_legacy: Path, **overrides: Any):
+    """Full patch set for a multilingual run() that never touches real FS/pip.
+
+    Every _install_* / download helper is mocked, and all boolean WizardFeatures
+    fields are set explicitly so a truthy MagicMock attr never spawns a real
+    subprocess.
+    """
+    features = MagicMock(
+        install_code_extra=False, install_graph_extra=False, disable_reranker=False,
+        enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
+        routing_strategy="centroid", log_format="text",
+        host=None, port=None, db_path=None, log_level=None,
+        top_k=None, telemetry_retention_days=None,
+        enable_hyde=False, enable_rag_fusion=False,
+    )
+    base = {
+        "get_default_config_path": MagicMock(return_value=config_path),
+        "_legacy_service_path": MagicMock(return_value=fake_legacy),
+        "_remove_legacy_service": MagicMock(),
+        "_prewarm_models": MagicMock(),
+        "_check_disk_space": MagicMock(),
+        "_prompt_multilingual": MagicMock(return_value=True),
+        "_prompt_optional_features": MagicMock(return_value=features),
+        "_prompt_gpu_confirm": MagicMock(return_value=True),
+        "_install_multilingual_extra": MagicMock(),
+    }
+    base.update(overrides)
+    return base
+
+
+_MULTILINGUAL_METHOD_PATCHES = {
+    "detect_gpu": MagicMock(return_value=GpuType.NONE),
+    "validate_providers": MagicMock(return_value=False),
+    "configure_providers": MagicMock(),
+    "write_service_file": MagicMock(),
+    "load_service": MagicMock(return_value=0),
+    "_wait_for_service": MagicMock(return_value=True),
+    "_is_service_running": MagicMock(return_value=False),
+}
+
+
+def test_multilingual_skip_preload_downloads_model_but_not_heavy_weights(tmp_path: Path) -> None:
+    """--multilingual --skip-preload (non-interactive, license accepted):
+
+    the required lid.176.ftz model IS downloaded, but the heavy embedder/reranker
+    pre-warm is still skipped. Regression for 2026-07-16.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    download_mock = MagicMock()
+    prewarm_mock = MagicMock()
+    patches = _multilingual_run_patches(
+        config_path, fake_legacy,
+        _download_fasttext_model=download_mock,
+        _prewarm_models=prewarm_mock,
+        _prompt_fasttext_license=MagicMock(),
+    )
+
+    with patch.multiple("archon_search.install", **patches):
+        with patch.multiple(SearchInstaller, **_MULTILINGUAL_METHOD_PATCHES):
+            installer = SearchInstaller(config_file=str(config_path))
+            rc = installer.run(
+                non_interactive=True,
+                profile="minimal",
+                multilingual=True,
+                skip_preload=True,
+                accept_fasttext_license=True,
+            )
+
+    assert rc == 0
+    download_mock.assert_called_once()   # tiny required model downloaded
+    prewarm_mock.assert_not_called()     # heavy weights still deferred
+
+
+def test_multilingual_skip_preload_without_license_flag_stops(tmp_path: Path) -> None:
+    """Non-interactive --multilingual --skip-preload WITHOUT --accept-fasttext-license
+
+    still stops with the license error (rc==1) and never reaches the download.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    download_mock = MagicMock()
+    # Real _prompt_fasttext_license → non-interactive + no flag raises SystemExit(1).
+    patches = _multilingual_run_patches(
+        config_path, fake_legacy,
+        _download_fasttext_model=download_mock,
+    )
+
+    with patch.multiple("archon_search.install", **patches):
+        with patch.multiple(SearchInstaller, **_MULTILINGUAL_METHOD_PATCHES):
+            installer = SearchInstaller(config_file=str(config_path))
+            rc = installer.run(
+                non_interactive=True,
+                profile="minimal",
+                multilingual=True,
+                skip_preload=True,
+                accept_fasttext_license=False,
+            )
+
+    assert rc == 1
+    download_mock.assert_not_called()
+
+
+def test_multilingual_download_failure_degrades_to_english(tmp_path: Path) -> None:
+    """When the lid.176.ftz download fails, the install continues English-only
+
+    (rc==0) and the written config has multilingual=false, so the server boots.
+    """
+    from archon_search.install import InstallError
+
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    install_extra_mock = MagicMock()
+    patches = _multilingual_run_patches(
+        config_path, fake_legacy,
+        _download_fasttext_model=MagicMock(side_effect=InstallError("network down")),
+        _prompt_fasttext_license=MagicMock(),
+        _install_multilingual_extra=install_extra_mock,
+    )
+
+    with patch.multiple("archon_search.install", **patches):
+        with patch.multiple(SearchInstaller, **_MULTILINGUAL_METHOD_PATCHES):
+            installer = SearchInstaller(config_file=str(config_path))
+            rc = installer.run(
+                non_interactive=True,
+                profile="minimal",
+                multilingual=True,
+                skip_preload=True,
+                accept_fasttext_license=True,
+            )
+
+    assert rc == 0
+    assert config_path.exists()
+    assert "multilingual = false" in config_path.read_text()
+    # Degraded to English-only → the [multilingual] extra is not installed.
+    install_extra_mock.assert_not_called()

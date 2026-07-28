@@ -75,6 +75,12 @@ def _patched_wizard(**extra_module_patches: Any) -> Generator[None, None, None]:
         "_install_graph_extra": MagicMock(),
         "_install_multilingual_extra": MagicMock(),
         "_install_query_expansion_extras": MagicMock(return_value=[]),
+        # 2026-07-16: the fasttext model download now runs for any multilingual
+        # profile regardless of --skip-preload, so mock the license gate + download
+        # by default to keep multilingual e2e tests hermetic (no real network / no
+        # non-interactive license SystemExit). Per-test overrides still win.
+        "_prompt_fasttext_license": MagicMock(),
+        "_download_fasttext_model": MagicMock(),
     }
 
     # Merge extra patches (using short names for consistency)

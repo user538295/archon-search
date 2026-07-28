@@ -82,7 +82,7 @@ The installer ships three tiered profiles. Choose based on your hardware and qua
 
 **Multilingual `balanced` and `max` profiles use the Jina reranker (`jinaai/jina-reranker-v2-base-multilingual`)**, which is licensed CC-BY-NC-4.0 (non-commercial). The installer requires explicit license acceptance before downloading it.
 
-**C2 — Language detection**: when `--multilingual` is set, the installer also downloads `lid.176.ftz` (Facebook Research fasttext language identification model, licensed CC-BY-SA 3.0) to `~/.archon-search/models/`. You must accept this license interactively, or pass `--accept-fasttext-license` for non-interactive installs. The model enables the `language=<code>` filter on searches.
+**C2 — Language detection**: when `--multilingual` is set, the installer also downloads `lid.176.ftz` (Facebook Research fasttext language identification model, licensed CC-BY-SA 3.0) to `~/.archon-search/models/`. You must accept this license interactively, or pass `--accept-fasttext-license` for non-interactive installs. The model enables the `language=<code>` filter on searches. This ~1 MB model is downloaded even with `--skip-preload` — it is required for the server to start, so it is never deferred (if the download fails, the installer falls back to English-only mode).
 
 The chosen profile is recorded in `[database].profile` and `[database].multilingual` in `~/.archon-search/archon-search.toml`. Reinstalling with a different profile requires `--force --delete-db` (the installer will tell you if this is needed).
 
@@ -116,7 +116,7 @@ All `wizard` flags (verified against `archon_search/cli/install_cmd.py`):
 | --- | --- |
 | `--profile {minimal,balanced,max}` | Select the install profile (skips interactive prompt). |
 | `--multilingual` | Use multilingual model stack for the chosen profile. |
-| `--skip-preload` | Skip model weight pre-warming after install (weights download on first use). |
+| `--skip-preload` | Skip pre-warming the heavy embedder/reranker weights after install (they download on first use). For multilingual profiles the small `lid.176.ftz` language-detection model is still downloaded — it is required for the server to start. |
 | `--force` | Overwrite an existing install. Required when changing profiles. |
 | `--delete-db` | Also delete the database when reinstalling (`--force` required). Use with caution — this removes all indexed data. |
 | `--accept-jina-license` | Accept the Jina CC-BY-NC-4.0 license non-interactively (required for multilingual `balanced`/`max`). |

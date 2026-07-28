@@ -148,7 +148,7 @@ Type `accept` to proceed. Anything else aborts the install. For non-interactive 
 
 #### fasttext CC-BY-SA 3.0 (multilingual only)
 
-If you chose a multilingual profile and did not pass `--skip-preload`, the wizard shows:
+If you chose a multilingual profile, the wizard shows (this runs even with `--skip-preload`, because the language-detection model is a required ~1 MB asset, not one of the deferred heavy weights):
 
 ```
 WARNING: lid.176.ftz (fasttext language identification model) is licensed CC-BY-SA 3.0.
@@ -397,7 +397,7 @@ The wizard downloads the embedding model and (if applicable) the reranker model 
 
 Depending on your chosen profile and connection speed this can take from a few seconds (Minimal) to several minutes (Max). Progress is printed to the terminal by fastembed.
 
-To skip this step and download on the first search request instead, pass `--skip-preload`.
+To skip this step and download the heavy weights on the first search request instead, pass `--skip-preload`. Note: for multilingual profiles the small `lid.176.ftz` language-detection model is **always** downloaded, even with `--skip-preload` — it is a required ~1 MB runtime asset without which the server cannot start, so it is never deferred. If that download fails, the wizard reverts to English-only mode so the server still boots.
 
 ### Step 9 — Service registration, startup, and next steps
 
@@ -439,7 +439,7 @@ All flags for the `wizard` command:
 |---|---|---|
 | `--profile {minimal,balanced,max}` | Interactive | Select the install profile, skipping the interactive prompt. |
 | `--multilingual` / `--no-multilingual` | Not set (interactive) | `--multilingual`: use multilingual model stack. `--no-multilingual`: force English models explicitly. Both skip the "non-English documents?" prompt. |
-| `--skip-preload` | False | Skip model weight pre-download. Models download on first query instead. |
+| `--skip-preload` | False | Skip the heavy embedder/reranker weight pre-download; those download on first query instead. The small `lid.176.ftz` language-detection model for multilingual profiles is still downloaded (it is required for the server to start). |
 | `--force` | False | Force reinstall of an existing install. **Must be combined with `--delete-db`.** |
 | `--delete-db` | False | Delete the existing database on reinstall. All indexed data will be lost. Use only with `--force`. |
 | `--accept-jina-license` | False | Pre-accept the Jina CC-BY-NC-4.0 license for multilingual Balanced/Max profiles. |
