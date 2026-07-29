@@ -739,7 +739,9 @@ async def reindex_collection(name: str, request: Request) -> JobResponse | JSONR
             pipeline=pipeline_obj,
             collection=name,
             namespace=ns,
-            collection_path=Path(resolved),
+            # None for a meta-only collection (single-file POST /ingest) with no
+            # configured source directory — the task must not re-scan the CWD.
+            collection_path=Path(resolved) if resolved else None,
         )
     )
     request.app.state._background_tasks.add(task)

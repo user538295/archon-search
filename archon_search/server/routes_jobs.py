@@ -273,7 +273,7 @@ async def _reindex_task(
     pipeline: Any,
     collection: str,
     namespace: str,
-    collection_path: Path,
+    collection_path: Path | None,
 ) -> None:
     """Lifecycle wrapper for reindex: resolves embedder, ingests, promotes model on success.
 
@@ -329,19 +329,31 @@ async def _reindex_task(
     # --- Step 4: ingest ---
     ingest_error: Exception | None = None
     cancelled: bool = False
-    try:
-        await pipeline.ingest_directory(
-            collection_path,
-            collection,
-            embedder=embedder,
-            namespace=namespace,
-            ingested_by="reindex",
-            collection_root=collection_path,
+    # A meta-only collection (e.g. created by a single-file POST /ingest) has no
+    # configured source directory to re-scan; the route passes collection_path=None.
+    # Skip the directory scan entirely — otherwise Path("") would coerce to "." and
+    # walk the entire server CWD. The reindex becomes a data-only no-op that still
+    # completes DONE, so `collection reindex --wait` exits 0 with a message.
+    if collection_path is None:
+        logger.info(
+            "_reindex_task: collection %r has no configured source directory; "
+            "skipping directory re-scan (no-op reindex) for job %s",
+            collection, job_id,
         )
-    except asyncio.CancelledError:
-        cancelled = True
-    except Exception as exc:  # noqa: BLE001
-        ingest_error = exc
+    else:
+        try:
+            await pipeline.ingest_directory(
+                collection_path,
+                collection,
+                embedder=embedder,
+                namespace=namespace,
+                ingested_by="reindex",
+                collection_root=collection_path,
+            )
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception as exc:  # noqa: BLE001
+            ingest_error = exc
 
     if cancelled or ingest_error is not None:
         logger.exception("_reindex_task: ingest failed for job %s", job_id) if ingest_error else None
@@ -379,7 +391,12 @@ async def _reindex_task(
     try:
         meta = await store.get_collection_meta(collection, namespace)
         if meta is not None:
-            if target_model is not None:
+            # Only promote the model when the chunks were actually re-embedded.
+            # A source-less no-op reindex (collection_path is None) skipped the
+            # scan, so promoting active_embedding_model would advertise a model the
+            # stored vectors were never produced with — silent search corruption.
+            # Leave pending_embedding_model/needs_reindex intact in that case.
+            if target_model is not None and collection_path is not None:
                 # Model-change path
                 meta.active_embedding_model = target_model
                 meta.reindex_job_id = None

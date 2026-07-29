@@ -798,6 +798,50 @@ async def test_reindex_task_promotes_active_on_success(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_reindex_task_no_source_dir_skips_scan_and_completes() -> None:
+    """S22: a meta-only collection (collection_path=None) must NOT scan the CWD.
+
+    The reindex is a data-only no-op: ``ingest_directory`` is never called (which
+    with the old empty-path would have walked the entire server CWD), and even when
+    a target model is set the active model is NOT promoted over un-re-embedded
+    vectors. The job still reaches DONE so ``reindex --wait`` exits 0.
+    """
+    from archon_search.server.routes_jobs import _reindex_task
+
+    job = _make_reindex_job(target_embedding_model="model-B")
+    meta = _make_collection_meta(
+        active_embedding_model="model-A",
+        pending_embedding_model="model-B",
+        needs_reindex=True,
+    )
+    job_store, search_store, embedder_cache, pipeline = _make_mocks(job, meta)
+
+    await _reindex_task(
+        job_id=job.job_id,
+        store=search_store,
+        job_store=job_store,
+        embedder_cache=embedder_cache,
+        pipeline=pipeline,
+        collection="col",
+        namespace=DEFAULT_NAMESPACE,
+        collection_path=None,
+    )
+
+    # The directory scan was skipped entirely — the core of the S22 fix.
+    pipeline.ingest_directory.assert_not_called()
+
+    # Model NOT promoted (vectors were never re-embedded); only reindex_job_id cleared.
+    written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
+    assert written_meta.active_embedding_model == "model-A"
+    assert written_meta.pending_embedding_model == "model-B"
+    assert written_meta.needs_reindex is True
+    assert written_meta.reindex_job_id is None
+
+    # Job completes DONE so the CLI --wait exits 0 with a completion message.
+    job_store.update.assert_called_with(job.job_id, status=JobStatus.DONE)
+
+
+@pytest.mark.anyio
 async def test_reindex_task_preserves_active_on_failure(tmp_path: Path) -> None:
     """When ingest_directory raises, active_embedding_model is left unchanged."""
     from archon_search.server.routes_jobs import _reindex_task
