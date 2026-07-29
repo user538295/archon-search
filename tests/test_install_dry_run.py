@@ -366,9 +366,14 @@ def test_dry_run_does_not_register_or_start_service(tmp_path: Path, monkeypatch)
     what it would do, it never touches the launchd/systemd service.
     """
     # Isolate the data dir so the run never touches the real ~/.archon-search.
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    data_dir = tmp_path / "data"  # does NOT exist
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
 
-    config_path = tmp_path / "archon-search.toml"
+    # In production config_path.parent IS the data dir (get_default_config_path
+    # -> ~/.archon-search/archon-search.toml), so the config MUST live inside
+    # data_dir here — otherwise the fresh-install branch's parent.mkdir would
+    # create tmp_path (already present) and the leak-guard below could not see it.
+    config_path = data_dir / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"  # does NOT exist
 
     installer = SearchInstaller(config_file=str(config_path), dry_run=True)
@@ -397,21 +402,35 @@ def test_dry_run_does_not_register_or_start_service(tmp_path: Path, monkeypatch)
     assert rc == 0
     mock_write_service.assert_not_called()
     mock_load_service.assert_not_called()
+    # A dry-run must not materialise the data dir: if ~/.archon-search/
+    # (here the isolated ARCHON_SEARCH_DATA_DIR) did not exist before, it must
+    # still not exist after.
+    assert not data_dir.exists(), "dry-run must not create the data dir"
 
 
 @pytest.mark.parametrize("scenario", ["fresh", "idempotent", "force"])
-def test_dry_run_all_three_branches_no_files(tmp_path: Path, scenario: str) -> None:
+def test_dry_run_all_three_branches_no_files(tmp_path: Path, scenario: str, monkeypatch) -> None:
     """--dry-run must leave the filesystem state unchanged for all three install branches."""
     from archon_search.install import _profile_toml
 
-    config_path = tmp_path / "archon-search.toml"
+    # Isolate the data dir under tmp_path (else get_data_dir() resolves to the
+    # developer's real ~/.archon-search — polluting it and hiding data-dir leaks
+    # from the tmp_path-scoped rglob below). Mirror production where the config
+    # lives INSIDE the data dir, so the fresh-branch parent.mkdir would surface.
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+    config_path = data_dir / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"
 
     if scenario in ("idempotent", "force"):
+        data_dir.mkdir()
         config_path.write_text(_profile_toml("balanced", False))
 
-    # Capture filesystem state before run
+    # Capture filesystem state before run. A set-diff catches new files but not
+    # an in-place config rewrite (same path), so also snapshot config content —
+    # the force branch is the one that rewrites config, and only in non-dry-run.
     files_before = set(tmp_path.rglob("*"))
+    config_before = config_path.read_text() if config_path.exists() else None
 
     installer = SearchInstaller(config_file=str(config_path), dry_run=True)
     run_kwargs: dict = {
@@ -447,4 +466,8 @@ def test_dry_run_all_three_branches_no_files(tmp_path: Path, scenario: str) -> N
     new_files = files_after - files_before
     assert not new_files, (
         f"Dry-run ({scenario} branch) must not create new files; found: {new_files}"
+    )
+    config_after = config_path.read_text() if config_path.exists() else None
+    assert config_after == config_before, (
+        f"Dry-run ({scenario} branch) must not modify config content in place"
     )

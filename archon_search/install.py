@@ -2100,13 +2100,17 @@ class SearchInstaller:
             print("--force requires --delete-db. To force a reinstall, use both flags together.")
             return 1
 
-        with _acquire_install_lock():
+        # A dry-run serializes against nothing (it writes no config/db), so it
+        # skips the install lock — whose parent.mkdir would otherwise leave the
+        # data dir (~/.archon-search) behind.
+        lock_cm = contextlib.nullcontext() if self.dry_run else _acquire_install_lock()
+        with lock_cm:
             # Step 0: legacy cleanup + log directory
             legacy = _legacy_service_path()
             if legacy.exists():
                 _remove_legacy_service(legacy)
-            log_dir = get_data_dir() / "logs"
-            log_dir.mkdir(parents=True, exist_ok=True)
+            if not self.dry_run:
+                (get_data_dir() / "logs").mkdir(parents=True, exist_ok=True)
 
             # Before Step 1: resolve multilingual via interactive prompt
             is_multilingual = _prompt_multilingual(non_interactive, multilingual)
@@ -2274,10 +2278,12 @@ class SearchInstaller:
             elif not config_path.exists():
                 # Branch B: fresh install
                 branch = "fresh"
-                tmp = config_path.with_suffix(config_path.suffix + ".tmp")
-                tmp.unlink(missing_ok=True)
-                config_path.parent.mkdir(parents=True, exist_ok=True)
                 if not self.dry_run:
+                    # config_path.parent IS the data dir on the default invocation
+                    # (get_default_config_path() -> ~/.archon-search/archon-search.toml),
+                    # so this mkdir must stay gated or a dry-run recreates it.
+                    config_path.with_suffix(config_path.suffix + ".tmp").unlink(missing_ok=True)
+                    config_path.parent.mkdir(parents=True, exist_ok=True)
                     atomic_write_bytes(config_path, _profile_toml(profile_name, is_multilingual, features).encode())
                     shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
                 else:
