@@ -561,8 +561,7 @@ def test_key_list_exits_0(smoke_docker_server_seeded, tmp_path):
 def test_collection_list_exits_0(smoke_docker_server_seeded, tmp_path):
     """``collection list`` reports "smoke" in output, exits 0 (S10).
 
-    ``collection list`` is offline-capable — it reads the store directly via
-    ``ARCHON_SEARCH_DATA_DIR``, so it does not need ``--api-url`` / ``--api-key``.
+    ``collection list`` is an HTTP proxy (CSP120) — requires the server to be running.
     The "smoke" collection was seeded by the ``smoke_docker_server_seeded`` fixture.
     """
     env = _make_docker_env(
@@ -570,9 +569,12 @@ def test_collection_list_exits_0(smoke_docker_server_seeded, tmp_path):
         data_dir=smoke_docker_server_seeded.data_dir,
         api_key=smoke_docker_server_seeded.api_key,
     )
-    env["ARCHON_SEARCH_DATA_DIR"] = str(smoke_docker_server_seeded.data_dir)
     result = subprocess.run(
-        ["uv", "run", "archon-search", "collection", "list"],
+        [
+            "uv", "run", "archon-search", "collection", "list",
+            "--api-url", smoke_docker_server_seeded.base_url,
+            "--api-key", smoke_docker_server_seeded.api_key,
+        ],
         env=env,
         capture_output=True,
         text=True,

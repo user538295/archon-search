@@ -34,7 +34,7 @@ import httpx
 import pytest
 
 # --- Timing budgets (seconds) ---
-_HEALTH_READY_TIMEOUT_S: float = 30.0
+_HEALTH_READY_TIMEOUT_S: float = 90.0 if os.environ.get("ARCHON_SEARCH_CONTAINER") == "1" else 30.0
 _JOB_POLL_TIMEOUT_S: float = 60.0
 _POLL_INTERVAL_S: float = 0.5
 _TEARDOWN_TIMEOUT_S: float = 10.0
