@@ -22,7 +22,7 @@ def test_single_file_ingest_is_visible_in_list_and_info(tmp_path, monkeypatch) -
         headers = {"Authorization": f"Bearer {api_key}"}
         ingest_file_via_path(client, "single-docs", str(doc), api_key=api_key)
 
-        # Step 2: list shows single-docs
+        # Step 2: list shows single-docs (re-filed as 202607282036-S09-single_docs_in_list).
         resp = client.get("/collections/", headers=headers)
         assert resp.status_code == 200, resp.text
         names = {c["name"] for c in resp.json()}
