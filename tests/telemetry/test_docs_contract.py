@@ -91,6 +91,6 @@ def test_doc_index_includes_telemetry_adr_and_guide() -> None:
     assert "ADRs/05_opt_in_local_telemetry_no_raw_query.md" in index, (
         "doc index must reference the telemetry ADR"
     )
-    assert "UserManual/06_telemetry.md" in index, (
+    assert "UserManual/120_telemetry.md" in index, (
         "doc index must reference the telemetry user guide"
     )
