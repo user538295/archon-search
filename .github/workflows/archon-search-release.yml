@@ -216,13 +216,14 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           docker buildx build --push \
+            --platform linux/amd64,linux/arm64 \
             --build-arg BASE_IMAGE=python:3.12-slim \
             --build-arg GIT_COMMIT=${{ github.sha }} \
             -t ghcr.io/${{ github.repository_owner }}/archon-search:$TAG \
             -t ghcr.io/${{ github.repository_owner }}/archon-search:latest \
             .
 
-      - name: Build and push GPU image (BASE_IMAGE=nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04)
+      - name: Build and push GPU image (BASE_IMAGE=nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04, amd64 only — NVIDIA CUDA base has no arm64 variant)
         id: gpu_build
         continue-on-error: true
         env:
