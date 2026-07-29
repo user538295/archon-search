@@ -424,7 +424,7 @@ Server tests live under `tests/server/` and `tests/test_app.py` (no monolithic `
 **Strengths:**
 - LanceDB ANN is designed to scale, but no benchmarks in this repo validate million-document latency claims; the `eval/` harness explicitly notes p50/p95 is a regression guard, not a production SLA #Unverified
 - `asyncio.to_thread()` keeps embedding non-blocking on the event loop
-- `max_parallel_collections` config allows tuning for available resources (default 3)
+- `[search].max_fanout` config caps how many collections a multi-collection query fans out to (default 8)
 - Adaptive fetch sizing balances recall vs. speed
 
 **Weaknesses:**

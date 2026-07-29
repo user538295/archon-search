@@ -698,7 +698,6 @@ The following `[routing]` keys are not exposed in the wizard:
 ```toml
 routing_shortlist_size = 8        # Collections evaluated before parallel search
 routing_confidence_threshold = 0.30
-max_parallel_collections = 3
 routing_description_weight = 0.3  # Only used when routing_strategy = "hybrid"
 ```
 

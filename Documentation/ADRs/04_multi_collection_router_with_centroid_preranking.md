@@ -67,12 +67,19 @@ Knobs (defaults from `SearchConfig` in `archon_search/config.py`):
 
 - `routing_shortlist_size = 8`
 - `routing_confidence_threshold = 0.30`
-- `max_parallel_collections = 3` — **#Unverified**: declared in
-  `SearchConfig`, parsed from TOML, and exposed via `archon-search config`,
-  but no runtime code path (pipeline, search routes, router, sync) reads
-  this value. It is currently inert config; the previous claim that
+- `max_parallel_collections = 3` — **superseded (2026-07-29), see amendment
+  below**: declared in `SearchConfig`, parsed from TOML, and exposed via
+  `archon-search config`, but no runtime code path (pipeline, search routes,
+  router, sync) read this value. It was inert config; the previous claim that
   downstream search "runs at most `max_parallel_collections` of them
-  concurrently" is not implemented.
+  concurrently" was never implemented.
+
+> **Amendment (2026-07-29).** `max_parallel_collections` was removed from
+> `SearchConfig`, the config loader, `archon-search config`, and the shipped
+> `archon-search.toml.example` as inert config. The knob no longer exists; a
+> `[routing].max_parallel_collections` line in an existing TOML is now ignored
+> (with a startup deprecation WARNING). Fan-out breadth is governed by
+> `[search].max_fanout`. See `BREAKING.md`.
 
 ## Consequences
 

@@ -125,7 +125,6 @@ All knobs live in `archon-search.toml`; `archon-search.toml.example` is the cano
 - `routing_shortlist_size` (8). Maximum collections the router considers.
 - `routing_confidence_threshold` (0.30). Below this, `MultiCollectionRouter.rank` returns `[]`; any "fallback to pinned collections" happens upstream in `routes_route.py`, not in the router.
 - `routing_strategy` (`centroid`; also `hybrid`) and `routing_description_weight` (0.3, used by the hybrid strategy).
-- `max_parallel_collections` (3). **Parsed and displayed only — not consumed by any runtime search path.** Effectively dead config today. #Unverified as a behavioural knob.
 
 **Providers & retention**
 

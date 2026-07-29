@@ -105,7 +105,6 @@ def test_load_config_defaults_for_all_sections() -> None:
     assert config.auto_reindex_on_chunk_size_change is True
     assert config.routing_shortlist_size == 8
     assert config.routing_confidence_threshold == 0.30
-    assert config.max_parallel_collections == 3
     assert config.pinned_collections == []
     assert config.watch is False
     assert config.level == "INFO"
@@ -294,7 +293,6 @@ def test_c11_13_search_config_no_args_all_defaults_valid() -> None:
     assert config.providers == []
     assert config.routing_shortlist_size == 8
     assert config.routing_confidence_threshold == 0.30
-    assert config.max_parallel_collections == 3
     assert config.pinned_collections == []
     assert config.collections == []
     assert config.watch is False
@@ -343,8 +341,7 @@ def test_c11_16_all_four_sections_populated(tmp_path: Path, monkeypatch: pytest.
         'providers = ["CPUExecutionProvider"]\n\n'
         "[routing]\n"
         "routing_shortlist_size = 5\n"
-        "routing_confidence_threshold = 0.75\n"
-        "max_parallel_collections = 2\n\n"
+        "routing_confidence_threshold = 0.75\n\n"
         "[collections]\n"
         'pinned_collections = ["/pinned/a"]\n'
         'collections = ["/col/b"]\n'
@@ -362,7 +359,6 @@ def test_c11_16_all_four_sections_populated(tmp_path: Path, monkeypatch: pytest.
     assert config.providers == ["CPUExecutionProvider"]
     assert config.routing_shortlist_size == 5
     assert config.routing_confidence_threshold == 0.75
-    assert config.max_parallel_collections == 2
     assert config.pinned_collections == ["/pinned/a"]
     assert config.collections == ["/col/b"]
     assert config.watch is True
@@ -700,6 +696,33 @@ def test_deprecated_flag_is_ignored(tmp_path: Path) -> None:
     toml_file.write_text("[database]\ncentroid_incremental_enabled = false\n", encoding="utf-8")
     cfg = load_config(path=toml_file)
     assert not hasattr(cfg, "centroid_incremental_enabled")
+
+
+def test_removed_max_parallel_collections_still_loads(tmp_path: Path) -> None:
+    """An existing TOML that still sets the removed [routing].max_parallel_collections key
+    must load without raising (the BREAKING.md forward-compat contract), and the field must
+    not reappear on SearchConfig. Previously-invalid values (<= 0) must no longer raise."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text(
+        "[routing]\nrouting_shortlist_size = 5\nmax_parallel_collections = 0\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(path=toml_file)
+    assert not hasattr(cfg, "max_parallel_collections")
+    # The recognised sibling key still loads; the removed key does not disturb it.
+    assert cfg.routing_shortlist_size == 5
+
+
+def test_removed_max_parallel_collections_emits_deprecation_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Loading the removed max_parallel_collections key emits a deprecation WARNING (mirrors the
+    centroid_incremental_enabled precedent), so operators who tuned it get a signal."""
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text("[routing]\nmax_parallel_collections = 3\n", encoding="utf-8")
+    with caplog.at_level("WARNING"):
+        load_config(path=toml_file)
+    assert any("max_parallel_collections" in r.message for r in caplog.records)
 
 
 def test_centroid_recompute_threshold_loaded_from_toml(tmp_path: Path) -> None:

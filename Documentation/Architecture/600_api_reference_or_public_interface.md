@@ -638,7 +638,6 @@ Controls collection-routing behaviour. All fields have defaults that take effect
 |---|---|---|---|
 | `routing_shortlist_size` | `int` | `8` | Maximum collections to pass to the decomposer after centroid pre-ranking. |
 | `routing_confidence_threshold` | `float` | `0.30` | Minimum centroid-similarity required to include a collection in the shortlist. When no collection reaches this threshold (and at least one was scored), the shortlist is empty (unroutable query). |
-| `max_parallel_collections` | `int` | `3` | Declared config knob; currently inert (no runtime code path reads it). Tracked as debt. |
 | `routing_strategy` | `str` | `"centroid"` | Routing scoring strategy. `"centroid"` — pure centroid cosine similarity (pre-B4 behaviour, the default). `"hybrid"` — blends centroid score with description-embedding cosine score (see below). Invalid values are rejected at config load with `ConfigError`. |
 | `routing_description_weight` | `float` | `0.3` | Weight `w ∈ [0.0, 1.0]` for description-embedding cosine in hybrid routing. Ignored when `routing_strategy = "centroid"`. Values outside `[0.0, 1.0]` are rejected at config load with `ConfigError`. |
 

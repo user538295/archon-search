@@ -30,7 +30,6 @@ def _default_toml() -> str:
     routing = tomlkit.table()
     routing.add("routing_shortlist_size", cfg.routing_shortlist_size)
     routing.add("routing_confidence_threshold", cfg.routing_confidence_threshold)
-    routing.add("max_parallel_collections", cfg.max_parallel_collections)
     doc.add("routing", routing)
 
     collections = tomlkit.table()

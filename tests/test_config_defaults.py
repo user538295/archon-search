@@ -114,7 +114,6 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         # [routing]
         "routing_shortlist_size": 8,
         "routing_confidence_threshold": 0.30,
-        "max_parallel_collections": 3,
         "routing_strategy": "centroid",
         "routing_description_weight": DEFAULT_ROUTING_DESCRIPTION_WEIGHT,
         # [database] — B5 incremental centroid

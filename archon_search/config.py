@@ -220,7 +220,6 @@ class SearchConfig:
     # [routing]
     routing_shortlist_size: int = 8
     routing_confidence_threshold: float = 0.30
-    max_parallel_collections: int = 3
     routing_strategy: str = "centroid"
     routing_description_weight: float = DEFAULT_ROUTING_DESCRIPTION_WEIGHT
     # [database] — B5 incremental centroid
@@ -524,10 +523,10 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             raise ConfigError(f"routing_confidence_threshold must be in [0.0, 1.0], got {threshold}")
         config.routing_confidence_threshold = threshold
     if "max_parallel_collections" in routing:
-        max_parallel = _coerce_int(routing["max_parallel_collections"], "max_parallel_collections")
-        if max_parallel <= 0:
-            raise ConfigError(f"max_parallel_collections must be > 0, got {max_parallel}")
-        config.max_parallel_collections = max_parallel
+        _logger.warning(
+            "max_parallel_collections is deprecated and ignored; the knob was never "
+            "wired into any search path. Fan-out breadth is governed by [search].max_fanout"
+        )
     if "routing_strategy" in routing:
         strategy = str(routing["routing_strategy"])
         if strategy not in {"centroid", "hybrid"}:

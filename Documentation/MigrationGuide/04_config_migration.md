@@ -33,7 +33,6 @@ The following sections and keys are part of the documented config surface and ha
 | `[database]` | `top_k_return` | int | `5` | Final returned cut-off, must be `> 0`. |
 | `[routing]` | `routing_shortlist_size` | int | `8` | Must be `> 0`. |
 | `[routing]` | `routing_confidence_threshold` | float | `0.30` | In `[0.0, 1.0]`. |
-| `[routing]` | `max_parallel_collections` | int | `3` | Must be `> 0`. |
 | `[collections]` | `pinned_collections` | list[string] | `[]` | Always searched, regardless of routing. |
 | `[collections]` | `collections` | list | `[]` | Static collection list; empty means manage over HTTP. |
 | `[collections]` | `watch` | bool | `false` | Enable filesystem watcher. |

@@ -15,7 +15,6 @@ eager_load_embedders = true
 [routing]
 routing_shortlist_size = 8
 routing_confidence_threshold = 0.3
-max_parallel_collections = 3
 routing_strategy = "hybrid"
 
 [collections]

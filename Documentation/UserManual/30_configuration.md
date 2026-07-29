@@ -88,7 +88,6 @@ How the centroid router selects which collections to search.
 | --- | --- | --- |
 | `routing_shortlist_size` | `8` | Collections considered before parallel search (>0). |
 | `routing_confidence_threshold` | `0.30` | Minimum centroid confidence to dispatch to a collection, in `[0.0, 1.0]`. |
-| `max_parallel_collections` | `3` | Hard cap on concurrent per-collection searches per query (>0). |
 | `routing_strategy` | `centroid` | `centroid` (pure vector) or `hybrid` (blends description-embedding cosine). |
 | `routing_description_weight` | `0.3` | Weight for description cosine in hybrid mode, in `[0.0, 1.0]`; ignored when `centroid`. |
 

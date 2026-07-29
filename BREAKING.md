@@ -8,6 +8,22 @@
 
 ## Changelog
 
+### [next release] — Removed inert `[routing].max_parallel_collections` config key (2026-07-29)
+
+**What changed:** The `[routing].max_parallel_collections` key is removed from `SearchConfig`, the
+config loader, `archon-search config show` output, and `archon-search.toml.example`. It was parsed
+and validated (`> 0`) but never consumed by any runtime search path — no code in `router.py`,
+`pipeline.py`, or `server/` read it — so setting it never affected concurrency or latency.
+
+**Why:** A documented knob that does nothing misleads operators. Fan-out breadth is already
+governed by `[search].max_fanout`.
+
+**Migration:** No action required. An existing `archon-search.toml` that still contains
+`max_parallel_collections` continues to load — the key is ignored and a deprecation WARNING is
+logged at startup (mirroring the `centroid_incremental_enabled` handling). Note that values that
+were previously rejected at load (`<= 0`, non-integer) are no longer validated, since the key is
+no longer read. Remove the line at your convenience.
+
 ### [next release] — `ErrorDetail` gains optional `code` field; 503 meta-lookup responses now include `code` (2026-07-21)
 
 **What changed:** `ErrorDetail` (the Pydantic schema used by documented 4xx/5xx responses on

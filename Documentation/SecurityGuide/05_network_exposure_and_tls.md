@@ -55,7 +55,7 @@ Concrete rules for the proxy:
 - **Override CORS at the proxy.** Strip `Access-Control-Allow-Origin: *` from upstream responses and emit a tight allow-list, or refuse `OPTIONS` for origins you do not own.
 - **Restrict origins for browser clients.** If you do not have browser clients, drop the `Access-Control-*` headers entirely at the proxy.
 - **Pass the `Authorization` header through unchanged.** The bearer token must reach `archon-search`; the proxy must not strip or replace it.
-- **Add rate limiting.** `archon-search` has none built in. Choose a budget that aligns with `[routing].max_parallel_collections` and reranker capacity.
+- **Add rate limiting.** `archon-search` has none built in. Choose a budget that aligns with `[search].max_fanout` and reranker capacity.
 - **Log at the proxy.** Server-side access logs are uvicorn's default and do not include the request body; if you need centralized audit, do it at the proxy.
 
 ### Minimal nginx example

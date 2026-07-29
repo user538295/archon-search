@@ -42,7 +42,6 @@ def _make_search_config(tmp_path: Path) -> object:
         collections: list[str] = field(default_factory=list)
         pinned_collections: list[str] = field(default_factory=lambda: ["/pinned/docs"])
         auto_reindex_on_chunk_size_change: bool = True
-        max_parallel_collections: int = 3
         # G10 Ollama picker: run() threads these into the wizard's base-URL prompt.
         hyde: FakeProviderConfig = field(default_factory=FakeProviderConfig)
         rag_fusion: FakeProviderConfig = field(default_factory=FakeProviderConfig)

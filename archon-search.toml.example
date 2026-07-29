@@ -116,8 +116,6 @@ fanout_timeout_seconds = 30.0
 routing_shortlist_size = 8
 # Minimum router confidence required to dispatch a query to a collection.
 routing_confidence_threshold = 0.30
-# Maximum number of collections searched concurrently per query.
-max_parallel_collections = 3
 # Routing strategy: "centroid" (pure vector centroid similarity) or
 # "hybrid" (blends centroid score with description-embedding cosine similarity).
 # Use "hybrid" for corpora with distinct domain boundaries to improve routing precision.

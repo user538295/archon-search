@@ -31,7 +31,6 @@ See also: [100_system_architecture_overview.md](100_system_architecture_overview
   - `top_k_return must be > 0` (`config.py:166`)
   - `routing_shortlist_size must be > 0` (`config.py:173`)
   - `routing_confidence_threshold must be in [0.0, 1.0]` (`config.py:178`)
-  - `max_parallel_collections must be > 0` (`config.py:183`)
   - `[telemetry].retention_days must be >= 1` (`config.py:207`)
   - `[telemetry].log_dir must be a non-empty string` (`config.py:221`)
   - `[ingest].max_file_mb must be >= 0, got {raw}` — negative values raise `ConfigError`; `0` (the default) is valid and disables the size guard entirely. **E0d**: `IngestConfig` (`config.py`)
