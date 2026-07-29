@@ -1,6 +1,21 @@
 # Changelog
 
 
+## [26.7.1738] - 2026-07-29
+
+**Multi-platform Docker, reindex isolation, and test reliability**
+
+- Added `linux/arm64` to the Docker buildx platform matrix alongside `linux/amd64`, so ARM64 hosts (Apple Silicon, AWS Graviton) can pull the native image. The slim image now ships multi-arch manifests; the NVIDIA CUDA variant remains `amd64`-only.
+
+- Fixed `reindex_collection` to skip directory scans when a collection has no configured source path (e.g., collections created via single-file `POST /ingest`). Previously, the reindex task would scan the server's current working directory, causing hangs or unintended file ingestion. Meta-only collections now complete cleanly.
+
+- Extended the Docker test runner's graph server startup timeout from 30 s to 90 s to account for spaCy model loading. Local development timeout remains 30 s.
+
+- Fixed `archon-search wizard --dry-run` to leave the filesystem completely untouched—previously it created `~/.archon-search/` and subdirectories even in dry-run mode.
+
+- Improved test coverage for single-file ingest collection visibility, reindex regression guards, and Docker smoke suite CLI handling.
+
+
 ## [26.7.1727] - 2026-07-28
 
 **Single-file ingest collections now fully functional; installation wizard improvements**
