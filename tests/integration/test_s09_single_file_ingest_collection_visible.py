@@ -28,7 +28,10 @@ def test_single_file_ingest_is_visible_in_list_and_info(tmp_path, monkeypatch) -
         names = {c["name"] for c in resp.json()}
         assert "single-docs" in names, f"single-docs missing from list: {names}"
 
-        # Step 3: info exits 0 with metadata
+        # Step 3: info exits 0 with metadata (re-filed as 202607282036-S09-collection_info_exits_zero).
         resp = client.get("/collections/single-docs", headers=headers)
         assert resp.status_code == 200, resp.text
-        assert resp.json()["name"] == "single-docs"
+        body = resp.json()
+        assert body["name"] == "single-docs"
+        # Metadata must reflect the ingested data, not an empty-shell registration.
+        assert body["chunk_count"] > 0, f"expected ingested chunks, got {body}"
