@@ -1,7 +1,7 @@
 **Purpose**: Run a native-service production instance and a Docker dev-UAT instance side by side on the same machine.
 **Audience**: Developers and operators who need an isolated second environment for e2e live tests or release-candidate validation.
 **Status**: Stable
-**Last reviewed**: 2026-06-25 / **Next review**: 2027-06-25
+**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
 
 # Multi-Instance Setup (Prod + Dev-UAT)
 
@@ -40,17 +40,17 @@ Each instance has its own:
 | API key file | `~/.archon-search/.search.env` | `/data/.search.env` inside volume |
 | LanceDB index | `~/.archon-search/search/` | `/data/search/` inside volume |
 | Config TOML | `~/.archon-search/archon-search.toml` | `/data/archon-search.toml` (if `ARCHON_SEARCH_CONFIG` set); otherwise the in-container default |
-| Fastembed model cache | Host default (`~/.cache/fastembed`) | Container default; mount `archon-model-cache:/data/fastembed-cache` to persist across restarts (see `08_running_with_docker.md`) |
+| Fastembed model cache | Host default (`~/.cache/fastembed`) | Container default; mount `archon-model-cache:/data/fastembed-cache` to persist across restarts (see [`140_running_with_docker.md`](140_running_with_docker.md)) |
 | Host port | `8765` | `18765` |
 | MCP endpoint | `127.0.0.1:8765/mcp` | `127.0.0.1:18765/mcp` |
 
-> **Two isolation boundaries are NOT controlled by `ARCHON_SEARCH_DATA_DIR`:** the TOML config path (controlled by `ARCHON_SEARCH_CONFIG`) and the fastembed embedding model cache (controlled by `FASTEMBED_CACHE_PATH`, a fastembed-native env var). These have independent defaults for native and Docker deployments. For fastembed cache sharing across multiple Docker instances, see [Part 7 below](#part-7--sharing-the-fastembed-model-cache-optional) or the [shared cache section in `08_running_with_docker.md`](08_running_with_docker.md#sharing-the-fastembed-model-cache).
+> **Two isolation boundaries are NOT controlled by `ARCHON_SEARCH_DATA_DIR`:** the TOML config path (controlled by `ARCHON_SEARCH_CONFIG`) and the fastembed embedding model cache (controlled by `FASTEMBED_CACHE_PATH`, a fastembed-native env var). These have independent defaults for native and Docker deployments. For fastembed cache sharing across multiple Docker instances, see [Part 7 below](#part-7--sharing-the-fastembed-model-cache-optional) or the [shared cache section in `140_running_with_docker.md`](140_running_with_docker.md#sharing-the-fastembed-model-cache).
 
 ---
 
 ## Prerequisites
 
-- `archon-search` installed from PyPI or a checkout — see [`01_installation.md`](01_installation.md).
+- `archon-search` installed from PyPI or a checkout — see [`10_installation.md`](10_installation.md).
 - Docker and Docker Compose installed and the Docker daemon running.
 - The `docker-compose.yml` from the repository root (it ships three sibling services: `archon-dev`, `archon-test`, `archon-prod`).
 - A `.env` file next to `docker-compose.yml` with the correct image path (instructions below).
@@ -574,7 +574,7 @@ The first service to start will populate `archon-model-cache`; the second will r
 
 > **Single-writer constraint does not apply to the model cache.** Unlike LanceDB (`archon-dev-data`), the fastembed model cache is effectively read-only once the initial download is complete. Multiple containers reading from `archon-model-cache` concurrently after the first download is safe.
 
-For full details on the Docker persistence layout and the model cache, see [`08_running_with_docker.md#sharing-the-fastembed-model-cache`](08_running_with_docker.md#sharing-the-fastembed-model-cache).
+For full details on the Docker persistence layout and the model cache, see [`140_running_with_docker.md#sharing-the-fastembed-model-cache`](140_running_with_docker.md#sharing-the-fastembed-model-cache).
 
 ---
 
@@ -591,9 +591,13 @@ curl http://127.0.0.1:18766/health   # archon-test
 
 ---
 
-## See also
+## Related documents
 
-- [`01_installation.md`](01_installation.md) — full install flow (wizard, profiles, GPU acceleration).
-- [`03_running_the_server.md`](03_running_the_server.md) — `start`/`stop`/`status`/`serve` subcommands.
-- [`08_running_with_docker.md`](08_running_with_docker.md) — full Docker reference including `docker run`, environment variables, and persistence layout.
-- [`02_configuration.md`](02_configuration.md) — TOML configuration reference.
+- [`00_index.md`](00_index.md) — UserManual table of contents and reading order.
+- [`10_installation.md`](10_installation.md) — full install flow (wizard, profiles, GPU acceleration).
+- [`30_configuration.md`](30_configuration.md) — TOML configuration reference.
+- [`40_running_the_server.md`](40_running_the_server.md) — `start`/`stop`/`status`/`serve` subcommands.
+- [`140_running_with_docker.md`](140_running_with_docker.md) — full Docker reference including `docker run`, environment variables, and persistence layout.
+- [`../OperatorGuide/10_deployment_topologies.md`](../OperatorGuide/10_deployment_topologies.md) — supported deployment shapes and isolation boundaries.
+</content>
+</invoke>

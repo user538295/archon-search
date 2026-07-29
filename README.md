@@ -30,7 +30,7 @@ uv tool install archon-search
 archon-search wizard
 ```
 
-After installing, run `archon-search wizard` to complete setup. The wizard lets you choose a profile (`minimal`, `balanced`, or `max`), downloads the matching embedding and reranker models, and registers the server as a background service. See [Documentation/UserManual/01_installation.md](Documentation/UserManual/01_installation.md) for the full profile comparison table, flag reference, and disk-space requirements.
+After installing, run `archon-search wizard` to complete setup. The wizard lets you choose a profile (`minimal`, `balanced`, or `max`), downloads the matching embedding and reranker models, and registers the server as a background service. See [Documentation/UserManual/10_installation.md](Documentation/UserManual/10_installation.md) for the full profile comparison table, flag reference, and disk-space requirements.
 
 Or, for a checkout-based development install:
 
@@ -131,7 +131,7 @@ docker run -d \
 
 **Persistent-volume warning.** Without a mounted volume *and* without `ARCHON_SEARCH_API_KEY`, the server auto-generates a fresh key on every container start and previously-issued tokens stop working. Either mount a volume so the key persists at `/data/.search.env`, or pass `ARCHON_SEARCH_API_KEY` explicitly.
 
-For a dev/test/prod stack with isolated volumes, see [`docker-compose.yml`](docker-compose.yml) and [`.env.example`](.env.example). For an end-to-end operator guide (compose stack, image variants, env-var reference, persistence layout), see [Documentation/UserManual/08_running_with_docker.md](Documentation/UserManual/08_running_with_docker.md).
+For a dev/test/prod stack with isolated volumes, see [`docker-compose.yml`](docker-compose.yml) and [`.env.example`](.env.example). For an end-to-end operator guide (compose stack, image variants, env-var reference, persistence layout), see [Documentation/UserManual/140_running_with_docker.md](Documentation/UserManual/140_running_with_docker.md).
 
 **Single-writer caveat.** LanceDB is single-writer: do not mount the same data volume into more than one running container — the on-disk state is undefined.
 

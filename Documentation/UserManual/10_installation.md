@@ -1,7 +1,7 @@
 **Purpose**: Install `archon-search` on a workstation or server.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-05-20 / **Next review**: 2027-05-20
+**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
 
 # Installation
 
@@ -50,9 +50,25 @@ uv run archon-search --version
 
 `uv` is the canonical environment manager for this project; see `pyproject.toml` for the dependency lock.
 
+## Optional extras
+
+Some features ship as optional dependency groups (`[project.optional-dependencies]` in `pyproject.toml`). Install them by adding the extra name in brackets, e.g. `pip install "archon-search[graph,code]"` (or `uv sync --extra graph`).
+
+| Extra | Installs | Unlocks |
+| --- | --- | --- |
+| `graph` | spaCy, networkx, leidenalg, igraph | Knowledge-graph extraction, community detection, PPR / naive graph search — see [`65_graph_search.md`](./65_graph_search.md). |
+| `code` | tree-sitter parsers (Python, TS/JS, Go, Rust, Java, Bash, Swift, C#) | AST-aware def/ref extraction and impact traversal for code files — see [`70_code_graph_and_impact.md`](./70_code_graph_and_impact.md). Also selectable via the wizard's `--code` flag. |
+| `multilingual` | fasttext-wheel | Non-English language detection (`language=<code>` search filter). Pair with a multilingual install profile (below). |
+| `hyde` | anthropic SDK | HyDE query expansion at search time — see [`60_searching.md`](./60_searching.md). |
+| `rag_fusion` | anthropic SDK | RAG-Fusion multi-query retrieval — see [`60_searching.md`](./60_searching.md). |
+| `ollama` | ollama SDK | Local Ollama provider for HyDE / RAG-Fusion. |
+| `openai-provider` | openai SDK | OpenAI provider for HyDE / RAG-Fusion. |
+
+`graph.enabled = true` with spaCy absent raises a `ConfigError` at startup; missing `code` parsers only log a warning and skip code files, so prose graphing still works.
+
 ## ONNX Runtime providers (GPU acceleration)
 
-Embedding and reranking run through ONNX Runtime. By default the CPU provider is used. To enable hardware acceleration, set `[database].providers` in `~/.archon-search/archon-search.toml` (see `archon_search/config.py:156` and `archon-search.toml.example`):
+Embedding and reranking run through ONNX Runtime. By default the CPU provider is used. To enable hardware acceleration, set `[database].providers` in `~/.archon-search/archon-search.toml` (see `archon_search/config.py` and `archon-search.toml.example`):
 
 ```toml
 [database]
@@ -66,7 +82,7 @@ providers = ["CUDAExecutionProvider"]
 # providers = []
 ```
 
-`providers` is a plain list passed to ONNX Runtime. Behavior on a provider name that the locally installed ONNX Runtime build does not support depends on that build (typically a warning, possible fallback, or an error). #Unverified
+`providers` is a plain list passed to ONNX Runtime. Behavior on a provider name that the locally installed ONNX Runtime build does not support depends on that build (typically a warning, possible fallback, or an error).
 
 The CLI's GPU autodetection (`archon_search/platform/runtime.py:detect_gpu_type`) currently only reports the available accelerator type — it does not auto-populate `providers`. You must set this manually.
 
@@ -91,7 +107,7 @@ The chosen profile is recorded in `[database].profile` and `[database].multiling
 The setup flow uses two separate commands:
 
 - **`archon-search wizard`** — the full interactive setup: choose a profile, configure optional features, download models, register and start the service. Run this first.
-- **`archon-search install`** — register and start the service only (no prompts, no model download). Requires `wizard` to have been run first.
+- **`archon-search install`** — register and start the service only (`--dry-run` and `--config` are its only flags; no prompts, no model download). Requires `wizard` to have been run first.
 
 ```bash
 archon-search wizard
@@ -110,12 +126,12 @@ archon-search wizard --profile balanced --multilingual --accept-jina-license --n
 archon-search wizard --profile minimal --non-interactive --watch --telemetry --log-format json
 ```
 
-All `wizard` flags (verified against `archon_search/cli/install_cmd.py`):
+Key `wizard` flags (verified against `archon_search/cli/install_cmd.py`):
 
 | Flag | Effect |
 | --- | --- |
 | `--profile {minimal,balanced,max}` | Select the install profile (skips interactive prompt). |
-| `--multilingual` | Use multilingual model stack for the chosen profile. |
+| `--multilingual / --no-multilingual` | Use (or force off) the multilingual model stack for the chosen profile. |
 | `--skip-preload` | Skip pre-warming the heavy embedder/reranker weights after install (they download on first use). For multilingual profiles the small `lid.176.ftz` language-detection model is still downloaded — it is required for the server to start. |
 | `--force` | Overwrite an existing install. Required when changing profiles. |
 | `--delete-db` | Also delete the database when reinstalling (`--force` required). Use with caution — this removes all indexed data. |
@@ -133,21 +149,7 @@ All `wizard` flags (verified against `archon_search/cli/install_cmd.py`):
 | `--log-format {text,json}` | Log format. Use `json` for container deployments and log aggregators. |
 | `--disable-gpu` | Force CPU execution; skip Metal/CUDA acceleration even when auto-detected. |
 
-The wizard:
-
-1. Detects and removes any legacy service file (`~/Library/LaunchAgents/com.archon.search.plist` on macOS, `~/.config/systemd/user/archon-search.service` on Linux).
-2. Asks "Will your corpus include non-English documents?" (sets multilingual models if yes; skipped when `--multilingual` flag is passed).
-3. Prompts for (or validates) the install profile.
-4. Asks about optional features: code enrichment, reranker toggle, filesystem watcher, telemetry, eager loading, routing strategy, and log format.
-5. Prompts for Jina license acceptance if the profile requires it (or checks `--accept-jina-license`).
-6. **C2**: When `--multilingual`, prompts for fasttext `lid.176.ftz` CC-BY-SA 3.0 license acceptance (or checks `--accept-fasttext-license`) and downloads the model to `~/.archon-search/models/`.
-7. Detects GPU hardware (Metal on Apple Silicon, CUDA on NVIDIA) and prompts for confirmation (or auto-enables with `--non-interactive`; skip with `--disable-gpu`).
-8. Creates `~/.archon-search/archon-search.toml` from the profile defaults (and optional feature choices) if missing.
-9. Checks available disk space for the selected profile.
-10. Installs code enrichment packages if requested (`--code`).
-11. Pre-warms model weights (unless `--skip-preload`).
-12. Registers and starts the service via the platform adapter (`archon_search/platform/macos.py`, `linux.py`).
-13. Polls `GET http://<host>:<port>/health` for up to 60 seconds; exits non-zero if the service does not become ready.
+Additional install-time overrides accepted by `wizard` include `--host`, `--port`, `--db-path`, `--log-level`, `--top-k`, `--telemetry-retention-days`, `--enable-hyde`, `--enable-rag-fusion`, and `--server-key` — these write into the installed config. For the full walkthrough of the interactive flow, see [`20_wizard.md`](./20_wizard.md).
 
 ## Uninstall
 
@@ -203,8 +205,15 @@ rm -rf ~/.archon-search/
 | `~/.archon-search/search-logs/` | Telemetry JSONL (only when telemetry is enabled). |
 | `~/.archon-search/models/lid.176.ftz` | **C2** — fasttext language identification model (only when installed with `--multilingual`). |
 
+> The entire runtime tree relocates with a single env var: set `ARCHON_SEARCH_DATA_DIR` to move DB, models, keys, and logs off `~/.archon-search/`.
+
+Once installed, richer file-type ingestion (Office and legacy document formats, PDFs, code) is covered in [`50_ingestion_and_collections.md`](./50_ingestion_and_collections.md).
+
 ## Related documents
 
-- [`02_configuration.md`](./02_configuration.md) — full configuration reference.
-- [`03_running_the_server.md`](./03_running_the_server.md) — start/stop/status.
-- [`07_troubleshooting.md`](./07_troubleshooting.md) — install failure modes.
+- [`00_index.md`](./00_index.md) — UserManual table of contents.
+- [`20_wizard.md`](./20_wizard.md) — interactive setup walkthrough.
+- [`30_configuration.md`](./30_configuration.md) — full configuration reference.
+- [`40_running_the_server.md`](./40_running_the_server.md) — start/stop/status.
+- [`50_ingestion_and_collections.md`](./50_ingestion_and_collections.md) — ingesting files and managing collections.
+- [`160_troubleshooting.md`](./160_troubleshooting.md) — install failure modes.

@@ -146,4 +146,4 @@ grep -E '"query"[[:space:]]*:' ~/.archon-search/search-logs/*.jsonl
 - [`../ADRs/05_opt_in_local_telemetry_no_raw_query.md`](../ADRs/05_opt_in_local_telemetry_no_raw_query.md) — original decision + D8 Amendment (HMAC hashing mode).
 - [`../Architecture/150_security_and_privacy_architecture.md`](../Architecture/150_security_and_privacy_architecture.md) — broader privacy architecture.
 - [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) — ~~`SEC-2`~~ (resolved by D8), `SEC-3`, `TEL-1`.
-- [`../UserManual/06_telemetry.md`](../UserManual/06_telemetry.md) — operator-facing how-to.
+- [`../UserManual/120_telemetry.md`](../UserManual/120_telemetry.md) — operator-facing how-to.

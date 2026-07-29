@@ -1,7 +1,7 @@
 Purpose: Single entry point to all `archon-search` documentation, plus the rules for adding and maintaining docs.
 Audience: Medior engineers contributing to or navigating the `archon-search` documentation set.
 Status: Draft
-Last reviewed: 2026-05-31 / Next review: 2026-08-31
+Last reviewed: 2026-07-29 / Next review: 2026-08-31
 
 # Documentation Index and Contribution Guide
 
@@ -42,16 +42,25 @@ End-user / operator documentation. Audience is medior-technical operators runnin
 
 | File | Purpose |
 | --- | --- |
-| [`UserManual/01_installation.md`](../UserManual/01_installation.md) | Install from PyPI or a checkout; ONNX provider tips; optional service install. |
-| [`UserManual/02_configuration.md`](../UserManual/02_configuration.md) | `archon-search.toml` sections, `ARCHON_SEARCH_CONFIG`, auth key resolution. |
-| [`UserManual/03_running_the_server.md`](../UserManual/03_running_the_server.md) | `start`/`stop`/`status`/`serve`, exposed endpoints, Bearer-auth examples. |
-| [`UserManual/04_ingestion_and_collections.md`](../UserManual/04_ingestion_and_collections.md) | `ingest`/`sync`/`collection` CLI and REST equivalents; watcher and reindex triggers. |
-| [`UserManual/05_searching.md`](../UserManual/05_searching.md) | `POST /search`, `POST /route`, and the 17 MCP tools (D7 added `create_key`, `list_keys`, `revoke_key`, `rotate_key`). |
-| [`UserManual/06_telemetry.md`](../UserManual/06_telemetry.md) | Opt-in local telemetry, no-raw-query invariant, read-back endpoints. |
-| [`UserManual/07_troubleshooting.md`](../UserManual/07_troubleshooting.md) | Common failure modes: auth, empty results, stuck reindex, install hangs. |
-| [`UserManual/08_running_with_docker.md`](../UserManual/08_running_with_docker.md) | C9 — Docker image (CPU + GPU), `docker run` / `docker compose`, env-var matrix, persistence layout. |
-| [`UserManual/09_multi_instance_setup.md`](../UserManual/09_multi_instance_setup.md) | MIS — Run a native-service prod instance and a Docker dev-UAT instance side by side; data isolation, API key isolation, MCP client config for both, optional shared fastembed model cache. |
-| [`UserManual/12_ttl_and_scoping.md`](../UserManual/12_ttl_and_scoping.md) | **E2a** — Operator runbook: schema migration, TTL configuration, scope tags, expiring-chunk preview, maintenance pruning, and troubleshooting. |
+| [`UserManual/00_index.md`](../UserManual/00_index.md) | Table of contents and reading order for the User Manual; scope and intended audience. |
+| [`UserManual/10_installation.md`](../UserManual/10_installation.md) | Install from PyPI or a `uv sync --dev` checkout; Python 3.12+ requirement; optional launchd/systemd service install. |
+| [`UserManual/20_wizard.md`](../UserManual/20_wizard.md) | `archon-search wizard`: every prompt and CLI flag, what it configures, and what it does not. |
+| [`UserManual/30_configuration.md`](../UserManual/30_configuration.md) | `archon-search.toml` sections, `ARCHON_SEARCH_CONFIG`, defaults, and auth-key resolution. |
+| [`UserManual/40_running_the_server.md`](../UserManual/40_running_the_server.md) | `start`/`stop`/`status`/`serve`, bind address, exposed endpoints, uniform Bearer auth. |
+| [`UserManual/50_ingestion_and_collections.md`](../UserManual/50_ingestion_and_collections.md) | `ingest`/`sync`/`collection` CLI and REST; pinned collections, the watcher, and reindex triggers. |
+| [`UserManual/55_chunk_metadata_and_enrichment.md`](../UserManual/55_chunk_metadata_and_enrichment.md) | Core schema vs auto-enrichment chunk fields, where each comes from, how they surface, and how to backfill. |
+| [`UserManual/60_searching.md`](../UserManual/60_searching.md) | Query the index over REST and MCP: `POST /search`, `POST /route`, hybrid pipeline behavior. |
+| [`UserManual/65_graph_search.md`](../UserManual/65_graph_search.md) | GraphRAG: entity graph, the four `graph_mode` paths, synonym resolution, and the browser graph viewer. |
+| [`UserManual/70_code_graph_and_impact.md`](../UserManual/70_code_graph_and_impact.md) | Index a code corpus into a typed def/ref graph and run "what breaks if I change X?" impact analysis. |
+| [`UserManual/80_explain_and_debugging.md`](../UserManual/80_explain_and_debugging.md) | `POST /explain`: per-stage retrieval provenance to debug and tune routing, reranking, and scoring. |
+| [`UserManual/85_openai_compatible_api.md`](../UserManual/85_openai_compatible_api.md) | OpenAI-compatible shim (`GET /v1/models`, `POST /v1/chat/completions`) for OpenAI-native tools; retrieval only, no LLM. |
+| [`UserManual/90_export_import.md`](../UserManual/90_export_import.md) | Package a collection into a portable `.tar.gz` archive and unpack it into the same or another instance, as background jobs. |
+| [`UserManual/100_jobs_and_async_operations.md`](../UserManual/100_jobs_and_async_operations.md) | The async job model; submit, poll, and manage namespaced jobs from CLI (`--wait`) and REST. |
+| [`UserManual/120_telemetry.md`](../UserManual/120_telemetry.md) | Opt-in local query telemetry, no-raw-query invariant, `doc_id` leak risk, read-back endpoints. |
+| [`UserManual/130_ttl_and_scoping.md`](../UserManual/130_ttl_and_scoping.md) | Per-chunk `expires_at` TTL expiry and `scopes` tags; one-time schema migration and maintenance pruning. |
+| [`UserManual/140_running_with_docker.md`](../UserManual/140_running_with_docker.md) | Run from the published Docker image: `docker run` / `docker compose`, env-var matrix, `/data` persistence. |
+| [`UserManual/150_multi_instance_setup.md`](../UserManual/150_multi_instance_setup.md) | Run a native-service prod instance and a Docker dev-UAT instance side by side; data, key, and port isolation. |
+| [`UserManual/160_troubleshooting.md`](../UserManual/160_troubleshooting.md) | Diagnose common runtime failures via `/health`, `/ready`, `/status`, and the log; auth, empty results, stuck jobs. |
 
 ## Migration Guide
 
@@ -86,12 +95,17 @@ Production-grade operations documentation for SREs and sysadmins running `archon
 
 | File | Purpose |
 | --- | --- |
-| [`OperatorGuide/01_deployment_topologies.md`](../OperatorGuide/01_deployment_topologies.md) | Foreground, `launchd`, `systemd --user`; bind/firewall guidance; nginx and Caddy reverse-proxy patterns. |
-| [`OperatorGuide/02_monitoring_and_alerts.md`](../OperatorGuide/02_monitoring_and_alerts.md) | `/health`, `/status`, `/indexing-state`, `/telemetry/*` — what each reports, gaps, suggested alert rules. |
-| [`OperatorGuide/03_backup_restore_disaster_recovery.md`](../OperatorGuide/03_backup_restore_disaster_recovery.md) | Backing up `~/.archon-search/`, restore steps, disaster scenarios, no-export-API gap. |
-| [`OperatorGuide/04_capacity_and_performance.md`](../OperatorGuide/04_capacity_and_performance.md) | Single-process limits, ingest cost surfaces (`CON-4`, `C6`), router-cache caveats (`CON-2`), sizing heuristics. |
-| [`OperatorGuide/05_incident_runbook.md`](../OperatorGuide/05_incident_runbook.md) | Triage for stuck jobs, watcher churn, key loss, LanceDB locks, search pipeline failures / timeouts (`CON-5` resolved in A3), telemetry log explosion. |
-| [`OperatorGuide/06_upgrading.md`](../OperatorGuide/06_upgrading.md) | Reading CalVer + `BREAKING.md`, pre-upgrade backup, upgrade and rollback procedure; links to `MigrationGuide/` for detail. |
+| [`OperatorGuide/00_index.md`](../OperatorGuide/00_index.md) | Table of contents and reading order for the Operator Guide. |
+| [`OperatorGuide/10_deployment_topologies.md`](../OperatorGuide/10_deployment_topologies.md) | Single-host topologies: bind address, supervision (`launchd`, `systemd --user`), and reverse-proxy/TLS guidance. |
+| [`OperatorGuide/20_monitoring_and_alerts.md`](../OperatorGuide/20_monitoring_and_alerts.md) | What to probe, what each endpoint (`/health`, `/ready`, `/status`, `/indexing-state`, `/telemetry/*`) reports, thresholds, and gaps. |
+| [`OperatorGuide/30_logging.md`](../OperatorGuide/30_logging.md) | Application log config: file rotation, level, text vs JSON, and shipping structured logs to an aggregator. |
+| [`OperatorGuide/40_backup_restore_disaster_recovery.md`](../OperatorGuide/40_backup_restore_disaster_recovery.md) | What to back up, restore steps, and DR scenarios — file-system snapshot plus the scheduled `.tar.gz` backup loop. |
+| [`OperatorGuide/50_maintenance_and_jobs.md`](../OperatorGuide/50_maintenance_and_jobs.md) | The in-process `MaintenanceLoop`: policies, `[maintenance]` config, manual trigger, and per-collection health surface. |
+| [`OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md) | Operate the graph subsystem: enable it, rebuild Leiden communities, inspect, garbage-collect, and run LLM enrichment. |
+| [`OperatorGuide/70_key_management_and_rotation.md`](../OperatorGuide/70_key_management_and_rotation.md) | Runbook for issuing, listing, revoking, and rotating API keys against a running server — no restart required. |
+| [`OperatorGuide/80_capacity_and_performance.md`](../OperatorGuide/80_capacity_and_performance.md) | Single-process capacity envelope, ingest/search cost surfaces, and sizing heuristics (no horizontal scale, no SLA). |
+| [`OperatorGuide/90_incident_runbook.md`](../OperatorGuide/90_incident_runbook.md) | Triage steps for the failures that actually occur in production, using only existing endpoints, logs, and CLI. |
+| [`OperatorGuide/100_upgrading.md`](../OperatorGuide/100_upgrading.md) | Upgrade and rollback procedure: reading CalVer + `BREAKING.md`, startup and `MigrationJob` schema migrations; links to `MigrationGuide/`. |
 
 ## Architecture Decision Records (ADRs)
 

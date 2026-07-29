@@ -145,9 +145,9 @@ It is **not** meant for searching the public internet, running across a cluster 
 If you'd like to try it:
 
 - **Five-minute setup:** `Documentation/quick_start.md`
-- **Install and configure:** `Documentation/UserManual/01_installation.md` → `02_configuration.md`
-- **Add documents:** `Documentation/UserManual/04_ingestion_and_collections.md`
-- **Search your documents:** `Documentation/UserManual/05_searching.md`
+- **Install and configure:** `Documentation/UserManual/10_installation.md` → `02_configuration.md`
+- **Add documents:** `Documentation/UserManual/50_ingestion_and_collections.md`
+- **Search your documents:** `Documentation/UserManual/60_searching.md`
 - **Connect an AI assistant:** `Documentation/DeveloperGuide/05_mcp_integration.md`
 
 If you'd like to understand the inside in more depth:

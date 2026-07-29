@@ -1,16 +1,16 @@
 **Purpose**: Enable, inspect, and reason about local query telemetry.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-05-20 / **Next review**: 2027-05-20
+**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
 
 # Telemetry
 
 ## Principles
 
-1. **Opt-in, disabled by default.** `[telemetry].enabled = false` out of the box; nothing is written until you flip it.
+1. **Opt-in, disabled by default.** `[telemetry].enabled = false` out of the box (`archon_search/config.py:TelemetryConfig`); nothing is written until you flip it.
 2. **Local only.** Every entry is appended to a JSONL file under `~/.archon-search/search-logs/`. No external transmission exists in v1.
 3. **Raw queries are never logged — structural invariant.** The factory methods on `TelemetryEntry` do not accept a `query` parameter (`archon_search/telemetry/entry.py`); there is no code path that can write the raw query.
-4. **`doc_id`s are path-derived.** When telemetry is enabled, result `doc_id`s — which equal source file paths — appear in the logs. Treat this as an accepted leak risk; see "Path-derived `doc_id` risk" below.
+4. **`doc_id`s are path-derived.** When telemetry is enabled, result `doc_id`s — which equal source file paths — appear in the logs unless you turn on `hash_doc_ids`. Treat plaintext paths as an accepted leak risk; see "Path-derived `doc_id` risk" below.
 5. **Old files are pruned.** Files older than `retention_days` are removed at startup and every 24h.
 
 ## Enabling
@@ -23,7 +23,7 @@ enabled = true
 retention_days = 30
 log_dir = "~/.archon-search/search-logs"
 hash_doc_ids = false         # set true to HMAC-SHA256 hash result_doc_ids before logging
-# export_enabled = false   # see note below — true is silently coerced to false
+# export_enabled = false     # see note below — true is silently coerced to false
 ```
 
 Restart the server. Instrumented call sites append one JSON line per call to `<log_dir>/<YYYY-MM-DD>.jsonl` (UTC date):
@@ -33,12 +33,12 @@ Restart the server. Instrumented call sites append one JSON line per call to `<l
 
 ### `export_enabled` coercion
 
-`export_enabled` is reserved for a future remote-export feature. The current behaviour in `archon_search/config.py:209-217` is:
+`export_enabled` is reserved for a future remote-export feature and is **not implemented in v1**. The current behaviour in `archon_search/config.py` (`load_config`, `[telemetry]` block) is:
 
 - `false` (default) — stored as-is.
 - `true` — logged as a warning (`telemetry: export_enabled is reserved for a future release and will be ignored`) and silently coerced to `false`.
 
-`README.md` and `archon-search.toml.example` both describe this behavior as silent coercion to `false` with a logged warning, matching the implementation. No external transmission occurs.
+No external transmission occurs regardless of the value.
 
 ## What is logged
 
@@ -51,11 +51,11 @@ Every entry contains:
 | `endpoint` | `search`, `search_with_context`, or `route`. |
 | `latency_ms` | Wall-clock latency. |
 | `status` | Exactly one of `ok`, `validation_error`, `timeout`, `internal_error` (the four values of `Status` in `entry.py`). |
-| `collection` / `collections` | Endpoint-specific. `collection` is set for `search` / `search_with_context`; `collections` is set for `route` and contains whatever list of collection names the route handler passes in (#Unverified — the precise semantics, e.g. "pinned + routable", are not enforced by the telemetry module; see `routes_route.py` for the call-site logic). |
-| `result_count`, `result_doc_ids` | For retrieval endpoints. |
+| `collection` / `collections` | Endpoint-specific. `collection` is set for `search` / `search_with_context`; `collections` is set for `route`. |
+| `result_count`, `result_doc_ids` | For retrieval endpoints. `result_doc_ids` are hashed when `hash_doc_ids = true` — see below. |
 | `truncated` | `true` when `result_doc_ids` were dropped to fit the per-entry size cap (`MAX_ENTRY_BYTES = 8192`); otherwise absent / `null`. See `writer.py`. |
 | `decomposer_invoked` | For `route`. |
-| `doc_ids_hashed` | `true` when HMAC-SHA256 hashing was active for this entry (i.e., `hash_doc_ids = true` and the salt was successfully loaded); `false` otherwise. |
+| `doc_ids_hashed` | `true` when HMAC-SHA256 hashing was active for this entry (i.e., `hash_doc_ids = true` and the salt loaded successfully); `false` otherwise. |
 | `error_kind` | One of `empty_query \| slot_out_of_range \| timeout \| internal_error \| validation_error \| other` on errors. |
 
 ## What is never logged
@@ -65,13 +65,28 @@ Every entry contains:
 
 ## Path-derived `doc_id` risk
 
-`result_doc_ids` are derived from the source file path on disk (e.g. `/Users/<name>/Documents/<project>/<file>.md`). When telemetry is enabled, these paths appear in the log files. Concretely, this can reveal:
+`result_doc_ids` are derived from the source file path on disk (e.g. `/Users/<name>/Documents/<project>/<file>.md`). When telemetry is enabled with `hash_doc_ids = false`, these paths appear in the log files verbatim. Concretely, this can reveal:
 
 - Your operating-system username.
 - The directory layout of indexed corpora.
 - The filenames of matching documents.
 
-To mitigate this, set `hash_doc_ids = true` in the `[telemetry]` config section. When enabled, every `doc_id` is replaced by its HMAC-SHA256 hex digest (64 chars, lowercase) before the JSONL line is written. The salt is generated once at `~/.archon-search/.telemetry-salt` (mode 0600) and reused across restarts; if the salt file is unreadable, hashing is skipped (ERROR logged) — the fallback is plaintext, not a crash. Note that the salt lives alongside LanceDB which stores raw `source_path` in plaintext: HMAC hashing protects telemetry logs **shared or exported separately** from the data directory but does not protect against an attacker with read access to the whole `~/.archon-search/` directory. If this is unacceptable for your environment, leave telemetry disabled.
+### Hashed `doc_id` mode
+
+Set `hash_doc_ids = true` in `[telemetry]` to mitigate this. When enabled, every `doc_id` is replaced by its **HMAC-SHA256 hex digest** (64 chars, lowercase) before the JSONL line is written (`archon_search/telemetry/hasher.py:hash_doc_id`). The transform is deterministic — the same path always hashes to the same digest — so aggregation and de-duplication still work, but the digest is not reversible without the salt.
+
+The salt is a 32-byte random key at `~/.archon-search/.telemetry-salt` (mode 0600), generated once at first startup and reused across restarts (`load_or_create_salt`, wired in `app.py` lifespan onto `app.state.doc_id_hasher`). Failure handling is fail-open, never fatal:
+
+- **Salt file unreadable or wrong size** — an ERROR is logged and hashing is disabled for that session; the fallback is plaintext, not a crash. Entries then carry `doc_ids_hashed: false`.
+- **First-time generation** — a WARNING is logged; keep the salt file safe, as the hashes are unrecoverable without it.
+
+**Scope of protection.** The salt lives alongside LanceDB, which stores the raw `source_path` in plaintext. HMAC hashing protects telemetry logs **shared or exported separately** from the data directory — it does **not** protect against an attacker with read access to the whole `~/.archon-search/` tree. If that threat matters for your environment, leave telemetry disabled. See [`../SecurityGuide/04_telemetry_privacy.md`](../SecurityGuide/04_telemetry_privacy.md) for the full privacy analysis.
+
+## Observable degrade signals
+
+Telemetry no longer degrades silently. When a serialised entry exceeds the 8 KB per-entry size cap, the writer **truncates** `result_doc_ids` to fit rather than dropping the entry, and marks it `truncated: true` (E0b — silent-failure transparency). `GET /telemetry/stats` surfaces a running `truncated_count` so a large-result-set pattern is visible instead of vanishing. This is an observability aid, not an error.
+
+`truncated_count` counts only entries written since E0b — older entries have `truncated = None` and are not counted. For the full set of degrade signals across the server (HyDE/RAG Fusion fallback, `FAILED_EXPIRED` jobs, `--wait` timeouts), see [`../OperatorGuide/20_monitoring_and_alerts.md`](../OperatorGuide/20_monitoring_and_alerts.md).
 
 ## Read-back API
 
@@ -100,8 +115,8 @@ Response (`StatsResponse`):
 {
   "schema_version": 1,
   "enabled": true,
-  "since": "2026-05-01",
-  "until": "2026-05-20",
+  "since": "2026-07-01",
+  "until": "2026-07-29",
   "total_queries": 42,
   "success_rate": 0.95,
   "skipped_lines": 0,
@@ -116,7 +131,7 @@ Response (`StatsResponse`):
 }
 ```
 
-`success_rate` is `null` when the window has zero queries. `by_collection.total` can exceed `total_queries` because routing entries fan out across multiple collections (see the comment in `schemas_telemetry.py:CollectionStats`). `truncated_count` (**E0b**) is the number of log entries in the window where `result_doc_ids` was trimmed to fit within the 8 KB per-entry size limit (implemented in D8 — entries written before E0b have `truncated=None` and are not counted). A non-zero `truncated_count` indicates large result sets; this is an observability aid, not an error.
+`success_rate` is `null` when the window has zero queries. `by_collection.total` can exceed `total_queries` because routing entries fan out across multiple collections (see the comment in `schemas_telemetry.py:CollectionStats`).
 
 ### `GET /telemetry/entries`
 
@@ -151,7 +166,7 @@ Iterate by re-sending the request with `offset = next_offset` until `entries` is
 ```bash
 source ~/.archon-search/.search.env
 
-curl -s "http://127.0.0.1:8765/telemetry/stats?since=2026-05-01" \
+curl -s "http://127.0.0.1:8765/telemetry/stats?since=2026-07-01" \
   -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY"
 
 curl -s "http://127.0.0.1:8765/telemetry/entries?endpoint=search&limit=20" \
@@ -164,7 +179,11 @@ curl -s "http://127.0.0.1:8765/telemetry/entries?endpoint=search&limit=20" \
 
 ## Related documents
 
-- [`02_configuration.md`](./02_configuration.md) — `[telemetry]` keys.
-- [`/BREAKING.md`](../../BREAKING.md) — telemetry-surface changes (none currently logged).
+- [`00_index.md`](./00_index.md) — UserManual table of contents.
+- [`30_configuration.md`](./30_configuration.md) — every `[telemetry]` config key and default.
+- [`60_searching.md`](./60_searching.md) — the search calls that produce telemetry entries.
+- [`../SecurityGuide/04_telemetry_privacy.md`](../SecurityGuide/04_telemetry_privacy.md) — privacy analysis and the no-raw-query guarantee.
+- [`../OperatorGuide/20_monitoring_and_alerts.md`](../OperatorGuide/20_monitoring_and_alerts.md) — observable degrade signals across the server.
 - [`../ADRs/05_opt_in_local_telemetry_no_raw_query.md`](../ADRs/05_opt_in_local_telemetry_no_raw_query.md) — design rationale.
-- [`../Architecture/150_security_and_privacy_architecture.md`](../Architecture/150_security_and_privacy_architecture.md) — privacy invariants.
+</content>
+</invoke>

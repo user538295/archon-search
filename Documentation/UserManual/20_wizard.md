@@ -1,7 +1,7 @@
 **Purpose**: Comprehensive guide to the `archon-search wizard` command — what it does, every prompt it asks, all CLI flags, what it configures, and what it does not.
 **Audience**: End users and operators setting up archon-search for the first time or reconfiguring an existing install.
 **Status**: Stable
-**Last reviewed**: 2026-06-11 / **Next review**: 2027-06-11
+**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
 
 # The archon-search Wizard
 
@@ -177,7 +177,7 @@ Index code files (installs tree-sitter enrichment)? [y/N]:
 
 If you answer `y`, the wizard installs the `archon-search[code]` extra packages (tree-sitter grammars for Python, TypeScript, JavaScript, Go, Rust, Java, and Bash). Once installed, ingesting code files automatically extracts symbol-level metadata (`_symbol_type`, `_containing_function`, `_containing_class`, etc.) from each chunk. This makes code search significantly more precise.
 
-You can install this separately at any time with `pip install archon-search[code]`.
+You can install this separately at any time with `pip install archon-search[code]`. Code enrichment also feeds the code graph — see [`70_code_graph_and_impact.md`](./70_code_graph_and_impact.md) for def/ref extraction and impact analysis.
 
 #### 5b. Reranker toggle
 
@@ -221,7 +221,7 @@ Enable local query telemetry? [y/N]:
 
 **Default**: No.
 
-If you answer `y`, archon-search appends one JSON line per search request to daily files under `~/.archon-search/search-logs/`. Only structural metadata is recorded — collection names, latency, result counts — **raw query text is never written**. Files older than 30 days are pruned automatically. Telemetry is entirely local; no data is sent anywhere.
+If you answer `y`, archon-search appends one JSON line per search request to daily files under `~/.archon-search/search-logs/`. Only structural metadata is recorded — collection names, latency, result counts — **raw query text is never written**. Files older than 30 days are pruned automatically. Telemetry is entirely local; no data is sent anywhere. See [`120_telemetry.md`](./120_telemetry.md) for the full telemetry surface.
 
 #### 5e. Eager load
 
@@ -276,7 +276,7 @@ Type `text` or `json`, or press Enter to keep the default.
 
 #### 5h. AI query expansion (HyDE + RAG Fusion)
 
-This prompt is **always shown** (no API key precondition). **G10**
+This prompt is **always shown** (no API key precondition). For how HyDE and RAG Fusion change search results at query time, see [`60_searching.md`](./60_searching.md).
 
 ```
 AI query expansion (HyDE + RAG Fusion):
@@ -433,7 +433,7 @@ The API key line format depends on how the key was sourced:
 
 ## CLI Flags Reference
 
-All flags for the `wizard` command:
+All flags for the `wizard` command (verified against `archon_search/cli/install_cmd.py`):
 
 | Flag | Default | Description |
 |---|---|---|
@@ -457,14 +457,14 @@ All flags for the `wizard` command:
 | `--disable-gpu` | False | Force CPU execution; skip GPU detection and confirmation entirely. |
 | **Tier 1 deployment flags** | | |
 | `--host TEXT` | Not set (uses `127.0.0.1`) | Bind address for the HTTP API. Use `0.0.0.0` for remote or Docker access. Non-loopback values print a security note reminding you to add a firewall or reverse proxy. Cannot be an empty string. |
-| `--port INTEGER` | Not set (uses `8765`) | HTTP port. Valid range: 1–65535. Port conflicts are not detected at wizard time; the OS will report an error at service start. |
+| `--port INTEGER` | Not set (uses `8765`) | HTTP port for the installed config (valid range 1–65535). This is an **install-time config flag** — it writes `[server].port`; there is no runtime `--port` flag on `serve`/`start`. Port conflicts are not detected at wizard time; the OS reports an error at service start. |
 | `--db-path PATH` | Not set (uses `~/.archon-search/search`) | Database directory. The tilde is written as-is to the config file; `config.py` expands it at use sites. The wizard creates the directory (including parent dirs) and checks writability. If the existing config uses a different path, a migration note is printed. |
 | `--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}` | Not set (uses `INFO`) | Server log level. Case-sensitive. |
 | `--top-k INTEGER` | Not set (uses `5`) | Number of results returned per query (`top_k_return`). Valid range: 1–100. Values > 100 are rejected with a message to edit TOML directly. The wizard also sets `top_k_retrieve = max(15, 3 × top_k)` automatically. This flag is flags-only; no interactive prompt. A hint appears in the "Next steps" block. |
 | `--telemetry-retention-days INTEGER` | Not set (uses `30`) | Days before telemetry log files are pruned. Must be ≥ 1. Only written to TOML when `--telemetry` is also passed; passing it without `--telemetry` prints a warning on stderr and writes nothing. |
 | **Tier 2 AI flags** | | |
-| `--enable-hyde` | False (flag) | Enable HyDE (Hypothetical Document Embeddings) query expansion. Provider defaults to `"anthropic"` but can be changed by setting `[hyde].provider` in `archon-search.toml` (supported values: `"anthropic"`, `"openai"`, `"ollama"`, `"claude_cli"`). For Anthropic or OpenAI, the corresponding API key must be set; for Ollama, no API key is needed and query text stays on-host; for Claude CLI, `claude` must be on PATH and logged in (no API key). |
-| `--enable-rag-fusion` | False (flag) | Enable RAG Fusion multi-query expansion. Same provider options and privacy considerations as `--enable-hyde`; provider controlled by `[rag_fusion].provider` in config. |
+| `--enable-hyde` | False (flag) | Enable HyDE (Hypothetical Document Embeddings) query expansion. Provider defaults to `"anthropic"` but can be changed by setting `[hyde].provider` in `archon-search.toml` (supported values: `"anthropic"`, `"openai"`, `"ollama"`, `"claude_cli"`). For Anthropic or OpenAI, the corresponding API key must be set; for Ollama, no API key is needed and query text stays on-host; for Claude CLI, `claude` must be on PATH and logged in (no API key). See [`60_searching.md`](./60_searching.md). |
+| `--enable-rag-fusion` | False (flag) | Enable RAG Fusion multi-query expansion. Same provider options and privacy considerations as `--enable-hyde`; provider controlled by `[rag_fusion].provider` in config. See [`60_searching.md`](./60_searching.md). |
 | **Tier 2 security** | | |
 | `--server-key HEX_KEY` | Not set | Set a custom Bearer token for the server. Must be a lowercase hex string of at least 32 characters (e.g., generated with `python -c "import secrets; print(secrets.token_hex(32))"`). Writes `ARCHON_SEARCH_API_KEY=<key>` to `~/.archon-search/.search.env` (mode 600). A shell-history warning and restart note are always printed. If `ARCHON_SEARCH_API_KEY` env var is set, it takes priority over the file; an additional warning is printed in that case. |
 
@@ -581,7 +581,7 @@ archon-search wizard \
 
 ## What Gets Configured
 
-The wizard writes to `~/.archon-search/archon-search.toml`. The following table maps each wizard choice to its TOML key:
+The wizard writes to `~/.archon-search/archon-search.toml`. The following table maps each wizard choice to its TOML key. For the full config reference, see [`30_configuration.md`](./30_configuration.md).
 
 ### `[server]` section
 
@@ -655,7 +655,7 @@ The wizard also backs up your existing config to `~/.archon-search/archon-search
 
 ## What the Wizard Does NOT Configure
 
-The following settings exist in `archon-search.toml` but are not exposed in the wizard. You must edit the file manually (or use `archon-search config set`) to change them.
+The following settings exist in `archon-search.toml` but are not exposed in the wizard. You must edit the file manually (or use `archon-search config set`) to change them. See [`30_configuration.md`](./30_configuration.md) for the complete key reference.
 
 ### API key (auto-generated; override via env var or `--server-key`)
 
@@ -672,6 +672,10 @@ pinned_collections = []    # Collections always searched, bypassing the router
 ```
 
 Collections are normally managed through the HTTP API or the `archon-search ingest` CLI command. The wizard does not configure them.
+
+### Graph search
+
+The wizard does not configure the `[graph]` section (entity/community graph, synonym enrichment, PageRank, PPR). Graph search is enabled and tuned by editing `[graph]` in the config directly. See [`65_graph_search.md`](./65_graph_search.md) for prose graph search and [`70_code_graph_and_impact.md`](./70_code_graph_and_impact.md) for the code graph and impact analysis.
 
 ### Telemetry log directory
 
@@ -728,7 +732,7 @@ max_requests_per_minute = 60
 num_queries = 2
 ```
 
-Edit these keys in `archon-search.toml` to tune model choice, timeouts, and rate limits.
+Edit these keys in `archon-search.toml` to tune model choice, timeouts, and rate limits. For how these features behave at query time, see [`60_searching.md`](./60_searching.md).
 
 ### Custom ONNX providers and language detection
 
@@ -793,6 +797,8 @@ archon-search wizard --profile minimal --watch --non-interactive
 
 ## Troubleshooting
 
+For service and ingestion failures beyond the wizard-specific cases below, see [`160_troubleshooting.md`](./160_troubleshooting.md).
+
 ### GPU detection is wrong or causes errors
 
 If the wizard enables Metal or CUDA but the server fails to start or produces ONNX errors, you can disable GPU acceleration by editing `~/.archon-search/archon-search.toml`:
@@ -843,7 +849,7 @@ Install is already running (PID 12345). Wait for it to finish or remove
 If you are certain no install is running (e.g., a previous run crashed), remove the stale lock file:
 
 ```bash
-rm ~/.archon-search/.install.lock
+trash ~/.archon-search/.install.lock   # or: rm ~/.archon-search/.install.lock
 ```
 
 Then re-run the wizard.
@@ -856,7 +862,7 @@ For large profiles (Max), downloads can take 10–30 minutes on slow connections
 
 ### Service install is not supported (Windows)
 
-Service registration (`launchd` on macOS, `systemd` on Linux) is not supported on Windows. The wizard will complete the config and model download steps, but service registration will fail. On Windows, run the server manually in the foreground with `archon-search start`.
+Service registration (`launchd` on macOS, `systemd` on Linux) is not supported on Windows. The wizard will complete the config and model download steps, but service registration will fail. On Windows, run the server manually in the foreground with `archon-search serve` (see [`40_running_the_server.md`](./40_running_the_server.md)).
 
 ### How to undo the wizard
 
@@ -871,9 +877,10 @@ The config file `~/.archon-search/archon-search.toml` and model weights in the f
 
 ---
 
-## Related Documents
+## Related documents
 
-- [`01_installation.md`](./01_installation.md) — installation prerequisites, install profiles table, and the `archon-search install` command.
-- [`02_configuration.md`](./02_configuration.md) — full reference for every key in `archon-search.toml`.
-- [`03_running_the_server.md`](./03_running_the_server.md) — start, stop, and status commands.
-- [`07_troubleshooting.md`](./07_troubleshooting.md) — detailed troubleshooting for service and ingestion failures.
+- [`00_index.md`](./00_index.md) — UserManual table of contents and reading order.
+- [`10_installation.md`](./10_installation.md) — installation prerequisites, install profiles, and the `archon-search install` command.
+- [`30_configuration.md`](./30_configuration.md) — full reference for every key in `archon-search.toml`.
+- [`40_running_the_server.md`](./40_running_the_server.md) — start, serve, stop, and status commands.
+- [`160_troubleshooting.md`](./160_troubleshooting.md) — detailed troubleshooting for service and ingestion failures.

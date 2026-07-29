@@ -126,4 +126,4 @@ If the third call returns `401`, your token does not match. Re-read the file (it
 - [`../Architecture/150_security_and_privacy_architecture.md`](../Architecture/150_security_and_privacy_architecture.md) — full auth/ACL/privacy model.
 - [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) — endpoint reference.
 - [`06_error_handling.md`](./06_error_handling.md) — status codes and error envelopes.
-- [`../UserManual/02_configuration.md`](../UserManual/02_configuration.md) — `[namespaces]` config block.
+- [`../UserManual/30_configuration.md`](../UserManual/30_configuration.md) — `[namespaces]` config block.

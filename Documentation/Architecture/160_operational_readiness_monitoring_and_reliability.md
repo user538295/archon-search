@@ -154,7 +154,7 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
 
 The `start-period=30s` gives the storage layer time to connect before failures count against the `retries` budget; once `SearchStore.ping()` returns OK, `docker ps` reports `(healthy)`. **The `/ready` `ready: bool` (and thus this HEALTHCHECK) is not gated on model availability** — D6 added a `checks.models` field that *reports* background model-validation state, but it never affects `ready` or the HTTP status. The first `/search` after a cold container start may still pay a multi-second model-load tax. If you need search-readiness gating, inspect `checks.models` (`"ok"`/`"warn"` once validation completes) or warm the embedder explicitly in your orchestration.
 
-`ARCHON_SEARCH_DATA_DIR=/data` is baked into the image so every runtime path (LanceDB index, logs, telemetry JSONL, key file, jobs file, fastembed models, ingest history) lands on a single mounted volume. Without a volume the key regenerates on every container start. See [`UserManual/08_running_with_docker.md`](../UserManual/08_running_with_docker.md) for the env-var matrix and the dev/test/prod docker-compose stack.
+`ARCHON_SEARCH_DATA_DIR=/data` is baked into the image so every runtime path (LanceDB index, logs, telemetry JSONL, key file, jobs file, fastembed models, ingest history) lands on a single mounted volume. Without a volume the key regenerates on every container start. See [`UserManual/140_running_with_docker.md`](../UserManual/140_running_with_docker.md) for the env-var matrix and the dev/test/prod docker-compose stack.
 
 ## Runbooks
 

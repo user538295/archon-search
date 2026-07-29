@@ -65,7 +65,7 @@ The external LLM dependency is acceptable because:
 1. HyDE is **opt-in at two levels** (operator config + per-request flag). Operators who do not set `enabled = true` in TOML pay zero overhead and zero privacy risk.
 2. The API key is **operator-provisioned** (`ANTHROPIC_API_KEY` env var). The server never auto-discovers or auto-installs credentials.
 3. The fallback path is **always available**. A missing key, a timeout, or a rate-limit causes `hyde_applied: false` — not a 5xx or degraded availability.
-4. The privacy trade-off is **explicitly documented** in: this ADR, `archon-search.toml.example`, the operator guide (`UserManual/05_searching.md`), and the `[hyde] enabled` TOML comment. Operators who enable HyDE do so knowingly.
+4. The privacy trade-off is **explicitly documented** in: this ADR, `archon-search.toml.example`, the operator guide (`UserManual/60_searching.md`), and the `[hyde] enabled` TOML comment. Operators who enable HyDE do so knowingly.
 5. The `anthropic` package is an **optional dependency** (`pip install archon-search[hyde]`). Installations without it return a clear 422 when `hyde=true` is requested, rather than silently degrading.
 
 ---

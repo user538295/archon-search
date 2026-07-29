@@ -419,5 +419,5 @@ Notes:
 - `docker-compose.override.yml` — the `archon-test-runner` and `archon-dev-shell` service definitions (and the separate `archon-dev` dev server).
 - `Dockerfile` — the **production** image (different tool, different purpose — do not confuse with the test runner).
 - `.dockerignore` — explains why `tests/` is absent from the production image, and therefore why this test runner exists.
-- [`UserManual/08_running_with_docker.md`](UserManual/08_running_with_docker.md) → **Development and testing with Docker** — the operator-facing summary of these two services.
+- [`UserManual/140_running_with_docker.md`](UserManual/140_running_with_docker.md) → **Development and testing with Docker** — the operator-facing summary of these two services.
 - `CLAUDE.md` → **Common commands** and **Repository conventions** — the authoritative rules for pytest markers, parallel-worker counts, and the smoke/default split.
