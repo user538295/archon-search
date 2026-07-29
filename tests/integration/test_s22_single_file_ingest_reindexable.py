@@ -48,10 +48,16 @@ def test_single_file_ingest_reindex_job_completes(tmp_path, monkeypatch) -> None
     """
     doc = tmp_path / "single.md"
     doc.write_text("# Single\nStandalone document about semantic search.\n")
+    other = tmp_path / "other.md"
+    other.write_text("# Other\nA second standalone document about vector databases.\n")
 
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
         ingest_file_via_path(client, "single-docs", str(doc), api_key=api_key)
+        # A bystander meta-only collection — the brief observed only the
+        # NON-reindexed collection surviving, so pin the reindexed one AND the
+        # bystander against the reindex.
+        ingest_file_via_path(client, "other-docs", str(other), api_key=api_key)
 
         def _chunk_count() -> int:
             info = client.get("/collections/single-docs", headers=headers).json()
@@ -76,6 +82,8 @@ def test_single_file_ingest_reindex_job_completes(tmp_path, monkeypatch) -> None
         # pins the actual fix (scan skipped) rather than inferring it from timing.
         assert _chunk_count() == before
 
-        # Reindex preserves the collection — it is still listed afterwards.
+        # Reindex preserves the reindexed collection AND the bystander — both
+        # are still listed afterwards (reindexing one drops neither).
         names = {c["name"] for c in client.get("/collections/", headers=headers).json()}
         assert "single-docs" in names
+        assert "other-docs" in names
