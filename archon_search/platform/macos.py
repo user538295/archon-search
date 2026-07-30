@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from archon_search.platform.service import SearchServiceLifecycle, ServiceStatus
+from archon_search.platform.service import _STOP_WAIT_TIMEOUT_S, SearchServiceLifecycle, ServiceStatus
 
 log = logging.getLogger(__name__)
 
@@ -107,6 +107,9 @@ class LaunchdSearchService(SearchServiceLifecycle):
             raise RuntimeError(f"Permission denied writing service files in {data_dir}") from e
 
     def unregister(self, dry_run: bool = False) -> None:
+        # Uninstall path — unlike stop(), this deliberately does NOT wait for the
+        # process to go down (S04's /health-unreachable guarantee is a stop()
+        # contract; uninstall then removes the plist and makes no such promise).
         if dry_run:
             return
         if self._is_loaded():
@@ -150,7 +153,18 @@ class LaunchdSearchService(SearchServiceLifecycle):
                 raise RuntimeError(f"launchctl unload failed (rc={result.returncode}): {result.stderr}")
         except FileNotFoundError as exc:
             raise RuntimeError("launchctl binary not found") from exc
-        return 0
+        # launchctl unload returns before the process has exited; wait for the
+        # service to actually go down so /health is unreachable afterward (S04).
+        # Return 0 only when confirmed down; 1 (with a WARNING) if the wait timed
+        # out, so callers can distinguish a clean stop from a possibly-still-up one.
+        if self._wait_until_stopped():
+            return 0
+        log.warning(
+            "archon-search did not report stopped within %.0fs of unload; "
+            "it may still be running",
+            _STOP_WAIT_TIMEOUT_S,
+        )
+        return 1
 
     def status(self) -> ServiceStatus:
         try:

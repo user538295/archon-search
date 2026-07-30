@@ -64,7 +64,12 @@ def test_start_raises_when_systemctl_not_found() -> None:
 # ── stop ───────────────────────────────────────────────────────────────────────
 
 def test_stop_calls_systemctl_stop() -> None:
-    """stop() calls systemctl --user stop archon-search."""
+    """stop() calls systemctl --user stop archon-search.
+
+    ``_wait_until_stopped`` is patched out so this test asserts only the stop
+    command (the S04 wait is verified separately in
+    ``test_stop_waits_until_stopped``).
+    """
     from archon_search.platform.linux import SystemdSearchService
     svc = SystemdSearchService()
     calls: list[list[str]] = []
@@ -73,10 +78,55 @@ def test_stop_calls_systemctl_stop() -> None:
         calls.append(cmd)
         return _ok()
 
-    with patch.object(svc, "_run", side_effect=mock_run):
+    with (
+        patch.object(svc, "_run", side_effect=mock_run),
+        patch.object(svc, "_wait_until_stopped", return_value=True),
+    ):
         svc.stop()
 
     assert ["systemctl", "--user", "stop", "archon-search"] in calls
+
+
+def test_stop_waits_until_stopped() -> None:
+    """stop() calls _wait_until_stopped() after a successful systemctl stop (S04)."""
+    from archon_search.platform.linux import SystemdSearchService
+    svc = SystemdSearchService()
+
+    with (
+        patch.object(svc, "_run", return_value=_ok()),
+        patch.object(svc, "_wait_until_stopped", return_value=True) as mock_wait,
+    ):
+        svc.stop()
+
+    mock_wait.assert_called_once()
+
+
+def test_stop_warns_and_returns_1_when_not_stopped_in_time() -> None:
+    """stop() logs a WARNING and returns 1 when the wait times out (S04)."""
+    from archon_search.platform.linux import SystemdSearchService
+    svc = SystemdSearchService()
+
+    with (
+        patch.object(svc, "_run", return_value=_ok()),
+        patch.object(svc, "_wait_until_stopped", return_value=False),
+        patch("archon_search.platform.linux.log") as mock_log,
+    ):
+        rc = svc.stop()
+
+    assert rc == 1
+    mock_log.warning.assert_called_once()
+
+
+def test_stop_returns_0_when_confirmed_stopped() -> None:
+    """stop() returns 0 when the wait confirms the service is down (S04)."""
+    from archon_search.platform.linux import SystemdSearchService
+    svc = SystemdSearchService()
+
+    with (
+        patch.object(svc, "_run", return_value=_ok()),
+        patch.object(svc, "_wait_until_stopped", return_value=True),
+    ):
+        assert svc.stop() == 0
 
 
 def test_stop_raises_on_failure() -> None:

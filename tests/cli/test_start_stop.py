@@ -22,6 +22,8 @@ def runner() -> CliRunner:
 def mock_service() -> MagicMock:
     svc = MagicMock()
     svc.status.return_value = ServiceStatus(running=False, pid=None, uptime_seconds=None)
+    # stop() returns 0 == confirmed stopped (default for the happy-path tests).
+    svc.stop.return_value = 0
     return svc
 
 
@@ -113,6 +115,17 @@ def test_stop_prints_stopped_message(runner: CliRunner, mock_service: MagicMock)
     with patch("archon_search.cli.stop._get_service", return_value=mock_service):
         result = runner.invoke(main, ["stop"])
     assert "stopped" in result.output.lower()
+
+
+def test_stop_timeout_warns_and_omits_clean_success(runner: CliRunner, mock_service: MagicMock) -> None:
+    """When stop() returns non-zero (wait timed out), the CLI must NOT print the
+    plain 'archon-search stopped' success line — it warns instead, exit 0 (S04)."""
+    mock_service.stop.return_value = 1
+    with patch("archon_search.cli.stop._get_service", return_value=mock_service):
+        result = runner.invoke(main, ["stop"])
+    assert result.exit_code == 0, result.output
+    assert "archon-search stopped" not in result.output
+    assert "may still be running" in result.output
 
 
 def test_stop_service_error_exits_nonzero(runner: CliRunner, mock_service: MagicMock) -> None:

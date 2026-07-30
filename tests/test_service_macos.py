@@ -140,7 +140,12 @@ def test_start_raises_when_launchctl_not_found(tmp_path: Path) -> None:
 # ── stop ───────────────────────────────────────────────────────────────────────
 
 def test_stop_calls_launchctl_unload(tmp_path: Path) -> None:
-    """stop() calls launchctl unload <plist> when service is loaded."""
+    """stop() calls launchctl unload <plist> when service is loaded.
+
+    ``_wait_until_stopped`` is patched out so this test asserts only the unload
+    command (the S04 wait is verified separately in
+    ``test_stop_waits_until_stopped``).
+    """
     from archon_search.platform.macos import LaunchdSearchService
     svc = LaunchdSearchService()
     plist = tmp_path / "com.archon.search.plist"
@@ -155,10 +160,62 @@ def test_stop_calls_launchctl_unload(tmp_path: Path) -> None:
         patch.object(type(svc), "_plist_path", property(lambda self: plist)),
         patch.object(svc, "_is_loaded", return_value=True),
         patch.object(svc, "_run", side_effect=mock_run),
+        patch.object(svc, "_wait_until_stopped", return_value=True),
     ):
         svc.stop()
 
     assert calls == [["launchctl", "unload", str(plist)]]
+
+
+def test_stop_waits_until_stopped(tmp_path: Path) -> None:
+    """stop() calls _wait_until_stopped() after a successful unload (S04)."""
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    plist = tmp_path / "com.archon.search.plist"
+
+    with (
+        patch.object(type(svc), "_plist_path", property(lambda self: plist)),
+        patch.object(svc, "_is_loaded", return_value=True),
+        patch.object(svc, "_run", return_value=_ok()),
+        patch.object(svc, "_wait_until_stopped", return_value=True) as mock_wait,
+    ):
+        svc.stop()
+
+    mock_wait.assert_called_once()
+
+
+def test_stop_warns_and_returns_1_when_not_stopped_in_time(tmp_path: Path) -> None:
+    """stop() logs a WARNING and returns 1 when the wait times out (S04)."""
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    plist = tmp_path / "com.archon.search.plist"
+
+    with (
+        patch.object(type(svc), "_plist_path", property(lambda self: plist)),
+        patch.object(svc, "_is_loaded", return_value=True),
+        patch.object(svc, "_run", return_value=_ok()),
+        patch.object(svc, "_wait_until_stopped", return_value=False),
+        patch("archon_search.platform.macos.log") as mock_log,
+    ):
+        rc = svc.stop()
+
+    assert rc == 1
+    mock_log.warning.assert_called_once()
+
+
+def test_stop_returns_0_when_confirmed_stopped(tmp_path: Path) -> None:
+    """stop() returns 0 when the wait confirms the service is down (S04)."""
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    plist = tmp_path / "com.archon.search.plist"
+
+    with (
+        patch.object(type(svc), "_plist_path", property(lambda self: plist)),
+        patch.object(svc, "_is_loaded", return_value=True),
+        patch.object(svc, "_run", return_value=_ok()),
+        patch.object(svc, "_wait_until_stopped", return_value=True),
+    ):
+        assert svc.stop() == 0
 
 
 def test_stop_noop_when_not_loaded() -> None:
