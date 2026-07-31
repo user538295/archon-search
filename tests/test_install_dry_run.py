@@ -10,6 +10,8 @@ Covers:
 """
 from __future__ import annotations
 
+import sys
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -26,6 +28,81 @@ pytestmark = pytest.mark.xdist_group("install")
 # ---------------------------------------------------------------------------
 
 
+@contextmanager
+def _patched_install(
+    config_path: Path,
+    legacy_path: Path,
+    *,
+    skip_remove_legacy_service: bool = False,
+    extra_patches: dict[str, dict | None] | None = None,
+):
+    """Yield the common patch set shared by every dry-run install test.
+
+    Patches ``get_default_config_path``/``_legacy_service_path`` to the given
+    paths, plus the standard no-op patches every test in this module relies
+    on (``_remove_legacy_service``, ``_prewarm_models``, ``_check_disk_space``,
+    and the ``SearchInstaller`` instance methods that touch GPU detection,
+    provider config, and the service lifecycle).
+
+    Keys in the returned dict are the exact target strings passed to
+    ``patch``/``patch.object`` — e.g. ``"write_service_file"`` for
+    ``patch.object(SearchInstaller, "write_service_file")``, or
+    ``"archon_search.install._prewarm_models"`` for
+    ``patch("archon_search.install._prewarm_models")`` — so callers can grab
+    a specific mock for assertions without re-patching it.
+
+    ``skip_remove_legacy_service=True`` leaves ``_remove_legacy_service``
+    unpatched — used by the one test that exercises the real cleanup.
+
+    ``extra_patches`` maps additional module-level patch targets (full
+    dotted ``archon_search.install.*`` strings) to a kwargs dict (or
+    ``None`` for no kwargs), each patched via ``patch(target, **kwargs)``.
+    """
+    with ExitStack() as stack:
+        mocks: dict[str, object] = {}
+        mocks["archon_search.install.get_default_config_path"] = stack.enter_context(
+            patch("archon_search.install.get_default_config_path", return_value=config_path)
+        )
+        mocks["archon_search.install._legacy_service_path"] = stack.enter_context(
+            patch("archon_search.install._legacy_service_path", return_value=legacy_path)
+        )
+        if not skip_remove_legacy_service:
+            mocks["archon_search.install._remove_legacy_service"] = stack.enter_context(
+                patch("archon_search.install._remove_legacy_service")
+            )
+        mocks["archon_search.install._prewarm_models"] = stack.enter_context(
+            patch("archon_search.install._prewarm_models")
+        )
+        mocks["archon_search.install._check_disk_space"] = stack.enter_context(
+            patch("archon_search.install._check_disk_space")
+        )
+        mocks["detect_gpu"] = stack.enter_context(
+            patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE)
+        )
+        mocks["validate_providers"] = stack.enter_context(
+            patch.object(SearchInstaller, "validate_providers", return_value=False)
+        )
+        mocks["configure_providers"] = stack.enter_context(
+            patch.object(SearchInstaller, "configure_providers")
+        )
+        mocks["write_service_file"] = stack.enter_context(
+            patch.object(SearchInstaller, "write_service_file")
+        )
+        mocks["load_service"] = stack.enter_context(
+            patch.object(SearchInstaller, "load_service", return_value=0)
+        )
+        mocks["_wait_for_service"] = stack.enter_context(
+            patch.object(SearchInstaller, "_wait_for_service", return_value=True)
+        )
+        mocks["_is_service_running"] = stack.enter_context(
+            patch.object(SearchInstaller, "_is_service_running", return_value=False)
+        )
+        for target, kwargs in (extra_patches or {}).items():
+            kwargs = kwargs or {}
+            mocks[target] = stack.enter_context(patch(target, **kwargs))
+        yield mocks
+
+
 def _run_dry_run_fresh(tmp_path: Path, profile: str = "balanced", **run_kwargs):
     """Run wizard with --dry-run on a fresh install (no pre-existing config).
 
@@ -36,20 +113,7 @@ def _run_dry_run_fresh(tmp_path: Path, profile: str = "balanced", **run_kwargs):
 
     installer = SearchInstaller(config_file=str(config_path), dry_run=True)
 
-    with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
-    ):
+    with _patched_install(config_path, fake_legacy):
         rc = installer.run(
             non_interactive=True,
             profile=profile,
@@ -144,20 +208,7 @@ def _run_dry_run_idempotent(tmp_path: Path, profile: str = "balanced", **run_kwa
 
     installer = SearchInstaller(config_file=str(config_path), dry_run=True)
 
-    with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
-    ):
+    with _patched_install(config_path, fake_legacy):
         rc = installer.run(
             non_interactive=True,
             profile=profile,
@@ -221,22 +272,14 @@ def test_dry_run_no_fasttext_download(tmp_path: Path) -> None:
 
     installer = SearchInstaller(config_file=str(config_path), dry_run=True)
 
-    with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._download_fasttext_model") as mock_dl,
-        patch("archon_search.install._prompt_fasttext_license"),
-        patch("archon_search.install._check_disk_space"),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
-    ):
+    with _patched_install(
+        config_path,
+        fake_legacy,
+        extra_patches={
+            "archon_search.install._download_fasttext_model": None,
+            "archon_search.install._prompt_fasttext_license": None,
+        },
+    ) as mocks:
         rc = installer.run(
             non_interactive=True,
             profile="balanced",
@@ -247,6 +290,7 @@ def test_dry_run_no_fasttext_download(tmp_path: Path) -> None:
         )
 
     assert rc == 0
+    mock_dl = mocks["archon_search.install._download_fasttext_model"]
     mock_dl.assert_not_called()
 
 
@@ -257,20 +301,7 @@ def test_dry_run_no_prewarm(tmp_path: Path) -> None:
 
     installer = SearchInstaller(config_file=str(config_path), dry_run=True)
 
-    with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models") as mock_pw,
-        patch("archon_search.install._check_disk_space"),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
-    ):
+    with _patched_install(config_path, fake_legacy) as mocks:
         rc = installer.run(
             non_interactive=True,
             profile="balanced",
@@ -278,7 +309,7 @@ def test_dry_run_no_prewarm(tmp_path: Path) -> None:
         )
 
     assert rc == 0
-    mock_pw.assert_not_called()
+    mocks["archon_search.install._prewarm_models"].assert_not_called()
 
 
 def test_dry_run_force_no_bak(tmp_path: Path) -> None:
@@ -294,20 +325,12 @@ def test_dry_run_force_no_bak(tmp_path: Path) -> None:
 
     installer = SearchInstaller(config_file=str(config_path), dry_run=True)
 
-    with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
-        patch("archon_search.install.get_search_service", return_value=MagicMock()),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    with _patched_install(
+        config_path,
+        fake_legacy,
+        extra_patches={
+            "archon_search.install.get_search_service": {"return_value": MagicMock()},
+        },
     ):
         rc = installer.run(
             non_interactive=True,
@@ -332,20 +355,12 @@ def test_dry_run_force_no_service_stop(tmp_path: Path) -> None:
     installer = SearchInstaller(config_file=str(config_path), dry_run=True)
     mock_service = MagicMock()
 
-    with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
-        patch("archon_search.install.get_search_service", return_value=mock_service),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    with _patched_install(
+        config_path,
+        fake_legacy,
+        extra_patches={
+            "archon_search.install.get_search_service": {"return_value": mock_service},
+        },
     ):
         rc = installer.run(
             non_interactive=True,
@@ -378,21 +393,13 @@ def test_dry_run_does_not_register_or_start_service(tmp_path: Path, monkeypatch)
 
     installer = SearchInstaller(config_file=str(config_path), dry_run=True)
 
-    with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
-        patch("archon_search.install.get_search_service", return_value=MagicMock()),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file") as mock_write_service,
-        patch.object(SearchInstaller, "load_service", return_value=0) as mock_load_service,
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
-    ):
+    with _patched_install(
+        config_path,
+        fake_legacy,
+        extra_patches={
+            "archon_search.install.get_search_service": {"return_value": MagicMock()},
+        },
+    ) as mocks:
         rc = installer.run(
             non_interactive=True,
             profile="minimal",
@@ -400,12 +407,92 @@ def test_dry_run_does_not_register_or_start_service(tmp_path: Path, monkeypatch)
         )
 
     assert rc == 0
-    mock_write_service.assert_not_called()
-    mock_load_service.assert_not_called()
+    mocks["write_service_file"].assert_not_called()
+    mocks["load_service"].assert_not_called()
     # A dry-run must not materialise the data dir: if ~/.archon-search/
     # (here the isolated ARCHON_SEARCH_DATA_DIR) did not exist before, it must
     # still not exist after.
     assert not data_dir.exists(), "dry-run must not create the data dir"
+
+
+def test_dry_run_does_not_remove_legacy_service(tmp_path: Path, capsys) -> None:
+    """--dry-run must NOT stop/delete the legacy launchd plist (regression guard).
+
+    Step 0 of ``SearchInstaller.run`` performs legacy-service cleanup. That
+    cleanup (``_remove_legacy_service``) runs ``launchctl unload`` and unlinks
+    the plist — a destructive side effect that a dry-run must never perform.
+    A real, existing legacy plist is used here (not a stubbed no-op) so the
+    actual delete is exercised.
+    """
+    # A real legacy plist that exists on disk — the destructive path only runs
+    # when ``legacy.exists()`` is true.
+    legacy_plist = tmp_path / "com.archon.search.plist"
+    legacy_plist.write_text("<plist>legacy</plist>")
+
+    config_path = tmp_path / "archon-search.toml"  # fresh install (does NOT exist)
+
+    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+
+    with _patched_install(
+        config_path,
+        legacy_plist,
+        # NOTE: _remove_legacy_service is deliberately NOT patched — we exercise
+        # the real cleanup. subprocess is patched so no real launchctl/systemctl
+        # runs, isolating the filesystem side effect (the unlink) under test.
+        skip_remove_legacy_service=True,
+        extra_patches={"archon_search.install.subprocess.run": None},
+    ) as mocks:
+        rc = installer.run(
+            non_interactive=True,
+            profile="balanced",
+            skip_preload=True,
+        )
+
+    assert rc == 0
+    assert legacy_plist.exists(), (
+        "dry-run must NOT delete the legacy launchd plist"
+    )
+    mocks["archon_search.install.subprocess.run"].assert_not_called()
+    captured = capsys.readouterr()
+    assert f"[DRY RUN] Would remove legacy service file: {legacy_plist}" in captured.out, (
+        "dry-run must print the exact [DRY RUN] wording for the legacy service file"
+    )
+
+
+@pytest.mark.parametrize(
+    "platform_value,expected_cmd",
+    [
+        ("darwin", "launchctl"),
+        ("linux", "systemctl"),
+    ],
+)
+def test_remove_legacy_service_real_removes_plist(
+    tmp_path: Path, monkeypatch, capsys, platform_value: str, expected_cmd: str
+) -> None:
+    """The REAL (non-dry-run) `_remove_legacy_service` must unlink the plist
+    and print the removal message, on both the darwin (launchctl) and linux
+    (systemctl) branches (C1-I-20/23 regression guard).
+
+    Exercises the actual function body — the destructive path that Step 0
+    only reaches when ``self.dry_run`` is False — proving the guard added in
+    this bugfix doesn't leave the real removal logic uncovered.
+    """
+    from archon_search.install import _remove_legacy_service
+
+    plist = tmp_path / "com.archon.search.plist"
+    plist.write_text("<plist>legacy</plist>")
+
+    monkeypatch.setattr(sys, "platform", platform_value)
+
+    with patch("archon_search.install.subprocess.run") as mock_run:
+        _remove_legacy_service(plist)
+
+    assert mock_run.called, f"expected subprocess.run to be invoked on platform={platform_value!r}"
+    assert mock_run.call_args_list[0].args[0][0] == expected_cmd
+    assert not plist.exists(), "real _remove_legacy_service must unlink the legacy plist"
+
+    captured = capsys.readouterr()
+    assert f"Removed legacy service file: {plist}" in captured.out
 
 
 @pytest.mark.parametrize("scenario", ["fresh", "idempotent", "force"])
@@ -442,20 +529,12 @@ def test_dry_run_all_three_branches_no_files(tmp_path: Path, scenario: str, monk
         run_kwargs["force"] = True
         run_kwargs["delete_db"] = True
 
-    with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
-        patch("archon_search.install.get_search_service", return_value=MagicMock()),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+    with _patched_install(
+        config_path,
+        fake_legacy,
+        extra_patches={
+            "archon_search.install.get_search_service": {"return_value": MagicMock()},
+        },
     ):
         rc = installer.run(**run_kwargs)
 

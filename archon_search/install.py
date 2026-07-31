@@ -2108,7 +2108,10 @@ class SearchInstaller:
             # Step 0: legacy cleanup + log directory
             legacy = _legacy_service_path()
             if legacy.exists():
-                _remove_legacy_service(legacy)
+                if self.dry_run:
+                    print(f"[DRY RUN] Would remove legacy service file: {legacy}")
+                else:
+                    _remove_legacy_service(legacy)
             if not self.dry_run:
                 (get_data_dir() / "logs").mkdir(parents=True, exist_ok=True)
 

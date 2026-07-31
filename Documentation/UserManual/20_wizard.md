@@ -43,6 +43,12 @@ If a legacy file is found, the wizard unloads and removes it automatically. You 
 Removed legacy service file: ~/Library/LaunchAgents/com.archon.search.plist
 ```
 
+Under `--dry-run`, the wizard leaves the legacy service untouched (it does not unload or delete it) and prints what it would do instead:
+
+```
+[DRY RUN] Would remove legacy service file: ~/Library/LaunchAgents/com.archon.search.plist
+```
+
 ### Step 1 — Multilingual corpus question
 
 ```
