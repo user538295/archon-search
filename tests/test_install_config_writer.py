@@ -167,12 +167,12 @@ class TestProfileToml:
 class TestConfigureProvidersDurableWrite:
     def test_configure_providers_uses_durable_write(self, tmp_path: Path) -> None:
         """configure_providers uses atomic_write_bytes, not write_text."""
-        from archon_search.install import SearchInstaller
+        from archon_search.install import RealInstaller
 
         config_file = tmp_path / "archon-search.toml"
         config_file.write_text("[database]\n")
 
-        installer = SearchInstaller.__new__(SearchInstaller)
+        installer = RealInstaller.__new__(RealInstaller)
         installer.dry_run = False
         installer.config_file = str(config_file)
 
@@ -189,13 +189,13 @@ class TestConfigureProvidersDurableWrite:
 
     def test_configure_providers_atomic_write_receives_encoded_toml(self, tmp_path: Path) -> None:
         """atomic_write_bytes receives bytes containing the updated provider config."""
-        from archon_search.install import SearchInstaller
+        from archon_search.install import RealInstaller
         from unittest.mock import MagicMock
 
         config_file = tmp_path / "archon-search.toml"
         config_file.write_text("[database]\n")
 
-        installer = SearchInstaller.__new__(SearchInstaller)
+        installer = RealInstaller.__new__(RealInstaller)
         installer.dry_run = False
         installer.config_file = str(config_file)
         installer.cfg = MagicMock()

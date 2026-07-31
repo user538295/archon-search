@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon_search.install import SearchInstaller, _execute_force_reinstall
+from archon_search.install import DryRunInstaller, _execute_force_reinstall, create_installer
 from archon_search.platform.types import GpuType
 from archon_search.profiles import get_profile
 
@@ -46,7 +46,7 @@ def _patched_install(
 
     Keys in the returned dict are the exact target strings passed to
     ``patch``/``patch.object`` — e.g. ``"write_service_file"`` for
-    ``patch.object(SearchInstaller, "write_service_file")``, or
+    ``patch.object(DryRunInstaller, "write_service_file")``, or
     ``"archon_search.install._prewarm_models"`` for
     ``patch("archon_search.install._prewarm_models")`` — so callers can grab
     a specific mock for assertions without re-patching it.
@@ -77,25 +77,25 @@ def _patched_install(
             patch("archon_search.install._check_disk_space")
         )
         mocks["detect_gpu"] = stack.enter_context(
-            patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE)
+            patch.object(DryRunInstaller, "detect_gpu", return_value=GpuType.NONE)
         )
         mocks["validate_providers"] = stack.enter_context(
-            patch.object(SearchInstaller, "validate_providers", return_value=False)
+            patch.object(DryRunInstaller, "validate_providers", return_value=False)
         )
         mocks["configure_providers"] = stack.enter_context(
-            patch.object(SearchInstaller, "configure_providers")
+            patch.object(DryRunInstaller, "configure_providers")
         )
         mocks["write_service_file"] = stack.enter_context(
-            patch.object(SearchInstaller, "write_service_file")
+            patch.object(DryRunInstaller, "write_service_file")
         )
         mocks["load_service"] = stack.enter_context(
-            patch.object(SearchInstaller, "load_service", return_value=0)
+            patch.object(DryRunInstaller, "load_service", return_value=0)
         )
         mocks["_wait_for_service"] = stack.enter_context(
-            patch.object(SearchInstaller, "_wait_for_service", return_value=True)
+            patch.object(DryRunInstaller, "_wait_for_service", return_value=True)
         )
         mocks["_is_service_running"] = stack.enter_context(
-            patch.object(SearchInstaller, "_is_service_running", return_value=False)
+            patch.object(DryRunInstaller, "_is_service_running", return_value=False)
         )
         for target, kwargs in (extra_patches or {}).items():
             kwargs = kwargs or {}
@@ -111,7 +111,7 @@ def _run_dry_run_fresh(tmp_path: Path, profile: str = "balanced", **run_kwargs):
     config_path = tmp_path / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"  # does NOT exist
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+    installer = create_installer(config_file=str(config_path), dry_run=True)
 
     with _patched_install(config_path, fake_legacy):
         rc = installer.run(
@@ -206,7 +206,7 @@ def _run_dry_run_idempotent(tmp_path: Path, profile: str = "balanced", **run_kwa
     config_path = _write_idempotent_config(tmp_path, profile)
     fake_legacy = tmp_path / "fake.plist"  # does NOT exist
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+    installer = create_installer(config_file=str(config_path), dry_run=True)
 
     with _patched_install(config_path, fake_legacy):
         rc = installer.run(
@@ -270,7 +270,7 @@ def test_dry_run_no_fasttext_download(tmp_path: Path) -> None:
     config_path = tmp_path / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+    installer = create_installer(config_file=str(config_path), dry_run=True)
 
     with _patched_install(
         config_path,
@@ -299,7 +299,7 @@ def test_dry_run_no_prewarm(tmp_path: Path) -> None:
     config_path = tmp_path / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+    installer = create_installer(config_file=str(config_path), dry_run=True)
 
     with _patched_install(config_path, fake_legacy) as mocks:
         rc = installer.run(
@@ -323,7 +323,7 @@ def test_dry_run_force_no_bak(tmp_path: Path) -> None:
 
     assert not bak_path.exists(), "precondition: no .bak before test"
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+    installer = create_installer(config_file=str(config_path), dry_run=True)
 
     with _patched_install(
         config_path,
@@ -352,7 +352,7 @@ def test_dry_run_force_no_service_stop(tmp_path: Path) -> None:
     config_path.write_text(_profile_toml("balanced", False))
     fake_legacy = tmp_path / "fake.plist"
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+    installer = create_installer(config_file=str(config_path), dry_run=True)
     mock_service = MagicMock()
 
     with _patched_install(
@@ -391,7 +391,7 @@ def test_dry_run_does_not_register_or_start_service(tmp_path: Path, monkeypatch)
     config_path = data_dir / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"  # does NOT exist
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+    installer = create_installer(config_file=str(config_path), dry_run=True)
 
     with _patched_install(
         config_path,
@@ -431,7 +431,7 @@ def test_dry_run_does_not_remove_legacy_service(tmp_path: Path, capsys) -> None:
 
     config_path = tmp_path / "archon-search.toml"  # fresh install (does NOT exist)
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+    installer = create_installer(config_file=str(config_path), dry_run=True)
 
     with _patched_install(
         config_path,
@@ -519,7 +519,7 @@ def test_dry_run_all_three_branches_no_files(tmp_path: Path, scenario: str, monk
     files_before = set(tmp_path.rglob("*"))
     config_before = config_path.read_text() if config_path.exists() else None
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+    installer = create_installer(config_file=str(config_path), dry_run=True)
     run_kwargs: dict = {
         "non_interactive": True,
         "profile": "balanced",
@@ -550,3 +550,86 @@ def test_dry_run_all_three_branches_no_files(tmp_path: Path, scenario: str, monk
     assert config_after == config_before, (
         f"Dry-run ({scenario} branch) must not modify config content in place"
     )
+
+
+# ---------------------------------------------------------------------------
+# db_path override — dry-run must preview, never mutate, and still surface
+# a writability failure a real run would hit (regression: dry-run silently
+# skipped the os.access(W_OK) check and gave a false all-clear).
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_db_path_not_created(tmp_path: Path) -> None:
+    """--dry-run with a db_path override must NOT create the directory."""
+    db_dir = tmp_path / "custom_db"
+    assert not db_dir.exists()
+
+    _, rc, _ = _run_dry_run_fresh(tmp_path, db_path=str(db_dir))
+
+    assert rc == 0
+    assert not db_dir.exists(), "db_path directory must NOT be created in dry-run mode"
+
+
+def test_dry_run_db_path_banner_printed(tmp_path: Path, capsys) -> None:
+    """--dry-run with a db_path override announces what it would do."""
+    db_dir = tmp_path / "custom_db"
+
+    _, rc, _ = _run_dry_run_fresh(tmp_path, db_path=str(db_dir))
+
+    assert rc == 0
+    assert "[DRY RUN] Would create db_path directory" in capsys.readouterr().out
+
+
+def test_dry_run_db_path_not_writable_previews_failure(tmp_path: Path) -> None:
+    """--dry-run must fail on an unwritable db_path, mirroring the real run."""
+    db_dir = tmp_path / "custom_db"
+
+    with patch("archon_search.install.os.access", return_value=False):
+        _, rc, _ = _run_dry_run_fresh(tmp_path, db_path=str(db_dir))
+
+    assert rc == 1, "dry-run must surface the writability failure a real run would hit"
+    assert not db_dir.exists(), "db_path directory must NOT be created in dry-run mode"
+
+
+# ---------------------------------------------------------------------------
+# BACKSTOP: the guarantee the class split alone cannot enforce.
+# A full dry-run must never invoke a system-changing seam — anywhere in run(),
+# including inline steps not routed through the abstract methods. If a future
+# edit lets a mutation reach dry-run, exactly one of these assertions fails.
+# ---------------------------------------------------------------------------
+
+_DANGEROUS_SEAMS = (
+    "archon_search.install._download_fasttext_model",
+    "archon_search.install.atomic_write_bytes",
+    "archon_search.install.subprocess.run",
+    "archon_search.install.shutil.copy2",
+    "archon_search.install.rmtree",
+    "archon_search.install.os.chmod",
+)
+
+
+def test_dry_run_backstop_touches_nothing_real(tmp_path: Path) -> None:
+    """A feature-rich dry-run must not call any real filesystem/subprocess seam."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+    installer = create_installer(config_file=str(config_path), dry_run=True)
+
+    with _patched_install(config_path, fake_legacy) as mocks, ExitStack() as stack:
+        seams = {name: stack.enter_context(patch(name)) for name in _DANGEROUS_SEAMS}
+        rc = installer.run(
+            non_interactive=True,
+            profile="balanced",
+            multilingual=True,
+            accept_fasttext_license=True,
+            accept_jina_license=True,
+            skip_preload=False,
+            server_key="ab" * 32,
+            db_path=str(tmp_path / "custom_db"),
+            enable_hyde=True,
+        )
+
+    assert rc == 0
+    for name, mock in seams.items():
+        assert not mock.called, f"dry-run called a real seam: {name}"
+    mocks["archon_search.install._prewarm_models"].assert_not_called()
+    mocks["archon_search.install._remove_legacy_service"].assert_not_called()

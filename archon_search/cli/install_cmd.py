@@ -9,7 +9,7 @@ from shutil import rmtree
 import click
 
 from archon_search.cli._helpers import _CONTAINER_MSG, _get_service
-from archon_search.install import SearchInstaller
+from archon_search.install import create_installer
 from archon_search.key_manager import _HEX_RE
 
 _TOP_K_MAX = 100
@@ -161,7 +161,7 @@ def wizard(
         telemetry_retention_days = None
 
     sys.exit(
-        SearchInstaller(
+        create_installer(
             config_file=str(config_path) if config_path else None,
             dry_run=dry_run,
         ).run(
@@ -206,7 +206,7 @@ def install(dry_run: bool, config_path: Path | None) -> None:
         click.echo(_CONTAINER_MSG, err=True)
         raise SystemExit(1)
     try:
-        rc = SearchInstaller(
+        rc = create_installer(
             config_file=str(config_path) if config_path else None,
             dry_run=dry_run,
         ).run_register_and_start()

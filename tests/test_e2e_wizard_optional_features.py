@@ -23,7 +23,7 @@ import tomlkit
 from click.testing import CliRunner
 
 from archon_search.cli.main import main
-from archon_search.install import InstallError, SearchInstaller
+from archon_search.install import InstallError, RealInstaller
 from archon_search.platform.types import GpuType
 
 
@@ -101,7 +101,7 @@ def _patched_wizard(**extra_module_patches: Any) -> Generator[None, None, None]:
     }
 
     with patch.multiple("archon_search.install", **module_level):
-        with patch.multiple(SearchInstaller, **installer_patches):
+        with patch.multiple(RealInstaller, **installer_patches):
             yield
 
 

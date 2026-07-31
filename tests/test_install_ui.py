@@ -450,12 +450,12 @@ def test_mask_api_key_with_equals_in_value(tmp_path):
 def test_next_steps_not_printed_in_dry_run(tmp_path, capsys):
     """_print_next_steps must NOT be called during a dry-run wizard run."""
     from unittest.mock import patch, MagicMock
-    from archon_search.install import SearchInstaller
+    from archon_search.install import BaseInstaller, DryRunInstaller, create_installer
     from archon_search.platform.types import GpuType
 
     config_path = tmp_path / "archon-search.toml"
     fake_legacy = tmp_path / "fake.plist"
-    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+    installer = create_installer(config_file=str(config_path), dry_run=True)
 
     with (
         patch("archon_search.install.get_default_config_path", return_value=config_path),
@@ -463,13 +463,13 @@ def test_next_steps_not_printed_in_dry_run(tmp_path, capsys):
         patch("archon_search.install._remove_legacy_service"),
         patch("archon_search.install._prewarm_models"),
         patch("archon_search.install._check_disk_space"),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(BaseInstaller, "validate_providers", return_value=False),
+        patch.object(DryRunInstaller, "configure_providers"),
+        patch.object(DryRunInstaller, "write_service_file"),
+        patch.object(DryRunInstaller, "load_service", return_value=0),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
     ):
         rc = installer.run(non_interactive=True, profile="balanced", skip_preload=True)
 

@@ -280,7 +280,7 @@ def _run_wizard_dry_run(tmp_path: Path) -> object:
     do not contend on ``~/.archon-search/.install.lock``.
     """
     from archon_search.cli.main import main
-    from archon_search.install import SearchInstaller
+    from archon_search.install import RealInstaller
 
     config_path = tmp_path / "archon-search.toml"
     runner = CliRunner()
@@ -291,7 +291,7 @@ def _run_wizard_dry_run(tmp_path: Path) -> object:
                         _legacy_service_path=MagicMock(return_value=tmp_path / "fake.plist"),
                         _remove_legacy_service=MagicMock(),
                         _acquire_install_lock=_noop_install_lock):
-        with patch.multiple(SearchInstaller, **_make_wizard_patches()):
+        with patch.multiple(RealInstaller, **_make_wizard_patches()):
             result = runner.invoke(main, [
                 "wizard",
                 "--dry-run",

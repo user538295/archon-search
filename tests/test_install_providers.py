@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import tomlkit
 
-from archon_search.install import SearchInstaller
+from archon_search.install import create_installer
 from archon_search.platform.types import GpuType
 
 
@@ -20,7 +20,7 @@ def _make_minimal_toml(tmp_path: Path) -> Path:
 class TestConfigureProviders:
     def test_configure_providers_cuda_writes_cuda_provider(self, tmp_path: Path) -> None:
         toml_file = _make_minimal_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         installer.configure_providers(GpuType.CUDA)
 
         doc = tomlkit.parse(toml_file.read_text())
@@ -28,7 +28,7 @@ class TestConfigureProviders:
 
     def test_configure_providers_metal_writes_coreml_provider(self, tmp_path: Path) -> None:
         toml_file = _make_minimal_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         installer.configure_providers(GpuType.METAL)
 
         doc = tomlkit.parse(toml_file.read_text())
@@ -37,7 +37,7 @@ class TestConfigureProviders:
     def test_configure_providers_none_does_not_write(self, tmp_path: Path) -> None:
         toml_file = _make_minimal_toml(tmp_path)
         original_content = toml_file.read_text()
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         installer.configure_providers(GpuType.NONE)
 
         doc = tomlkit.parse(toml_file.read_text())
@@ -45,7 +45,7 @@ class TestConfigureProviders:
 
     def test_configure_providers_dry_run_does_not_write(self, tmp_path: Path) -> None:
         toml_file = _make_minimal_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file), dry_run=True)
+        installer = create_installer(config_file=str(toml_file), dry_run=True)
         installer.configure_providers(GpuType.CUDA)
 
         doc = tomlkit.parse(toml_file.read_text())
@@ -61,7 +61,7 @@ class TestConfigureProviders:
         import logging
         from unittest.mock import patch
 
-        installer = SearchInstaller(config_file=None)
+        installer = create_installer(config_file=None)
         expected_path = Path.home() / ".archon-search" / "archon-search.toml"
 
         # Patch Path.exists() only for the fallback path so it returns False (file absent).
@@ -87,7 +87,7 @@ class TestConfigureProviders:
             '[server]\nhost = "127.0.0.1"\n\n[database]\nproviders = ["CUDAExecutionProvider", "CPUExecutionProvider"]\n',
             encoding="utf-8",
         )
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         installer.configure_providers(GpuType.CUDA)
 
         doc = tomlkit.parse(toml_file.read_text())

@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 import tomlkit
 
-from archon_search.install import SearchInstaller
+from archon_search.install import create_installer
 
 
 def _make_toml(tmp_path: Path) -> Path:
@@ -35,7 +35,7 @@ def _make_toml(tmp_path: Path) -> Path:
 class TestConfigureRerankerProviders:
     def test_writes_empty_list_to_toml(self, tmp_path: Path) -> None:
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         installer.configure_reranker_providers([])
 
         doc = tomlkit.parse(toml_file.read_text())
@@ -43,7 +43,7 @@ class TestConfigureRerankerProviders:
 
     def test_dry_run_does_not_write(self, tmp_path: Path) -> None:
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file), dry_run=True)
+        installer = create_installer(config_file=str(toml_file), dry_run=True)
         installer.configure_reranker_providers([])
 
         doc = tomlkit.parse(toml_file.read_text())
@@ -52,7 +52,7 @@ class TestConfigureRerankerProviders:
     def test_missing_config_file_logs_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        installer = SearchInstaller(config_file="/nonexistent/path/archon-search.toml")
+        installer = create_installer(config_file="/nonexistent/path/archon-search.toml")
         with caplog.at_level(logging.WARNING):
             installer.configure_reranker_providers([])
         assert "not found" in caplog.text
@@ -60,7 +60,7 @@ class TestConfigureRerankerProviders:
     def test_creates_database_section_if_absent(self, tmp_path: Path) -> None:
         toml_file = tmp_path / "archon-search.toml"
         toml_file.write_text("[server]\nport = 8765\n", encoding="utf-8")
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         installer.configure_reranker_providers([])
 
         doc = tomlkit.parse(toml_file.read_text())
@@ -68,7 +68,7 @@ class TestConfigureRerankerProviders:
 
     def test_writes_nonempty_list_to_toml(self, tmp_path: Path) -> None:
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         installer.configure_reranker_providers(["CPUExecutionProvider"])
 
         doc = tomlkit.parse(toml_file.read_text())
@@ -76,7 +76,7 @@ class TestConfigureRerankerProviders:
 
     def test_idempotent_does_not_rewrite_when_already_set(self, tmp_path: Path) -> None:
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         installer.configure_reranker_providers([])
         mtime1 = toml_file.stat().st_mtime_ns
         installer.configure_reranker_providers([])  # second call
@@ -92,7 +92,7 @@ class TestConfigureRerankerProviders:
 class TestClearRerankerProviders:
     def test_removes_key_from_toml(self, tmp_path: Path) -> None:
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         installer.configure_reranker_providers([])  # write stale split
         installer.clear_reranker_providers()
 
@@ -101,7 +101,7 @@ class TestClearRerankerProviders:
 
     def test_no_op_when_key_absent(self, tmp_path: Path) -> None:
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         installer.clear_reranker_providers()  # no reranker_providers present → no error
 
         doc = tomlkit.parse(toml_file.read_text())
@@ -109,9 +109,9 @@ class TestClearRerankerProviders:
 
     def test_dry_run_does_not_clear(self, tmp_path: Path) -> None:
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         installer.configure_reranker_providers([])  # write split
-        installer_dry = SearchInstaller(config_file=str(toml_file), dry_run=True)
+        installer_dry = create_installer(config_file=str(toml_file), dry_run=True)
         installer_dry.clear_reranker_providers()
 
         doc = tomlkit.parse(toml_file.read_text())
@@ -120,7 +120,7 @@ class TestClearRerankerProviders:
     def test_preserves_manual_value(self, tmp_path: Path) -> None:
         """A user-set non-empty reranker_providers must not be deleted by the self-heal."""
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         installer.configure_reranker_providers(["CPUExecutionProvider"])
         installer.clear_reranker_providers()
 
@@ -138,10 +138,10 @@ class TestValidateEmbedderOnly:
         self, tmp_path: Path
     ) -> None:
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
 
         with patch(
-            "archon_search.install.SearchInstaller.validate_embedder_only",
+            "archon_search.install.BaseInstaller.validate_embedder_only",
             wraps=installer.validate_embedder_only,
         ):
             with patch(
@@ -160,7 +160,7 @@ class TestValidateEmbedderOnly:
 
     def test_returns_false_on_embedder_failure(self, tmp_path: Path) -> None:
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
 
         with patch(
             "archon_search.model_validation.validate_providers_shared",
@@ -174,7 +174,7 @@ class TestValidateEmbedderOnly:
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
 
         with patch(
             "archon_search.model_validation.validate_providers_shared",
@@ -213,7 +213,7 @@ class TestWizardCoreMlSplitLogic:
         from archon_search.platform.types import GpuType
 
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
 
         with patch.object(installer, "validate_providers", return_value=True):
             labels, gpu_prov, split = installer._probe_and_configure_coreml(GpuType.METAL)
@@ -232,7 +232,7 @@ class TestWizardCoreMlSplitLogic:
         from archon_search.platform.types import GpuType
 
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
 
         with patch.object(installer, "validate_providers", return_value=False):
             with patch.object(installer, "validate_embedder_only", return_value=True):
@@ -250,7 +250,7 @@ class TestWizardCoreMlSplitLogic:
         from archon_search.platform.types import GpuType
 
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
 
         with patch.object(installer, "validate_providers", return_value=False):
             with patch.object(installer, "validate_embedder_only", return_value=False):
@@ -269,7 +269,7 @@ class TestWizardCoreMlSplitLogic:
         from archon_search.platform.types import GpuType
 
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         # Simulate an existing split config written by a prior wizard run
         installer.configure_reranker_providers([])
 
@@ -308,7 +308,7 @@ class TestWizardCoreMlSplitLogic:
         from archon_search.profiles import InstallProfile
 
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         prof = InstallProfile(
             name="test", embedder="e", reranker="r", chunk_size=512,
             download_mb=0, quality_stars="", cpu_ms=0, metal_ms=0, memory_gb=0,
@@ -324,7 +324,7 @@ class TestWizardCoreMlSplitLogic:
         from archon_search.profiles import InstallProfile
 
         toml_file = _make_toml(tmp_path)
-        installer = SearchInstaller(config_file=str(toml_file))
+        installer = create_installer(config_file=str(toml_file))
         prof = InstallProfile(
             name="test", embedder="e", reranker="r", chunk_size=512,
             download_mb=0, quality_stars="", cpu_ms=0, metal_ms=0, memory_gb=0,

@@ -92,33 +92,33 @@ def _make_full_config(tmp_path: Path) -> object:
 class TestSearchInstallerInit:
     def test_init_succeeds_without_telegram_token(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """SearchInstaller.__init__ must not require TELEGRAM_BOT_TOKEN — uses archon_search.config."""
-        from archon_search.install import SearchInstaller
+        from archon_search.install import create_installer
 
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
         config_toml = tmp_path / "archon-search.toml"
         config_toml.write_text("")  # empty — valid minimal config
 
         with patch("archon_search.install.load_config", return_value=MagicMock()):
-            installer = SearchInstaller(config_file=str(config_toml))
+            installer = create_installer(config_file=str(config_toml))
 
         assert installer.cfg is not None
 
     def test_default_config_file_path(self) -> None:
         """SearchInstaller default config_file must be None (uses archon_search.config default path)."""
-        from archon_search.install import SearchInstaller
+        from archon_search.install import create_installer
 
         with patch("archon_search.install.load_config", return_value=MagicMock()) as mock_load:
-            installer = SearchInstaller()
+            installer = create_installer()
         assert installer.config_file is None
         mock_load.assert_called_once_with(path=None)
 
 
 def _make_installer(tmp_path: Path, dry_run: bool = False) -> object:
-    """Create a SearchInstaller with a fake config injected."""
-    from archon_search.install import SearchInstaller
+    """Create an installer with a fake config injected (bypasses __init__)."""
+    from archon_search.install import DryRunInstaller, RealInstaller
 
-    installer = SearchInstaller.__new__(SearchInstaller)
-    installer.dry_run = dry_run
+    cls = DryRunInstaller if dry_run else RealInstaller
+    installer = cls.__new__(cls)
     installer.cfg = _make_search_config(tmp_path)
     installer.config_file = str(tmp_path / "archon-search.toml")
     return installer
@@ -2006,3 +2006,125 @@ class TestConsoleIntegration:
         assert "ready" in out.lower() or "timed out" in out.lower() or "timeout" in out.lower(), (
             f"Expected timeout/ready info in stdout: {out}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Strategy-pattern structural guarantees (BaseInstaller ABC / InstallerProtocol)
+# ---------------------------------------------------------------------------
+
+
+class TestInstallerStructure:
+    def test_base_installer_cannot_be_instantiated_directly(self) -> None:
+        """BaseInstaller is an ABC with abstract destructive methods — cannot be built."""
+        from archon_search.install import BaseInstaller
+
+        with pytest.raises(TypeError):
+            BaseInstaller()  # type: ignore[abstract]
+
+    def test_base_installer_abstractmethods_are_exactly_the_destructive_ops(self) -> None:
+        """Locks the abstract boundary: exactly these mutation methods are abstract.
+
+        Every step in run()/run_uninstall() that touches the filesystem, packages,
+        or the service is routed through one of these abstract methods (Real
+        executes, Dry narrates). Adding a mutation here without marking it abstract
+        would let it run unguarded in dry-run — this test fails if the set drifts.
+
+        Note: this documents the routed mutation surface. It is NOT a full safety
+        proof — a raw mutation typed inline into run() bypasses it. That case is
+        caught by test_dry_run_backstop_touches_nothing_real, which asserts a full
+        dry-run invokes no real seam anywhere.
+        """
+        from archon_search.install import BaseInstaller
+
+        assert BaseInstaller.__abstractmethods__ == frozenset({
+            "install_deps",
+            "configure_providers",
+            "configure_reranker_providers",
+            "clear_reranker_providers",
+            "create_data_dir",
+            "write_service_file",
+            "load_service",
+            "unload_service",
+            "install_lock",
+            "remove_legacy_service",
+            "create_logs_dir",
+            "download_fasttext_model",
+            "prepare_db_path",
+            "persist_fresh_config",
+            "persist_reinstall_config",
+            "write_gpu_providers_disabled",
+            "write_server_key",
+            "preload_models",
+            "register_and_start",
+            "delete_database",
+        })
+
+
+class TestCreateInstallerFactory:
+    def test_dry_run_true_returns_dry_run_installer(self, tmp_path: Path) -> None:
+        from archon_search.install import DryRunInstaller, InstallerProtocol, create_installer
+
+        config_toml = tmp_path / "archon-search.toml"
+        config_toml.write_text("")
+
+        with patch("archon_search.install.load_config", return_value=MagicMock()):
+            installer = create_installer(config_file=str(config_toml), dry_run=True)
+
+        assert isinstance(installer, DryRunInstaller)
+        assert isinstance(installer, InstallerProtocol)
+        assert installer.config_file == str(config_toml)
+
+    def test_dry_run_false_returns_real_installer(self, tmp_path: Path) -> None:
+        from archon_search.install import InstallerProtocol, RealInstaller, create_installer
+
+        config_toml = tmp_path / "archon-search.toml"
+        config_toml.write_text("")
+
+        with patch("archon_search.install.load_config", return_value=MagicMock()):
+            installer = create_installer(config_file=str(config_toml), dry_run=False)
+
+        assert isinstance(installer, RealInstaller)
+        assert isinstance(installer, InstallerProtocol)
+        assert installer.config_file == str(config_toml)
+
+
+class TestDryRunGuardAgainstRealServiceCalls:
+    """S37 regression guard: dry-run must never reach the real service path."""
+
+    def _dry_run_installer(self, tmp_path: Path) -> object:
+        from archon_search.install import create_installer
+
+        config_toml = tmp_path / "archon-search.toml"
+        config_toml.write_text("")
+        with patch("archon_search.install.load_config", return_value=MagicMock()):
+            return create_installer(config_file=str(config_toml), dry_run=True)
+
+    def test_write_service_file_calls_service_with_dry_run_true(self, tmp_path: Path) -> None:
+        installer = self._dry_run_installer(tmp_path)
+        svc = MagicMock()
+
+        with patch("archon_search.install.get_search_service", return_value=svc):
+            installer.write_service_file()
+
+        svc.pre_activate_cleanup.assert_called_once_with(dry_run=True)
+        svc.register.assert_called_once_with(dry_run=True)
+
+    def test_load_service_calls_service_with_dry_run_true(self, tmp_path: Path) -> None:
+        installer = self._dry_run_installer(tmp_path)
+        svc = MagicMock()
+        svc.start.return_value = 0
+
+        with patch("archon_search.install.get_search_service", return_value=svc):
+            installer.load_service()
+
+        svc.start.assert_called_once_with(dry_run=True)
+
+    def test_unload_service_calls_service_with_dry_run_true(self, tmp_path: Path) -> None:
+        installer = self._dry_run_installer(tmp_path)
+        svc = MagicMock()
+        svc.stop.return_value = 0
+
+        with patch("archon_search.install.get_search_service", return_value=svc):
+            installer.unload_service()
+
+        svc.stop.assert_called_once_with(dry_run=True)

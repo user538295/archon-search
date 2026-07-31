@@ -121,7 +121,7 @@ def test_install_delegates_to_search_installer(runner: CliRunner, tmp_path: Path
     config_path = tmp_path / "archon-search.toml"
     config_path.write_text("[database]\n")
     run_mock = MagicMock(return_value=0)
-    with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
+    with patch("archon_search.cli.install_cmd.create_installer") as installer_cls:
         installer_cls.return_value.run_register_and_start = run_mock
         result = runner.invoke(main, ["install", "--config", str(config_path)])
     assert result.exit_code == 0, result.output
@@ -133,7 +133,7 @@ def test_install_dry_run_passed_to_installer(runner: CliRunner, tmp_path: Path) 
     config_path = tmp_path / "archon-search.toml"
     config_path.write_text("[database]\n")
     run_mock = MagicMock(return_value=0)
-    with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
+    with patch("archon_search.cli.install_cmd.create_installer") as installer_cls:
         installer_cls.return_value.run_register_and_start = run_mock
         result = runner.invoke(main, ["install", "--config", str(config_path), "--dry-run"])
     assert result.exit_code == 0, result.output
@@ -146,7 +146,7 @@ def test_install_migrates_legacy_service_definition(runner: CliRunner, mock_serv
     config_path = tmp_path / "archon-search.toml"
     config_path.write_text("[database]\n")
     run_mock = MagicMock(return_value=0)
-    with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
+    with patch("archon_search.cli.install_cmd.create_installer") as installer_cls:
         installer_cls.return_value.run_register_and_start = run_mock
         result = runner.invoke(main, ["install", "--config", str(config_path)])
     assert result.exit_code == 0, result.output

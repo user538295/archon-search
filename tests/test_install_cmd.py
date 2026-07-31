@@ -22,7 +22,7 @@ def runner() -> CliRunner:
 
 def test_install_cmd_no_config_exits_with_message(runner: CliRunner, tmp_path: Path) -> None:
     run_mock = MagicMock(return_value=1)
-    with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
+    with patch("archon_search.cli.install_cmd.create_installer") as installer_cls:
         installer_cls.return_value.run_register_and_start = run_mock
         result = runner.invoke(main, ["install"])
 
@@ -34,7 +34,7 @@ def test_install_cmd_with_config_calls_register_and_start(runner: CliRunner, tmp
     config_path.write_text("[database]\n")
 
     run_mock = MagicMock(return_value=0)
-    with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
+    with patch("archon_search.cli.install_cmd.create_installer") as installer_cls:
         installer_cls.return_value.run_register_and_start = run_mock
         result = runner.invoke(main, ["install", "--config", str(config_path)])
 
@@ -47,7 +47,7 @@ def test_install_cmd_dry_run_passes_through(runner: CliRunner, tmp_path: Path) -
     config_path.write_text("[database]\n")
 
     run_mock = MagicMock(return_value=0)
-    with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
+    with patch("archon_search.cli.install_cmd.create_installer") as installer_cls:
         installer_cls.return_value.run_register_and_start = run_mock
         result = runner.invoke(main, ["install", "--config", str(config_path), "--dry-run"])
 
@@ -76,7 +76,7 @@ def test_install_multilingual_non_interactive_with_flag(runner: CliRunner) -> No
     """When --accept-fasttext-license is set, _prompt_fasttext_license is called with accept_fasttext_license=True."""
     with patch("archon_search.install._prompt_fasttext_license") as mock_prompt, \
          patch("archon_search.install._download_fasttext_model") as mock_download, \
-         patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+         patch("archon_search.install.BaseInstaller.run", return_value=0) as mock_run:
         result = runner.invoke(
             main,
             ["wizard", "--multilingual", "--accept-fasttext-license", "--non-interactive",
@@ -93,7 +93,7 @@ def test_install_multilingual_non_interactive_with_flag(runner: CliRunner) -> No
 
 def test_install_without_fasttext_flag_passes_false(runner: CliRunner) -> None:
     """When --accept-fasttext-license is NOT set, accept_fasttext_license=False is passed."""
-    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+    with patch("archon_search.install.BaseInstaller.run", return_value=0) as mock_run:
         result = runner.invoke(
             main,
             ["wizard", "--multilingual", "--non-interactive", "--accept-jina-license"],
@@ -143,7 +143,7 @@ def test_wizard_help_contains_new_flags(runner: CliRunner) -> None:
 
 def test_wizard_non_interactive_with_code_flag(runner: CliRunner) -> None:
     """--code passes install_code=True to run()."""
-    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+    with patch("archon_search.install.BaseInstaller.run", return_value=0) as mock_run:
         runner.invoke(main, ["wizard", "--non-interactive", "--code", "--profile", "minimal"])
     mock_run.assert_called_once()
     kwargs = mock_run.call_args.kwargs
@@ -152,7 +152,7 @@ def test_wizard_non_interactive_with_code_flag(runner: CliRunner) -> None:
 
 def test_wizard_routing_strategy_hybrid(runner: CliRunner) -> None:
     """--routing-strategy hybrid passes routing_strategy='hybrid' to run()."""
-    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+    with patch("archon_search.install.BaseInstaller.run", return_value=0) as mock_run:
         runner.invoke(
             main,
             ["wizard", "--non-interactive", "--routing-strategy", "hybrid", "--profile", "minimal"],
@@ -178,7 +178,7 @@ def test_install_command_does_not_have_new_flags(runner: CliRunner) -> None:
 
 def test_no_multilingual_cli_flag(runner: CliRunner) -> None:
     """--no-multilingual passes multilingual=False to run()."""
-    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+    with patch("archon_search.install.BaseInstaller.run", return_value=0) as mock_run:
         runner.invoke(
             main,
             ["wizard", "--no-multilingual", "--non-interactive", "--dry-run"],
@@ -190,7 +190,7 @@ def test_no_multilingual_cli_flag(runner: CliRunner) -> None:
 
 def test_multilingual_cli_flag(runner: CliRunner) -> None:
     """--multilingual passes multilingual=True to run()."""
-    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+    with patch("archon_search.install.BaseInstaller.run", return_value=0) as mock_run:
         runner.invoke(
             main,
             ["wizard", "--multilingual", "--non-interactive", "--dry-run"],
@@ -202,7 +202,7 @@ def test_multilingual_cli_flag(runner: CliRunner) -> None:
 
 def test_no_multilingual_flag_no_prompt_shown(runner: CliRunner) -> None:
     """--no-multilingual + interactive mode: multilingual prompt text absent from stdout."""
-    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+    with patch("archon_search.install.BaseInstaller.run", return_value=0) as mock_run:
         result = runner.invoke(
             main,
             ["wizard", "--no-multilingual", "--dry-run"],
@@ -250,7 +250,7 @@ _VALID_SERVER_KEY_64 = "deadbeef" * 8  # 64 lowercase hex chars
 
 def test_server_key_valid_hex_32_chars_accepted(runner: CliRunner) -> None:
     """A valid 32-char lowercase hex key passes Click validation and reaches run()."""
-    with patch("archon_search.install.SearchInstaller.run", return_value=0) as mock_run:
+    with patch("archon_search.install.BaseInstaller.run", return_value=0) as mock_run:
         result = runner.invoke(
             main,
             ["wizard", "--server-key", _VALID_SERVER_KEY_32, "--non-interactive", "--dry-run"],
@@ -285,7 +285,7 @@ def test_server_key_31_chars_rejected(runner: CliRunner) -> None:
 
 def test_server_key_32_chars_accepted(runner: CliRunner) -> None:
     """A 32-char hex string passes parse-time validation."""
-    with patch("archon_search.install.SearchInstaller.run", return_value=0):
+    with patch("archon_search.install.BaseInstaller.run", return_value=0):
         result = runner.invoke(
             main,
             ["wizard", "--server-key", _VALID_SERVER_KEY_32, "--non-interactive", "--dry-run"],
@@ -319,7 +319,7 @@ def test_install_container_env_emits_clean_message_exits_1(
     from archon_search.cli._helpers import _CONTAINER_MSG
 
     monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
-    with patch("archon_search.cli.install_cmd.SearchInstaller") as mock_installer_cls:
+    with patch("archon_search.cli.install_cmd.create_installer") as mock_installer_cls:
         result = runner.invoke(main, ["install"], catch_exceptions=False)
     assert result.exit_code == 1
     assert _CONTAINER_MSG in result.output
@@ -334,7 +334,7 @@ def test_install_systemctl_absent_emits_clean_message_exits_1(
 
     monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
     run_mock = MagicMock(side_effect=RuntimeError("systemctl binary not found"))
-    with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
+    with patch("archon_search.cli.install_cmd.create_installer") as installer_cls:
         installer_cls.return_value.run_register_and_start = run_mock
         result = runner.invoke(main, ["install"], catch_exceptions=False)
     assert result.exit_code == 1
@@ -380,7 +380,7 @@ def test_install_native_path_unchanged(
     config_path.write_text("[database]\n")
 
     run_mock = MagicMock(return_value=0)
-    with patch("archon_search.cli.install_cmd.SearchInstaller") as installer_cls:
+    with patch("archon_search.cli.install_cmd.create_installer") as installer_cls:
         installer_cls.return_value.run_register_and_start = run_mock
         result = runner.invoke(main, ["install", "--config", str(config_path)], catch_exceptions=False)
     assert result.exit_code == 0

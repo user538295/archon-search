@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon_search.install import SearchInstaller, WizardFeatures
+from archon_search.install import DryRunInstaller, RealInstaller, WizardFeatures, create_installer
 from archon_search.platform.types import GpuType
 
 pytestmark = pytest.mark.xdist_group("install")
@@ -76,8 +76,8 @@ def _run_installer(
         "archon_search.install",
         **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
     ):
-        with patch.multiple(SearchInstaller, **method_patches):
-            installer = SearchInstaller(config_file=str(config_path))
+        with patch.multiple(RealInstaller, **method_patches):
+            installer = create_installer(config_file=str(config_path))
             rc = installer.run(
                 non_interactive=True,
                 profile="minimal",
@@ -258,10 +258,10 @@ def _run_with_server_key(
             "archon_search.install",
             **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
         ):
-            with patch.multiple(SearchInstaller, **method_patches):
+            with patch.multiple(RealInstaller, **method_patches):
                 with patch("archon_search.install.atomic_write_bytes", side_effect=capturing_atomic_write):
                     with patch("archon_search.install.os.chmod"):
-                        installer = SearchInstaller(config_file=str(config_path))
+                        installer = create_installer(config_file=str(config_path))
                         rc = installer.run(
                             non_interactive=True,
                             profile="minimal",
@@ -307,9 +307,9 @@ def test_run_server_key_sets_mode_600(tmp_path: Path) -> None:
             "archon_search.install",
             **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
         ):
-            with patch.multiple(SearchInstaller, **method_patches):
+            with patch.multiple(RealInstaller, **method_patches):
                 with patch("archon_search.install.os.chmod", side_effect=capturing_chmod):
-                    installer = SearchInstaller(config_file=str(config_path))
+                    installer = create_installer(config_file=str(config_path))
                     rc = installer.run(
                         non_interactive=True,
                         profile="minimal",
@@ -382,9 +382,9 @@ def test_run_dry_run_server_key_prints_message(tmp_path: Path, capsys) -> None:
             "archon_search.install",
             **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
         ):
-            with patch.multiple(SearchInstaller, **method_patches):
+            with patch.multiple(DryRunInstaller, **method_patches):
                 with patch("archon_search.install.atomic_write_bytes") as mock_write:
-                    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+                    installer = create_installer(config_file=str(config_path), dry_run=True)
                     rc = installer.run(
                         non_interactive=True,
                         profile="minimal",
@@ -457,8 +457,8 @@ def test_run_db_path_migration_note_when_different(tmp_path: Path, capsys) -> No
         "archon_search.install",
         **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
     ):
-        with patch.multiple(SearchInstaller, **method_patches):
-            installer = SearchInstaller(config_file=str(config_path))
+        with patch.multiple(RealInstaller, **method_patches):
+            installer = create_installer(config_file=str(config_path))
             rc = installer.run(
                 non_interactive=True,
                 profile="minimal",

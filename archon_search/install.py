@@ -1,4 +1,9 @@
-"""SearchInstaller — install, configure, and manage the search service (Task 7.1)."""
+"""Installer — install, configure, and manage the search service.
+
+Split into a read-only ``BaseInstaller`` (ABC) with two concrete strategies:
+``RealInstaller`` executes destructive actions, ``DryRunInstaller`` stubs them.
+Use ``create_installer(config_file, dry_run)`` to obtain the right one.
+"""
 from __future__ import annotations
 
 import contextlib
@@ -15,11 +20,12 @@ import time
 import urllib.error
 import urllib.request
 import warnings
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import rmtree
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import click
 import tomlkit
@@ -1748,18 +1754,69 @@ def _remove_legacy_service(legacy_path: Path) -> None:
         click.echo(f"Warning: could not remove legacy service file: {exc}", err=True)
 
 
-class SearchInstaller:
-    """Installs and manages the search service end-to-end."""
+# ---------------------------------------------------------------------------
+# Installer strategy pattern (dry-run enforcement)
+# ---------------------------------------------------------------------------
 
-    def __init__(self, config_file: str | None = None, dry_run: bool = False) -> None:
+
+@runtime_checkable
+class InstallerProtocol(Protocol):
+    """Public surface both concrete installers implement.
+
+    A runtime-checkable Protocol so call sites depend on the capability, not a
+    concrete class. ``create_installer`` returns either ``DryRunInstaller`` or
+    ``RealInstaller``, both of which satisfy this protocol.
+    """
+
+    config_file: str | None
+    cfg: SearchConfig
+    dry_run: bool
+
+    def check_deps(self) -> list[str]: ...
+    def detect_gpu(self) -> GpuType: ...
+    def install_deps(self, gpu: GpuType) -> None: ...
+    def validate_providers(self, providers: list[str]) -> bool: ...
+    def validate_embedder_only(self, providers: list[str]) -> bool: ...
+    def configure_providers(self, gpu: GpuType) -> None: ...
+    def configure_reranker_providers(self, providers: list[str]) -> None: ...
+    def clear_reranker_providers(self) -> None: ...
+    def create_data_dir(self) -> None: ...
+    def write_service_file(self) -> None: ...
+    def load_service(self) -> int: ...
+    def unload_service(self) -> int: ...
+    def run(self, *args: object, **kwargs: object) -> int: ...
+    def run_register_and_start(self) -> int: ...
+    def run_uninstall(self, delete_db: bool = ...) -> int: ...
+
+
+class BaseInstaller(ABC):
+    """Read-only install logic shared by the dry-run and real installers.
+
+    Holds config parsing, GPU detection, provider validation, and the install /
+    register / uninstall orchestration. Every operation that mutates the system
+    (filesystem writes, package installs, service lifecycle) is an abstract method
+    here, implemented by the concrete subclasses: ``DryRunInstaller`` narrates them
+    so nothing is mutated, ``RealInstaller`` executes them. run()/run_uninstall()
+    call these unconditionally and never touch the system directly.
+
+    This routes the mutation surface through the abstract boundary, but it is not
+    a complete safety proof: a raw mutation typed inline into run() would bypass
+    it. The backstop is ``test_dry_run_backstop_touches_nothing_real`` — a full
+    dry-run that fails if any real seam is invoked anywhere.
+    """
+
+    #: Overridden per concrete class; a few non-mutating run() branches still read it.
+    dry_run: bool = False
+    #: Banner printed at the very start of run() announcing the mode.
+    _MODE_BANNER: str = ""
+
+    def __init__(self, config_file: str | None = None) -> None:
         self.config_file = config_file
-        self.dry_run = dry_run
-
         cfg = load_config(path=Path(config_file) if config_file else None)
         self.cfg: SearchConfig = cfg
 
     # ------------------------------------------------------------------
-    # Dependency checks
+    # Read-only methods (no filesystem / service / subprocess mutation)
     # ------------------------------------------------------------------
 
     def check_deps(self) -> list[str]:
@@ -1772,49 +1829,9 @@ class SearchInstaller:
                 missing.append(pkg)
         return missing
 
-    # ------------------------------------------------------------------
-    # GPU detection
-    # ------------------------------------------------------------------
-
     def detect_gpu(self) -> GpuType:
         """Return the GPU type detected by the platform runtime."""
         return get_runtime().detect_gpu_type()
-
-    # ------------------------------------------------------------------
-    # Dependency installation
-    # ------------------------------------------------------------------
-
-    def install_deps(self, gpu: GpuType) -> None:
-        """Install search dependencies into the same Python that runs this process. No-op when dry_run=True."""
-        if self.dry_run:
-            return
-
-        python = sys.executable
-
-        if gpu == GpuType.CUDA:
-            subprocess.run(
-                ["uv", "pip", "uninstall", "--python", python, "fastembed", "-y"],
-                check=False,
-            )
-            subprocess.run(
-                ["uv", "pip", "install", "--python", python, "fastembed-gpu>=0.8.0", "onnxruntime-gpu"],
-                check=True,
-            )
-        else:
-            subprocess.run(
-                ["uv", "pip", "install", "--python", python, "fastembed>=0.8.0"],
-                check=True,
-            )
-
-        subprocess.run(
-            ["uv", "pip", "install", "--python", python, "lancedb", "docling", "markitdown",
-             "trafilatura", "chonkie", "fastmcp"],
-            check=True,
-        )
-
-    # ------------------------------------------------------------------
-    # Provider validation
-    # ------------------------------------------------------------------
 
     def validate_providers(self, providers: list[str]) -> bool:
         """Check that all non-CPU providers are available and both models load.
@@ -1863,83 +1880,6 @@ class SearchInstaller:
             logger.warning("validate_embedder_only: %s", warning)
         return embedder_ok
 
-    # ------------------------------------------------------------------
-    # Provider configuration
-    # ------------------------------------------------------------------
-
-    def configure_providers(self, gpu: GpuType) -> None:
-        """Write providers list to [database] section via tomlkit based on gpu type.
-
-        - GpuType.CUDA: write ["CUDAExecutionProvider"]
-        - GpuType.METAL: write ["CoreMLExecutionProvider"]
-        - GpuType.NONE: no-op
-        No-op when dry_run=True.
-        """
-        _provider_map = {
-            GpuType.CUDA: "CUDAExecutionProvider",
-            GpuType.METAL: "CoreMLExecutionProvider",
-        }
-        target_provider = _provider_map.get(gpu)
-        if target_provider is None or self.dry_run:
-            return
-
-        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
-        if not config_path.exists():
-            logger.warning("Config file %s not found — skipping provider config", config_path)
-            return
-
-        doc = tomlkit.parse(config_path.read_text())
-        if "database" not in doc:
-            doc["database"] = tomlkit.table()
-
-        database_section = doc["database"]
-        if isinstance(database_section, dict):
-            existing_providers = database_section.get("providers", [])
-            if target_provider in existing_providers:
-                return  # already set — skip to preserve user-extended chains
-            database_section["providers"] = [target_provider]
-
-        atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
-
-    def configure_reranker_providers(self, providers: list[str]) -> None:
-        """Write reranker_providers to [database] section (empty list = CPU).
-
-        No-op when dry_run=True.
-        """
-        if self.dry_run:
-            return
-        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
-        if not config_path.exists():
-            logger.warning(
-                "Config file %s not found — skipping reranker_providers config",
-                config_path,
-            )
-            return
-        doc = tomlkit.parse(config_path.read_text())
-        # Check existing value first to avoid unnecessary TOML rewrites (comment reflow risk)
-        db = doc.get("database", {})
-        if isinstance(db, dict) and db.get("reranker_providers") == providers:
-            return
-        if "database" not in doc:
-            doc["database"] = tomlkit.table()
-        arr = tomlkit.array()
-        arr.extend(providers)
-        doc["database"]["reranker_providers"] = arr
-        atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
-
-    def clear_reranker_providers(self) -> None:
-        """Remove reranker_providers from [database] if present (self-heal on upgrade)."""
-        if self.dry_run:
-            return
-        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
-        if not config_path.exists():
-            return
-        doc = tomlkit.parse(config_path.read_text(encoding="utf-8"))
-        # Only clear the stale auto-written split marker ([]); preserve user-set values.
-        if "database" in doc and doc["database"].get("reranker_providers") == []:
-            del doc["database"]["reranker_providers"]
-            atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
-
     def _probe_and_configure_coreml(
         self, gpu: "GpuType"
     ) -> "tuple[list[str], str | None, bool]":
@@ -1974,39 +1914,6 @@ class SearchInstaller:
                     "the reranker will fall back to CPU."
                 )
 
-    # ------------------------------------------------------------------
-    # Data directory
-    # ------------------------------------------------------------------
-
-    def create_data_dir(self) -> None:
-        """Create the search database directory. No-op when dry_run=True."""
-        if self.dry_run:
-            return
-        db_path = Path(self.cfg.db_path).expanduser()
-        db_path.mkdir(parents=True, exist_ok=True)
-
-    # ------------------------------------------------------------------
-    # Service management delegation
-    # ------------------------------------------------------------------
-
-    def write_service_file(self) -> None:
-        """Stop legacy service then register the new search service."""
-        svc = get_search_service()
-        svc.pre_activate_cleanup(dry_run=self.dry_run)
-        svc.register(dry_run=self.dry_run)
-
-    def load_service(self) -> int:
-        """Delegate to get_search_service().start()."""
-        return get_search_service().start(dry_run=self.dry_run)
-
-    def unload_service(self) -> int:
-        """Delegate to get_search_service().stop()."""
-        return get_search_service().stop(dry_run=self.dry_run)
-
-    # ------------------------------------------------------------------
-    # History collection bootstrap
-    # ------------------------------------------------------------------
-
     async def _bootstrap_collections(self) -> None:
         """Sync configured collections into the search store."""
         from archon_search.progress import IndexingStateStore  # noqa: PLC0415
@@ -2026,10 +1933,6 @@ class SearchInstaller:
             await sync.sync(self.cfg.pinned_collections)
         finally:
             await pipeline.store.disconnect()
-
-    # ------------------------------------------------------------------
-    # HTTP probe (service readiness)
-    # ------------------------------------------------------------------
 
     def _is_service_running(self) -> bool:
         """Check if the search HTTP service is already running."""
@@ -2059,7 +1962,79 @@ class SearchInstaller:
             raise
 
     # ------------------------------------------------------------------
-    # Full install flow
+    # Destructive operations — implemented by the concrete subclasses
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def install_deps(self, gpu: GpuType) -> None: ...
+
+    @abstractmethod
+    def configure_providers(self, gpu: GpuType) -> None: ...
+
+    @abstractmethod
+    def configure_reranker_providers(self, providers: list[str]) -> None: ...
+
+    @abstractmethod
+    def clear_reranker_providers(self) -> None: ...
+
+    @abstractmethod
+    def create_data_dir(self) -> None: ...
+
+    @abstractmethod
+    def write_service_file(self) -> None: ...
+
+    @abstractmethod
+    def load_service(self) -> int: ...
+
+    @abstractmethod
+    def unload_service(self) -> int: ...
+
+    # -- mutations extracted out of run() so dry-run cannot perform them.
+    #    Real executes; Dry narrates. run() calls these unconditionally.
+
+    @abstractmethod
+    def install_lock(self) -> "contextlib.AbstractContextManager[object]": ...
+
+    @abstractmethod
+    def remove_legacy_service(self, legacy: Path) -> None: ...
+
+    @abstractmethod
+    def create_logs_dir(self) -> None: ...
+
+    @abstractmethod
+    def download_fasttext_model(self) -> None: ...
+
+    @abstractmethod
+    def prepare_db_path(self, expanded: Path) -> bool: ...
+
+    @abstractmethod
+    def persist_fresh_config(
+        self, config_path: Path, profile_name: str, is_multilingual: bool, features: "WizardFeatures"
+    ) -> None: ...
+
+    @abstractmethod
+    def persist_reinstall_config(
+        self, config_path: Path, prof: object, profile_name: str,
+        is_multilingual: bool, features: "WizardFeatures", has_edits: bool,
+    ) -> None: ...
+
+    @abstractmethod
+    def write_gpu_providers_disabled(self, config_path: Path) -> None: ...
+
+    @abstractmethod
+    def write_server_key(self, server_key: str) -> None: ...
+
+    @abstractmethod
+    def preload_models(self, prof: object, gpu_provider: str | None, split_coreml: bool) -> None: ...
+
+    @abstractmethod
+    def register_and_start(self) -> int: ...
+
+    @abstractmethod
+    def delete_database(self, db_path: Path) -> bool: ...
+
+    # ------------------------------------------------------------------
+    # Orchestration (shared; mutation is delegated to the abstract methods)
     # ------------------------------------------------------------------
 
     def run(
@@ -2095,6 +2070,7 @@ class SearchInstaller:
         server_key: str | None = None,
     ) -> int:
         """Execute the full install flow. Returns 0 on success."""
+        print(self._MODE_BANNER)
         # Validate --force requires --delete-db
         if force and not delete_db:
             print("--force requires --delete-db. To force a reinstall, use both flags together.")
@@ -2103,17 +2079,12 @@ class SearchInstaller:
         # A dry-run serializes against nothing (it writes no config/db), so it
         # skips the install lock — whose parent.mkdir would otherwise leave the
         # data dir (~/.archon-search) behind.
-        lock_cm = contextlib.nullcontext() if self.dry_run else _acquire_install_lock()
-        with lock_cm:
+        with self.install_lock():
             # Step 0: legacy cleanup + log directory
             legacy = _legacy_service_path()
             if legacy.exists():
-                if self.dry_run:
-                    print(f"[DRY RUN] Would remove legacy service file: {legacy}")
-                else:
-                    _remove_legacy_service(legacy)
-            if not self.dry_run:
-                (get_data_dir() / "logs").mkdir(parents=True, exist_ok=True)
+                self.remove_legacy_service(legacy)
+            self.create_logs_dir()
 
             # Before Step 1: resolve multilingual via interactive prompt
             is_multilingual = _prompt_multilingual(non_interactive, multilingual)
@@ -2152,25 +2123,22 @@ class SearchInstaller:
                     _prompt_fasttext_license(non_interactive, accept_fasttext_license=accept_fasttext_license)
                 except SystemExit as e:
                     return int(e.code) if e.code is not None else 1
-                if self.dry_run:
-                    print("[DRY RUN] Would download fasttext model.")
-                else:
-                    try:
-                        _download_fasttext_model(get_data_dir() / "models")
-                    except InstallError as exc:
-                        # Degrade to English-only rather than aborting, so the
-                        # server still boots (mirrors _revert_multilingual_flag's
-                        # philosophy). The config is not written until Step 6/7/8,
-                        # so setting is_multilingual=False here is the rollback:
-                        # the config writer emits multilingual=false and the
-                        # [multilingual] extra install is skipped.
-                        print(
-                            f"Warning: fasttext model download failed: {exc}\n"
-                            "Continuing in English-only mode. Re-run the wizard "
-                            "to enable multilingual language detection.",
-                            file=sys.stderr,
-                        )
-                        is_multilingual = False
+                try:
+                    self.download_fasttext_model()
+                except InstallError as exc:
+                    # Degrade to English-only rather than aborting, so the
+                    # server still boots (mirrors _revert_multilingual_flag's
+                    # philosophy). The config is not written until Step 6/7/8,
+                    # so setting is_multilingual=False here is the rollback:
+                    # the config writer emits multilingual=false and the
+                    # [multilingual] extra install is skipped. (Dry never raises.)
+                    print(
+                        f"Warning: fasttext model download failed: {exc}\n"
+                        "Continuing in English-only mode. Re-run the wizard "
+                        "to enable multilingual language detection.",
+                        file=sys.stderr,
+                    )
+                    is_multilingual = False
 
             # Step 3c: collect optional-feature choices (after all license gates)
             features = _prompt_optional_features(
@@ -2226,17 +2194,7 @@ class SearchInstaller:
             if _db_path_override is not None:
                 features.db_path = _db_path_override
                 _expanded_db_path = Path(_db_path_override).expanduser()
-                try:
-                    _expanded_db_path.mkdir(parents=True, exist_ok=True)
-                except OSError as exc:
-                    print(f"Error: could not create db_path directory {_expanded_db_path}: {exc}", file=sys.stderr)
-                    return 1
-                if not os.access(_expanded_db_path, os.W_OK):
-                    print(
-                        f"Error: db_path {_expanded_db_path} is not writable. "
-                        "Choose a writable directory.",
-                        file=sys.stderr,
-                    )
+                if not self.prepare_db_path(_expanded_db_path):
                     return 1
 
             # Step 4: config path
@@ -2281,17 +2239,7 @@ class SearchInstaller:
             elif not config_path.exists():
                 # Branch B: fresh install
                 branch = "fresh"
-                if not self.dry_run:
-                    # config_path.parent IS the data dir on the default invocation
-                    # (get_default_config_path() -> ~/.archon-search/archon-search.toml),
-                    # so this mkdir must stay gated or a dry-run recreates it.
-                    config_path.with_suffix(config_path.suffix + ".tmp").unlink(missing_ok=True)
-                    config_path.parent.mkdir(parents=True, exist_ok=True)
-                    atomic_write_bytes(config_path, _profile_toml(profile_name, is_multilingual, features).encode())
-                    shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
-                else:
-                    print(f"[DRY RUN] Would write config: {config_path}")
-                    print(f"[DRY RUN] Would write .bak: {config_path.with_suffix('.toml.bak')}")
+                self.persist_fresh_config(config_path, profile_name, is_multilingual, features)
             else:
                 # Branch C: idempotent reinstall (same profile)
                 branch = "idempotent"
@@ -2301,6 +2249,8 @@ class SearchInstaller:
                 prev_multilingual = existing_cfg.multilingual
                 has_edits = _detect_config_hand_edits(config_path, prev_profile_name, prev_multilingual)
 
+                # Interactive overwrite confirm is a real-mode-only prompt (not a
+                # mutation); dry-run narrates it inside persist_reinstall_config.
                 if has_edits and not self.dry_run:
                     if non_interactive:
                         print(
@@ -2317,18 +2267,9 @@ class SearchInstaller:
                             print("Installation aborted.")
                             return 1
 
-                if not self.dry_run:
-                    shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
-                    _write_profile_config(config_path, prof, profile_name, is_multilingual, features=features)
-                    print(f"  Backup:     {config_path.with_suffix('.toml.bak')}")
-                else:
-                    if has_edits:
-                        print(
-                            "[DRY RUN] Would prompt: Existing config has custom values."
-                            " Overwrite with profile defaults?"
-                        )
-                    print(f"[DRY RUN] Would write .bak: {config_path.with_suffix('.toml.bak')}")
-                    print(f"[DRY RUN] Would overwrite config: {config_path}")
+                self.persist_reinstall_config(
+                    config_path, prof, profile_name, is_multilingual, features, has_edits
+                )
 
             # Step 8b: reload config with freshly-written values
             if self.dry_run and branch == "fresh":
@@ -2369,12 +2310,7 @@ class SearchInstaller:
             if not enable_gpu:
                 # User declined GPU — write providers = [] explicitly to override any previous setting
                 gpu_config_path = Path(self.config_file) if self.config_file else get_default_config_path()
-                if gpu_config_path.exists() and not self.dry_run:
-                    gpu_doc = tomlkit.parse(gpu_config_path.read_text())
-                    if "database" not in gpu_doc:
-                        gpu_doc.add("database", tomlkit.table())
-                    gpu_doc["database"]["providers"] = tomlkit.array()
-                    atomic_write_bytes(gpu_config_path, tomlkit.dumps(gpu_doc).encode())
+                self.write_gpu_providers_disabled(gpu_config_path)
             elif not self.dry_run and gpu == GpuType.METAL:
                 providers, gpu_provider, split_coreml = self._probe_and_configure_coreml(gpu)
             elif gpu == GpuType.CUDA:
@@ -2480,56 +2416,32 @@ class SearchInstaller:
                     print(f"Warning: could not create .secrets.env: {exc}", file=sys.stderr)
 
             # Before Step 14b: write custom server key if provided
-            if server_key is not None and not self.dry_run:
-                _key_file = get_key_file()
-                atomic_write_bytes(_key_file, f"ARCHON_SEARCH_API_KEY={server_key}\n".encode())
-                os.chmod(_key_file, 0o600)
-                print(
-                    "Note: your server key may appear in shell history. "
-                    "Consider using ARCHON_SEARCH_API_KEY env var instead."
-                )
-                if os.environ.get("ARCHON_SEARCH_API_KEY"):
-                    print(
-                        "Warning: ARCHON_SEARCH_API_KEY env var is set and takes priority over the key file. "
-                        "Your --server-key value was written to disk but will not be used while "
-                        "ARCHON_SEARCH_API_KEY is set."
-                    )
-                print("Server key updated. Restart the service to apply: archon-search restart.")
-            elif server_key is not None and self.dry_run:
-                print(f"[dry-run] Would write server key to {get_key_file()}.")
+            if server_key is not None:
+                self.write_server_key(server_key)
 
             # Step 14: pre-warm
             if not skip_preload:
-                if self.dry_run:
-                    print(f"[DRY RUN] Would download models (~{prof.download_mb} MB).")
-                else:
-                    print("[4/5] Downloading models...")
-                    try:
-                        _prewarm_models(prof)
-                    except InstallError as exc:
-                        print(f"Model download failed: {exc}", file=sys.stderr)
-                        if branch == "fresh":
-                            config_path.unlink(missing_ok=True)
-                            config_path.with_suffix(".toml.bak").unlink(missing_ok=True)
-                        elif branch == "idempotent":
-                            bak = config_path.with_suffix(".toml.bak")
-                            if bak.exists():
-                                shutil.copy2(bak, config_path)
-                        # branch == "force": leave backup, new config stays
-                        return 1
-
-                    self._fe1_reprobe(gpu_provider, prof, split_coreml)
+                try:
+                    self.preload_models(prof, gpu_provider, split_coreml)
+                except InstallError as exc:
+                    # Real-only: dry never raises, so this rollback runs only when
+                    # a real download fails.
+                    print(f"Model download failed: {exc}", file=sys.stderr)
+                    if branch == "fresh":
+                        config_path.unlink(missing_ok=True)
+                        config_path.with_suffix(".toml.bak").unlink(missing_ok=True)
+                    elif branch == "idempotent":
+                        bak = config_path.with_suffix(".toml.bak")
+                        if bak.exists():
+                            shutil.copy2(bak, config_path)
+                    # branch == "force": leave backup, new config stays
+                    return 1
 
             # Step 15: register and start service
-            if self.dry_run:
-                print("[DRY RUN] Would register and start the search service.")
-            else:
-                print("[5/5] Starting search service...")
-                self.write_service_file()
-                rc = self.load_service()
-                if rc != 0:
-                    print(f"Service start returned exit code {rc}.", file=sys.stderr)
-                    return rc
+            rc = self.register_and_start()
+            if rc != 0:
+                print(f"Service start returned exit code {rc}.", file=sys.stderr)
+                return rc
 
             # Step 16: wait for readiness
             if not self.dry_run:
@@ -2579,10 +2491,6 @@ class SearchInstaller:
             print(f"archon-search installed and running. Profile: {profile_name.capitalize()} · {lang}.")
             return 0
 
-    # ------------------------------------------------------------------
-    # Register-and-start flow (used by `archon-search install`)
-    # ------------------------------------------------------------------
-
     def run_register_and_start(self) -> int:
         """Register and start the service. Requires wizard to have been run first.
 
@@ -2618,10 +2526,6 @@ class SearchInstaller:
         click.echo("archon-search service registered and running.")
         return 0
 
-    # ------------------------------------------------------------------
-    # Uninstall flow
-    # ------------------------------------------------------------------
-
     def run_uninstall(self, delete_db: bool = False) -> int:
         """Stop and unregister the search service. Optionally delete the database."""
         rag_svc = get_search_service()
@@ -2632,10 +2536,7 @@ class SearchInstaller:
         if delete_db:
             db_path = Path(self.cfg.db_path).expanduser()
             if db_path.exists():
-                if not self.dry_run:
-                    rmtree(db_path)
-                    print(f"Deleted search database at {db_path}.")
-                    db_deleted = True
+                db_deleted = self.delete_database(db_path)
 
         if db_deleted:
             print(
@@ -2646,3 +2547,311 @@ class SearchInstaller:
                 "Search service uninstalled. Your search settings are preserved in archon-search.toml."
             )
         return 0
+
+
+class DryRunInstaller(BaseInstaller):
+    """Rehearsal installer: describes destructive actions without performing them."""
+
+    dry_run = True
+    _MODE_BANNER = "=== DRY-RUN MODE: No changes will be made ==="
+
+    def install_deps(self, gpu: GpuType) -> None:
+        print("[DRY RUN] Would install search dependencies.")
+
+    def configure_providers(self, gpu: GpuType) -> None:
+        print("[DRY RUN] Would configure GPU execution providers.")
+
+    def configure_reranker_providers(self, providers: list[str]) -> None:
+        print("[DRY RUN] Would configure reranker execution providers.")
+
+    def clear_reranker_providers(self) -> None:
+        print("[DRY RUN] Would clear reranker execution providers.")
+
+    def create_data_dir(self) -> None:
+        print("[DRY RUN] Would create the search data directory.")
+
+    def write_service_file(self) -> None:
+        svc = get_search_service()
+        svc.pre_activate_cleanup(dry_run=True)
+        svc.register(dry_run=True)
+
+    def load_service(self) -> int:
+        return get_search_service().start(dry_run=True)
+
+    def unload_service(self) -> int:
+        return get_search_service().stop(dry_run=True)
+
+    # -- extracted mutations: narrate, never touch the system -------------
+
+    def install_lock(self) -> "contextlib.AbstractContextManager[object]":
+        # A dry-run writes no config/db, so it serializes against nothing and
+        # skips the real lock — whose parent.mkdir would leave the data dir behind.
+        return contextlib.nullcontext()
+
+    def remove_legacy_service(self, legacy: Path) -> None:
+        print(f"[DRY RUN] Would remove legacy service file: {legacy}")
+
+    def create_logs_dir(self) -> None:
+        pass
+
+    def download_fasttext_model(self) -> None:
+        print("[DRY RUN] Would download fasttext model.")
+
+    def prepare_db_path(self, expanded: Path) -> bool:
+        # Preview without mutating: probe the nearest existing ancestor for
+        # writability so dry-run surfaces the same failure a real run would hit.
+        probe = expanded
+        while not probe.exists():
+            probe = probe.parent
+        if not os.access(probe, os.W_OK):
+            print(
+                f"Error: db_path {expanded} is not writable. Choose a writable directory.",
+                file=sys.stderr,
+            )
+            return False
+        print(f"[DRY RUN] Would create db_path directory: {expanded}")
+        return True
+
+    def persist_fresh_config(
+        self, config_path: Path, profile_name: str, is_multilingual: bool, features: "WizardFeatures"
+    ) -> None:
+        print(f"[DRY RUN] Would write config: {config_path}")
+        print(f"[DRY RUN] Would write .bak: {config_path.with_suffix('.toml.bak')}")
+
+    def persist_reinstall_config(
+        self, config_path: Path, prof: object, profile_name: str,
+        is_multilingual: bool, features: "WizardFeatures", has_edits: bool,
+    ) -> None:
+        if has_edits:
+            print(
+                "[DRY RUN] Would prompt: Existing config has custom values."
+                " Overwrite with profile defaults?"
+            )
+        print(f"[DRY RUN] Would write .bak: {config_path.with_suffix('.toml.bak')}")
+        print(f"[DRY RUN] Would overwrite config: {config_path}")
+
+    def write_gpu_providers_disabled(self, config_path: Path) -> None:
+        pass
+
+    def write_server_key(self, server_key: str) -> None:
+        print(f"[dry-run] Would write server key to {get_key_file()}.")
+
+    def preload_models(self, prof: object, gpu_provider: str | None, split_coreml: bool) -> None:
+        print(f"[DRY RUN] Would download models (~{prof.download_mb} MB).")
+
+    def register_and_start(self) -> int:
+        print("[DRY RUN] Would register and start the search service.")
+        return 0
+
+    def delete_database(self, db_path: Path) -> bool:
+        print(f"[dry-run] Would delete database at {db_path}.")
+        return False
+
+
+class RealInstaller(BaseInstaller):
+    """Executing installer: performs the real filesystem, package, and service work."""
+
+    dry_run = False
+    _MODE_BANNER = "=== REAL MODE: System will be modified ==="
+
+    def install_deps(self, gpu: GpuType) -> None:
+        """Install search dependencies into the same Python that runs this process."""
+        python = sys.executable
+
+        if gpu == GpuType.CUDA:
+            subprocess.run(
+                ["uv", "pip", "uninstall", "--python", python, "fastembed", "-y"],
+                check=False,
+            )
+            subprocess.run(
+                ["uv", "pip", "install", "--python", python, "fastembed-gpu>=0.8.0", "onnxruntime-gpu"],
+                check=True,
+            )
+        else:
+            subprocess.run(
+                ["uv", "pip", "install", "--python", python, "fastembed>=0.8.0"],
+                check=True,
+            )
+
+        subprocess.run(
+            ["uv", "pip", "install", "--python", python, "lancedb", "docling", "markitdown",
+             "trafilatura", "chonkie", "fastmcp"],
+            check=True,
+        )
+
+    def configure_providers(self, gpu: GpuType) -> None:
+        """Write providers list to [database] section via tomlkit based on gpu type.
+
+        - GpuType.CUDA: write ["CUDAExecutionProvider"]
+        - GpuType.METAL: write ["CoreMLExecutionProvider"]
+        - GpuType.NONE: no-op
+        """
+        _provider_map = {
+            GpuType.CUDA: "CUDAExecutionProvider",
+            GpuType.METAL: "CoreMLExecutionProvider",
+        }
+        target_provider = _provider_map.get(gpu)
+        if target_provider is None:
+            return
+
+        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
+        if not config_path.exists():
+            logger.warning("Config file %s not found — skipping provider config", config_path)
+            return
+
+        doc = tomlkit.parse(config_path.read_text())
+        if "database" not in doc:
+            doc["database"] = tomlkit.table()
+
+        database_section = doc["database"]
+        if isinstance(database_section, dict):
+            existing_providers = database_section.get("providers", [])
+            if target_provider in existing_providers:
+                return  # already set — skip to preserve user-extended chains
+            database_section["providers"] = [target_provider]
+
+        atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
+
+    def configure_reranker_providers(self, providers: list[str]) -> None:
+        """Write reranker_providers to [database] section (empty list = CPU)."""
+        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
+        if not config_path.exists():
+            logger.warning(
+                "Config file %s not found — skipping reranker_providers config",
+                config_path,
+            )
+            return
+        doc = tomlkit.parse(config_path.read_text())
+        # Check existing value first to avoid unnecessary TOML rewrites (comment reflow risk)
+        db = doc.get("database", {})
+        if isinstance(db, dict) and db.get("reranker_providers") == providers:
+            return
+        if "database" not in doc:
+            doc["database"] = tomlkit.table()
+        arr = tomlkit.array()
+        arr.extend(providers)
+        doc["database"]["reranker_providers"] = arr
+        atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
+
+    def clear_reranker_providers(self) -> None:
+        """Remove reranker_providers from [database] if present (self-heal on upgrade)."""
+        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
+        if not config_path.exists():
+            return
+        doc = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+        # Only clear the stale auto-written split marker ([]); preserve user-set values.
+        if "database" in doc and doc["database"].get("reranker_providers") == []:
+            del doc["database"]["reranker_providers"]
+            atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
+
+    def create_data_dir(self) -> None:
+        """Create the search database directory."""
+        db_path = Path(self.cfg.db_path).expanduser()
+        db_path.mkdir(parents=True, exist_ok=True)
+
+    def write_service_file(self) -> None:
+        """Stop legacy service then register the new search service."""
+        svc = get_search_service()
+        svc.pre_activate_cleanup(dry_run=False)
+        svc.register(dry_run=False)
+
+    def load_service(self) -> int:
+        """Delegate to get_search_service().start()."""
+        return get_search_service().start(dry_run=False)
+
+    def unload_service(self) -> int:
+        """Delegate to get_search_service().stop()."""
+        return get_search_service().stop(dry_run=False)
+
+    # -- extracted mutations: perform the real work ----------------------
+
+    def install_lock(self) -> "contextlib.AbstractContextManager[object]":
+        return _acquire_install_lock()
+
+    def remove_legacy_service(self, legacy: Path) -> None:
+        _remove_legacy_service(legacy)
+
+    def create_logs_dir(self) -> None:
+        (get_data_dir() / "logs").mkdir(parents=True, exist_ok=True)
+
+    def download_fasttext_model(self) -> None:
+        _download_fasttext_model(get_data_dir() / "models")
+
+    def prepare_db_path(self, expanded: Path) -> bool:
+        try:
+            expanded.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            print(f"Error: could not create db_path directory {expanded}: {exc}", file=sys.stderr)
+            return False
+        if not os.access(expanded, os.W_OK):
+            print(
+                f"Error: db_path {expanded} is not writable. Choose a writable directory.",
+                file=sys.stderr,
+            )
+            return False
+        return True
+
+    def persist_fresh_config(
+        self, config_path: Path, profile_name: str, is_multilingual: bool, features: "WizardFeatures"
+    ) -> None:
+        # config_path.parent IS the data dir on the default invocation, so this
+        # mkdir must stay gated behind RealInstaller or a dry-run recreates it.
+        config_path.with_suffix(config_path.suffix + ".tmp").unlink(missing_ok=True)
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(config_path, _profile_toml(profile_name, is_multilingual, features).encode())
+        shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
+
+    def persist_reinstall_config(
+        self, config_path: Path, prof: object, profile_name: str,
+        is_multilingual: bool, features: "WizardFeatures", has_edits: bool,
+    ) -> None:
+        shutil.copy2(config_path, config_path.with_suffix(".toml.bak"))
+        _write_profile_config(config_path, prof, profile_name, is_multilingual, features=features)
+        print(f"  Backup:     {config_path.with_suffix('.toml.bak')}")
+
+    def write_gpu_providers_disabled(self, config_path: Path) -> None:
+        if not config_path.exists():
+            return
+        gpu_doc = tomlkit.parse(config_path.read_text())
+        if "database" not in gpu_doc:
+            gpu_doc.add("database", tomlkit.table())
+        gpu_doc["database"]["providers"] = tomlkit.array()
+        atomic_write_bytes(config_path, tomlkit.dumps(gpu_doc).encode())
+
+    def write_server_key(self, server_key: str) -> None:
+        _key_file = get_key_file()
+        atomic_write_bytes(_key_file, f"ARCHON_SEARCH_API_KEY={server_key}\n".encode())
+        os.chmod(_key_file, 0o600)
+        print(
+            "Note: your server key may appear in shell history. "
+            "Consider using ARCHON_SEARCH_API_KEY env var instead."
+        )
+        if os.environ.get("ARCHON_SEARCH_API_KEY"):
+            print(
+                "Warning: ARCHON_SEARCH_API_KEY env var is set and takes priority over the key file. "
+                "Your --server-key value was written to disk but will not be used while "
+                "ARCHON_SEARCH_API_KEY is set."
+            )
+        print("Server key updated. Restart the service to apply: archon-search restart.")
+
+    def preload_models(self, prof: object, gpu_provider: str | None, split_coreml: bool) -> None:
+        print("[4/5] Downloading models...")
+        _prewarm_models(prof)
+        self._fe1_reprobe(gpu_provider, prof, split_coreml)
+
+    def register_and_start(self) -> int:
+        print("[5/5] Starting search service...")
+        self.write_service_file()
+        return self.load_service()
+
+    def delete_database(self, db_path: Path) -> bool:
+        rmtree(db_path)
+        print(f"Deleted search database at {db_path}.")
+        return True
+
+
+def create_installer(config_file: str | None = None, dry_run: bool = False) -> InstallerProtocol:
+    """Return the installer for *dry_run*: DryRunInstaller if true, else RealInstaller."""
+    if dry_run:
+        return DryRunInstaller(config_file)
+    return RealInstaller(config_file)

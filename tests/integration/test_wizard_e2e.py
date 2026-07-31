@@ -72,7 +72,7 @@ def _run_wizard(
     monkeypatch.setenv() in the test function itself before invoking this helper.
     """
     from archon_search.cli.main import main
-    from archon_search.install import SearchInstaller
+    from archon_search.install import RealInstaller
 
     config_path = tmp_path / "archon-search.toml"
     runner = CliRunner()
@@ -101,7 +101,7 @@ def _run_wizard(
     }
 
     with patch.multiple("archon_search.install", **install_patches):
-        with patch.multiple(SearchInstaller, **_base_wizard_patches()):
+        with patch.multiple(RealInstaller, **_base_wizard_patches()):
             result = runner.invoke(main, args)
     return result
 

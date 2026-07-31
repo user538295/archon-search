@@ -8,7 +8,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon_search.install import SearchInstaller, _create_secrets_env
+from archon_search.install import (
+    BaseInstaller,
+    DryRunInstaller,
+    RealInstaller,
+    _create_secrets_env,
+    create_installer,
+)
 from archon_search.platform.types import GpuType
 
 pytestmark = pytest.mark.xdist_group("install")
@@ -76,7 +82,7 @@ def test_wizard_creates_secrets_env_and_wrapper_on_macos_positive(tmp_path: Path
     data_dir = tmp_path / ".archon-search"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=False)
+    installer = create_installer(config_file=str(config_path), dry_run=False)
 
     # Mock macOS platform — use LaunchdSearchService writing to tmp_path
     from archon_search.platform.macos import LaunchdSearchService
@@ -91,11 +97,11 @@ def test_wizard_creates_secrets_env_and_wrapper_on_macos_positive(tmp_path: Path
         patch("archon_search.install._check_disk_space"),
         patch("archon_search.install.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(BaseInstaller, "validate_providers", return_value=False),
+        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
         patch("archon_search.install.get_search_service") as mock_get_svc,
         patch("pathlib.Path.home", return_value=tmp_path),
     ):
@@ -134,7 +140,7 @@ def test_wizard_creates_secrets_env_when_rag_fusion_only(tmp_path: Path) -> None
     data_dir = tmp_path / ".archon-search"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=False)
+    installer = create_installer(config_file=str(config_path), dry_run=False)
 
     with (
         patch("archon_search.install.get_default_config_path", return_value=config_path),
@@ -144,13 +150,13 @@ def test_wizard_creates_secrets_env_when_rag_fusion_only(tmp_path: Path) -> None
         patch("archon_search.install._check_disk_space"),
         patch("archon_search.install.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(BaseInstaller, "validate_providers", return_value=False),
+        patch.object(RealInstaller, "configure_providers"),
+        patch.object(RealInstaller, "write_service_file"),
+        patch.object(RealInstaller, "load_service", return_value=0),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
         patch("pathlib.Path.home", return_value=tmp_path),
     ):
         rc = installer.run(
@@ -175,7 +181,7 @@ def test_wizard_dry_run_secrets_env_not_created_via_installer(tmp_path: Path) ->
     data_dir = tmp_path / ".archon-search"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=True)
+    installer = create_installer(config_file=str(config_path), dry_run=True)
 
     with (
         patch("archon_search.install.get_default_config_path", return_value=config_path),
@@ -185,13 +191,13 @@ def test_wizard_dry_run_secrets_env_not_created_via_installer(tmp_path: Path) ->
         patch("archon_search.install._check_disk_space"),
         patch("archon_search.install.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(BaseInstaller, "validate_providers", return_value=False),
+        patch.object(DryRunInstaller, "configure_providers"),
+        patch.object(DryRunInstaller, "write_service_file"),
+        patch.object(DryRunInstaller, "load_service", return_value=0),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
         patch("pathlib.Path.home", return_value=tmp_path),
     ):
         rc = installer.run(
@@ -213,7 +219,7 @@ def test_wizard_no_secrets_env_when_expansion_disabled(tmp_path: Path) -> None:
     data_dir = tmp_path / ".archon-search"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=False)
+    installer = create_installer(config_file=str(config_path), dry_run=False)
 
     with (
         patch("archon_search.install.get_default_config_path", return_value=config_path),
@@ -223,13 +229,13 @@ def test_wizard_no_secrets_env_when_expansion_disabled(tmp_path: Path) -> None:
         patch("archon_search.install._check_disk_space"),
         patch("archon_search.install.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(BaseInstaller, "validate_providers", return_value=False),
+        patch.object(RealInstaller, "configure_providers"),
+        patch.object(RealInstaller, "write_service_file"),
+        patch.object(RealInstaller, "load_service", return_value=0),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
     ):
         rc = installer.run(
             non_interactive=True,
@@ -269,7 +275,7 @@ def test_wizard_secrets_env_oserror_is_nonfatal(tmp_path: Path) -> None:
     data_dir = tmp_path / ".archon-search"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=False)
+    installer = create_installer(config_file=str(config_path), dry_run=False)
 
     with (
         patch("archon_search.install.get_default_config_path", return_value=config_path),
@@ -279,13 +285,13 @@ def test_wizard_secrets_env_oserror_is_nonfatal(tmp_path: Path) -> None:
         patch("archon_search.install._check_disk_space"),
         patch("archon_search.install.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(BaseInstaller, "validate_providers", return_value=False),
+        patch.object(RealInstaller, "configure_providers"),
+        patch.object(RealInstaller, "write_service_file"),
+        patch.object(RealInstaller, "load_service", return_value=0),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
         patch("pathlib.Path.home", return_value=tmp_path),
         patch("archon_search.install._create_secrets_env", side_effect=PermissionError("permission denied")),
     ):
@@ -309,7 +315,7 @@ def test_wizard_creates_secrets_env_both_flags_enabled(tmp_path: Path) -> None:
     data_dir = tmp_path / ".archon-search"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=False)
+    installer = create_installer(config_file=str(config_path), dry_run=False)
 
     with (
         patch("archon_search.install.get_default_config_path", return_value=config_path),
@@ -319,13 +325,13 @@ def test_wizard_creates_secrets_env_both_flags_enabled(tmp_path: Path) -> None:
         patch("archon_search.install._check_disk_space"),
         patch("archon_search.install.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(BaseInstaller, "validate_providers", return_value=False),
+        patch.object(RealInstaller, "configure_providers"),
+        patch.object(RealInstaller, "write_service_file"),
+        patch.object(RealInstaller, "load_service", return_value=0),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
         patch("pathlib.Path.home", return_value=tmp_path),
     ):
         rc = installer.run(
@@ -354,7 +360,7 @@ def test_wizard_secrets_env_no_created_hint_on_reinstall(tmp_path: Path, capsys:
     existing_secrets.write_text("ANTHROPIC_API_KEY=existing_key")
     existing_secrets.chmod(0o600)
 
-    installer = SearchInstaller(config_file=str(config_path), dry_run=False)
+    installer = create_installer(config_file=str(config_path), dry_run=False)
 
     with (
         patch("archon_search.install.get_default_config_path", return_value=config_path),
@@ -364,13 +370,13 @@ def test_wizard_secrets_env_no_created_hint_on_reinstall(tmp_path: Path, capsys:
         patch("archon_search.install._check_disk_space"),
         patch("archon_search.install.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
-        patch.object(SearchInstaller, "detect_gpu", return_value=GpuType.NONE),
-        patch.object(SearchInstaller, "validate_providers", return_value=False),
-        patch.object(SearchInstaller, "configure_providers"),
-        patch.object(SearchInstaller, "write_service_file"),
-        patch.object(SearchInstaller, "load_service", return_value=0),
-        patch.object(SearchInstaller, "_wait_for_service", return_value=True),
-        patch.object(SearchInstaller, "_is_service_running", return_value=False),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(BaseInstaller, "validate_providers", return_value=False),
+        patch.object(RealInstaller, "configure_providers"),
+        patch.object(RealInstaller, "write_service_file"),
+        patch.object(RealInstaller, "load_service", return_value=0),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
         patch("pathlib.Path.home", return_value=tmp_path),
     ):
         rc = installer.run(
