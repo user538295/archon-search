@@ -169,13 +169,13 @@ class TestInstallExtra:
 
     def test_install_code_extra_delegates_to_install_extra(self):
         """_install_code_extra() must delegate to _install_extra with the code package and label."""
-        with patch("archon_search.install._install_extra") as mock_extra:
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_code_extra(dry_run=False)
             mock_extra.assert_called_once_with("archon-search[code]", "code enrichment", False)
 
     def test_install_code_extra_delegates_dry_run_to_install_extra(self):
         """_install_code_extra(dry_run=True) must delegate dry_run=True to _install_extra."""
-        with patch("archon_search.install._install_extra") as mock_extra:
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_code_extra(dry_run=True)
             mock_extra.assert_called_once_with("archon-search[code]", "code enrichment", True)
 
@@ -189,7 +189,7 @@ class TestInstallGraphExtra:
         The old ``python -m spacy download`` route assumed a virtual environment
         and failed in a uv-tool install context — assert we no longer use it.
         """
-        with patch("archon_search.install._install_extra"), \
+        with patch("archon_search.install.extras._install_extra"), \
              patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             _install_graph_extra(dry_run=False)
@@ -205,7 +205,7 @@ class TestInstallGraphExtra:
     def test_install_graph_extra_spacy_download_failure_is_nonfatal(self, capsys):
         """CalledProcessError from spaCy subprocess must not raise; a warning is printed to stderr."""
         spacy_error = subprocess.CalledProcessError(1, "spacy", stderr=b"model not found")
-        with patch("archon_search.install._install_extra"), \
+        with patch("archon_search.install.extras._install_extra"), \
              patch("subprocess.run", side_effect=spacy_error):
             _install_graph_extra(dry_run=False)  # must not raise
         captured = capsys.readouterr()
@@ -213,14 +213,14 @@ class TestInstallGraphExtra:
 
     def test_install_graph_extra_dry_run_no_subprocess(self):
         """dry_run=True must not call subprocess.run at all."""
-        with patch("archon_search.install._install_extra"), \
+        with patch("archon_search.install.extras._install_extra"), \
              patch("subprocess.run") as mock_run:
             _install_graph_extra(dry_run=True)
             mock_run.assert_not_called()
 
     def test_install_graph_extra_dry_run_prints_message(self, capsys):
         """dry_run=True should print a message indicating what would be run."""
-        with patch("archon_search.install._install_extra"), \
+        with patch("archon_search.install.extras._install_extra"), \
              patch("subprocess.run"):
             _install_graph_extra(dry_run=True)
         captured = capsys.readouterr()
@@ -229,7 +229,7 @@ class TestInstallGraphExtra:
     def test_install_graph_extra_partial_failure_extras_succeed_spacy_fails(self):
         """When _install_extra succeeds but spaCy download fails, InstallError is NOT raised."""
         spacy_error = subprocess.CalledProcessError(1, "spacy", stderr=b"download failed")
-        with patch("archon_search.install._install_extra"), \
+        with patch("archon_search.install.extras._install_extra"), \
              patch("subprocess.run", side_effect=spacy_error):
             # Must not raise InstallError — caller's except InstallError block must NOT trigger
             try:
@@ -243,7 +243,7 @@ class TestInstallMultilingualExtra:
 
     def test_delegates_to_install_extra(self):
         """_install_multilingual_extra() must delegate to _install_extra with the multilingual package."""
-        with patch("archon_search.install._install_extra") as mock_extra:
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_multilingual_extra(dry_run=False)
             mock_extra.assert_called_once_with(
                 "archon-search[multilingual]", "multilingual language detection", False
@@ -251,7 +251,7 @@ class TestInstallMultilingualExtra:
 
     def test_delegates_dry_run(self):
         """_install_multilingual_extra(dry_run=True) must delegate dry_run=True to _install_extra."""
-        with patch("archon_search.install._install_extra") as mock_extra:
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_multilingual_extra(dry_run=True)
             mock_extra.assert_called_once_with(
                 "archon-search[multilingual]", "multilingual language detection", True

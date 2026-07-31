@@ -59,7 +59,11 @@ def test_notification_monitor_deleted() -> None:
 
 
 def test_install_py_has_no_archon_imports() -> None:
-    """install.py must have zero archon.* imports after platform extraction."""
-    source = (_ARCHON_SEARCH_SRC / "install.py").read_text(encoding="utf-8")
-    lines = [ln for ln in source.splitlines() if "from archon." in ln or "import archon." in ln]
-    assert not lines, f"install.py still has archon.* imports: {lines}"
+    """install package must have zero legacy archon.* imports after platform extraction."""
+    lines = [
+        f"{py.name}: {ln}"
+        for py in sorted((_ARCHON_SEARCH_SRC / "install").glob("*.py"))
+        for ln in py.read_text(encoding="utf-8").splitlines()
+        if "from archon." in ln or "import archon." in ln
+    ]
+    assert not lines, f"install package still has archon.* imports: {lines}"

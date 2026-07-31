@@ -49,7 +49,7 @@ def test_explicit_invalid_profile_raises():
 
 def test_interactive_choice_1_returns_minimal():
     with (
-        patch("archon_search.install._render_profile_table", return_value=""),
+        patch("archon_search.install.wizard._render_profile_table", return_value=""),
         patch("builtins.input", return_value="1"),
     ):
         result = _select_profile(profile_flag=None, multilingual_flag=False, non_interactive=False)
@@ -58,7 +58,7 @@ def test_interactive_choice_1_returns_minimal():
 
 def test_interactive_empty_defaults_to_minimal():
     with (
-        patch("archon_search.install._render_profile_table", return_value=""),
+        patch("archon_search.install.wizard._render_profile_table", return_value=""),
         patch("builtins.input", return_value=""),
     ):
         result = _select_profile(profile_flag=None, multilingual_flag=False, non_interactive=False)
@@ -67,7 +67,7 @@ def test_interactive_empty_defaults_to_minimal():
 
 def test_interactive_invalid_then_valid_retries():
     with (
-        patch("archon_search.install._render_profile_table", return_value=""),
+        patch("archon_search.install.wizard._render_profile_table", return_value=""),
         patch("builtins.input", side_effect=["x", "2"]),
     ):
         result = _select_profile(profile_flag=None, multilingual_flag=False, non_interactive=False)
@@ -76,7 +76,7 @@ def test_interactive_invalid_then_valid_retries():
 
 def test_interactive_three_invalid_inputs_exits(capsys):
     with (
-        patch("archon_search.install._render_profile_table", return_value=""),
+        patch("archon_search.install.wizard._render_profile_table", return_value=""),
         patch("builtins.input", side_effect=["x", "y", "z"]),
         pytest.raises(SystemExit) as exc_info,
     ):
@@ -87,7 +87,7 @@ def test_interactive_three_invalid_inputs_exits(capsys):
 
 def test_interactive_eof_on_input_exits(capsys):
     with (
-        patch("archon_search.install._render_profile_table", return_value=""),
+        patch("archon_search.install.wizard._render_profile_table", return_value=""),
         patch("builtins.input", side_effect=EOFError),
         pytest.raises(SystemExit) as exc_info,
     ):
@@ -99,7 +99,7 @@ def test_interactive_eof_on_input_exits(capsys):
 
 def test_interactive_choice_returns_multilingual_flag_as_given():
     with (
-        patch("archon_search.install._render_profile_table", return_value=""),
+        patch("archon_search.install.wizard._render_profile_table", return_value=""),
         patch("builtins.input", return_value="2"),
     ):
         result = _select_profile(profile_flag=None, multilingual_flag=True, non_interactive=False)

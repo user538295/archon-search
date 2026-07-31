@@ -100,7 +100,7 @@ def _run_wizard(
         "load_or_generate_key": MagicMock(return_value=_mock_key),
     }
 
-    with patch.multiple("archon_search.install", **install_patches):
+    with patch.multiple("archon_search.install.installer", **install_patches):
         with patch.multiple(RealInstaller, **_base_wizard_patches()):
             result = runner.invoke(main, args)
     return result

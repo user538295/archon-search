@@ -130,14 +130,14 @@ class TestInstallQueryExpansionExtras:
             enable_hyde=True, enable_rag_fusion=True,
             hyde_provider="anthropic", rag_fusion_provider="anthropic",
         )
-        with patch("archon_search.install._install_extra") as mock_extra:
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_query_expansion_extras(features, dry_run=False)
         mock_extra.assert_called_once()
         assert mock_extra.call_args[0][0] == "archon-search[hyde]"
 
     def test_hyde_only_anthropic(self) -> None:
         features = WizardFeatures(enable_hyde=True, hyde_provider="anthropic")
-        with patch("archon_search.install._install_extra") as mock_extra:
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_query_expansion_extras(features, dry_run=False)
         mock_extra.assert_called_once()
         assert mock_extra.call_args[0][0] == "archon-search[hyde]"
@@ -149,14 +149,14 @@ class TestInstallQueryExpansionExtras:
             hyde_provider="anthropic", rag_fusion_provider="ollama",
             rag_fusion_model="qwen2.5:3b",
         )
-        with patch("archon_search.install._install_extra") as mock_extra:
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_query_expansion_extras(features, dry_run=False)
         installed = {c[0][0] for c in mock_extra.call_args_list}
         assert installed == {"archon-search[hyde]", "archon-search[ollama]"}
 
     def test_openai_provider_package(self) -> None:
         features = WizardFeatures(enable_hyde=True, hyde_provider="openai", hyde_model="gpt-4o-mini")
-        with patch("archon_search.install._install_extra") as mock_extra:
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_query_expansion_extras(features, dry_run=False)
         mock_extra.assert_called_once()
         assert mock_extra.call_args[0][0] == "archon-search[openai-provider]"
@@ -164,24 +164,24 @@ class TestInstallQueryExpansionExtras:
     def test_claude_cli_installs_nothing(self) -> None:
         """claude_cli has no pip package → no install call."""
         features = WizardFeatures(enable_hyde=True, hyde_provider="claude_cli")
-        with patch("archon_search.install._install_extra") as mock_extra:
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_query_expansion_extras(features, dry_run=False)
         mock_extra.assert_not_called()
 
     def test_neither_enabled_installs_nothing(self) -> None:
-        with patch("archon_search.install._install_extra") as mock_extra:
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_query_expansion_extras(WizardFeatures(), dry_run=False)
         mock_extra.assert_not_called()
 
     def test_dry_run_forwarded(self) -> None:
         features = WizardFeatures(enable_hyde=True, hyde_provider="anthropic")
-        with patch("archon_search.install._install_extra") as mock_extra:
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_query_expansion_extras(features, dry_run=True)
         assert mock_extra.call_args[0][2] is True
 
     def test_failed_install_is_returned_not_raised(self) -> None:
         features = WizardFeatures(enable_hyde=True, hyde_provider="anthropic")
-        with patch("archon_search.install._install_extra", side_effect=InstallError("pip failed")):
+        with patch("archon_search.install.extras._install_extra", side_effect=InstallError("pip failed")):
             failed = _install_query_expansion_extras(features, dry_run=False)
         assert failed == ["hyde"]
 
@@ -196,7 +196,7 @@ class TestInstallQueryExpansionExtras:
             if package == "archon-search[ollama]":
                 raise InstallError("boom")
 
-        with patch("archon_search.install._install_extra", side_effect=_fail_ollama):
+        with patch("archon_search.install.extras._install_extra", side_effect=_fail_ollama):
             failed = _install_query_expansion_extras(features, dry_run=False)
         assert failed == ["rag_fusion"]
 
@@ -206,7 +206,7 @@ class TestInstallQueryExpansionExtras:
             enable_hyde=True, enable_rag_fusion=True,
             hyde_provider="anthropic", rag_fusion_provider="anthropic",
         )
-        with patch("archon_search.install._install_extra", side_effect=InstallError("boom")):
+        with patch("archon_search.install.extras._install_extra", side_effect=InstallError("boom")):
             failed = _install_query_expansion_extras(features, dry_run=False)
         assert set(failed) == {"hyde", "rag_fusion"}
 

@@ -85,7 +85,7 @@ def _patched_wizard(**extra_module_patches: Any) -> Generator[None, None, None]:
 
     # Merge extra patches (using short names for consistency)
     for key, val in extra_module_patches.items():
-        short_key = key.replace("archon_search.install.", "")
+        short_key = key.replace("archon_search.install.installer.", "")
         base_patches[short_key] = val
 
     module_level = base_patches
@@ -100,7 +100,7 @@ def _patched_wizard(**extra_module_patches: Any) -> Generator[None, None, None]:
         "_is_service_running": MagicMock(return_value=False),
     }
 
-    with patch.multiple("archon_search.install", **module_level):
+    with patch.multiple("archon_search.install.installer", **module_level):
         with patch.multiple(RealInstaller, **installer_patches):
             yield
 
@@ -277,9 +277,9 @@ def test_e2e_interactive_multilingual_yes(runner: CliRunner, tmp_path: Path) -> 
 
     with _no_anthropic_key():
         with _patched_wizard(
-            **{"archon_search.install._select_profile": select_profile_spy,
-               "archon_search.install._prompt_fasttext_license": MagicMock(),
-               "archon_search.install._download_fasttext_model": MagicMock()}
+            **{"archon_search.install.installer._select_profile": select_profile_spy,
+               "archon_search.install.installer._prompt_fasttext_license": MagicMock(),
+               "archon_search.install.installer._download_fasttext_model": MagicMock()}
         ):
             result = runner.invoke(
                 main,
@@ -358,8 +358,8 @@ def test_e2e_code_extra_install_triggered(runner: CliRunner, tmp_path: Path) -> 
     install_graph_mock = MagicMock()
 
     with _patched_wizard(**{
-        "archon_search.install._install_code_extra": install_code_mock,
-        "archon_search.install._install_graph_extra": install_graph_mock,
+        "archon_search.install.installer._install_code_extra": install_code_mock,
+        "archon_search.install.installer._install_graph_extra": install_graph_mock,
     }):
         result = runner.invoke(main, [
             "wizard",
@@ -388,8 +388,8 @@ def test_wizard_autoInstallsCodeAndGraphBundles(runner: CliRunner, tmp_path: Pat
 
     with _patched_wizard(
         **{
-            "archon_search.install._install_code_extra": install_code_mock,
-            "archon_search.install._install_graph_extra": install_graph_mock,
+            "archon_search.install.installer._install_code_extra": install_code_mock,
+            "archon_search.install.installer._install_graph_extra": install_graph_mock,
         }
     ):
         result = runner.invoke(main, [
@@ -462,8 +462,8 @@ def test_e2e_code_extra_install_failure_non_fatal(runner: CliRunner, tmp_path: P
 
     with _patched_wizard(
         **{
-            "archon_search.install._install_code_extra": install_code_mock,
-            "archon_search.install._install_graph_extra": install_graph_mock,
+            "archon_search.install.installer._install_code_extra": install_code_mock,
+            "archon_search.install.installer._install_graph_extra": install_graph_mock,
         }
     ):
         result = runner.invoke(main, [
@@ -496,8 +496,8 @@ def test_e2e_graph_extra_install_failure_non_fatal(runner: CliRunner, tmp_path: 
 
     with _patched_wizard(
         **{
-            "archon_search.install._install_code_extra": install_code_mock,
-            "archon_search.install._install_graph_extra": install_graph_mock,
+            "archon_search.install.installer._install_code_extra": install_code_mock,
+            "archon_search.install.installer._install_graph_extra": install_graph_mock,
         }
     ):
         result = runner.invoke(main, [
@@ -538,9 +538,9 @@ def test_wizard_diskSpaceFailure_revertsGraphEnabled(runner: CliRunner, tmp_path
 
     with _patched_wizard(
         **{
-            "archon_search.install._install_code_extra": install_code_mock,
-            "archon_search.install._install_graph_extra": install_graph_mock,
-            "archon_search.install._check_disk_space": disk_space_mock,
+            "archon_search.install.installer._install_code_extra": install_code_mock,
+            "archon_search.install.installer._install_graph_extra": install_graph_mock,
+            "archon_search.install.installer._check_disk_space": disk_space_mock,
         }
     ):
         result = runner.invoke(main, [
@@ -598,8 +598,8 @@ def test_wizard_declineProceedPrompt_revertsGraphEnabled(runner: CliRunner, tmp_
     with _no_anthropic_key():
         with _patched_wizard(
             **{
-                "archon_search.install._install_code_extra": install_code_mock,
-                "archon_search.install._install_graph_extra": install_graph_mock,
+                "archon_search.install.installer._install_code_extra": install_code_mock,
+                "archon_search.install.installer._install_graph_extra": install_graph_mock,
             }
         ):
             result = runner.invoke(
@@ -642,7 +642,7 @@ def test_e2e_hyde_install_triggered(runner: CliRunner, tmp_path: Path) -> None:
     install_mock = MagicMock(return_value=[])
 
     with _patched_wizard(
-        **{"archon_search.install._install_query_expansion_extras": install_mock}
+        **{"archon_search.install.installer._install_query_expansion_extras": install_mock}
     ):
         result = runner.invoke(main, [
             "wizard",
@@ -689,7 +689,7 @@ def test_e2e_hyde_install_failure_reverts(runner: CliRunner, tmp_path: Path) -> 
     install_mock = MagicMock(return_value=["hyde"])
 
     with _patched_wizard(
-        **{"archon_search.install._install_query_expansion_extras": install_mock}
+        **{"archon_search.install.installer._install_query_expansion_extras": install_mock}
     ):
         result = runner.invoke(main, [
             "wizard",
@@ -719,8 +719,8 @@ def test_e2e_hyde_disk_space_failure_reverts(runner: CliRunner, tmp_path: Path) 
 
     with _patched_wizard(
         **{
-            "archon_search.install._install_query_expansion_extras": install_mock,
-            "archon_search.install._check_disk_space": disk_space_mock,
+            "archon_search.install.installer._install_query_expansion_extras": install_mock,
+            "archon_search.install.installer._check_disk_space": disk_space_mock,
         }
     ):
         result = runner.invoke(main, [
@@ -766,7 +766,7 @@ def test_e2e_hyde_declineProceedPrompt_reverts(runner: CliRunner, tmp_path: Path
 
     with _no_anthropic_key():
         with _patched_wizard(
-            **{"archon_search.install._install_query_expansion_extras": install_mock}
+            **{"archon_search.install.installer._install_query_expansion_extras": install_mock}
         ):
             result = runner.invoke(
                 main,
@@ -813,9 +813,7 @@ def test_e2e_post_write_assertion_fires_on_silent_drop(runner: CliRunner, tmp_pa
     assertion must abort the install with a clear error (Q1)."""
     config_path = tmp_path / "archon-search.toml"
 
-    with _patched_wizard(
-        **{"archon_search.install._apply_wizard_features_to_toml": MagicMock()}
-    ):
+    with patch("archon_search.install.config_writer._apply_wizard_features_to_toml", MagicMock()), _patched_wizard():
         result = runner.invoke(main, [
             "wizard",
             "--non-interactive",
@@ -841,7 +839,7 @@ def test_e2e_multilingual_extra_install_triggered(runner: CliRunner, tmp_path: P
     install_multilingual_mock = MagicMock()
 
     with _patched_wizard(
-        **{"archon_search.install._install_multilingual_extra": install_multilingual_mock}
+        **{"archon_search.install.installer._install_multilingual_extra": install_multilingual_mock}
     ):
         result = runner.invoke(main, [
             "wizard",
@@ -865,7 +863,7 @@ def test_e2e_english_profile_does_not_install_multilingual(runner: CliRunner, tm
     install_multilingual_mock = MagicMock()
 
     with _patched_wizard(
-        **{"archon_search.install._install_multilingual_extra": install_multilingual_mock}
+        **{"archon_search.install.installer._install_multilingual_extra": install_multilingual_mock}
     ):
         result = runner.invoke(main, [
             "wizard",
@@ -891,7 +889,7 @@ def test_e2e_multilingual_install_failure_reverts_flag(runner: CliRunner, tmp_pa
     install_multilingual_mock = MagicMock(side_effect=InstallError("pip failed"))
 
     with _patched_wizard(
-        **{"archon_search.install._install_multilingual_extra": install_multilingual_mock}
+        **{"archon_search.install.installer._install_multilingual_extra": install_multilingual_mock}
     ):
         result = runner.invoke(main, [
             "wizard",
@@ -925,8 +923,8 @@ def test_e2e_multilingual_disk_space_failure_reverts_flag(runner: CliRunner, tmp
 
     with _patched_wizard(
         **{
-            "archon_search.install._install_multilingual_extra": install_multilingual_mock,
-            "archon_search.install._check_disk_space": disk_space_mock,
+            "archon_search.install.installer._install_multilingual_extra": install_multilingual_mock,
+            "archon_search.install.installer._check_disk_space": disk_space_mock,
         }
     ):
         result = runner.invoke(main, [
@@ -977,7 +975,7 @@ def test_e2e_multilingual_declineProceedPrompt_reverts_flag(runner: CliRunner, t
 
     with _no_anthropic_key():
         with _patched_wizard(
-            **{"archon_search.install._install_multilingual_extra": install_multilingual_mock}
+            **{"archon_search.install.installer._install_multilingual_extra": install_multilingual_mock}
         ):
             result = runner.invoke(
                 main,
@@ -1018,7 +1016,7 @@ def test_e2e_interactive_multilingual_install_triggered(runner: CliRunner, tmp_p
 
     with _no_anthropic_key():
         with _patched_wizard(
-            **{"archon_search.install._install_multilingual_extra": install_multilingual_mock}
+            **{"archon_search.install.installer._install_multilingual_extra": install_multilingual_mock}
         ):
             result = runner.invoke(
                 main,
@@ -1053,9 +1051,9 @@ def test_e2e_multilingual_install_before_prewarm(runner: CliRunner, tmp_path: Pa
 
     with _patched_wizard(
         **{
-            "archon_search.install._install_multilingual_extra": install_mock,
-            "archon_search.install._prewarm_models": prewarm_mock,
-            "archon_search.install._download_fasttext_model": MagicMock(),
+            "archon_search.install.installer._install_multilingual_extra": install_mock,
+            "archon_search.install.installer._prewarm_models": prewarm_mock,
+            "archon_search.install.installer._download_fasttext_model": MagicMock(),
         }
     ):
         result = runner.invoke(main, [

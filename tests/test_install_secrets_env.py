@@ -24,7 +24,7 @@ pytestmark = pytest.mark.xdist_group("install")
 def _mock_query_expansion_install():
     """Mock the provider-package install so enable_hyde/enable_rag_fusion runs in
     this file never shell out to a real `pip install archon-search[hyde]`."""
-    with patch("archon_search.install._install_query_expansion_extras", return_value=[]):
+    with patch("archon_search.install.installer._install_query_expansion_extras", return_value=[]):
         yield
 
 
@@ -90,19 +90,19 @@ def test_wizard_creates_secrets_env_and_wrapper_on_macos_positive(tmp_path: Path
     plist_path = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
 
     with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
-        patch("archon_search.install.get_data_dir", return_value=data_dir),
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._remove_legacy_service"),
+        patch("archon_search.install.installer._prewarm_models"),
+        patch("archon_search.install.installer._check_disk_space"),
+        patch("archon_search.install.installer.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
         patch.object(BaseInstaller, "validate_providers", return_value=False),
         patch.object(RealInstaller, "configure_providers"),
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
         patch.object(BaseInstaller, "_is_service_running", return_value=False),
-        patch("archon_search.install.get_search_service") as mock_get_svc,
+        patch("archon_search.install.installer.get_search_service") as mock_get_svc,
         patch("pathlib.Path.home", return_value=tmp_path),
     ):
         # Use a real LaunchdSearchService but with home redirected to tmp_path
@@ -143,12 +143,12 @@ def test_wizard_creates_secrets_env_when_rag_fusion_only(tmp_path: Path) -> None
     installer = create_installer(config_file=str(config_path), dry_run=False)
 
     with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
-        patch("archon_search.install.get_data_dir", return_value=data_dir),
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._remove_legacy_service"),
+        patch("archon_search.install.installer._prewarm_models"),
+        patch("archon_search.install.installer._check_disk_space"),
+        patch("archon_search.install.installer.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
         patch.object(BaseInstaller, "validate_providers", return_value=False),
@@ -184,12 +184,12 @@ def test_wizard_dry_run_secrets_env_not_created_via_installer(tmp_path: Path) ->
     installer = create_installer(config_file=str(config_path), dry_run=True)
 
     with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
-        patch("archon_search.install.get_data_dir", return_value=data_dir),
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._remove_legacy_service"),
+        patch("archon_search.install.installer._prewarm_models"),
+        patch("archon_search.install.installer._check_disk_space"),
+        patch("archon_search.install.installer.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
         patch.object(BaseInstaller, "validate_providers", return_value=False),
@@ -222,12 +222,12 @@ def test_wizard_no_secrets_env_when_expansion_disabled(tmp_path: Path) -> None:
     installer = create_installer(config_file=str(config_path), dry_run=False)
 
     with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
-        patch("archon_search.install.get_data_dir", return_value=data_dir),
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._remove_legacy_service"),
+        patch("archon_search.install.installer._prewarm_models"),
+        patch("archon_search.install.installer._check_disk_space"),
+        patch("archon_search.install.installer.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
         patch.object(BaseInstaller, "validate_providers", return_value=False),
@@ -278,12 +278,12 @@ def test_wizard_secrets_env_oserror_is_nonfatal(tmp_path: Path) -> None:
     installer = create_installer(config_file=str(config_path), dry_run=False)
 
     with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
-        patch("archon_search.install.get_data_dir", return_value=data_dir),
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._remove_legacy_service"),
+        patch("archon_search.install.installer._prewarm_models"),
+        patch("archon_search.install.installer._check_disk_space"),
+        patch("archon_search.install.installer.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
         patch.object(BaseInstaller, "validate_providers", return_value=False),
@@ -293,7 +293,7 @@ def test_wizard_secrets_env_oserror_is_nonfatal(tmp_path: Path) -> None:
         patch.object(BaseInstaller, "_wait_for_service", return_value=True),
         patch.object(BaseInstaller, "_is_service_running", return_value=False),
         patch("pathlib.Path.home", return_value=tmp_path),
-        patch("archon_search.install._create_secrets_env", side_effect=PermissionError("permission denied")),
+        patch("archon_search.install.installer._create_secrets_env", side_effect=PermissionError("permission denied")),
     ):
         stderr_buf = io.StringIO()
         with patch("sys.stderr", stderr_buf):
@@ -318,12 +318,12 @@ def test_wizard_creates_secrets_env_both_flags_enabled(tmp_path: Path) -> None:
     installer = create_installer(config_file=str(config_path), dry_run=False)
 
     with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
-        patch("archon_search.install.get_data_dir", return_value=data_dir),
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._remove_legacy_service"),
+        patch("archon_search.install.installer._prewarm_models"),
+        patch("archon_search.install.installer._check_disk_space"),
+        patch("archon_search.install.installer.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
         patch.object(BaseInstaller, "validate_providers", return_value=False),
@@ -363,12 +363,12 @@ def test_wizard_secrets_env_no_created_hint_on_reinstall(tmp_path: Path, capsys:
     installer = create_installer(config_file=str(config_path), dry_run=False)
 
     with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
-        patch("archon_search.install.get_data_dir", return_value=data_dir),
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._remove_legacy_service"),
+        patch("archon_search.install.installer._prewarm_models"),
+        patch("archon_search.install.installer._check_disk_space"),
+        patch("archon_search.install.installer.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
         patch.object(BaseInstaller, "validate_providers", return_value=False),

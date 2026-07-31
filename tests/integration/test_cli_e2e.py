@@ -285,7 +285,7 @@ def _run_wizard_dry_run(tmp_path: Path) -> object:
     config_path = tmp_path / "archon-search.toml"
     runner = CliRunner()
 
-    with patch.multiple("archon_search.install",
+    with patch.multiple("archon_search.install.installer",
                         _prewarm_models=MagicMock(),
                         _check_disk_space=MagicMock(),
                         _legacy_service_path=MagicMock(return_value=tmp_path / "fake.plist"),

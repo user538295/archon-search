@@ -98,7 +98,7 @@ class TestSearchInstallerInit:
         config_toml = tmp_path / "archon-search.toml"
         config_toml.write_text("")  # empty — valid minimal config
 
-        with patch("archon_search.install.load_config", return_value=MagicMock()):
+        with patch("archon_search.install.installer.load_config", return_value=MagicMock()):
             installer = create_installer(config_file=str(config_toml))
 
         assert installer.cfg is not None
@@ -107,7 +107,7 @@ class TestSearchInstallerInit:
         """SearchInstaller default config_file must be None (uses archon_search.config default path)."""
         from archon_search.install import create_installer
 
-        with patch("archon_search.install.load_config", return_value=MagicMock()) as mock_load:
+        with patch("archon_search.install.installer.load_config", return_value=MagicMock()) as mock_load:
             installer = create_installer()
         assert installer.config_file is None
         mock_load.assert_called_once_with(path=None)
@@ -164,7 +164,7 @@ class TestDetectGpu:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
         mock_runtime.detect_gpu_type.return_value = GpuType.CUDA
-        with patch("archon_search.install.get_runtime", return_value=mock_runtime):
+        with patch("archon_search.install.installer.get_runtime", return_value=mock_runtime):
             result = installer.detect_gpu()
         assert result == GpuType.CUDA
         mock_runtime.detect_gpu_type.assert_called_once()
@@ -173,28 +173,28 @@ class TestDetectGpu:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
         mock_runtime.detect_gpu_type.return_value = GpuType.CUDA
-        with patch("archon_search.install.get_runtime", return_value=mock_runtime):
+        with patch("archon_search.install.installer.get_runtime", return_value=mock_runtime):
             assert installer.detect_gpu() == GpuType.CUDA
 
     def test_detect_gpu_returns_apple_silicon(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
         mock_runtime.detect_gpu_type.return_value = GpuType.METAL
-        with patch("archon_search.install.get_runtime", return_value=mock_runtime):
+        with patch("archon_search.install.installer.get_runtime", return_value=mock_runtime):
             assert installer.detect_gpu() == GpuType.METAL
 
     def test_detect_gpu_returns_none_on_intel_mac(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
         mock_runtime.detect_gpu_type.return_value = "none"
-        with patch("archon_search.install.get_runtime", return_value=mock_runtime):
+        with patch("archon_search.install.installer.get_runtime", return_value=mock_runtime):
             assert installer.detect_gpu() == "none"
 
     def test_detect_gpu_returns_none_on_linux_no_cuda(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path)
         mock_runtime = MagicMock()
         mock_runtime.detect_gpu_type.return_value = "none"
-        with patch("archon_search.install.get_runtime", return_value=mock_runtime):
+        with patch("archon_search.install.installer.get_runtime", return_value=mock_runtime):
             assert installer.detect_gpu() == "none"
 
 
@@ -442,7 +442,7 @@ class TestServiceDelegation:
         installer = _make_installer(tmp_path)
         svc = self._mock_rag_service()
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             installer.write_service_file()
 
         svc.register.assert_called_once_with(dry_run=False)
@@ -451,7 +451,7 @@ class TestServiceDelegation:
         installer = _make_installer(tmp_path, dry_run=True)
         svc = self._mock_rag_service()
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             installer.write_service_file()
 
         svc.register.assert_called_once_with(dry_run=True)
@@ -465,7 +465,7 @@ class TestServiceDelegation:
         svc.pre_activate_cleanup.side_effect = lambda **_: call_order.append("pre_activate_cleanup") or 0
         svc.register.side_effect = lambda **_: call_order.append("register") or 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             installer.write_service_file()
 
         assert "pre_activate_cleanup" in call_order
@@ -493,7 +493,7 @@ class TestBootstrapCollections:
         mock_sync_result = MagicMock()
         mock_sync = AsyncMock(side_effect=lambda *a, **kw: (call_order.append("sync"), mock_sync_result)[1])
 
-        with patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+        with patch("archon_search.install.installer.create_pipeline", return_value=mock_pipeline), \
              patch("archon_search.sync.SearchCollectionSync") as MockSync:
             MockSync.return_value.sync = mock_sync
             asyncio.run(installer._bootstrap_collections())
@@ -511,7 +511,7 @@ class TestBootstrapCollections:
         mock_pipeline = MagicMock()
         mock_pipeline.store = mock_store
 
-        with patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+        with patch("archon_search.install.installer.create_pipeline", return_value=mock_pipeline), \
              patch("archon_search.sync.SearchCollectionSync") as MockSync:
             MockSync.return_value.sync = AsyncMock(side_effect=RuntimeError("boom"))
             with pytest.raises(RuntimeError, match="boom"):
@@ -527,7 +527,7 @@ class TestBootstrapCollections:
         mock_pipeline = MagicMock()
         mock_pipeline.store = mock_store
 
-        with patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+        with patch("archon_search.install.installer.create_pipeline", return_value=mock_pipeline), \
              patch("archon_search.sync.SearchCollectionSync") as MockSync:
             MockSync.return_value.sync = AsyncMock()
             asyncio.run(installer._bootstrap_collections())
@@ -552,7 +552,7 @@ class TestBootstrapCollections:
         mock_pipeline.store = mock_store
         mock_sync = AsyncMock()
 
-        with patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+        with patch("archon_search.install.installer.create_pipeline", return_value=mock_pipeline), \
              patch("archon_search.sync.SearchCollectionSync") as MockSync:
             MockSync.return_value.sync = mock_sync
             asyncio.run(installer._bootstrap_collections())
@@ -574,8 +574,8 @@ class TestRun:
         svc.register.return_value = 0
         svc.start.return_value = 0
         return {
-            "archon_search.install.get_search_service": MagicMock(return_value=svc),
-            "archon_search.install.create_pipeline": MagicMock(
+            "archon_search.install.installer.get_search_service": MagicMock(return_value=svc),
+            "archon_search.install.installer.create_pipeline": MagicMock(
                 return_value=MagicMock(
                     store=AsyncMock(),
                     ingest_directory=AsyncMock(return_value=[]),
@@ -590,11 +590,11 @@ class TestRun:
 
         write_service_mock = MagicMock()
         with patch("builtins.input", return_value="n"), \
-             patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install._remove_legacy_service"), \
-             patch("archon_search.install._prewarm_models"), \
-             patch("archon_search.install._check_disk_space"), \
-             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+             patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install.installer._remove_legacy_service"), \
+             patch("archon_search.install.installer._prewarm_models"), \
+             patch("archon_search.install.installer._check_disk_space"), \
+             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
              patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "configure_providers"), \
@@ -623,8 +623,8 @@ class TestRun:
         mock_store = AsyncMock()
         mock_pipeline.store = mock_store
 
-        with patch("archon_search.install.get_search_service", return_value=svc), \
-             patch("archon_search.install.create_pipeline", return_value=mock_pipeline), \
+        with patch("archon_search.install.installer.get_search_service", return_value=svc), \
+             patch("archon_search.install.installer.create_pipeline", return_value=mock_pipeline), \
              patch("archon_search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
              patch.object(installer, "check_deps", return_value=[]), \
@@ -644,11 +644,11 @@ class TestRun:
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
 
-        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install._remove_legacy_service"), \
-             patch("archon_search.install._prewarm_models"), \
-             patch("archon_search.install._check_disk_space"), \
-             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+        with patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install.installer._remove_legacy_service"), \
+             patch("archon_search.install.installer._prewarm_models"), \
+             patch("archon_search.install.installer._check_disk_space"), \
+             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
              patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "configure_providers"), \
@@ -684,12 +684,12 @@ class TestRun:
             captured.update(kwargs)
             return WizardFeatures()
 
-        with patch("archon_search.install._prompt_optional_features", side_effect=_capture), \
-             patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install._remove_legacy_service"), \
-             patch("archon_search.install._prewarm_models"), \
-             patch("archon_search.install._check_disk_space"), \
-             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+        with patch("archon_search.install.installer._prompt_optional_features", side_effect=_capture), \
+             patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install.installer._remove_legacy_service"), \
+             patch("archon_search.install.installer._prewarm_models"), \
+             patch("archon_search.install.installer._check_disk_space"), \
+             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
              patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "configure_providers"), \
@@ -710,11 +710,11 @@ class TestRun:
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
 
-        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install._remove_legacy_service"), \
-             patch("archon_search.install._prewarm_models"), \
-             patch("archon_search.install._check_disk_space"), \
-             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+        with patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install.installer._remove_legacy_service"), \
+             patch("archon_search.install.installer._prewarm_models"), \
+             patch("archon_search.install.installer._check_disk_space"), \
+             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
              patch.object(installer, "validate_providers", return_value=True), \
              patch.object(installer, "configure_providers"), \
@@ -735,11 +735,11 @@ class TestRun:
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
 
-        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install._remove_legacy_service"), \
-             patch("archon_search.install._prewarm_models"), \
-             patch("archon_search.install._check_disk_space"), \
-             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+        with patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install.installer._remove_legacy_service"), \
+             patch("archon_search.install.installer._prewarm_models"), \
+             patch("archon_search.install.installer._check_disk_space"), \
+             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
              patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "validate_embedder_only", return_value=False), \
@@ -762,11 +762,11 @@ class TestRun:
         fake_legacy = tmp_path / "fake.plist"
 
         configure_mock = MagicMock()
-        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install._remove_legacy_service"), \
-             patch("archon_search.install._prewarm_models"), \
-             patch("archon_search.install._check_disk_space"), \
-             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+        with patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install.installer._remove_legacy_service"), \
+             patch("archon_search.install.installer._prewarm_models"), \
+             patch("archon_search.install.installer._check_disk_space"), \
+             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
              patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "configure_providers", configure_mock), \
@@ -788,11 +788,11 @@ class TestRun:
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
 
-        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install._remove_legacy_service"), \
-             patch("archon_search.install._prewarm_models"), \
-             patch("archon_search.install._check_disk_space"), \
-             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+        with patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install.installer._remove_legacy_service"), \
+             patch("archon_search.install.installer._prewarm_models"), \
+             patch("archon_search.install.installer._check_disk_space"), \
+             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
              patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "configure_providers"), \
@@ -813,11 +813,11 @@ class TestRun:
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
 
-        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install._remove_legacy_service"), \
-             patch("archon_search.install._prewarm_models"), \
-             patch("archon_search.install._check_disk_space"), \
-             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+        with patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install.installer._remove_legacy_service"), \
+             patch("archon_search.install.installer._prewarm_models"), \
+             patch("archon_search.install.installer._check_disk_space"), \
+             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
              patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "configure_providers"), \
@@ -838,11 +838,11 @@ class TestRun:
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
 
-        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install._remove_legacy_service"), \
-             patch("archon_search.install._prewarm_models"), \
-             patch("archon_search.install._check_disk_space"), \
-             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+        with patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install.installer._remove_legacy_service"), \
+             patch("archon_search.install.installer._prewarm_models"), \
+             patch("archon_search.install.installer._check_disk_space"), \
+             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
              patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "configure_providers"), \
@@ -871,7 +871,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
@@ -888,7 +888,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=True)
 
         assert result == 0
@@ -905,7 +905,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=True)
 
         assert result == 0
@@ -922,7 +922,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
@@ -941,7 +941,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
@@ -958,7 +958,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=True)
 
         assert result == 0
@@ -975,7 +975,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=True)
 
         assert result == 0
@@ -998,7 +998,7 @@ class TestRunUninstall:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
@@ -1519,11 +1519,11 @@ class TestRunFlow:
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
 
-        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install._remove_legacy_service"), \
-             patch("archon_search.install._prewarm_models"), \
-             patch("archon_search.install._check_disk_space"), \
-             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+        with patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install.installer._remove_legacy_service"), \
+             patch("archon_search.install.installer._prewarm_models"), \
+             patch("archon_search.install.installer._check_disk_space"), \
+             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
              patch.object(installer, "validate_providers", return_value=True) as mock_validate, \
              patch.object(installer, "configure_providers") as mock_configure, \
@@ -1570,11 +1570,11 @@ class TestRunFlow:
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
 
-        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install._remove_legacy_service"), \
-             patch("archon_search.install._prewarm_models"), \
-             patch("archon_search.install._check_disk_space"), \
-             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+        with patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install.installer._remove_legacy_service"), \
+             patch("archon_search.install.installer._prewarm_models"), \
+             patch("archon_search.install.installer._check_disk_space"), \
+             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.CUDA), \
              patch.object(installer, "validate_providers") as mock_validate, \
              patch.object(installer, "configure_providers") as mock_configure, \
@@ -1597,11 +1597,11 @@ class TestRunFlow:
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
 
-        with patch("archon_search.install._legacy_service_path", return_value=fake_legacy), \
-             patch("archon_search.install._remove_legacy_service"), \
-             patch("archon_search.install._prewarm_models"), \
-             patch("archon_search.install._check_disk_space"), \
-             patch("archon_search.install.get_default_config_path", return_value=config_path), \
+        with patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy), \
+             patch("archon_search.install.installer._remove_legacy_service"), \
+             patch("archon_search.install.installer._prewarm_models"), \
+             patch("archon_search.install.installer._check_disk_space"), \
+             patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.NONE), \
              patch.object(installer, "validate_providers") as mock_validate, \
              patch.object(installer, "configure_providers") as mock_configure, \
@@ -1676,7 +1676,7 @@ class TestLoadUnloadService:
         svc = MagicMock()
         svc.start.return_value = 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             rc = installer.load_service()
 
         assert rc == 0
@@ -1688,7 +1688,7 @@ class TestLoadUnloadService:
         svc = MagicMock()
         svc.stop.return_value = 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             rc = installer.unload_service()
 
         assert rc == 0
@@ -1953,7 +1953,7 @@ class TestConsoleIntegration:
         svc.stop.return_value = 0
         svc.unregister.return_value = 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             result = installer.run_uninstall(delete_db=False)
 
         assert result == 0
@@ -2067,7 +2067,7 @@ class TestCreateInstallerFactory:
         config_toml = tmp_path / "archon-search.toml"
         config_toml.write_text("")
 
-        with patch("archon_search.install.load_config", return_value=MagicMock()):
+        with patch("archon_search.install.installer.load_config", return_value=MagicMock()):
             installer = create_installer(config_file=str(config_toml), dry_run=True)
 
         assert isinstance(installer, DryRunInstaller)
@@ -2080,7 +2080,7 @@ class TestCreateInstallerFactory:
         config_toml = tmp_path / "archon-search.toml"
         config_toml.write_text("")
 
-        with patch("archon_search.install.load_config", return_value=MagicMock()):
+        with patch("archon_search.install.installer.load_config", return_value=MagicMock()):
             installer = create_installer(config_file=str(config_toml), dry_run=False)
 
         assert isinstance(installer, RealInstaller)
@@ -2096,14 +2096,14 @@ class TestDryRunGuardAgainstRealServiceCalls:
 
         config_toml = tmp_path / "archon-search.toml"
         config_toml.write_text("")
-        with patch("archon_search.install.load_config", return_value=MagicMock()):
+        with patch("archon_search.install.installer.load_config", return_value=MagicMock()):
             return create_installer(config_file=str(config_toml), dry_run=True)
 
     def test_write_service_file_calls_service_with_dry_run_true(self, tmp_path: Path) -> None:
         installer = self._dry_run_installer(tmp_path)
         svc = MagicMock()
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             installer.write_service_file()
 
         svc.pre_activate_cleanup.assert_called_once_with(dry_run=True)
@@ -2114,7 +2114,7 @@ class TestDryRunGuardAgainstRealServiceCalls:
         svc = MagicMock()
         svc.start.return_value = 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             installer.load_service()
 
         svc.start.assert_called_once_with(dry_run=True)
@@ -2124,7 +2124,7 @@ class TestDryRunGuardAgainstRealServiceCalls:
         svc = MagicMock()
         svc.stop.return_value = 0
 
-        with patch("archon_search.install.get_search_service", return_value=svc):
+        with patch("archon_search.install.installer.get_search_service", return_value=svc):
             installer.unload_service()
 
         svc.stop.assert_called_once_with(dry_run=True)

@@ -458,11 +458,11 @@ def test_next_steps_not_printed_in_dry_run(tmp_path, capsys):
     installer = create_installer(config_file=str(config_path), dry_run=True)
 
     with (
-        patch("archon_search.install.get_default_config_path", return_value=config_path),
-        patch("archon_search.install._legacy_service_path", return_value=fake_legacy),
-        patch("archon_search.install._remove_legacy_service"),
-        patch("archon_search.install._prewarm_models"),
-        patch("archon_search.install._check_disk_space"),
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._remove_legacy_service"),
+        patch("archon_search.install.installer._prewarm_models"),
+        patch("archon_search.install.installer._check_disk_space"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
         patch.object(BaseInstaller, "validate_providers", return_value=False),
         patch.object(DryRunInstaller, "configure_providers"),

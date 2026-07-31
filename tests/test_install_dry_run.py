@@ -47,8 +47,8 @@ def _patched_install(
     Keys in the returned dict are the exact target strings passed to
     ``patch``/``patch.object`` — e.g. ``"write_service_file"`` for
     ``patch.object(DryRunInstaller, "write_service_file")``, or
-    ``"archon_search.install._prewarm_models"`` for
-    ``patch("archon_search.install._prewarm_models")`` — so callers can grab
+    ``"archon_search.install.installer._prewarm_models"`` for
+    ``patch("archon_search.install.installer._prewarm_models")`` — so callers can grab
     a specific mock for assertions without re-patching it.
 
     ``skip_remove_legacy_service=True`` leaves ``_remove_legacy_service``
@@ -60,21 +60,21 @@ def _patched_install(
     """
     with ExitStack() as stack:
         mocks: dict[str, object] = {}
-        mocks["archon_search.install.get_default_config_path"] = stack.enter_context(
-            patch("archon_search.install.get_default_config_path", return_value=config_path)
+        mocks["archon_search.install.installer.get_default_config_path"] = stack.enter_context(
+            patch("archon_search.install.installer.get_default_config_path", return_value=config_path)
         )
-        mocks["archon_search.install._legacy_service_path"] = stack.enter_context(
-            patch("archon_search.install._legacy_service_path", return_value=legacy_path)
+        mocks["archon_search.install.installer._legacy_service_path"] = stack.enter_context(
+            patch("archon_search.install.installer._legacy_service_path", return_value=legacy_path)
         )
         if not skip_remove_legacy_service:
-            mocks["archon_search.install._remove_legacy_service"] = stack.enter_context(
-                patch("archon_search.install._remove_legacy_service")
+            mocks["archon_search.install.installer._remove_legacy_service"] = stack.enter_context(
+                patch("archon_search.install.installer._remove_legacy_service")
             )
-        mocks["archon_search.install._prewarm_models"] = stack.enter_context(
-            patch("archon_search.install._prewarm_models")
+        mocks["archon_search.install.installer._prewarm_models"] = stack.enter_context(
+            patch("archon_search.install.installer._prewarm_models")
         )
-        mocks["archon_search.install._check_disk_space"] = stack.enter_context(
-            patch("archon_search.install._check_disk_space")
+        mocks["archon_search.install.installer._check_disk_space"] = stack.enter_context(
+            patch("archon_search.install.installer._check_disk_space")
         )
         mocks["detect_gpu"] = stack.enter_context(
             patch.object(DryRunInstaller, "detect_gpu", return_value=GpuType.NONE)
@@ -276,8 +276,8 @@ def test_dry_run_no_fasttext_download(tmp_path: Path) -> None:
         config_path,
         fake_legacy,
         extra_patches={
-            "archon_search.install._download_fasttext_model": None,
-            "archon_search.install._prompt_fasttext_license": None,
+            "archon_search.install.installer._download_fasttext_model": None,
+            "archon_search.install.installer._prompt_fasttext_license": None,
         },
     ) as mocks:
         rc = installer.run(
@@ -290,7 +290,7 @@ def test_dry_run_no_fasttext_download(tmp_path: Path) -> None:
         )
 
     assert rc == 0
-    mock_dl = mocks["archon_search.install._download_fasttext_model"]
+    mock_dl = mocks["archon_search.install.installer._download_fasttext_model"]
     mock_dl.assert_not_called()
 
 
@@ -309,7 +309,7 @@ def test_dry_run_no_prewarm(tmp_path: Path) -> None:
         )
 
     assert rc == 0
-    mocks["archon_search.install._prewarm_models"].assert_not_called()
+    mocks["archon_search.install.installer._prewarm_models"].assert_not_called()
 
 
 def test_dry_run_force_no_bak(tmp_path: Path) -> None:
@@ -329,7 +329,7 @@ def test_dry_run_force_no_bak(tmp_path: Path) -> None:
         config_path,
         fake_legacy,
         extra_patches={
-            "archon_search.install.get_search_service": {"return_value": MagicMock()},
+            "archon_search.install.installer.get_search_service": {"return_value": MagicMock()},
         },
     ):
         rc = installer.run(
@@ -359,7 +359,7 @@ def test_dry_run_force_no_service_stop(tmp_path: Path) -> None:
         config_path,
         fake_legacy,
         extra_patches={
-            "archon_search.install.get_search_service": {"return_value": mock_service},
+            "archon_search.install.installer.get_search_service": {"return_value": mock_service},
         },
     ):
         rc = installer.run(
@@ -397,7 +397,7 @@ def test_dry_run_does_not_register_or_start_service(tmp_path: Path, monkeypatch)
         config_path,
         fake_legacy,
         extra_patches={
-            "archon_search.install.get_search_service": {"return_value": MagicMock()},
+            "archon_search.install.installer.get_search_service": {"return_value": MagicMock()},
         },
     ) as mocks:
         rc = installer.run(
@@ -533,7 +533,7 @@ def test_dry_run_all_three_branches_no_files(tmp_path: Path, scenario: str, monk
         config_path,
         fake_legacy,
         extra_patches={
-            "archon_search.install.get_search_service": {"return_value": MagicMock()},
+            "archon_search.install.installer.get_search_service": {"return_value": MagicMock()},
         },
     ):
         rc = installer.run(**run_kwargs)
@@ -599,11 +599,11 @@ def test_dry_run_db_path_not_writable_previews_failure(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 _DANGEROUS_SEAMS = (
-    "archon_search.install._download_fasttext_model",
-    "archon_search.install.atomic_write_bytes",
+    "archon_search.install.installer._download_fasttext_model",
+    "archon_search.install.config_writer.atomic_write_bytes",
     "archon_search.install.subprocess.run",
     "archon_search.install.shutil.copy2",
-    "archon_search.install.rmtree",
+    "archon_search.install.installer.rmtree",
     "archon_search.install.os.chmod",
 )
 
@@ -631,5 +631,5 @@ def test_dry_run_backstop_touches_nothing_real(tmp_path: Path) -> None:
     assert rc == 0
     for name, mock in seams.items():
         assert not mock.called, f"dry-run called a real seam: {name}"
-    mocks["archon_search.install._prewarm_models"].assert_not_called()
-    mocks["archon_search.install._remove_legacy_service"].assert_not_called()
+    mocks["archon_search.install.installer._prewarm_models"].assert_not_called()
+    mocks["archon_search.install.installer._remove_legacy_service"].assert_not_called()

@@ -93,7 +93,7 @@ class TestWriteProfileConfig:
         config_path = tmp_path / "archon-search.toml"
         profile = ENGLISH_PROFILES["minimal"]
 
-        with patch("archon_search.install.atomic_write_bytes") as mock_atomic:
+        with patch("archon_search.install.config_writer.atomic_write_bytes") as mock_atomic:
             _write_profile_config(config_path, profile, "minimal", False)
 
         mock_atomic.assert_called_once()
@@ -180,7 +180,7 @@ class TestConfigureProvidersDurableWrite:
         installer.cfg = MagicMock()
         installer.cfg.embedding_model = "BAAI/bge-small-en-v1.5"
 
-        with patch("archon_search.install.atomic_write_bytes") as mock_atomic:
+        with patch("archon_search.install.installer.atomic_write_bytes") as mock_atomic:
             installer.configure_providers(gpu="cuda")
 
         mock_atomic.assert_called_once()
@@ -201,7 +201,7 @@ class TestConfigureProvidersDurableWrite:
         installer.cfg = MagicMock()
         installer.cfg.embedding_model = "BAAI/bge-small-en-v1.5"
 
-        with patch("archon_search.install.atomic_write_bytes") as mock_atomic:
+        with patch("archon_search.install.installer.atomic_write_bytes") as mock_atomic:
             installer.configure_providers(gpu="cuda")
 
         written = mock_atomic.call_args[0][1]

@@ -17,10 +17,10 @@ pytestmark = pytest.mark.xdist_group("install")
 # ---------------------------------------------------------------------------
 
 _COMMON_PATCHES = {
-    "archon_search.install._prewarm_models": MagicMock(),
-    "archon_search.install._check_disk_space": MagicMock(),
-    "archon_search.install._legacy_service_path": MagicMock,  # overridden per test
-    "archon_search.install._remove_legacy_service": MagicMock(),
+    "archon_search.install.installer._prewarm_models": MagicMock(),
+    "archon_search.install.installer._check_disk_space": MagicMock(),
+    "archon_search.install.installer._legacy_service_path": MagicMock,  # overridden per test
+    "archon_search.install.installer._remove_legacy_service": MagicMock(),
 }
 
 
@@ -29,16 +29,16 @@ def _base_run_patches(tmp_path: Path, features_override: WizardFeatures | None =
     fake_legacy = tmp_path / "fake.plist"
     features = features_override or WizardFeatures()
     return {
-        "archon_search.install._legacy_service_path": MagicMock(return_value=fake_legacy),
-        "archon_search.install._remove_legacy_service": MagicMock(),
-        "archon_search.install._prewarm_models": MagicMock(),
-        "archon_search.install._check_disk_space": MagicMock(),
-        "archon_search.install._prompt_multilingual": MagicMock(return_value=False),
-        "archon_search.install._prompt_optional_features": MagicMock(return_value=features),
-        "archon_search.install._prompt_gpu_confirm": MagicMock(return_value=True),
+        "archon_search.install.installer._legacy_service_path": MagicMock(return_value=fake_legacy),
+        "archon_search.install.installer._remove_legacy_service": MagicMock(),
+        "archon_search.install.installer._prewarm_models": MagicMock(),
+        "archon_search.install.installer._check_disk_space": MagicMock(),
+        "archon_search.install.installer._prompt_multilingual": MagicMock(return_value=False),
+        "archon_search.install.installer._prompt_optional_features": MagicMock(return_value=features),
+        "archon_search.install.installer._prompt_gpu_confirm": MagicMock(return_value=True),
         # Mock the subprocess-shelling provider install so enable_hyde/enable_rag_fusion
         # runs never shell out to a real `pip install archon-search[hyde]`.
-        "archon_search.install._install_query_expansion_extras": MagicMock(return_value=[]),
+        "archon_search.install.installer._install_query_expansion_extras": MagicMock(return_value=[]),
     }
 
 
@@ -64,7 +64,7 @@ def _run_installer(
     """Run SearchInstaller.run() with all infrastructure patched out."""
     config_path = tmp_path / "archon-search.toml"
     module_patches = _base_run_patches(tmp_path, features_override)
-    module_patches["archon_search.install.get_default_config_path"] = MagicMock(return_value=config_path)
+    module_patches["archon_search.install.installer.get_default_config_path"] = MagicMock(return_value=config_path)
     if extra_module_patches:
         module_patches.update(extra_module_patches)
 
@@ -73,8 +73,8 @@ def _run_installer(
         method_patches.update(extra_method_patches)
 
     with patch.multiple(
-        "archon_search.install",
-        **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
+        "archon_search.install.installer",
+        **{k.replace("archon_search.install.installer.", ""): v for k, v in module_patches.items()},
     ):
         with patch.multiple(RealInstaller, **method_patches):
             installer = create_installer(config_file=str(config_path))
@@ -172,7 +172,7 @@ def test_run_mixed_provider_partial_failure_reverts_only_failed_section(tmp_path
         {},
         features_override=features,
         extra_module_patches={
-            "archon_search.install._install_query_expansion_extras": MagicMock(return_value=["rag_fusion"]),
+            "archon_search.install.installer._install_query_expansion_extras": MagicMock(return_value=["rag_fusion"]),
         },
     )
     assert rc == 0
@@ -244,7 +244,7 @@ def _run_with_server_key(
             _real_aw(path, data, **kwargs)
 
     module_patches = _base_run_patches(tmp_path)
-    module_patches["archon_search.install.get_default_config_path"] = MagicMock(return_value=config_path)
+    module_patches["archon_search.install.installer.get_default_config_path"] = MagicMock(return_value=config_path)
 
     method_patches = _method_patches()
 
@@ -255,11 +255,11 @@ def _run_with_server_key(
 
     with env_context:
         with patch.multiple(
-            "archon_search.install",
-            **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
+            "archon_search.install.installer",
+            **{k.replace("archon_search.install.installer.", ""): v for k, v in module_patches.items()},
         ):
             with patch.multiple(RealInstaller, **method_patches):
-                with patch("archon_search.install.atomic_write_bytes", side_effect=capturing_atomic_write):
+                with patch("archon_search.install.installer.atomic_write_bytes", side_effect=capturing_atomic_write):
                     with patch("archon_search.install.os.chmod"):
                         installer = create_installer(config_file=str(config_path))
                         rc = installer.run(
@@ -290,7 +290,7 @@ def test_run_server_key_sets_mode_600(tmp_path: Path) -> None:
 
     config_path = tmp_path / "archon-search.toml"
     module_patches = _base_run_patches(tmp_path)
-    module_patches["archon_search.install.get_default_config_path"] = MagicMock(return_value=config_path)
+    module_patches["archon_search.install.installer.get_default_config_path"] = MagicMock(return_value=config_path)
 
     method_patches = _method_patches()
 
@@ -304,8 +304,8 @@ def test_run_server_key_sets_mode_600(tmp_path: Path) -> None:
 
     with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
         with patch.multiple(
-            "archon_search.install",
-            **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
+            "archon_search.install.installer",
+            **{k.replace("archon_search.install.installer.", ""): v for k, v in module_patches.items()},
         ):
             with patch.multiple(RealInstaller, **method_patches):
                 with patch("archon_search.install.os.chmod", side_effect=capturing_chmod):
@@ -373,17 +373,17 @@ def test_run_dry_run_server_key_prints_message(tmp_path: Path, capsys) -> None:
     key_file = tmp_path / ".search.env"
 
     module_patches = _base_run_patches(tmp_path)
-    module_patches["archon_search.install.get_default_config_path"] = MagicMock(return_value=config_path)
+    module_patches["archon_search.install.installer.get_default_config_path"] = MagicMock(return_value=config_path)
 
     method_patches = _method_patches()
 
     with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
         with patch.multiple(
-            "archon_search.install",
-            **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
+            "archon_search.install.installer",
+            **{k.replace("archon_search.install.installer.", ""): v for k, v in module_patches.items()},
         ):
             with patch.multiple(DryRunInstaller, **method_patches):
-                with patch("archon_search.install.atomic_write_bytes") as mock_write:
+                with patch("archon_search.install.config_writer.atomic_write_bytes") as mock_write:
                     installer = create_installer(config_file=str(config_path), dry_run=True)
                     rc = installer.run(
                         non_interactive=True,
@@ -449,13 +449,13 @@ def test_run_db_path_migration_note_when_different(tmp_path: Path, capsys) -> No
     db_dir = tmp_path / "new_db"
 
     module_patches = _base_run_patches(tmp_path)
-    module_patches["archon_search.install.get_default_config_path"] = MagicMock(return_value=config_path)
+    module_patches["archon_search.install.installer.get_default_config_path"] = MagicMock(return_value=config_path)
 
     method_patches = _method_patches()
 
     with patch.multiple(
-        "archon_search.install",
-        **{k.replace("archon_search.install.", ""): v for k, v in module_patches.items()},
+        "archon_search.install.installer",
+        **{k.replace("archon_search.install.installer.", ""): v for k, v in module_patches.items()},
     ):
         with patch.multiple(RealInstaller, **method_patches):
             installer = create_installer(config_file=str(config_path))

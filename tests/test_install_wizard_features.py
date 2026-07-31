@@ -779,7 +779,7 @@ class TestWizardFeaturesG10:
         # New flow — inputs: enable=y, hyde_provider=ollama, hyde_base_url="",
         #   pick "1" from fetched list; rag_fusion_provider=ollama, base_url="", pick "1".
         with patch.dict("os.environ", env_without_key, clear=True):
-            with patch("archon_search.install._fetch_ollama_models", return_value=["llama3.2"]):
+            with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]):
                 with patch("builtins.input", side_effect=["y", "ollama", "", "1", "ollama", "", "1"]):
                     features = _prompt_optional_features(
                         non_interactive=False,
@@ -827,7 +827,7 @@ class TestWizardFeaturesG10:
         """Empty input for Ollama base URL stores empty string (config uses default)."""
         # New flow — inputs: enable=y, provider=ollama, base_url="" (default), pick "1".
         # Same for rag_fusion.
-        with patch("archon_search.install._fetch_ollama_models", return_value=["llama3.2"]):
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]):
             with patch("builtins.input", side_effect=["y", "ollama", "", "1", "ollama", "", "1"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
@@ -859,7 +859,7 @@ class TestWizardFeaturesG10:
             except StopIteration:
                 raise EOFError
 
-        with patch("archon_search.install._fetch_ollama_models", return_value=[]):
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=[]):
             with patch("builtins.input", side_effect=mock_input):
                 features = _prompt_optional_features(
                     non_interactive=False,
@@ -900,7 +900,7 @@ class TestWizardFeaturesG10:
         """An out-of-range picker entry re-prompts; a valid number on retry is accepted."""
         # "y"=enable, "ollama"=hyde provider, ""=base url (default), "9"=out of range (retry),
         # "1"=valid → llama3.2; "ollama"=rag provider, ""=base url, "1"=valid → llama3.2.
-        with patch("archon_search.install._fetch_ollama_models", return_value=["llama3.2", "mistral"]):
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2", "mistral"]):
             with patch("builtins.input", side_effect=["y", "ollama", "", "9", "1", "ollama", "", "1"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
@@ -922,7 +922,7 @@ class TestWizardFeaturesG10:
         """RAG Fusion OpenAI free-text model re-prompts on empty; valid accepted on retry."""
         # "y"=enable, "ollama"=hyde provider, ""=hyde base url, "1"=pick llama3.2;
         # "openai"=rag provider, ""=empty model (retry), "gpt-4o"=valid.
-        with patch("archon_search.install._fetch_ollama_models", return_value=["llama3.2"]):
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]):
             with patch("builtins.input", side_effect=["y", "ollama", "", "1", "openai", "", "gpt-4o"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
@@ -1117,7 +1117,7 @@ class TestPromptOllamaModel:
 
     def test_default_url_and_picker(self) -> None:
         """Empty base-URL input keeps the default; picker returns the chosen model."""
-        with patch("archon_search.install._fetch_ollama_models", return_value=["llama3.2"]) as mock_fetch:
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]) as mock_fetch:
             with patch("builtins.input", side_effect=["", "1"]):
                 base_url, model = _prompt_ollama_model("HyDE", OLLAMA_BASE_URL_DEFAULT)
         mock_fetch.assert_called_once_with(OLLAMA_BASE_URL_DEFAULT)
@@ -1126,7 +1126,7 @@ class TestPromptOllamaModel:
 
     def test_custom_url_is_stored_and_fetched(self) -> None:
         """A typed custom URL is fetched from and stored (survives config regen)."""
-        with patch("archon_search.install._fetch_ollama_models", return_value=["llama3.2"]) as mock_fetch:
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]) as mock_fetch:
             with patch("builtins.input", side_effect=["http://box:11434", "1"]):
                 base_url, model = _prompt_ollama_model("HyDE", OLLAMA_BASE_URL_DEFAULT)
         mock_fetch.assert_called_once_with("http://box:11434")
@@ -1135,7 +1135,7 @@ class TestPromptOllamaModel:
 
     def test_enter_keeps_saved_custom_default(self) -> None:
         """On re-run, pressing Enter keeps the config-saved custom URL (stored + fetched)."""
-        with patch("archon_search.install._fetch_ollama_models", return_value=["llama3.2"]) as mock_fetch:
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]) as mock_fetch:
             with patch("builtins.input", side_effect=["", "1"]):
                 base_url, model = _prompt_ollama_model("HyDE", "http://box:11434")
         mock_fetch.assert_called_once_with("http://box:11434")
@@ -1144,7 +1144,7 @@ class TestPromptOllamaModel:
 
     def test_unreachable_falls_back_to_freetext(self, capsys) -> None:
         """Empty model list → honest message + free-text fallback."""
-        with patch("archon_search.install._fetch_ollama_models", return_value=[]):
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=[]):
             with patch("builtins.input", side_effect=["", "mymodel"]):
                 base_url, model = _prompt_ollama_model("HyDE", OLLAMA_BASE_URL_DEFAULT)
         out = capsys.readouterr().out
@@ -1155,7 +1155,7 @@ class TestPromptOllamaModel:
 
     def test_eof_on_base_url_uses_default(self) -> None:
         """EOF on the base-URL prompt resolves to the default and proceeds to fetch."""
-        with patch("archon_search.install._fetch_ollama_models", return_value=["llama3.2"]) as mock_fetch:
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]) as mock_fetch:
             with patch("builtins.input", side_effect=[EOFError, "1"]):
                 base_url, model = _prompt_ollama_model("HyDE", OLLAMA_BASE_URL_DEFAULT)
         mock_fetch.assert_called_once_with(OLLAMA_BASE_URL_DEFAULT)
@@ -1169,7 +1169,7 @@ class TestOllamaPickerIntegration:
     _profile = ENGLISH_PROFILES["minimal"]  # reranker is not None
 
     def _run(self, inputs: list[object], fetch_return, **kwargs) -> WizardFeatures:
-        with patch("archon_search.install._fetch_ollama_models", return_value=fetch_return):
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=fetch_return):
             with patch("builtins.input", side_effect=inputs):
                 return _prompt_optional_features(
                     non_interactive=False,
@@ -1205,7 +1205,7 @@ class TestOllamaPickerIntegration:
 
     def test_custom_base_url_threaded_from_config(self) -> None:
         """A config-saved base URL pre-fills the prompt; Enter keeps it for both features."""
-        with patch("archon_search.install._fetch_ollama_models", return_value=["llama3.2"]) as mock_fetch:
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]) as mock_fetch:
             with patch("builtins.input", side_effect=["y", "ollama", "", "1", "ollama", "", "1"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
@@ -1235,7 +1235,7 @@ class TestOllamaPickerE2E:
         """A model picked in the wizard reaches a real SearchConfig via the written TOML."""
         from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
 
-        with patch("archon_search.install._fetch_ollama_models", return_value=["llama3.2", "mistral"]):
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2", "mistral"]):
             with patch("builtins.input", side_effect=["y", "ollama", "", "2", "ollama", "", "1"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
@@ -1266,7 +1266,7 @@ class TestOllamaPickerE2E:
         """A custom base URL typed in the wizard reaches the loaded SearchConfig."""
         from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
 
-        with patch("archon_search.install._fetch_ollama_models", return_value=["llama3.2"]):
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]):
             with patch("builtins.input", side_effect=["y", "ollama", "http://box:11434", "1", "anthropic"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
@@ -1295,7 +1295,7 @@ class TestOllamaPickerE2E:
         from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
 
         # enable=y; hyde=anthropic (no ollama prompt); rag=ollama, custom URL, pick "1".
-        with patch("archon_search.install._fetch_ollama_models", return_value=["llama3.2"]):
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]):
             with patch("builtins.input", side_effect=["y", "anthropic", "ollama", "http://rag:11434", "1"]):
                 features = _prompt_optional_features(
                     non_interactive=False,

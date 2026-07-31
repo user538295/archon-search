@@ -43,8 +43,8 @@ def test_force_reinstall_backs_up_config(tmp_path):
     original_content = config_path.read_text()
 
     with (
-        patch("archon_search.install.get_search_service") as mock_svc,
-        patch("archon_search.install._write_profile_config"),
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config"),
         patch("archon_search.install.shutil.rmtree"),
     ):
         mock_svc.return_value.stop.return_value = None
@@ -74,8 +74,8 @@ def test_force_reinstall_confirms_before_delete(tmp_path, capsys):
 
     with (
         patch("builtins.input", return_value="no") as mock_input,
-        patch("archon_search.install.get_search_service") as mock_svc,
-        patch("archon_search.install._write_profile_config") as mock_write,
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
         patch("archon_search.install.shutil.rmtree") as mock_rmtree,
     ):
         mock_svc.return_value.stop.return_value = None
@@ -109,8 +109,8 @@ def test_force_reinstall_yes_confirmation_proceeds(tmp_path):
 
     with (
         patch("builtins.input", return_value="yes"),
-        patch("archon_search.install.get_search_service") as mock_svc,
-        patch("archon_search.install._write_profile_config") as mock_write,
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
         patch("archon_search.install.shutil.rmtree") as mock_rmtree,
     ):
         mock_svc.return_value.stop.return_value = None
@@ -138,8 +138,8 @@ def test_force_reinstall_skips_confirm_when_non_interactive(tmp_path):
 
     with (
         patch("builtins.input") as mock_input,
-        patch("archon_search.install.get_search_service") as mock_svc,
-        patch("archon_search.install._write_profile_config"),
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config"),
         patch("archon_search.install.shutil.rmtree"),
     ):
         mock_svc.return_value.stop.return_value = None
@@ -165,8 +165,8 @@ def test_force_reinstall_deletes_db_directory(tmp_path):
     profile, profile_name = _profile_and_name()
 
     with (
-        patch("archon_search.install.get_search_service") as mock_svc,
-        patch("archon_search.install._write_profile_config"),
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config"),
         patch("archon_search.install.shutil.rmtree") as mock_rmtree,
     ):
         mock_svc.return_value.stop.return_value = None
@@ -196,8 +196,8 @@ def test_force_reinstall_restores_backup_on_stop_failure(tmp_path):
         pass
 
     with (
-        patch("archon_search.install.get_search_service") as mock_svc,
-        patch("archon_search.install._write_profile_config") as mock_write,
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
         patch("archon_search.install.shutil.rmtree") as mock_rmtree,
     ):
         mock_svc.return_value.stop.side_effect = BoomError("kaboom")
@@ -227,8 +227,8 @@ def test_force_reinstall_prints_post_db_deletion_message_on_write_failure(tmp_pa
     profile, profile_name = _profile_and_name()
 
     with (
-        patch("archon_search.install.get_search_service") as mock_svc,
-        patch("archon_search.install._write_profile_config", side_effect=OSError("disk full")),
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config", side_effect=OSError("disk full")),
         patch("archon_search.install.shutil.rmtree"),
     ):
         mock_svc.return_value.stop.return_value = None
@@ -260,8 +260,8 @@ def test_force_reinstall_handles_missing_db_directory(tmp_path):
     profile, profile_name = _profile_and_name()
 
     with (
-        patch("archon_search.install.get_search_service") as mock_svc,
-        patch("archon_search.install._write_profile_config") as mock_write,
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
         patch("archon_search.install.shutil.rmtree") as mock_rmtree,
     ):
         mock_svc.return_value.stop.return_value = None
@@ -288,8 +288,8 @@ def test_force_reinstall_dry_run_skips_all_destructive_ops(tmp_path):
     profile, profile_name = _profile_and_name()
 
     with (
-        patch("archon_search.install.get_search_service") as mock_svc,
-        patch("archon_search.install._write_profile_config") as mock_write,
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
         patch("archon_search.install.shutil.rmtree") as mock_rmtree,
     ):
         _execute_force_reinstall(
@@ -317,8 +317,8 @@ def test_force_reinstall_runtime_error_from_stop_is_no_op(tmp_path):
     profile, profile_name = _profile_and_name()
 
     with (
-        patch("archon_search.install.get_search_service") as mock_svc,
-        patch("archon_search.install._write_profile_config") as mock_write,
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
         patch("archon_search.install.shutil.rmtree") as mock_rmtree,
     ):
         mock_svc.return_value.stop.side_effect = RuntimeError("service not running")
@@ -346,8 +346,8 @@ def test_force_reinstall_rmtree_failure_exits_with_message(tmp_path, capsys):
     profile, profile_name = _profile_and_name()
 
     with (
-        patch("archon_search.install.get_search_service") as mock_svc,
-        patch("archon_search.install._write_profile_config") as mock_write,
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
         patch("archon_search.install.shutil.rmtree", side_effect=OSError("permission denied")),
     ):
         mock_svc.return_value.stop.return_value = None
@@ -381,8 +381,8 @@ def test_force_reinstall_no_config_no_backup(tmp_path):
     profile, profile_name = _profile_and_name()
 
     with (
-        patch("archon_search.install.get_search_service") as mock_svc,
-        patch("archon_search.install._write_profile_config") as mock_write,
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
         patch("archon_search.install.shutil.rmtree") as mock_rmtree,
     ):
         mock_svc.return_value.stop.return_value = None
