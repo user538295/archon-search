@@ -127,7 +127,7 @@ flowchart TB
   INST --> WAIT[Poll GET /health up to 60s]
 ```
 
-The active install path is `cli/install_cmd.py::install` (wired into `cli/main.py`). `archon_search/install.py::SearchInstaller` is the **profile-aware installer** called by `cli/install_cmd.py` — it handles disk-space checks, profile selection, Jina license gating, config writes, model pre-warming, service registration, and health polling. The full C0 install flow is documented in `100_system_architecture_overview.md` (see "Install Profile Registry (C0)").
+The active install path is `cli/install_cmd.py::install` (wired into `cli/main.py`). `archon_search/install/installer.py::RealInstaller` (constructed via `create_installer`) is the **profile-aware installer** called by `cli/install_cmd.py` — it handles disk-space checks, profile selection, Jina license gating, config writes, model pre-warming, service registration, and health polling. The full C0 install flow is documented in `100_system_architecture_overview.md` (see "Install Profile Registry (C0)").
 
 The `SearchServiceLifecycle` ABC (`platform/service.py`) declares `start`, `stop`, `restart`, `status`, `register`, `unregister`. Concrete implementations:
 
@@ -135,7 +135,7 @@ The `SearchServiceLifecycle` ABC (`platform/service.py`) declares `start`, `stop
 - **Linux (`platform/linux.py::SystemdSearchService`)** — writes `~/.config/systemd/user/archon-search.service`; `Restart=always`, `RestartSec=5`, `Nice=10`, `CPUQuota=50%`. `register()` runs `daemon-reload`, `systemctl --user enable`, and `loginctl enable-linger $USER` so the service survives logout.
 - **Windows (`platform/windows.py::WindowsSearchService`)** — every lifecycle method raises `NotImplementedError("Windows service management not yet supported — run archon-search start manually")`. `status()` always reports `running=False`.
 
-GPU detection (`platform/runtime.py::SearchRuntime.detect_gpu_type`) is **not gated by OS**: it first invokes `nvidia-smi` on any platform, and returns `GpuType.CUDA` whenever `nvidia-smi` exits with rc=0. Only if `nvidia-smi` is missing or fails does it fall back to checking `platform.system() == "Darwin" and platform.machine() == "arm64"`, which returns `GpuType.METAL` (mapped to the ONNX provider name `CoreMLExecutionProvider` by `install.py::SearchInstaller.configure_providers`). Otherwise it returns `GpuType.NONE` and no provider is written.
+GPU detection (`platform/runtime.py::SearchRuntime.detect_gpu_type`) is **not gated by OS**: it first invokes `nvidia-smi` on any platform, and returns `GpuType.CUDA` whenever `nvidia-smi` exits with rc=0. Only if `nvidia-smi` is missing or fails does it fall back to checking `platform.system() == "Darwin" and platform.machine() == "arm64"`, which returns `GpuType.METAL` (mapped to the ONNX provider name `CoreMLExecutionProvider` by `install/installer.py::RealInstaller.configure_providers`). Otherwise it returns `GpuType.NONE` and no provider is written.
 
 `SearchInstaller.configure_providers` writes the matching ONNX provider into `[database].providers`. As of C0, `archon-search install` calls `SearchInstaller.run()`, which invokes `detect_gpu_type()` and `configure_providers()` during the install flow — GPU detection runs automatically and the correct ONNX provider is written to `archon-search.toml` without manual intervention. Operators can override by editing `[database].providers` after installation.
 

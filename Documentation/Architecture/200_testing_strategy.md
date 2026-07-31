@@ -186,7 +186,7 @@ The **`archon_unset_data_dir` marker** is registered in `[tool.pytest.ini_option
 
 3. **`test_archon_unset_data_dir_marker_scope`** — AST-walks `tests/` and asserts that `@pytest.mark.archon_unset_data_dir` appears on exactly the tests named in `MARKER_ALLOWLIST`. Paired with `test_meta_ast_finds_pytest_mark_decorator`, which validates the AST walker itself.
 
-Grandfathered callsites (those in `archon_search/install.py` lines 1214, 1215, 1358, 1547; `archon_search/config.py:144`; `archon_search/platform/linux.py` and `archon_search/platform/macos.py`) are pinned in `tests/path_home_allowlist.txt`. Lines 48, 377, and 1508 of `install.py` were migrated to `get_data_dir()` in C17 and removed from the allowlist. The sibling ratchet for SQL f-string injection is `tests/test_no_fstring_sql.py` + `store.py` guard (see `Architecture/130_data_architecture_and_persistence.md`).
+Grandfathered callsites (the two legacy launchd/systemd service-path `Path.home()` calls in `archon_search/install/service_ops.py:37-38`; `archon_search/config.py`; `archon_search/platform/linux.py` and `archon_search/platform/macos.py`) are pinned in `tests/path_home_allowlist.txt`, which is keyed by `(file, line, content-hash)` — so an entry must be re-pinned whenever the callsite moves (as the two `install.py` service-path pins were during the `install.py` → `install/` package split). Earlier `install.py` callsites were migrated to `get_data_dir()` in C17 and removed from the allowlist. The sibling ratchet for SQL f-string injection is `tests/test_no_fstring_sql.py` + `store.py` guard (see `Architecture/130_data_architecture_and_persistence.md`).
 
 ## See also
 

@@ -104,7 +104,7 @@ Both app factories add this middleware to their respective apps. They remain **s
 
 ### Watchdog filesystem observer
 
-`archon_search/watcher.py` wraps a `watchdog.Observer` per collection in `CollectionWatcher`, and `WatcherManager` keeps a registry. `_DebounceHandler` coalesces a burst of filesystem events into a single coroutine call after `debounce_seconds` (default 5 s). The coroutine target is `SearchCollectionSync.sync_collection`. Note: the FastAPI server (`server/app.create_app`) does **not** construct or start a `WatcherManager` in its lifespan; watcher wiring lives in `archon_search/install.py` (the `install_cmd` flow). `sync_collection` does not call `ingest_directory` — it computes new/changed/deleted files and routes them through `_apply_collection_changes`, which uses per-file pipeline primitives.
+`archon_search/watcher.py` wraps a `watchdog.Observer` per collection in `CollectionWatcher`, and `WatcherManager` keeps a registry. `_DebounceHandler` coalesces a burst of filesystem events into a single coroutine call after `debounce_seconds` (default 5 s). The coroutine target is `SearchCollectionSync.sync_collection`. Note: the FastAPI server (`server/app.create_app`) does **not** construct or start a `WatcherManager` in its lifespan; watcher wiring lives in `archon_search/install/` (the `install_cmd` flow). `sync_collection` does not call `ingest_directory` — it computes new/changed/deleted files and routes them through `_apply_collection_changes`, which uses per-file pipeline primitives.
 
 Failure modes (see source: `archon_search/watcher.py`):
 

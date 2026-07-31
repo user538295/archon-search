@@ -174,7 +174,7 @@ All three topologies share the same `run_server` codepath, the same FastAPI app,
 
 `archon_search/profiles.py` defines three tiered install profiles (`minimal`, `balanced`, `max`) for English and multilingual model stacks. The profile controls which `embedding_model`, `reranker_model`, and `chunk_size` are written into `archon-search.toml` at install time.
 
-The install flow (`archon_search/install.py`):
+The install flow (`archon_search/install/`, orchestrated by `installer.py`):
 
 1. Prompts for or validates the profile and multilingual flag.
 2. Applies a Jina CC-BY-NC-4.0 license gate for multilingual `balanced`/`max` (those profiles use `jinaai/jina-reranker-v2-base-multilingual`).
