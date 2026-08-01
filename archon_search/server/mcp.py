@@ -269,7 +269,7 @@ def create_app(
     doc_id_hasher: Callable[[str], str] | None = None,
     graph_store: "GraphStore | None" = None,
 ) -> FastMCP:
-    """Create a FastMCP app with 13 RAG tools + up to 4 optional key-management tools.
+    """Create a FastMCP app with 16 RAG tools + up to 4 optional key-management tools.
 
     ``config`` is required only for the collectionless ``explain`` routing path;
     when omitted, ``explain`` without a collection falls back to
