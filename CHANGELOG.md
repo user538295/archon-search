@@ -1,6 +1,23 @@
 # Changelog
 
 
+## [26.8.1751] - 2026-08-01
+
+**Reliable service shutdown, safe dry-run rehearsals, and installation refactoring**
+
+**Service lifecycle**
+- `archon-search stop` now waits for the process to fully terminate (up to ~10 seconds) before returning, fixing a race where `GET /health` still returned 200 while the server was shutting down and accepting requests.
+- `GET /health` returns 503 during shutdown to signal clients to stop routing work to the instance.
+
+**Setup wizard**
+- `archon-search wizard --dry-run` now properly previews all operations without executing them—previously it removed the legacy service config even in dry-run mode.
+- Validates `--db-path` write permissions during dry-run, surfacing errors during preview instead of silently skipping the check.
+
+**Installation**
+- Refactored the monolithic 2857-line `install.py` into a focused `archon_search/install/` package with modules like `installer.py`, `config_writer.py`, `wizard.py`, and `service_ops.py`. Existing `from archon_search.install import X` imports remain unchanged via re-export.
+- Enforced dry-run correctness via strategy pattern: all system mutations route through abstract methods, allowing `DryRunInstaller` to preview operations while `RealInstaller` executes them, preventing accidental state changes in rehearsal mode.
+
+
 ## [26.7.1738] - 2026-07-29
 
 **Multi-platform Docker, reindex isolation, and test reliability**
