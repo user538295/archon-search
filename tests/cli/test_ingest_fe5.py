@@ -68,6 +68,10 @@ def test_ingest_submits_job_with_explicit_collection(tmp_path: Path) -> None:
     assert request_body.get("collection") == "my-explicit-collection"
     assert request_body.get("path") == str(test_file)
     assert call_kwargs.get("headers", {}).get("Authorization") == "Bearer test-key"
+    # S51: a CLI-initiated ingest must attribute chunks as "cli" via the
+    # X-Ingested-By header the server already honors — otherwise it is recorded
+    # as "http" and the documented "cli" value is unreachable.
+    assert call_kwargs.get("headers", {}).get("X-Ingested-By") == "cli"
     mock_get.assert_not_called()
 
 

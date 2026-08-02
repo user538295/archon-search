@@ -95,7 +95,7 @@ def list_cmd(api_url: str, api_key: str | None) -> None:
 def add(path: str, wait_flag: bool, api_url: str, api_key: str | None) -> None:
     """Add a path to collections and ingest it."""
     key = _resolve_api_key(api_key)
-    headers = {"Authorization": f"Bearer {key}"}
+    headers = {"Authorization": f"Bearer {key}", "X-Ingested-By": "cli"}
     base_url = api_url.rstrip("/")
     post_url = f"{base_url}/collections/"
 

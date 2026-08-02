@@ -605,6 +605,9 @@ def test_add_submits_job_prints_id_and_server_collection_name() -> None:
     assert posted_json.get("path") == "/some/path/my docs"
     # Must send auth header
     assert call_kwargs.get("headers", {}).get("Authorization") == "Bearer test-key"
+    # S51: collection add is a CLI-initiated ingest → must attribute chunks as
+    # "cli" via the X-Ingested-By header the server honors, not the default "http".
+    assert call_kwargs.get("headers", {}).get("X-Ingested-By") == "cli"
 
 
 def test_add_with_wait_polls_to_done() -> None:
