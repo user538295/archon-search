@@ -62,6 +62,8 @@ curl -s -X POST http://127.0.0.1:8765/search \
 
 The response carries `graph_expansion_applied: true` when expansion fired. Nothing needs to be pre-built beyond the graph itself.
 
+**Precondition — the trigger is lexical, not semantic.** Expansion fires only when an N-gram (1–3 words) of your query matches an extracted **entity name** verbatim (case-insensitive), after which that entity's first-degree neighbours are appended to the query. Entity names come from spaCy proper-noun NER, so the match is against *names in the graph*, **not by semantic relevance**. A query with the same meaning but no matching entity-name N-gram returns `graph_expansion_applied: false` with plain hybrid results and no error or warning — so `false` means "your phrasing missed an entity name", not "the feature is broken" or "the graph is empty". Inspect the available names with `GET /graph/{collection}` (the `nodes[].entity_name` values) and phrase queries to overlap them.
+
 ### `local` and `global` — need communities first
 
 Both community modes require Leiden communities to be built for the collection. Run the build via the CLI (an HTTP proxy to the running server):
