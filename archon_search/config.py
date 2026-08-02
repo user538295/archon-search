@@ -285,6 +285,11 @@ def save_config(config: SearchConfig, path: Path | str) -> None:
         text = path.read_text(encoding="utf-8")
         doc = tomlkit.parse(text)
     else:
+        # Create the parent directory: the default config path lives under a
+        # `.archon-search/` subdir (e.g. `/data/.archon-search/` in the Docker
+        # image, where HOME=/data) that nothing else creates, so a first-ever
+        # `collection add` would otherwise raise FileNotFoundError → 500.
+        path.parent.mkdir(parents=True, exist_ok=True)
         doc = tomlkit.document()
 
     if "collections" not in doc:
