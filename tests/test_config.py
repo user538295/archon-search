@@ -863,10 +863,12 @@ def test_logging_log_file_empty_string_no_warn_in_container_mode(
     assert not any("log_file" in r.message and r.levelno == logging.WARNING for r in caplog.records)
 
 
-def test_logging_log_file_empty_string_no_warn_when_data_dir_overrides(
+def test_logging_log_file_empty_string_preserved_and_warns_when_data_dir_set(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """log_file='' in TOML must NOT warn when ARCHON_SEARCH_DATA_DIR overrides it to a real path."""
+    """S107: TOML log_file="" is the disable-file-logging opt-out and must be PRESERVED
+    (not clobbered) when ARCHON_SEARCH_DATA_DIR is set. The empty-string warning MUST
+    fire (since ARCHON_SEARCH_CONTAINER is not "1")."""
     import logging
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
@@ -875,8 +877,8 @@ def test_logging_log_file_empty_string_no_warn_when_data_dir_overrides(
     toml_file.write_text('[logging]\nlog_file = ""\n', encoding="utf-8")
     with caplog.at_level(logging.WARNING, logger="archon_search.config"):
         config = load_config(path=toml_file)
-    assert not any("log_file" in r.message and r.levelno == logging.WARNING for r in caplog.records)
-    assert config.log_file, f"DATA_DIR should have set a real log_file path; got {config.log_file!r}"
+    assert any("log_file" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+    assert config.log_file == ""
 
 
 def test_logging_toml_key_format_maps_to_log_format_field(tmp_path: Path) -> None:

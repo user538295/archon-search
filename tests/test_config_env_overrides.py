@@ -165,9 +165,10 @@ def test_data_dir_overrides_toml_db_path(
 def test_data_dir_overrides_toml_log_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Env DATA_DIR beats explicit TOML `log_file`. Symmetric with `db_path`
+    """Env DATA_DIR beats explicit non-empty TOML `log_file`. Symmetric with `db_path`
     precedence so future reorderings of TOML/env application can't silently
-    flip the contract for one field but not the others."""
+    flip the contract for one field but not the others. An empty `log_file` is the
+    sole documented carve-out (preserved — see `test_data_dir_preserves_empty_toml_log_file`)."""
     toml_file = tmp_path / "archon-search.toml"
     toml_file.write_text(
         "[logging]\nlog_file = \"/var/log/archon/app.log\"\n", encoding="utf-8"
@@ -175,6 +176,23 @@ def test_data_dir_overrides_toml_log_file(
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
     config = load_config(path=toml_file)
     assert config.log_file == "/data/logs/archon-search.log"
+
+
+def test_data_dir_preserves_empty_toml_log_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """S107: TOML `log_file = ""` (user intent = disable file logging) must be
+    preserved even when `ARCHON_SEARCH_DATA_DIR` is set. The DATA_DIR env
+    override must NOT clobber an explicit empty-string opt-out with the derived
+    default path, or file logging stays silently enabled and the empty-string
+    warning never fires."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[logging]\nlog_file = \"\"\n", encoding="utf-8")
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+    config = load_config(path=toml_file)
+    assert config.log_file == ""
+    assert config.db_path == "/data/search"
+    assert config.telemetry.log_dir == "/data/search-logs"
 
 
 def test_data_dir_overrides_toml_telemetry_log_dir(
