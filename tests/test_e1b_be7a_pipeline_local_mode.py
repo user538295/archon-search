@@ -2,7 +2,7 @@
 
 Tests:
 - No entities matched → fall back to standard hybrid search (graph_expansion_applied=False, S10)
-- No communities table (never built) → fall back to standard (graph_expansion_applied=False, WARNING)
+- No communities table (never built) → raise GraphCommunitiesNotBuiltError (HTTP 422; S60, mirrors global/explain)
 - Isolated nodes (entities matched but no community membership) → naive expansion fallback (graph_expansion_applied=True, S9)
 - Matched community → representative chunks merged with hybrid candidates, reranked (graph_expansion_applied=True)
 - Multiple communities matched → chunk IDs from all communities merged before reranking
@@ -26,7 +26,7 @@ from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdo
 from archon_search.config import GraphConfig
 from archon_search.filters import SearchFilters
 from archon_search.graph_types import Community, EntityType, GraphNode
-from archon_search.pipeline import SearchPipelineResult
+from archon_search.pipeline import GraphCommunitiesNotBuiltError, SearchPipelineResult
 
 
 # ---------------------------------------------------------------------------
@@ -203,8 +203,14 @@ async def test_local_mode_no_entities_falls_back_to_hybrid(connected_store, col_
 
 
 @pytest.mark.asyncio
-async def test_local_mode_no_communities_table_falls_back_to_hybrid(connected_store, col_name, caplog):
-    """Communities table never created → fall back to standard search; WARNING logged."""
+async def test_local_mode_no_communities_table_raises(connected_store, col_name):
+    """S60: entities matched but communities never built → GraphCommunitiesNotBuiltError.
+
+    Local mode must guard the not-built case exactly like global search and the explain
+    path (both raise GraphCommunitiesNotBuiltError → HTTP 422 graph_communities_not_built),
+    matching the documented contract in Documentation/UserManual/65_graph_search.md. It must
+    NOT silently degrade to hybrid results.
+    """
     node = _make_graph_node(collection=col_name)
     graph_store = _make_graph_store_mock(
         find_nodes_return=[node],
@@ -213,19 +219,16 @@ async def test_local_mode_no_communities_table_falls_back_to_hybrid(connected_st
     graph_config = GraphConfig(enabled=True)
     pipeline = _make_pipeline(connected_store, graph_store=graph_store, graph_config=graph_config)
 
-    dummy_result = SearchPipelineResult(results=[], acl_filtered=False)
-    with patch.object(pipeline, "_search_standard", new=AsyncMock(return_value=dummy_result)) as mock_std:
-        with caplog.at_level(logging.WARNING, logger="archon_search.pipeline"):
-            result = await pipeline.search(
+    with patch.object(pipeline, "_search_standard", new=AsyncMock()) as mock_std:
+        with pytest.raises(GraphCommunitiesNotBuiltError):
+            await pipeline.search(
                 "AuthService logs",
                 col_name,
                 embedder=pipeline._global_embedder,
                 graph_mode="local",
             )
 
-    mock_std.assert_awaited_once()
-    assert result.graph_expansion_applied is False
-    assert any("communities" in r.message.lower() for r in caplog.records if r.levelno >= logging.WARNING)
+    mock_std.assert_not_awaited()
 
 
 @pytest.mark.asyncio

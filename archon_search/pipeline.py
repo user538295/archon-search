@@ -1436,7 +1436,8 @@ class SearchPipeline:
         2. Look up matched graph nodes via find_nodes_by_name.
            No match → fall back to standard hybrid search (S10).
         3. Check communities table exists (build-communities must have run).
-           Table absent → fall back with WARNING (S10 variant).
+           Table absent → raise GraphCommunitiesNotBuiltError (HTTP 422); mirrors
+           global search and the explain path (S60).
         4. Look up communities for matched entity IDs.
            No community membership (isolated nodes) → naive-expansion fallback (S9).
         5. Collect representative chunk IDs from all matched communities.
@@ -1501,16 +1502,11 @@ class SearchPipeline:
             )
 
         if not table_exists:
-            logger.warning(
-                "_search_local_mode: communities table not found for collection %r — "
-                "run 'archon-search graph build-communities %s' first; falling back (fp=%s)",
-                collection, collection, fp,
-            )
-            result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
-            )
-            result.graph_expansion_applied = False
-            return result
+            # Communities never built — local mode requires them, mirroring global search
+            # and _explain_community_candidates (both raise here). The route maps this to
+            # HTTP 422 {"code": "graph_communities_not_built"}. Do NOT silently degrade to
+            # hybrid: the caller asked for a layer that was never consulted (S60).
+            raise GraphCommunitiesNotBuiltError(collection)
 
         # Step 4: community lookup for matched entity IDs.
         entity_ids = [n.id for n in matched_nodes]
