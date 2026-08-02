@@ -18,6 +18,15 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 DOCKERIGNORE = REPO_ROOT / ".dockerignore"
+UV_LOCK = REPO_ROOT / "uv.lock"
+DOCKER_DOC = REPO_ROOT / "Documentation" / "UserManual" / "140_running_with_docker.md"
+
+# S232: the first-start extras install was measured at 398s (lightest set) and
+# 423s (default set) on an idle machine — both above the original 360s
+# HEALTHCHECK start-period, so a container was marked unhealthy while still
+# legitimately installing. The start-period must cover the measured worst-case
+# (and leave margin for the network-bound variance the bug report documents).
+MIN_START_PERIOD_SECONDS = 420
 
 
 def _join_continuations(text: str) -> list[str]:
@@ -291,19 +300,19 @@ def test_dockerfile_gpu_swap_only_on_nvidia_base(dockerfile_text: str) -> None:
         "Dockerfile must install onnxruntime-gpu for the GPU variant"
     )
     # The swap must be inside a `case ${BASE_IMAGE} in *nvidia/cuda*)` guard.
-    case_block = re.search(
+    # The Dockerfile has more than one such case block (the CPU torch-index
+    # guard is another — S269), so locate the block by its content rather
+    # than assuming there is exactly one.
+    case_blocks = re.findall(
         r"case\s+\"?\$\{?BASE_IMAGE\}?\"?\s+in[\s\S]*?esac",
         dockerfile_text,
     )
-    assert case_block is not None, (
+    swap_block = next((b for b in case_blocks if "onnxruntime-gpu" in b), None)
+    assert swap_block is not None, (
         "GPU swap must be guarded by a `case ${BASE_IMAGE} in ... esac` block"
     )
-    assert "*nvidia/cuda*" in case_block.group(0), (
+    assert "*nvidia/cuda*" in swap_block, (
         "GPU swap guard must match `*nvidia/cuda*` (the documented GPU base)"
-    )
-    assert "onnxruntime-gpu" in case_block.group(0), (
-        "GPU swap must install onnxruntime-gpu INSIDE the case guard, not "
-        "unconditionally"
     )
 
 
@@ -316,6 +325,129 @@ def test_dockerignore_excludes_git(dockerignore_text: str) -> None:
     lines = {line.strip() for line in dockerignore_text.splitlines() if line.strip()}
     assert any(entry in lines for entry in (".git", ".git/")), (
         ".dockerignore must exclude the .git directory"
+    )
+
+
+# ---------------------------------------------------------------------------
+# CPU image must not ship the CUDA/torch stack (S269)
+# ---------------------------------------------------------------------------
+
+
+def _uvlock_package_block(name: str) -> str:
+    """Return the `[[package]]` TOML block for *name* from uv.lock.
+
+    Anchors on the ``[[package]]\\nname = "<name>"`` header so it never
+    matches a ``{ name = "<name>" }`` *dependency* entry inside some other
+    package's block.
+    """
+    text = UV_LOCK.read_text()
+    header = re.search(
+        rf'^\[\[package\]\]\nname = "{re.escape(name)}"$', text, re.MULTILINE
+    )
+    assert header is not None, f"uv.lock has no package block for {name!r}"
+    start = header.start()
+    nxt = text.find("[[package]]", header.end())
+    return text[start : nxt if nxt != -1 else len(text)]
+
+
+def test_uvlock_torch_pulls_cuda_stack_on_linux() -> None:
+    # Ground truth for S269: `torch` (a transitive core dependency via
+    # docling) declares nvidia-*/cuda-* dependencies gated on linux. This is
+    # WHY the CPU image must route torch through the PyTorch CPU wheel index —
+    # the default PyPI linux wheel drags the ~6 GB CUDA runtime a CPU host
+    # cannot execute. If torch ever stops depending on CUDA on linux this
+    # guard fails and the CPU-index fix can be revisited.
+    block = _uvlock_package_block("torch")
+    cuda_dep = re.search(
+        r'name = "(?:nvidia-[a-z0-9-]+|cuda-[a-z0-9-]+)"[^\n]*'
+        r"sys_platform == 'linux'",
+        block,
+    )
+    assert cuda_dep is not None, (
+        "Expected torch to declare an nvidia-*/cuda-* dependency gated on "
+        "`sys_platform == 'linux'` in uv.lock (root cause of S269)"
+    )
+
+
+def test_dockerfile_cpu_base_resolves_cpu_only_torch(dockerfile_text: str) -> None:
+    # S269: the CPU image is documented "CPU inference only" yet resolved
+    # torch + torchvision + ~18 nvidia/cuda packages (~6.2 GB). The fix must
+    # point pip at the PyTorch CPU wheel index so torch resolves to a
+    # `+cpu` build with no nvidia/cuda dependencies. Both the bake-time
+    # `pip install .` and the entrypoint's runtime `pip install .[extras]`
+    # must pick it up (e.g. via a baked /etc/pip.conf).
+    assert "download.pytorch.org/whl/cpu" in dockerfile_text, (
+        "Dockerfile must route the CPU base at the PyTorch CPU wheel index "
+        "(download.pytorch.org/whl/cpu) so torch resolves CPU-only"
+    )
+
+
+def test_dockerfile_cpu_torch_index_not_applied_to_gpu_base(
+    dockerfile_text: str,
+) -> None:
+    # The CPU wheel index must be gated on the CPU base — the nvidia/cuda GPU
+    # base needs the default CUDA torch build, so the CPU index must sit in a
+    # `case ${BASE_IMAGE}` guard that explicitly excludes `*nvidia/cuda*`.
+    case_blocks = re.findall(
+        r"case\s+\"?\$\{?BASE_IMAGE\}?\"?\s+in[\s\S]*?esac", dockerfile_text
+    )
+    guard = next(
+        (b for b in case_blocks if "download.pytorch.org/whl/cpu" in b), None
+    )
+    assert guard is not None, (
+        "The PyTorch CPU index must live inside a `case ${BASE_IMAGE} in "
+        "... esac` guard so it is applied per base image, not unconditionally"
+    )
+    assert "*nvidia/cuda*" in guard, (
+        "The CPU-index case guard must have an explicit `*nvidia/cuda*` arm "
+        "so the GPU base keeps the default CUDA torch build"
+    )
+    nvidia_arm = re.search(
+        r"\*nvidia/cuda\*\)([\s\S]*?)(?:;;|esac)", guard
+    )
+    assert nvidia_arm is not None, "case guard must have a *nvidia/cuda*) arm"
+    assert "download.pytorch.org/whl/cpu" not in nvidia_arm.group(1), (
+        "The GPU (*nvidia/cuda*) arm must NOT apply the CPU torch index"
+    )
+
+
+# ---------------------------------------------------------------------------
+# First-start install must fit inside the HEALTHCHECK start-period (S232)
+# ---------------------------------------------------------------------------
+
+
+def _healthcheck_start_period_seconds(dockerfile_text: str) -> int:
+    m = re.search(r"--start-period=(\d+)s", dockerfile_text)
+    assert m is not None, "HEALTHCHECK must declare a --start-period=<N>s"
+    return int(m.group(1))
+
+
+def test_dockerfile_start_period_covers_measured_first_start(
+    dockerfile_text: str,
+) -> None:
+    # S232: the first-start extras install reached 398-423s on an idle
+    # machine — above the original 360s start-period, so the container's own
+    # HEALTHCHECK marked it unhealthy while it was still legitimately
+    # installing, causing spurious restart loops on fresh deployments.
+    sp = _healthcheck_start_period_seconds(dockerfile_text)
+    assert sp >= MIN_START_PERIOD_SECONDS, (
+        f"HEALTHCHECK --start-period={sp}s is below the measured idle "
+        f"first-start install (~398-423s); must be >= "
+        f"{MIN_START_PERIOD_SECONDS}s so a still-installing container is not "
+        "marked unhealthy (S232)"
+    )
+
+
+def test_docker_doc_cites_actual_start_period(dockerfile_text: str) -> None:
+    # S232: the Docker user manual quotes the HEALTHCHECK start-period as a
+    # readiness-budget guide for operators. It must match the Dockerfile's
+    # actual value — a stale figure under-provisions orchestrator readiness
+    # budgets and reintroduces the restart-loop the fix removes.
+    sp = _healthcheck_start_period_seconds(dockerfile_text)
+    doc = DOCKER_DOC.read_text()
+    assert f"{sp}s start-period" in doc, (
+        f"{DOCKER_DOC.name} must cite the Dockerfile's actual HEALTHCHECK "
+        f"start-period ({sp}s), not a stale value"
     )
 
 

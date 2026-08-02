@@ -25,7 +25,7 @@ The container entrypoint is `scripts/docker-entrypoint.sh` (copied to `/entrypoi
 3. If `graph` is in `ARCHON_EXTRAS`, downloads the spaCy model `en_core_web_sm` into `/pip-packages` if not already present (required by `graph.enabled = true`).
 4. Prepends `/pip-packages` to `PYTHONPATH` and execs the CMD (`archon-search serve`).
 
-**First start** triggers a pip install that can take 3–5 minutes depending on network speed. Subsequent starts are instant (stamp matches). Mount `/pip-packages` as a named volume to persist the install across container recreates:
+**First start** triggers a pip install whose duration is network-bound. The image bakes `PIP_NO_CACHE_DIR=1`, so every first start on a fresh `/pip-packages` volume re-downloads the full dependency set — typically a few minutes on a fast idle uplink, and longer on a slow or contended one. The `HEALTHCHECK` allows up to 10 minutes (600s start-period) before it counts failures. Subsequent starts are instant (stamp matches). Mount `/pip-packages` as a named volume to persist the install across container recreates:
 
 ```bash
 docker volume create archon-search-packages
@@ -91,7 +91,7 @@ curl http://127.0.0.1:8765/ready     # readiness — 200 once storage is connect
 curl -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY" http://127.0.0.1:8765/status
 ```
 
-The image declares a `HEALTHCHECK` that polls `/ready` every 15s after a 360s start-period. The generous start-period accommodates the first-start extras install (up to 3–5 minutes); subsequent starts are instant (stamp matches) but the start-period is fixed at image level. `docker ps` shows `(healthy)` once the storage layer is up.
+The image declares a `HEALTHCHECK` that polls `/ready` every 15s after a 600s start-period. The generous start-period accommodates the network-bound first-start extras install (see "Entrypoint and runtime extras installation" above); subsequent starts are instant (stamp matches) but the start-period is fixed at image level. `docker ps` shows `(healthy)` once the storage layer is up.
 
 ## `docker compose`
 
@@ -209,7 +209,7 @@ When `/pip-packages` is mounted (recommended), it holds the optional-extras inst
    - `~/.cache/fastembed:/data/fastembed-cache` — host fastembed model cache (avoids re-downloading ~500 MB)
    - `~/.archon-search/models:/data/models` — host fasttext model cache
 
-3. **First start only:** the entrypoint installs graph + code + multilingual extras and downloads `en_core_web_sm` (~3–5 min). Watch progress with `docker compose logs -f archon-dev`.
+3. **First start only:** the entrypoint installs graph + code + multilingual extras and downloads `en_core_web_sm` — a network-bound download that takes a few minutes (longer on a slow uplink; the image allows up to 10 minutes before the healthcheck counts failures). Watch progress with `docker compose logs -f archon-dev`.
 
 4. **Smoke-test:**
 

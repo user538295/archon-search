@@ -71,6 +71,24 @@ WORKDIR /app
 # release. `.dockerignore` excludes tests, docs, and dev artefacts.
 COPY . /app
 
+# CPU image must resolve CPU-only torch wheels. `torch` is a transitive core
+# dependency (docling → docling-ibm-models / accelerate / safetensors[torch]);
+# on linux the default PyPI `torch` pulls the full CUDA runtime — torch +
+# torchvision + ~18 nvidia-*/cuda* packages, ~6 GB — that a CPU host can never
+# execute. Bake an /etc/pip.conf pointing pip at PyTorch's CPU wheel index so
+# BOTH the bake-time `pip install .` below AND the entrypoint's runtime
+# `pip install --target /pip-packages .[extras]` resolve `torch==<ver>+cpu`
+# (which declares no nvidia/cuda dependencies). The nvidia/cuda GPU base skips
+# this and keeps the default CUDA build it needs.
+RUN set -eux; \
+    case "${BASE_IMAGE}" in \
+        *nvidia/cuda*) \
+            : "GPU base — keep the default index so torch resolves the CUDA build" ;; \
+        *) \
+            printf '[global]\nextra-index-url = https://download.pytorch.org/whl/cpu\n' \
+                > /etc/pip.conf ;; \
+    esac
+
 # Install archon-search into the system Python. We deliberately do NOT use
 # `uv` inside the container: the production image only needs to *run* the
 # server, not re-resolve dependencies. `pip install --no-cache-dir .` is
@@ -119,7 +137,7 @@ EXPOSE 8765
 # `/ready` is the readiness probe exposed by the FastAPI app. urllib is
 # used to avoid pulling curl into the slim base image. Exit non-zero on
 # any error so the orchestrator can mark the container unhealthy.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=360s --retries=3 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=600s --retries=3 \
     CMD python3 -c "import urllib.request, sys; urllib.request.urlopen('http://localhost:8765/ready')" || exit 1
 
 # tini reaps zombies and forwards SIGTERM/SIGINT to uvicorn so the server
