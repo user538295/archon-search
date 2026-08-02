@@ -2,11 +2,16 @@
 # config from repo, claude CLI proxied to Mac host.
 # Usage:
 #   1. python3 scripts/claude-proxy.py   # run on Mac host (separate terminal)
-#   2. docker compose up archon-dev
+#   2. ARCHON_VERSION=$(git describe --tags --always) docker compose up --build archon-dev
+#      (ARCHON_VERSION stamps the real version; omit it and the image reports 0.0.0+docker)
 services:
   archon-dev:
     build:
       context: .
+      args:
+        # `.git` is dockerignored, so pass the host-derived version in.
+        # Build with: ARCHON_VERSION=$(git describe --tags --always) docker compose build archon-dev
+        RELEASE_VERSION: ${ARCHON_VERSION:-0.0.0}
     image: archon-search:dev
     environment:
       ARCHON_SEARCH_CONFIG: /config/archon-search.toml

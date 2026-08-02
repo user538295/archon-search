@@ -20,11 +20,15 @@ FROM ${BASE_IMAGE}
 # Re-declare ARGs after FROM so they are visible to RUN instructions.
 ARG BASE_IMAGE=python:3.12-slim
 ARG GIT_COMMIT=unknown
+# Release tag passed by the release workflow. `.git` is dockerignored, so
+# hatch-vcs cannot derive the version at build time; we stamp it explicitly.
+ARG RELEASE_VERSION=0.0.0
 
 LABEL org.opencontainers.image.source="https://github.com/user538295/archon-search"
 LABEL org.opencontainers.image.title="archon-search"
 LABEL org.opencontainers.image.description="Hybrid retrieval + routing server (LanceDB + fastembed + reranker)"
 LABEL org.opencontainers.image.revision=$GIT_COMMIT
+LABEL org.opencontainers.image.version=$RELEASE_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -99,7 +103,8 @@ RUN set -eux; \
 # a `[gpu]` extra (verified against the package metadata) so this is the
 # documented manual-swap path.
 RUN set -eux; \
-    /usr/local/bin/python3 -m pip install --no-cache-dir .; \
+    SETUPTOOLS_SCM_PRETEND_VERSION="${RELEASE_VERSION}+docker" \
+        /usr/local/bin/python3 -m pip install --no-cache-dir .; \
     case "${BASE_IMAGE}" in \
         *nvidia/cuda*) \
             /usr/local/bin/python3 -m pip uninstall -y onnxruntime; \
