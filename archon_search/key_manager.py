@@ -249,7 +249,10 @@ class KeyStore:
         grace-expired (``grace_seconds > 0``).
 
         If no matching record exists (the current default was never in
-        ``keys.json``), only the new record is created — no revocation.
+        ``keys.json`` — e.g. an auto-generated key living only in
+        ``.search.env``), a grace record for the old key is synthesized from its
+        hash when ``grace_seconds > 0`` so it stays accepted during the grace
+        window; when ``grace_seconds == 0`` only the new record is created.
 
         **File I/O responsibility:** this method only mutates ``keys.json``.
         Writing ``.search.env`` with the new raw token is the caller's
@@ -284,8 +287,10 @@ class KeyStore:
             - ``new_token`` (str): Raw bearer token for the new key (printed
               once; never stored on disk).
             - ``old_record`` (KeyRecord | None): The old key record **after**
-              mutation (status/expires_at already updated), or ``None`` if no
-              active matching managed record was found.
+              mutation (status/expires_at already updated), the freshly
+              synthesized grace record when the old key was unmanaged and
+              ``grace_seconds > 0``, or ``None`` when no matching managed record
+              was found and ``grace_seconds == 0``.
 
         Raises:
             ValueError: If ``grace_seconds`` is negative.
@@ -308,14 +313,13 @@ class KeyStore:
             # with the same current_token finds the already-revoked record and
             # skips it, returning old_record=None instead of re-mutating it.
             old_record: KeyRecord | None = None
+            current_hash_seen = False
             for record in records:
-                if (
-                    record.id is not None
-                    and record.token_hash == current_hash
-                    and record.status == "active"
-                ):
-                    old_record = record
-                    break
+                if record.id is not None and record.token_hash == current_hash:
+                    current_hash_seen = True
+                    if record.status == "active":
+                        old_record = record
+                        break
 
             # Mark old record revoked or grace-expired.
             if old_record is not None:
@@ -324,6 +328,28 @@ class KeyStore:
                 else:
                     old_record.expires_at = now + timedelta(seconds=grace_seconds)
                     # Keep status="active" so the key is accepted during grace window.
+            elif grace_seconds > 0 and not current_hash_seen:
+                # The old default key was never a managed record (e.g. an
+                # auto-generated key living only in .search.env). Synthesize a
+                # grace record so it stays accepted during the grace window —
+                # otherwise, once .search.env holds the new token, the old key
+                # matches neither a managed record nor the legacy fallback and is
+                # rejected immediately (S133). Only the SHA-256 hash is persisted;
+                # the raw token is never stored (invariant preserved).
+                #
+                # ``not current_hash_seen`` preserves double-rotation idempotency:
+                # a retry with a current_token that matches an already-revoked
+                # record must NOT resurrect it as a fresh active grace record.
+                old_record = KeyRecord(
+                    id=str(uuid.uuid4()),
+                    token_hash=current_hash,
+                    namespace="default",
+                    label=None,
+                    created_at=now,
+                    expires_at=now + timedelta(seconds=grace_seconds),
+                    status="active",
+                )
+                records.append(old_record)
 
             # Create the new key record, using the caller-supplied token if provided.
             new_key_id = str(uuid.uuid4())
