@@ -505,6 +505,60 @@ def test_write_graph_preserves_existing_name_embedding_on_node_update(tmp_path) 
 
 
 # ---------------------------------------------------------------------------
+# S68 — source_path round-trip / preservation integration tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_write_graph_preserves_existing_source_path_on_node_update(tmp_path) -> None:
+    """Write a code_symbol node with source_path, then re-write it (e.g. a
+    secondary writer such as synonym enrichment) without source_path; the
+    originally stored source_path must be preserved, not nulled."""
+    from archon_search.graph_store import GraphStore
+
+    col = "preservesourcepathcol"
+    source_path = "/proj/sub/auth.py"
+    node_id = make_stable_entity_id(EntityType.code_symbol.value, "auth.py::login")
+
+    node_with_source_path = GraphNode(
+        id=node_id,
+        entity_name="login",
+        entity_type=EntityType.code_symbol,
+        source_doc_id="doc-1",
+        collection_name=col,
+        source_path=source_path,
+    )
+    node_without_source_path = GraphNode(
+        id=node_id,
+        entity_name="login",
+        entity_type=EntityType.code_symbol,
+        source_doc_id="doc-2",  # different source doc (secondary write)
+        collection_name=col,
+        source_path=None,  # no source_path in second write
+    )
+
+    async def _run():
+        gs = GraphStore(str(tmp_path / "db"))
+        await gs.connect()
+        try:
+            await gs.ensure_graph_tables(col, ns="default")
+            # First write: node with source_path
+            await gs.write_graph(col, [node_with_source_path], [], ns="default")
+            # Second write: same node ID, no source_path — must NOT overwrite existing value
+            await gs.write_graph(col, [node_without_source_path], [], ns="default")
+            nodes = await gs.get_all_nodes(col, ns="default")
+            return nodes
+        finally:
+            await gs.disconnect()
+
+    nodes = asyncio.run(_run())
+    assert len(nodes) == 1
+    assert nodes[0].source_path == source_path, (
+        "Existing source_path must be preserved when a subsequent write supplies source_path=None"
+    )
+
+
+# ---------------------------------------------------------------------------
 # BE-1 — new RelationshipType members round-trip (E2g)
 # ---------------------------------------------------------------------------
 

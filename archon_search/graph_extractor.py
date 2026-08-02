@@ -234,6 +234,7 @@ class GraphExtractor:
                     source_doc_id=doc_id,
                     collection_name=collection,
                     entity_subtype=chunk.symbol_subtype,
+                    source_path=chunk.source_path,
                 )
             chunk_entity_ids.append([entity_id])
             # Add mention for the entity in this chunk (E2b)

@@ -33,8 +33,6 @@ from archon_search.graph_types import (
     MAX_IMPACT_DEPTH,
     MAX_IMPACT_GROUP_SIZE,
     RelationshipType,
-    make_code_symbol_qualified_name,
-    make_stable_entity_id,
 )
 from archon_search.store_filters import _sql_quote_str
 
@@ -61,6 +59,46 @@ _GC_DELETE_BATCH_SIZE = 500
 # on the very first GC pass after ingest. See defref_extractor.py's
 # module/_build_result docstrings for the contract this exemption satisfies.
 _GC_EXEMPT_EXTRACTION_METHODS = frozenset({"extracted", "inferred"})
+
+def _source_path_matches(stored: str | None, query: str) -> bool:
+    """Return True if a node's stored ``source_path`` matches a caller's ``file_path``.
+
+    Node IDs are opaque SHA-256 hashes of the ingest-time (usually absolute,
+    realpath-normalized) source path, so a caller's ``file_path`` can almost
+    never be rebuilt into a byte-identical ID (S68). Instead we compare the
+    stored path against the query directly (case-insensitively, for macOS-
+    primary case-insensitive filesystems), using tiered precedence so a
+    directory-qualified query never falls through to a basename match against
+    an unrelated directory:
+
+    - ``query`` contains a path separator ("/" or "\\"): match by exact
+      string equality or path-suffix only (``query`` is a trailing path
+      segment of ``stored``) — basename is deliberately NOT considered, so
+      ``"sub/x.py"`` matches ``"/proj/sub/x.py"`` but never ``"/proj/other/x.py"``.
+    - ``query`` is a bare basename (no separator): match by exact string
+      equality or basename equality.
+
+    ``stored`` is ``None``/empty for non-code-symbol / pre-S68 nodes → never
+    matches. An empty/whitespace-only ``query`` never matches.
+    """
+    if not stored:
+        return False
+    s = stored.strip().casefold()
+    q = query.strip().casefold()
+    if not q:
+        return False
+    if s == q:
+        return True
+    has_separator = "/" in q or "\\" in q
+    if has_separator:
+        # Normalize both sides to "/" so a query using "\\" still matches a
+        # stored path using "/" (or vice versa) — separator style must not
+        # affect the suffix comparison.
+        s_norm = s.replace("\\", "/")
+        q_norm = q.replace("\\", "/")
+        return s_norm.endswith("/" + q_norm)
+    return re.split(r"[/\\]", s)[-1] == q
+
 
 _DEFREF_RELATIONSHIP_TYPES = frozenset(
     {
@@ -192,6 +230,7 @@ class GraphStore:
             pa.field("entity_subtype", pa.utf8()),
             pa.field("name_embedding", pa.list_(pa.float32()), nullable=True),
             pa.field("pagerank_score", pa.float64(), nullable=True),
+            pa.field("source_path", pa.utf8(), nullable=True),
         ])
 
     @staticmethod
@@ -286,6 +325,23 @@ class GraphStore:
                     else:
                         raise
 
+            # S68 migration: pre-S68 node tables lack source_path; add it if absent
+            # so re-ingest can populate it and file_path disambiguation can work.
+            if "source_path" not in nodes_schema.names:
+                try:
+                    await nodes_tbl.add_columns(pa.field("source_path", pa.utf8(), nullable=True))
+                    logger.info(
+                        "S68 migration: added source_path column to nodes table %r",
+                        nodes_name,
+                    )
+                except Exception as exc:
+                    if "already exists" in str(exc).lower():
+                        logger.warning(
+                            "Concurrent S68 migration: source_path already added — %s", exc
+                        )
+                    else:
+                        raise
+
         edges_name = self._edges_table_name(collection, ns)
         if edges_name not in existing_tables:
             await db.create_table(edges_name, schema=self._edges_schema())
@@ -344,6 +400,7 @@ class GraphStore:
             live_nodes_schema = await nodes_table.schema()
             table_has_emb_col = "name_embedding" in live_nodes_schema.names
             table_has_pagerank_col = "pagerank_score" in live_nodes_schema.names
+            table_has_source_path_col = "source_path" in live_nodes_schema.names
 
             # Value-preservation pre-read: LanceDB 0.30 only exposes
             # when_matched_update_all() which would overwrite an existing value with
@@ -386,6 +443,26 @@ class GraphStore:
                     existing_pr_list = existing_arrow["pagerank_score"].to_pylist()
                     existing_pageranks = dict(zip(existing_ids_list, existing_pr_list))
 
+            # Defensive: secondary writers (e.g. synonym-enrichment edges) may
+            # re-write an existing code_symbol node without a source_path of
+            # their own — the pre-read above/below preserves the previously
+            # stored value instead of nulling it out on merge_insert.
+            existing_source_paths: dict[str, str | None] = {}
+            if table_has_source_path_col:
+                nodes_without_sp = [n for n in nodes if n.source_path is None]
+                if nodes_without_sp:
+                    node_ids_without_sp = [n.id for n in nodes_without_sp]
+                    id_pred = _where_in("id", node_ids_without_sp)
+                    existing_arrow = await (
+                        nodes_table.query()
+                        .where(id_pred)
+                        .select(["id", "source_path"])
+                        .to_arrow()
+                    )
+                    existing_ids_list = existing_arrow["id"].to_pylist()
+                    existing_sp_list = existing_arrow["source_path"].to_pylist()
+                    existing_source_paths = dict(zip(existing_ids_list, existing_sp_list))
+
             # Use the live schema as the target for nodes_data to avoid field-count
             # mismatches — build the base dict, then add each optional column only
             # when the live table has it.
@@ -416,6 +493,15 @@ class GraphStore:
                 ]
                 data["pagerank_score"] = pa.array(resolved_pageranks, type=pa.float64())
                 target_fields.append(self._nodes_schema().field("pagerank_score"))
+
+            if table_has_source_path_col:
+                resolved_source_paths = [
+                    n.source_path if n.source_path is not None
+                    else existing_source_paths.get(n.id)
+                    for n in nodes
+                ]
+                data["source_path"] = pa.array(resolved_source_paths, type=pa.utf8())
+                target_fields.append(self._nodes_schema().field("source_path"))
 
             nodes_data = pa.table(data, schema=pa.schema(target_fields))
             await (
@@ -601,15 +687,27 @@ class GraphStore:
         (case-insensitive), restricted to ``EntityType.code_symbol`` candidates
         only — a same-named non-code-symbol node (e.g. a ``person``/``concept``
         entity) is never eligible to become the root: when more than one
-        code-symbol node shares that name, *file_path* (if given) disambiguates
-        via the file-qualified stable ID (``make_stable_entity_id`` +
-        ``make_code_symbol_qualified_name``); when *file_path* is absent, or
-        does not match any candidate, resolution falls back to the highest
-        ``pagerank_score`` (nulls-last, ``id`` tiebreak — mirrors
+        code-symbol node shares that name, *file_path* (if given and non-blank)
+        disambiguates by matching it against each candidate's stored
+        ``source_path`` via ``_source_path_matches`` (case-insensitive, tiered:
+        a directory-qualified *file_path* matches only by exact string or
+        path-suffix — never basename, so it can't cross into an unrelated
+        directory; a bare basename matches by exact string or basename — S68).
+        When *file_path* matches no candidate AND at least one candidate has a
+        populated ``source_path``, an empty ``ImpactResult`` (``depth_used=0``)
+        is returned — resolution never silently falls back to an arbitrary
+        same-named symbol's blast radius. Legacy-data exception: on a
+        pre-S68 collection that hasn't been re-ingested, ``source_path`` is
+        NULL on every candidate (the S68 migration only adds the nullable
+        column — it does not backfill it), so disambiguation is impossible;
+        resolution falls back to highest-pagerank in that case instead of
+        hard-regressing to empty. When *file_path* is absent/blank (or matches
+        multiple candidates, e.g. a shared basename), resolution picks the
+        highest ``pagerank_score`` (nulls-last, ``id`` tiebreak — mirrors
         ``graph_inspector._node_sort_key``'s importance-mode idiom exactly,
-        including its ``entity_id`` tiebreak for determinism).
-        Returns an empty ``ImpactResult`` (``depth_used=0``) when no
-        code-symbol node named *symbol* exists.
+        including its ``entity_id`` tiebreak for determinism). Returns an
+        empty ``ImpactResult`` (``depth_used=0``) when no code-symbol node
+        named *symbol* exists.
 
         BFS-traverses outward from the root, hop by hop, via
         ``get_edges_for_nodes`` on the current frontier — forward
@@ -653,6 +751,14 @@ class GraphStore:
             )
 
         root = self._resolve_impact_root(code_symbol_candidates, symbol, file_path)
+        if root is None:
+            # file_path was given but matched no candidate's source path (and
+            # at least one candidate had a populated source_path, so this
+            # isn't the legacy-data all-None case) — never fall back to an
+            # arbitrary same-named symbol's blast radius (S68).
+            return ImpactResult(
+                symbol=symbol, callers=empty_group, callees=empty_group, depth_used=0
+            )
         effective_depth = min(depth, MAX_IMPACT_DEPTH)
 
         want_callers = direction in (ImpactDirection.callers, ImpactDirection.both)
@@ -679,22 +785,40 @@ class GraphStore:
 
     def _resolve_impact_root(
         self, candidates: list[GraphNode], symbol: str, file_path: str | None
-    ) -> GraphNode:
+    ) -> GraphNode | None:
         """Pick the single root node for ``compute_impact`` from *candidates*.
 
-        See ``compute_impact``'s docstring for the resolution order.
+        See ``compute_impact``'s docstring for the resolution order. Returns
+        ``None`` when *file_path* is given but at least one candidate has a
+        populated ``source_path`` and none of them matches it — the caller
+        must then return an empty result rather than fall back to an
+        arbitrary same-named symbol (S68).
+
+        Legacy-data fallback: on a pre-S68 collection that has not been
+        re-ingested, ``source_path`` is NULL on every row (the S68 migration
+        only adds the nullable column; it never backfills it). In that case
+        disambiguation by *file_path* is impossible, so this falls back to
+        highest-pagerank instead of hard-regressing to an empty result.
         """
-        if len(candidates) == 1:
-            return candidates[0]
-        if file_path is not None:
-            expected_id = make_stable_entity_id(
-                EntityType.code_symbol.value,
-                make_code_symbol_qualified_name(symbol, file_path),
-            )
-            for candidate in candidates:
-                if candidate.id == expected_id:
-                    return candidate
-        return self._highest_pagerank_node(candidates)
+        blank_file_path = file_path is None or not file_path.strip()
+        if blank_file_path:
+            return self._highest_pagerank_node(candidates)
+
+        if all(c.source_path is None for c in candidates):
+            # Legacy-data fallback (see docstring): source_path column exists
+            # but is unpopulated for every candidate — disambiguation is
+            # impossible, so don't hard-regress to an empty result.
+            return self._highest_pagerank_node(candidates)
+
+        matches = [
+            c for c in candidates if _source_path_matches(c.source_path, file_path)
+        ]
+        if not matches:
+            return None
+        # A basename or ambiguous suffix can legitimately match more than one
+        # candidate (same file name in different dirs); break the tie the same
+        # deterministic way an omitted file_path would, but only among matches.
+        return self._highest_pagerank_node(matches)
 
     @staticmethod
     def _highest_pagerank_node(nodes: list[GraphNode]) -> GraphNode:
@@ -1712,8 +1836,17 @@ class GraphStore:
             else [None] * len(ids)
         )
 
-        for nid, name, etype, sdoc, col, subtype, emb, pr in zip(
-            ids, names, types, source_docs, collections, subtypes, embeddings, pageranks
+        # Guard: pre-S68 node tables lack the source_path column; default to None.
+        has_source_path_col = "source_path" in arrow_table.schema.names
+        source_paths = (
+            arrow_table["source_path"].to_pylist()
+            if has_source_path_col
+            else [None] * len(ids)
+        )
+
+        for nid, name, etype, sdoc, col, subtype, emb, pr, sp in zip(
+            ids, names, types, source_docs, collections, subtypes, embeddings, pageranks,
+            source_paths,
         ):
             results.append(
                 GraphNode(
@@ -1725,6 +1858,7 @@ class GraphStore:
                     entity_subtype=subtype,
                     name_embedding=emb,
                     pagerank_score=pr,
+                    source_path=sp,
                 )
             )
         return results

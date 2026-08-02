@@ -79,6 +79,9 @@ def _nodes_arrow(nodes: list[GraphNode]):
             "pagerank_score": pa.array(
                 [n.pagerank_score for n in nodes], type=pa.float64()
             ),
+            "source_path": pa.array(
+                [n.source_path for n in nodes], type=pa.utf8()
+            ),
         },
         schema=GraphStore._nodes_schema(),
     )

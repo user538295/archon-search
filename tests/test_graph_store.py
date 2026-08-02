@@ -1110,6 +1110,7 @@ def _build_nodes_arrow(nodes: list[GraphNode]):  # type: ignore[return]
                 "entity_subtype": [],
                 "name_embedding": pa.array([], type=pa.list_(pa.float32())),
                 "pagerank_score": pa.array([], type=pa.float64()),
+                "source_path": pa.array([], type=pa.utf8()),
             },
             schema=node_schema,
         )
@@ -1126,6 +1127,9 @@ def _build_nodes_arrow(nodes: list[GraphNode]):  # type: ignore[return]
             ),
             "pagerank_score": pa.array(
                 [n.pagerank_score for n in nodes], type=pa.float64()
+            ),
+            "source_path": pa.array(
+                [n.source_path for n in nodes], type=pa.utf8()
             ),
         },
         schema=node_schema,
@@ -1909,6 +1913,7 @@ def test_graph_store_vector_search_nodes_returns_nearest_nodes() -> None:
             "entity_subtype": [node_a.entity_subtype, node_b.entity_subtype],
             "name_embedding": [[1.0, 0.0], [0.0, 1.0]],
             "pagerank_score": [node_a.pagerank_score, node_b.pagerank_score],
+            "source_path": [node_a.source_path, node_b.source_path],
         },
         schema=node_schema_with_emb,
     )
@@ -1963,6 +1968,7 @@ def test_graph_store_vector_search_nodes_filters_by_entity_type() -> None:
             "entity_subtype": [node_a.entity_subtype],
             "name_embedding": [[1.0, 0.0]],
             "pagerank_score": [node_a.pagerank_score],
+            "source_path": [node_a.source_path],
         },
         schema=node_schema_with_emb,
     )

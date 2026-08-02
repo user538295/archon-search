@@ -258,6 +258,7 @@ def test_writePagerankScores_batchesViaSingleMergeInsert() -> None:
             [
                 pa.field("id", pa.utf8()),
                 pa.field("pagerank_score", pa.float64(), nullable=True),
+                pa.field("source_path", pa.utf8(), nullable=True),
                 pa.field("extraction_method", pa.utf8(), nullable=True),
             ]
         )
@@ -377,8 +378,12 @@ def test_ensureGraphTables_migratesPreExistingNodesTable_addsPagerankColumn() ->
     store = GraphStore("/tmp/fake-db-pr-migration")
 
     mock_nodes_table = MagicMock()
+    # Include source_path so the unrelated S68 migration guard is a no-op here —
+    # only the BE-7 pagerank_score add_columns() call is asserted.
     mock_nodes_table.schema = AsyncMock(
-        return_value=pa.schema([pa.field("id", pa.utf8())])
+        return_value=pa.schema(
+            [pa.field("id", pa.utf8()), pa.field("source_path", pa.utf8(), nullable=True)]
+        )
     )
     mock_nodes_table.add_columns = AsyncMock(return_value=None)
 
@@ -415,6 +420,66 @@ def test_ensureGraphTables_migratesPreExistingNodesTable_addsPagerankColumn() ->
         mock_nodes_table.add_columns.assert_awaited_once()
         added_field = mock_nodes_table.add_columns.await_args.args[0]
         assert added_field.name == "pagerank_score"
+        mock_edges_table.add_columns.assert_not_awaited()
+
+    asyncio.run(_run())
+
+
+def test_ensureGraphTables_migratesPreExistingNodesTable_addsSourcePathColumn() -> None:
+    """S68: a pre-S68 nodes table lacking source_path gets the column added.
+
+    The nodes-table mock already has pagerank_score (its BE-7 guard is a no-op
+    here) so exactly one add_columns() call — for source_path — is asserted.
+    """
+    import asyncio
+
+    import pyarrow as pa
+
+    from archon_search.graph_store import GraphStore
+
+    store = GraphStore("/tmp/fake-db-sp-migration")
+
+    mock_nodes_table = MagicMock()
+    mock_nodes_table.schema = AsyncMock(
+        return_value=pa.schema(
+            [pa.field("id", pa.utf8()), pa.field("pagerank_score", pa.float64(), nullable=True)]
+        )
+    )
+    mock_nodes_table.add_columns = AsyncMock(return_value=None)
+
+    mock_edges_table = MagicMock()
+    mock_edges_table.schema = AsyncMock(
+        return_value=pa.schema(
+            [pa.field("id", pa.utf8()), pa.field("extraction_method", pa.utf8(), nullable=True)]
+        )
+    )
+    mock_edges_table.add_columns = AsyncMock(return_value=None)
+
+    def _open_table(name: str):
+        if name.endswith("_edges"):
+            return mock_edges_table
+        return mock_nodes_table
+
+    mock_db = AsyncMock()
+    mock_db.list_tables = AsyncMock(
+        return_value=MagicMock(
+            tables=[
+                "_archon_graph_default__test-col_nodes",
+                "_archon_graph_default__test-col_edges",
+                "_archon_graph_default__test-col_communities",
+                "_archon_graph_default__test-col_mentions",
+            ]
+        )
+    )
+    mock_db.open_table = AsyncMock(side_effect=_open_table)
+    mock_db.create_table = AsyncMock(return_value=AsyncMock())
+
+    async def _run() -> None:
+        store._db = mock_db
+        await store.ensure_graph_tables("test-col", ns="default")
+        mock_nodes_table.add_columns.assert_awaited_once()
+        added_field = mock_nodes_table.add_columns.await_args.args[0]
+        assert added_field.name == "source_path"
         mock_edges_table.add_columns.assert_not_awaited()
 
     asyncio.run(_run())
