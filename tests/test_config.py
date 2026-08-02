@@ -1,5 +1,6 @@
 """Tests for archon_search.config ( — Standalone config loader)."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -879,6 +880,51 @@ def test_logging_log_file_empty_string_preserved_and_warns_when_data_dir_set(
         config = load_config(path=toml_file)
     assert any("log_file" in r.message and r.levelno == logging.WARNING for r in caplog.records)
     assert config.log_file == ""
+
+
+def test_logging_log_file_empty_string_warning_reaches_stderr(tmp_path: Path) -> None:
+    """S107: the empty-log_file warning must reach STDERR (the stream a serving
+    operator / smoke harness captures) — not just the logging record — and no log
+    file may be created while file logging is disabled.
+
+    caplog cannot prove this: it attaches its own handler. The real guarantee is
+    that load_config emits the warning before logging is configured, so Python's
+    last-resort handler flushes it to stderr. This runs load_config in a clean
+    subprocess with unconfigured logging to observe the actual stream.
+    """
+    import subprocess
+    import sys
+
+    data_dir = tmp_path / "datadir"
+    data_dir.mkdir()
+    toml_file = tmp_path / "cfg.toml"
+    toml_file.write_text('[logging]\nlog_file = ""\n', encoding="utf-8")
+
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in {"ARCHON_SEARCH_CONTAINER"}
+    }
+    env["ARCHON_SEARCH_DATA_DIR"] = str(data_dir)
+
+    snippet = (
+        "import pathlib\n"
+        "from archon_search.config import load_config\n"
+        f"cfg = load_config(pathlib.Path({str(toml_file)!r}), serve=True)\n"
+        "assert cfg.log_file == '', repr(cfg.log_file)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", snippet],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "log_file" in result.stderr and "file logging is disabled" in result.stderr, (
+        f"expected empty-log_file warning on stderr, got: {result.stderr!r}"
+    )
+    assert not (data_dir / "logs").exists(), "no log directory may be created when file logging is disabled"
 
 
 def test_logging_toml_key_format_maps_to_log_format_field(tmp_path: Path) -> None:
