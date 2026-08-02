@@ -861,7 +861,10 @@ class BaseInstaller(ABC):
                 )
                 return 1
 
-        click.echo("archon-search service registered and running.")
+        if self.dry_run:
+            click.echo("[DRY RUN] Would register and start the archon-search service.")
+        else:
+            click.echo("archon-search service registered and running.")
         return 0
 
     def run_uninstall(self, delete_db: bool = False) -> int:
