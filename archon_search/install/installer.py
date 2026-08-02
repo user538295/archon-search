@@ -418,10 +418,12 @@ class BaseInstaller(ABC):
         # skips the install lock — whose parent.mkdir would otherwise leave the
         # data dir (~/.archon-search) behind.
         with self.install_lock():
-            # Step 0: legacy cleanup + log directory
-            legacy = _legacy_service_path()
-            if legacy.exists():
-                self.remove_legacy_service(legacy)
+            # Step 0: log directory. The legacy-service cleanup is deliberately
+            # NOT done here: removing it before the reinstall guard (Step 5) or
+            # any other abort point would dismantle a running service that the
+            # wizard then refuses to replace, leaving it unrecoverable by
+            # `start`. It runs just before Step 15, once the install is
+            # committed to registering the new service.
             self.create_logs_dir()
 
             # Before Step 1: resolve multilingual via interactive prompt
@@ -774,6 +776,15 @@ class BaseInstaller(ABC):
                             shutil.copy2(bak, config_path)
                     # branch == "force": leave backup, new config stays
                     return 1
+
+            # Before Step 15: legacy-service cleanup. Deferred from Step 0 so an
+            # aborting run (reinstall guard, disk space, declined confirmation,
+            # pre-warm failure) never dismantles a running service it then
+            # refuses to replace. By here the install is committed to
+            # registering the new service.
+            legacy = _legacy_service_path()
+            if legacy.exists():
+                self.remove_legacy_service(legacy)
 
             # Step 15: register and start service
             rc = self.register_and_start()
