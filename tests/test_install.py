@@ -33,6 +33,7 @@ def _make_search_config(tmp_path: Path) -> object:
         host: str = "localhost"
         port: int = 8282
         db_path: str = str(tmp_path / "rag_db")
+        log_file: str = ""
         embedding_model: str = "BAAI/bge-small-en-v1.5"
         reranker_model: str = "BAAI/bge-reranker-v2-m3"
         providers: list[str] = field(default_factory=list)
@@ -1346,6 +1347,129 @@ class TestWaitForService:
         captured = capsys.readouterr()
         assert result is False
         assert "timed out." in captured.out
+
+    def test_wait_for_service_tolerates_one_crash_and_restart(self, tmp_path: Path) -> None:
+        """S02: a first-launch import crash + supervisor restart must not be reported as failure.
+
+        A fresh install can launch the service against a not-yet-materialised
+        environment; it crashes on import (ModuleNotFoundError), launchd restarts
+        it, and the second launch becomes healthy — but only after the crash plus
+        the restart throttle have eaten the initial budget. When the service log
+        shows that startup crash, the readiness gate must extend the window once so
+        the poll survives the restart and returns True.
+        """
+        import time as time_module
+
+        installer = _make_installer(tmp_path)
+        log_path = tmp_path / "archon-search.log"
+        log_path.write_text(
+            "Traceback (most recent call last):\n"
+            "  File \".../fastapi/__init__.py\", line 5, in <module>\n"
+            "    from starlette import status as status\n"
+            "ModuleNotFoundError: No module named 'starlette'\n"
+        )
+        installer.cfg.log_file = str(log_path)
+
+        # timeout=10 → initial deadline=10. The crash extends it once to 20.
+        # Service only becomes healthy at t=15 — inside the extended window,
+        # past the un-extended deadline. Current (un-fixed) code returns False.
+        monotonic_values = [0.0, 5.0, 15.0]
+
+        with patch.object(installer, "_is_service_running", side_effect=[False, True]), \
+             patch.object(time_module, "sleep"), \
+             patch.object(time_module, "monotonic", side_effect=monotonic_values):
+            result = installer._wait_for_service(timeout=10)
+
+        assert result is True
+
+    def test_wait_for_service_surfaces_crash_on_timeout(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """When the service never comes up, the readiness gate surfaces the crash from the log."""
+        import time as time_module
+
+        installer = _make_installer(tmp_path)
+        log_path = tmp_path / "archon-search.log"
+        log_path.write_text(
+            "Traceback (most recent call last):\n"
+            "ModuleNotFoundError: No module named 'starlette'\n"
+        )
+        installer.cfg.log_file = str(log_path)
+
+        # timeout=10 → deadline 10, extended once to 20; t=25 exceeds it.
+        monotonic_values = [0.0, 1.0, 25.0]
+
+        with patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(time_module, "sleep"), \
+             patch.object(time_module, "monotonic", side_effect=monotonic_values):
+            result = installer._wait_for_service(timeout=10)
+
+        captured = capsys.readouterr()
+        assert result is False
+        assert "timed out." in captured.out
+        assert "ModuleNotFoundError" in captured.out
+
+    def test_wait_for_service_no_crash_does_not_extend(self, tmp_path: Path) -> None:
+        """A service that never comes up with no crash in the log must fail at the normal deadline.
+
+        Regression guard: the crash tolerance must not silently double every
+        timeout — only an import-time startup crash grants the extra window.
+        """
+        import time as time_module
+
+        installer = _make_installer(tmp_path)
+        log_path = tmp_path / "archon-search.log"
+        log_path.write_text("INFO archon_search.server.app starting up\n")
+        installer.cfg.log_file = str(log_path)
+
+        # t=15 exceeds the normal deadline (10) but would be inside an extended
+        # window (20). No crash → no extension → must return False.
+        monotonic_values = [0.0, 5.0, 15.0]
+
+        with patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(time_module, "sleep"), \
+             patch.object(time_module, "monotonic", side_effect=monotonic_values):
+            result = installer._wait_for_service(timeout=10)
+
+        assert result is False
+
+    def test_wait_for_service_ignores_stale_crash_before_offset(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """A crash from an earlier run (before log_offset) must not extend the window.
+
+        The service log is rotated daily and appended across runs, so a same-day
+        reinstall can find a previous run's ModuleNotFoundError. Only crashes
+        written after the offset captured at service (re)start count.
+        """
+        import time as time_module
+
+        installer = _make_installer(tmp_path)
+        log_path = tmp_path / "archon-search.log"
+        log_path.write_text("ModuleNotFoundError: No module named 'starlette'\n")
+        installer.cfg.log_file = str(log_path)
+        stale_offset = log_path.stat().st_size  # everything so far is from a prior run
+
+        # t=15 is inside an extended window (20) but past the normal deadline (10).
+        # With the stale crash correctly ignored, no extension → returns False.
+        monotonic_values = [0.0, 5.0, 15.0]
+
+        with patch.object(installer, "_is_service_running", return_value=False), \
+             patch.object(time_module, "sleep"), \
+             patch.object(time_module, "monotonic", side_effect=monotonic_values):
+            result = installer._wait_for_service(timeout=10, log_offset=stale_offset)
+
+        captured = capsys.readouterr()
+        assert result is False
+        assert "ModuleNotFoundError" not in captured.out
+
+    def test_service_log_crash_ignores_non_startup_markers(self, tmp_path: Path) -> None:
+        """Only lines starting with a startup-crash marker count — not substring matches."""
+        installer = _make_installer(tmp_path)
+        log_path = tmp_path / "archon-search.log"
+        log_path.write_text(
+            "DEBUG caught ImportError for optional spacy, continuing without graph\n"
+            "INFO archon_search.server.app started\n"
+        )
+        installer.cfg.log_file = str(log_path)
+
+        assert installer._service_log_crash() is None
 
     def test_wait_for_service_keyboard_interrupt_prints_newline(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """KeyboardInterrupt in the loop must print a newline before re-raising."""

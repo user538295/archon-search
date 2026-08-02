@@ -426,7 +426,7 @@ Config:  /Users/you/.archon-search/archon-search.toml
 archon-search installed and running. Profile: Balanced · English.
 ```
 
-The wizard registers the service with your OS (launchd on macOS, systemd user unit on Linux) and starts it. It then polls `GET /health` for up to 60 seconds. If the service does not become ready within that window, the wizard exits with an error.
+The wizard registers the service with your OS (launchd on macOS, systemd user unit on Linux) and starts it. It then polls `GET /health` for up to 60 seconds. If the first launch crashes on an import-time error (`ModuleNotFoundError` / `ImportError`) — a fresh-install race where the service starts before its environment is fully materialised — the wizard detects that crash in the service log and extends the window once so it survives the supervisor's automatic restart. If the service still does not become ready, the wizard exits with an error and prints the last import-time error from the service log.
 
 After startup, the wizard prints a "Next steps" block with common follow-up commands, the full API key with its source label and a "keep this key private" note, and the paths to your API key file and config. The key is always shown in full — it already lives in a plaintext file you own, so terminal masking adds no security. The "Next steps" block is suppressed in `--dry-run` mode.
 
@@ -839,7 +839,8 @@ Check the service log for errors:
 tail -50 ~/.archon-search/logs/archon-search.log
 ```
 
-Common causes:
+On timeout the wizard also prints the last import-time error it found in the service log (`Last service-log error: ...`), if any. Common causes:
+- An import-time crash such as `ModuleNotFoundError` / `ImportError` on the *first* launch is usually a fresh-install race, not a packaging gap — the environment was still being written when the service started. The wizard already tolerates one supervisor restart, so check whether the service recovered on its own before doing anything: `archon-search status` and `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/health`. If it is healthy, no repair is needed.
 - Another process is using port 8765. Change `[server].port` in `archon-search.toml` and re-run `archon-search install`.
 - Model weights failed to download or are corrupt. Re-run the wizard without `--skip-preload`.
 - Insufficient disk space. Check with `df -h ~/.archon-search`.
