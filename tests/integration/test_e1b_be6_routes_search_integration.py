@@ -3,7 +3,7 @@
 Covers:
 - POST /search graph_mode=global → 200 when communities exist (S2)
 - POST /search graph_mode=global → 422 graph_communities_not_built when no communities (S11)
-- POST /search graph_mode=local → 200 (fallback) when no communities built (not 422)
+- POST /search graph_mode=local → 422 graph_communities_not_built when no communities built and entities match (S60)
 - POST /search graph_mode=local → 200, graph_expansion_applied=false when no entity match (S10)
 - POST /search graph_mode=global: ACL-restricted chunks filtered from response (S15)
 - POST /search graph_mode=* → 422 when graph.enabled=False
@@ -222,18 +222,23 @@ def test_post_search_global_no_communities_422(
 
 
 # ---------------------------------------------------------------------------
-# test_post_search_local_no_communities_fallback
+# test_post_search_local_no_communities_422
 # ---------------------------------------------------------------------------
 
 
-def test_post_search_local_no_communities_fallback(
+def test_post_search_local_no_communities_422(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """POST /search graph_mode=local → 200 (fallback) when communities never built.
+    """POST /search graph_mode=local → 422 graph_communities_not_built when communities
+    never built and the query matches graph entities (S60).
 
-    Local mode must NOT return 422 when communities are absent.
-    It falls back to standard hybrid search; graph_expansion_applied=false.
+    Local mode must guard the not-built case exactly like global search and the explain
+    path, matching the documented contract in Documentation/UserManual/65_graph_search.md.
+    It must NOT silently degrade to hybrid results. The no-entity path (S10) is covered
+    separately by test_post_search_local_no_entity_graph_expansion_false.
     """
+    from unittest.mock import AsyncMock, MagicMock
+
     _install_spacy_stub_no_entities(monkeypatch)
 
     col = "e1b-be6-local-no-communities"
@@ -243,21 +248,33 @@ def test_post_search_local_no_communities_fallback(
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
-        # Do NOT build communities.
+        # Entity matching succeeds, but communities were never built.
+        from archon_search.graph_types import EntityType, GraphNode
+        matched_node = GraphNode(
+            id="entity-1",
+            entity_name="AuthService",
+            entity_type=EntityType.system,
+            source_doc_id="any",
+            collection_name=col,
+        )
+        pipeline = client.app.state.pipeline
+        mock_gs = MagicMock()
+        mock_gs.find_nodes_by_name = AsyncMock(return_value=[matched_node])
+        mock_gs.communities_table_exists = AsyncMock(return_value=False)
+        pipeline._graph_store = mock_gs
+
         resp = client.post(
             "/search",
-            json={"collection": col, "query": "test query", "graph_mode": "local"},
+            json={"collection": col, "query": "AuthService", "graph_mode": "local"},
             headers=_auth(api_key),
         )
-        assert resp.status_code == 200, (
-            f"Expected 200 for local mode fallback when no communities; "
+        assert resp.status_code == 422, (
+            f"Expected 422 when no communities built (local mode); "
             f"got {resp.status_code}: {resp.text}"
         )
-        body = resp.json()
-        assert "results" in body, f"Expected 'results' key: {list(body.keys())}"
-        assert body.get("graph_expansion_applied") is False, (
-            f"Expected graph_expansion_applied=False for local fallback; "
-            f"got {body.get('graph_expansion_applied')!r}"
+        detail = resp.json()["detail"]
+        assert detail.get("code") == "graph_communities_not_built", (
+            f"Expected code='graph_communities_not_built'; got: {detail!r}"
         )
 
 
