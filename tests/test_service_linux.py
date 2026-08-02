@@ -497,3 +497,25 @@ def test_config_path_is_archon_search(tmp_path: Path) -> None:
     content = unit.read_text()
     expected_config = str(Path.home() / ".archon-search" / "archon-search.toml")
     assert expected_config in content
+
+
+def test_register_writes_requested_config_path_into_unit(tmp_path: Path) -> None:
+    """register(config_path=X) writes X into the unit's ARCHON_SEARCH_CONFIG (S206).
+
+    The wizard's --config flag must reach the service it starts: the generated
+    systemd unit's Environment=ARCHON_SEARCH_CONFIG must point at the requested
+    config, not the hardcoded ~/.archon-search/archon-search.toml default.
+    """
+    from archon_search.platform.linux import SystemdSearchService
+    svc = SystemdSearchService()
+    unit = tmp_path / "archon-search.service"
+    requested = tmp_path / "custom" / "archon-search.toml"
+    with (
+        patch.object(type(svc), "_unit_path", property(lambda self: unit)),
+        patch.object(svc, "_run", return_value=_ok()),
+    ):
+        svc.register(config_path=str(requested))
+    content = unit.read_text()
+    assert f"Environment=ARCHON_SEARCH_CONFIG={requested}" in content
+    hardcoded_default = str(Path.home() / ".archon-search" / "archon-search.toml")
+    assert f"ARCHON_SEARCH_CONFIG={hardcoded_default}" not in content
