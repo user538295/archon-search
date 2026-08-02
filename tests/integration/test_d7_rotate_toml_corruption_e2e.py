@@ -219,6 +219,74 @@ def test_e2e_rotate_grace_window(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# S133 regression: a SINGLE rotate --grace of the initial auto-generated default
+# key must keep the OLD key active during the grace window
+# ---------------------------------------------------------------------------
+
+
+def test_e2e_rotate_grace_first_rotation_of_default_key(tmp_path, monkeypatch):
+    """S133: one ``rotate --grace`` of the initial auto-generated key honors grace.
+
+    The initial default key lives only in ``.search.env`` (never a managed record
+    in ``keys.json``), so ``rotate_default_key`` found ``old_record=None`` and
+    created NO grace record — the old key was rejected (401) immediately, ignoring
+    grace.  A grace record for the old key must be synthesized so it stays accepted
+    during the window; only its SHA-256 hash may be persisted, never the raw token.
+    """
+    from fastapi.testclient import TestClient
+
+    grace = 3600  # 1h, as in the S133 repro
+    app, initial_api_key = _make_rotate_app(tmp_path, monkeypatch, grace_seconds=grace)
+
+    with TestClient(app) as client:
+        before = datetime.now(UTC)
+        resp = client.post(
+            "/keys/rotate",
+            json={"grace_seconds": grace},
+            headers=_auth(initial_api_key),
+        )
+        after = datetime.now(UTC)
+        assert resp.status_code == 200, f"rotate failed: {resp.status_code} {resp.text}"
+        body = resp.json()
+        new_token = body["token"]
+
+        # Step 4 (bug report): old key stays active with expires_at ~ now + grace.
+        assert body["old_key_status"] == "active", (
+            "old key must remain 'active' during grace window, not 'revoked' (S133)"
+        )
+        assert body["old_key_expires_at"] is not None, (
+            "old_key_expires_at must be ~now+grace when grace_seconds > 0 (S133)"
+        )
+        expires_dt = datetime.fromisoformat(
+            body["old_key_expires_at"].replace("Z", "+00:00")
+        )
+        assert (
+            before + timedelta(seconds=grace)
+            <= expires_dt
+            <= after + timedelta(seconds=grace)
+        ), f"old_key_expires_at={expires_dt} not within the grace window"
+
+        # Step 5 (bug report): old key still accepted during grace window.
+        old_resp = client.get("/keys", headers=_auth(initial_api_key))
+        assert old_resp.status_code == 200, (
+            f"old key rejected during grace window (grace not honored); "
+            f"got {old_resp.status_code}: {old_resp.text}"
+        )
+
+        # Step 6 (bug report): new key accepted immediately.
+        new_resp = client.get("/keys", headers=_auth(new_token))
+        assert new_resp.status_code == 200, (
+            f"new key rejected: {new_resp.status_code}: {new_resp.text}"
+        )
+
+        # Invariant: the raw old token must never be persisted — only its hash.
+        keys_json_text = (tmp_path / "keys.json").read_text()
+        assert initial_api_key not in keys_json_text, (
+            "raw old token must never be persisted in keys.json (only SHA-256 hash)"
+        )
+
+
+# ---------------------------------------------------------------------------
 # T-3 test 2: TOML token and managed token both accepted simultaneously (S7, S8)
 # ---------------------------------------------------------------------------
 

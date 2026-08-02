@@ -311,6 +311,66 @@ class TestRotateDefaultKey:
         assert revoked[0].id == result1["new_key_id"]
         assert active[0].id == result2["new_key_id"]
 
+    def test_rotate_unmanaged_key_with_grace_synthesizes_active_record(
+        self, tmp_path: Path
+    ) -> None:
+        """S133: unmanaged current_token + grace>0 → synthesize an active grace record.
+
+        The initial default key lives only in ``.search.env`` (never in
+        ``keys.json``). Rotating it with grace must still keep it accepted during
+        the window, so a grace record is synthesized from its hash. Only the
+        SHA-256 hash is persisted — never the raw token.
+        """
+        store = _make_store(tmp_path)
+        unmanaged_token = "ab" * 32  # not in keys.json
+
+        result = asyncio.run(
+            store.rotate_default_key(current_token=unmanaged_token, grace_seconds=3600)
+        )
+
+        old_record = result["old_record"]
+        assert old_record is not None, "grace record must be synthesized (S133)"
+        assert old_record.status == "active"
+        assert old_record.expires_at is not None
+        assert old_record.token_hash == _token_hash(unmanaged_token)
+
+        records = asyncio.run(store.load())
+        # Two records: synthesized grace record (active, expiring) + new key.
+        assert len(records) == 2
+        grace_recs = [r for r in records if r.token_hash == _token_hash(unmanaged_token)]
+        assert len(grace_recs) == 1
+        assert grace_recs[0].status == "active"
+        assert grace_recs[0].expires_at is not None
+        # Security invariant: raw old token must never be persisted.
+        assert unmanaged_token not in (tmp_path / "keys.json").read_text()
+
+    def test_rotate_double_call_with_grace_does_not_resurrect_revoked(
+        self, tmp_path: Path
+    ) -> None:
+        """Retry with an already-revoked token + grace>0 must NOT resurrect it.
+
+        Preserves double-rotation idempotency: the ``not current_hash_seen``
+        guard means a token that matches a revoked record is not re-synthesized
+        into a fresh active grace record.
+        """
+        store = _make_store(tmp_path)
+        seed = asyncio.run(store.create(ns="default", label=None, expires_at=None))
+        old_token = seed["token"]
+        old_key_id = seed["id"]
+
+        # First rotation revokes the managed key (grace=0).
+        asyncio.run(store.rotate_default_key(current_token=old_token, grace_seconds=0))
+        # Retry with the same (now-revoked) token, this time with grace>0.
+        result2 = asyncio.run(
+            store.rotate_default_key(current_token=old_token, grace_seconds=3600)
+        )
+
+        assert result2["old_record"] is None, "revoked key must not be resurrected"
+        records = asyncio.run(store.load())
+        old_recs = [r for r in records if r.id == old_key_id]
+        assert len(old_recs) == 1
+        assert old_recs[0].status == "revoked"  # still revoked, not re-activated
+
 
 # ---------------------------------------------------------------------------
 # Integration test: old key rejected after grace window (S15)
