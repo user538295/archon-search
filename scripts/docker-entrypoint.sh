@@ -19,7 +19,7 @@ if [ -z "$EXTRAS" ]; then
 elif [ ! -f "$STAMP" ] || [ "$(cat "$STAMP" 2>/dev/null)" != "$EXTRAS" ]; then
     log "Extras not yet installed (or list changed) — starting pip install …"
     log "Target: /pip-packages  Extras: [${EXTRAS}]"
-    log "(First start: this may take 3–5 minutes)"
+    log "(First start: network-bound — this can take several minutes)"
     _BAKED_VERSION=$(python3 -c "import importlib.metadata; print(importlib.metadata.version('archon-search'))" 2>/dev/null || true)
     [ -n "$_BAKED_VERSION" ] && export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ARCHON_SEARCH="$_BAKED_VERSION"
     { python3 -m pip install --no-cache-dir --target /pip-packages ".[${EXTRAS}]"; } 2>&1
