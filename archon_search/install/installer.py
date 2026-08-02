@@ -10,6 +10,7 @@ import contextlib
 import importlib
 import logging
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -44,6 +45,7 @@ from .config_writer import (
 from .errors import InstallError, NeedsForceDeleteError
 from .extras import (
     _install_code_extra,
+    _install_cuda_torch,
     _install_graph_extra,
     _install_multilingual_extra,
     _install_query_expansion_extras,
@@ -725,6 +727,13 @@ class BaseInstaller(ABC):
                 providers = ["CUDA"]
                 # CUDA post-prewarm validation is out of scope (D6); leave
                 # gpu_provider None so the FE-1 block does not probe CUDA.
+                # CUDA torch swap (wizard-cuda-torch-upgrade): only on linux/x86_64
+                # — the sole platform S269 pins torch to the CPU-only build, so the
+                # only one where "replace the CPU build with CUDA" is well-defined.
+                # _install_cuda_torch is best-effort: a failed swap warns and keeps
+                # the working CPU build, never failing the install.
+                if sys.platform.startswith("linux") and platform.machine() == "x86_64":
+                    _install_cuda_torch(dry_run=self.dry_run)
             else:
                 self.configure_providers(gpu=gpu)
 

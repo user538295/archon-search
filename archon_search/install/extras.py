@@ -1,6 +1,7 @@
 """Extra-package installers plus the query-expansion flag revert."""
 from __future__ import annotations
 
+import importlib.metadata
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,35 @@ from .errors import InstallError
 # ---------------------------------------------------------------------------
 # Code enrichment package install (Task C8-2.3)
 # ---------------------------------------------------------------------------
+
+def _uv_or_pip_install(packages: list[str], extra_args: list[str], fail_label: str) -> None:
+    """Install *packages* via ``uv pip install`` with a plain-``pip`` fallback.
+
+    *extra_args* are appended to both the uv and pip command lines (e.g. an
+    ``--extra-index-url``). Raises ``InstallError`` (message prefixed with
+    *fail_label*) only when BOTH uv and pip fail.
+    """
+    python = sys.executable
+    try:
+        subprocess.run(
+            ["uv", "pip", "install", "--python", python, *packages, *extra_args],
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        # uv missing / not executable / wrong-arch (OSError) or failed
+        # (CalledProcessError) — fall back to pip
+
+        try:
+            subprocess.run(
+                [python, "-m", "pip", "install", *packages, *extra_args],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as pip_exc:
+            stderr = (pip_exc.stderr or b"").decode(errors="replace")
+            raise InstallError(f"{fail_label}: {stderr}") from pip_exc
+
 
 def _install_extra(package: str, label: str, dry_run: bool = False) -> None:
     """Install an arbitrary pip *package* via uv (with pip fallback).
@@ -35,26 +65,82 @@ def _install_extra(package: str, label: str, dry_run: bool = False) -> None:
         return
 
     click.echo(f"Installing {label}...")
-    python = sys.executable
-    try:
-        subprocess.run(
-            ["uv", "pip", "install", "--python", python, package],
-            check=True,
-            capture_output=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        # uv not found or failed — fall back to pip
-        try:
-            subprocess.run(
-                [python, "-m", "pip", "install", package],
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as pip_exc:
-            stderr = (pip_exc.stderr or b"").decode(errors="replace")
-            raise InstallError(f"Failed to install {package}: {stderr}") from pip_exc
-
+    _uv_or_pip_install([package], [], f"Failed to install {package}")
     click.echo(f"{label.capitalize()} installed.")
+
+
+# ---------------------------------------------------------------------------
+# CUDA torch swap (wizard-cuda-torch-upgrade)
+# ---------------------------------------------------------------------------
+
+# PyTorch CUDA wheel index for the GPU torch swap. The `+<tag>` local build the
+# swap pins (below) is derived from this URL's last path segment, so the index
+# and the pinned build can never drift apart. cu126 is the lowest CUDA toolkit
+# still shipping the S269-pinned torch/torchvision cp312 wheels, so it has the
+# widest NVIDIA-driver compatibility (cu129/cu130 demand much newer drivers).
+# Verified against download.pytorch.org/whl/cu126/{torch,torchvision}/ on
+# 2026-08-02. Only used on linux/x86_64 (the sole platform S269 pins to +cpu).
+_CUDA_TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu126"
+# The local-version tag ("cu126") for the pinned CUDA build — parsed from the
+# index URL so the two stay coupled by construction.
+_CUDA_LOCAL_TAG = _CUDA_TORCH_INDEX_URL.rsplit("/", 1)[-1]
+
+
+def _install_cuda_torch(dry_run: bool = False) -> None:
+    """Best-effort swap of the CPU-only torch build for the CUDA build.
+
+    Replaces the S269 CPU-only torch/torchvision with the CUDA build of the SAME
+    public version so docling's PDF/OCR parsing runs on an NVIDIA GPU. The
+    version is derived from the already-installed build (``importlib.metadata``,
+    stripping the local tag) and re-pinned to the exact CUDA local build, e.g.
+    ``torch==2.13.0+cu126``.
+
+    The local ``+cu126`` tag is REQUIRED: a bare public specifier ``==2.13.0``
+    is satisfied by the installed ``2.13.0+cpu`` (PEP 440 ignores the local label
+    when the requirement has none), so pip/uv would report "already satisfied"
+    and the swap would silently do nothing. Pinning the local build forces the
+    reinstall. ``--extra-index-url`` (not ``--index-url``) keeps PyPI available
+    for any transitive dependency the CUDA build needs.
+
+    Best-effort: on any failure (torch not installed, both uv and pip fail) it
+    logs a warning to stderr and returns, leaving the working CPU build in place.
+    Prints ``[DRY RUN] Would install CUDA torch from {index}`` and returns early
+    when *dry_run* is True.
+    """
+    if dry_run:
+        click.echo(f"[DRY RUN] Would install CUDA torch from {_CUDA_TORCH_INDEX_URL}")
+        return
+
+    try:
+        torch_version = importlib.metadata.version("torch").split("+")[0]
+        torchvision_version = importlib.metadata.version("torchvision").split("+")[0]
+    except importlib.metadata.PackageNotFoundError as exc:
+        print(
+            f"Warning: cannot determine installed torch/torchvision version; "
+            f"keeping the CPU build: {exc}",
+            file=sys.stderr,
+        )
+        return
+
+    click.echo("Installing CUDA torch/torchvision...")
+    packages = [
+        f"torch=={torch_version}+{_CUDA_LOCAL_TAG}",
+        f"torchvision=={torchvision_version}+{_CUDA_LOCAL_TAG}",
+    ]
+    try:
+        _uv_or_pip_install(
+            packages,
+            ["--extra-index-url", _CUDA_TORCH_INDEX_URL],
+            "Failed to install CUDA torch",
+        )
+    except InstallError as exc:
+        print(
+            f"Warning: CUDA torch install failed; keeping the CPU build: {exc}",
+            file=sys.stderr,
+        )
+        return
+
+    click.echo("CUDA torch/torchvision installed.")
 
 
 def _install_code_extra(dry_run: bool = False) -> None:

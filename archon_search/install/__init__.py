@@ -46,6 +46,7 @@ from .errors import InstallLockError as InstallLockError
 from .errors import NeedsForceDeleteError as NeedsForceDeleteError
 from .extras import _PROVIDER_EXTRA as _PROVIDER_EXTRA
 from .extras import _install_code_extra as _install_code_extra
+from .extras import _install_cuda_torch as _install_cuda_torch
 from .extras import _install_extra as _install_extra
 from .extras import _install_graph_extra as _install_graph_extra
 from .extras import _install_multilingual_extra as _install_multilingual_extra
