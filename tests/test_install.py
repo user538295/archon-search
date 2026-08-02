@@ -446,7 +446,7 @@ class TestServiceDelegation:
         with patch("archon_search.install.installer.get_search_service", return_value=svc):
             installer.write_service_file()
 
-        svc.register.assert_called_once_with(dry_run=False)
+        svc.register.assert_called_once_with(dry_run=False, config_path=installer.config_file)
 
     def test_write_service_file_dry_run(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path, dry_run=True)
@@ -455,7 +455,7 @@ class TestServiceDelegation:
         with patch("archon_search.install.installer.get_search_service", return_value=svc):
             installer.write_service_file()
 
-        svc.register.assert_called_once_with(dry_run=True)
+        svc.register.assert_called_once_with(dry_run=True, config_path=installer.config_file)
 
     def test_write_service_file_calls_pre_activate_cleanup_before_register(self, tmp_path: Path) -> None:
         """write_service_file() must call pre_activate_cleanup before register to stop legacy service."""
@@ -2231,7 +2231,7 @@ class TestDryRunGuardAgainstRealServiceCalls:
             installer.write_service_file()
 
         svc.pre_activate_cleanup.assert_called_once_with(dry_run=True)
-        svc.register.assert_called_once_with(dry_run=True)
+        svc.register.assert_called_once_with(dry_run=True, config_path=installer.config_file)
 
     def test_load_service_calls_service_with_dry_run_true(self, tmp_path: Path) -> None:
         installer = self._dry_run_installer(tmp_path)
