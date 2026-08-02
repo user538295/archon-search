@@ -140,6 +140,8 @@ class CollectionHealthEntry(BaseModel):
     mutations_since_recompute: int = Field(default=0, ge=0)
     centroid_recompute_threshold: int = Field(default=0, ge=0)
     meta_chunk_count: int = Field(default=0, ge=0)
+    expired_chunks_removed_last_run: int = Field(default=0, ge=0)
+    communities_invalidated: bool = False
 
 
 class MaintenanceStatusDetail(BaseModel):

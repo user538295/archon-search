@@ -346,6 +346,53 @@ async def test_build_maintenance_status_last_graph_gc_at_from_state(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_build_maintenance_status_entry_has_documented_fields(tmp_path: Path) -> None:
+    """S115: each collection_health entry exposes the two documented per-collection
+    maintenance fields — expired_chunks_removed_last_run and communities_invalidated —
+    populated from the state file (OperatorGuide/50_maintenance_and_jobs.md:96)."""
+    from archon_search.server.routes_status import _build_maintenance_status
+
+    config = SearchConfig()
+    config.maintenance.interval_hours = 0
+    config.maintenance.prune_expired_chunks = False
+
+    mock_store = MagicMock()
+    mock_store.count_expired_chunks = AsyncMock(return_value=0)
+
+    loop = MaintenanceLoop(
+        job_store=MagicMock(),
+        search_store=mock_store,
+        config=config.maintenance,
+        data_dir=tmp_path,
+    )
+    loop._save_state({
+        "last_run_at": None,
+        "next_run_at": None,
+        "collection_health": {
+            f"{DEFAULT_NAMESPACE}/docs": {
+                "fts_optimized_at": None,
+                "orphans_removed_last_run": 0,
+                "expired_chunks_removed_last_run": 7,
+                "communities_invalidated": True,
+            }
+        },
+        "retry_counts": {},
+    })
+
+    mock_request = MagicMock()
+    mock_request.app.state.maintenance_loop = loop
+
+    result = await _build_maintenance_status(
+        mock_request, config, DEFAULT_NAMESPACE, mock_store, []
+    )
+
+    assert result is not None
+    entry = result.collection_health[0]
+    assert entry.expired_chunks_removed_last_run == 7
+    assert entry.communities_invalidated is True
+
+
+@pytest.mark.asyncio
 async def test_build_maintenance_status_last_graph_gc_at_null_before_gc(tmp_path: Path) -> None:
     """last_graph_gc_at is null when no GC pass has run yet."""
     from archon_search.server.routes_status import _build_maintenance_status

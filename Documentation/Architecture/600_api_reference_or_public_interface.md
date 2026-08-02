@@ -288,6 +288,8 @@ Each `CollectionHealthEntry` (namespace is implied by the caller's API key; the 
 | `meta_chunk_count` | `int` | O(1) metadata-row chunk count |
 | `mutations_since_recompute` | `int` | Mutations since last centroid recompute |
 | `centroid_recompute_threshold` | `int` | Current threshold from `config.centroid_recompute_threshold` |
+| `expired_chunks_removed_last_run` | `int` | Expired (TTL) chunks pruned in the last pass |
+| `communities_invalidated` | `bool` | `true` when the last graph GC removed nodes/edges, invalidating cached communities |
 
 ### `routes_keys.py` (D7)
 
