@@ -35,7 +35,7 @@ def ingest(ingest_path: Path | None, collection: str | None, wait_flag: bool, ap
     collection_name = collection or path_to_collection_name(str(ingest_path))
 
     key = _resolve_api_key(api_key)
-    headers = {"Authorization": f"Bearer {key}"}
+    headers = {"Authorization": f"Bearer {key}", "X-Ingested-By": "cli"}
     base_url = api_url.rstrip("/")
     post_url = f"{base_url}/ingest"
 
