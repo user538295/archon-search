@@ -2193,3 +2193,27 @@ def test_multilingual_download_failure_degrades_to_english(tmp_path: Path) -> No
     assert "multilingual = false" in config_path.read_text()
     # Degraded to English-only → the [multilingual] extra is not installed.
     install_extra_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# S206: write_service_file threads the chosen --config path into register()
+# ---------------------------------------------------------------------------
+
+
+def test_write_service_file_passes_config_file_to_register(tmp_path: Path) -> None:
+    """RealInstaller.write_service_file() must register the service with the
+    installer's config_file so the launchd/systemd unit's ARCHON_SEARCH_CONFIG
+    points at the config the wizard just wrote, not the hardcoded default (S206).
+    """
+    from archon_search.install import _profile_toml
+
+    config_path = tmp_path / "custom" / "archon-search.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(_profile_toml("minimal", False))
+
+    fake_svc = MagicMock()
+    with patch("archon_search.install.installer.get_search_service", return_value=fake_svc):
+        installer = create_installer(config_file=str(config_path))
+        installer.write_service_file()
+
+    fake_svc.register.assert_called_once_with(dry_run=False, config_path=str(config_path))

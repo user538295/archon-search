@@ -359,6 +359,36 @@ def test_register_plist_uses_taskpolicy(tmp_path: Path) -> None:
     assert "<string>-b</string>" in content
 
 
+def test_register_writes_requested_config_path_into_plist(tmp_path: Path) -> None:
+    """register(config_path=X) writes X into the plist's ARCHON_SEARCH_CONFIG (S206).
+
+    The wizard's --config flag must reach the service it starts: the generated
+    plist's ARCHON_SEARCH_CONFIG must point at the requested config, not the
+    hardcoded ~/.archon-search/archon-search.toml default.
+    """
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    requested = tmp_path / "custom" / "archon-search.toml"
+    with patch.object(Path, "home", return_value=tmp_path):
+        svc.register(config_path=str(requested))
+    plist = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
+    content = plist.read_text()
+    assert f"<string>{requested}</string>" in content
+    hardcoded_default = tmp_path / ".archon-search" / "archon-search.toml"
+    assert f"<string>{hardcoded_default}</string>" not in content
+
+
+def test_register_defaults_config_path_when_omitted(tmp_path: Path) -> None:
+    """register() with no config_path keeps the ~/.archon-search default."""
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    with patch.object(Path, "home", return_value=tmp_path):
+        svc.register()
+    plist = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
+    default = tmp_path / ".archon-search" / "archon-search.toml"
+    assert f"<string>{default}</string>" in plist.read_text()
+
+
 def test_register_raises_on_permission_error(tmp_path: Path) -> None:
     """register() raises RuntimeError when it cannot write the plist."""
     from archon_search.platform.macos import LaunchdSearchService

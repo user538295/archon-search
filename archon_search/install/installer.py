@@ -922,7 +922,7 @@ class DryRunInstaller(BaseInstaller):
     def write_service_file(self) -> None:
         svc = get_search_service()
         svc.pre_activate_cleanup(dry_run=True)
-        svc.register(dry_run=True)
+        svc.register(dry_run=True, config_path=self.config_file)
 
     def load_service(self) -> int:
         return get_search_service().start(dry_run=True)
@@ -1099,10 +1099,15 @@ class RealInstaller(BaseInstaller):
         db_path.mkdir(parents=True, exist_ok=True)
 
     def write_service_file(self) -> None:
-        """Stop legacy service then register the new search service."""
+        """Stop legacy service then register the new search service.
+
+        Threads the installer's config_file into register() so the service the
+        installer starts reads the config just written, not the hardcoded
+        default (S206). None → register() falls back to the default path.
+        """
         svc = get_search_service()
         svc.pre_activate_cleanup(dry_run=False)
-        svc.register(dry_run=False)
+        svc.register(dry_run=False, config_path=self.config_file)
 
     def load_service(self) -> int:
         """Delegate to get_search_service().start()."""

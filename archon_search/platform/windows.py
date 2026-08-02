@@ -16,7 +16,7 @@ class WindowsSearchService(SearchServiceLifecycle):
     def restart(self, dry_run: bool = False) -> None:
         raise NotImplementedError(_MSG)
 
-    def register(self, dry_run: bool = False) -> None:
+    def register(self, dry_run: bool = False, config_path: str | None = None) -> None:
         raise NotImplementedError(_MSG)
 
     def unregister(self, dry_run: bool = False) -> None:
