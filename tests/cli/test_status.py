@@ -971,3 +971,52 @@ def test_status_container_mode_running_service_shows_running(runner: CliRunner, 
     assert "42" in result.output, (
         f"PID should appear in running output; got:\n{result.output}"
     )
+
+
+# ---------------------------------------------------------------------------
+# S209 — `archon-search status --json` machine-readable output
+# ---------------------------------------------------------------------------
+
+
+def test_status_json_flag_outputs_valid_json_with_running_state(runner: CliRunner) -> None:
+    """`status --json` must exit 0, print valid JSON to stdout, and report running state.
+
+    Regression: the status command exposes no --json option, so Click rejects it
+    with exit code 2 ("No such option '--json'").
+    """
+    import json
+
+    svc = MagicMock()
+    svc.status.return_value = ServiceStatus(running=True, pid=123, uptime_seconds=42.0)
+    with patch("archon_search.cli.status._get_service", return_value=svc):
+        with patch("archon_search.cli.status._fetch_server_status", return_value=None):
+            result = runner.invoke(main, ["status", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["running"] is True, f"Expected running=True in JSON; got: {payload!r}"
+    assert set(payload) == {"running", "pid", "uptime_seconds", "server"}, (
+        f"Unexpected JSON keys; got: {sorted(payload)}"
+    )
+    assert payload["pid"] == 123
+    assert payload["uptime_seconds"] == 42.0
+    assert payload["server"] is None
+
+
+def test_status_json_flag_normalizes_auth_failed_sentinel(runner: CliRunner) -> None:
+    """`status --json` must normalize the internal `_auth_failed` sentinel into
+    a clean public `{"auth_failed": True}` key — the private sentinel must
+    never leak into emitted JSON.
+    """
+    import json
+
+    svc = MagicMock()
+    svc.status.return_value = ServiceStatus(running=True, pid=123, uptime_seconds=42.0)
+    with patch("archon_search.cli.status._get_service", return_value=svc):
+        with patch(
+            "archon_search.cli.status._fetch_server_status",
+            return_value={"_auth_failed": True},
+        ):
+            result = runner.invoke(main, ["status", "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["server"] == {"auth_failed": True}
+    assert "_auth_failed" not in result.stdout

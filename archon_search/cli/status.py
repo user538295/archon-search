@@ -1,6 +1,7 @@
 """archon-search status subcommand."""
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -192,6 +193,13 @@ def _print_graph_gc_status(server_payload: dict[str, Any]) -> None:
 
 @click.command()
 @click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    default=False,
+    help="Emit machine-readable JSON instead of human-readable text.",
+)
+@click.option(
     "--api-url",
     default=_DEFAULT_API_URL,
     show_default=True,
@@ -202,13 +210,26 @@ def _print_graph_gc_status(server_payload: dict[str, Any]) -> None:
     default=None,
     help="API key (falls back to ARCHON_SEARCH_API_KEY env var or the key file).",
 )
-def status(api_url: str, api_key: str | None) -> None:
+def status(as_json: bool, api_url: str, api_key: str | None) -> None:
     """Show archon-search service status."""
     try:
         svc_status = _get_service().status()
     except Exception as exc:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)
+
+    if as_json:
+        server_payload = _fetch_server_status(api_url, api_key)
+        if server_payload is not None and server_payload.get("_auth_failed"):
+            server_payload = {"auth_failed": True}
+        payload = {
+            "running": svc_status.running,
+            "pid": svc_status.pid,
+            "uptime_seconds": svc_status.uptime_seconds,
+            "server": server_payload,
+        }
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
 
     container_mode = os.environ.get("ARCHON_SEARCH_CONTAINER") == "1"
 
