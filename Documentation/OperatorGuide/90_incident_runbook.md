@@ -105,12 +105,12 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 
 ### Provider / model validation failing (`/ready`, `/status`)
 
-**Symptoms**: `GET /ready` reports `checks.models: "FAIL"` or `"WARN"`; `GET /status.model_validation` shows `embedder_ok: false` or `reranker_ok: false`, or a populated `provider_warnings` list.
+**Symptoms**: `GET /ready` reports `checks.models: "fail"` or `"warn"`; `GET /status.model_validation` shows `embedder_ok: false` or `reranker_ok: false`, or a populated `provider_warnings` list.
 
 **Triage** (D6, verified against `server/routes_ready.py`):
 
-- The model probe runs in the background at startup and **never blocks boot or raises** — the server accepts requests while the probe is `PENDING`.
-- `checks.models` priority is strict: **FAIL** (an embedder or reranker model could not load) > **WARN** (both loaded, but a provider fallback warning was emitted) > **OK**. `PENDING` means the probe has not produced a result yet.
+- The model probe runs in the background at startup and **never blocks boot or raises** — the server accepts requests while the probe is `pending`.
+- `checks.models` priority is strict: **FAIL** (an embedder or reranker model could not load) > **WARN** (both loaded, but a provider fallback warning was emitted) > **OK**. `pending` means the probe has not produced a result yet.
 - **FAIL** → the configured `embedding_model` / `reranker_model` cannot be loaded (bad name, missing model cache, no network for first download). Fix the model name in `[database]` or pre-warm the fastembed cache, then restart. Search will surface 500s until a model loads.
 - **WARN** → models loaded but an LLM provider fell back (e.g. HyDE / RAG Fusion provider unreachable). Read `provider_warnings` for the specific provider and check `[hyde]` / `[rag_fusion]` credentials and reachability.
 
@@ -160,6 +160,15 @@ archon-search key rotate --grace 60s   # duration string; POST /keys/rotate take
 3. Update every client (CLI users, MCP integrations, monitoring scraper) before the grace window closes.
 
 **When `ARCHON_SEARCH_API_KEY` env var is set**: `POST /keys/rotate` returns **409** (`Cannot rotate: ARCHON_SEARCH_API_KEY env var is set...`) because the env var always overrides `.search.env` in the running process. Rotate by changing the env var and restarting instead.
+
+`POST /keys/rotate` requires a JSON body (`KeyRotateRequest`; the integer `grace_seconds` field is optional). FastAPI validates the body **before** the env-var check runs, so a plain `curl` with no body returns **422** (`{"loc": ["body"], "msg": "Field required"}`), not the 409 above — send an empty body and `Content-Type: application/json` to reach the env-var check:
+
+```bash
+curl -i -X POST http://127.0.0.1:8765/keys/rotate \
+  -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
 
 **Key file lost entirely**: on next start, `key_manager.py` mints a fresh key and **all existing clients break**. For emergency restoration set `ARCHON_SEARCH_API_KEY=<known-value>` in the service environment and restart — the env var takes precedence over the file. This first-start recreation is the only key path that requires a restart.
 

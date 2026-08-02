@@ -144,17 +144,17 @@ The server exits with a `ConfigError` naming `[hyde]` or `[rag_fusion]`, e.g. `[
 
 `GET /ready` returns **503** only when the **storage** check fails (`store.ping()` — LanceDB unreachable / not initialised). The `models` check is **informational**: it never flips `ready` to false. In the JSON body:
 
-- `checks.storage` — `OK` / `FAIL`. `FAIL` → HTTP 503; fix the datastore (disk, permissions, `db_path`).
-- `checks.models` — `OK` / `WARN` / `FAIL` / `PENDING`. `PENDING` means the background model probe has not finished yet (normal right after start); `WARN`/`FAIL` do not block readiness but flag a model/provider issue — see below.
+- `checks.storage` — `ok` / `fail`. `fail` → HTTP 503; fix the datastore (disk, permissions, `db_path`).
+- `checks.models` — `ok` / `warn` / `fail` / `pending`. `pending` means the background model probe has not finished yet (normal right after start); `warn`/`fail` do not block readiness but flag a model/provider issue — see below.
 
 ## Symptom: provider / model validation failures in `/ready` and `/status`
 
 A background probe (`model_validation.py`) loads the embedder and reranker and records the result on `app.state.model_validation`. It never blocks startup and never raises. Surfaces:
 
-- `GET /ready` → `checks.models`: `FAIL` (a model could not load), `WARN` (both loaded but a provider fallback warning was emitted), `OK`, or `PENDING`.
+- `GET /ready` → `checks.models`: `fail` (a model could not load), `warn` (both loaded but a provider fallback warning was emitted), `ok`, or `pending`.
 - `GET /status` → `model_validation` sub-object: `embedder_ok`, `reranker_ok`, and `provider_warnings` (e.g. `validation timed out after 60s`, `validation failed unexpectedly: …`).
 
-1. `FAIL` / `embedder_ok=false` — the embedding model failed to load: check the log for download errors, disk space, and that `[database].embedding_model` names a valid model.
+1. `fail` / `embedder_ok=false` — the embedding model failed to load: check the log for download errors, disk space, and that `[database].embedding_model` names a valid model.
 2. A timeout warning — raise `[database].validation_timeout_seconds` (default 60) if first-run downloads are slow.
 3. `reranker_model = ""` disables the reranker; the probe then reports `reranker_ok=true` with nothing to load — expected, not a fault.
 
