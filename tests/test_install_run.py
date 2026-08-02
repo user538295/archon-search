@@ -693,6 +693,36 @@ def test_run_register_and_start_dry_run_skips_wait(tmp_path: Path) -> None:
     wait_mock.assert_not_called()
 
 
+def test_run_register_and_start_dry_run_output_marks_simulation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """S197: dry-run completion output must be marked as a simulation.
+
+    A bare past-tense "archon-search service registered and running." is
+    indistinguishable from a real install that just succeeded. In dry-run mode
+    the output must carry the DryRunInstaller "[DRY RUN]" convention instead.
+    """
+    from archon_search.install import _profile_toml
+
+    config_path = tmp_path / "archon-search.toml"
+    config_path.write_text(_profile_toml("minimal", False))
+
+    with (
+        patch.object(DryRunInstaller, "write_service_file"),
+        patch.object(DryRunInstaller, "load_service", return_value=0),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+    ):
+        installer = create_installer(config_file=str(config_path), dry_run=True)
+        rc = installer.run_register_and_start()
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "[DRY RUN]" in out, f"dry-run completion output missing marker; got:\n{out}"
+    assert "archon-search service registered and running." not in out, (
+        f"bare past-tense state report emitted in dry-run mode; got:\n{out}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Task 3.1 — New wiring tests
 # ---------------------------------------------------------------------------

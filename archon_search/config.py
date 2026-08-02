@@ -362,7 +362,8 @@ def load_config(path: Path | None = None, *, serve: bool = False) -> SearchConfi
         ARCHON_SEARCH_DATA_DIR: when set, overrides `config.db_path`,
             `config.log_file`, and `config.telemetry.log_dir` (derived under
             the data directory). Wins over any TOML-sourced values for those
-            three fields.
+            three fields — except an explicit empty `log_file`, which is
+            preserved as the file-logging-disable opt-out (S107).
     """
     if path is None:
         path = get_default_config_path()
@@ -1036,5 +1037,8 @@ def _apply_env_overrides(config: SearchConfig) -> None:
         # (search / logs/archon-search.log / search-logs); the plan's
         # "Path derivations" table is the canonical source of truth.
         config.db_path = str(data_dir / "search")
-        config.log_file = str(data_dir / "logs" / "archon-search.log")
+        # S107: preserve an explicit empty log_file (file-logging disable
+        # opt-out) — only relocate a non-empty path under DATA_DIR.
+        if config.log_file:
+            config.log_file = str(data_dir / "logs" / "archon-search.log")
         config.telemetry.log_dir = str(data_dir / "search-logs")
