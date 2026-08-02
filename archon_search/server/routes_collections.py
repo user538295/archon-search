@@ -1166,14 +1166,23 @@ async def reindex_metadata(
 
     # Set metadata_reindex_job_id AFTER the QUEUED->RUNNING transition so the
     # guard above can detect and reject a duplicate submission while this one is active.
-    meta.metadata_reindex_job_id = running_job.job_id
-    try:
-        await search_store.update_collection_meta(meta)
-    except Exception:
-        logger.warning(
-            "reindex_metadata: failed to persist metadata_reindex_job_id for job %s",
-            running_job.job_id,
-        )
+    # A dry-run is a read-only preview and must write NOTHING to the meta table:
+    # the non-atomic delete-then-add in update_collection_meta would otherwise open a
+    # window during which a lock-free get_collection_meta sees no rows and the
+    # collection becomes transiently unresolvable (S52).
+    # Consequence: a dry-run never registers metadata_reindex_job_id, so it is
+    # intentionally exempt from the Guard 3 (409) in-progress check above; concurrent
+    # dry-runs are harmless because they are read-only and still serialise on
+    # lock_for(collection) inside SearchStore.reindex_metadata.
+    if not body.dry_run:
+        meta.metadata_reindex_job_id = running_job.job_id
+        try:
+            await search_store.update_collection_meta(meta)
+        except Exception:
+            logger.warning(
+                "reindex_metadata: failed to persist metadata_reindex_job_id for job %s",
+                running_job.job_id,
+            )
 
     task = asyncio.create_task(
         _reindex_metadata_task(
