@@ -108,10 +108,18 @@ All routes require a `Bearer` token (`server/routes_jobs.py`). `GET /openapi.jso
 
 | Route | Purpose |
 |---|---|
-| `GET /jobs` | List jobs (namespace-filtered). Query params: `status` (repeatable), `kind`, `source`, `limit` (1..200, default 50), `cursor`. |
+| `GET /jobs` | List jobs (namespace-filtered). Query params: `status` (repeatable), `kind`, `source`, `limit` (1..200, default 50), `cursor`. Response envelope below. |
 | `GET /jobs/{id}` | Fetch one job; `404` if missing or in another namespace. |
 | `POST /jobs/{id}/resume` | Transition a `FAILED` **export / import / migration** job back to `QUEUED` for retry. `409` if the job type is not resumable or is not `FAILED`; `422` if the backing file is gone. |
 | `DELETE /jobs/{id}` | Cancel an active job (sets `CANCELLING`, returns `202`); idempotent `200` on already-terminal jobs. |
+
+`GET /jobs` returns a cursor-paginated envelope object (never a bare array):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `items` | array | The page of jobs, newest first. |
+| `next_cursor` | string \| null | Continuation token — pass it back as the `cursor` query param to fetch the next page; `null` on the last page. |
+| `total` | integer | Total jobs matching the filters, across all pages. |
 
 ```bash
 # List running + queued jobs
