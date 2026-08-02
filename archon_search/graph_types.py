@@ -169,6 +169,14 @@ class GraphNode:
     """Unweighted PageRank importance score over code-symbol edges — E2g BE-7.
     ``None`` for nodes whose score has not yet been computed by the background
     recompute (freshly-ingested symbols, or pre-BE-7 nodes)."""
+    source_path: str | None = None
+    """Source file path this ``code_symbol`` node was extracted from (the same
+    string fed into ``make_code_symbol_qualified_name`` at ingest — S68). Lets
+    ``compute_impact`` disambiguate same-named symbols by a caller-supplied
+    ``file_path`` (matched by path suffix/basename) instead of trying to rebuild
+    the opaque hashed node ID from a path that rarely byte-matches. ``None`` for
+    non-code-symbol nodes and for pre-S68 nodes written before this column
+    existed."""
 
 
 @dataclass

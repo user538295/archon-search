@@ -53,6 +53,7 @@ def _symbol(
         source_doc_id="doc-abc",
         collection_name=COL,
         pagerank_score=pagerank_score,
+        source_path=source_path,
     )
 
 
@@ -889,3 +890,171 @@ def test_computeImpact_diamondShape_dedupsIndirectByNodeId(tmp_path) -> None:
 
     indirect_names = [e.entity_name for e in result.callees.indirect]
     assert indirect_names.count("c") == 1
+
+
+# ---------------------------------------------------------------------------
+# S68: file_path disambiguation edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_computeImpact_basenameQuery_picksHighestPagerankAmongMatches(tmp_path) -> None:
+    """Shared basename in different dirs + a bare-basename query: matches by
+    basename against both candidates, then breaks the tie by highest pagerank."""
+    run_a = _symbol("run", source_path="/proj/sub_a/run.py", pagerank_score=0.1)
+    run_b = _symbol("run", source_path="/proj/sub_b/run.py", pagerank_score=0.9)
+    caller_of_a = _symbol("caller_of_a")
+    caller_of_b = _symbol("caller_of_b")
+    nodes = [run_a, run_b, caller_of_a, caller_of_b]
+    edges = [_edge(caller_of_a, run_a), _edge(caller_of_b, run_b)]
+
+    async def _go():
+        store = await _seeded_store(tmp_path, "basename-tiebreak", nodes, edges)
+        try:
+            return await store.compute_impact(
+                COL, "run", depth=1, direction=ImpactDirection.callers,
+                extraction_method_filter=None, file_path="run.py", ns=NS,
+            )
+        finally:
+            await store.disconnect()
+
+    result = _run(_go())
+
+    # basename matches both; highest-pagerank (run_b) wins the tie.
+    assert [e.entity_name for e in result.callers.direct] == ["caller_of_b"]
+
+
+def test_computeImpact_directoryQualifiedQuery_ignoresHigherPagerankWrongDir(tmp_path) -> None:
+    """FIX 1: a directory-qualified file_path picks the correct dir even when
+    the wrong dir's candidate has a higher pagerank score."""
+    run_a = _symbol("run", source_path="/proj/sub_a/run.py", pagerank_score=0.1)
+    run_b = _symbol("run", source_path="/proj/sub_b/run.py", pagerank_score=0.9)
+    caller_of_a = _symbol("caller_of_a")
+    caller_of_b = _symbol("caller_of_b")
+    nodes = [run_a, run_b, caller_of_a, caller_of_b]
+    edges = [_edge(caller_of_a, run_a), _edge(caller_of_b, run_b)]
+
+    async def _go():
+        store = await _seeded_store(tmp_path, "dir-qualified", nodes, edges)
+        try:
+            return await store.compute_impact(
+                COL, "run", depth=1, direction=ImpactDirection.callers,
+                extraction_method_filter=None, file_path="sub_a/run.py", ns=NS,
+            )
+        finally:
+            await store.disconnect()
+
+    result = _run(_go())
+
+    # sub_a/run.py only matches run_a (suffix), despite run_b's higher pagerank.
+    assert [e.entity_name for e in result.callers.direct] == ["caller_of_a"]
+
+
+def test_computeImpact_allCandidatesLegacyNullSourcePath_fallsBackToPagerank(tmp_path) -> None:
+    """FIX 4: on a pre-S68/not-yet-reingested collection every candidate has
+    source_path=None; a file_path-qualified query must fall back to
+    highest-pagerank rather than hard-regressing to an empty result."""
+    # Simulate real legacy data: DefRefExtractor already file-qualifies node
+    # IDs independently of the source_path column (see graph_store.py module
+    # docstring), so two same-named legacy symbols in different files have
+    # distinct IDs even though source_path is NULL on both (S68 migration
+    # only adds the column — it never backfills it). Build the nodes
+    # directly rather than via ``_symbol`` so their IDs stay distinct despite
+    # source_path=None.
+    run_a = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "run::/proj/sub_a/run.py"),
+        entity_name="run",
+        entity_type=EntityType.code_symbol,
+        source_doc_id="doc-abc",
+        collection_name=COL,
+        pagerank_score=0.1,
+        source_path=None,
+    )
+    run_b = GraphNode(
+        id=make_stable_entity_id(EntityType.code_symbol.value, "run::/proj/sub_b/run.py"),
+        entity_name="run",
+        entity_type=EntityType.code_symbol,
+        source_doc_id="doc-abc",
+        collection_name=COL,
+        pagerank_score=0.9,
+        source_path=None,
+    )
+    caller_of_a = _symbol("caller_of_a")
+    caller_of_b = _symbol("caller_of_b")
+    nodes = [run_a, run_b, caller_of_a, caller_of_b]
+    edges = [_edge(caller_of_a, run_a), _edge(caller_of_b, run_b)]
+
+    async def _go():
+        store = await _seeded_store(tmp_path, "legacy-null", nodes, edges)
+        try:
+            return await store.compute_impact(
+                COL, "run", depth=1, direction=ImpactDirection.callers,
+                extraction_method_filter=None, file_path="sub_a/run.py", ns=NS,
+            )
+        finally:
+            await store.disconnect()
+
+    result = _run(_go())
+
+    # Falls back to highest pagerank (run_b) instead of returning empty.
+    assert [e.entity_name for e in result.callers.direct] == ["caller_of_b"]
+    assert result.depth_used == 1
+
+
+def test_computeImpact_someCandidatesHaveSourcePathButNoneMatches_returnsEmpty(tmp_path) -> None:
+    """When at least one candidate has a populated source_path but none
+    matches the query, resolution must still return an empty result — only
+    the all-None (column-unpopulated) legacy case falls back."""
+    run_a = _symbol("run", source_path="/proj/sub_a/run.py", pagerank_score=0.9)
+    run_b = _symbol("run", source_path=None, pagerank_score=0.1)
+    caller_of_a = _symbol("caller_of_a")
+    caller_of_b = _symbol("caller_of_b")
+    nodes = [run_a, run_b, caller_of_a, caller_of_b]
+    edges = [_edge(caller_of_a, run_a), _edge(caller_of_b, run_b)]
+
+    async def _go():
+        store = await _seeded_store(tmp_path, "partial-null", nodes, edges)
+        try:
+            return await store.compute_impact(
+                COL, "run", depth=1, direction=ImpactDirection.callers,
+                extraction_method_filter=None, file_path="sub_z/run.py", ns=NS,
+            )
+        finally:
+            await store.disconnect()
+
+    result = _run(_go())
+
+    assert result.callers.direct == []
+    assert result.callers.indirect == []
+    assert result.depth_used == 0
+
+
+def test_computeImpact_emptyStringFilePath_sameAsAbsent(tmp_path) -> None:
+    """FIX 2: an empty-string file_path (as delivered by ``?file_path=`` at
+    the route layer) must behave identically to file_path=None."""
+    run_a = _symbol("run", source_path="/proj/sub_a/run.py", pagerank_score=0.1)
+    run_b = _symbol("run", source_path="/proj/sub_b/run.py", pagerank_score=0.9)
+    caller_of_a = _symbol("caller_of_a")
+    caller_of_b = _symbol("caller_of_b")
+    nodes = [run_a, run_b, caller_of_a, caller_of_b]
+    edges = [_edge(caller_of_a, run_a), _edge(caller_of_b, run_b)]
+
+    async def _go():
+        store = await _seeded_store(tmp_path, "empty-file-path", nodes, edges)
+        try:
+            by_empty = await store.compute_impact(
+                COL, "run", depth=1, direction=ImpactDirection.callers,
+                extraction_method_filter=None, file_path="", ns=NS,
+            )
+            by_none = await store.compute_impact(
+                COL, "run", depth=1, direction=ImpactDirection.callers,
+                extraction_method_filter=None, file_path=None, ns=NS,
+            )
+            return by_empty, by_none
+        finally:
+            await store.disconnect()
+
+    by_empty, by_none = _run(_go())
+
+    # Both resolve by highest pagerank (run_b).
+    assert [e.entity_name for e in by_empty.callers.direct] == ["caller_of_b"]
+    assert [e.entity_name for e in by_none.callers.direct] == ["caller_of_b"]

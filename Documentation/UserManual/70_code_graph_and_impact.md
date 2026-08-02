@@ -81,7 +81,7 @@ Query parameters (`routes_graph.py:get_graph_impact`):
 
 | Param | Default | Meaning |
 |---|---|---|
-| `file_path` | — | Disambiguates same-named symbols to the one defined in this file. |
+| `file_path` | — | Disambiguates same-named symbols to the one defined in this file. A bare filename (e.g. `helpers_a.py`, no path separator) matches by exact string or basename. A path containing a separator (e.g. `sub/helpers_a.py`) matches by exact string or path-suffix only — it will *not* match a same-named file in a different directory. Matching is case-insensitive. If it matches no definition, the response is empty (`depth_used=0`) rather than another file's blast radius — **unless** the collection predates the S68 `source_path` column and hasn't been re-ingested yet, in which case every candidate's `source_path` is still `NULL` and resolution falls back to highest-pagerank (re-ingest to get real disambiguation). |
 | `depth` | `2` (`DEFAULT_IMPACT_DEPTH`) | Ripple distance; hard-capped server-side at `5` (`MAX_IMPACT_DEPTH`). |
 | `direction` | `both` | `callers`, `callees`, or `both`. Any other value → `422`. |
 | `extraction_method_filter` | — | Traverse only edges with this method, e.g. `extracted` for proven-only. |

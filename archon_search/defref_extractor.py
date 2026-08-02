@@ -259,6 +259,7 @@ class DefRefExtractor:
                     source_doc_id=doc_id,
                     collection_name=collection,
                     entity_subtype=subtype,
+                    source_path=file_path,
                 )
             return nodes[node_id]
 
@@ -278,6 +279,7 @@ class DefRefExtractor:
                     source_doc_id=doc_id,
                     collection_name=collection,
                     entity_subtype=f"{lang_label}-defref-module",
+                    source_path=file_path,
                 )
             return nodes[node_id]
 

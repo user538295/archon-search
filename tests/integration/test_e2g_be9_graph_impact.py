@@ -97,6 +97,7 @@ def _symbol(
         source_doc_id="doc-abc",
         collection_name="impact-test",
         pagerank_score=pagerank_score,
+        source_path=source_path,
     )
 
 
