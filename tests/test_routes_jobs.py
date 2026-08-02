@@ -397,6 +397,26 @@ def test_ingest_passes_namespace_to_job(tmp_path: Path) -> None:
     assert data["namespace"] == "tenantA"
 
 
+def test_ingest_persists_collection_and_path_on_job(client: TestClient, tmp_store: JobStore) -> None:
+    """S97: POST /ingest must persist the target collection (and source_path) on the job record.
+
+    Regression: store.create() was called without collection/path, so the job — and every
+    downstream view (GET /jobs/{id}, `jobs show`) — reported an empty collection/source_path.
+    """
+    response = client.post("/ingest", json={"collection": "s097-col", "path": "/tmp/s097.txt"})
+    assert response.status_code == 202
+    data = response.json()
+    assert data["collection"] == "s097-col"
+    # source_path is resolve()d (e.g. /tmp -> /private/tmp on macOS); assert it survives, non-empty.
+    assert data["source_path"].endswith("s097.txt")
+
+    # Same values must be visible on the persisted job via GET /jobs/{id}.
+    got = client.get(f"/jobs/{data['job_id']}")
+    assert got.status_code == 200
+    assert got.json()["collection"] == "s097-col"
+    assert got.json()["source_path"].endswith("s097.txt")
+
+
 def test_ingest_request_ignores_body_namespace(tmp_path: Path, auth_headers: dict[str, str]) -> None:
     """POST /ingest with unknown 'namespace' field in body: no 422, job uses request namespace."""
     store = JobStore(path=tmp_path / "jobs.json")
