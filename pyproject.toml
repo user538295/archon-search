@@ -17,6 +17,14 @@ dependencies = [
     "httpx>=0.25",
     "chonkie>=0.5.0",
     "docling>=2.80.0",
+    # torch/torchvision are pulled transitively by docling. They are declared
+    # here as direct dependencies ONLY so the [tool.uv.sources] CPU-index pin
+    # below binds (uv applies sources to declared deps, not transitive-only
+    # ones). Bounds mirror docling's own `torch>=2.2.2,<3.0.0` / `torchvision<1`
+    # so this never over-constrains the resolution. S269: on linux/amd64 the
+    # default PyPI torch drags the ~6 GB CUDA runtime a CPU host cannot run.
+    "torch>=2.2.2,<3.0.0",
+    "torchvision<1",
     "markitdown[docx,pptx,xls,xlsx,outlook]>=0.1.6,<0.2",
     "watchdog>=3.0",
     "pydantic>=2.0",
@@ -151,5 +159,22 @@ markers = [
 [tool.uv]
 package = true
 
+# PyTorch CPU wheel index (S269). On linux/amd64 the default PyPI `torch` wheel
+# declares ~18 nvidia-*/cuda* dependencies gated on `sys_platform == 'linux'`,
+# dragging the multi-GB CUDA runtime into the CPU-only `:latest` container that
+# can never execute it. Routing torch/torchvision through this index resolves
+# the `+cpu` local build (which declares zero nvidia/cuda deps). `explicit = true`
+# means the index is used only for the packages that opt into it below.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.uv.sources]
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
+# Scope the CPU-index pin to linux/amd64 only — the sole platform whose PyPI
+# torch wheel pulls nvidia/cuda. macOS (arm64) and Windows torch on PyPI is
+# already CPU-only, and whl/cpu serves no macOS +cpu wheel, so pinning them
+# there would break resolution. linux/arm64 keeps PyPI too (narrowest scope).
+torch = { index = "pytorch-cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }
+torchvision = { index = "pytorch-cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }

@@ -11,14 +11,18 @@ container env vars, local-source install, GPU swap gating, and the
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.markers import Marker
+from packaging.utils import canonicalize_name
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 DOCKERIGNORE = REPO_ROOT / ".dockerignore"
 UV_LOCK = REPO_ROOT / "uv.lock"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 DOCKER_DOC = REPO_ROOT / "Documentation" / "UserManual" / "140_running_with_docker.md"
 
 # S232: the first-start extras install was measured at 398s (lightest set) and
@@ -367,6 +371,147 @@ def test_uvlock_torch_pulls_cuda_stack_on_linux() -> None:
         "Expected torch to declare an nvidia-*/cuda-* dependency gated on "
         "`sys_platform == 'linux'` in uv.lock (root cause of S269)"
     )
+
+
+# Environment markers for the CPU image target: it is built and run as
+# linux/amd64 (Documentation/UserManual/140_running_with_docker.md documents
+# the `:latest` image as CPU inference only). nvidia-*/cuda-* deps in uv.lock
+# are gated on `sys_platform == 'linux'`, so honoring these markers keeps the
+# closure faithful to what actually installs inside the CPU container.
+_CPU_TARGET_ENV = {
+    "sys_platform": "linux",
+    "platform_system": "Linux",
+    "os_name": "posix",
+    "platform_machine": "x86_64",
+    "python_version": "3.12",
+    "python_full_version": "3.12.0",
+    "implementation_name": "cpython",
+    "platform_python_implementation": "CPython",
+    "extra": "",
+}
+
+# The CPU image installs the package with its default runtime extras. The
+# entrypoint installs `archon-search[graph,code,multilingual]` on first start
+# (default feature set); torch/torchvision enter the closure transitively via
+# the core `docling` dependency, not via these extras.
+_CPU_IMAGE_EXTRAS = ("graph", "code", "multilingual")
+
+# The PyTorch CPU wheel index the fix pins torch/torchvision to; the `+cpu`
+# local builds are sourced from here for the linux/amd64 CPU image.
+_CPU_TORCH_INDEX = "download.pytorch.org/whl/cpu"
+
+
+def _marker_holds_on_cpu_target(marker: str | None) -> bool:
+    """Whether a PEP 508 dependency marker is true for the linux/amd64 CPU image.
+
+    A dependency with no marker always installs. On any parse/eval error we
+    conservatively include the dependency — a false inclusion can only make the
+    nvidia/cuda ban stricter, never mask a genuine CUDA package.
+    """
+    if not marker:
+        return True
+    try:
+        return Marker(marker).evaluate(_CPU_TARGET_ENV)
+    except Exception:  # pragma: no cover - defensive, markers here are simple
+        return True
+
+
+def _requirement_name(spec: str) -> str:
+    """Canonical distribution name from a PEP 508 requirement string."""
+    return canonicalize_name(re.split(r"[<>=!~;\[ ]", spec.strip(), maxsplit=1)[0])
+
+
+def _uvlock_cpu_target_closure() -> set[str]:
+    """Resolve the full dependency closure the CPU image installs, offline.
+
+    Seeds from the core `[project.dependencies]` plus the CPU image's default
+    `[graph,code,multilingual]` extras, then BFS-walks each locked package's
+    `dependencies` (and the `optional-dependencies` pulled via a dependency's
+    ``extra = [...]``), honoring environment markers for linux/amd64. Returns
+    the set of canonical package names in the closure.
+    """
+    lock = tomllib.loads(UV_LOCK.read_text())
+    pyproject = tomllib.loads(PYPROJECT.read_text())
+    packages = {canonicalize_name(p["name"]): p for p in lock["package"]}
+
+    seed = list(pyproject["project"]["dependencies"])
+    for group in _CPU_IMAGE_EXTRAS:
+        seed += pyproject["project"]["optional-dependencies"][group]
+
+    # Work items are (package_name, extra_or_None); an extra pulls that
+    # package's optional-dependencies[extra] in addition to its base deps.
+    work: list[tuple[str, str | None]] = [(_requirement_name(s), None) for s in seed]
+    visited: set[tuple[str, str | None]] = set()
+    closure: set[str] = set()
+    while work:
+        name, extra = work.pop()
+        closure.add(name)
+        if name not in packages or (name, extra) in visited:
+            continue
+        visited.add((name, extra))
+        pkg = packages[name]
+        deps = list(pkg.get("dependencies", []))
+        if extra is not None:
+            deps += pkg.get("optional-dependencies", {}).get(extra, [])
+        for dep in deps:
+            if not _marker_holds_on_cpu_target(dep.get("marker")):
+                continue
+            dep_name = canonicalize_name(dep["name"])
+            for requested_extra in dep.get("extra") or [None]:
+                work.append((dep_name, requested_extra))
+    return closure
+
+
+def test_uvlock_cpu_closure_has_no_nvidia_cuda_and_torch_is_cpu() -> None:
+    # S269 REPRODUCER: the CPU `:latest` image is documented "CPU inference
+    # only" (linux/amd64, no NVIDIA GPU), yet the locked dependency closure for
+    # its default extras `[graph,code,multilingual]` drags in the full NVIDIA
+    # CUDA runtime through docling -> docling-slim[standard] -> torch. A CPU
+    # host cannot execute those CUDA libraries. The fix pins torch/torchvision
+    # to the PyTorch CPU wheel index so the closure resolves `torch==<ver>+cpu`
+    # with ZERO nvidia/cuda deps. This test bans nvidia-*/cuda* by name and
+    # requires any resolved torch/torchvision to be a `+cpu` local build.
+    closure = _uvlock_cpu_target_closure()
+
+    banned = sorted(n for n in closure if re.match(r"^(nvidia-|cuda)", n, re.IGNORECASE))
+    assert not banned, (
+        "CPU image dependency closure must contain NO nvidia-*/cuda* packages, "
+        f"but {len(banned)} are present: {banned}. They enter via "
+        "docling -> docling-slim[standard] -> torch on linux/amd64."
+    )
+
+    # After the fix, uv.lock carries TWO blocks each for torch/torchvision: a
+    # plain pypi build (for non-x86_64-linux platforms) and a `+cpu` whl/cpu
+    # build (the one that resolves for the linux/amd64 CPU image). A dict keyed
+    # by canonical name would collapse them and pick a block by file order, so
+    # select the CPU block explicitly by its whl/cpu source (or `+cpu` version).
+    lock = tomllib.loads(UV_LOCK.read_text())
+    blocks_by_name: dict[str, list[dict]] = {}
+    for p in lock["package"]:
+        blocks_by_name.setdefault(canonicalize_name(p["name"]), []).append(p)
+
+    for pkg in ("torch", "torchvision"):
+        if pkg not in closure:
+            continue
+        blocks = blocks_by_name[pkg]
+        cpu_blocks = [
+            b
+            for b in blocks
+            if _CPU_TORCH_INDEX in b.get("source", {}).get("registry", "")
+            or "+cpu" in b.get("version", "")
+        ]
+        assert cpu_blocks, (
+            f"{pkg} is in the CPU image closure but uv.lock has no '+cpu' build "
+            f"for it (registry {_CPU_TORCH_INDEX} or version containing '+cpu'). "
+            f"Locked builds: {[b.get('version') for b in blocks]}. The CPU image "
+            "must resolve the '+cpu' build from the PyTorch CPU wheel index."
+        )
+        for b in cpu_blocks:
+            version = b.get("version", "")
+            assert "+cu" not in version, (
+                f"{pkg}=={version} is a CUDA (+cu) build; the CPU image must "
+                "use the '+cpu' build."
+            )
 
 
 def test_dockerfile_cpu_base_resolves_cpu_only_torch(dockerfile_text: str) -> None:
