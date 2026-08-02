@@ -56,9 +56,11 @@ def test_e2e_rest_413_single_file_over_limit(
         assert resp.status_code == 413, f"Expected 413, got {resp.status_code}: {resp.text}"
         detail = resp.json()["detail"]
         # Message must name file size (20 MB), limit (10 MB), and config key
-        assert "20 MB" in detail, f"Expected '20 MB' in detail: {detail!r}"
-        assert "10 MB" in detail, f"Expected '10 MB' in detail: {detail!r}"
-        assert "[ingest].max_file_mb" in detail, f"Expected config key in detail: {detail!r}"
+        assert "20 MB" in detail["message"], f"Expected '20 MB' in detail: {detail!r}"
+        assert "10 MB" in detail["message"], f"Expected '10 MB' in detail: {detail!r}"
+        assert "[ingest].max_file_mb" in detail["message"], (
+            f"Expected config key in detail: {detail!r}"
+        )
 
         # No job must have been created
         jobs_resp = client.get("/jobs", headers=headers)
@@ -111,7 +113,7 @@ def test_e2e_cli_single_file_over_limit_exits_nonzero(
     err = IngestError(file_size_mb=5, limit_mb=1)
     mock_resp = MagicMock(spec=httpx.Response)
     mock_resp.status_code = 413
-    mock_resp.text = f'{{"detail": "{err.message}"}}'
+    mock_resp.text = f'{{"detail": {{"code": "{err.code}", "message": "{err.message}"}}}}'
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "a" * 64)  # must be valid 64-char lowercase hex
