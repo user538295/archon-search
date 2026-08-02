@@ -470,7 +470,9 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
                 except OSError:
                     file_size_mb = max_file_mb + 1  # File size unknown but known to exceed limit.
                 err = IngestError(file_size_mb=file_size_mb, limit_mb=max_file_mb)
-                raise HTTPException(status_code=413, detail=err.message)
+                raise HTTPException(
+                    status_code=413, detail={"code": err.code, "message": err.message}
+                )
 
     try:
         job = store.create(namespace=ns)

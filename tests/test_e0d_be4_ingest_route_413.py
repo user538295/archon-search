@@ -51,9 +51,31 @@ def test_ingest_route_413_single_file_over_limit(tmp_path: Path) -> None:
 
     assert response.status_code == 413
     detail = response.json()["detail"]
-    assert "2 MB" in detail
-    assert "1 MB" in detail
-    assert "[ingest].max_file_mb" in detail
+    assert "2 MB" in detail["message"]
+    assert "1 MB" in detail["message"]
+    assert "[ingest].max_file_mb" in detail["message"]
+
+
+def test_single_file_413_body_carries_file_too_large_code(tmp_path: Path) -> None:
+    """POST /ingest oversized single file → 413 body exposes the machine-readable code.
+
+    The rest of the API surfaces structured errors as
+    ``{"detail": {"code": ..., "message": ...}}`` and the user manual
+    (Documentation/UserManual/50_ingestion_and_collections.md) promises the 413
+    body carries ``code="file_too_large"``. This test pins that contract.
+    """
+    oversized = tmp_path / "big.pdf"
+    oversized.write_bytes(b"x")  # real file so is_file() passes
+
+    client, _ = _make_client(tmp_path, max_file_mb=1)
+
+    with patch("os.path.getsize", return_value=2 * ONE_MB):
+        response = client.post("/ingest", json={"collection": "docs", "path": str(oversized)})
+
+    assert response.status_code == 413
+    detail = response.json()["detail"]
+    assert isinstance(detail, dict), f"413 detail must be a structured object, got {detail!r}"
+    assert detail["code"] == "file_too_large"
 
 
 def test_ingest_route_413_no_job_in_store(tmp_path: Path) -> None:
@@ -175,8 +197,8 @@ def test_ingest_e2e_413_rest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
         assert response.status_code == 413
         detail = response.json()["detail"]
-        assert "2 MB" in detail
-        assert "1 MB" in detail
+        assert "2 MB" in detail["message"]
+        assert "1 MB" in detail["message"]
 
 
 @pytest.mark.integration
