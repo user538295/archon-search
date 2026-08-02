@@ -76,6 +76,11 @@ logger = logging.getLogger(__name__)
 
 _SEARCH_PACKAGES = ["lancedb", "fastembed", "docling", "markitdown", "trafilatura", "chonkie", "fastmcp"]
 _WAIT_FOR_SERVICE_TIMEOUT = 60
+# Import-time crash markers that identify a first-launch environment race (e.g.
+# a service started before its freshly-installed venv is fully materialised).
+# Their presence in the service log lets the readiness gate tolerate one
+# supervisor crash-and-restart cycle instead of reporting a bare timeout.
+_STARTUP_CRASH_MARKERS = ("ModuleNotFoundError", "ImportError")
 
 
 def _compute_svc_timeout(eager_load: bool, download_mb: int) -> int:
@@ -282,18 +287,80 @@ class BaseInstaller(ABC):
         except Exception:
             return False
 
-    def _wait_for_service(self, timeout: int = _WAIT_FOR_SERVICE_TIMEOUT) -> bool:
-        """Poll HTTP health endpoint until ready or timeout. Returns True if up."""
+    def _service_log_offset(self) -> int:
+        """Return the current byte size of the service log (0 if absent/unreadable).
+
+        Captured *before* the service is (re)started so :meth:`_service_log_crash`
+        only ever sees crashes from this launch — never a stale crash line from a
+        previous same-day run appended to a rotated-daily log.
+        """
+        log_file = getattr(self.cfg, "log_file", None)
+        if not log_file:
+            return 0
+        try:
+            return Path(log_file).expanduser().stat().st_size
+        except OSError:
+            return 0
+
+    def _service_log_crash(self, since_offset: int = 0) -> str | None:
+        """Return the last import-time crash line written after ``since_offset``.
+
+        A fresh install can launch the service before its venv is fully
+        materialised; the first launch then dies on ``ModuleNotFoundError`` /
+        ``ImportError`` and the supervisor relaunches it. Only bytes after
+        ``since_offset`` are scanned, so a stale crash from an earlier run cannot
+        trigger the readiness gate. Returns the last matching line so the gate can
+        tolerate the restart and surface the cause; returns ``None`` when the log
+        is absent, unreadable, or shows no fresh crash.
+        """
+        log_file = getattr(self.cfg, "log_file", None)
+        if not log_file:
+            return None
+        try:
+            with Path(log_file).expanduser().open("r", errors="replace") as fh:
+                fh.seek(since_offset)
+                text = fh.read()
+        except OSError:
+            return None
+        crash_line: str | None = None
+        for line in text.splitlines():
+            stripped = line.strip()
+            if any(stripped.startswith(marker) for marker in _STARTUP_CRASH_MARKERS):
+                crash_line = stripped
+        return crash_line
+
+    def _wait_for_service(
+        self, timeout: int = _WAIT_FOR_SERVICE_TIMEOUT, log_offset: int = 0
+    ) -> bool:
+        """Poll HTTP health endpoint until ready or timeout. Returns True if up.
+
+        Tolerates a single supervisor crash-and-restart cycle: a first launch
+        against a not-yet-materialised environment crashes on import and is
+        relaunched by launchd/systemd, but the crash plus the restart throttle
+        can consume the whole budget even when the second launch becomes healthy
+        well inside it. When such a startup crash is visible in the service log,
+        the deadline is extended once so the poll survives the restart; if the
+        service still never comes up, the crash is surfaced instead of a bare
+        timeout.
+        """
         deadline = time.monotonic() + timeout
+        extended = False
         print("Waiting for search service", end="", flush=True)
         try:
             while time.monotonic() < deadline:
                 if self._is_service_running():
                     print(" ready.")
                     return True
+                if not extended and self._service_log_crash(log_offset):
+                    # First launch crashed; grant one more budget for the restart.
+                    deadline += timeout
+                    extended = True
                 print(".", end="", flush=True)
                 time.sleep(1)
             print(" timed out.")
+            crash = self._service_log_crash(log_offset)
+            if crash:
+                print(f"  Last service-log error: {crash}")
             return False
         except KeyboardInterrupt:
             print()
@@ -786,7 +853,9 @@ class BaseInstaller(ABC):
             if legacy.exists():
                 self.remove_legacy_service(legacy)
 
-            # Step 15: register and start service
+            # Step 15: register and start service. Snapshot the log size first so
+            # the readiness gate only reads crashes from this launch.
+            _log_offset = self._service_log_offset()
             rc = self.register_and_start()
             if rc != 0:
                 print(f"Service start returned exit code {rc}.", file=sys.stderr)
@@ -795,7 +864,7 @@ class BaseInstaller(ABC):
             # Step 16: wait for readiness
             if not self.dry_run:
                 _svc_timeout = _compute_svc_timeout(features.eager_load_embedders, prof.download_mb)
-                ready = self._wait_for_service(timeout=_svc_timeout)
+                ready = self._wait_for_service(timeout=_svc_timeout, log_offset=_log_offset)
                 if not ready:
                     print(f"Warning: Search service did not become ready within {_svc_timeout} seconds.")
                     return 1
@@ -855,6 +924,7 @@ class BaseInstaller(ABC):
             return 1
 
         self.write_service_file()
+        _log_offset = self._service_log_offset()
         rc = self.load_service()
         if rc != 0:
             click.echo(f"Service start returned exit code {rc}.", err=True)
@@ -864,7 +934,7 @@ class BaseInstaller(ABC):
             _start_cfg = load_config(config_path)
             _start_prof = get_profile(_start_cfg.profile or "minimal", _start_cfg.multilingual)
             _svc_timeout = _compute_svc_timeout(_start_cfg.eager_load_embedders, _start_prof.download_mb)
-            ready = self._wait_for_service(timeout=_svc_timeout)
+            ready = self._wait_for_service(timeout=_svc_timeout, log_offset=_log_offset)
             if not ready:
                 click.echo(
                     f"Warning: Search service did not become ready within {_svc_timeout} seconds.",
