@@ -568,6 +568,56 @@ def test_run_calls_legacy_service_cleanup(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Test 12b (S199): an aborting reinstall guard must NOT remove the legacy
+# service. Removing it in Step 0 before the guard leaves the running service
+# dismantled and unrecoverable by `start` once the guard refuses the change.
+# ---------------------------------------------------------------------------
+
+
+def test_run_guard_abort_does_not_remove_legacy_service(tmp_path: Path) -> None:
+    config_path = tmp_path / "archon-search.toml"
+
+    # A REAL existing legacy file so legacy.exists() is True (a nonexistent path
+    # would make this test vacuous — the Step-0 branch would be skipped anyway).
+    fake_legacy = tmp_path / "fake.plist"
+    fake_legacy.touch()
+
+    # Existing minimal-profile config so the reinstall guard fires on a switch.
+    from archon_search.install import _profile_toml
+    config_path.write_text(_profile_toml("minimal", False))
+
+    remove_legacy_mock = MagicMock()
+    load_service_mock = MagicMock(return_value=0)
+    with (
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._remove_legacy_service", remove_legacy_mock),
+        patch("archon_search.install.installer._check_disk_space"),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(RealInstaller, "configure_providers"),
+        patch.object(RealInstaller, "write_service_file"),
+        patch.object(RealInstaller, "load_service", load_service_mock),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=True,
+            profile="max",  # different embedder + chunk_size → guard aborts
+            skip_preload=True,
+        )
+
+    assert rc == 1
+    # The service must be left exactly as found: the guard refused the change,
+    # so the legacy service must NOT have been dismantled.
+    remove_legacy_mock.assert_not_called()
+    # And the legacy file itself must still be present on disk.
+    assert fake_legacy.exists()
+    # Nothing downstream should have run either.
+    load_service_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # run_register_and_start() — new method for `archon-search install`
 # ---------------------------------------------------------------------------
 

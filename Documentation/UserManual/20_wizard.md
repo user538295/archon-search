@@ -33,11 +33,11 @@ This section walks through every prompt in the order they appear.
 
 ### Step 0 — Legacy service cleanup
 
-Before asking any questions, the wizard silently checks for and removes any legacy service file from a previous installation:
+If a previous installation left a legacy service file behind, the wizard removes it as part of installing the new service:
 - macOS: `~/Library/LaunchAgents/com.archon.search.plist`
 - Linux: `~/.config/systemd/user/archon-search.service`
 
-If a legacy file is found, the wizard unloads and removes it automatically. You will see a message like:
+The removal happens only once the run is committed to registering the new service — that is, after every prompt and safety check has passed (profile selection, the reinstall guard, disk-space check, and the final confirmation). A run that aborts at any of those steps leaves the existing service exactly as it found it, so a wizard that refuses its own change never dismantles a running service. When the legacy file is removed you will see a message like:
 
 ```
 Removed legacy service file: ~/Library/LaunchAgents/com.archon.search.plist
