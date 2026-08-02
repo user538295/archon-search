@@ -473,7 +473,7 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
                 raise HTTPException(status_code=413, detail=err.message)
 
     try:
-        job = store.create(namespace=ns)
+        job = store.create(namespace=ns, collection=body.collection, path=body.path or "")
     except OSError:
         return JSONResponse({"detail": "internal error"}, status_code=500)
 
