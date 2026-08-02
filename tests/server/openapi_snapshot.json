@@ -365,6 +365,17 @@
             "title": "Collection",
             "type": "string"
           },
+          "communities_invalidated": {
+            "default": false,
+            "title": "Communities Invalidated",
+            "type": "boolean"
+          },
+          "expired_chunks_removed_last_run": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Expired Chunks Removed Last Run",
+            "type": "integer"
+          },
           "fts_optimized_at": {
             "anyOf": [
               {
@@ -4176,7 +4187,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "503": {
             "content": {
@@ -4417,7 +4428,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         },
         "security": [
@@ -4510,7 +4521,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         },
         "security": [
@@ -4614,7 +4625,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         },
         "security": [
@@ -4890,7 +4901,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           },
           "500": {
             "content": {
@@ -5521,7 +5532,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         },
         "security": [
@@ -6033,7 +6044,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         },
         "security": [
@@ -6110,7 +6121,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         },
         "security": [
@@ -6165,7 +6176,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         },
         "security": [

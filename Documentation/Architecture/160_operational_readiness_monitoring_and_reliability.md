@@ -320,6 +320,8 @@ The `maintenance.collection_health` block in `GET /status` is namespace-scoped t
 | `collection_health[n].meta_chunk_count` | Chunk count from the O(1) metadata row (written at ingest time) |
 | `collection_health[n].mutations_since_recompute` | Mutations since last centroid recompute (from metadata row) |
 | `collection_health[n].centroid_recompute_threshold` | Current configured threshold for triggering a centroid recompute |
+| `collection_health[n].expired_chunks_removed_last_run` | Number of expired (TTL) chunks pruned for this collection in the last pass |
+| `collection_health[n].communities_invalidated` | `true` when the last graph GC removed nodes/edges for this collection, invalidating cached communities |
 | `expired_chunk_count` | Live count of chunks with `expires_at < now_utc` in the caller-visible collection tables (not namespace-scoped within shared tables — all tenants in a shared-table collection contribute; see store.py `count_expired_chunks` docstring for the caveat); always an integer (never null); 0 when no expired chunks exist. Resets as chunks are pruned or new TTL-expiry occurs. |
 | `last_expired_pruned_at` | ISO-8601 UTC timestamp of the last successful expired-chunk prune pass; `null` until the first prune pass runs. |
 

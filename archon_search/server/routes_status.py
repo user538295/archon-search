@@ -545,6 +545,12 @@ async def _build_maintenance_status(
                 mutations_since_recompute=entry.get("mutations_since_recompute", 0),
                 centroid_recompute_threshold=centroid_threshold,
                 meta_chunk_count=entry.get("meta_chunk_count", 0),
+                expired_chunks_removed_last_run=entry.get(
+                    "expired_chunks_removed_last_run", 0
+                ),
+                communities_invalidated=bool(
+                    entry.get("communities_invalidated", False)
+                ),
             )
         )
 
