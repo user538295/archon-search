@@ -18,7 +18,7 @@ import pytest
 from click.testing import CliRunner
 
 from archon_search.cli.main import main
-from archon_search.config import ConfigError, SearchConfig
+from archon_search.config import ConfigError, SearchConfig, get_default_config_path
 
 
 @pytest.fixture
@@ -46,7 +46,9 @@ def test_serve_calls_run_server(runner: CliRunner) -> None:
         result = runner.invoke(main, ["serve"])
     assert result.exit_code == 0, result.output
     mock_load.assert_called_once()
-    mock_run.assert_called_once_with(cfg)
+    # run_server receives the resolved config path so collection add/remove
+    # persists to the file this config was loaded from (S07/S252).
+    mock_run.assert_called_once_with(cfg, get_default_config_path())
 
 
 def test_serve_uses_serve_load_config(runner: CliRunner) -> None:
@@ -71,7 +73,7 @@ def test_serve_host_defaults_to_0000(
     """With no env/TOML overrides, the loaded config's host is 0.0.0.0 in serve mode."""
     captured: dict[str, SearchConfig] = {}
 
-    def _capture(cfg: SearchConfig) -> None:
+    def _capture(cfg: SearchConfig, config_path: Path | None = None) -> None:
         captured["cfg"] = cfg
 
     # Real load_config — but force the config path to a non-existent file inside tmp_path
@@ -92,7 +94,7 @@ def test_serve_respects_host_env_var(
     monkeypatch.setenv("ARCHON_SEARCH_HOST", "192.168.1.1")
     captured: dict[str, SearchConfig] = {}
 
-    def _capture(cfg: SearchConfig) -> None:
+    def _capture(cfg: SearchConfig, config_path: Path | None = None) -> None:
         captured["cfg"] = cfg
 
     nonexistent = tmp_path / "nonexistent.toml"
@@ -121,6 +123,25 @@ def test_serve_forwards_config_path_to_load_config(
         result = runner.invoke(main, ["serve", "--config", str(config_file)])
     assert result.exit_code == 0, result.output
     mock_load.assert_called_once_with(config_file, serve=True)
+
+
+def test_serve_forwards_config_path_to_run_server(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """`--config <path>` must reach `run_server` so collection add/remove persists
+    to THAT file, not the default TOML (S07/S252 regression guard).
+    """
+    config_file = tmp_path / "my-search.toml"
+    config_file.write_text("[server]\nport = 9000\n")
+    cfg = _config_with_host("0.0.0.0")
+    with (
+        patch("archon_search.cli.serve.load_config", return_value=cfg),
+        patch("archon_search.server.app.run_server") as mock_run,
+    ):
+        result = runner.invoke(main, ["serve", "--config", str(config_file)])
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once_with(cfg, config_file)
 
 
 def test_serve_config_error_exits_nonzero(
@@ -276,7 +297,7 @@ def test_serve_invokes_run_server_with_config(runner: CliRunner) -> None:
     ):
         result = runner.invoke(main, ["serve"])
     assert result.exit_code == 0, result.output
-    mock_run.assert_called_once_with(cfg)
+    mock_run.assert_called_once_with(cfg, get_default_config_path())
     # run_server must NOT be a module-level attribute after the lazy-import move.
     assert not hasattr(serve_mod, "run_server"), (
         "cli.serve must not expose run_server at module level after BE-2"
