@@ -1,6 +1,31 @@
 # Changelog
 
 
+## [26.8.1800] - 2026-08-02
+
+canary
+
+**Installation wizard + Docker improvements + metadata safety**
+
+**Installation & Service Management**
+- Wizard's `--config` path now correctly threaded to started service (previously service ignored the flag and read default config, causing 401 errors on custom keys and timeout on non-default ports)
+- Legacy service file no longer removed on install abort (failed runs now leave the existing service intact rather than requiring manual recovery)
+- Readiness gate tolerates first-launch crashes with extended timeout (installer now survives one `ModuleNotFoundError` restart and surfaces the error on timeout)
+
+**Docker**
+- CPU base image now resolves CPU-only torch (removed ~6.2 GB of unnecessary CUDA/nvidia packages from CPU deployments)
+- Healthcheck start-period extended from 360s to 600s to accommodate network-bound first-start extras install
+
+**API & Configuration**
+- `POST /collections/{name}/reindex-metadata` with `dry_run: true` is now purely read-only (previously wrote to meta table, causing transient 404s during concurrent search)
+- Empty `log_file` setting now preserved under `ARCHON_SEARCH_DATA_DIR` (environment variable no longer clobbers explicit empty-string opt-out)
+- Dry-run CLI output marked with `[DRY RUN]` prefix for clarity
+
+**Documentation**
+- `GET /jobs` response envelope documented with pagination details (`next_cursor` field)
+- Fixed quotes of server-not-running error message and dry-run examples (added missing `--wait` flag)
+
+
 ## [26.8.1751] - 2026-08-01
 
 **Reliable service shutdown, safe dry-run rehearsals, and installation refactoring**
