@@ -242,8 +242,8 @@ async def validate_embedding_model(
        to populate ``embedding_dim``.
 
     Raises:
-        ModelValidationError: if the model cannot be reached within the timeout.
-        Any exception from ``make_embedder`` (e.g. unknown model) propagates as-is.
+        ModelValidationError: if the model cannot be reached within the timeout,
+            or if the backend fails to load it (e.g. an unknown model name).
     """
     # Step 1: fast path via the supported-model registry
     try:
@@ -266,4 +266,11 @@ async def validate_embedding_model(
             "could not determine model output dimension; "
             "verify the model name and ensure it is reachable."
         )
+    except Exception as exc:
+        # An unknown/unsupported model name makes the backend raise (fastembed
+        # raises ValueError). Surface it as ModelValidationError so callers can
+        # map it to 422 rather than letting it escape as an unhandled 500.
+        raise ModelValidationError(
+            f"could not load embedding model {model_name!r}: {exc}"
+        ) from exc
     return embedder.embedding_dim

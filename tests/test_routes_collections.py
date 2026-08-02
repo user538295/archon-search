@@ -974,6 +974,48 @@ def test_add_collection_global_uniqueness_409(
     assert "already registered" in response.json()["detail"]
 
 
+def test_add_collection_unknown_embedding_model_returns_422(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """POST /collections/ with an unknown embedding_model returns 422, not 500 (S221).
+
+    An unknown model makes the underlying embedder raise a plain ValueError
+    (real fastembed does this). That must surface as 422 before any job is
+    created — not escape as an unhandled 500.
+    """
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    # Mimic real fastembed: an unknown model raises ValueError when probed.
+    bad_embedder = MagicMock()
+    bad_embedder.embed = AsyncMock(
+        side_effect=ValueError("Model unknown-model-xyz-404 is not supported")
+    )
+
+    with patch("archon_search.model_validation.make_embedder", return_value=bad_embedder):
+        response = c.post(
+            "/collections/",
+            json={"path": str(src), "embedding_model": "unknown-model-xyz-404"},
+        )
+
+    assert response.status_code == 422
+    # Validation must fail before any job/meta is created.
+    mock_store.update_collection_meta.assert_not_called()
+
+
 def test_add_collection_writes_stub_meta(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
