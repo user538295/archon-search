@@ -153,8 +153,8 @@ Re-derive `file_type` from each `source_path`, refresh `updated_at` from the cur
 # CLI — proxies POST /collections/{name}/reindex-metadata (server must be running)
 archon-search collection reindex-metadata docs --wait
 
-# Preview counts without writing
-archon-search collection reindex-metadata docs --dry-run
+# Preview counts without writing (--wait surfaces the counts; without it you get only a job id)
+archon-search collection reindex-metadata docs --dry-run --wait
 ```
 
 Flags (`archon_search/cli/collection.py`):

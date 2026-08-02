@@ -13,7 +13,7 @@
 4. **The watcher is opt-in.** Set `[collections].watch = true` to keep the index in sync with on-disk changes via watchdog (`archon_search/watcher.py`, `sync.py`).
 5. **Chunk-size changes trigger reindex.** If `chunk_size` differs from the value previously used for a collection and `auto_reindex_on_chunk_size_change = true` (default), affected collections rebuild on the next start.
 
-> **Write commands require a running server.** All CLI write commands (`ingest`, `sync`, `collection add/remove/reindex/reindex-metadata/migrate`, `export`, `import`) are HTTP proxies — they submit jobs to a running `archon-search serve` and accept `--api-url` / `--api-key` instead of `--config`. On a refused connection they exit `1` with `"archon-search serve is not running. Start it first."` See [`40_running_the_server.md`](./40_running_the_server.md).
+> **Write commands require a running server.** All CLI write commands (`ingest`, `sync`, `collection add/remove/reindex/reindex-metadata/migrate`, `export`, `import`) are HTTP proxies — they submit jobs to a running `archon-search serve` and accept `--api-url` / `--api-key` instead of `--config`. On a refused connection they exit `1` with `archon-search serve is not running. Start it first with: archon-search serve` See [`40_running_the_server.md`](./40_running_the_server.md).
 
 ## Supported file types
 
@@ -143,7 +143,7 @@ archon-search collection reindex docs --wait
 Proxies `POST /collections/{name}/reindex-metadata`. Backfills per-chunk metadata (`file_type`, `updated_at`, `ingested_by`) and optionally normalizes timestamps **in place** — it does **not** re-embed or re-chunk, so it is far cheaper than `reindex`.
 
 ```bash
-archon-search collection reindex-metadata docs --dry-run
+archon-search collection reindex-metadata docs --dry-run --wait
 archon-search collection reindex-metadata docs --wait
 ```
 
