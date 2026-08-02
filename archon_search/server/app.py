@@ -19,7 +19,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from archon_search.chunker import ASTChunker, DocumentChunker
-from archon_search.config import ConfigError, SearchConfig, resolve_reranker_providers, warn_gc_cpu_priority
+from archon_search.config import (
+    ConfigError,
+    SearchConfig,
+    get_default_config_path,
+    resolve_reranker_providers,
+    warn_gc_cpu_priority,
+)
 from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, get_fasttext_models_dir
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.embedder_cache import EmbedderCache
@@ -746,8 +752,15 @@ def create_app(
     return app
 
 
-def run_server(config: SearchConfig) -> None:
-    """Create JobStore, build the app, and start the uvicorn server."""
+def run_server(config: SearchConfig, config_path: Path | str | None = None) -> None:
+    """Create JobStore, build the app, and start the uvicorn server.
+
+    ``config_path`` defaults to ``get_default_config_path()`` and is forwarded to
+    ``create_app`` as ``app.state.config_path``. This is what makes runtime config
+    persistence effective — ``_maybe_save_config`` (``collection add``/``remove``)
+    no-ops when it is ``None`` (the S07 / S252 root cause).
+    """
+    config_path = config_path or get_default_config_path()
     configure_logging(config)
     job_store = JobStore()
 
@@ -769,5 +782,5 @@ def run_server(config: SearchConfig) -> None:
         max_concurrent=config.jobs.max_concurrent_bulk,
         dispatch_fn=_placeholder_dispatch,
     )
-    app = create_app(config, job_store, scheduler=scheduler)
+    app = create_app(config, job_store, scheduler=scheduler, config_path=config_path)
     uvicorn.run(app, host=config.host, port=config.port)

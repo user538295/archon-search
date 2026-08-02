@@ -21,7 +21,7 @@ from pathlib import Path
 
 import click
 
-from archon_search.config import ConfigError, load_config
+from archon_search.config import ConfigError, get_default_config_path, load_config
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,13 @@ _CONTAINER_COLLECTION_WARNING = (
 )
 def serve(config_path: Path | None) -> None:
     """Start the archon-search server in the foreground (container / direct-run mode)."""
+    # Resolve the effective path so run_server persists collection add/remove to
+    # the SAME file this config was loaded from (honors --config; otherwise the
+    # default / ARCHON_SEARCH_CONFIG path). Without this the server would write
+    # collection changes to the default TOML even when started with --config.
+    resolved_config_path = config_path or get_default_config_path()
     try:
-        config = load_config(config_path, serve=True)
+        config = load_config(resolved_config_path, serve=True)
     except ConfigError as exc:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)
@@ -54,4 +59,4 @@ def serve(config_path: Path | None) -> None:
 
     from archon_search.server.app import run_server  # noqa: PLC0415
 
-    run_server(config)
+    run_server(config, resolved_config_path)
