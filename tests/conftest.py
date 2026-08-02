@@ -190,6 +190,42 @@ def _archon_isolated_data_dir(
         monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(_archon_worker_data_dir))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_archon_logging() -> Generator[None, None, None]:
+    """Isolate the `archon_search` logger's state per test.
+
+    `logging_setup.configure_logging()` sets `logger.propagate = False` and attaches
+    a file/stderr handler whenever `log_file` or container mode is configured. Under
+    xdist that state LEAKS across tests on the same worker: once any test disables
+    propagation, later caplog-based warning assertions (store/sync/watcher/backfill)
+    capture nothing — because child records (`archon_search.*`) no longer reach the
+    root handler pytest's `caplog` installs — and fail non-deterministically depending
+    on which tests happen to share a worker. Snapshot at setup, force `propagate=True`
+    so the test-under-observation always reaches caplog, and fully restore at teardown
+    so no test leaks logging state into the next.
+    """
+    import logging
+
+    logger = logging.getLogger("archon_search")
+    saved_handlers = logger.handlers[:]
+    saved_propagate = logger.propagate
+    saved_level = logger.level
+    logger.propagate = True
+    try:
+        yield
+    finally:
+        for handler in logger.handlers[:]:
+            if handler not in saved_handlers:
+                logger.removeHandler(handler)
+                try:
+                    handler.close()
+                except Exception:
+                    pass
+        logger.handlers[:] = saved_handlers
+        logger.propagate = saved_propagate
+        logger.setLevel(saved_level)
+
+
 @pytest.fixture
 def auth_headers() -> dict[str, str]:
     """Bearer auth headers using the test API key."""
