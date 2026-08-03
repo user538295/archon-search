@@ -1,6 +1,22 @@
 # Changelog
 
 
+## [26.8.1822] - 2026-08-03
+
+**Installation reliability fix, logging clarity, and atomic metadata storage**
+
+**Installation and wizard reliability**
+- Fixed a 60-second timeout in `archon-search wizard` when the service was already running. The installer was calling `launchctl unload` without waiting for the service process to exit, leaving the old process holding the network port. The subsequent service start failed to bind, triggering launchd's throttle mechanism and exceeding the health-check timeout. The legacy-service cleanup has been removed from the base installer run path — service shutdown is now handled exclusively by the newer `pre_activate_cleanup()` flow, which includes proper wait-for-stop logic.
+- Added a regression test to prevent `archon-search serve` from accidentally touching OS service registration even on config errors. The plist is managed exclusively by install/uninstall.
+
+**Logging improvements**
+- Fixed missing "file logging disabled" warning in structured logs when `[logging].log_file = ""` outside container mode. The warning now emits from `configure_logging()` (the handler-configuration point) instead of just `load_config()`, ensuring it reaches the full log pipeline. The warning is not suppressed by high `[logging].level` settings.
+
+**Data consistency**
+- Fixed a race condition in metadata storage where concurrent reads could return `404` even though the collection existed. `update_collection_meta()` and `_do_write_meta_unlocked()` previously used separate delete-then-add operations, creating a window where a lock-free read could land between them and see no rows. Replaced with a single atomic `merge_insert()` operation on the `(name, namespace)` composite key, closing the gap and preserving namespace isolation.
+- Added a regression test running concurrent metadata writers and readers to ensure `get_collection_meta()` never returns `None` during writes.
+
+
 ## [26.8.1815] - 2026-08-03
 
 canary
