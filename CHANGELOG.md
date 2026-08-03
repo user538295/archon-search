@@ -1,6 +1,22 @@
 # Changelog
 
 
+## [26.8.1826] - 2026-08-03
+
+canary
+
+**macOS Arrow allocator pin + dependency upgrades + CI hardening**
+
+**Arrow allocator**
+- Set `ARROW_DEFAULT_MEMORY_POOL` to `system` on macOS to work around a segfault in `pyarrow` 25's bundled allocator (mimalloc) during thread initialization on macOS/arm64. Linux retains the faster mimalloc default. The system allocator is pinned globally before any `pyarrow` or `lancedb` import across all entry points (CLI, `serve`, service, subprocesses) while respecting operator overrides via environment variables.
+
+**Dependency upgrades**
+- Upgraded `fastapi` to 0.141+ and `lancedb` to 0.36. `FastAPI` 0.141+ wraps included routers in dataclasses, requiring updated route collection logic. `lancedb` 0.36 no longer guarantees stable ordering for tied rows; replaced a zero-vector embedding stub with a deterministic content-aware embedder to eliminate flaky assertions.
+
+**CI hardening**
+- Pinned all GitHub Actions to exact versions across workflows: `checkout@v7.0.1`, `setup-python@v7.0.0`, `setup-uv@v9.0.0`, `cache@v6.1.0`, `upload-artifact@v7.0.1`, `setup-buildx-action@v4.2.0`, `login-action@v4.6.0`, `gh-action-pypi-publish@v1.14.2`. Floating major tags can introduce subtle breaking changes; exact pins ensure reproducible CI.
+
+
 ## [26.8.1824] - 2026-08-03
 
 **Internal infrastructure: Test regression guard alignment**
