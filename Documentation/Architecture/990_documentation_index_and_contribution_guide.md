@@ -33,6 +33,7 @@ Last reviewed: 2026-07-29 / Next review: 2026-08-31
 | [`Architecture/510_release_and_environment_strategy.md`](./510_release_and_environment_strategy.md) | `release.sh`, CalVer tagging, CI/CD, PyPI OIDC. |
 | [`Architecture/520_api_design_and_contracts.md`](./520_api_design_and_contracts.md) | Design rules for REST, MCP, and CLI surfaces. |
 | [`Architecture/530_technical_debt_refactoring_roadmap.md`](./530_technical_debt_refactoring_roadmap.md) | Grounded register of known debt, severity, triggers, and planned refactors. |
+| [`Architecture/540_code_and_architecture_quality_audit.md`](./540_code_and_architecture_quality_audit.md) | Evidence-based production-code and architecture quality audit with a prioritized remediation roadmap. |
 | [`Architecture/600_api_reference_or_public_interface.md`](./600_api_reference_or_public_interface.md) | Endpoint-by-endpoint REST, MCP, CLI reference. |
 | [`Architecture/990_documentation_index_and_contribution_guide.md`](./990_documentation_index_and_contribution_guide.md) | This file. |
 
