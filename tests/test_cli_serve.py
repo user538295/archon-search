@@ -161,6 +161,39 @@ def test_serve_config_error_exits_nonzero(
     mock_run.assert_not_called()
 
 
+def test_serve_malformed_toml_does_not_remove_plist(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """`serve` on malformed TOML must NEVER invoke macOS plist removal (S138 regression guard).
+
+    The launchd plist is owned exclusively by install/uninstall. This spies on
+    the macOS plist-removal call sites at their real bindings per repo
+    convention: `LaunchdSearchService.unregister` (the canonical plist unlink,
+    patched at the class so any instance is intercepted), `_remove_legacy_service`
+    (the legacy-plist unlink), and `_legacy_service_path` (a path resolver, spied
+    as a tripwire) — both legacy helpers patched at their `install.installer`
+    call-site binding. Preventive: serve's ConfigError path does not reach
+    service management today, so this guards a future refactor that would wire
+    plist removal into the serve failure path.
+    """
+    bad_config = tmp_path / "bad.toml"
+    bad_config.write_text("[broken")  # malformed TOML
+
+    with (
+        patch("archon_search.install.installer._legacy_service_path") as mock_legacy_path,
+        patch("archon_search.install.installer._remove_legacy_service") as mock_remove_legacy,
+        patch("archon_search.platform.macos.LaunchdSearchService.unregister") as mock_unregister,
+    ):
+        result = runner.invoke(main, ["serve", "--config", str(bad_config)])
+
+    assert result.exit_code == 1
+    assert "Error" in result.output
+    mock_legacy_path.assert_not_called()
+    mock_remove_legacy.assert_not_called()
+    mock_unregister.assert_not_called()
+
+
 def test_serve_config_error_message_propagated(runner: CliRunner) -> None:
     """The ConfigError message text is surfaced verbatim to the operator."""
     with (
