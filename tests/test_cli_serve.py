@@ -194,6 +194,43 @@ def test_serve_malformed_toml_does_not_remove_plist(
     mock_unregister.assert_not_called()
 
 
+def test_serve_malformed_toml_preserves_real_plist_on_disk(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end S138 repro: a real plist file on disk must survive a serve
+    config-parse failure.
+
+    Stronger than `test_serve_malformed_toml_does_not_remove_plist` (which spies
+    on the removal call sites): this drives the FULL real path — real
+    `load_config`, real `serve` body, no mocks — with an isolated HOME that holds
+    an actual `~/Library/LaunchAgents/com.archon.search.plist`, triggered exactly
+    as the S138 report describes (`ARCHON_SEARCH_CONFIG` pointing at malformed
+    TOML). It asserts the plist file itself still exists afterward, since
+    `LaunchdSearchService` resolves the plist path from `Path.home()` at call
+    time — so it also catches a future removal path that bypasses the three
+    call-site symbols the mock-based guard spies on.
+    """
+    home = tmp_path / "home"
+    launch_agents = home / "Library" / "LaunchAgents"
+    launch_agents.mkdir(parents=True)
+    plist = launch_agents / "com.archon.search.plist"
+    plist.write_text("<plist>installed</plist>")
+
+    malformed = tmp_path / "malformed.toml"
+    malformed.write_text("this is = = not valid [[[\n")  # malformed TOML
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(malformed))
+
+    result = runner.invoke(main, ["serve"])
+
+    assert result.exit_code == 1, result.output
+    assert "Error" in result.output
+    assert plist.exists(), "S138: serve removed the launchd plist on malformed TOML"
+
+
 def test_serve_config_error_message_propagated(runner: CliRunner) -> None:
     """The ConfigError message text is surfaced verbatim to the operator."""
     with (
