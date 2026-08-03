@@ -1,6 +1,13 @@
 # Changelog
 
 
+## [26.8.1824] - 2026-08-03
+
+**Internal infrastructure: Test regression guard alignment**
+
+- Synchronized regression guard line numbers in `tests/test_g10_be2_config.py` and `tests/path_home_allowlist.txt` with corresponding code shifts in `config.py` to maintain `config.py` file integrity verification accuracy across test suite and allowlist.
+
+
 ## [26.8.1822] - 2026-08-03
 
 **Installation reliability fix, logging clarity, and atomic metadata storage**
