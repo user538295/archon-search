@@ -86,6 +86,16 @@ providers = ["CUDAExecutionProvider"]
 
 The CLI's GPU autodetection (`archon_search/platform/runtime.py:detect_gpu_type`) currently only reports the available accelerator type — it does not auto-populate `providers`. You must set this manually.
 
+**PDF / image-OCR acceleration (PyTorch).** The `providers` setting above only
+covers embedding and reranking (ONNX Runtime). PDF and image-OCR parsing
+(docling) runs on PyTorch, which is installed **CPU-only by default** — the
+default install pins the `+cpu` torch build on Linux x86_64 so no NVIDIA CUDA
+runtime is pulled in. To run docling on an NVIDIA GPU, answer **Yes** to the
+wizard's "enable CUDA acceleration?" prompt on a Linux x86_64 host: the wizard
+then replaces the CPU torch build with the matching CUDA build (best-effort —
+it keeps the CPU build if the download fails). There is no manual TOML setting
+for this; it is driven by the wizard's GPU confirmation.
+
 ## Install profiles (C0)
 
 The installer ships three tiered profiles. Choose based on your hardware and quality requirements:

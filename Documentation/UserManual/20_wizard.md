@@ -121,6 +121,13 @@ Immediately after profile selection, the wizard detects your GPU hardware and co
   ```
   Default: Yes. Press Enter to enable CUDA. Type `n` to use CPU only.
 
+  On a **Linux x86_64** host, confirming CUDA also replaces the default CPU-only
+  PyTorch build with the matching CUDA build, so PDF and image-OCR parsing
+  (docling) runs on the GPU as well. This step is best-effort: if the CUDA
+  download fails, the wizard keeps the working CPU build and the install still
+  succeeds. It does not run on other platforms (Windows and ARM are out of
+  scope; the default install pins CPU-only torch on Linux x86_64 only).
+
 - **No GPU detected:** No prompt is shown; CPU is used automatically.
 
 If Metal is selected but CoreML validation fails (e.g., the installed ONNX Runtime build does not support it), the wizard tries a split-provider probe: it checks whether the **embedder** works under CoreML even if the combined probe failed. If the embedder passes but the reranker does not:
