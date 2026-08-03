@@ -3,20 +3,18 @@
 **ID**: S107-empty_log_file_disables_file_logging_and_warns
 **Scenario**: S107
 **Severity**: medium
-**Version**: archon-search, version 26.8.1751
+**Version**: archon-search, version 26.8.1815
 
 ### What happened
 AssertionError: no startup warning that file logging is disabled found in serve.log — the doc says an empty log_file outside container mode warns via load_config; serve.log tail:
-INFO:     Started server process [63739]
+[logging].log_file is set to an empty string — file logging is disabled. To re-enable, set [logging].log_file to a path, or set ARCHON_SEARCH_CONTAINER=1 to use stderr output instead.
+INFO:     Started server process [73008]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:60502 (Press CTRL+C to quit)
-2026-08-01 21:24:02.751 python[63739:35930862] 2026-08-01 21:24:02.751883 [W:onnxruntime:, session_state.cc:1387 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.
-2026-08-01 21:24:02.751 python[63739:35930862] 2026-08-01 21:24:02.751964 [W:onnxruntime:, session_state.cc:1389 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.
-2026-08-01 21:24:02.811 python[63739:35930862] 2026-08-01 21:24:02.811778 [W:onnxruntime:, coreml_execution_provider.cc:137 GetCapability] CoreMLExecutionProvider::GetCapability, number of partitions supported by CoreML: 39 number of nodes in the graph: 327 number of nodes supported by CoreML: 212
-2026-08-01 21:24:03.835 python[63739:35930862] 2026-08-01 21:24:03.835708 [W:onnxruntime:, session_state.cc:1387 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.
-2026-08-01 21:24:03.835 python[63739:35930862] 2026-08-01 21:24:03.835780 [W:onnxruntime:, session_state.cc:1389 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.
-INFO:     127.0.0.1:60505 - "GET /health HTTP/1.1" 200 OK
+INFO:     Uvicorn running on http://127.0.0.1:58955 (Press CTRL+C to quit)
+2026-08-03 11:30:51.987 python[73008:39777876] 2026-08-03 11:30:51.987048 [W:onnxruntime:, session_state.cc:1387 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.
+2026-08-03 11:30:51.987 python[73008:39777876] 2026-08-03 11:30:51.987119 [W:onnxruntime:, session_state.cc:1389 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.
+INFO:     127.0.0.1:58960 - "GET /health HTTP/1.1" 200 OK
 assert False
 
 ### What should happen
@@ -62,15 +60,13 @@ assert False
 ### Evidence
 ```
 E   AssertionError: no startup warning that file logging is disabled found in serve.log — the doc says an empty log_file outside container mode warns via load_config; serve.log tail:
-E     INFO:     Started server process [63739]
+E     [logging].log_file is set to an empty string — file logging is disabled. To re-enable, set [logging].log_file to a path, or set ARCHON_SEARCH_CONTAINER=1 to use stderr output instead.
+E     INFO:     Started server process [73008]
 E     INFO:     Waiting for application startup.
 E     INFO:     Application startup complete.
-E     INFO:     Uvicorn running on http://127.0.0.1:60502 (Press CTRL+C to quit)
-E     2026-08-01 21:24:02.751 python[63739:35930862] 2026-08-01 21:24:02.751883 [W:onnxruntime:, session_state.cc:1387 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.
-E     2026-08-01 21:24:02.751 python[63739:35930862] 2026-08-01 21:24:02.751964 [W:onnxruntime:, session_state.cc:1389 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.
-E     2026-08-01 21:24:02.811 python[63739:35930862] 2026-08-01 21:24:02.811778 [W:onnxruntime:, coreml_execution_provider.cc:137 GetCapability] CoreMLExecutionProvider::GetCapability, number of partitions supported by CoreML: 39 number of nodes in the graph: 327 number of nodes supported by CoreML: 212
-E     2026-08-01 21:24:03.835 python[63739:35930862] 2026-08-01 21:24:03.835708 [W:onnxruntime:, session_state.cc:1387 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.
-E     2026-08-01 21:24:03.835 python[63739:35930862] 2026-08-01 21:24:03.835780 [W:onnxruntime:, session_state.cc:1389 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.
-E     INFO:     127.0.0.1:60505 - "GET /health HTTP/1.1" 200 OK
+E     INFO:     Uvicorn running on http://127.0.0.1:58955 (Press CTRL+C to quit)
+E     2026-08-03 11:30:51.987 python[73008:39777876] 2026-08-03 11:30:51.987048 [W:onnxruntime:, session_state.cc:1387 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.
+E     2026-08-03 11:30:51.987 python[73008:39777876] 2026-08-03 11:30:51.987119 [W:onnxruntime:, session_state.cc:1389 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.
+E     INFO:     127.0.0.1:58960 - "GET /health HTTP/1.1" 200 OK
 E   assert False
 ```
