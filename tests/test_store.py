@@ -939,8 +939,33 @@ async def test_get_all_collections_meta_returns_namespace(connected_store: Searc
             assert m.namespace == DEFAULT_NAMESPACE
 
 
+@pytest.mark.asyncio
+async def test_update_collection_meta_no_404_window(connected_store: SearchStore) -> None:
+    """get_collection_meta never returns None during concurrent meta writes (regression: non-atomic delete→add)."""
+    from archon_search.collection_meta import CollectionMeta
+
+    meta = CollectionMeta(name="no-404-window-col")
+    await connected_store.update_collection_meta(meta)
+
+    nones_seen: list[int] = []
+
+    async def _writer() -> None:
+        for i in range(20):
+            await connected_store.update_collection_meta(dataclasses.replace(meta, doc_count=i))
+
+    async def _reader() -> None:
+        for _ in range(100):
+            result = await connected_store.get_collection_meta("no-404-window-col")
+            if result is None:
+                nones_seen.append(1)
+            await asyncio.sleep(0)
+
+    await asyncio.gather(_writer(), _reader())
+    assert not nones_seen, f"get_collection_meta returned None {len(nones_seen)} time(s) during concurrent meta writes"
+
+
 # ---------------------------------------------------------------------------
-# migrate_namespace tests 
+# migrate_namespace tests
 # ---------------------------------------------------------------------------
 
 

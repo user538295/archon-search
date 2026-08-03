@@ -1247,12 +1247,6 @@ class SearchStore:
                             f"Collection {meta.name!r} belongs to namespace {existing_ns!r}; "
                             f"cannot reassign to {meta.namespace!r}"
                         )
-                    # _where_eq is defense-in-depth; include namespace to prevent cross-namespace collision.
-                    # Legacy rows may have NULL namespace (treated as DEFAULT_NAMESPACE), so match both.
-                    ns_predicate = _where_eq("namespace", meta.namespace)
-                    if meta.namespace == DEFAULT_NAMESPACE:
-                        ns_predicate = f"({ns_predicate} OR namespace IS NULL)"
-                    await table.delete(_where_eq("name", meta.name) + " AND " + ns_predicate)
 
             centroid_json = json.dumps(meta.centroid) if meta.centroid is not None else ""
             description_embedding_json = (
@@ -1262,33 +1256,42 @@ class SearchStore:
             last_described_str = meta.last_described.isoformat() if meta.last_described else ""
             described_at = meta.described_at_doc_count if meta.described_at_doc_count is not None else -1
 
-            await table.add(
-                [
-                    {
-                        "name": meta.name,
-                        "description": meta.description or "",
-                        "centroid_json": centroid_json,
-                        "description_embedding_json": description_embedding_json,
-                        "doc_count": meta.doc_count,
-                        "chunk_count": meta.chunk_count,
-                        "active_embedding_model": meta.active_embedding_model,
-                        "pending_embedding_model": meta.pending_embedding_model or "",
-                        "needs_reindex": meta.needs_reindex,
-                        "reindex_job_id": meta.reindex_job_id or "",
-                        "community_rebuild_job_id": meta.community_rebuild_job_id or "",
-                        "metadata_reindex_job_id": meta.metadata_reindex_job_id or "",
-                        "last_indexed": last_indexed_str,
-                        "last_described": last_described_str,
-                        "described_at_doc_count": described_at,
-                        "namespace": meta.namespace,
-                        "centroid_sum_json": json.dumps(meta.centroid_sum) if meta.centroid_sum is not None else "",
-                        "mutations_since_recompute": meta.mutations_since_recompute,
-                        "needs_recompute": meta.needs_recompute,
-                        "schema_version": meta.schema_version,
-                        "default_ttl_seconds": meta.default_ttl_seconds,
-                    }
-                ]
+            await (
+                table.merge_insert(["name", "namespace"])
+                .when_matched_update_all()
+                .when_not_matched_insert_all()
+                .execute(
+                    [
+                        {
+                            "name": meta.name,
+                            "description": meta.description or "",
+                            "centroid_json": centroid_json,
+                            "description_embedding_json": description_embedding_json,
+                            "doc_count": meta.doc_count,
+                            "chunk_count": meta.chunk_count,
+                            "active_embedding_model": meta.active_embedding_model,
+                            "pending_embedding_model": meta.pending_embedding_model or "",
+                            "needs_reindex": meta.needs_reindex,
+                            "reindex_job_id": meta.reindex_job_id or "",
+                            "community_rebuild_job_id": meta.community_rebuild_job_id or "",
+                            "metadata_reindex_job_id": meta.metadata_reindex_job_id or "",
+                            "last_indexed": last_indexed_str,
+                            "last_described": last_described_str,
+                            "described_at_doc_count": described_at,
+                            "namespace": meta.namespace,
+                            "centroid_sum_json": json.dumps(meta.centroid_sum) if meta.centroid_sum is not None else "",
+                            "mutations_since_recompute": meta.mutations_since_recompute,
+                            "needs_recompute": meta.needs_recompute,
+                            "schema_version": meta.schema_version,
+                            "default_ttl_seconds": meta.default_ttl_seconds,
+                        }
+                    ]
+                )
             )
+            # Remove any legacy NULL-namespace orphan for the same collection name. The canonical
+            # row was already written above, so get_collection_meta sees no gap.
+            if meta.namespace == DEFAULT_NAMESPACE:
+                await table.delete(_where_eq("name", meta.name) + " AND namespace IS NULL")
         finally:
             lock.release()
 
@@ -1383,15 +1386,6 @@ class SearchStore:
             table = await db.create_table(_META_TABLE, schema=self._meta_schema())
         else:
             table = await db.open_table(_META_TABLE)
-            rows = await table.query().to_list()
-            existing = next((r for r in rows if r["name"] == meta.name), None)
-            if existing is not None:
-                # Include namespace in delete predicate to avoid cross-namespace collision.
-                # Legacy rows may have NULL namespace (treated as DEFAULT_NAMESPACE), so match both.
-                ns_predicate = _where_eq("namespace", meta.namespace)
-                if meta.namespace == DEFAULT_NAMESPACE:
-                    ns_predicate = f"({ns_predicate} OR namespace IS NULL)"
-                await table.delete(_where_eq("name", meta.name) + " AND " + ns_predicate)
 
         centroid_json = json.dumps(meta.centroid) if meta.centroid is not None else ""
         description_embedding_json = (
@@ -1401,33 +1395,42 @@ class SearchStore:
         last_described_str = meta.last_described.isoformat() if meta.last_described else ""
         described_at = meta.described_at_doc_count if meta.described_at_doc_count is not None else -1
 
-        await table.add(
-            [
-                {
-                    "name": meta.name,
-                    "description": meta.description or "",
-                    "centroid_json": centroid_json,
-                    "description_embedding_json": description_embedding_json,
-                    "doc_count": meta.doc_count,
-                    "chunk_count": meta.chunk_count,
-                    "active_embedding_model": meta.active_embedding_model,
-                    "pending_embedding_model": meta.pending_embedding_model or "",
-                    "needs_reindex": meta.needs_reindex,
-                    "reindex_job_id": meta.reindex_job_id or "",
-                    "community_rebuild_job_id": meta.community_rebuild_job_id or "",
-                    "metadata_reindex_job_id": meta.metadata_reindex_job_id or "",
-                    "last_indexed": last_indexed_str,
-                    "last_described": last_described_str,
-                    "described_at_doc_count": described_at,
-                    "namespace": meta.namespace,
-                    "centroid_sum_json": json.dumps(meta.centroid_sum) if meta.centroid_sum is not None else "",
-                    "mutations_since_recompute": meta.mutations_since_recompute,
-                    "needs_recompute": meta.needs_recompute,
-                    "schema_version": meta.schema_version,
-                    "default_ttl_seconds": meta.default_ttl_seconds,
-                }
-            ]
+        await (
+            table.merge_insert(["name", "namespace"])
+            .when_matched_update_all()
+            .when_not_matched_insert_all()
+            .execute(
+                [
+                    {
+                        "name": meta.name,
+                        "description": meta.description or "",
+                        "centroid_json": centroid_json,
+                        "description_embedding_json": description_embedding_json,
+                        "doc_count": meta.doc_count,
+                        "chunk_count": meta.chunk_count,
+                        "active_embedding_model": meta.active_embedding_model,
+                        "pending_embedding_model": meta.pending_embedding_model or "",
+                        "needs_reindex": meta.needs_reindex,
+                        "reindex_job_id": meta.reindex_job_id or "",
+                        "community_rebuild_job_id": meta.community_rebuild_job_id or "",
+                        "metadata_reindex_job_id": meta.metadata_reindex_job_id or "",
+                        "last_indexed": last_indexed_str,
+                        "last_described": last_described_str,
+                        "described_at_doc_count": described_at,
+                        "namespace": meta.namespace,
+                        "centroid_sum_json": json.dumps(meta.centroid_sum) if meta.centroid_sum is not None else "",
+                        "mutations_since_recompute": meta.mutations_since_recompute,
+                        "needs_recompute": meta.needs_recompute,
+                        "schema_version": meta.schema_version,
+                        "default_ttl_seconds": meta.default_ttl_seconds,
+                    }
+                ]
+            )
         )
+        # Remove any legacy NULL-namespace orphan for the same collection name. The canonical
+        # row was already written above, so get_collection_meta sees no gap.
+        if meta.namespace == DEFAULT_NAMESPACE:
+            await table.delete(_where_eq("name", meta.name) + " AND namespace IS NULL")
 
     async def _do_fetch_doc_vectors_unlocked(
         self, db: "lancedb.db.AsyncConnection", collection: str, doc_id: str
