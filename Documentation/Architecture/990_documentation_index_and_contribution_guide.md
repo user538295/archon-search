@@ -7,7 +7,7 @@ Last reviewed: 2026-07-29 / Next review: 2026-08-31
 
 ## Guiding principles
 
-1. **One index, one source of navigation.** Every doc under `/Documentation/` is listed here. If a doc is not in this index, it does not exist as far as readers are concerned.
+1. **One index, one source of navigation.** Every doc under `/Documentation/` is listed here (exception: `Completed/` is an unindexed transient area intentionally excluded from the main index — see [Completed](#completed)). If a doc is not in this index, it does not exist as far as readers are concerned.
 2. **Numbered prefixes encode reading order.** `000`–`099` are foundations, `100`–`299` are architecture (including testing/perf/a11y at `200`–`220`), `300`–`499` are unallocated, `500`–`599` are workflows and roadmap-style technical reference, `600` is API reference, `990` is meta. The cadence table below groups `500`–`699` together as "Technical reference"; the workflows label on `500`–`599` is a narrative gloss, not a strict taxonomy. #Unverified
 3. **Source of truth is code.** Docs explain intent and trade-offs; they never replace `/openapi.json`, `BREAKING.md`, or the test suite.
 4. **Cross-link liberally.** Every doc should point readers to neighbours; orphan docs are a smell.
@@ -144,6 +144,10 @@ Security-focused documentation for security engineers, IT admins, and reviewers 
 | [`Backlog/e0c-api-surface-fixes-brief.md`](../Backlog/e0c-api-surface-fixes-brief.md) | E0c: list_documents pagination, max_fanout config, top_k operator cap. |
 | [`Backlog/e0d-pdf-large-file-support-brief.md`](../Backlog/e0d-pdf-large-file-support-brief.md) | E0d: PDF streaming ingest + configurable size guard. |
 | [`Backlog/e0e-multi-collection-filters-brief.md`](../Backlog/e0e-multi-collection-filters-brief.md) | E0e: lift multi-collection filter v1 restriction. |
+
+## Completed
+
+`Documentation/Completed/` holds finished work items that have been resolved and closed: completed feature briefs, resolved bug reports confirmed "not a product defect," and other work items that no longer require active tracking. These files may be deleted from the working tree once either (a) their content is fully superseded by code, tests, or updated documentation, or (b) they were triaged as "not a product defect" and the environmental condition is documented or guarded against; git history is the preservation mechanism. Do not edit files in `Completed/` — if a resolved finding resurfaces, open a new backlog item instead.
 
 ## Root-level docs
 

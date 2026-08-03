@@ -3,7 +3,7 @@
 **ID**: S194-lid_ftz_downloaded
 **Scenario**: S194
 **Severity**: medium
-**Version**: archon-search, version 26.8.1800
+**Version**: archon-search, version 26.8.1815
 
 ### What happened
 Installs tree-sitter language parsers (~50 MB) and graph enrichment (spaCy),
@@ -41,9 +41,9 @@ Embedder:   sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 Reranker:   (none)
 Chunk size: 512 tokens
 Providers:  CoreML (Apple Silicon)
-Database:   /var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-ri5309io/data/search
+Database:   /var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-uulsqleu/data/search
 Server:     http://127.0.0.1:8765
-API key:    (not yet generated)  (full key: /var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-ri5309io/data/.search.env)
+API key:    (not yet generated)  (full key: /var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-uulsqleu/data/.search.env)
 Download:   ~220 MB
 
 Note: Model files are downloaded now. ONNX session initialization happens in the
@@ -60,8 +60,8 @@ Warning: Search service did not become ready within 60 seconds.
 
 stderr: /Users/manczg/.local/share/uv/tools/archon-search/lib/python3.13/site-packages/archon_search/model_validation.py:112: UserWarning: The model sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 now uses mean pooling instead of CLS embedding. In order to preserve the previous behaviour, consider either pinning fastembed version to 0.5.1 or using `add_custom_model` functionality.
 model = TextEmbedding(embedding_model, providers=providers or None)
-2026-08-02 15:23:21.693 python[58881:37727404] 2026-08-02 15:23:21.693094 [W:onnxruntime:, session_state.cc:1387 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.
-2026-08-02 15:23:21.693 python[58881:37727404] 2026-08-02 15:23:21.693143 [W:onnxruntime:, session_state.cc:1389 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.
+2026-08-03 11:41:08.826 python[76034:39819703] 2026-08-03 11:41:08.826647 [W:onnxruntime:, session_state.cc:1387 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.
+2026-08-03 11:41:08.826 python[76034:39819703] 2026-08-03 11:41:08.826688 [W:onnxruntime:, session_state.cc:1389 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.
 
 assert 1 == 0
 
@@ -111,9 +111,9 @@ E       Embedder:   sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 E       Reranker:   (none)
 E       Chunk size: 512 tokens
 E       Providers:  CoreML (Apple Silicon)
-E       Database:   /var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-ri5309io/data/search
+E       Database:   /var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-uulsqleu/data/search
 E       Server:     http://127.0.0.1:8765
-E       API key:    (not yet generated)  (full key: /var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-ri5309io/data/.search.env)
+E       API key:    (not yet generated)  (full key: /var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-uulsqleu/data/.search.env)
 E       Download:   ~220 MB
 E     
 E       Note: Model files are downloaded now. ONNX session initialization happens in the
@@ -130,20 +130,10 @@ E     Warning: Search service did not become ready within 60 seconds.
 E     
 E     stderr: /Users/manczg/.local/share/uv/tools/archon-search/lib/python3.13/site-packages/archon_search/model_validation.py:112: UserWarning: The model sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 now uses mean pooling instead of CLS embedding. In order to preserve the previous behaviour, consider either pinning fastembed version to 0.5.1 or using `add_custom_model` functionality.
 E       model = TextEmbedding(embedding_model, providers=providers or None)
-E     2026-08-02 15:23:21.693 python[58881:37727404] 2026-08-02 15:23:21.693094 [W:onnxruntime:, session_state.cc:1387 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.
-E     2026-08-02 15:23:21.693 python[58881:37727404] 2026-08-02 15:23:21.693143 [W:onnxruntime:, session_state.cc:1389 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.
+E     2026-08-03 11:41:08.826 python[76034:39819703] 2026-08-03 11:41:08.826647 [W:onnxruntime:, session_state.cc:1387 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.
+E     2026-08-03 11:41:08.826 python[76034:39819703] 2026-08-03 11:41:08.826688 [W:onnxruntime:, session_state.cc:1389 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.
 E     
 E   assert 1 == 0
 E    +  where 1 = CompletedProcess(args=('archon-search', 'wizard', '--config', '/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon...89 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.
 ').returncode
 ```
-
----
-
-### Analysis — Not a product defect (feature-level)
-
-**Verdict:** environmental (machine under load), not a product defect.
-
-The setup wizard waits up to 60 seconds for the search service to become ready and then exits with an error if it has not. On a busy machine, starting the larger multilingual models can take longer than 60 seconds, so the wizard reports the timeout and exits. On an unloaded machine the service becomes ready well within that window and the wizard completes successfully. The 60-second readiness wait and exit-on-timeout are the intended, documented behaviour — the documentation is accurate, so no doc change was needed.
-
-**Scenario-specific:** the language-detection model file (`lid.176.ftz`) is a small, required runtime asset and is always downloaded — including with `--skip-preload`. This scenario’s own expectation is that the file should exist, which matches actual behaviour. The only failure here was the shared 60-second readiness timeout above.

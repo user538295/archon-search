@@ -412,6 +412,8 @@ Depending on your chosen profile and connection speed this can take from a few s
 
 To skip this step and download the heavy weights on the first search request instead, pass `--skip-preload`. Note: for multilingual profiles the small `lid.176.ftz` language-detection model is **always** downloaded, even with `--skip-preload` — it is a required ~1 MB runtime asset without which the server cannot start, so it is never deferred. If that download fails, the wizard reverts to English-only mode so the server still boots.
 
+> **Note — readiness timeout:** The length of the readiness window in Step 9 is controlled by the *eager embedder loading* setting (Step 5e), not by `--skip-preload`. When eager loading is **disabled** (the default), the window is a flat 60 seconds regardless of model size. When eager loading is **enabled**, the window scales with model size (approximately 100 ms per MB, never below 60 seconds, capped at 10 minutes). On a slow or heavily loaded machine the wizard may print "Search service did not become ready within N seconds" and exit non-zero; this is load-sensitive, not a permanent failure. Run `archon-search status` immediately after to check whether the service recovered on its own.
+
 ### Step 9 — Service registration, startup, and next steps
 
 ```
@@ -433,7 +435,7 @@ Config:  /Users/you/.archon-search/archon-search.toml
 archon-search installed and running. Profile: Balanced · English.
 ```
 
-The wizard registers the service with your OS (launchd on macOS, systemd user unit on Linux) and starts it. It then polls `GET /health` for up to 60 seconds. If the first launch crashes on an import-time error (`ModuleNotFoundError` / `ImportError`) — a fresh-install race where the service starts before its environment is fully materialised — the wizard detects that crash in the service log and extends the window once so it survives the supervisor's automatic restart. If the service still does not become ready, the wizard exits with an error and prints the last import-time error from the service log.
+The wizard registers the service with your OS (launchd on macOS, systemd user unit on Linux) and starts it. It then polls `GET /health` for up to 60 seconds by default (longer when eager loading is enabled — see the note above). If the first launch crashes on an import-time error (`ModuleNotFoundError` / `ImportError`) — a fresh-install race where the service starts before its environment is fully materialised — the wizard detects that crash in the service log and extends the window once so it survives the supervisor's automatic restart. If the service still does not become ready, the wizard exits with an error and prints the last import-time error from the service log.
 
 After startup, the wizard prints a "Next steps" block with common follow-up commands, the full API key with its source label and a "keep this key private" note, and the paths to your API key file and config. The key is always shown in full — it already lives in a plaintext file you own, so terminal masking adds no security. The "Next steps" block is suppressed in `--dry-run` mode.
 
@@ -833,11 +835,11 @@ Alternatively, re-run the wizard with `--disable-gpu` to force CPU:
 archon-search wizard --profile minimal --disable-gpu --non-interactive
 ```
 
-### Service does not become ready (60-second timeout)
+### Service does not become ready (60-second timeout by default; see note in Step 8 for eager-load timing)
 
 If the wizard exits with:
 ```
-Warning: Search service did not become ready within 60 seconds.
+Warning: Search service did not become ready within N seconds.
 ```
 
 Check the service log for errors:

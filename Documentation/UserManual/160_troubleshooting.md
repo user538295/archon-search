@@ -77,7 +77,7 @@ Symptoms: `archon-search collection list` shows no growth in `chunks=`, `GET /st
 
 ## Symptom: install hangs at health check
 
-`archon-search install` polls `GET /health` for 60 seconds. On timeout it prints `Warning: service did not become ready within 60s` and exits 1. Causes:
+`archon-search wizard` (or `install`) polls `GET /health` for up to 60 seconds by default (longer when eager embedder loading is enabled — see the readiness-timeout note in the [Wizard guide Step 8](20_wizard.md)). On timeout it prints `Warning: Search service did not become ready within N seconds.` and exits 1. Causes:
 
 - Model weights still downloading on first run — check the log for download progress.
 - Port already in use — change `[server].port` (or set `ARCHON_SEARCH_PORT`). #Unverified
