@@ -11,6 +11,7 @@ from pathlib import Path
 from pythonjsonlogger.jsonlogger import JsonFormatter
 
 from archon_search.config import SearchConfig
+from archon_search.constants import LOG_FILE_DISABLED_WARNING
 from archon_search.observability import correlation_id
 
 
@@ -104,6 +105,20 @@ def configure_logging(config: SearchConfig) -> None:
     # File handler: only when log_file is configured.
     if config.log_file:
         _attach_file_handler(logger, config)
+    elif not container_mode:
+        # Empty log_file outside container mode means file logging is disabled.
+        # load_config() already warns about this at config-load time, and in
+        # the serve path it always runs first — so operators may see this
+        # warning twice. We also emit it here, via the root logger (not
+        # gated by [logging].level), so it is still surfaced when logging is
+        # configured from a programmatically-built config that bypassed
+        # load_config. No archon_search handler is attached in this state, so
+        # — absent any configured root handler — the warning reaches stderr
+        # only via Python's last-resort handler, not a formatted pipeline.
+        # Use the root logger's method directly (getLogger().warning) rather
+        # than logging.warning(), which would call basicConfig() and mutate
+        # global logging state by attaching a root handler as a side effect.
+        logging.getLogger().warning(LOG_FILE_DISABLED_WARNING)
 
     # Container handler: always check, regardless of log_file state.
     if container_mode:

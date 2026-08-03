@@ -10,6 +10,7 @@ from logging.handlers import TimedRotatingFileHandler
 import pytest
 
 from archon_search.config import SearchConfig
+from archon_search.constants import LOG_FILE_DISABLED_WARNING
 from archon_search.logging_setup import CorrelationIdFilter, configure_logging
 from archon_search.observability import correlation_id
 
@@ -121,6 +122,131 @@ def test_configure_logging_no_handler_when_log_file_empty():
     cfg.log_file = ""
     configure_logging(cfg)
     assert len(logger.handlers) == 0
+
+
+def test_configure_logging_warns_when_file_logging_disabled(monkeypatch, caplog):
+    """S107: configure_logging() must emit the disabled-file-logging WARNING (via
+    the root logger, not the archon_search logger — see C2-A) when log_file=''
+    and not in container mode.
+
+    This is emitted in addition to (not instead of) load_config()'s warning; in
+    the serve path both run, so operators may see it twice. In this disabled
+    state no handler is attached to the archon_search logger, so — like
+    load_config's warning — it reaches stderr via Python's last-resort handler
+    rather than a configured/formatted handler; this test only pins that the
+    WARNING is logged and matches the shared constant, not how it is ultimately
+    rendered.
+    """
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    cfg = SearchConfig()
+    cfg.log_file = ""
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        configure_logging(cfg)
+    matches = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING
+        and "log_file" in r.message
+        and ("empty" in r.message or "disabled" in r.message)
+    ]
+    assert matches, (
+        "configure_logging() must emit a WARNING that file logging is disabled when "
+        f"log_file='' and not in container mode; got: {[r.message for r in caplog.records]}"
+    )
+    assert "ARCHON_SEARCH_CONTAINER=1" in matches[0].message
+    assert "set [logging].log_file to a path" in matches[0].message
+    # Pins this call site to the shared constant — a hardcoded literal here
+    # would drift silently without this equality check (S107 C2-B).
+    assert matches[0].message == LOG_FILE_DISABLED_WARNING
+
+
+def test_configure_logging_no_disabled_warning_in_container_mode(monkeypatch, caplog):
+    """S107: the disabled-file-logging warning must NOT fire in container mode
+    (ARCHON_SEARCH_CONTAINER=1) — an empty log_file is intentional there because a
+    stderr handler is attached instead."""
+    monkeypatch.setenv("ARCHON_SEARCH_CONTAINER", "1")
+    cfg = SearchConfig()
+    cfg.log_file = ""
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        configure_logging(cfg)
+    assert not any(
+        r.levelno == logging.WARNING
+        and "log_file" in r.message
+        and ("empty" in r.message or "disabled" in r.message)
+        for r in caplog.records
+    )
+
+
+def test_configure_logging_no_disabled_warning_when_log_file_set(tmp_path, monkeypatch, caplog):
+    """S107: the disabled-file-logging warning must NOT fire when log_file is set
+    to a real path — guards against the elif branch firing spuriously on a valid
+    config (positive control for test_configure_logging_warns_when_file_logging_disabled)."""
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    cfg = _make_config(tmp_path)
+    with caplog.at_level(logging.WARNING, logger="archon_search"):
+        configure_logging(cfg)
+    assert not any(
+        r.levelno == logging.WARNING
+        and "log_file" in r.message
+        and ("empty" in r.message or "disabled" in r.message)
+        for r in caplog.records
+    )
+
+
+def test_configure_logging_disabled_warning_not_gated_by_log_level(monkeypatch, caplog):
+    """S107 C2-A: the disabled-file-logging warning must fire via the root logger,
+    not the archon_search logger — so it is NOT suppressed by a high [logging].level
+    (logger.setLevel(config.level) runs before this branch, and WARNING is a child
+    of archon_search). Would fail under the old child-logger, level-gated emission."""
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    cfg = SearchConfig()
+    cfg.log_file = ""
+    cfg.level = "ERROR"
+    with caplog.at_level(logging.WARNING):
+        configure_logging(cfg)
+    matches = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert matches, (
+        "expected a WARNING record even with [logging].level=ERROR; got: "
+        f"{[(r.name, r.levelno, r.message) for r in caplog.records]}"
+    )
+    assert matches[0].message == LOG_FILE_DISABLED_WARNING
+
+
+def test_configure_logging_disabled_warning_leaves_root_handlers_untouched(monkeypatch):
+    """S107 C3: the disabled-file-logging warning must be emitted via
+    logging.getLogger().warning() (the root Logger method), NOT the module-level
+    logging.warning(), which calls basicConfig() and attaches a StreamHandler to
+    the root logger as a global side effect. This asserts configure_logging()
+    adds no root handler in the disabled path — would fail if the emission
+    reverted to logging.warning()."""
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    root = logging.getLogger()
+    saved_root_handlers = root.handlers[:]
+    # basicConfig() only fires when the root logger has NO handlers, so the
+    # revert is only observable from an empty-root starting state.
+    root.handlers[:] = []
+    try:
+        cfg = SearchConfig()
+        cfg.log_file = ""
+        configure_logging(cfg)
+        assert root.handlers == [], (
+            "configure_logging() must not attach a root handler (no basicConfig "
+            f"side effect from module-level logging.warning); got: {root.handlers}"
+        )
+    finally:
+        root.handlers[:] = saved_root_handlers
+
+
+def test_disabled_warning_string_is_shared():
+    """S107: pins the shared constant's stable content — the remediation guidance
+    operators rely on (LOG_FILE_DISABLED_WARNING in constants.py). This does not by
+    itself guard against either call site drifting to a hardcoded literal; that is
+    covered by the full-equality assertions in
+    test_configure_logging_warns_when_file_logging_disabled (logging_setup.py call
+    site) and the config.py call-site tests in tests/test_config.py."""
+    assert "log_file" in LOG_FILE_DISABLED_WARNING
+    assert "ARCHON_SEARCH_CONTAINER=1" in LOG_FILE_DISABLED_WARNING
+    assert "set [logging].log_file to a path" in LOG_FILE_DISABLED_WARNING
 
 
 def test_configure_logging_sets_level(tmp_path):

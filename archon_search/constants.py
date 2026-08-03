@@ -37,6 +37,15 @@ DEFAULT_NAMESPACE: str = "default"
 # Shared by router.py, config.py, and eval/runner.py to avoid hardcoding 0.3.
 DEFAULT_ROUTING_DESCRIPTION_WEIGHT: Final[float] = 0.3
 
+# S107: emitted when [logging].log_file is empty (file logging disabled) outside
+# container mode. Shared by config.load_config and logging_setup.configure_logging
+# so the two call sites never drift.
+LOG_FILE_DISABLED_WARNING: Final[str] = (
+    "[logging].log_file is set to an empty string — file logging is disabled. "
+    "To re-enable, set [logging].log_file to a path, "
+    "or set ARCHON_SEARCH_CONTAINER=1 to use stderr output instead."
+)
+
 # Maximum number of chunks passed to a single store.ingest_chunks() call during
 # ingest_file() batch-emit (D4). At ~4 KB per chunk, 512 chunks ≈ 2 MB per
 # batch — safe on any memory-constrained host.

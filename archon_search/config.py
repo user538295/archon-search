@@ -10,7 +10,11 @@ from pathlib import Path
 
 import tomlkit
 
-from archon_search.constants import DEFAULT_FAST_MODEL, DEFAULT_ROUTING_DESCRIPTION_WEIGHT
+from archon_search.constants import (
+    DEFAULT_FAST_MODEL,
+    DEFAULT_ROUTING_DESCRIPTION_WEIGHT,
+    LOG_FILE_DISABLED_WARNING,
+)
 from archon_search.paths import get_data_dir
 
 _logger = logging.getLogger(__name__)
@@ -395,11 +399,7 @@ def load_config(path: Path | None = None, *, serve: bool = False) -> SearchConfi
 
     _apply_env_overrides(config)
     if not config.log_file and os.environ.get("ARCHON_SEARCH_CONTAINER") != "1":
-        _logger.warning(
-            "[logging].log_file is set to an empty string — file logging is disabled. "
-            "To re-enable, set [logging].log_file to a path, "
-            "or set ARCHON_SEARCH_CONTAINER=1 to use stderr output instead."
-        )
+        _logger.warning(LOG_FILE_DISABLED_WARNING)
     _post_process_backup(config)
     _post_process_maintenance(config)
     return config

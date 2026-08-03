@@ -95,7 +95,7 @@ Per-stage latency itself is surfaced through the telemetry/observability surface
 
 When `ARCHON_SEARCH_CONTAINER=1`, `configure_logging()` attaches a `StreamHandler(sys.stderr)` — using the same format and correlation-id filter as the file handler — **in addition to** any file handler. This guarantees `docker logs` captures output even when `log_file = ""`. It is why the Docker image can run with file logging disabled and still emit structured logs to stdout/stderr for the container runtime to collect.
 
-Outside container mode, an empty `log_file` produces a startup warning (from `load_config`) reminding you that file logging is off; set `ARCHON_SEARCH_CONTAINER=1` to silence it when stderr-only is intentional. See [Running with Docker](../UserManual/140_running_with_docker.md).
+Outside container mode, an empty `log_file` produces a startup warning that file logging is off. `load_config` emits it at config-load time, and the serve path always runs `load_config` first, so operators typically see it once from there. `configure_logging` also emits it (via the root logger, not gated by `[logging].level`), which adds coverage only when logging is configured from a programmatically-built config that bypassed `load_config` — in the serve path this means the warning may appear twice. In this disabled state no `archon_search` handler is attached, so absent any configured root handler, the warning reaches stderr only via Python's last-resort handler — it is not written to a log file, since file logging is disabled. Set `ARCHON_SEARCH_CONTAINER=1` to silence it when stderr-only is intentional. See [Running with Docker](../UserManual/140_running_with_docker.md).
 
 ## Shipping JSON logs to ELK / Loki / Datadog
 

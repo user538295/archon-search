@@ -842,11 +842,17 @@ def test_logging_log_file_empty_string_warns(tmp_path: Path, monkeypatch: pytest
     toml_file = tmp_path / "cfg.toml"
     toml_file.write_text('[logging]\nlog_file = ""\n', encoding="utf-8")
     import logging
+
+    from archon_search.constants import LOG_FILE_DISABLED_WARNING
     with caplog.at_level(logging.WARNING, logger="archon_search.config"):
         load_config(path=toml_file)
-    assert any("log_file" in r.message and r.levelno == logging.WARNING for r in caplog.records), (
+    matches = [r for r in caplog.records if "log_file" in r.message and r.levelno == logging.WARNING]
+    assert matches, (
         f"Expected a WARNING about empty log_file, got: {[r.message for r in caplog.records]}"
     )
+    # Pins the config.py call site to the shared constant — a hardcoded literal
+    # here would drift silently without this equality check (S107 C2-B).
+    assert matches[0].message == LOG_FILE_DISABLED_WARNING
 
 
 def test_logging_log_file_empty_string_no_warn_in_container_mode(
@@ -872,13 +878,19 @@ def test_logging_log_file_empty_string_preserved_and_warns_when_data_dir_set(
     fire (since ARCHON_SEARCH_CONTAINER is not "1")."""
     import logging
 
+    from archon_search.constants import LOG_FILE_DISABLED_WARNING
+
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
     toml_file = tmp_path / "cfg.toml"
     toml_file.write_text('[logging]\nlog_file = ""\n', encoding="utf-8")
     with caplog.at_level(logging.WARNING, logger="archon_search.config"):
         config = load_config(path=toml_file)
-    assert any("log_file" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+    matches = [r for r in caplog.records if "log_file" in r.message and r.levelno == logging.WARNING]
+    assert matches
+    # Pins the config.py call site to the shared constant — a hardcoded literal
+    # here would drift silently without this equality check (S107 C2-B).
+    assert matches[0].message == LOG_FILE_DISABLED_WARNING
     assert config.log_file == ""
 
 
