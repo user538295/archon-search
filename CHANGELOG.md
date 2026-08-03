@@ -1,6 +1,31 @@
 # Changelog
 
 
+## [26.8.1815] - 2026-08-03
+
+canary
+
+**CPU-only torch by default, CUDA-aware wizard, container reliability fixes**
+
+**Dependency optimization**
+- `pyproject.toml` now pins `torch`/`torchvision` to CPU-only builds on Linux/x86_64, removing ~18 NVIDIA/CUDA runtime packages (~6.2 GB) from the `:latest` container image. docling PDF/OCR continues working on CPU hosts; GPU acceleration is now opt-in via the installer wizard or container image selection.
+- Added regression test (`test_dockerfile_lint.py`) to prevent CUDA packages from re-entering CPU image builds.
+
+**Installation & wizard**
+- The installer wizard now swaps `torch`/`torchvision` to CUDA builds when the user opts into CUDA acceleration on Linux/x86_64 GPU hosts, enabling docling's PDF/OCR parsing to run on the GPU. The swap is best-effort—any failure logs a warning and keeps the working CPU build. Windows and ARM are out of scope; Docker GPU images handle CUDA setup directly.
+- Extracted shared `_uv_or_pip_install()` helper to support both `uv` and `pip` fallback paths.
+
+**Container and Docker**
+- Fixed `save_config()` to create parent directories before writing, resolving `FileNotFoundError` in Docker containers where config paths don't yet exist. This unblocks `POST /collections/` operations inside containers.
+- Docker images now stamp the real release version via `RELEASE_VERSION` build-arg instead of reporting `0.0.0+docker`. Pass `--build-arg RELEASE_VERSION=$(git describe --tags --always)` to `docker build` or set `ARCHON_VERSION` in `docker-compose.override.yml`.
+
+**Testing and documentation**
+- Added regression test for the collection add → search → reindex workflow to confirm it works on clean data directories.
+- Added subprocess-based test validating that `load_config()` emits file-logging-disabled warnings to `stderr` when logging is unconfigured.
+- Updated `UserManual/` docs with CPU-only torch defaults and GPU CUDA swap guidance in `10_installation.md`, `20_wizard.md`, and `140_running_with_docker.md`.
+- Completed triage of 24 smoke-scenario reports, moving verified non-defects to `Documentation/Completed/`.
+
+
 ## [26.8.1800] - 2026-08-02
 
 canary
