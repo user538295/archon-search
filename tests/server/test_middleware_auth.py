@@ -451,9 +451,21 @@ def test_exempt_paths_all_have_matching_routes(tmp_path: Path) -> None:
     from archon_search.server.app import create_app
     from archon_search.server.middleware_auth import _EXEMPT_PATHS
 
+    def _collect_paths(routes: list) -> set[str]:
+        paths: set[str] = set()
+        for r in routes:
+            if hasattr(r, "path"):
+                paths.add(r.path)
+            if hasattr(r, "routes"):
+                paths |= _collect_paths(r.routes)
+            # FastAPI 0.141+ wraps included routers in _IncludedRouter dataclasses
+            if hasattr(r, "original_router") and hasattr(r.original_router, "routes"):
+                paths |= _collect_paths(r.original_router.routes)
+        return paths
+
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     app = create_app(config, JobStore(path=tmp_path / "jobs.json"))
-    route_paths = {r.path for r in app.routes}
+    route_paths = _collect_paths(app.routes)
     for exempt in _EXEMPT_PATHS:
         assert exempt in route_paths, f"{exempt!r} is in _EXEMPT_PATHS but has no matching route"

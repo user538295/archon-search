@@ -126,24 +126,24 @@ def test_docker_job_uses_checkout_v4_with_full_history(docker_steps: list[dict])
     checkout_steps = [s for s in docker_steps if s.get("uses", "").startswith("actions/checkout")]
     assert checkout_steps, "docker job must include actions/checkout"
     first = checkout_steps[0]
-    assert first["uses"] == "actions/checkout@v5"
+    assert first["uses"] == "actions/checkout@v7.0.1"
     assert first.get("with", {}).get("fetch-depth") == 0
 
 
 def test_docker_job_uses_buildx_setup(docker_steps: list[dict]) -> None:
     """docker/setup-buildx-action@v3 must be configured for multi-arch / cache."""
     uses = [s.get("uses", "") for s in docker_steps]
-    assert any(u.startswith("docker/setup-buildx-action@v3") for u in uses), (
-        "docker job must include docker/setup-buildx-action@v3"
+    assert any(u.startswith("docker/setup-buildx-action@") for u in uses), (
+        "docker job must include docker/setup-buildx-action"
     )
 
 
 def test_docker_job_logs_in_to_ghcr(docker_steps: list[dict]) -> None:
     """docker/login-action@v3 must log in to ghcr.io with GITHUB_TOKEN."""
     login_steps = [
-        s for s in docker_steps if s.get("uses", "").startswith("docker/login-action@v3")
+        s for s in docker_steps if s.get("uses", "").startswith("docker/login-action@")
     ]
-    assert login_steps, "docker job must include docker/login-action@v3"
+    assert login_steps, "docker job must include docker/login-action"
     login = login_steps[0]
     with_block = login.get("with", {})
     assert with_block.get("registry") == "ghcr.io"

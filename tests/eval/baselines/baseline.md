@@ -11,7 +11,7 @@ Quality metrics:
   mrr                = 1.0000
   ndcg_at_5          = 0.9847
   ndcg_at_10         = 0.9875
-  reranker_lift      = 0.0234
+  reranker_lift      = 0.0230
   routing_accuracy   = 1.0000
   graph_mrr          = 0.3087
   graph_local_mrr    = 0.9167

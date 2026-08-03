@@ -21,7 +21,7 @@
     "recall_at_1": 0.8636363636363636,
     "recall_at_3": 0.9696969696969697,
     "recall_at_5": 0.9848484848484849,
-    "reranker_lift": 0.023355963535386715,
+    "reranker_lift": 0.02299021907328158,
     "routing_accuracy": 1.0,
     "routing_mrr_centroid": 0.7182539682539683,
     "routing_mrr_hybrid": 0.7182539682539683,

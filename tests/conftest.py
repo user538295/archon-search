@@ -24,6 +24,14 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("ORT_NUM_THREADS", "1")
 os.environ.setdefault("TOKIO_WORKER_THREADS", "2")
 
+# pyarrow 25's mimalloc allocator segfaults on macOS/arm64 during per-thread
+# heap init (`mi_thread_init`, apache/arrow #37010/#41696/#44342) — this is
+# where the 7 crashes landed (test-worker subprocesses). Route Arrow through
+# the system allocator on macOS before any direct `import lancedb`/`pyarrow`.
+# macOS-only mirrors archon_search/__init__.py; Linux keeps mimalloc.
+if sys.platform == "darwin":
+    os.environ.setdefault("ARROW_DEFAULT_MEMORY_POOL", "system")
+
 _tests_dir = os.path.dirname(os.path.abspath(__file__))
 if _tests_dir not in sys.path:
     sys.path.insert(0, _tests_dir)

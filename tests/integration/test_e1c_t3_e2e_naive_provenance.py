@@ -113,6 +113,39 @@ def _install_content_aware_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
 
 
+def _install_deterministic_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the zero-vector fastembed stub with a deterministic, content-aware one.
+
+    The shared stub (tests/_search_stubs.py) yields all-zero vectors, so every
+    chunk's vector score ties. The S7 assertion depends on a knife-edge boundary
+    (one chunk in the plain-query top-k but not the expanded-query top-k), and
+    which tied chunks fill each top-k is decided by LanceDB's tied-row order —
+    which lancedb 0.36 no longer keeps stable, making this test ~40% flaky.
+
+    This stub keeps determinism WITHOUT masking anything: cosine similarity
+    tracks two concept axes (AuthService, TokenValidator) exactly as a real
+    embedder would separate these documents, and a tiny per-text hash jitter
+    (<= 0.01, far below the concept axes) breaks exact ties so retrieval order is
+    stable across runs. monkeypatch auto-reverts, so no other test is affected.
+    """
+    import hashlib
+
+    import numpy as np
+
+    def _embed(self: object, texts: list[str]):  # type: ignore[no-untyped-def]
+        for t in texts:
+            v = np.zeros(384, dtype=np.float32)
+            if "AuthService" in t:
+                v[0] = 1.0
+            if "TokenValidator" in t:
+                v[1] = 1.0
+            h = int.from_bytes(hashlib.sha256(t.encode()).digest()[:4], "big")
+            v[2] = (h % 10_000) / 1_000_000.0  # deterministic tie-break, <= 0.01
+            yield v
+
+    monkeypatch.setattr(sys.modules["fastembed"].TextEmbedding, "embed", _embed)
+
+
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
@@ -288,50 +321,63 @@ def _build_corpus(tmp_path: Path) -> tuple[Path, Path]:
     return doc1, doc2
 
 
-def _build_large_corpus_for_s7(tmp_path: Path) -> tuple[Path, Path]:
-    """Create a large doc1 and a small doc2 for the S7 mixed-results test.
+def _build_large_corpus_for_s7(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Build a corpus whose mixed graph/hybrid results are DETERMINISTIC.
 
-    Design: top_k_retrieve=3 (pinned in toml) gives
-    candidate_depth = max(3 × 3, 20) = 20.  doc1 must produce more than
-    20 chunks so the expanded search does NOT retrieve all of them.
+    top_k_retrieve=3 (pinned in toml) → candidate_depth = max(3×3, 20) = 20.
 
-    With chunk_size=16 GPT-2 tokens and 30 reps of ~32 tokens each:
-      - Each rep produces ~2 chunks.
-      - 30 reps → ~60 doc1 chunks (3× safety margin over candidate_depth=20).
+    The S7 intent is a response containing BOTH graph-provenance results and a
+    hybrid-only (null-provenance) result. That requires one document the plain
+    query retrieves but the graph-EXPANDED query ranks below the top-20. With
+    the deterministic content-aware embedder (_install_deterministic_embedding),
+    similarity tracks two axes — AuthService (dim 0), TokenValidator (dim 1):
 
-    Expanded search "AuthService TokenValidator" (union of vec+FTS top-20):
-      - doc2 (TokenValidator: fts_rank=0 for rare term; vec_rank=0: first ingested).
-      - Top ~19 doc1 chunks (AuthService: low IDF since all 60 chunks have it).
-      - Graph candidates: ~20 unique (all with provenance).
+    - doc1: 30 DISTINCT 16-word chunks, each carrying BOTH "AuthService" and
+      "TokenValidator" (+ a unique "segmentNNN" marker → distinct vectors) →
+      vector ≈ [1, 1]. These are the graph-provenance results.
+    - doc3: a single chunk with ONLY "AuthService" → vector ≈ [1, 0].
+    - doc2: a single "TokenValidator"-only chunk → vector ≈ [0, 1] (the doc the
+      AuthService↔TokenValidator graph edge points at).
 
-    Standard hybrid "AuthService" (union of vec+FTS top-20):
-      - FTS top-20: doc1[0..19] (doc2 has no "AuthService" → not in FTS).
-      - Vec top-20: doc2 + doc1[0..18].
-      - Union: doc2 + doc1[0..19] = 21 candidates.
-      - Of these 21: doc2 + doc1[0..18] are in graph_by_chunk → dedup removes.
-      - doc1[19] is NOT in graph_by_chunk → added with graph_provenance=None.
+    Plain query "AuthService" (vector [1, 0]):
+      - doc3 [1,0] is the closest match; doc1 chunks [1,1] follow; doc2 [0,1] is
+        far. Plain top-20 = doc3 + 19 doc1 chunks.
+    Graph-expanded query "AuthService TokenValidator" (vector [1, 1]):
+      - the 30 doc1 chunks [1,1] are the closest (they fill all 20 slots); doc3
+        [1,0] and doc2 [0,1] are strictly farther → doc3 is NOT in the graph set.
 
-    Merged total: ~20 graph (provenance) + several hybrid-only (null provenance) ≈ 30.
-    top_k=80 in the test ensures all candidates land in results[]; near_misses is empty.
+    Merge: 20 doc1 chunks (graph provenance) + doc3 (hybrid-only, null
+    provenance). doc3's exclusion from the graph set is a full concept-axis gap
+    (not a tie-break), so the null-provenance leftover is stable across runs.
+    top_k=80 ensures all merged candidates land in results[]; near_misses empty.
     """
     doc1 = tmp_path / "auth_service_large_doc.txt"
+    # 30 distinct 16-word chunks, each with BOTH concept terms + a unique marker.
     doc1.write_text(
-        # 30 reps × ~32 GPT-2 tokens per rep / chunk_size=16 = ~60 chunks.
-        # Well exceeds candidate_depth=20 (3× safety margin).
-        "AuthService handles authentication in the system. "
-        "AuthService is the primary security gateway for all requests. "
-        "AuthService validates credentials and issues session tokens. "
-        "AuthService is responsible for the full login and logout lifecycle.\n" * 30,
+        " ".join(
+            f"AuthService TokenValidator segment{i:03d} handles authentication for the "
+            f"security gateway validating credentials issuing session tokens login"
+            for i in range(30)
+        ),
         encoding="utf-8",
     )
 
-    # doc2: 1 chunk, ingested first (lower row IDs → vec_rank=0).
+    # doc2: single TokenValidator-only chunk (graph edge target).
     doc2 = tmp_path / "token_validator_doc.txt"
     doc2.write_text(
         "TokenValidator validates JWT tokens using the RS256 asymmetric signing algorithm.\n",
         encoding="utf-8",
     )
-    return doc1, doc2
+
+    # doc3: single AuthService-only chunk — the deterministic hybrid-only leftover.
+    # No "TokenValidator" → the expanded query ranks it below all 30 doc1 chunks.
+    doc3 = tmp_path / "auth_service_only_doc.txt"
+    doc3.write_text(
+        "AuthService leftoveronly handles authentication credentials session tokens "
+        "login logout lifecycle gateway primary.\n",
+        encoding="utf-8",
+    )
+    return doc1, doc2, doc3
 
 
 # ---------------------------------------------------------------------------
@@ -450,23 +496,24 @@ def test_explain_naive_mixed_results_e2e(
     S8: no duplicate chunk_ids (graph provenance wins in dedup).
     """
     _install_content_aware_spacy_stub(monkeypatch)
+    _install_deterministic_embedding(monkeypatch)
 
     col = "t3-s7-mixed-results"
-    doc1, doc2 = _build_large_corpus_for_s7(tmp_path)
+    doc1, doc2, doc3 = _build_large_corpus_for_s7(tmp_path)
 
     with make_real_app(
         tmp_path,
         monkeypatch,
         graph_enabled=True,
-        # chunk_size=16 → ~60 doc1 chunks; top_k_retrieve=3 → candidate_depth=20.
+        # chunk_size=16 → 30 doc1 chunks; top_k_retrieve=3 → candidate_depth=20.
         # Pinning top_k_retrieve removes dependency on the config default.
         toml_content="[database]\nchunk_size = 16\ntop_k_retrieve = 3\n",
     ) as (client, _cfg, api_key):
         auth = _auth(api_key)
 
-        # doc2 ingested first → lower LanceDB row IDs → vec_rank=0 (best vector rank).
         ingest_file_via_path(client, col, str(doc2), api_key=api_key)
         ingest_file_via_path(client, col, str(doc1), api_key=api_key)
+        ingest_file_via_path(client, col, str(doc3), api_key=api_key)
 
         resp = client.post(
             "/explain",
@@ -530,17 +577,19 @@ def test_explain_naive_mixed_results_e2e(
         _assert_valid_first_traversal_step(graph_results[0]["graph_provenance"])
 
         # S7: hybrid-only results must carry null graph_provenance.
-        # doc1 has ~60 chunks; expanded search retrieves only top-20 (1 doc2 + ~19 doc1).
-        # Standard hybrid union returns doc2 + doc1[0..19] = 21; doc1[19] is NOT in
-        # graph_by_chunk → appears with graph_provenance=None.
+        # doc3 (AuthService-only) is retrieved by the plain query but ranks below all
+        # 30 doc1 chunks in the expanded "AuthService TokenValidator" search, so it is
+        # NOT in graph_by_chunk → appears with graph_provenance=None. This exclusion is
+        # a full concept-axis gap, not a tie-break, so it is stable across runs.
         # Checking results[] only (not near_misses): ExplainResult always has the
         # graph_provenance field (null when the candidate came from the hybrid-only path).
         null_prov_results = [r for r in results if r.get("graph_provenance") is None]
         assert null_prov_results, (
             "Expected at least one result with graph_provenance=null (hybrid-only path); "
             f"got zero. Total results: {len(results)}. "
-            "This means all doc1 chunks were covered by the expanded graph search — "
-            "check that doc1 produces >candidate_depth chunks (should be ~60 >> 20). "
+            "This means doc3 (AuthService-only) was covered by the expanded graph search — "
+            "check the deterministic embedder ranks doc3 below all doc1 chunks for the "
+            "expanded query. "
             f"Sample: {[{k: v for k, v in r.items() if k in ('chunk_id', 'graph_provenance')} for r in results[:3]]}"
         )
 
