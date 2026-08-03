@@ -415,17 +415,18 @@ def test_dry_run_does_not_register_or_start_service(tmp_path: Path, monkeypatch)
     assert not data_dir.exists(), "dry-run must not create the data dir"
 
 
-def test_dry_run_does_not_remove_legacy_service(tmp_path: Path, capsys) -> None:
-    """--dry-run must NOT stop/delete the legacy launchd plist (regression guard).
+def test_dry_run_does_not_remove_legacy_service(tmp_path: Path) -> None:
+    """run() must NEVER call _remove_legacy_service (regression guard for S194/S201/S202).
 
-    Step 0 of ``SearchInstaller.run`` performs legacy-service cleanup. That
-    cleanup (``_remove_legacy_service``) runs ``launchctl unload`` and unlinks
-    the plist — a destructive side effect that a dry-run must never perform.
-    A real, existing legacy plist is used here (not a stubbed no-op) so the
-    actual delete is exercised.
+    The bare ``_remove_legacy_service`` call issued ``launchctl unload`` without
+    waiting, leaving the dying service holding port 8765. The new service would
+    then fail to bind, launchd's ThrottleInterval would delay the restart 60 s,
+    and the wizard would time out — exit code 1.
+
+    Service transition now goes through ``pre_activate_cleanup() → stop() →
+    _wait_until_stopped()`` which waits correctly. ``_remove_legacy_service`` is
+    never called from ``run()``, so the legacy file is left untouched.
     """
-    # A real legacy plist that exists on disk — the destructive path only runs
-    # when ``legacy.exists()`` is true.
     legacy_plist = tmp_path / "com.archon.search.plist"
     legacy_plist.write_text("<plist>legacy</plist>")
 
@@ -433,15 +434,7 @@ def test_dry_run_does_not_remove_legacy_service(tmp_path: Path, capsys) -> None:
 
     installer = create_installer(config_file=str(config_path), dry_run=True)
 
-    with _patched_install(
-        config_path,
-        legacy_plist,
-        # NOTE: _remove_legacy_service is deliberately NOT patched — we exercise
-        # the real cleanup. subprocess is patched so no real launchctl/systemctl
-        # runs, isolating the filesystem side effect (the unlink) under test.
-        skip_remove_legacy_service=True,
-        extra_patches={"archon_search.install.subprocess.run": None},
-    ) as mocks:
+    with _patched_install(config_path, legacy_plist) as mocks:
         rc = installer.run(
             non_interactive=True,
             profile="balanced",
@@ -450,13 +443,11 @@ def test_dry_run_does_not_remove_legacy_service(tmp_path: Path, capsys) -> None:
 
     assert rc == 0
     assert legacy_plist.exists(), (
-        "dry-run must NOT delete the legacy launchd plist"
+        "run() must NOT delete the legacy launchd plist"
     )
-    mocks["archon_search.install.subprocess.run"].assert_not_called()
-    captured = capsys.readouterr()
-    assert f"[DRY RUN] Would remove legacy service file: {legacy_plist}" in captured.out, (
-        "dry-run must print the exact [DRY RUN] wording for the legacy service file"
-    )
+    # _remove_legacy_service must never be called — the race-free transition
+    # path goes through pre_activate_cleanup() → stop() → _wait_until_stopped().
+    mocks["archon_search.install.installer._remove_legacy_service"].assert_not_called()
 
 
 @pytest.mark.parametrize(

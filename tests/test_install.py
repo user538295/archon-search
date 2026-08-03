@@ -2170,7 +2170,6 @@ class TestInstallerStructure:
             "load_service",
             "unload_service",
             "install_lock",
-            "remove_legacy_service",
             "create_logs_dir",
             "download_fasttext_model",
             "prepare_db_path",

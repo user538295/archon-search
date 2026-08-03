@@ -403,9 +403,6 @@ class BaseInstaller(ABC):
     def install_lock(self) -> "contextlib.AbstractContextManager[object]": ...
 
     @abstractmethod
-    def remove_legacy_service(self, legacy: Path) -> None: ...
-
-    @abstractmethod
     def create_logs_dir(self) -> None: ...
 
     @abstractmethod
@@ -853,15 +850,6 @@ class BaseInstaller(ABC):
                     # branch == "force": leave backup, new config stays
                     return 1
 
-            # Before Step 15: legacy-service cleanup. Deferred from Step 0 so an
-            # aborting run (reinstall guard, disk space, declined confirmation,
-            # pre-warm failure) never dismantles a running service it then
-            # refuses to replace. By here the install is committed to
-            # registering the new service.
-            legacy = _legacy_service_path()
-            if legacy.exists():
-                self.remove_legacy_service(legacy)
-
             # Step 15: register and start service. Snapshot the log size first so
             # the readiness gate only reads crashes from this launch.
             _log_offset = self._service_log_offset()
@@ -1018,9 +1006,6 @@ class DryRunInstaller(BaseInstaller):
         # A dry-run writes no config/db, so it serializes against nothing and
         # skips the real lock — whose parent.mkdir would leave the data dir behind.
         return contextlib.nullcontext()
-
-    def remove_legacy_service(self, legacy: Path) -> None:
-        print(f"[DRY RUN] Would remove legacy service file: {legacy}")
 
     def create_logs_dir(self) -> None:
         pass
@@ -1203,9 +1188,6 @@ class RealInstaller(BaseInstaller):
 
     def install_lock(self) -> "contextlib.AbstractContextManager[object]":
         return _acquire_install_lock()
-
-    def remove_legacy_service(self, legacy: Path) -> None:
-        _remove_legacy_service(legacy)
 
     def create_logs_dir(self) -> None:
         (get_data_dir() / "logs").mkdir(parents=True, exist_ok=True)

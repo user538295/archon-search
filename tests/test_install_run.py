@@ -531,14 +531,17 @@ def test_run_creates_log_directory(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 12: run() calls _remove_legacy_service when legacy file exists
+# Test 12: run() never calls _remove_legacy_service, even when a legacy file exists.
+# pre_activate_cleanup() → stop() → _wait_until_stopped() handles service transition
+# correctly with proper waiting; bare _remove_legacy_service() skips the wait and
+# causes a port-hold race that times out the wizard (S194, S201, S202).
 # ---------------------------------------------------------------------------
 
 
-def test_run_calls_legacy_service_cleanup(tmp_path: Path) -> None:
+def test_run_does_not_call_legacy_service_cleanup(tmp_path: Path) -> None:
     config_path = tmp_path / "archon-search.toml"
 
-    # Create the fake legacy file so legacy.exists() returns True
+    # Create the fake legacy file so it exists on disk
     fake_legacy = tmp_path / "fake.plist"
     fake_legacy.touch()
 
@@ -564,7 +567,9 @@ def test_run_calls_legacy_service_cleanup(tmp_path: Path) -> None:
             skip_preload=True,
         )
 
-    remove_legacy_mock.assert_called_once_with(fake_legacy)
+    # _remove_legacy_service must NEVER be called from run() — the race-free
+    # service transition goes through pre_activate_cleanup() → stop() → _wait_until_stopped().
+    remove_legacy_mock.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
