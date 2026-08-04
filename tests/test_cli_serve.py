@@ -223,6 +223,7 @@ def test_serve_malformed_toml_preserves_real_plist_on_disk(
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(malformed))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
 
     result = runner.invoke(main, ["serve"])
 
