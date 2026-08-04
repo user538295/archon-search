@@ -1,6 +1,13 @@
 # Changelog
 
 
+## [26.8.1848] - 2026-08-04
+
+**JSON logging: uvicorn startup and error lines now properly formatted**
+
+- When `[logging] format = "json"`, uvicorn's own loggers (`uvicorn`, `uvicorn.error`, `uvicorn.access`) now emit JSON instead of plain text, preventing unstructured log lines from interleaving with application logs in the log file. The configured `[logging].level` now applies to uvicorn's startup and error messages as well.
+
+
 ## [26.8.1845] - 2026-08-04
 
 **Release process reliability improvements + OpenAPI spec sync**
