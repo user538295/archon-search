@@ -1,6 +1,15 @@
 # Changelog
 
 
+## [26.8.1840] - 2026-08-04
+
+**Reranker resilience and data directory fixes**
+
+- `CoreML` reranker model preload failures are no longer fatal during wizard setup. If the ONNX backend rejects the model, the wizard logs a warning and continues; the server can download the model on first search. Embedder preload failures remain fatal.
+- `ARCHON_SEARCH_DATA_DIR` environment variable is now correctly passed to `launchd` (macOS) and `systemd` (Linux) service files. Previously, services always defaulted to `~/.archon-search` regardless of custom data directory configuration.
+- Hardened service installation with regression guards to prevent accidental removal of existing plist files during installation.
+
+
 ## [26.8.1826] - 2026-08-03
 
 canary
