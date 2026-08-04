@@ -1,6 +1,15 @@
 # Changelog
 
 
+## [26.8.1845] - 2026-08-04
+
+**Release process reliability improvements + OpenAPI spec sync**
+
+`release.sh` now includes a pre-flight test-suite gate that runs before computing the release tag, ensuring broken commits cannot be tagged. The gate respects test-harness and dry-run modes, so test assertions of the release script's logic itself remain unaffected while real releases stay protected.
+
+OpenAPI snapshot updated to reflect FastAPI's 422 error description string (`"Unprocessable Entity"` instead of the earlier `"Unprocessable Content"`), keeping the snapshot in sync with the framework version.
+
+
 ## [26.8.1840] - 2026-08-04
 
 **Reranker resilience and data directory fixes**
