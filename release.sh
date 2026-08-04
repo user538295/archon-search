@@ -91,6 +91,9 @@ check_git_cliff() {
 
 check_git_cliff
 
+echo "Running full test suite before release..."
+uv run pytest || bail "test suite failed — fix all failures before releasing"
+
 # 2. Compute provisional CalVer tag (count+1 accounts for the CHANGELOG.md commit added later).
 [ -n "${EXPECTED_COUNT_OVERRIDE:-}" ] && [ -z "${RELEASE_SH_TEST_MODE:-}" ] && \
     bail "EXPECTED_COUNT_OVERRIDE is set — unset it before running a real release"
