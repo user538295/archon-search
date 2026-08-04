@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from archon_search.paths import get_data_dir
 from archon_search.platform.service import _STOP_WAIT_TIMEOUT_S, SearchServiceLifecycle, ServiceStatus
 
 log = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ After=network.target
 ExecStart={python} -m archon_search.server
 WorkingDirectory={cwd}
 Environment=ARCHON_SEARCH_CONFIG={config_path}
+Environment=ARCHON_SEARCH_DATA_DIR={data_dir}
 EnvironmentFile=-%h/.archon-search/.secrets.env
 Restart=always
 RestartSec=5
@@ -110,16 +112,18 @@ class SystemdSearchService(SearchServiceLifecycle):
     def register(self, dry_run: bool = False, config_path: str | None = None) -> None:
         if dry_run:
             return
-        cwd = str(Path.home() / ".archon-search")
+        data_dir = get_data_dir()
+        cwd = str(data_dir)
         # Honor the caller-supplied config path (e.g. `wizard --config`) so the
         # unit's ARCHON_SEARCH_CONFIG points at the config the installer just
         # wrote, not the hardcoded default (S206).
-        config_path = config_path or str(Path.home() / ".archon-search" / "archon-search.toml")
+        config_path = config_path or str(data_dir / "archon-search.toml")
 
         content = _UNIT_TEMPLATE.format(
             python=sys.executable,
             cwd=cwd,
             config_path=config_path,
+            data_dir=str(data_dir),
         )
 
         try:

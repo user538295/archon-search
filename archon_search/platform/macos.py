@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from archon_search.paths import get_data_dir
 from archon_search.platform.service import _STOP_WAIT_TIMEOUT_S, SearchServiceLifecycle, ServiceStatus
 
 log = logging.getLogger(__name__)
@@ -32,6 +33,8 @@ _PLIST_TEMPLATE = """\
     <dict>
         <key>ARCHON_SEARCH_CONFIG</key>
         <string>{config_path}</string>
+        <key>ARCHON_SEARCH_DATA_DIR</key>
+        <string>{data_dir}</string>
     </dict>
     <key>StandardOutPath</key>
     <string>{log_path}</string>
@@ -73,7 +76,7 @@ class LaunchdSearchService(SearchServiceLifecycle):
             return False
 
     def register(self, dry_run: bool = False, config_path: str | None = None) -> None:
-        data_dir = Path.home() / ".archon-search"
+        data_dir = get_data_dir()
         cwd = str(data_dir)
         # The service reads its config from ARCHON_SEARCH_CONFIG; honor the
         # caller-supplied path (e.g. `wizard --config`) so the service the
@@ -97,6 +100,7 @@ class LaunchdSearchService(SearchServiceLifecycle):
             cwd=cwd,
             config_path=config_path,
             log_path=log_path,
+            data_dir=str(data_dir),
         )
 
         try:
@@ -124,7 +128,7 @@ class LaunchdSearchService(SearchServiceLifecycle):
                 raise RuntimeError("launchctl binary not found") from exc
         if self._plist_path.exists():
             self._plist_path.unlink()
-        wrapper = Path.home() / ".archon-search" / "run-server.sh"
+        wrapper = get_data_dir() / "run-server.sh"
         wrapper.unlink(missing_ok=True)
 
     def start(self, dry_run: bool = False) -> int:

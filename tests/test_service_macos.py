@@ -334,10 +334,13 @@ def test_register_writes_plist_with_label(tmp_path: Path) -> None:
     assert "com.archon.search" in plist.read_text()
 
 
-def test_register_writes_plist_with_python_executable(tmp_path: Path) -> None:
+def test_register_writes_plist_with_python_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """register() launches the server via a wrapper script that uses sys.executable."""
     from pathlib import Path as _Path
     from archon_search.platform.macos import LaunchdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
     with patch.object(_Path, "home", return_value=tmp_path):
         svc.register()
@@ -346,10 +349,13 @@ def test_register_writes_plist_with_python_executable(tmp_path: Path) -> None:
     assert sys.executable in wrapper.read_text()
 
 
-def test_register_plist_uses_taskpolicy(tmp_path: Path) -> None:
+def test_register_plist_uses_taskpolicy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """register() wraps server command with taskpolicy -b for background QoS."""
     from pathlib import Path as _Path
     from archon_search.platform.macos import LaunchdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
     with patch.object(_Path, "home", return_value=tmp_path):
         svc.register()
@@ -359,7 +365,9 @@ def test_register_plist_uses_taskpolicy(tmp_path: Path) -> None:
     assert "<string>-b</string>" in content
 
 
-def test_register_writes_requested_config_path_into_plist(tmp_path: Path) -> None:
+def test_register_writes_requested_config_path_into_plist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """register(config_path=X) writes X into the plist's ARCHON_SEARCH_CONFIG (S206).
 
     The wizard's --config flag must reach the service it starts: the generated
@@ -367,6 +375,7 @@ def test_register_writes_requested_config_path_into_plist(tmp_path: Path) -> Non
     hardcoded ~/.archon-search/archon-search.toml default.
     """
     from archon_search.platform.macos import LaunchdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
     requested = tmp_path / "custom" / "archon-search.toml"
     with patch.object(Path, "home", return_value=tmp_path):
@@ -378,15 +387,43 @@ def test_register_writes_requested_config_path_into_plist(tmp_path: Path) -> Non
     assert f"<string>{hardcoded_default}</string>" not in content
 
 
-def test_register_defaults_config_path_when_omitted(tmp_path: Path) -> None:
-    """register() with no config_path keeps the ~/.archon-search default."""
+def test_register_defaults_config_path_when_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """register() with no config_path defaults to data_dir/archon-search.toml."""
     from archon_search.platform.macos import LaunchdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
     with patch.object(Path, "home", return_value=tmp_path):
         svc.register()
     plist = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
     default = tmp_path / ".archon-search" / "archon-search.toml"
     assert f"<string>{default}</string>" in plist.read_text()
+
+
+def test_register_plist_includes_data_dir_when_env_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """register() must include ARCHON_SEARCH_DATA_DIR in plist when env is set (S194/S201).
+
+    When ARCHON_SEARCH_DATA_DIR is overridden (e.g. by the smoke test harness),
+    the service process must inherit it so lid.176.ftz and logs are found at the
+    same location the wizard used, not at the hardcoded ~/.archon-search default.
+    """
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    from archon_search.platform.macos import LaunchdSearchService
+    svc = LaunchdSearchService()
+    plist = tmp_path / "com.archon.search.plist"
+    with patch.object(type(svc), "_plist_path", property(lambda self: plist)):
+        svc.register(config_path=str(tmp_path / "archon-search.toml"))
+    content = plist.read_text()
+    assert "ARCHON_SEARCH_DATA_DIR" in content, (
+        "plist must declare ARCHON_SEARCH_DATA_DIR so the service finds "
+        "models/logs under the same data dir the wizard used"
+    )
+    assert str(tmp_path) in content, (
+        f"plist must propagate the overridden data dir {tmp_path}"
+    )
 
 
 def test_register_raises_on_permission_error(tmp_path: Path) -> None:
@@ -443,9 +480,12 @@ def test_unregister_noop_when_not_loaded(tmp_path: Path) -> None:
     assert not plist.exists()
 
 
-def test_unregister_removes_wrapper_script(tmp_path: Path) -> None:
+def test_unregister_removes_wrapper_script(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """unregister() removes run-server.sh alongside the plist."""
     from archon_search.platform.macos import LaunchdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
     with patch.object(Path, "home", return_value=tmp_path):
         # Pre-create both files that register() would have written
@@ -520,9 +560,10 @@ def test_service_label_unchanged() -> None:
     assert _LABEL == "com.archon.search"
 
 
-def test_cwd_is_archon_search(tmp_path: Path) -> None:
-    """register() must use ~/.archon-search as WorkingDirectory."""
+def test_cwd_is_archon_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """register() must use ARCHON_SEARCH_DATA_DIR as WorkingDirectory."""
     from archon_search.platform.macos import LaunchdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
     with patch.object(Path, "home", return_value=tmp_path):
         plist = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
@@ -532,9 +573,10 @@ def test_cwd_is_archon_search(tmp_path: Path) -> None:
     assert expected_cwd in content
 
 
-def test_config_path_is_archon_search(tmp_path: Path) -> None:
-    """register() must reference ~/.archon-search/archon-search.toml as config."""
+def test_config_path_is_archon_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """register() must reference data_dir/archon-search.toml as config."""
     from archon_search.platform.macos import LaunchdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
     with patch.object(Path, "home", return_value=tmp_path):
         plist = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
@@ -544,9 +586,10 @@ def test_config_path_is_archon_search(tmp_path: Path) -> None:
     assert expected_config in content
 
 
-def test_log_path_is_archon_search(tmp_path: Path) -> None:
-    """register() must route stdout/stderr logs to ~/.archon-search/logs/archon-search.log."""
+def test_log_path_is_archon_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """register() must route stdout/stderr logs to data_dir/logs/archon-search.log."""
     from archon_search.platform.macos import LaunchdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
     with patch.object(Path, "home", return_value=tmp_path):
         plist = tmp_path / "Library" / "LaunchAgents" / "com.archon.search.plist"
@@ -571,9 +614,12 @@ def test_macos_plist_uses_wrapper_script(tmp_path: Path) -> None:
     assert sys.executable not in content
 
 
-def test_macos_wrapper_script_content_guards_missing_file(tmp_path: Path) -> None:
+def test_macos_wrapper_script_content_guards_missing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """register() writes a wrapper script that guards against absent .secrets.env with [ -f ] && set -a."""
     from archon_search.platform.macos import LaunchdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
     with patch.object(Path, "home", return_value=tmp_path):
         svc.register()
@@ -586,10 +632,13 @@ def test_macos_wrapper_script_content_guards_missing_file(tmp_path: Path) -> Non
     assert ".secrets.env" in content
 
 
-def test_register_writes_wrapper_script_on_macos(tmp_path: Path) -> None:
-    """register() writes run-server.sh with mode 0o755 in ~/.archon-search/."""
+def test_register_writes_wrapper_script_on_macos(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """register() writes run-server.sh with mode 0o755 in data_dir."""
     import stat as _stat
     from archon_search.platform.macos import LaunchdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
     with patch.object(Path, "home", return_value=tmp_path):
         svc.register()
@@ -599,9 +648,12 @@ def test_register_writes_wrapper_script_on_macos(tmp_path: Path) -> None:
     assert _stat.S_IMODE(mode) == 0o755, f"run-server.sh must have mode 0o755, got {oct(_stat.S_IMODE(mode))}"
 
 
-def test_wrapper_script_syntax_is_valid(tmp_path: Path) -> None:
+def test_wrapper_script_syntax_is_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Generated wrapper script passes sh -n syntax check; [ -f ] guard handles absent .secrets.env."""
     from archon_search.platform.macos import LaunchdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = LaunchdSearchService()
     with patch.object(Path, "home", return_value=tmp_path):
         svc.register()
