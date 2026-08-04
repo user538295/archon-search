@@ -97,6 +97,7 @@ def test_wizard_creates_secrets_env_and_wrapper_on_macos_positive(tmp_path: Path
         patch("archon_search.install.installer._check_disk_space"),
         patch("archon_search.install.installer.get_data_dir", return_value=data_dir),
         patch("archon_search.paths.get_data_dir", return_value=data_dir),
+        patch("archon_search.platform.macos.get_data_dir", return_value=data_dir),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
         patch.object(BaseInstaller, "validate_providers", return_value=False),
         patch.object(RealInstaller, "configure_providers"),
