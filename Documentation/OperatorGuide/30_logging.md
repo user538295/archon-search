@@ -1,8 +1,8 @@
 **Purpose**: Configure `archon-search` application logs — file rotation, log level, text vs JSON output — and ship structured logs to an aggregation pipeline.
 **Audience**: SREs and sysadmins operating `archon-search` in production.
 **Status**: Draft
-**Last reviewed**: 2026-07-29
-**Next review**: 2027-07-29
+**Last reviewed**: 2026-08-04
+**Next review**: 2027-08-04
 
 # Logging
 
@@ -103,12 +103,13 @@ Outside container mode, an empty `log_file` produces a startup warning that file
 
 1. Set `format = "json"` in `[logging]`.
 2. Choose the ingestion path:
-   - **File tailing** — point Filebeat / Promtail / the Datadog Agent at `~/.archon-search/logs/archon-search.log`. Each line is already a JSON object; configure the agent's JSON/`decode_json_fields` parser and it maps `timestamp`, `level`, `logger`, `message`, `correlation_id` directly.
+   - **File tailing** — point Filebeat / Promtail / the Datadog Agent at `~/.archon-search/logs/archon-search.log`. Every line `archon_search` and uvicorn emit is a JSON object mapping `timestamp`, `level`, `logger`, `message` directly (plus `correlation_id` on `archon_search` request lines) — configure the agent's JSON/`decode_json_fields` parser accordingly. Note that lines written straight to the process's stderr **outside** the logging system — unhandled-exception tracebacks, the Python `warnings` module, and third-party libraries that log without propagating through `archon_search`/`uvicorn` — remain plain text, so keep the parser tolerant of the occasional non-JSON line rather than failing the batch.
    - **Container stdout** — run with `ARCHON_SEARCH_CONTAINER=1` and (optionally) `log_file = ""`, then let the container runtime's log driver (Docker json-file, Fluent Bit, Loki's Docker driver, Datadog's container agent) collect stderr.
 3. Index on `correlation_id` to correlate multi-line request traces, and on `logger` for module-level filtering.
 
 Notes:
-- uvicorn's own access logs use a separate logger hierarchy and are **not** reformatted by this handler. If you want them structured too, configure uvicorn's logging separately.
+- uvicorn's own loggers (`uvicorn`, `uvicorn.error`, `uvicorn.access`) use a separate logger hierarchy from the `archon_search` file handler, but when `format = "json"` they are **also** emitted as JSON: `run_server()` passes a uvicorn `log_config` built by `build_uvicorn_log_config()` (`archon_search/logging_setup.py`) into `uvicorn.run()`, so startup lines like `Started server process [PID]` and access-log lines are wrapped as JSON objects too — no separate uvicorn logging setup is needed (S192). The helper is derived from uvicorn's own `LOGGING_CONFIG` (not a hardcoded logger list), applies `[logging].level`, and inherits uvicorn's stderr/stdout streams. Two caveats: (1) the access line's request fields (client address, request line, status code) are rendered into the single `message` string rather than broken out as separate JSON keys, so you cannot index on `status_code` directly; (2) uvicorn lines carry no `correlation_id` — they are emitted outside the request middleware. When `format = "text"` (the default), the helper returns `None` and uvicorn keeps its own default text log config.
+- uvicorn's lines reach the log **file** only where the process's stdout/stderr are redirected into it (the macOS launchd service does this). They are **not** written through the rotating file handler, so under systemd they land in the journal and in a container they go to stdout/stderr; and after a midnight rotation they continue on the process's original stream rather than following the renamed file.
 - Rotated file suffixes are UTC dates; make sure your file-tailing agent follows renamed files (all of the above do by default).
 
 ## Upgrade behaviour

@@ -1,6 +1,7 @@
 """Logging configuration helpers for archon-search (B7)."""
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import sys
@@ -44,6 +45,45 @@ def _build_formatter(log_format: str) -> logging.Formatter:
         formatter = logging.Formatter(fmt, datefmt=datefmt)
     formatter.converter = time.gmtime  # type: ignore[method-assign]
     return formatter
+
+
+def build_uvicorn_log_config(config: SearchConfig) -> dict[str, object] | None:
+    """Build a uvicorn dictConfig that routes uvicorn's own loggers through the
+    configured JSON formatter (S192).
+
+    Returns ``None`` for the text format so uvicorn keeps its own default text
+    ``LOGGING_CONFIG``. For ``json`` it is derived by deep-copying uvicorn's own
+    ``LOGGING_CONFIG``, adding a JSON formatter, and repointing every handler at
+    it, so uvicorn's startup lines (``Started server process [PID]``, ...) are
+    emitted as JSON objects instead of plain text. Deriving from uvicorn's config
+    (rather than restating its logger/handler topology) means any logger uvicorn
+    adds or renames in a future release is covered automatically — a hardcoded
+    allowlist would silently leak that logger's lines as text, re-opening the
+    S192 bug.
+
+    Every uvicorn logger's level is set to ``config.level`` so the operator's
+    ``[logging].level`` governs uvicorn output too, matching the archon_search
+    logger (note ``level >= WARNING`` therefore silences uvicorn access lines).
+    The correlation-id filter is intentionally NOT attached: uvicorn's lines are
+    emitted outside archon_search's request middleware, so they never carry a
+    correlation_id.
+    """
+    if config.log_format != "json":
+        return None
+    from uvicorn.config import LOGGING_CONFIG  # lazy: uvicorn is only needed to serve
+
+    log_config = copy.deepcopy(LOGGING_CONFIG)
+    # Add a JSON formatter and point every handler at it, but KEEP uvicorn's own
+    # "default"/"access" formatter entries: uvicorn's configure_logging() indexes
+    # log_config["formatters"]["default"|"access"] to inject use_colors *before*
+    # applying the dict, so deleting them would KeyError if a caller ever passed
+    # use_colors. The kept formatters simply end up unattached to any handler.
+    log_config["formatters"]["json"] = {"()": _build_formatter, "log_format": "json"}
+    for handler in log_config["handlers"].values():
+        handler["formatter"] = "json"
+    for logger in log_config["loggers"].values():
+        logger["level"] = config.level
+    return log_config
 
 
 def _attach_file_handler(logger: logging.Logger, config: SearchConfig) -> None:

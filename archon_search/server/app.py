@@ -35,7 +35,7 @@ from archon_search.jobs.scheduler import JobScheduler
 from archon_search.jobs.store import JobStore
 from archon_search.key_manager import KeyRecord, KeyStore, load_or_generate_key
 from archon_search.paths import get_data_dir
-from archon_search.logging_setup import configure_logging
+from archon_search.logging_setup import build_uvicorn_log_config, configure_logging
 from archon_search.model_validation import ModelValidationResult, validate_models_async
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import SearchPipeline
@@ -783,4 +783,8 @@ def run_server(config: SearchConfig, config_path: Path | str | None = None) -> N
         dispatch_fn=_placeholder_dispatch,
     )
     app = create_app(config, job_store, scheduler=scheduler, config_path=config_path)
-    uvicorn.run(app, host=config.host, port=config.port)
+    uvicorn_kwargs: dict = {"host": config.host, "port": config.port}
+    log_config = build_uvicorn_log_config(config)
+    if log_config is not None:
+        uvicorn_kwargs["log_config"] = log_config
+    uvicorn.run(app, **uvicorn_kwargs)
