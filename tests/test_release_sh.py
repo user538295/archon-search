@@ -26,6 +26,17 @@ SAMPLE_NOTES = """\
 """
 
 
+def _add_uv_pytest_stub(stub_bin: Path) -> None:
+    """Add a uv stub that exits 0 for 'uv run pytest', simulating a passing suite."""
+    stub = stub_bin / "uv"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '====== 1 passed in 0.01s ======\\n'\n"
+        "exit 0\n"
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
 def _make_stub_git_cliff(bin_dir: Path, version_output: str) -> None:
     """Write a stub git-cliff script that prints version_output and exits 0."""
     stub = bin_dir / "git-cliff"
@@ -205,6 +216,7 @@ def test_valid_git_cliff_version_passes_preflight(valid_repo, tmp_path):
     stub_bin = tmp_path / "stub_bin"
     stub_bin.mkdir()
     _make_stub_git_cliff(stub_bin, "git-cliff 2.4.0")
+    _add_uv_pytest_stub(stub_bin)
 
     original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     new_path = f"{stub_bin}:{original_path}"
@@ -248,6 +260,7 @@ class TestProvisionalTag:
         stub_bin = tmp_path / "stub_bin"
         stub_bin.mkdir()
         _make_stub_git_cliff(stub_bin, "git-cliff 2.4.0")
+        _add_uv_pytest_stub(stub_bin)
 
         original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
         new_path = f"{stub_bin}:{original_path}"
@@ -313,6 +326,7 @@ def test_override_without_test_mode_bails(tmp_path):
     stub_bin = tmp_path / "stub_bin"
     stub_bin.mkdir()
     _make_stub_git_cliff(stub_bin, "git-cliff 2.4.0")
+    _add_uv_pytest_stub(stub_bin)
 
     original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     new_path = f"{stub_bin}:{original_path}"
@@ -340,6 +354,7 @@ def _make_cliff_path(tmp_path: Path, notes: str = SAMPLE_NOTES, exit_code: int =
     stub_bin = tmp_path / "stub_bin"
     stub_bin.mkdir(exist_ok=True)
     _make_stub_git_cliff_with_notes(stub_bin, "git-cliff 2.4.0", notes, exit_code)
+    _add_uv_pytest_stub(stub_bin)
     original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     return f"{stub_bin}:{original_path}"
 
@@ -535,6 +550,7 @@ class TestChangelogPrepend:
         stub_bin = tmp_path / "stub_bin"
         stub_bin.mkdir()
         _make_stub_git_cliff_with_notes(stub_bin, "git-cliff 2.4.0", SAMPLE_NOTES)
+        _add_uv_pytest_stub(stub_bin)
         original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
         new_path = f"{stub_bin}:{original_path}"
 
@@ -593,6 +609,7 @@ class TestDryRunOutput:
         stub_bin = tmp_path / "stub_bin"
         stub_bin.mkdir(exist_ok=True)
         _make_stub_git_cliff_with_notes(stub_bin, "git-cliff 2.4.0", SAMPLE_NOTES)
+        _add_uv_pytest_stub(stub_bin)
         original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
         new_path = f"{stub_bin}:{original_path}"
         return _run_release_sh(["--dry-run"], env_overrides={"PATH": new_path}, repo_path=worker)
@@ -681,6 +698,7 @@ class TestDryRunOutput:
         stub_bin = tmp_path / "stub_bin"
         stub_bin.mkdir()
         _make_stub_git_cliff_with_notes(stub_bin, "git-cliff 2.4.0", "   \n  \n")
+        _add_uv_pytest_stub(stub_bin)
         original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
         new_path = f"{stub_bin}:{original_path}"
 

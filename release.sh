@@ -91,9 +91,11 @@ check_git_cliff() {
 
 check_git_cliff
 
-if [ -z "${RELEASE_SH_TEST_MODE:-}" ] && [ "$DRY_RUN" != 1 ]; then
+if [ -z "${RELEASE_SH_TEST_MODE:-}" ]; then
     echo "Running full test suite before release..."
+    _suite_start=$SECONDS
     uv run pytest || bail "test suite failed — fix all failures before releasing"
+    echo "Test suite passed in $(( SECONDS - _suite_start ))s."
 fi
 
 # 2. Compute provisional CalVer tag (count+1 accounts for the CHANGELOG.md commit added later).
