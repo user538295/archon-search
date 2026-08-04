@@ -81,6 +81,57 @@ def test_smoke_marker_in_pyproject() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_serve_exits_nonzero_on_malformed_config(tmp_path) -> None:
+    """``archon-search serve`` with a malformed TOML config must exit non-zero (S138).
+
+    Subprocess-level regression guard: runs the real binary with
+    ``ARCHON_SEARCH_CONFIG`` pointing at a syntactically invalid TOML file and
+    asserts that (a) the exit code is non-zero and (b) an error message is
+    printed to stderr.  The unit-test equivalent
+    (``test_serve_config_error_exits_nonzero`` in ``tests/test_cli_serve.py``)
+    exercises the in-process path via ``CliRunner``; this test proves the same
+    invariant at the OS process boundary so a future packaging or entry-point
+    change cannot regress silently.
+
+    Root cause of S138 (26.8.1815): ``BaseInstaller.run()`` was calling
+    ``_remove_legacy_service()`` which resolved to the same path as the current
+    production plist, inadvertently removing it during ``archon-search install``
+    (not serve).  That call was removed in commit ``b8a7949c``.  This test
+    guards the serve command's own exit-code contract; the plist-preservation
+    contract is guarded by the disk-level unit test
+    ``test_serve_malformed_toml_preserves_real_plist_on_disk``.
+    """
+    malformed = tmp_path / "malformed.toml"
+    malformed.write_text("[broken")  # syntactically invalid TOML
+
+    # Isolate ARCHON_SEARCH_DATA_DIR so the subprocess never reads the
+    # developer's real ~/.archon-search/ tree.  ARCHON_SEARCH_CONFIG overrides
+    # get_default_config_path() to point at the malformed file.
+    env = {
+        **os.environ,
+        "ARCHON_SEARCH_CONFIG": str(malformed),
+        "ARCHON_SEARCH_DATA_DIR": str(tmp_path / "data"),
+        "PYTEST_ADDOPTS": "",
+    }
+
+    result = subprocess.run(
+        ["uv", "run", "archon-search", "serve"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    assert result.returncode != 0, (
+        f"archon-search serve on malformed TOML must exit non-zero; "
+        f"got returncode=0. stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "Error" in result.stderr or "error" in result.stderr.lower(), (
+        f"expected an error message in stderr; "
+        f"got: stderr={result.stderr!r} stdout={result.stdout!r}"
+    )
+
+
 @pytest.mark.skipif(
     os.environ.get("SMOKE_NO_TIMING") == "1", reason="timing disabled"
 )
