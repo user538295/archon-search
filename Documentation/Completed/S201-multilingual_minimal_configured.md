@@ -3,7 +3,7 @@
 **ID**: S201-multilingual_minimal_configured
 **Scenario**: S201
 **Severity**: medium
-**Version**: archon-search, version 26.8.1815
+**Version**: archon-search, version 26.8.1826 (re-regression; originally fixed in 26.8.1815)
 
 ### What happened
 Installs tree-sitter language parsers (~50 MB) and graph enrichment (spaCy),
