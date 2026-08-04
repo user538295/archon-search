@@ -455,9 +455,10 @@ def test_service_name_unchanged() -> None:
     assert _SERVICE_NAME == "archon-search"
 
 
-def test_cwd_is_archon_search(tmp_path: Path) -> None:
-    """register() must use ~/.archon-search as WorkingDirectory."""
+def test_cwd_is_archon_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """register() must use ARCHON_SEARCH_DATA_DIR as WorkingDirectory."""
     from archon_search.platform.linux import SystemdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = SystemdSearchService()
     unit = tmp_path / "archon-search.service"
     with (
@@ -466,7 +467,7 @@ def test_cwd_is_archon_search(tmp_path: Path) -> None:
     ):
         svc.register()
     content = unit.read_text()
-    expected_cwd = str(Path.home() / ".archon-search")
+    expected_cwd = str(tmp_path / ".archon-search")
     assert expected_cwd in content
 
 
@@ -484,9 +485,10 @@ def test_linux_unit_template_contains_environment_file(tmp_path: Path) -> None:
     assert "EnvironmentFile=-%h/.archon-search/.secrets.env" in content
 
 
-def test_config_path_is_archon_search(tmp_path: Path) -> None:
-    """register() must reference ~/.archon-search/archon-search.toml as config."""
+def test_config_path_is_archon_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """register() must reference data_dir/archon-search.toml as config."""
     from archon_search.platform.linux import SystemdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
     svc = SystemdSearchService()
     unit = tmp_path / "archon-search.service"
     with (
@@ -495,7 +497,7 @@ def test_config_path_is_archon_search(tmp_path: Path) -> None:
     ):
         svc.register()
     content = unit.read_text()
-    expected_config = str(Path.home() / ".archon-search" / "archon-search.toml")
+    expected_config = str(tmp_path / ".archon-search" / "archon-search.toml")
     assert expected_config in content
 
 
@@ -519,3 +521,31 @@ def test_register_writes_requested_config_path_into_unit(tmp_path: Path) -> None
     assert f"Environment=ARCHON_SEARCH_CONFIG={requested}" in content
     hardcoded_default = str(Path.home() / ".archon-search" / "archon-search.toml")
     assert f"ARCHON_SEARCH_CONFIG={hardcoded_default}" not in content
+
+
+def test_register_unit_includes_data_dir_when_env_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """register() must include ARCHON_SEARCH_DATA_DIR in unit when env is set (S194/S201).
+
+    When ARCHON_SEARCH_DATA_DIR is overridden (e.g. by the smoke test harness),
+    the service process must inherit it so lid.176.ftz and logs are found at the
+    same location the wizard used, not at the hardcoded ~/.archon-search default.
+    """
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    from archon_search.platform.linux import SystemdSearchService
+    svc = SystemdSearchService()
+    unit = tmp_path / "archon-search.service"
+    with (
+        patch.object(type(svc), "_unit_path", property(lambda self: unit)),
+        patch.object(svc, "_run", return_value=_ok()),
+    ):
+        svc.register(config_path=str(tmp_path / "archon-search.toml"))
+    content = unit.read_text()
+    assert "ARCHON_SEARCH_DATA_DIR" in content, (
+        "unit file must declare ARCHON_SEARCH_DATA_DIR so the service finds "
+        "models/logs under the same data dir the wizard used"
+    )
+    assert str(tmp_path) in content, (
+        f"unit file must propagate the overridden data dir {tmp_path}"
+    )
