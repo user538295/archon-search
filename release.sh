@@ -91,7 +91,7 @@ check_git_cliff() {
 
 check_git_cliff
 
-if [ -z "${RELEASE_SH_TEST_MODE:-}" ]; then
+if [ -z "${RELEASE_SH_TEST_MODE:-}" ] && [ "$DRY_RUN" != 1 ]; then
     echo "Running full test suite before release..."
     uv run pytest || bail "test suite failed — fix all failures before releasing"
 fi
