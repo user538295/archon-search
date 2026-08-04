@@ -97,9 +97,13 @@ def _prewarm_models(profile: InstallProfile, timeout: int | None = None) -> None
             try:
                 TextCrossEncoder(profile.reranker, lazy_load=True)
             except Exception as exc:
-                raise InstallError(
-                    f"Failed to pre-warm reranker model {profile.reranker!r}: {exc}"
-                ) from exc
+                # Non-fatal: a CoreML ONNX error or transient download hiccup must
+                # not abort the wizard.  The reranker will download on first search.
+                logger.warning(
+                    "Failed to pre-warm reranker model %r: %s — "
+                    "the model will be downloaded on first search.",
+                    profile.reranker, exc,
+                )
 
         timer.cancel()
     except InstallError:

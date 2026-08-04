@@ -144,16 +144,41 @@ def test_prewarm_raises_install_error_on_download_failure():
     assert profile.embedder in str(exc_info.value)
 
 
-def test_prewarm_raises_install_error_on_cross_encoder_failure():
-    """If TextCrossEncoder raises, InstallError must be raised with reranker model name."""
+def test_prewarm_reranker_failure_logs_warning_not_raises(caplog):
+    """When TextCrossEncoder raises, _prewarm_models must warn and continue — NOT raise.
+
+    S202: CoreML reranker probe failure must be non-fatal so the wizard does not exit 1
+    on hardware where the CoreML ONNX backend rejects the reranker model.
+    """
+    import logging
+
+    profile = ENGLISH_PROFILES["minimal"]
+    assert profile.reranker is not None
+    mock_te = MagicMock()
+    mock_tce = MagicMock(side_effect=RuntimeError("CoreML reranker probe failed: [ONNXRuntimeError]"))
+    fe_mod = _make_fastembed_mock(mock_te, mock_tce)
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.install"):
+        with patch.dict(sys.modules, {"fastembed": fe_mod}):
+            _prewarm_models(profile, timeout=300)  # must NOT raise
+
+    assert any(profile.reranker in r.message for r in caplog.records), (
+        f"expected warning mentioning {profile.reranker!r} in {[r.message for r in caplog.records]}"
+    )
+
+
+def test_prewarm_raises_install_error_on_cross_encoder_failure(caplog):
+    """Reranker prewarm failure logs a warning and does NOT raise (S202 non-fatal fix)."""
+    import logging
+
     profile = ENGLISH_PROFILES["minimal"]
     mock_te = MagicMock()
     mock_tce = MagicMock(side_effect=RuntimeError("download failed"))
     fe_mod = _make_fastembed_mock(mock_te, mock_tce)
-    with patch.dict(sys.modules, {"fastembed": fe_mod}):
-        with pytest.raises(InstallError) as exc_info:
-            _prewarm_models(profile, timeout=300)
-    assert profile.reranker in str(exc_info.value)
+    with caplog.at_level(logging.WARNING, logger="archon_search.install"):
+        with patch.dict(sys.modules, {"fastembed": fe_mod}):
+            _prewarm_models(profile, timeout=300)  # must NOT raise
+    assert any(profile.reranker in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
