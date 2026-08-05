@@ -1,0 +1,261 @@
+openapi: 3.0.0
+info:
+  title: E2C Graph Salience API
+  version: 0.0.0
+tags: []
+paths:
+  /graph/cross-collection:
+    get:
+      operationId: GraphInspection_getCrossCollection
+      description: |-
+        Return merged node and edge list across ≥2 collections, scored by the chosen salience mode.
+        For tfidf mode, IDF denominator is the full namespace collection count (not just the listed ones).
+        Defaults to "frequency" when ?salience= is omitted.
+      parameters:
+        - name: collections
+          in: query
+          required: true
+          schema:
+            type: string
+          explode: false
+        - name: format
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/GraphFormat'
+          explode: false
+        - name: salience
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/SalienceMode'
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CrossCollectionGraphInspectionResponse'
+        '404':
+          description: The server cannot find the requested resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionNotFoundError'
+        '422':
+          description: Client error
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/GraphDisabledError'
+                  - $ref: '#/components/schemas/CrossCollectionMinimumError'
+                  - $ref: '#/components/schemas/InvalidSalienceError'
+  /graph/{collection}:
+    get:
+      operationId: GraphInspection_getSingleCollection
+      description: |-
+        Return node and edge list for a single collection, scored by the chosen salience mode.
+        Defaults to "frequency" (existing behaviour) when ?salience= is omitted.
+        Returns 422 for unknown salience values.
+      parameters:
+        - name: collection
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: format
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/GraphFormat'
+          explode: false
+        - name: salience
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/SalienceMode'
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphInspectionResponse'
+        '404':
+          description: The server cannot find the requested resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionNotFoundError'
+        '422':
+          description: Client error
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/GraphDisabledError'
+                  - $ref: '#/components/schemas/InvalidSalienceError'
+components:
+  schemas:
+    CollectionNotFoundError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          enum:
+            - collection not found
+    CrossCollectionGraphInspectionResponse:
+      type: object
+      required:
+        - collections
+        - nodes
+        - edges
+        - node_count
+        - edge_count
+        - truncated
+        - salience_mode
+      properties:
+        collections:
+          type: array
+          items:
+            type: string
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphNodeResponse'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdgeResponse'
+        node_count:
+          type: integer
+          format: int32
+        edge_count:
+          type: integer
+          format: int32
+        truncated:
+          type: boolean
+        salience_mode:
+          allOf:
+            - $ref: '#/components/schemas/SalienceMode'
+          description: E2c — echoes the effective salience mode used.
+      description: 'E2c addition: salience mode echoed in cross-collection response.'
+    CrossCollectionMinimumError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+    GraphDisabledError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          enum:
+            - graph inspection requires [graph] enabled=true in server config
+    GraphEdgeResponse:
+      type: object
+      required:
+        - edge_id
+        - source_entity_id
+        - target_entity_id
+        - weight
+        - source_chunk_ids
+      properties:
+        edge_id:
+          type: string
+        source_entity_id:
+          type: string
+        target_entity_id:
+          type: string
+        weight:
+          type: integer
+          format: int32
+        source_chunk_ids:
+          type: array
+          items:
+            type: string
+      description: A single graph edge with co-occurrence weight.
+    GraphFormat:
+      type: string
+      enum:
+        - json
+        - graphml
+      description: Graph export format.
+    GraphInspectionResponse:
+      type: object
+      required:
+        - nodes
+        - edges
+        - node_count
+        - edge_count
+        - truncated
+        - salience_mode
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphNodeResponse'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdgeResponse'
+        node_count:
+          type: integer
+          format: int32
+        edge_count:
+          type: integer
+          format: int32
+        truncated:
+          type: boolean
+        salience_mode:
+          allOf:
+            - $ref: '#/components/schemas/SalienceMode'
+          description: E2c — echoes the effective salience mode used.
+      description: 'E2c addition: salience mode echoed in both response types.'
+    GraphNodeResponse:
+      type: object
+      required:
+        - entity_id
+        - entity_name
+        - chunk_count
+        - salience
+      properties:
+        entity_id:
+          type: string
+        entity_name:
+          type: string
+        chunk_count:
+          type: integer
+          format: int32
+          description: Number of distinct chunks in which this entity is mentioned.
+        salience:
+          type: number
+          format: float
+          description: |-
+            Salience score. Semantics depend on salience_mode:
+            - "frequency": chunk_count / total_chunks_in_collection, clamped [0, 1].
+            - "tfidf": (chunk_count / total_chunks_in_collection) × log((N+1) / df),
+            where N = total namespace collections, df = collections containing this entity.
+      description: A single graph node with derived salience metrics.
+    InvalidSalienceError:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+    SalienceMode:
+      type: string
+      enum:
+        - frequency
+        - tfidf
+      description: Salience scoring mode. E2c adds "tfidf"; "frequency" is the existing default.

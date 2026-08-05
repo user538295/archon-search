@@ -159,6 +159,12 @@ Topic-specific entry points:
 
 When generating, refactoring, or reviewing code: open the relevant Architecture doc first for context, then verify against source. When making a behavior change that the docs describe (auth, telemetry, routing, schemas, API surface), update the docs in the same PR. ADRs are append-only — supersede with a new ADR rather than editing accepted ones.
 
+## TypeSpec contracts
+
+`tsp_contract/` at the project root is the home for all TypeSpec (`.tsp`) contract files and the generated `openapi.yaml`. When designing a new API surface or integration seam, save the `.tsp` file there. After compilation (`tsp compile .`), save the resulting `openapi.yaml` there as well. Related planning docs (brief, tasks, team-plan) for a feature live alongside the contract files in the same directory.
+
+Current contracts: `llama-cpp-config.tsp`, `llama-cpp-enrichment-protocol.tsp`, `llama-cpp-provider-factory.tsp`, `llama-cpp-query-expansion-protocol.tsp`. Related planning docs (`llama-cpp-local-provider-brief.md`, `llama-cpp-local-provider-tasks.md`, `llama-cpp-local-provider-team-plan.md`) remain in `Documentation/Backlog/`.
+
 ## Memory and Learning
 
 **Before starting any task:**
