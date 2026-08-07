@@ -126,6 +126,7 @@ async def test_pipeline_ingest_file_parse_error(connected_store, col_name, tmp_p
     assert result.status == "error"
     assert result.chunks_created == 0
     assert result.error is not None
+    assert result.code == "parse_error"
 
 
 @pytest.mark.asyncio

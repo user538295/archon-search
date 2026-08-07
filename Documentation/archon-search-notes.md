@@ -2,16 +2,7 @@
 
 ## Feature ideas
 
-### Extend install add uninstall section in README.md
-
-The app can be installed via `uv`. Add this option too.
-Also add the uninstall section to the readme.md (not just the uv, but all of them). include the info that uninstall won't remove the user data and what cna do to remove them to during the uninstall or manually.
-
 ### One Major lifecycle gap remains: def/ref cleanup on TTL/maintenance-only chunk expiry (not on explicit delete or sync/watcher delete).
-
-### Handle more file type without file size limit.
-
-**Resolved by E0d.** The 1 MB limitation no longer exists. Large files (PDF and all other supported formats) ingest at any size when no size guard is configured (`[ingest].max_file_mb = 0`, the default). Operators can set a size ceiling via `[ingest].max_file_mb` in `archon-search.toml`; exceeding it returns HTTP 413 / MCP `code="file_too_large"` with an actionable message. See `Documentation/Backlog/e0d-pdf-large-file-support-team-plan.md` for full details.
 
 ### The user can search between the visited websites and if he asks questions in a topic, then these websites also could help him to recall and use those information.
 
@@ -26,8 +17,6 @@ First we should support ChatGPT, Claude and Perplexity. Is there any services to
 ### Handle 30+ collections better
 
 If we have more collections in the future, then we should think over the handling of the search between collections. Now we have a heuristic, to determine in which collections should be search (not all of them), but later we should handle it even better. Eg.: What if we put another layer to collection search? The collections should have a larger more detailed description about what are in that collection and run a very fast and effective search on these descriptions to determine which collections will fit the best. We should define what does the more detailed collection mean. I expect that the 
-
-### multilanguage support 
 
 ### video trans-scripting with video frame linking. Finf the word or expression and show me the related video image (or seek the video there and pause it (and the user can play it))
 
@@ -112,3 +101,6 @@ Provide LLM with (a) IDs + (b) minimal snippets.
 Only fetch verbatim spans after the model commits to which IDs are needed.
 Example encoding (prompt injection).
 
+### AXI support
+
+https://axi.md/

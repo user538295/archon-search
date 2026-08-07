@@ -28,6 +28,7 @@ def normalize_iso_utc(dt: datetime | str) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 IngestedBy = Literal["cli", "http", "watcher", "reindex"]
+IngestErrorCode = Literal["file_too_large", "parse_error"]
 """Canonical call-site identity for ingest writes.
 
 Four members only. The pre-A1 sentinel ``"archon-search-cli"`` is
@@ -173,15 +174,16 @@ class IngestResult:
     error: str | None = None
     needs_recompute: bool = False
     warnings: list[str] = field(default_factory=list)
-    code: Literal["file_too_large"] | None = None
+    code: IngestErrorCode | None = None
 
 
 class IngestError(Exception):
     """Raised (or used to construct messages) when an ingest pre-check rejects a file.
 
-    Currently the only code is ``"file_too_large"``.  ``pipeline.ingest_file()``
+    This error class covers only the ``"file_too_large"`` pre-check.  ``pipeline.ingest_file()``
     instantiates this to produce the human-readable message and returns an error
     ``IngestResult`` directly — it does *not* raise ``IngestError``.
+    (See also ``IngestResult.code`` for other non-null codes, e.g. ``"parse_error"``.)
     """
 
     code: Literal["file_too_large"] = "file_too_large"

@@ -12,6 +12,8 @@ drifting the MCP contract.
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
+from archon_search._types import IngestErrorCode
+
 from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
@@ -282,7 +284,7 @@ class IngestResultSchema(BaseModel):
     status: str
     error: str | None = None
     warnings: list[str] = Field(default_factory=list)
-    code: Literal["file_too_large"] | None = None
+    code: IngestErrorCode | None = None
 
     @classmethod
     def from_result(cls, r: IngestResult) -> IngestResultSchema:

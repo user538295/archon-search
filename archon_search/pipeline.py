@@ -444,7 +444,7 @@ class SearchPipeline:
             with record_stage("parse"):
                 markdown = await self._parser.parse(path)
         except ParseError as e:
-            return IngestResult(doc_id=doc_id, chunks_created=0, status="error", error=str(e))
+            return IngestResult(doc_id=doc_id, chunks_created=0, status="error", error=str(e), code="parse_error")
 
         # Extract front matter (text files only; binary files skipped to avoid false positives)
         is_text_type = path.suffix.lower() in _FRONT_MATTER_EXTENSIONS
