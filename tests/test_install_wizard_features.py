@@ -18,6 +18,7 @@ from archon_search.install import (
     _pick_llama_cpp_model,
     _pick_ollama_model,
     _prompt_gpu_confirm,
+    _prompt_graph_provider,
     _prompt_llama_cpp_model,
     _prompt_model_freetext,
     _prompt_multilingual,
@@ -88,6 +89,79 @@ class TestWizardFeaturesDefaults:
         assert f.eager_load_embedders is True
         assert f.routing_strategy == "hybrid"
         assert f.log_format == "json"
+
+
+class TestWizardFeaturesFE2GraphProviderFields:
+    """FE-2: WizardFeatures carries five new llama.cpp/graph-provider fields."""
+
+    def test_wizard_features_has_five_new_fields(self) -> None:
+        """All five new fields exist with correct empty-string defaults."""
+        f = WizardFeatures()
+        assert f.hyde_llama_cpp_base_url == ""
+        assert f.rag_fusion_llama_cpp_base_url == ""
+        assert f.graph_provider == ""
+        assert f.graph_extraction_model == ""
+        assert f.graph_llama_cpp_base_url == ""
+
+    def test_new_fields_accept_values(self) -> None:
+        f = WizardFeatures(
+            hyde_llama_cpp_base_url="http://hyde-box:8080",
+            rag_fusion_llama_cpp_base_url="http://rag-box:8080",
+            graph_provider="llama_cpp",
+            graph_extraction_model="qwen2.5-coder",
+            graph_llama_cpp_base_url="http://graph-box:8080",
+        )
+        assert f.hyde_llama_cpp_base_url == "http://hyde-box:8080"
+        assert f.rag_fusion_llama_cpp_base_url == "http://rag-box:8080"
+        assert f.graph_provider == "llama_cpp"
+        assert f.graph_extraction_model == "qwen2.5-coder"
+        assert f.graph_llama_cpp_base_url == "http://graph-box:8080"
+
+
+class TestPromptGraphProvider:
+    """FE-2: _prompt_graph_provider() — LLM-backed graph enrichment step (S18, S22, Q8=A)."""
+
+    @staticmethod
+    def _ask_choice_from(provider: str):
+        def _ask_choice(_prompt: str, valid: set[str], _default: str) -> str:
+            assert provider in valid
+            return provider
+        return _ask_choice
+
+    def test_declined_returns_all_empty(self) -> None:
+        """Answering 'n' to the enable question returns ('', '', '') — S27 default."""
+        ask_yn = lambda *_a, **_k: False  # noqa: E731
+        provider, model, base_url = _prompt_graph_provider(ask_yn, lambda *_a: "anthropic")
+        assert (provider, model, base_url) == ("", "", "")
+
+    def test_anthropic_prompts_for_model_no_base_url(self) -> None:
+        """Anthropic still prompts for extraction_model (no built-in default, unlike HyDE)."""
+        ask_yn = lambda *_a, **_k: True  # noqa: E731
+        with patch("builtins.input", return_value="claude-haiku-4-5"):
+            provider, model, base_url = _prompt_graph_provider(ask_yn, self._ask_choice_from("anthropic"))
+        assert provider == "anthropic"
+        assert model == "claude-haiku-4-5"
+        assert base_url == ""
+
+    def test_llama_cpp_uses_model_picker_and_returns_base_url(self) -> None:
+        """llama_cpp fetches /v1/models and returns the picked model + base URL (S18)."""
+        ask_yn = lambda *_a, **_k: True  # noqa: E731
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1", "m2"]):
+            with patch("builtins.input", side_effect=["", "2"]):
+                provider, model, base_url = _prompt_graph_provider(ask_yn, self._ask_choice_from("llama_cpp"))
+        assert provider == "llama_cpp"
+        assert model == "m2"
+        assert base_url == ""
+
+    def test_llama_cpp_unreachable_falls_back_to_freetext(self) -> None:
+        """Unreachable llama-server falls back to free-text model entry (S12/S18)."""
+        ask_yn = lambda *_a, **_k: True  # noqa: E731
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=[]):
+            with patch("builtins.input", side_effect=["", "my-model"]):
+                provider, model, base_url = _prompt_graph_provider(ask_yn, self._ask_choice_from("llama_cpp"))
+        assert provider == "llama_cpp"
+        assert model == "my-model"
+        assert base_url == ""
 
 
 class TestPromptMultilingual:
@@ -445,20 +519,21 @@ class TestPromptOptionalFeaturesExplanations:
             )
         assert mock_input.call_count == 6
 
-    def test_prompt_count_8_with_reranker_no_api_key_gate(self, capsys) -> None:
-        """Interactive mode with reranker profile: 8 input() calls (7 standard + 1 HyDE yn).
+    def test_prompt_count_9_with_reranker_no_api_key_gate(self, capsys) -> None:
+        """Interactive mode with reranker profile: 9 input() calls (7 standard + 1 HyDE yn + 1 graph yn).
 
         After G10 BE-8, HyDE/RAG Fusion prompt fires regardless of ANTHROPIC_API_KEY.
         Answering 'n' to the enable question requires no further provider prompts.
+        FE-2 adds a trailing graph-enrichment yn, also declined with "n".
         """
-        # 7 standard + 1 HyDE yn (answered "n", so no provider/model prompts)
-        responses = iter(["n", "n", "n", "n", "n", "", "", "n"])
+        # 7 standard + 1 HyDE yn (answered "n", so no provider/model prompts) + 1 graph yn ("n")
+        responses = iter(["n", "n", "n", "n", "n", "", "", "n", "n"])
         with patch("builtins.input", side_effect=responses) as mock_input:
             _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile_with_reranker,
             )
-        assert mock_input.call_count == 8
+        assert mock_input.call_count == 9
 
 
 class TestWizardFeaturesC15NewFields:
@@ -528,9 +603,10 @@ class TestPromptOptionalFeaturesHydeRagFusion:
     def test_hyde_rag_fusion_prompted_regardless_of_api_key(self) -> None:
         """HyDE/RAG Fusion prompt fires without ANTHROPIC_API_KEY (G10 BE-8: no API key gate)."""
         env_without_key = {k: v for k, v in __import__("os").environ.items() if k != "ANTHROPIC_API_KEY"}
-        # Answer "n" to enable → no further provider prompts
+        # Answer "n" to enable → no further provider prompts; trailing "n" declines
+        # the FE-2 graph-enrichment step, which shares this interactive branch.
         with patch.dict("os.environ", env_without_key, clear=True):
-            with patch("builtins.input", side_effect=["n"]):
+            with patch("builtins.input", side_effect=["n", "n"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
                     profile=self._profile,
@@ -547,9 +623,9 @@ class TestPromptOptionalFeaturesHydeRagFusion:
 
     def test_hyde_rag_fusion_prompted_when_api_key_present(self) -> None:
         """Interactive + answer 'y' + 'anthropic' for both → both enabled."""
-        # 3 inputs: enable=y, hyde_provider=anthropic, rag_fusion_provider=anthropic
-        # (no model prompt for anthropic)
-        with patch("builtins.input", side_effect=["y", "anthropic", "anthropic"]):
+        # 4 inputs: enable=y, hyde_provider=anthropic, rag_fusion_provider=anthropic
+        # (no model prompt for anthropic), then "n" declines the FE-2 graph-enrichment step.
+        with patch("builtins.input", side_effect=["y", "anthropic", "anthropic", "n"]):
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -566,7 +642,8 @@ class TestPromptOptionalFeaturesHydeRagFusion:
 
     def test_hyde_rag_fusion_declined(self) -> None:
         """Interactive + answer 'n' → both remain False; no provider prompt fired."""
-        with patch("builtins.input", side_effect=["n"]):
+        # Trailing "n" declines the FE-2 graph-enrichment step, which shares this branch.
+        with patch("builtins.input", side_effect=["n", "n"]):
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -789,7 +866,7 @@ class TestWizardFeaturesG10:
         #   pick "1" from fetched list; rag_fusion_provider=ollama, base_url="", pick "1".
         with patch.dict("os.environ", env_without_key, clear=True):
             with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]):
-                with patch("builtins.input", side_effect=["y", "ollama", "", "1", "ollama", "", "1"]):
+                with patch("builtins.input", side_effect=["y", "ollama", "", "1", "ollama", "", "1", "n"]):
                     features = _prompt_optional_features(
                         non_interactive=False,
                         profile=self._profile,
@@ -810,8 +887,8 @@ class TestWizardFeaturesG10:
         from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
 
         # Inputs: enable=y, hyde_provider=anthropic (no model prompt)
-        #         rag_fusion_provider=anthropic (no model prompt)
-        with patch("builtins.input", side_effect=["y", "anthropic", "anthropic"]):
+        #         rag_fusion_provider=anthropic (no model prompt), then "n" declines graph enrichment
+        with patch("builtins.input", side_effect=["y", "anthropic", "anthropic", "n"]):
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -837,7 +914,7 @@ class TestWizardFeaturesG10:
         # New flow — inputs: enable=y, provider=ollama, base_url="" (default), pick "1".
         # Same for rag_fusion.
         with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]):
-            with patch("builtins.input", side_effect=["y", "ollama", "", "1", "ollama", "", "1"]):
+            with patch("builtins.input", side_effect=["y", "ollama", "", "1", "ollama", "", "1", "n"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
                     profile=self._profile,
@@ -888,8 +965,8 @@ class TestWizardFeaturesG10:
     def test_wizard_invalid_provider_falls_back_to_anthropic(self) -> None:
         """Two invalid provider choices fall back to default 'anthropic'."""
         # "y" = enable, "foobar" = invalid (retry), "alsobad" = invalid (fall back to anthropic)
-        # Then RAG Fusion provider prompt fires — provide "anthropic"
-        with patch("builtins.input", side_effect=["y", "foobar", "alsobad", "anthropic"]):
+        # Then RAG Fusion provider prompt fires — provide "anthropic"; "n" declines graph enrichment.
+        with patch("builtins.input", side_effect=["y", "foobar", "alsobad", "anthropic", "n"]):
             features = _prompt_optional_features(
                 non_interactive=False,
                 profile=self._profile,
@@ -910,7 +987,7 @@ class TestWizardFeaturesG10:
         # "y"=enable, "ollama"=hyde provider, ""=base url (default), "9"=out of range (retry),
         # "1"=valid → llama3.2; "ollama"=rag provider, ""=base url, "1"=valid → llama3.2.
         with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2", "mistral"]):
-            with patch("builtins.input", side_effect=["y", "ollama", "", "9", "1", "ollama", "", "1"]):
+            with patch("builtins.input", side_effect=["y", "ollama", "", "9", "1", "ollama", "", "1", "n"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
                     profile=self._profile,
@@ -932,7 +1009,7 @@ class TestWizardFeaturesG10:
         # "y"=enable, "ollama"=hyde provider, ""=hyde base url, "1"=pick llama3.2;
         # "openai"=rag provider, ""=empty model (retry), "gpt-4o"=valid.
         with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]):
-            with patch("builtins.input", side_effect=["y", "ollama", "", "1", "openai", "", "gpt-4o"]):
+            with patch("builtins.input", side_effect=["y", "ollama", "", "1", "openai", "", "gpt-4o", "n"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
                     profile=self._profile,
@@ -1195,9 +1272,9 @@ class TestOllamaPickerIntegration:
 
     def test_both_features_pick_independently(self) -> None:
         """HyDE and RAG Fusion each get their own picker; selections are independent."""
-        # enable=y; hyde: ollama, base "", pick "1"; rag: ollama, base "", pick "2".
+        # enable=y; hyde: ollama, base "", pick "1"; rag: ollama, base "", pick "2"; n=decline graph.
         features = self._run(
-            ["y", "ollama", "", "1", "ollama", "", "2"],
+            ["y", "ollama", "", "1", "ollama", "", "2", "n"],
             fetch_return=["llama3.2", "mistral"],
         )
         assert features.hyde_model == "llama3.2"
@@ -1206,7 +1283,7 @@ class TestOllamaPickerIntegration:
     def test_unreachable_server_falls_back_for_both(self) -> None:
         """Unreachable Ollama → free-text fallback for both features."""
         features = self._run(
-            ["y", "ollama", "", "hmodel", "ollama", "", "rmodel"],
+            ["y", "ollama", "", "hmodel", "ollama", "", "rmodel", "n"],
             fetch_return=[],
         )
         assert features.hyde_model == "hmodel"
@@ -1215,7 +1292,7 @@ class TestOllamaPickerIntegration:
     def test_custom_base_url_threaded_from_config(self) -> None:
         """A config-saved base URL pre-fills the prompt; Enter keeps it for both features."""
         with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]) as mock_fetch:
-            with patch("builtins.input", side_effect=["y", "ollama", "", "1", "ollama", "", "1"]):
+            with patch("builtins.input", side_effect=["y", "ollama", "", "1", "ollama", "", "1", "n"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
                     profile=self._profile,
@@ -1245,7 +1322,7 @@ class TestOllamaPickerE2E:
         from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
 
         with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2", "mistral"]):
-            with patch("builtins.input", side_effect=["y", "ollama", "", "2", "ollama", "", "1"]):
+            with patch("builtins.input", side_effect=["y", "ollama", "", "2", "ollama", "", "1", "n"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
                     profile=self._profile,
@@ -1276,7 +1353,7 @@ class TestOllamaPickerE2E:
         from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
 
         with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]):
-            with patch("builtins.input", side_effect=["y", "ollama", "http://box:11434", "1", "anthropic"]):
+            with patch("builtins.input", side_effect=["y", "ollama", "http://box:11434", "1", "anthropic", "n"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
                     profile=self._profile,
@@ -1305,7 +1382,7 @@ class TestOllamaPickerE2E:
 
         # enable=y; hyde=anthropic (no ollama prompt); rag=ollama, custom URL, pick "1".
         with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]):
-            with patch("builtins.input", side_effect=["y", "anthropic", "ollama", "http://rag:11434", "1"]):
+            with patch("builtins.input", side_effect=["y", "anthropic", "ollama", "http://rag:11434", "1", "n"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
                     profile=self._profile,
@@ -1518,9 +1595,9 @@ class TestLlamaCppPickerIntegration:
 
     def test_both_features_pick_independently(self) -> None:
         """HyDE and RAG Fusion each get their own llama_cpp picker; selections are independent (S4)."""
-        # enable=y; hyde: llama_cpp, base "", pick "1"; rag: llama_cpp, base "", pick "2".
+        # enable=y; hyde: llama_cpp, base "", pick "1"; rag: llama_cpp, base "", pick "2"; n=decline graph.
         features = self._run(
-            ["y", "llama_cpp", "", "1", "llama_cpp", "", "2"],
+            ["y", "llama_cpp", "", "1", "llama_cpp", "", "2", "n"],
             fetch_return=["m1", "m2"],
         )
         assert features.hyde_provider == "llama_cpp"
@@ -1531,7 +1608,7 @@ class TestLlamaCppPickerIntegration:
     def test_unreachable_server_falls_back_for_both(self) -> None:
         """Unreachable llama-server → free-text fallback for both features (S12)."""
         features = self._run(
-            ["y", "llama_cpp", "", "hmodel", "llama_cpp", "", "rmodel"],
+            ["y", "llama_cpp", "", "hmodel", "llama_cpp", "", "rmodel", "n"],
             fetch_return=[],
         )
         assert features.hyde_model == "hmodel"
@@ -1670,7 +1747,7 @@ class TestWizardClaudeCLI:
         """Selecting claude_cli picks a model alias for both features."""
         # enable=y; hyde=claude_cli, model "1" (haiku); rag=claude_cli, model "sonnet".
         with patch("archon_search.install.shutil.which", return_value="/usr/bin/claude"):
-            with patch("builtins.input", side_effect=["y", "claude_cli", "1", "claude_cli", "sonnet"]):
+            with patch("builtins.input", side_effect=["y", "claude_cli", "1", "claude_cli", "sonnet", "n"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
                     profile=self._profile,
@@ -1690,7 +1767,7 @@ class TestWizardClaudeCLI:
     def test_wizard_claude_cli_missing_warns_but_proceeds(self, capsys) -> None:
         """claude not on PATH → warning printed, config still gathered."""
         with patch("archon_search.install.shutil.which", return_value=None):
-            with patch("builtins.input", side_effect=["y", "claude_cli", "", "anthropic"]):
+            with patch("builtins.input", side_effect=["y", "claude_cli", "", "anthropic", "n"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
                     profile=self._profile,
@@ -1712,7 +1789,7 @@ class TestWizardClaudeCLI:
         from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
 
         with patch("archon_search.install.shutil.which", return_value="/usr/bin/claude"):
-            with patch("builtins.input", side_effect=["y", "claude_cli", "opus", "claude_cli", ""]):
+            with patch("builtins.input", side_effect=["y", "claude_cli", "opus", "claude_cli", "", "n"]):
                 features = _prompt_optional_features(
                     non_interactive=False,
                     profile=self._profile,

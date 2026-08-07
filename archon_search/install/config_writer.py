@@ -42,12 +42,18 @@ class WizardFeatures:
     enable_hyde: bool = False
     enable_rag_fusion: bool = False
     # G10 BE-8: provider-selection for HyDE / RAG Fusion
-    hyde_provider: str = "anthropic"          # "anthropic" | "openai" | "ollama" | "claude_cli"
+    hyde_provider: str = "anthropic"          # "anthropic" | "openai" | "ollama" | "claude_cli" | "llama_cpp"
     hyde_model: str = ""                      # empty = use provider default
     hyde_ollama_base_url: str = ""            # empty = use config default
+    hyde_llama_cpp_base_url: str = ""         # empty = use config default
     rag_fusion_provider: str = "anthropic"
     rag_fusion_model: str = ""
     rag_fusion_ollama_base_url: str = ""
+    rag_fusion_llama_cpp_base_url: str = ""
+    # FE-2: [graph] LLM-backed enrichment provider (independent of install_graph_extra/graph.enabled)
+    graph_provider: str = ""                  # "" = enrichment disabled (GraphConfig.provider stays None)
+    graph_extraction_model: str = ""
+    graph_llama_cpp_base_url: str = ""        # empty = use config default
 
 
 def _write_profile_config(
@@ -121,6 +127,18 @@ def _reconcile_ollama_base_url(section: tomlkit.items.Table, base_url: str) -> N
         section["ollama_base_url"] = base_url
     elif "ollama_base_url" in section:
         del section["ollama_base_url"]
+
+
+def _reconcile_llama_cpp_base_url(section: tomlkit.items.Table, base_url: str) -> None:
+    """Set or clear ``llama_cpp_base_url`` on a config *section* table.
+
+    Mirrors :func:`_reconcile_ollama_base_url` for the llama.cpp base URL — see
+    that function's docstring for the re-run leak this prevents.
+    """
+    if base_url:
+        section["llama_cpp_base_url"] = base_url
+    elif "llama_cpp_base_url" in section:
+        del section["llama_cpp_base_url"]
 
 
 def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFeatures) -> None:
@@ -210,6 +228,8 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
                 doc["hyde"]["model"] = features.hyde_model
                 if features.hyde_provider == "ollama":
                     _reconcile_ollama_base_url(doc["hyde"], features.hyde_ollama_base_url)
+                elif features.hyde_provider == "llama_cpp":
+                    _reconcile_llama_cpp_base_url(doc["hyde"], features.hyde_llama_cpp_base_url)
     else:
         _ensure_section("hyde")
         doc["hyde"]["enabled"] = False
@@ -230,9 +250,21 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
                 doc["rag_fusion"]["model"] = features.rag_fusion_model
                 if features.rag_fusion_provider == "ollama":
                     _reconcile_ollama_base_url(doc["rag_fusion"], features.rag_fusion_ollama_base_url)
+                elif features.rag_fusion_provider == "llama_cpp":
+                    _reconcile_llama_cpp_base_url(doc["rag_fusion"], features.rag_fusion_llama_cpp_base_url)
     else:
         _ensure_section("rag_fusion")
         doc["rag_fusion"]["enabled"] = False
+
+    # FE-2: LLM-backed graph enrichment provider — independent of graph.enabled
+    # (BE-11, below): `[graph].provider` is itself the enrichment gate (no
+    # separate `enabled` key), so nothing is written when the operator declined.
+    if features.graph_provider:
+        _ensure_section("graph")
+        doc["graph"]["provider"] = features.graph_provider
+        doc["graph"]["extraction_model"] = features.graph_extraction_model
+        if features.graph_provider == "llama_cpp":
+            _reconcile_llama_cpp_base_url(doc["graph"], features.graph_llama_cpp_base_url)
 
     # BE-11: [graph] enabled must be written whenever the [graph] extras were
     # auto-installed, or the install is inert — see C1-I-1 / C1-A-4.

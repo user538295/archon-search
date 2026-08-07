@@ -278,3 +278,36 @@ def _revert_query_expansion_flags(
             "[hyde] / [rag_fusion] in archon-search.toml.",
             file=sys.stderr,
         )
+
+
+def _revert_graph_enrichment_flags(config_path: Path, dry_run: bool) -> None:
+    """Strip the LLM-backed graph-enrichment keys the wizard wrote, on abort.
+
+    Mirrors :func:`_revert_query_expansion_flags`, but scoped to ``[graph]``'s
+    enrichment fields only. Unlike HyDE/RAG Fusion (which have their own
+    ``enabled`` gate), ``[graph].provider`` IS the enrichment gate — this only
+    strips ``provider``/``extraction_model``/``llama_cpp_base_url``, and
+    deliberately does NOT touch ``graph.enabled``, which independently gates
+    the graph subsystem itself (entity extraction, PPR, communities) via
+    :func:`archon_search.install.config_writer._revert_graph_enabled_flag`.
+    """
+    if dry_run or not config_path.exists():
+        return
+    doc = tomlkit.parse(config_path.read_text())
+    if "graph" not in doc:
+        return
+    changed = False
+    for key in ("provider", "extraction_model", "llama_cpp_base_url"):
+        if key in doc["graph"]:
+            del doc["graph"][key]
+            changed = True
+    if changed:
+        atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
+        print(
+            "Warning: LLM-backed graph enrichment has been disabled because the "
+            "install did not complete. The graph subsystem (entity extraction, "
+            "PPR, communities) is unaffected. Re-run the wizard, or set "
+            "[graph].provider / extraction_model manually in archon-search.toml, "
+            "to re-enable enrichment.",
+            file=sys.stderr,
+        )

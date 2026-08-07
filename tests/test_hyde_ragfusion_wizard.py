@@ -24,6 +24,7 @@ from archon_search.install import (
     _assert_features_persisted,
     _install_query_expansion_extras,
     _render_summary,
+    _revert_graph_enrichment_flags,
     _revert_query_expansion_flags,
 )
 from archon_search.profiles import get_profile
@@ -277,6 +278,57 @@ class TestRevertQueryExpansionFlags:
         assert "llama_cpp_base_url" not in doc["hyde"]
         assert doc["rag_fusion"]["enabled"] is False
         assert "llama_cpp_base_url" not in doc["rag_fusion"]
+
+
+class TestRevertGraphEnrichmentFlags:
+    """FE-2: _revert_graph_enrichment_flags — strips [graph] enrichment keys on abort (S22)."""
+
+    def _write(self, tmp_path: Path, body: str) -> Path:
+        cfg = tmp_path / "archon-search.toml"
+        cfg.write_text(body)
+        return cfg
+
+    def test_revert_graph_enrichment_flags_strips_three_fields(self, tmp_path: Path) -> None:
+        cfg = self._write(
+            tmp_path,
+            '[graph]\nenabled = true\nprovider = "llama_cpp"\nextraction_model = "m1"\n'
+            'llama_cpp_base_url = "http://box:8080"\n',
+        )
+        _revert_graph_enrichment_flags(cfg, dry_run=False)
+        doc = tomlkit.parse(cfg.read_text())
+        assert "provider" not in doc["graph"]
+        assert "extraction_model" not in doc["graph"]
+        assert "llama_cpp_base_url" not in doc["graph"]
+
+    def test_revert_graph_enrichment_flags_preserves_graph_enabled(self, tmp_path: Path) -> None:
+        """graph.enabled is untouched — it gates the graph subsystem, not enrichment (S22)."""
+        cfg = self._write(
+            tmp_path,
+            '[graph]\nenabled = true\nprovider = "anthropic"\nextraction_model = "m1"\n',
+        )
+        _revert_graph_enrichment_flags(cfg, dry_run=False)
+        doc = tomlkit.parse(cfg.read_text())
+        assert doc["graph"]["enabled"] is True
+
+    def test_missing_graph_section_is_noop(self, tmp_path: Path) -> None:
+        cfg = self._write(tmp_path, "[hyde]\nenabled = true\n")
+        _revert_graph_enrichment_flags(cfg, dry_run=False)  # must not raise
+        doc = tomlkit.parse(cfg.read_text())
+        assert "graph" not in doc
+
+    def test_dry_run_is_noop(self, tmp_path: Path) -> None:
+        cfg = self._write(tmp_path, '[graph]\nprovider = "anthropic"\n')
+        _revert_graph_enrichment_flags(cfg, dry_run=True)
+        assert tomlkit.parse(cfg.read_text())["graph"]["provider"] == "anthropic"
+
+    def test_missing_file_is_noop(self, tmp_path: Path) -> None:
+        _revert_graph_enrichment_flags(tmp_path / "nope.toml", dry_run=False)  # must not raise
+
+    def test_no_enrichment_keys_present_is_noop(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """No provider/extraction_model/llama_cpp_base_url set → no warning printed."""
+        cfg = self._write(tmp_path, "[graph]\nenabled = true\n")
+        _revert_graph_enrichment_flags(cfg, dry_run=False)
+        assert "warning" not in capsys.readouterr().err.lower()
 
 
 # ---------------------------------------------------------------------------

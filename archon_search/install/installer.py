@@ -49,6 +49,7 @@ from .extras import (
     _install_graph_extra,
     _install_multilingual_extra,
     _install_query_expansion_extras,
+    _revert_graph_enrichment_flags,
     _revert_query_expansion_flags,
 )
 from .licenses import (
@@ -748,6 +749,8 @@ class BaseInstaller(ABC):
                     _revert_multilingual_flag(config_path, self.dry_run)
                 if features.enable_hyde or features.enable_rag_fusion:
                     _revert_query_expansion_flags(config_path, self.dry_run)
+                if features.graph_provider:
+                    _revert_graph_enrichment_flags(config_path, self.dry_run)
                 return 1
 
             # Step 12: summary display
@@ -772,6 +775,8 @@ class BaseInstaller(ABC):
                         _revert_multilingual_flag(config_path, self.dry_run)
                     if features.enable_hyde or features.enable_rag_fusion:
                         _revert_query_expansion_flags(config_path, self.dry_run)
+                    if features.graph_provider:
+                        _revert_graph_enrichment_flags(config_path, self.dry_run)
                     return 1
 
             # Before Step 14: install code enrichment packages if requested

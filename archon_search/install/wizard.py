@@ -246,6 +246,48 @@ def _prompt_llama_cpp_model(feature_label: str) -> tuple[str, str]:
     return stored, _prompt_model_freetext(feature_label)
 
 
+def _prompt_graph_provider(
+    ask_yn: "Callable[[str], bool]",
+    ask_choice: "Callable[[str, set[str], str], str]",
+) -> tuple[str, str, str]:
+    """Ask whether to enable LLM-backed graph enrichment and gather its settings.
+
+    Graph enrichment (community summaries, relationship labels) is optional and
+    disabled by default — unlike HyDE/RAG Fusion, ``[graph].provider`` is itself
+    the enable gate (there is no separate ``[graph].enabled`` for enrichment;
+    that key gates the graph subsystem — entity extraction, PPR, communities —
+    which works fine without enrichment). Offers the four v1 enrichment
+    providers (anthropic/openai/ollama/llama_cpp) — ``claude_cli`` has no v1
+    enrichment client (deferred; see ``EnrichmentClientFactory``) and is
+    intentionally not offered here.
+
+    Returns ``(provider, extraction_model, llama_cpp_base_url)``, all ``""``
+    when the operator declines enrichment. ``extraction_model`` is always
+    prompted (even for anthropic) because, unlike ``HyDEConfig``/
+    ``RAGFusionConfig``, ``GraphConfig.extraction_model`` has no built-in
+    default model.
+    """
+    print(
+        "\nLLM-backed graph enrichment:\n"
+        "  Uses an LLM to write community summaries and label relationship types\n"
+        "  during graph community builds. Optional — the graph subsystem (entity\n"
+        "  extraction, PPR, communities) works without it.\n"
+        "  Default: disabled."
+    )
+    if not ask_yn("Enable LLM-backed graph enrichment? [y/N]: "):
+        return "", "", ""
+
+    provider = ask_choice(
+        "Which provider for graph enrichment? (anthropic/openai/ollama/llama_cpp) [anthropic]: ",
+        {"anthropic", "openai", "ollama", "llama_cpp"},
+        "anthropic",
+    )
+    if provider == "llama_cpp":
+        base_url, model = _prompt_llama_cpp_model("graph enrichment")
+        return provider, model, base_url
+    return provider, _prompt_model_freetext("graph enrichment"), ""
+
+
 # Curated Claude model aliases shown by the wizard. The Claude CLI has no
 # runtime `models` subcommand, so this list is hardcoded and MUST be kept
 # current with Anthropic releases.
@@ -495,9 +537,14 @@ def _prompt_optional_features(
     _hyde_provider_val = "anthropic"
     _hyde_model_val = ""
     _hyde_ollama_base_url_val = ""
+    _hyde_llama_cpp_base_url_val = ""
     _rag_fusion_provider_val = "anthropic"
     _rag_fusion_model_val = ""
     _rag_fusion_ollama_base_url_val = ""
+    _rag_fusion_llama_cpp_base_url_val = ""
+    _graph_provider_val = ""
+    _graph_extraction_model_val = ""
+    _graph_llama_cpp_base_url_val = ""
 
     if enable_hyde is not None or enable_rag_fusion is not None:
         # One or both flags pre-answered — use them directly; no provider prompts.
@@ -526,19 +573,30 @@ def _prompt_optional_features(
             # to fetch the installed-model list) then a numbered picker; OpenAI
             # keeps free-text model entry; claude_cli checks PATH then offers a
             # curated alias picker with a free-text fallback.
-            # 4th return value (llama_cpp_base_url) is not yet threaded into
-            # WizardFeatures/TOML — that wiring is a separate task.
-            _hyde_provider_val, _hyde_model_val, _hyde_ollama_base_url_val, _ = _prompt_provider(
-                "HyDE", _ask_choice, hyde_ollama_base_url_default
-            )
+            (
+                _hyde_provider_val,
+                _hyde_model_val,
+                _hyde_ollama_base_url_val,
+                _hyde_llama_cpp_base_url_val,
+            ) = _prompt_provider("HyDE", _ask_choice, hyde_ollama_base_url_default)
 
             # Provider selection for RAG Fusion (same flow, independent picker).
-            _rag_fusion_provider_val, _rag_fusion_model_val, _rag_fusion_ollama_base_url_val, _ = (
-                _prompt_provider("RAG Fusion", _ask_choice, rag_fusion_ollama_base_url_default)
-            )
+            (
+                _rag_fusion_provider_val,
+                _rag_fusion_model_val,
+                _rag_fusion_ollama_base_url_val,
+                _rag_fusion_llama_cpp_base_url_val,
+            ) = _prompt_provider("RAG Fusion", _ask_choice, rag_fusion_ollama_base_url_default)
         else:
             _enable_hyde_val = False
             _enable_rag_fusion_val = False
+
+        # Graph enrichment provider step (FE-2): independent of HyDE/RAG Fusion,
+        # but shares their "truly interactive" gate — skipped whenever either
+        # flag was pre-answered or the wizard is running non-interactively.
+        _graph_provider_val, _graph_extraction_model_val, _graph_llama_cpp_base_url_val = (
+            _prompt_graph_provider(_ask_yn, _ask_choice)
+        )
 
     return WizardFeatures(
         install_code_extra=_install_code_extra_val,
@@ -554,9 +612,14 @@ def _prompt_optional_features(
         hyde_provider=_hyde_provider_val,
         hyde_model=_hyde_model_val,
         hyde_ollama_base_url=_hyde_ollama_base_url_val,
+        hyde_llama_cpp_base_url=_hyde_llama_cpp_base_url_val,
         rag_fusion_provider=_rag_fusion_provider_val,
         rag_fusion_model=_rag_fusion_model_val,
         rag_fusion_ollama_base_url=_rag_fusion_ollama_base_url_val,
+        rag_fusion_llama_cpp_base_url=_rag_fusion_llama_cpp_base_url_val,
+        graph_provider=_graph_provider_val,
+        graph_extraction_model=_graph_extraction_model_val,
+        graph_llama_cpp_base_url=_graph_llama_cpp_base_url_val,
     )
 
 

@@ -752,6 +752,7 @@ def test_run_prompts_multilingual_question(tmp_path: Path) -> None:
             routing_strategy="centroid", log_format="text",
             host=None, port=None, db_path=None, log_level=None,
             top_k=None, telemetry_retention_days=None, enable_hyde=False, enable_rag_fusion=False,
+            graph_provider="",
         )),
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=True),
         patch("builtins.input", return_value="y"),  # "Proceed?" prompt
@@ -789,6 +790,7 @@ def test_run_multilingual_flag_skips_prompt(tmp_path: Path) -> None:
             routing_strategy="centroid", log_format="text",
             host=None, port=None, db_path=None, log_level=None,
             top_k=None, telemetry_retention_days=None, enable_hyde=False, enable_rag_fusion=False,
+            graph_provider="",
         )),
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=True),
         patch("archon_search.install.installer._prompt_fasttext_license"),
@@ -2103,6 +2105,7 @@ def _multilingual_run_patches(config_path: Path, fake_legacy: Path, **overrides:
         host=None, port=None, db_path=None, log_level=None,
         top_k=None, telemetry_retention_days=None,
         enable_hyde=False, enable_rag_fusion=False,
+        graph_provider="",  # falsy — FE-2's [graph] enrichment write is conditional on this
     )
     base = {
         "get_default_config_path": MagicMock(return_value=config_path),

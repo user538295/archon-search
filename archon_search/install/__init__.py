@@ -51,6 +51,7 @@ from .extras import _install_extra as _install_extra
 from .extras import _install_graph_extra as _install_graph_extra
 from .extras import _install_multilingual_extra as _install_multilingual_extra
 from .extras import _install_query_expansion_extras as _install_query_expansion_extras
+from .extras import _revert_graph_enrichment_flags as _revert_graph_enrichment_flags
 from .extras import _revert_query_expansion_flags as _revert_query_expansion_flags
 from .installer import _SEARCH_PACKAGES as _SEARCH_PACKAGES
 from .installer import _WAIT_FOR_SERVICE_TIMEOUT as _WAIT_FOR_SERVICE_TIMEOUT
@@ -93,6 +94,7 @@ from .wizard import _pick_claude_model as _pick_claude_model
 from .wizard import _pick_llama_cpp_model as _pick_llama_cpp_model
 from .wizard import _pick_ollama_model as _pick_ollama_model
 from .wizard import _prompt_gpu_confirm as _prompt_gpu_confirm
+from .wizard import _prompt_graph_provider as _prompt_graph_provider
 from .wizard import _prompt_llama_cpp_model as _prompt_llama_cpp_model
 from .wizard import _prompt_model_freetext as _prompt_model_freetext
 from .wizard import _prompt_multilingual as _prompt_multilingual

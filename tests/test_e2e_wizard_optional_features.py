@@ -227,8 +227,9 @@ def test_e2e_interactive_watch_and_telemetry(runner: CliRunner, tmp_path: Path) 
     #  7. routing strategy: "" (default=centroid)
     #  8. log format: "" (default=text)
     #  9. HyDE/RAG Fusion: "n"
-    # 10. "Proceed?": "y"
-    stdin_responses = "\n".join(["n", "n", "n", "y", "y", "n", "", "", "n", "y"]) + "\n"
+    # 10. graph enrichment: "n"
+    # 11. "Proceed?": "y"
+    stdin_responses = "\n".join(["n", "n", "n", "y", "y", "n", "", "", "n", "n", "y"]) + "\n"
 
     with _no_anthropic_key():
         with _patched_wizard():
@@ -272,8 +273,9 @@ def test_e2e_interactive_multilingual_yes(runner: CliRunner, tmp_path: Path) -> 
     #  1. multilingual: "y"
     #  All optional features: defaults (n / "" for choices)
     #  9. HyDE/RAG Fusion: "n"
+    # 10. graph enrichment: "n"
     #  confirmation: "y"
-    stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "n", "y"]) + "\n"
+    stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "n", "n", "y"]) + "\n"
 
     with _no_anthropic_key():
         with _patched_wizard(
@@ -321,8 +323,9 @@ def test_e2e_interactive_invalid_routing_retries(runner: CliRunner, tmp_path: Pa
     #  8. routing (retry, valid): "hybrid"
     #  9. log format: ""
     # 10. HyDE/RAG Fusion: "n"
-    # 11. "Proceed?": "y"
-    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "badval", "hybrid", "", "n", "y"]) + "\n"
+    # 11. graph enrichment: "n"
+    # 12. "Proceed?": "y"
+    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "badval", "hybrid", "", "n", "n", "y"]) + "\n"
 
     with _no_anthropic_key():
         with _patched_wizard():
@@ -592,8 +595,9 @@ def test_wizard_declineProceedPrompt_revertsGraphEnabled(runner: CliRunner, tmp_
     #  7. routing strategy: "" (default)
     #  8. log format: "" (default)
     #  9. HyDE/RAG Fusion: "n"
-    # 10. "Proceed?": "n"  ← decline
-    stdin_responses = "\n".join(["n", "y", "n", "n", "n", "n", "", "", "n", "n"]) + "\n"
+    # 10. graph enrichment: "n"
+    # 11. "Proceed?": "n"  ← decline
+    stdin_responses = "\n".join(["n", "y", "n", "n", "n", "n", "", "", "n", "n", "n"]) + "\n"
 
     with _no_anthropic_key():
         with _patched_wizard(
@@ -811,10 +815,11 @@ def test_wizard_llama_cpp_model_picker_reachable(runner: CliRunner, tmp_path: Pa
     # 13. "Which provider for RAG Fusion?": "llama_cpp"
     # 14. llama-server base URL for RAG Fusion: "" (default)
     # 15. numbered model picker for RAG Fusion: "2"
-    # 16. "Proceed?": "y"
+    # 16. "Enable LLM-backed graph enrichment?": "n"
+    # 17. "Proceed?": "y"
     stdin_responses = (
         "\n".join(
-            ["n", "n", "n", "n", "n", "n", "", "", "y", "llama_cpp", "", "1", "llama_cpp", "", "2", "y"]
+            ["n", "n", "n", "n", "n", "n", "", "", "y", "llama_cpp", "", "1", "llama_cpp", "", "2", "n", "y"]
         )
         + "\n"
     )
@@ -846,10 +851,11 @@ def test_wizard_llama_cpp_model_picker_unreachable(runner: CliRunner, tmp_path: 
     config_path = tmp_path / "archon-search.toml"
 
     # Same queue as the reachable case, except steps 12/15 are free-text model names
-    # (no numbered picker is shown when /v1/models returns []).
+    # (no numbered picker is shown when /v1/models returns []); trailing "n" declines
+    # the FE-2 graph-enrichment step before "Proceed?".
     stdin_responses = (
         "\n".join(
-            ["n", "n", "n", "n", "n", "n", "", "", "y", "llama_cpp", "", "hmodel", "llama_cpp", "", "rmodel", "y"]
+            ["n", "n", "n", "n", "n", "n", "", "", "y", "llama_cpp", "", "hmodel", "llama_cpp", "", "rmodel", "n", "y"]
         )
         + "\n"
     )
@@ -871,6 +877,103 @@ def test_wizard_llama_cpp_model_picker_unreachable(runner: CliRunner, tmp_path: 
     assert doc["rag_fusion"]["enabled"] is True
     assert doc["rag_fusion"]["provider"] == "llama_cpp"
     assert doc["rag_fusion"]["model"] == "rmodel"
+
+
+@pytest.mark.integration
+def test_wizard_graph_provider_step_writes_all_three_fields(runner: CliRunner, tmp_path: Path) -> None:
+    """FE-2 S18: choosing llama_cpp for graph enrichment writes provider,
+    extraction_model, and llama_cpp_base_url to [graph]."""
+    config_path = tmp_path / "archon-search.toml"
+
+    # Input queue (minimal English profile HAS a reranker):
+    #  1. multilingual: "n"
+    #  2. code enrichment: "n"
+    #  3. disable reranker: "n"
+    #  4. watch: "n"
+    #  5. telemetry: "n"
+    #  6. eager load: "n"
+    #  7. routing strategy: "" (default)
+    #  8. log format: "" (default)
+    #  9. "Enable AI query expansion?": "n"
+    # 10. "Enable LLM-backed graph enrichment?": "y"
+    # 11. "Which provider for graph enrichment?": "llama_cpp"
+    # 12. llama-server base URL: "http://box:8080" (custom, so the key is written)
+    # 13. numbered model picker: "1"
+    # 14. "Proceed?": "y"
+    stdin_responses = (
+        "\n".join(
+            ["n", "n", "n", "n", "n", "n", "", "", "n", "y", "llama_cpp", "http://box:8080", "1", "y"]
+        )
+        + "\n"
+    )
+
+    with _no_anthropic_key():
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1", "m2"]) as mock_fetch:
+            with _patched_wizard():
+                result = runner.invoke(
+                    main,
+                    ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
+                    input=stdin_responses,
+                )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    mock_fetch.assert_called_once_with("http://box:8080")
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["graph"]["provider"] == "llama_cpp"
+    assert doc["graph"]["extraction_model"] == "m1"
+    assert doc["graph"]["llama_cpp_base_url"] == "http://box:8080"
+
+
+@pytest.mark.integration
+def test_wizard_abort_reverts_graph_enrichment_only(runner: CliRunner, tmp_path: Path) -> None:
+    """FE-2 S22: declining the final 'Proceed?' prompt after configuring graph
+    enrichment strips provider/extraction_model/llama_cpp_base_url from [graph],
+    but leaves graph.enabled untouched — distinct from _revert_graph_enabled_flag,
+    which is never triggered here since code enrichment (install_graph_extra) is
+    declined in this test's input queue."""
+    config_path = tmp_path / "archon-search.toml"
+
+    # Input queue (minimal English profile HAS a reranker):
+    #  1. multilingual: "n"
+    #  2. code enrichment: "n"   (install_graph_extra stays False — isolates the assertion)
+    #  3. disable reranker: "n"
+    #  4. watch: "n"
+    #  5. telemetry: "n"
+    #  6. eager load: "n"
+    #  7. routing strategy: "" (default)
+    #  8. log format: "" (default)
+    #  9. "Enable AI query expansion?": "n"
+    # 10. "Enable LLM-backed graph enrichment?": "y"
+    # 11. "Which provider for graph enrichment?": "llama_cpp"
+    # 12. llama-server base URL: "http://box:8080"
+    # 13. numbered model picker: "1"
+    # 14. "Proceed?": "n"  ← decline
+    stdin_responses = (
+        "\n".join(
+            ["n", "n", "n", "n", "n", "n", "", "", "n", "y", "llama_cpp", "http://box:8080", "1", "n"]
+        )
+        + "\n"
+    )
+
+    with _no_anthropic_key():
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]):
+            with _patched_wizard():
+                result = runner.invoke(
+                    main,
+                    ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
+                    input=stdin_responses,
+                )
+
+    assert result.exit_code == 1, f"Expected exit 1, got {result.exit_code}:\nOUT: {result.output}"
+    assert config_path.exists(), "Config should have been written before the Proceed? prompt"
+    doc = tomlkit.parse(config_path.read_text())
+    assert "provider" not in doc["graph"]
+    assert "extraction_model" not in doc["graph"]
+    assert "llama_cpp_base_url" not in doc["graph"]
+    assert "enabled" not in doc["graph"], (
+        "graph.enabled must remain untouched by the enrichment-only revert — "
+        "install_graph_extra was never selected in this test"
+    )
 
 
 @pytest.mark.integration
@@ -1055,8 +1158,9 @@ def test_e2e_multilingual_declineProceedPrompt_reverts_flag(runner: CliRunner, t
     #  6. routing strategy: "" (default)
     #  7. log format: "" (default)
     #  8. HyDE/RAG Fusion: "n"
-    #  9. "Proceed?": "n"  ← decline
-    stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "n", "n"]) + "\n"
+    #  9. graph enrichment: "n"
+    # 10. "Proceed?": "n"  ← decline
+    stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "n", "n", "n"]) + "\n"
 
     with _no_anthropic_key():
         with _patched_wizard(
@@ -1097,7 +1201,7 @@ def test_e2e_interactive_multilingual_install_triggered(runner: CliRunner, tmp_p
     install_multilingual_mock = MagicMock()
 
     # Same interactive setup as the decline test above, but Proceed="y".
-    stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "n", "y"]) + "\n"
+    stdin_responses = "\n".join(["y", "n", "n", "n", "n", "", "", "n", "n", "y"]) + "\n"
 
     with _no_anthropic_key():
         with _patched_wizard(

@@ -52,7 +52,7 @@ flowchart LR
     FE2["FE-2 graph provider step"]
     FE3["FE-3 toml.example"]
     BE10["BE-10 registry sync guard"]
-    T1["T-1 manual checklist"]
+    T1["T-1 e2e tests"]
   end
   T2([T-2 · close-out])
 
@@ -201,7 +201,7 @@ flowchart LR
         - #integration_test — `test_wizard_llama_cpp_model_picker_reachable` — `CliRunner`, `_fetch_llama_cpp_models` patched with non-empty list → numbered picker presented (S4)
         - #integration_test — `test_wizard_llama_cpp_model_picker_unreachable` — patched to `[]` → free-text model entry prompt shown (S12)
 
-- [ ] **FE-2** — Add `_prompt_graph_provider()` to `archon_search/install/wizard.py` (prompts `[graph] provider`, `extraction_model`, and `llama_cpp_base_url`; calls `_fetch_llama_cpp_models` when `llama_cpp`; falls back to free-text when unreachable; wired into `_prompt_optional_features`); add five new fields to `WizardFeatures` in `archon_search/install/config_writer.py:21` (`hyde_llama_cpp_base_url: str = ""`, `rag_fusion_llama_cpp_base_url: str = ""`, `graph_provider: str = ""`, `graph_extraction_model: str = ""`, `graph_llama_cpp_base_url: str = ""`); update `_apply_wizard_features_to_toml` to write all new fields to `[hyde]`/`[rag_fusion]` (following the `_reconcile_ollama_base_url` pattern for llama_cpp) and to write `provider`/`extraction_model`/`llama_cpp_base_url` to `[graph]`; add `_revert_graph_enrichment_flags()` to `archon_search/install/extras.py` (strips only `provider`, `extraction_model`, `llama_cpp_base_url` from `[graph]` — does **not** set `graph.enabled=False`, distinct from `_revert_query_expansion_flags`) #frontend-role
+- [x] **FE-2** — Add `_prompt_graph_provider()` to `archon_search/install/wizard.py` (prompts `[graph] provider`, `extraction_model`, and `llama_cpp_base_url`; calls `_fetch_llama_cpp_models` when `llama_cpp`; falls back to free-text when unreachable; wired into `_prompt_optional_features`); add five new fields to `WizardFeatures` in `archon_search/install/config_writer.py:21` (`hyde_llama_cpp_base_url: str = ""`, `rag_fusion_llama_cpp_base_url: str = ""`, `graph_provider: str = ""`, `graph_extraction_model: str = ""`, `graph_llama_cpp_base_url: str = ""`); update `_apply_wizard_features_to_toml` to write all new fields to `[hyde]`/`[rag_fusion]` (following the `_reconcile_ollama_base_url` pattern for llama_cpp) and to write `provider`/`extraction_model`/`llama_cpp_base_url` to `[graph]`; add `_revert_graph_enrichment_flags()` to `archon_search/install/extras.py` (strips only `provider`, `extraction_model`, `llama_cpp_base_url` from `[graph]` — does **not** set `graph.enabled=False`, distinct from `_revert_query_expansion_flags`) #frontend-role
     - Presentation · 5.0h
     - needs FE-1, BE-4 · completes S18, S22
     - Tests
@@ -223,15 +223,15 @@ flowchart LR
     - Tests
         - (the file IS the structural guard — meta-tests plus `test_provider_registry_is_source_of_truth`)
 
-- [ ] **T-1** — Create `tests/integration/test_llama_cpp_manual_checklist.md`; mirror the format of `tests/integration/test_g10_t2_manual_checklist.md` (prerequisites block, per-scenario TOML config block, checkbox steps with exact commands, acceptance statement) #tester-role
+- [ ] **T-1** — Create `tests/integration/test_llama_cpp_e2e.py`: real, executable e2e pytest tests against a live llama-server at `LLAMA_CPP_BASE_URL_DEFAULT` (`http://localhost:8080`) — NOT a manual checklist, no `#manual_test` steps. No `pytest.skip()`/marker gating on unreachability: these tests run as part of the default `uv run pytest` invocation, and an unreachable/misconfigured llama-server must surface as a loud test failure, not a silent skip #tester-role
     - — · 3.0h
     - needs BE-2, BE-3, BE-7, BE-9, FE-1 · completes S1, S2, S3, S4, S17
     - Tests
-        - #manual_test — Live HyDE via llama.cpp — llama-server reachable with a loaded model; `[hyde] provider="llama_cpp"`; `POST /search` with `hyde=true`; confirm `hyde_applied=true` and HTTP 200 (non-automatable: requires real llama-server inference)
-        - #manual_test — Live RAG Fusion via llama.cpp — `[rag_fusion] provider="llama_cpp"`; confirm query decomposed and fused via RRF; HTTP 200 (non-automatable: requires real llama-server inference)
-        - #manual_test — Live graph enrichment via llama.cpp — `[graph] provider="llama_cpp"` and `extraction_model` set; trigger community build; confirm LLM summaries and typed relationship labels produced (non-automatable: requires real llama-server inference)
-        - #manual_test — Wizard `/v1/models` picker — run wizard with llama-server live; confirm model list fetched and displayed; TOML written with all three `[graph]` fields (non-automatable: requires real llama-server)
-        - #manual_test — Startup probe in `/status` — `GET /status` shows `llama_cpp_ok: true` when reachable; `llama_cpp_ok: false` when stopped; `GET /ready` stays HTTP 200 in both cases (non-automatable: requires real llama-server process control)
+        - test_live_hyde_via_llama_cpp — `[hyde] provider="llama_cpp"`; `POST /search` with `hyde=true`; assert `hyde_applied=true` and HTTP 200
+        - test_live_rag_fusion_via_llama_cpp — `[rag_fusion] provider="llama_cpp"`; assert query decomposed and fused via RRF, HTTP 200
+        - test_live_graph_enrichment_via_llama_cpp — `[graph] provider="llama_cpp"` and `extraction_model` set; trigger community build; assert LLM summaries and typed relationship labels produced
+        - test_wizard_v1_models_picker_live — run wizard against the live llama-server; assert model list fetched and displayed; TOML written with all three `[graph]` fields
+        - test_status_probe_llama_cpp_reachability — `GET /status` shows `llama_cpp_ok: true` while llama-server is up; `GET /ready` stays HTTP 200
 
 ### Phase 5 · Close-out
 

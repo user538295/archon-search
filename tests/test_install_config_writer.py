@@ -515,6 +515,79 @@ class TestApplyWizardFeaturesToToml:
         assert doc["hyde"]["model"] == "llama3"
 
 
+class TestApplyWizardFeaturesFE2LlamaCppAndGraph:
+    """FE-2: llama_cpp_base_url threading for [hyde]/[rag_fusion], and [graph] enrichment."""
+
+    def _empty_doc(self) -> tomlkit.TOMLDocument:
+        return tomlkit.document()
+
+    def test_apply_wizard_features_writes_llama_cpp_base_url_to_hyde_rag_fusion(self) -> None:
+        """A custom llama_cpp_base_url is written under both [hyde] and [rag_fusion]."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        features = WizardFeatures(
+            enable_hyde=True,
+            hyde_provider="llama_cpp",
+            hyde_model="m1",
+            hyde_llama_cpp_base_url="http://hyde-box:8080",
+            enable_rag_fusion=True,
+            rag_fusion_provider="llama_cpp",
+            rag_fusion_model="m2",
+            rag_fusion_llama_cpp_base_url="http://rag-box:8080",
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["hyde"]["provider"] == "llama_cpp"
+        assert doc["hyde"]["llama_cpp_base_url"] == "http://hyde-box:8080"
+        assert doc["rag_fusion"]["provider"] == "llama_cpp"
+        assert doc["rag_fusion"]["llama_cpp_base_url"] == "http://rag-box:8080"
+
+    def test_hyde_llama_cpp_default_base_url_omits_key(self) -> None:
+        """Empty hyde_llama_cpp_base_url (built-in default) writes no key."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        features = WizardFeatures(
+            enable_hyde=True, hyde_provider="llama_cpp", hyde_model="m1", hyde_llama_cpp_base_url=""
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert "llama_cpp_base_url" not in doc["hyde"]
+
+    def test_graph_provider_writes_all_three_fields(self) -> None:
+        """graph_provider set writes provider/extraction_model/llama_cpp_base_url to [graph]."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        features = WizardFeatures(
+            graph_provider="llama_cpp",
+            graph_extraction_model="qwen2.5-coder",
+            graph_llama_cpp_base_url="http://graph-box:8080",
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["graph"]["provider"] == "llama_cpp"
+        assert doc["graph"]["extraction_model"] == "qwen2.5-coder"
+        assert doc["graph"]["llama_cpp_base_url"] == "http://graph-box:8080"
+
+    def test_graph_provider_anthropic_omits_llama_cpp_base_url(self) -> None:
+        """A non-llama_cpp graph provider writes provider/extraction_model but no base URL key."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        features = WizardFeatures(graph_provider="anthropic", graph_extraction_model="claude-haiku-4-5")
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["graph"]["provider"] == "anthropic"
+        assert doc["graph"]["extraction_model"] == "claude-haiku-4-5"
+        assert "llama_cpp_base_url" not in doc["graph"]
+
+    def test_graph_provider_empty_writes_nothing(self) -> None:
+        """graph_provider='' (declined enrichment) writes no [graph] section at all."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(doc, WizardFeatures())
+        assert "graph" not in doc
+
+
 # ---------------------------------------------------------------------------
 # Brief 150: re-run wizard with settings disabled writes the off/default value
 # ---------------------------------------------------------------------------
