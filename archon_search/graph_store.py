@@ -186,7 +186,7 @@ class GraphStore:
 
     def _validate_collection(self, collection: str) -> None:
         """Raise ValueError for collection names that fail _COLLECTION_RE."""
-        if not _COLLECTION_RE.match(collection):
+        if not _COLLECTION_RE.fullmatch(collection):
             raise ValueError(
                 f"Invalid collection name {collection!r}: must match "
                 r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$"

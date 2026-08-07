@@ -2144,6 +2144,20 @@ def test_P14_10_store_invalid_collection_name_empty_raises(tmp_path: Path) -> No
         asyncio.run(store.disconnect())
 
 
+def test_store_invalid_collection_name_trailing_newline_raises() -> None:
+    """S361 upstream enabler: `_COLLECTION_RE.match()` let a trailing '\\n' through.
+
+    ``re.match`` only anchors the start; a pattern ending in ``$`` still matches
+    a string with a trailing newline because ``$`` matches just before it. Must
+    use ``.fullmatch()`` (like the sibling ``_NAMESPACE_RE``) so the whole string
+    is validated. A collection name carrying a control character can otherwise
+    reach the store and later break control-character-unsafe renderers (e.g. the
+    `jobs list` CLI table).
+    """
+    with pytest.raises(ValueError, match="Invalid collection name"):
+        SearchStore._validate_collection("mytest\n")
+
+
 @pytest.mark.asyncio
 async def test_P14_11_store_rebuild_fts_on_empty_collection_does_not_raise(
     connected_store: SearchStore, col_name: str

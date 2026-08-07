@@ -92,6 +92,13 @@ def test_validate_collection_accepts_valid_names() -> None:
     store._validate_collection("col123")
 
 
+def test_validate_collection_rejects_trailing_newline() -> None:
+    """S361 upstream enabler: `.match()` let 'docs\\n' through — must use `.fullmatch()`."""
+    store = GraphStore("/tmp/fake-db-vc-newline")
+    with pytest.raises(ValueError):
+        store._validate_collection("docs\n")
+
+
 # ---------------------------------------------------------------------------
 # Unit: _validate_namespace guards
 # ---------------------------------------------------------------------------

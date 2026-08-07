@@ -347,7 +347,7 @@ class SearchStore:
 
     @staticmethod
     def _validate_collection(collection: str) -> None:
-        if not _COLLECTION_RE.match(collection):
+        if not _COLLECTION_RE.fullmatch(collection):
             raise ValueError(
                 f"Invalid collection name: {collection!r} — "
                 "must start with alphanumeric, contain only [a-zA-Z0-9_-], max 64 chars"
