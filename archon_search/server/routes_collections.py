@@ -121,17 +121,21 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
         # store), but one collection name maps to exactly one namespace, so the count
         # is namespace-isolated in practice.
         chunk_count = 0
+        doc_count = 0
         if col_meta is not None:
             try:
                 chunk_count = await search_store.count_chunks(name, namespace=namespace)
             except Exception:  # noqa: BLE001 — one bad collection must not 500 the whole list
                 chunk_count = 0
+            try:
+                doc_count = await search_store.count_documents(name)
+            except Exception:  # noqa: BLE001 — one bad collection must not 500 the whole list
+                doc_count = 0
         result.append(CollectionSummary(
             name=name,
             path=resolved,
             description=(col_meta.description or "") if col_meta is not None else "",
-            # doc_count intentionally 0 — populating it here is bug-025 (out of scope).
-            doc_count=0,
+            doc_count=doc_count,
             chunk_count=chunk_count,
             namespace=namespace,
             status=status,
