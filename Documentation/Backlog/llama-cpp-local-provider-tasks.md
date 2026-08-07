@@ -168,7 +168,7 @@ flowchart LR
         - #integration_test — `test_app_state_has_enrichment_client_for_three_sites` — `TestClient`, inspect `app.state`; `GraphExtractor` (`app.py:639`), `CommunityBuilder` via `routes_graph.py:99`, and `CommunityBuilder` inside `MaintenanceLoop` (`maintenance_loop.py:586`) each receive a non-`None` client of the correct concrete type when `[graph] provider` is configured (S20a)
         - #integration_test — `test_all_four_enrichment_clients_constructible` — factory builds all four v1 clients from valid `GraphConfig`; each implements `LLMEnrichmentClientProtocol` (S5)
 
-- [ ] **BE-8** — Create `tests/test_no_content_log_in_enrichment.py`: static source guard scanning all `archon_search/enrichment/*.py` modules for log-call arguments passing `chunk_text` or `community_text` variable names directly; includes meta-tests verifying the regex fires and does not over-match; mirrors `tests/test_no_query_log_in_hyde.py` pattern; entity names (e.g. `item.get("source_entity")`) are explicitly excluded from the guard (already-abstracted graph metadata, not raw input content) #backend-role
+- [x] **BE-8** — Create `tests/test_no_content_log_in_enrichment.py`: static source guard scanning all `archon_search/enrichment/*.py` modules for log-call arguments passing `chunk_text` or `community_text` variable names directly; includes meta-tests verifying the regex fires and does not over-match; mirrors `tests/test_no_query_log_in_hyde.py` pattern; entity names (e.g. `item.get("source_entity")`) are explicitly excluded from the guard (already-abstracted graph metadata, not raw input content) #backend-role
     - Frameworks & Drivers · 1.0h
     - needs BE-6 · completes S15b
     - Tests
