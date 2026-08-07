@@ -61,11 +61,11 @@ class Reranker:
     async def rerank(
         self, query: str, candidates: list[SearchResult], top_k: int
     ) -> list[SearchResult]:
-        if not candidates:
-            return []
-
-        pairs = [(query, c.text) for c in candidates]
         with record_stage("rerank"):
+            if not candidates:
+                return []
+
+            pairs = [(query, c.text) for c in candidates]
             scores: list[float] = await asyncio.to_thread(self._backend.predict, pairs)
 
         if len(scores) != len(candidates):
@@ -90,11 +90,11 @@ class Reranker:
         and explain paths). Returns new ScoredSearchCandidate objects with
         reranker_score populated. Input candidates are NOT mutated.
         """
-        if not candidates:
-            return []
-
-        pairs = [(query, c.text) for c in candidates]
         with record_stage("rerank"):
+            if not candidates:
+                return []
+
+            pairs = [(query, c.text) for c in candidates]
             scores: list[float] = await asyncio.to_thread(self._backend.predict, pairs)
 
         if len(scores) != len(candidates):

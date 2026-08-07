@@ -283,6 +283,77 @@ def test_explain_stage_timings_ms_in_response_body(
 
 
 # ---------------------------------------------------------------------------
+# Test 3b — S345: rerank stage key present in stage_timings_ms (B1)
+# ---------------------------------------------------------------------------
+
+
+def test_explain_stage_timings_rerank_key_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /explain with rerank=True includes all six documented stage keys.
+
+    The docs at 20_monitoring_and_alerts.md:82 list six query-path stages:
+    embed, vector, fts, fuse, rerank, total.  When rerank=True (default) and
+    a reranker is configured, every key must be present and >= 0.
+    Regression guard for S345.
+    """
+    import secrets
+
+    from archon_search.config import ObservabilityConfig, SearchConfig
+    from archon_search.jobs.scheduler import JobScheduler
+    from archon_search.jobs.store import JobStore
+    from archon_search.server.app import create_app
+    from fastapi.testclient import TestClient
+
+    api_key = secrets.token_hex(32)
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", api_key)
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "db")
+    cfg.backup.interval_hours = 0
+    cfg.observability = ObservabilityConfig(stage_timings_enabled=True)
+
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    scheduler = JobScheduler(
+        store=job_store,
+        max_concurrent=cfg.jobs.max_concurrent_bulk,
+        dispatch_fn=lambda job: None,
+    )
+
+    app = create_app(cfg, job_store, scheduler=scheduler)
+    with TestClient(app) as client:
+        col = "s345-rerank-timings"
+        doc_file = tmp_path / "rerank_doc.txt"
+        doc_file.write_text("Programming language design and compiler theory.\n" * 8)
+        ingest_file_via_path(client, col, str(doc_file), api_key=api_key)
+
+        resp = client.post(
+            "/explain",
+            json={"collection": col, "query": "programming language", "rerank": True},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        assert resp.status_code == 200, f"POST /explain returned {resp.status_code}: {resp.text}"
+        body = resp.json()
+        timings = body.get("stage_timings_ms")
+        assert timings is not None, "stage_timings_ms is None"
+
+        documented_stages = {"embed", "vector", "fts", "fuse", "rerank", "total"}
+        missing = documented_stages - set(timings.keys())
+        assert not missing, (
+            f"stage_timings_ms is missing documented stage(s) {sorted(missing)} "
+            f"(20_monitoring_and_alerts.md:82); present keys={sorted(timings.keys())}"
+        )
+        for key in documented_stages:
+            assert isinstance(timings[key], (int, float)), (
+                f"stage_timings_ms[{key!r}] should be a number"
+            )
+            assert timings[key] >= 0, (
+                f"stage_timings_ms[{key!r}]={timings[key]!r} should be non-negative"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Test 4 — Explicit single-collection /explain path (routes_explain.py:460-470)
 # ---------------------------------------------------------------------------
 

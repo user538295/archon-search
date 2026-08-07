@@ -397,6 +397,27 @@ async def test_rerank_with_trace_records_stage_when_bound() -> None:
     assert "rerank" in recorder.stage_timings_ms
 
 
+@pytest.mark.asyncio
+async def test_rerank_candidates_records_stage_on_empty_input() -> None:
+    """S345: rerank_candidates must record 'rerank' stage even with empty candidates.
+
+    The docs (20_monitoring_and_alerts.md:82) list 'rerank' as a mandatory
+    stage key whenever rerank=True.  The early-return for empty candidates
+    must not skip the record_stage("rerank") call.
+    """
+    from archon_search.observability import bind_stage_recorder
+
+    backend = _MockRerankerBackend()
+    reranker = Reranker(backend)
+    with bind_stage_recorder() as recorder:
+        result = await reranker.rerank_candidates("query", [], top_k=5)
+    assert result == []
+    assert "rerank" in recorder.stage_timings_ms, (
+        f"'rerank' missing from stage_timings_ms; present keys={sorted(recorder.stage_timings_ms)}"
+    )
+    assert recorder.stage_timings_ms["rerank"] >= 0
+
+
 # ===========================================================================
 # rerank_candidates — Task 2.1 (B3): unified production-grade candidate surface
 # ===========================================================================
