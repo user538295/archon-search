@@ -23,6 +23,25 @@ _EXIT_1_STATUSES = {"FAILED", "FAILED_EXPIRED", "CANCELLED"}
 _DEFAULT_WAIT_TIMEOUT = 600  # 10 minutes
 
 
+def _clean(value: str) -> str:
+    """Replace non-printable characters with spaces so one job stays on one row.
+
+    ``collection`` (and any other echoed field) is free-form and user-controlled;
+    an embedded newline would otherwise render a single job as several physical
+    lines, breaking the ``--limit`` row budget and the ``Showing N`` footer.
+    Every character ``str.splitlines()`` breaks on is non-printable, so this
+    covers them all — as well as terminal escapes such as ``\\x1b``.
+
+    Substitution is 1:1, so the result is length-preserving and the callers'
+    column widths are unaffected.
+
+    Applied to stdout only. The ``err=True`` error paths are each followed by
+    ``SystemExit(1)``, so no row can follow them, and an operator debugging a
+    failure wants the server's bytes verbatim.
+    """
+    return "".join(ch if ch.isprintable() else " " for ch in value)
+
+
 def _fmt_elapsed(created_at: str, updated_at: str, status: str) -> str:
     """Return a human-readable elapsed duration string."""
     from datetime import datetime, timezone  # noqa: PLC0415
@@ -65,7 +84,7 @@ def _print_job_detail(job: dict) -> None:
 
     width = max(len(k) for k, _ in fields)
     for k, v in fields:
-        click.echo(f"{k:<{width}}  {v}")
+        click.echo(f"{k:<{width}}  {_clean(str(v))}")
 
 
 @click.group("jobs")
@@ -127,11 +146,11 @@ def list_cmd(status: tuple[str, ...], limit: int, api_url: str, api_key: str | N
     click.echo(f"{'ID':<8}  {'TYPE':<18}  {'COLLECTION':<20}  {'STATUS':<14}  {'STARTED':<20}  ELAPSED")
     click.echo("-" * 94)
     for j in items:
-        jid = (j.get("job_id") or "")[:8]
-        jtype = (j.get("job_type") or "")[:18]
-        col = (j.get("collection") or "")[:20]
-        st = (j.get("status") or "")[:14]
-        started = (j.get("created_at") or "")[:19].replace("T", " ")
+        jid = _clean(j.get("job_id") or "")[:8]
+        jtype = _clean(j.get("job_type") or "")[:18]
+        col = _clean(j.get("collection") or "")[:20]
+        st = _clean(j.get("status") or "")[:14]
+        started = _clean(j.get("created_at") or "")[:19].replace("T", " ")
         elapsed = _fmt_elapsed(
             j.get("created_at", ""),
             j.get("updated_at", ""),
@@ -261,15 +280,15 @@ def status_cmd(job_id: str, api_url: str, api_key: str | None) -> None:
     progress = job.get("progress")
     error = job.get("error")
 
-    click.echo(f"job_id:     {job_id}")
-    click.echo(f"status:     {current_status}")
-    click.echo(f"collection: {collection}")
-    click.echo(f"created_at: {created_at}")
+    click.echo(f"job_id:     {_clean(job_id)}")
+    click.echo(f"status:     {_clean(str(current_status))}")
+    click.echo(f"collection: {_clean(str(collection))}")
+    click.echo(f"created_at: {_clean(str(created_at))}")
 
     if progress is not None:
-        click.echo(f"progress:   {progress}")
+        click.echo(f"progress:   {_clean(str(progress))}")
 
     if current_status in _EXIT_1_STATUSES:
         if error:
-            click.echo(f"error:      {error}")
+            click.echo(f"error:      {_clean(str(error))}")
         raise SystemExit(1)
