@@ -365,6 +365,26 @@ async def test_rate_limit_fallback(
     assert any(r.levelno >= logging.WARNING for r in caplog.records)
 
 
+@pytest.mark.asyncio
+async def test_rate_limit_skip_includes_llama_cpp_hyde() -> None:
+    """provider='llama_cpp' must skip rate limiting, mirroring ollama/claude_cli."""
+    embedder = _make_embedder()
+    config = _make_config(provider="llama_cpp", max_requests_per_minute=1)
+
+    mock_provider = MagicMock()
+    mock_provider.generate_hypothetical_doc = AsyncMock(return_value="hypothesis text")
+
+    from archon_search.hyde import HyDEGenerator  # noqa: PLC0415
+
+    gen = HyDEGenerator(embedder, config, provider=mock_provider)
+
+    result1 = await gen.generate("query 1")
+    result2 = await gen.generate("query 2")
+
+    assert result1 is not None, "First call should succeed"
+    assert result2 is not None, "llama_cpp must skip rate limiting like ollama/claude_cli"
+
+
 # ---------------------------------------------------------------------------
 # Privacy: fingerprint only, no raw query in logs
 # ---------------------------------------------------------------------------

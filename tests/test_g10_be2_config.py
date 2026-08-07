@@ -269,7 +269,7 @@ def test_config_rag_fusion_ollama_package_absent_raises_config_error(
 # C1-I-20: path_home_allowlist contains config.py entry with correct line number and SHA
 # ---------------------------------------------------------------------------
 
-_EXPECTED_CONFIG_LINE_NO = 319
+_EXPECTED_CONFIG_LINE_NO = 323
 _EXPECTED_CONFIG_SHA = "8c6844f3268afa9c4a632945843e776075a111407a0540b8a29041b99d669043"
 _CONFIG_REL_PATH = "archon_search/config.py"
 
@@ -362,3 +362,55 @@ def test_config_toml_empty_model_with_ollama_provider_raises_config_error() -> N
     doc = _make_toml_doc("hyde", provider="ollama", model="")
     with pytest.raises(ConfigError, match="model"):
         _apply_toml(config, doc)
+
+
+# ---------------------------------------------------------------------------
+# BE-1: llama_cpp provider registry + base URL default + TOML loading
+# ---------------------------------------------------------------------------
+
+
+def test_llama_cpp_in_valid_providers() -> None:
+    """'llama_cpp' must be a member of _VALID_PROVIDERS after registry derivation."""
+    from archon_search.config import _VALID_PROVIDERS  # noqa: PLC0415
+
+    assert "llama_cpp" in _VALID_PROVIDERS
+
+
+def test_provider_key_available_llama_cpp() -> None:
+    """provider_key_available('llama_cpp') must return True (local inference; no key)."""
+    from archon_search.query_expansion_protocol import provider_key_available  # noqa: PLC0415
+
+    assert provider_key_available("llama_cpp") is True
+
+
+def test_llama_cpp_base_url_default() -> None:
+    """LLAMA_CPP_BASE_URL_DEFAULT must be 'http://localhost:8080'."""
+    from archon_search.config import LLAMA_CPP_BASE_URL_DEFAULT  # noqa: PLC0415
+
+    assert LLAMA_CPP_BASE_URL_DEFAULT == "http://localhost:8080"
+
+
+def test_toml_loader_hyde_llama_cpp_base_url(tmp_path: Path) -> None:
+    """A non-default [hyde].llama_cpp_base_url round-trips through load_config()."""
+    from archon_search.config import load_config  # noqa: PLC0415
+
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        '[hyde]\nprovider = "llama_cpp"\nllama_cpp_base_url = "http://localhost:9090"\n',
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    assert config.hyde.llama_cpp_base_url == "http://localhost:9090"
+
+
+def test_toml_loader_rag_fusion_llama_cpp_base_url(tmp_path: Path) -> None:
+    """A non-default [rag_fusion].llama_cpp_base_url round-trips through load_config()."""
+    from archon_search.config import load_config  # noqa: PLC0415
+
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        '[rag_fusion]\nprovider = "llama_cpp"\nllama_cpp_base_url = "http://localhost:9090"\n',
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    assert config.rag_fusion.llama_cpp_base_url == "http://localhost:9090"

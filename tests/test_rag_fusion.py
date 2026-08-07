@@ -489,6 +489,25 @@ async def test_rate_limit_fallback(
 
 
 @pytest.mark.asyncio
+async def test_rate_limit_skip_includes_llama_cpp_rag_fusion() -> None:
+    """provider='llama_cpp' must skip rate limiting, mirroring ollama/claude_cli."""
+    from archon_search.rag_fusion import RAGFusionGenerator  # noqa: PLC0415
+
+    config = _make_config(provider="llama_cpp", max_requests_per_minute=1)
+
+    mock_provider = MagicMock()
+    mock_provider.decompose_query = AsyncMock(return_value=["v1", "v2"])
+
+    gen = RAGFusionGenerator(config, provider=mock_provider)
+
+    result1 = await gen.generate_variants("query 1")
+    result2 = await gen.generate_variants("query 2")
+
+    assert result1, "First call should succeed"
+    assert result2, "llama_cpp must skip rate limiting like ollama/claude_cli"
+
+
+@pytest.mark.asyncio
 async def test_concurrent_generate_variants_respects_token_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

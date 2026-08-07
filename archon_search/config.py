@@ -26,8 +26,10 @@ class ConfigError(Exception):
     """Raised on invalid configuration values."""
 
 
-_VALID_PROVIDERS: frozenset[str] = frozenset({"anthropic", "ollama", "openai", "claude_cli"})
+_PROVIDER_REGISTRY: tuple[str, ...] = ("anthropic", "ollama", "openai", "claude_cli", "llama_cpp")
+_VALID_PROVIDERS: frozenset[str] = frozenset(_PROVIDER_REGISTRY)
 OLLAMA_BASE_URL_DEFAULT: str = "http://localhost:11434"
+LLAMA_CPP_BASE_URL_DEFAULT: str = "http://localhost:8080"
 
 
 @dataclass
@@ -38,6 +40,7 @@ class HyDEConfig:
     max_requests_per_minute: int = 60
     provider: str = "anthropic"
     ollama_base_url: str = OLLAMA_BASE_URL_DEFAULT
+    llama_cpp_base_url: str = LLAMA_CPP_BASE_URL_DEFAULT
 
 
 @dataclass
@@ -49,6 +52,7 @@ class RAGFusionConfig:
     num_queries: int = 2
     provider: str = "anthropic"
     ollama_base_url: str = OLLAMA_BASE_URL_DEFAULT
+    llama_cpp_base_url: str = LLAMA_CPP_BASE_URL_DEFAULT
 
 
 @dataclass
@@ -656,6 +660,11 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         if not ollama_base_url:
             raise ConfigError("[hyde].ollama_base_url must be a non-empty string")
         hyde.ollama_base_url = ollama_base_url
+    if "llama_cpp_base_url" in hyde_cfg:
+        llama_cpp_base_url = _coerce_str(hyde_cfg["llama_cpp_base_url"], "[hyde].llama_cpp_base_url").strip()
+        if not llama_cpp_base_url:
+            raise ConfigError("[hyde].llama_cpp_base_url must be a non-empty string")
+        hyde.llama_cpp_base_url = llama_cpp_base_url
     config.hyde = hyde
 
     rag_fusion_cfg = doc.get("rag_fusion", {})
@@ -698,6 +707,13 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         if not ollama_base_url:
             raise ConfigError("[rag_fusion].ollama_base_url must be a non-empty string")
         rag_fusion.ollama_base_url = ollama_base_url
+    if "llama_cpp_base_url" in rag_fusion_cfg:
+        llama_cpp_base_url = _coerce_str(
+            rag_fusion_cfg["llama_cpp_base_url"], "[rag_fusion].llama_cpp_base_url"
+        ).strip()
+        if not llama_cpp_base_url:
+            raise ConfigError("[rag_fusion].llama_cpp_base_url must be a non-empty string")
+        rag_fusion.llama_cpp_base_url = llama_cpp_base_url
     config.rag_fusion = rag_fusion
 
     jobs_cfg = doc.get("jobs", {})

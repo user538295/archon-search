@@ -92,9 +92,9 @@ class HyDEGenerator:
             )
 
         # Token bucket pre-flight (under lock).
-        # Ollama and claude_cli are local/free paths with no API cap — skip
-        # rate limiting entirely.
-        _skip_rate_limit = self._config.provider in ("ollama", "claude_cli")
+        # Ollama, claude_cli, and llama_cpp are local/free paths with no API cap —
+        # skip rate limiting entirely.
+        _skip_rate_limit = self._config.provider in ("ollama", "claude_cli", "llama_cpp")
         if not _skip_rate_limit:
             async with self._lock:
                 now = time.monotonic()

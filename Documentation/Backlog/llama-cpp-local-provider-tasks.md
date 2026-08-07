@@ -79,7 +79,7 @@ flowchart LR
 
 ### Phase 1 · Search via llama.cpp *(walking skeleton: config + provider adapter + factory branch + silent fallback, end-to-end)*
 
-- [ ] **BE-1** — Add `_PROVIDER_REGISTRY` constant to `archon_search/config.py` (ordered sequence; `_VALID_PROVIDERS` frozenset derives from it); add `"llama_cpp"` to both; add `LLAMA_CPP_BASE_URL_DEFAULT = "http://localhost:8080"`; add `llama_cpp_base_url: str` field to `HyDEConfig` and `RAGFusionConfig`; add TOML loader branches for `llama_cpp_base_url` in both `[hyde]` and `[rag_fusion]` section loaders; add `"llama_cpp" → True` branch in `provider_key_available` (`archon_search/query_expansion_protocol.py:17`); add `"llama_cpp"` to rate-limit skip tuples in `archon_search/hyde.py:97` and `archon_search/rag_fusion.py:133` #backend-role
+- [x] **BE-1** — Add `_PROVIDER_REGISTRY` constant to `archon_search/config.py` (ordered sequence; `_VALID_PROVIDERS` frozenset derives from it); add `"llama_cpp"` to both; add `LLAMA_CPP_BASE_URL_DEFAULT = "http://localhost:8080"`; add `llama_cpp_base_url: str` field to `HyDEConfig` and `RAGFusionConfig`; add TOML loader branches for `llama_cpp_base_url` in both `[hyde]` and `[rag_fusion]` section loaders; add `"llama_cpp" → True` branch in `provider_key_available` (`archon_search/query_expansion_protocol.py:17`); add `"llama_cpp"` to rate-limit skip tuples in `archon_search/hyde.py:97` and `archon_search/rag_fusion.py:133` #backend-role
     - Frameworks & Drivers · 4.0h
     - needs K1 · completes C4 (partial), S14, S16 (partial)
     - Tests

@@ -158,6 +158,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "max_requests_per_minute": 60,
             "provider": "anthropic",
             "ollama_base_url": "http://localhost:11434",
+            "llama_cpp_base_url": "http://localhost:8080",
         },
         # [rag_fusion]
         "rag_fusion": {
@@ -168,6 +169,7 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "num_queries": 2,
             "provider": "anthropic",
             "ollama_base_url": "http://localhost:11434",
+            "llama_cpp_base_url": "http://localhost:8080",
         },
         # [jobs]
         "jobs": {
