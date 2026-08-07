@@ -414,3 +414,85 @@ def test_toml_loader_rag_fusion_llama_cpp_base_url(tmp_path: Path) -> None:
     )
     config = load_config(path=toml_file)
     assert config.rag_fusion.llama_cpp_base_url == "http://localhost:9090"
+
+
+def test_config_llama_cpp_base_url_empty_raises_config_error() -> None:
+    """_apply_toml with llama_cpp_base_url='' must raise ConfigError for hyde.
+
+    Mirrors test_config_ollama_base_url_empty_raises_config_error — the
+    llama_cpp_base_url loader branch uses the same non-empty-string validation.
+    """
+    from archon_search.config import SearchConfig, _apply_toml  # noqa: PLC0415
+
+    config = SearchConfig()
+    doc = _make_toml_doc("hyde", llama_cpp_base_url="")
+    with pytest.raises(ConfigError, match="llama_cpp_base_url"):
+        _apply_toml(config, doc)
+
+
+def test_config_llama_cpp_base_url_whitespace_raises_config_error() -> None:
+    """_apply_toml with llama_cpp_base_url='   ' (whitespace-only) must raise ConfigError."""
+    from archon_search.config import SearchConfig, _apply_toml  # noqa: PLC0415
+
+    config = SearchConfig()
+    doc = _make_toml_doc("hyde", llama_cpp_base_url="   ")
+    with pytest.raises(ConfigError, match="llama_cpp_base_url"):
+        _apply_toml(config, doc)
+
+
+def test_config_rag_fusion_llama_cpp_base_url_whitespace_raises_config_error() -> None:
+    """_apply_toml with [rag_fusion].llama_cpp_base_url='   ' must raise ConfigError."""
+    from archon_search.config import SearchConfig, _apply_toml  # noqa: PLC0415
+
+    config = SearchConfig()
+    doc = _make_toml_doc("rag_fusion", llama_cpp_base_url="   ")
+    with pytest.raises(ConfigError, match="llama_cpp_base_url"):
+        _apply_toml(config, doc)
+
+
+# ---------------------------------------------------------------------------
+# BE-1 fix: provider='llama_cpp' must fail loudly at create_app(), not silently
+# fall through to the Anthropic default in _build_query_expansion_provider.
+# _VALID_PROVIDERS accepts 'llama_cpp' (BE-1), but no adapter branch exists
+# for it yet (lands in BE-3). Without an explicit guard, provider='llama_cpp'
+# would silently route queries to the Anthropic API instead of failing —
+# exactly the kind of misrouting a fail-fast ConfigError must prevent.
+# ---------------------------------------------------------------------------
+
+
+def test_config_hyde_llama_cpp_provider_raises_config_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """create_app() with [hyde].provider='llama_cpp' must raise ConfigError."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
+
+    from archon_search.config import HyDEConfig, SearchConfig  # noqa: PLC0415
+    from archon_search.jobs.store import JobStore  # noqa: PLC0415
+    from archon_search.server.app import create_app  # noqa: PLC0415
+
+    config = SearchConfig()
+    config.hyde = HyDEConfig(provider="llama_cpp")
+
+    with pytest.raises(ConfigError, match="llama_cpp"):
+        create_app(config, JobStore())
+
+
+def test_config_rag_fusion_llama_cpp_provider_raises_config_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """create_app() with [rag_fusion].provider='llama_cpp' must raise ConfigError."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
+
+    from archon_search.config import RAGFusionConfig, SearchConfig  # noqa: PLC0415
+    from archon_search.jobs.store import JobStore  # noqa: PLC0415
+    from archon_search.server.app import create_app  # noqa: PLC0415
+
+    config = SearchConfig()
+    config.rag_fusion = RAGFusionConfig(provider="llama_cpp")
+
+    with pytest.raises(ConfigError, match="llama_cpp"):
+        create_app(config, JobStore())

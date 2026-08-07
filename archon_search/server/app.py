@@ -198,7 +198,19 @@ def _build_query_expansion_provider(
     The returned object is injected as the ``provider`` argument to
     HyDEGenerator and RAGFusionGenerator so the generators do not
     construct a default provider.
+
+    Raises ``ConfigError`` for provider='llama_cpp': ``_VALID_PROVIDERS``
+    accepts it (config-layer walking skeleton), but no adapter branch exists
+    here yet. Without this guard, provider='llama_cpp' would silently fall
+    through to the Anthropic default below and route queries to the Anthropic
+    API instead of failing loudly.
     """
+    if provider == "llama_cpp":
+        raise ConfigError(
+            "provider='llama_cpp' is not yet supported by the query-expansion "
+            "provider factory (adapter lands in a future release); use "
+            "'anthropic', 'openai', 'ollama', or 'claude_cli' for now"
+        )
     if provider == "ollama":
         from archon_search.providers.ollama_provider import (  # noqa: PLC0415
             OllamaQueryExpansionProvider,
