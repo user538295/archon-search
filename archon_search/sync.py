@@ -532,7 +532,18 @@ class SearchCollectionSync:
             on_complete = _make_on_file_complete(name)
             wrapped_cb = _make_progress_wrapper(name)
             _active_model = (meta.active_embedding_model or "") if meta else ""
-            embedder = make_embedder(_active_model) if _active_model else self._pipeline._global_embedder
+            _global = self._pipeline._global_embedder
+            if not _active_model or _active_model == _global.model_name:
+                embedder = _global
+            else:
+                try:
+                    embedder = make_embedder(_active_model)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "Could not load stored embedder %r for collection %r; using global embedder",
+                        _active_model, name,
+                    )
+                    embedder = _global
 
             try:
                 results = await self._pipeline.ingest_directory(
@@ -626,7 +637,18 @@ class SearchCollectionSync:
         from archon_search.progress import CollectionProgress, IndexingStatus
 
         _active_model = (meta.active_embedding_model or "") if meta else ""
-        embedder = make_embedder(_active_model) if _active_model else self._pipeline._global_embedder
+        _global = self._pipeline._global_embedder
+        if not _active_model or _active_model == _global.model_name:
+            embedder = _global
+        else:
+            try:
+                embedder = make_embedder(_active_model)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Could not load stored embedder %r for collection %r; using global embedder",
+                    _active_model, name,
+                )
+                embedder = _global
 
         async with self._get_lock(name):
             # Read current state and get processed_paths

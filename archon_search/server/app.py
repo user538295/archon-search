@@ -578,8 +578,63 @@ def create_app(
                             "MCP server failed to start; continuing without MCP", exc_info=True
                         )
 
+                # Startup: create filesystem watcher when watch=True.
+                # The WatcherManager fires a callback when files change in a
+                # collection's source directory; the callback calls
+                # collection_sync.sync_collection(), which passes
+                # ingested_by="watcher" to the pipeline (S276).
+                if config.watch:
+                    try:
+                        from archon_search.watcher import WatcherManager  # noqa: PLC0415
+                        all_collections = (
+                            list(config.pinned_collections) + list(config.collections)
+                        )
+                        desired = app.state.collection_sync.build_desired(all_collections)
+                        if desired:
+                            loop = asyncio.get_running_loop()
+                            # Capture desired in the closure so the callback can resolve
+                            # collection_name → source_path without a round-trip to config.
+                            _desired_snapshot = dict(desired)
+
+                            async def _watch_callback(col_name: str) -> None:
+                                path_str = _desired_snapshot.get(col_name)
+                                if path_str is None:
+                                    logger.warning(
+                                        "Watcher fired for unknown collection %r; skipping",
+                                        col_name,
+                                    )
+                                    return
+                                await app.state.collection_sync.sync_collection(
+                                    col_name, Path(path_str)
+                                )
+
+                            wm = WatcherManager(
+                                on_change=_watch_callback,
+                                loop=loop,
+                            )
+                            for col_name, path_str in _desired_snapshot.items():
+                                wm.add(col_name, Path(path_str))
+                            app.state.watcher_manager = wm
+                            logger.info(
+                                "Filesystem watcher started for %d collection(s): %s",
+                                len(_desired_snapshot),
+                                sorted(_desired_snapshot),
+                            )
+                    except Exception:  # noqa: BLE001 — watcher must never block REST startup
+                        logger.warning(
+                            "Filesystem watcher failed to start; continuing without watching",
+                            exc_info=True,
+                        )
+
                 yield
         finally:
+            # Shutdown: stop filesystem watcher before disconnecting the store.
+            if app.state.watcher_manager is not None:
+                try:
+                    await app.state.watcher_manager.stop_all()
+                except Exception:  # noqa: BLE001
+                    logger.warning("Filesystem watcher stop_all() raised", exc_info=True)
+
             # Shutdown: disconnect search store
             await app.state.search_store.disconnect()
 
