@@ -131,6 +131,10 @@ def _check_provider_deps(config: SearchConfig) -> None:
     guard would require ``archon-search[hyde]`` on every install and break the
     optional-extras model. ``claude_cli`` is never guarded (no pip package;
     availability is the ``claude`` binary on PATH with graceful runtime degradation).
+    ``llama_cpp`` is never guarded either: httpx is a core dependency (no optional
+    import), llama-server needs no API key, and reachability is a runtime concern
+    handled by the non-blocking probe in ``model_validation.py`` — warn, never
+    raise, at ``create_app()`` time.
     """
     # Per-provider firing rule: ollama/openai unconditional; anthropic enabled-gated;
     # claude_cli never (see docstring). `enabled` is consumed only by the anthropic branch.
@@ -183,34 +187,32 @@ def _check_provider_deps(config: SearchConfig) -> None:
         # provider='claude_cli' is intentionally not guarded: it has no pip package
         # and resolves availability via shutil.which('claude') with graceful runtime
         # degradation (claude_cli_provider.py).
+        # provider='llama_cpp' is intentionally not guarded: httpx is a core
+        # dependency (no optional import) and llama-server needs no API key.
+        # Unreachability is warned-not-blocked by the async startup probe in
+        # model_validation.py, not by this synchronous, network-free check.
 
 
 def _build_query_expansion_provider(
-    provider: str, model: str, ollama_base_url: str
+    provider: str, model: str, ollama_base_url: str, llama_cpp_base_url: str
 ) -> "QueryExpansionProvider":
     """Build and return the appropriate QueryExpansionProvider from config.
 
     Returns an OllamaQueryExpansionProvider for provider='ollama',
     a ClaudeCLIQueryExpansionProvider for provider='claude_cli',
     an OpenAIQueryExpansionProvider for provider='openai',
+    a LlamaCppQueryExpansionProvider for provider='llama_cpp',
     or an AnthropicQueryExpansionProvider for provider='anthropic' (default).
 
     The returned object is injected as the ``provider`` argument to
     HyDEGenerator and RAGFusionGenerator so the generators do not
     construct a default provider.
-
-    Raises ``ConfigError`` for provider='llama_cpp': ``_VALID_PROVIDERS``
-    accepts it (config-layer walking skeleton), but no adapter branch exists
-    here yet. Without this guard, provider='llama_cpp' would silently fall
-    through to the Anthropic default below and route queries to the Anthropic
-    API instead of failing loudly.
     """
     if provider == "llama_cpp":
-        raise ConfigError(
-            "provider='llama_cpp' is not yet supported by the query-expansion "
-            "provider factory (adapter lands in a future release); use "
-            "'anthropic', 'openai', 'ollama', or 'claude_cli' for now"
+        from archon_search.providers.llama_cpp_provider import (  # noqa: PLC0415
+            LlamaCppQueryExpansionProvider,
         )
+        return LlamaCppQueryExpansionProvider(model=model, base_url=llama_cpp_base_url)
     if provider == "ollama":
         from archon_search.providers.ollama_provider import (  # noqa: PLC0415
             OllamaQueryExpansionProvider,
@@ -703,7 +705,9 @@ def create_app(
     from archon_search.hyde import HyDEGenerator  # noqa: PLC0415
     from archon_search.rag_fusion import RAGFusionGenerator  # noqa: PLC0415
 
-    _hyde_provider = _build_query_expansion_provider(config.hyde.provider, config.hyde.model, config.hyde.ollama_base_url)
+    _hyde_provider = _build_query_expansion_provider(
+        config.hyde.provider, config.hyde.model, config.hyde.ollama_base_url, config.hyde.llama_cpp_base_url
+    )
     app.state.hyde_generator = HyDEGenerator(embedder=app.state.embedder, config=config.hyde, provider=_hyde_provider)
     if config.hyde.enabled:
         logger.info(
@@ -712,7 +716,9 @@ def create_app(
             config.hyde.model,
         )
 
-    _rag_fusion_provider = _build_query_expansion_provider(config.rag_fusion.provider, config.rag_fusion.model, config.rag_fusion.ollama_base_url)
+    _rag_fusion_provider = _build_query_expansion_provider(
+        config.rag_fusion.provider, config.rag_fusion.model, config.rag_fusion.ollama_base_url, config.rag_fusion.llama_cpp_base_url
+    )
     app.state.rag_fusion_generator = RAGFusionGenerator(config=config.rag_fusion, provider=_rag_fusion_provider)
     if config.rag_fusion.enabled:
         logger.info(

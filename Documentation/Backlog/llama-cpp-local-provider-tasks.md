@@ -106,7 +106,7 @@ flowchart LR
         - #integration_test — `test_rag_fusion_end_to_end_with_llama_cpp` — as above for `decompose_query` path (S2)
         - #integration_test — `test_llama_cpp_fallback_on_unreachable` — `ConnectError` → plain search continues, HTTP 200, no exception propagated (S6)
 
-- [ ] **BE-3** — Add `llama_cpp` branch + `llama_cpp_base_url` as 4th param to `_build_query_expansion_provider` (`archon_search/server/app.py:188`); update call sites at `:694` and `:703` to pass `config.hyde.llama_cpp_base_url` / `config.rag_fusion.llama_cpp_base_url`; add `llama_cpp` branch to `_check_provider_deps` (`:124`, no key check, warn-not-block if unreachable) #backend-role
+- [x] **BE-3** — Add `llama_cpp` branch + `llama_cpp_base_url` as 4th param to `_build_query_expansion_provider` (`archon_search/server/app.py:188`); update call sites at `:694` and `:703` to pass `config.hyde.llama_cpp_base_url` / `config.rag_fusion.llama_cpp_base_url`; add `llama_cpp` branch to `_check_provider_deps` (`:124`, no key check, warn-not-block if unreachable) #backend-role
     - Interface Adapters · 2.0h
     - needs BE-1, BE-2 · completes C3 (partial), S7 (partial), S16 (partial)
     - Tests

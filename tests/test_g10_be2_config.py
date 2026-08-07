@@ -451,48 +451,96 @@ def test_config_rag_fusion_llama_cpp_base_url_whitespace_raises_config_error() -
 
 
 # ---------------------------------------------------------------------------
-# BE-1 fix: provider='llama_cpp' must fail loudly at create_app(), not silently
-# fall through to the Anthropic default in _build_query_expansion_provider.
-# _VALID_PROVIDERS accepts 'llama_cpp' (BE-1), but no adapter branch exists
-# for it yet (lands in BE-3). Without an explicit guard, provider='llama_cpp'
-# would silently route queries to the Anthropic API instead of failing —
-# exactly the kind of misrouting a fail-fast ConfigError must prevent.
+# BE-3: provider='llama_cpp' builds a real LlamaCppQueryExpansionProvider at
+# create_app() time (the BE-1 stopgap ConfigError guard is gone — a real
+# adapter branch now exists in _build_query_expansion_provider).
 # ---------------------------------------------------------------------------
 
 
-def test_config_hyde_llama_cpp_provider_raises_config_error(
+def test_config_hyde_llama_cpp_provider_builds_successfully(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """create_app() with [hyde].provider='llama_cpp' must raise ConfigError."""
+    """create_app() with [hyde].provider='llama_cpp' builds the real adapter (BE-3)."""
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
 
     from archon_search.config import HyDEConfig, SearchConfig  # noqa: PLC0415
     from archon_search.jobs.store import JobStore  # noqa: PLC0415
+    from archon_search.providers.llama_cpp_provider import (  # noqa: PLC0415
+        LlamaCppQueryExpansionProvider,
+    )
     from archon_search.server.app import create_app  # noqa: PLC0415
 
     config = SearchConfig()
     config.hyde = HyDEConfig(provider="llama_cpp")
 
-    with pytest.raises(ConfigError, match="llama_cpp"):
-        create_app(config, JobStore())
+    app = create_app(config, JobStore())
+
+    assert isinstance(app.state.hyde_generator._provider, LlamaCppQueryExpansionProvider)
 
 
-def test_config_rag_fusion_llama_cpp_provider_raises_config_error(
+def test_config_rag_fusion_llama_cpp_provider_builds_successfully(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """create_app() with [rag_fusion].provider='llama_cpp' must raise ConfigError."""
+    """create_app() with [rag_fusion].provider='llama_cpp' builds the real adapter (BE-3)."""
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", "test-key-abc123")
 
     from archon_search.config import RAGFusionConfig, SearchConfig  # noqa: PLC0415
     from archon_search.jobs.store import JobStore  # noqa: PLC0415
+    from archon_search.providers.llama_cpp_provider import (  # noqa: PLC0415
+        LlamaCppQueryExpansionProvider,
+    )
     from archon_search.server.app import create_app  # noqa: PLC0415
 
     config = SearchConfig()
     config.rag_fusion = RAGFusionConfig(provider="llama_cpp")
 
-    with pytest.raises(ConfigError, match="llama_cpp"):
-        create_app(config, JobStore())
+    app = create_app(config, JobStore())
+
+    assert isinstance(app.state.rag_fusion_generator._provider, LlamaCppQueryExpansionProvider)
+
+
+# ---------------------------------------------------------------------------
+# BE-3: factory unit test, no-key no-raise dep check, no pip extra
+# ---------------------------------------------------------------------------
+
+
+def test_build_query_expansion_provider_builds_llama_cpp() -> None:
+    """_build_query_expansion_provider('llama_cpp', ...) returns the real adapter."""
+    from archon_search.providers.llama_cpp_provider import (  # noqa: PLC0415
+        LlamaCppQueryExpansionProvider,
+    )
+    from archon_search.server.app import _build_query_expansion_provider  # noqa: PLC0415
+
+    provider = _build_query_expansion_provider(
+        "llama_cpp", "some-model", "http://localhost:11434", "http://localhost:9090"
+    )
+
+    assert isinstance(provider, LlamaCppQueryExpansionProvider)
+    assert provider._model == "some-model"
+    assert provider._base_url == "http://localhost:9090"
+
+
+def test_check_provider_deps_llama_cpp_no_raise(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_check_provider_deps(provider='llama_cpp') never raises with an empty environment (S16)."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig  # noqa: PLC0415
+    from archon_search.server.app import _check_provider_deps  # noqa: PLC0415
+
+    config = SearchConfig()
+    config.hyde = HyDEConfig(provider="llama_cpp")
+    config.rag_fusion = RAGFusionConfig(provider="llama_cpp")
+
+    _check_provider_deps(config)  # must not raise
+
+
+def test_no_pip_extra_for_llama_cpp() -> None:
+    """_PROVIDER_EXTRA.get('llama_cpp') is None — no new package to install (S14)."""
+    from archon_search.install.extras import _PROVIDER_EXTRA  # noqa: PLC0415
+
+    assert _PROVIDER_EXTRA.get("llama_cpp") is None
