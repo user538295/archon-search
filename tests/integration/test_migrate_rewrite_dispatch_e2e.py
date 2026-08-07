@@ -577,8 +577,8 @@ def test_concurrent_ingest_503_during_rewrite_e2e(
                 assert ingest_resp.status_code == 503, (
                     f"expected 503 while rewrite holds lock, got {ingest_resp.status_code}: {ingest_resp.text}"
                 )
-                assert ingest_resp.json().get("error") == "store_busy", (
-                    f"expected error='store_busy' in 503 response, got: {ingest_resp.json()!r}"
+                assert ingest_resp.json().get("code") == "store_busy", (
+                    f"expected code='store_busy' in 503 response, got: {ingest_resp.json()!r}"
                 )
                 assert "Retry-After" in ingest_resp.headers, (
                     "expected Retry-After header in 503 response"

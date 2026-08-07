@@ -15,7 +15,7 @@ import math
 from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig, save_config
-from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
@@ -25,7 +25,7 @@ from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, DocumentInfoItem, DocumentListResponse, ErrorDetail, ExpiringChunkItem, ExpiringChunksResponse, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
 from archon_search.store import STORE_SCHEMA_VERSION, StoreBusyError
 from archon_search.sync import path_to_collection_name
-from archon_search.types import JobStatus, MetadataReindexJob, MigrationJob, MigrationKind, MigrationSpec
+from archon_search.types import IngestJob, JobStatus, MetadataReindexJob, MigrationJob, MigrationKind, MigrationSpec
 
 logger = logging.getLogger(__name__)
 
@@ -326,6 +326,62 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
                 "'pinned_collections' in config before deleting."
             ),
         )
+
+    # Refuse if a base IngestJob is actively writing to this collection.
+    #
+    # The collection lock is released early in _default_ingest_task_with_lock
+    # (before writes complete, to avoid asyncio.Lock re-entrancy deadlock with
+    # store.ingest_chunks), so the lock-based check below cannot protect against
+    # an ingest that is mid-flight.  The job store is the authoritative signal.
+    #
+    # Statuses covered:
+    #   RUNNING   — lock released, dispatch active.
+    #   CANCELLING — DELETE /jobs/{id} set this but does NOT cancel the task;
+    #                the ingest continues until it completes.
+    # PENDING is intentionally excluded: on the REST POST /ingest path the
+    # caller pre-acquires the lock before returning 202, so the lock-based
+    # guard below covers that window.  The maintenance-retry path creates PENDING
+    # jobs with no lock and no immediate dispatcher — adding PENDING here would
+    # produce permanent false positives for those orphaned retry records.
+    #
+    # type(j) is IngestJob — exact-type check (not isinstance).  Subclasses
+    # (ReindexJob, SyncJob, MetadataReindexJob, …) each have their own
+    # CollectionMeta job-id guard that returns 409, keeping guard responsibilities
+    # separate.  This mirrors the established idiom in maintenance_loop.py
+    # ("Only process exact base IngestJob instances — no subclasses").
+    job_store = getattr(request.app.state, "job_store", None)
+    if job_store is not None:
+        _active_write_statuses = {JobStatus.RUNNING, JobStatus.CANCELLING}
+        active_ingest = next(
+            (
+                j for j in job_store.list()
+                if type(j) is IngestJob
+                and j.collection == name
+                and j.namespace == ns
+                and j.status in _active_write_statuses
+            ),
+            None,
+        )
+        if active_ingest is not None:
+            logger.warning(
+                "DELETE /collections/%s refused: ingest job %s is %s (namespace=%s)",
+                name,
+                active_ingest.job_id,
+                active_ingest.status.value,
+                ns,
+            )
+            retry_after = str(math.ceil(INGEST_LOCK_TIMEOUT_S))
+            return JSONResponse(
+                {
+                    "detail": (
+                        f"ingest job {active_ingest.job_id} is in progress; "
+                        "retry after it completes"
+                    ),
+                    "code": "store_busy",
+                },
+                status_code=503,
+                headers={"Retry-After": retry_after},
+            )
 
     # Acquire the per-collection lock before mutating — 503 if a write is in progress.
     lock_result = await acquire_collection_lock_or_503(search_store, name)

@@ -1,6 +1,7 @@
 """Tests for GET/POST/DELETE /collections/* endpoints ."""
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from unittest import mock
@@ -10,11 +11,13 @@ import pytest
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
+from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.jobs.model import JobStatus
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from archon_search.sync import path_to_collection_name
+from archon_search.types import IngestJob, ReindexJob
 
 
 @pytest.fixture
@@ -1353,7 +1356,7 @@ def test_delete_collection_503_when_lock_held(
 
     assert response.status_code == 503
     data = response.json()
-    assert data["error"] == "store_busy"
+    assert data["code"] == "store_busy"
     assert "Retry-After" in response.headers
     # drop_collection must NOT have been called
     mock_store.drop_collection.assert_not_called()
@@ -1454,6 +1457,168 @@ def test_delete_collection_lock_released_on_exception(
     assert response.status_code == 500
     # Lock MUST be released despite the exception
     assert not real_lock.locked(), "Lock must be released even when delete_collection_meta raises"
+
+
+# ---------------------------------------------------------------------------
+# S399/S428/S430: DELETE /collections/{name} must return 503 when an ingest job is active
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_search_store_for_delete(collection_name: str, ns: str = "default") -> MagicMock:
+    """Return a mock SearchStore that reports `collection_name` as existing (for DELETE tests)."""
+    meta = CollectionMeta(name=collection_name, namespace=ns)
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=meta)
+    mock_store.drop_collection = AsyncMock()
+    mock_store.delete_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=asyncio.Lock())  # free lock
+    return mock_store
+
+
+@pytest.mark.parametrize("active_status", [JobStatus.RUNNING, JobStatus.CANCELLING])
+def test_delete_collection_503_when_ingest_active(
+    tmp_path: Path, tmp_store: JobStore, active_status: JobStatus
+) -> None:
+    """DELETE returns 503 when a base IngestJob is RUNNING or CANCELLING for this collection.
+
+    Regression test for S399/S428/S430:
+    - RUNNING: the collection lock is released early in _default_ingest_task_with_lock
+      (before writes complete), so a free lock does not mean the collection is safe to delete.
+    - CANCELLING: DELETE /jobs/{id} transitions RUNNING→CANCELLING but does NOT cancel the
+      asyncio task; the ingest continues writing until it finishes.
+    The route must check the job store directly.
+    """
+    src = tmp_path / "ingest_active_col"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    name = path_to_collection_name(str(src))
+    ns = "default"
+
+    now = "2026-08-07T00:00:00Z"
+    active_job = IngestJob(
+        job_id="s399-active-job-id",
+        status=active_status,
+        created_at=now,
+        updated_at=now,
+        namespace=ns,
+        collection=name,
+    )
+    tmp_store.create_job(active_job)
+
+    mock_search_store = _make_mock_search_store_for_delete(name, ns)
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_search_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    response = c.delete(f"/collections/{name}")
+
+    assert response.status_code == 503, (
+        f"Expected 503 when ingest job is {active_status.value}, "
+        f"got {response.status_code}; body={response.json()}"
+    )
+    data = response.json()
+    assert data.get("code") == "store_busy", f"Expected code='store_busy', got {data}"
+    assert "s399-active-job-id" in data.get("detail", ""), (
+        f"Expected job_id in detail: {data}"
+    )
+    assert response.headers.get("Retry-After") == "30", (
+        f"Expected Retry-After: 30, got {response.headers.get('Retry-After')!r}"
+    )
+    # The collection must NOT have been mutated in any way
+    mock_search_store.drop_collection.assert_not_called()
+    mock_search_store.delete_collection_meta.assert_not_called()
+
+
+def test_delete_collection_200_when_ingest_done(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """DELETE succeeds when a DONE IngestJob exists — completed jobs must not block deletion."""
+    src = tmp_path / "ingest_done_col"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    name = path_to_collection_name(str(src))
+    ns = "default"
+
+    now = "2026-08-07T00:00:00Z"
+    done_job = IngestJob(
+        job_id="s399-done-job-id",
+        status=JobStatus.DONE,
+        created_at=now,
+        updated_at=now,
+        namespace=ns,
+        collection=name,
+    )
+    tmp_store.create_job(done_job)
+
+    mock_search_store = _make_mock_search_store_for_delete(name, ns)
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_search_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    response = c.delete(f"/collections/{name}")
+
+    assert response.status_code == 200, (
+        f"Expected 200 when ingest is DONE, got {response.status_code}; body={response.json()}"
+    )
+    mock_search_store.drop_collection.assert_called_once()
+
+
+def test_delete_collection_200_when_reindex_running(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """DELETE is not blocked by a RUNNING ReindexJob — subclasses are intentionally excluded.
+
+    ReindexJob (and other IngestJob subclasses) each have their own per-collection guard via
+    CollectionMeta job-id fields (reindex_job_id → 409).  This test pins the
+    type(j) is IngestJob exact-type check as deliberate: changing it to isinstance would
+    unintentionally block DELETE while those jobs run, but that responsibility belongs to the
+    409 guard, not here.
+    """
+    src = tmp_path / "reindex_running_col"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+
+    name = path_to_collection_name(str(src))
+    ns = "default"
+
+    now = "2026-08-07T00:00:00Z"
+    reindex_job = ReindexJob(
+        job_id="s399-reindex-job-id",
+        status=JobStatus.RUNNING,
+        created_at=now,
+        updated_at=now,
+        namespace=ns,
+        collection=name,
+    )
+    tmp_store.create_job(reindex_job)
+
+    mock_search_store = _make_mock_search_store_for_delete(name, ns)
+    app = create_app(cfg, tmp_store)
+    app.state.search_store = mock_search_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+    response = c.delete(f"/collections/{name}")
+
+    # ReindexJob is excluded from the guard — the request proceeds to the lock check.
+    # With a free lock, delete succeeds.
+    assert response.status_code == 200, (
+        f"Expected 200 (ReindexJob excluded from guard), got {response.status_code}; "
+        f"body={response.json()}"
+    )
 
 
 # ---------------------------------------------------------------------------

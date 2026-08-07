@@ -1124,8 +1124,14 @@ def test_search_response_has_rag_fusion_fields() -> None:
 
 
 def test_search_rag_fusion_true_skips_hyde(tmp_path: Path) -> None:
-    """rag_fusion=True must suppress HyDE: resolve_hyde_vector NOT called; response hyde_applied=False."""
+    """rag_fusion=True (and enabled in config) must suppress HyDE: resolve_hyde_vector NOT called; response hyde_applied=False.
+
+    Mutual exclusion only holds when RAG Fusion can actually run (config kill-switch on).
+    When config.rag_fusion.enabled=False, HyDE still applies — see the parallel
+    test_explain_rag_fusion_requested_but_disabled_hyde_still_applies in test_routes_explain.py.
+    """
     app, client = _make_app(tmp_path)
+    app.state.config.rag_fusion.enabled = True  # enable so mutual exclusion fires
     results = [_make_search_result(1)]
     pipeline_mock = _make_pipeline_mock(results=results)
     pipeline_mock.search = AsyncMock(
@@ -1145,6 +1151,46 @@ def test_search_rag_fusion_true_skips_hyde(tmp_path: Path) -> None:
     data = response.json()
     assert data["hyde_applied"] is False
     mock_hyde.assert_not_called()
+
+
+def test_search_rag_fusion_requested_but_disabled_hyde_still_applies(tmp_path: Path) -> None:
+    """rag_fusion=True with kill-switch off (config.rag_fusion.enabled=False): HyDE still runs.
+
+    The mutual exclusion in routes_search.py requires BOTH body.rag_fusion AND
+    config.rag_fusion.enabled.  When the kill-switch is off, RAG Fusion cannot run,
+    so HyDE proceeds regardless of the body flag.
+
+    Mirrors test_explain_rag_fusion_requested_but_disabled_hyde_still_applies in
+    test_routes_explain.py, which covers the same kill-switch logic on POST /explain.
+    """
+    app, client = _make_app(tmp_path)
+    # Kill-switch is OFF (default) — RAG Fusion cannot run, HyDE must fire.
+    assert app.state.config.rag_fusion.enabled is False
+    results = [_make_search_result(1)]
+    pipeline_mock = _make_pipeline_mock(results=results)
+    pipeline_mock.search = AsyncMock(
+        return_value=SearchPipelineResult(
+            results=results, acl_filtered=False, rag_fusion_applied=False, rag_fusion_queries_used=0
+        )
+    )
+    app.state.pipeline = pipeline_mock
+
+    with patch(
+        "archon_search.server.routes_search.resolve_hyde_vector",
+        new=AsyncMock(return_value=([0.1, 0.2], True)),
+    ) as mock_hyde:
+        response = client.post(
+            "/search",
+            json={"collection": "col", "query": "q", "rag_fusion": True, "hyde": True},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    # With kill-switch off, HyDE must have run and been applied
+    assert data["hyde_applied"] is True, (
+        "HyDE should apply when rag_fusion kill-switch is disabled, even if body.rag_fusion=True"
+    )
+    mock_hyde.assert_called_once()
 
 
 def test_search_rag_fusion_true_passes_to_pipeline(tmp_path: Path) -> None:

@@ -8,6 +8,16 @@
 
 ## Changelog
 
+### [next release] — `DELETE /collections/{name}` returns 503 while an ingest job is active (2026-08-07)
+
+**What changed:** `DELETE /collections/{name}` now returns HTTP 503 with `{"detail": "...", "code": "store_busy"}` and a `Retry-After: 30` header when a base `IngestJob` with status `RUNNING` or `CANCELLING` exists for that collection in the job store.  Previously the endpoint returned 200 and dropped the collection while the ingest was mid-flight, because the per-collection lock is released before actual disk writes complete.
+
+**Why:** Deleting a collection under an active write produces a torn-write state: the ingest task holds no lock, yet continues calling `store.ingest_chunks`, which recreates the dropped table as a meta-less orphan.  The fix is a bug-fix for S399/S428/S430; the 503 response was always the declared and documented behaviour.
+
+**Migration:** Clients or scripts that delete a collection immediately after submitting an ingest (e.g. during test teardown) must wait for the ingest job to reach a terminal status (`DONE`, `FAILED`, `CANCELLED`) before deleting.  The `Retry-After` header gives a poll hint.  The error code `"store_busy"` is machine-readable.
+
+**Also changed:** the 503 body shape on `DELETE /collections/{name}` (and the pre-existing lock-timeout 503 in `_ingest_lock.py`) now follows the `ErrorDetail` schema — `{"detail": "…", "code": "store_busy"}` — instead of the previous non-schema `{"error": "store_busy", "detail": "…"}` shape.  Clients that parsed the `"error"` key must switch to `"code"`.
+
 ### [next release] — Removed inert `[routing].max_parallel_collections` config key (2026-07-29)
 
 **What changed:** The `[routing].max_parallel_collections` key is removed from `SearchConfig`, the
