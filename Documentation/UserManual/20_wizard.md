@@ -300,6 +300,7 @@ AI query expansion (HyDE + RAG Fusion):
     openai     - OpenAI API (needs OPENAI_API_KEY)
     ollama     - runs locally, no API key
     claude_cli - uses Claude Code's login, no API key
+    llama_cpp  - runs against a local llama-server, no API key
   Default: disabled.
 Enable AI query expansion (HyDE + RAG Fusion)? [y/N]:
 ```
@@ -309,8 +310,8 @@ Enable AI query expansion (HyDE + RAG Fusion)? [y/N]:
 If you answer `y`, the wizard prompts for a provider for each feature independently:
 
 ```
-Which provider for HyDE? (anthropic/openai/ollama/claude_cli) [anthropic]:
-Which provider for RAG Fusion? (anthropic/openai/ollama/claude_cli) [anthropic]:
+Which provider for HyDE? (anthropic/openai/ollama/claude_cli/llama_cpp) [anthropic]:
+Which provider for RAG Fusion? (anthropic/openai/ollama/claude_cli/llama_cpp) [anthropic]:
 ```
 
 For **Anthropic** (default): no further prompts. Add your API key to `~/.archon-search/.secrets.env` (`ANTHROPIC_API_KEY=<key>`) so the managed service can reach Anthropic's API. The managed service (launchd on macOS, systemd on Linux) sources this file at start time; existing files are left untouched.
@@ -345,14 +346,49 @@ Model for HyDE (number, name, or blank):
 
 Leaving it blank omits `--model` so Claude Code uses its own configured default. If `claude` is not found, the wizard prints an install pointer (https://claude.ai/code) and still writes the config — install Claude Code before starting the server, and query expansion falls back silently until it is available. Unlike Ollama, this alias list is hardcoded in the wizard (the Claude CLI has no runtime model-listing command) and is updated with each release.
 
+For **llama.cpp**: the wizard asks for the llama-server base URL first (default `http://localhost:8080`; a re-run pre-fills the address already in your config), then contacts that address's OpenAI-compatible `/v1/models` endpoint and lists the loaded models as a numbered menu — you pick by number instead of typing a name:
+
+```
+llama-server base URL for HyDE [http://localhost:8080]:
+
+Available llama-server models:
+  1. qwen2.5-0.5b-instruct
+Select a model by number [1-1]:
+```
+
+If the server is unreachable or has no models loaded, the wizard says so and falls back to manual model-name entry so you can still finish setup. HyDE and RAG Fusion each get their own base-URL prompt and picker. No API key is needed — query text never leaves your host, so it is safe for air-gapped deployments. Use a small, direct-response instruct model, not a reasoning model — a reasoning model spends the whole `max_tokens` budget on hidden chain-of-thought and HyDE/RAG Fusion silently stay disabled (`hyde_applied`/`rag_fusion_applied: false`) even though the server is reachable.
+
 After answering, the wizard:
 
 - Enables both `[hyde].enabled = true` and `[rag_fusion].enabled = true` in your config.
-- Writes `[hyde].provider` / `[rag_fusion].provider` (and `model`, `ollama_base_url` where applicable) for non-Anthropic providers. For `claude_cli`, `model` is only written when you choose one — a blank leaves it unset so the config default applies.
-- Installs the provider's package so the feature actually works: `anthropic` → `archon-search[hyde]`, `openai` → `archon-search[openai-provider]`, `ollama` → `archon-search[ollama]`. When both features share a provider (the default is `anthropic` for both), the package is installed once. `claude_cli` needs no package (it uses the `claude` command on your PATH). If the install fails, the wizard prints a warning and reverts `[hyde].enabled` / `[rag_fusion].enabled` to `false` so the next server start does not hard-fail on the missing package — re-run the wizard or install the package manually to enable it.
-- Creates `~/.archon-search/.secrets.env` (mode 600, empty) if it does not already exist and the selected provider requires an API key. (`ollama` and `claude_cli` need no key, so no secrets file is created for them.)
+- Writes `[hyde].provider` / `[rag_fusion].provider` (and `model`, `ollama_base_url`/`llama_cpp_base_url` where applicable) for non-Anthropic providers. For `claude_cli`, `model` is only written when you choose one — a blank leaves it unset so the config default applies.
+- Installs the provider's package so the feature actually works: `anthropic` → `archon-search[hyde]`, `openai` → `archon-search[openai-provider]`, `ollama` → `archon-search[ollama]`. When both features share a provider (the default is `anthropic` for both), the package is installed once. `claude_cli` and `llama_cpp` need no package (the former uses the `claude` command on your PATH, the latter uses `httpx`, a core dependency). If the install fails, the wizard prints a warning and reverts `[hyde].enabled` / `[rag_fusion].enabled` to `false` so the next server start does not hard-fail on the missing package — re-run the wizard or install the package manually to enable it.
+- Creates `~/.archon-search/.secrets.env` (mode 600, empty) if it does not already exist and the selected provider requires an API key. (`ollama`, `claude_cli`, and `llama_cpp` need no key, so no secrets file is created for them.)
 
-To configure providers manually after the wizard, edit `archon-search.toml` directly: set `[hyde].provider` and `[rag_fusion].provider` to `"anthropic"`, `"openai"`, `"ollama"`, or `"claude_cli"`, and set the corresponding `model` and `ollama_base_url` fields as needed. You can also re-run the wizard with `--enable-hyde --enable-rag-fusion` to reconfigure.
+To configure providers manually after the wizard, edit `archon-search.toml` directly: set `[hyde].provider` and `[rag_fusion].provider` to `"anthropic"`, `"openai"`, `"ollama"`, `"claude_cli"`, or `"llama_cpp"`, and set the corresponding `model` and `ollama_base_url`/`llama_cpp_base_url` fields as needed. You can also re-run the wizard with `--enable-hyde --enable-rag-fusion` to reconfigure.
+
+#### 5i. Graph enrichment provider
+
+Shown right after the HyDE/RAG Fusion questions above, on the same "truly interactive" gate (skipped when `--enable-hyde`/`--enable-rag-fusion` were passed as flags, or the wizard is running non-interactively). This step is independent of both HyDE/RAG Fusion and of `[graph].enabled`: graph enrichment (LLM-written community summaries, typed relationship labels) is optional, and `[graph].provider` is itself the enable gate — there is no separate `[graph].enrichment_enabled`. The graph subsystem (entity extraction, PPR, communities) works fine without it.
+
+```
+LLM-backed graph enrichment:
+  Uses an LLM to write community summaries and label relationship types
+  during graph community builds. Optional — the graph subsystem (entity
+  extraction, PPR, communities) works without it.
+  Default: disabled.
+Enable LLM-backed graph enrichment? [y/N]:
+```
+
+**Default**: No — `[graph].provider` stays `null`.
+
+If you answer `y`, the wizard prompts for one of the four v1 enrichment providers (`claude_cli` is not offered here — it has no v1 HTTP enrichment client, deferred post-v1):
+
+```
+Which provider for graph enrichment? (anthropic/openai/ollama/llama_cpp) [anthropic]:
+```
+
+`extraction_model` is always prompted as free text (even for `anthropic`), because unlike `HyDEConfig`/`RAGFusionConfig`, `GraphConfig.extraction_model` has no built-in default. Choosing `llama_cpp` uses the same base-URL-then-`/v1/models`-picker flow shown above for HyDE/RAG Fusion. After answering, the wizard writes `[graph].provider`, `[graph].extraction_model`, and (for `llama_cpp`) `[graph].llama_cpp_base_url` to your config.
 
 ### Step 6 — Summary screen
 

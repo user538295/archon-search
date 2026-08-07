@@ -235,7 +235,7 @@ flowchart LR
 
 ### Phase 5 · Close-out
 
-- [ ] **T-2** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-2** — Project close-out & acceptance fact-check #tester-role
     - — · 4.0h
     - needs K1, BE-1, BE-2, BE-3, BE-4, BE-5, BE-6, BE-7, BE-8, BE-9, FE-1, FE-2, FE-3, BE-10, T-1
     - Tests

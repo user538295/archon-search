@@ -15,7 +15,7 @@ See also: [100_system_architecture_overview.md](100_system_architecture_overview
 1. **Local trust boundary.** The threat model assumes anything running as the same OS user is trusted; the server binds to `127.0.0.1` by default.
 2. **Bearer auth on every endpoint except `/health` and `/ready`.** No anonymous access to data planes.
 3. **Privacy is structural, not procedural.** The telemetry schema cannot represent a raw query — there is no field for it and no factory that accepts one.
-4. **No outbound network calls for telemetry.** `export_enabled` is silently coerced to `false`; nothing leaves the host. **Exception (C4/C5)**: when `[hyde] enabled = true` and a caller sends `hyde=true`, or when `[rag_fusion] enabled = true` and a caller sends `rag_fusion=true`, the raw query is sent to Anthropic's API — both are explicit operator opt-ins; see the HyDE and RAG Fusion sections under Privacy. The two features are mutually exclusive per request.
+4. **No outbound network calls for telemetry.** `export_enabled` is silently coerced to `false`; nothing leaves the host. **Exception (C4/C5)**: when `[hyde] enabled = true` and a caller sends `hyde=true`, or when `[rag_fusion] enabled = true` and a caller sends `rag_fusion=true`, the raw query is sent to the configured LLM provider — `anthropic` (default) or `openai` send it to that vendor's API over the internet; `claude_cli` sends it to Anthropic's API via a local Claude Code subprocess; `ollama` and `llama_cpp` (LLCP) send it only to a local server process and it never leaves the host. All five are explicit operator opt-ins; see the HyDE and RAG Fusion sections under Privacy. The two features are mutually exclusive per request. The same provider set, and the same local-vs-external transmission split, applies to `[graph] provider` (LLM-backed graph enrichment) — see the Graph enrichment section under Privacy.
 5. **ACL is best-effort, default-open.** Documents without an explicit `_acl` are visible to all namespaces. Misconfigured ACLs fail-open with a warning, never crash.
 
 ## Threat model — scope and non-scope
@@ -209,36 +209,46 @@ This is reinforced by `CLAUDE.md`'s "Structural invariant" note and is the priva
 
 Note: archon-search does **not** explicitly set mode `0700` on `~/.archon-search/`; the directory is created via `os.makedirs(..., exist_ok=True)` (`key_manager.py:83`), so its mode is governed by the process umask. Only the key file and salt file are enforced to mode `0600`. The effective protection of the parent directory depends on the user's home-directory permissions, which vary by platform.
 
-### HyDE external LLM transmission (C4) — explicit opt-in exception
+### HyDE external LLM transmission (C4, extended by G10/LLCP) — explicit opt-in exception
 
 **C4 introduces the first point in archon-search v1 where user data can leave the host by design. C5 introduces a second (see the RAG Fusion section below).**
 
-When `[hyde] enabled = true` in config *and* a request includes `hyde=true`, the user's raw query (up to 2000 characters) is sent to Anthropic's API servers over HTTPS to generate a hypothetical answer passage. This is a deliberate operator opt-in, not a default behaviour.
+When `[hyde] enabled = true` in config *and* a request includes `hyde=true`, the user's raw query (up to 2000 characters) is sent to the LLM configured by `[hyde] provider` to generate a hypothetical answer passage. This is a deliberate operator opt-in, not a default behaviour. **Whether the query leaves the host depends on the provider:**
+
+| `provider` | Query text goes to | Leaves the host? |
+|---|---|---|
+| `anthropic` (default) | Anthropic's API, over HTTPS | Yes |
+| `openai` | OpenAI's API, over HTTPS | Yes |
+| `claude_cli` | Anthropic's API, via a local `claude` subprocess using the operator's Claude Code login | Yes |
+| `ollama` | A local Ollama server (`[hyde] ollama_base_url`) | No |
+| `llama_cpp` (LLCP) | A local llama-server (`[hyde] llama_cpp_base_url`) | No |
 
 **Gating requirements** — HyDE transmission occurs only when all three conditions are true simultaneously:
-1. The operator has installed `archon-search[hyde]` (optional dependency).
+1. The operator has installed `archon-search[hyde]` (optional dependency) — not required for `ollama`/`claude_cli`/`llama_cpp`, which need no SDK.
 2. The operator has set `[hyde] enabled = true` in `~/.archon-search/archon-search.toml`.
 3. The caller includes `hyde=true` in the request body.
 
-**Invariants preserved despite the external call:**
-- The hypothesis text returned by the API is consumed only by the local embedder. It is **never logged, stored in LanceDB, or returned to the caller**.
+**Invariants preserved despite the external call, for every provider:**
+- The hypothesis text returned by the provider is consumed only by the local embedder. It is **never logged, stored in LanceDB, or returned to the caller**.
 - Log messages in `archon_search/hyde.py` use `_query_fingerprint(query)` (SHA-256 truncated to 16 hex chars) — the raw query is never passed to any logging call. A CI guard (`tests/test_no_query_log_in_hyde.py`) enforces this structurally.
 - `TelemetryEntry` factories receive no query text — the HyDE path does not weaken the telemetry structural invariant.
-- Fallback is silent and transparent: a timeout, API error, missing key, or rate limit causes `hyde_applied: false` in the response, not an error. Availability is never degraded by the external dependency.
+- Fallback is silent and transparent: a timeout, API error, missing key, model-not-loaded, or rate limit causes `hyde_applied: false` in the response, not an error. Availability is never degraded by the external dependency.
 
-**Operator visibility:** when `enabled = true`, the server logs an INFO message at startup naming the model. This makes the data-transmission fact visible in server logs without the operator needing to read config.
+**Operator visibility:** when `enabled = true`, the server logs an INFO message at startup naming the provider and model. This makes the data-transmission fact visible in server logs without the operator needing to read config.
 
-See `Documentation/ADRs/C4-hyde-external-llm-dependency.md` for the full decision record.
+**Air-gapped / data-residency deployments** should set `provider = "ollama"` or `provider = "llama_cpp"` — query text then never leaves the host, at the cost of running a local model server.
 
-### RAG Fusion external LLM transmission (C5) — explicit opt-in exception
+See `Documentation/ADRs/C4-hyde-external-llm-dependency.md` and `Documentation/ADRs/C6-local-llm-provider.md` for the full decision records.
+
+### RAG Fusion external LLM transmission (C5, extended by G10/LLCP) — explicit opt-in exception
 
 **C5 introduces a second point where user data can leave the host by design**, following the same opt-in pattern as HyDE (C4).
 
-When `[rag_fusion] enabled = true` in config *and* a request includes `rag_fusion=true`, the user's raw query (up to 2000 characters) is sent to Anthropic's API servers over HTTPS to generate semantic query variants. This is a deliberate operator opt-in, not default behaviour.
+When `[rag_fusion] enabled = true` in config *and* a request includes `rag_fusion=true`, the user's raw query (up to 2000 characters) is sent to the LLM configured by `[rag_fusion] provider` to generate semantic query variants. This is a deliberate operator opt-in, not default behaviour. The same provider-dependent transmission table as HyDE above applies (`anthropic`/`openai`/`claude_cli` leave the host; `ollama`/`llama_cpp` do not).
 
 **Gating requirements** — RAG Fusion transmission occurs only when all three conditions are true simultaneously:
 
-1. The operator has installed `archon-search[rag_fusion]` (optional dependency).
+1. The operator has installed `archon-search[rag_fusion]` (optional dependency) — not required for `ollama`/`claude_cli`/`llama_cpp`.
 2. The operator has set `[rag_fusion] enabled = true` in `~/.archon-search/archon-search.toml`.
 3. The caller includes `rag_fusion=true` in the request body.
 
@@ -247,11 +257,25 @@ When `[rag_fusion] enabled = true` in config *and* a request includes `rag_fusio
 - LLM-generated query variants are consumed only by the local embedder. They are **never logged, stored in LanceDB, or returned to the caller**.
 - Log messages in `archon_search/rag_fusion.py` use `_query_fingerprint(query)` (from `archon_search/_privacy.py`) — the raw query is never passed to any logging call. A CI guard (`tests/test_no_query_log_in_rag_fusion.py`) enforces this structurally.
 - `TelemetryEntry` factories receive no query text — the RAG Fusion path does not weaken the telemetry structural invariant.
-- Fallback is silent: timeout, API error, missing key, or rate limit causes `rag_fusion_applied: false` in the response, not an error. Availability is never degraded.
+- Fallback is silent: timeout, API error, missing key, model-not-loaded, or rate limit causes `rag_fusion_applied: false` in the response, not an error. Availability is never degraded.
 
-**Shared API key operational risk:** both HyDE and RAG Fusion use `ANTHROPIC_API_KEY`. Each maintains independent per-process token-bucket rate limiters (`[hyde].max_requests_per_minute` and `[rag_fusion].max_requests_per_minute`). In steady state, the combined peak rate from a single process can approach `hyde_rpm + rag_fusion_rpm` API calls per minute. In multi-worker deployments this is multiplied by the worker count. Operators must ensure the combined rate does not exceed their Anthropic account rate limit. See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md` for the full decision record.
+**Shared API key operational risk:** when both HyDE and RAG Fusion are configured with `provider = "anthropic"` (the default for both), they share `ANTHROPIC_API_KEY`. Each maintains independent per-process token-bucket rate limiters (`[hyde].max_requests_per_minute` and `[rag_fusion].max_requests_per_minute`; **not enforced** for `ollama`/`claude_cli`/`llama_cpp` — local/free, no account-level cap to protect). In steady state, the combined peak rate from a single process can approach `hyde_rpm + rag_fusion_rpm` API calls per minute. In multi-worker deployments this is multiplied by the worker count. Operators must ensure the combined rate does not exceed their Anthropic account rate limit. See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md` for the full decision record.
 
 **HyDE and RAG Fusion are mutually exclusive**: when `rag_fusion=true` is present, HyDE is skipped regardless of the `hyde` flag value. This prevents compounding privacy risk (both calls for a single request) and avoids multiplying LLM cost.
+
+### Graph enrichment external LLM transmission (LLCP) — explicit opt-in exception, third transmission surface
+
+`[graph] provider` (a discrete field, distinct from `[hyde]`/`[rag_fusion] provider`) gates LLM-backed graph enrichment: community summarisation and typed relationship labelling, performed by `EnrichmentClientFactory`-built adapters injected into `CommunityBuilder` and `GraphExtractor`. Unlike HyDE/RAG Fusion, `[graph] provider` defaults to `None` and IS the enable gate itself — there is no separate `[graph].enrichment_enabled` — so enrichment is off by default even when `[graph] enabled = true` (which only turns on entity extraction, PPR, and communities).
+
+When set, community representative-chunk text and per-chunk text containing co-occurring entities are sent to the configured provider (same five-provider set as HyDE/RAG Fusion, except `claude_cli`, which has no v1 enrichment client and is never offered — the factory logs a WARNING and returns `None` if configured anyway). The same local-vs-external split applies: `anthropic`/`openai` leave the host; `ollama`/`llama_cpp` do not.
+
+**Invariants preserved:**
+- The `LLMEnrichmentClientProtocol` adapters (`archon_search/enrichment/`) never receive raw user query text — only community chunk text and entity names already persisted in the graph.
+- Community texts and LLM prompts are never logged — the no-raw-query telemetry guarantee extends to enrichment.
+- Adapter contract is raise-on-failure: `CommunityBuilder`/`GraphExtractor` catch every exception and substitute `None`/`[]`; a failed enrichment call never fails ingest or a community rebuild.
+- No rate limiting for `llama_cpp` (`extraction_rate_limit_rpm` is honoured only by the `anthropic` client) — parity with the HyDE/RAG-Fusion `llama_cpp` adapter.
+
+See `Documentation/ADRs/C6-local-llm-provider.md` for the full decision record and `Documentation/OperatorGuide/60_graph_operations.md` for operator-facing configuration.
 
 ### No external transmission (baseline — non-HyDE traffic)
 

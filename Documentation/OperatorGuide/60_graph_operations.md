@@ -154,25 +154,29 @@ There is no automatic migration. Delete the listed tables manually from the Lanc
 
 ## Opt-in LLM enrichment
 
-By default the graph is built from statistical co-occurrence only: community summaries are empty and edges are generic. Setting `[graph] extraction_model` turns on two enrichments automatically:
+By default the graph is built from statistical co-occurrence only: community summaries are empty and edges are generic. Setting `[graph] provider` — a **discrete** field, not a `"provider:model"` string — turns on two enrichments automatically:
 
 ```toml
 [graph]
 enabled = true
-extraction_model = "anthropic:claude-haiku-4-5-20251001"   # "provider:model"
+provider = "anthropic"                              # anthropic | openai | ollama | llama_cpp
+extraction_model = "claude-haiku-4-5-20251001"       # bare model name, never "provider:model"
 ```
 
+`provider` defaults to `null` (enrichment disabled) and is itself the enrichment enable gate — unlike `[hyde]`/`[rag_fusion]`, there is no separate `[graph].enrichment_enabled`. `claude_cli` is a valid provider name elsewhere in the config but has no v1 enrichment client (no HTTP endpoint; deferred post-v1) — setting `provider = "claude_cli"` logs a WARNING and enrichment stays disabled. For `llama_cpp`, also set `[graph] llama_cpp_base_url` (default `http://localhost:8080`); use a small, direct-response instruct model — a reasoning model burns the whole `extraction_token_budget` on hidden chain-of-thought and enrichment silently produces nothing.
+
 1. **Community summaries** — each community gets an LLM-written summary (`summary_text`), surfaced in `local`/`global` search and in the inspection endpoint.
-2. **Typed edges** — relationships are labeled (`uses`, `implements`, `depends_on`, …) instead of generic `related_to`.
+2. **Typed edges** — relationships are labeled (`uses`, `implements`, `depends_on`) instead of generic `related_to`.
 
 Operational properties:
 
-- **Byte-identical default:** with `extraction_model` unset, behavior is exactly as before — no LLM call, no token cost, no API dependency.
+- **Byte-identical default:** with `provider` unset (`null`), behavior is exactly as before — no LLM call, no token cost, no API dependency.
 - **Silent fallback:** any LLM failure (timeout, quota, missing key, network) logs a WARNING and proceeds. Communities are still built, entities still extracted via spaCy, and **no ingest ever fails**.
-- **Extraction precedence:** statically verified def/ref edges (`extraction_method="extracted"`) always win over LLM-inferred ones (`"llm"`) — an LLM edge cannot downgrade a static one.
+- **LLM-typed edges are additive, not overriding:** relationship-labeling edges are merged in alongside the `related_to` co-occurrence edges (distinct `relationship_type` values produce distinct edge IDs) — they never replace or downgrade an existing edge. This is a separate mechanism from the def/ref extractor's `"extracted"`-always-wins-over-`"inferred"` precedence rule for code-symbol edges.
 - **Refresh:** the maintenance loop re-summarizes only communities whose membership changed since the last build.
+- **No rate limiting for `llama_cpp`:** `extraction_rate_limit_rpm` is honored by `anthropic` but ignored by the `llama_cpp` enrichment client (local inference, unthrottled) — parity with the query-expansion adapters.
 
-Set the provider credential (e.g. `ANTHROPIC_API_KEY`) in the environment or via the wizard-managed `~/.archon-search/.secrets.env`. Community texts and LLM prompts are never logged — the no-raw-query telemetry guarantee extends to enrichment.
+Set the provider credential (e.g. `ANTHROPIC_API_KEY`) in the environment or via the wizard-managed `~/.archon-search/.secrets.env`. `ollama` and `llama_cpp` need no credential. Community texts and LLM prompts are never logged — the no-raw-query telemetry guarantee extends to enrichment.
 
 ---
 
