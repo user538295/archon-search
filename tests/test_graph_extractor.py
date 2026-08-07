@@ -277,6 +277,67 @@ def test_graph_extractor_calls_label_relationships_per_chunk() -> None:
     assert result.llm_fallback_used is False
 
 
+def test_resolve_labeled_pair_recovers_merged_source_name() -> None:
+    """Small local models occasionally merge both entity names into one field
+    (e.g. ``source_entity="Bob / Google"``, ``target_entity="Google"``) instead
+    of keeping them separate. When one side resolves directly and the other
+    splits into exactly two known names including the resolved side, recover
+    the missing side as the other split part; otherwise return (None, None)."""
+    from archon_search.graph_extractor import _resolve_labeled_pair
+
+    name_to_id = {"Alice": "id_alice", "Bob": "id_bob", "Google": "id_google"}
+
+    assert _resolve_labeled_pair("Alice", "Bob", name_to_id) == ("id_alice", "id_bob")
+    assert _resolve_labeled_pair("Bob / Google", "Google", name_to_id) == ("id_bob", "id_google")
+    assert _resolve_labeled_pair("Bob / Alice", "Alice", name_to_id) == ("id_bob", "id_alice")
+    assert _resolve_labeled_pair("Alice, Google", "Google", name_to_id) == ("id_alice", "id_google")
+    assert _resolve_labeled_pair("Alice", "Bob and Google", name_to_id) == (None, None), (
+        "ambiguous recovery (neither split part matches the resolved side) must not guess"
+    )
+    assert _resolve_labeled_pair("Charlie", "Bob", name_to_id) == (None, None)
+    assert _resolve_labeled_pair("Alice / Bob / Google", "Google", name_to_id) == (None, None), (
+        "three-way merge is not a recoverable two-name pattern"
+    )
+
+
+def test_graph_extractor_recovers_garbled_relationship_entity_name() -> None:
+    """When the LLM merges both names into ``source_entity`` (a real failure mode
+    observed with small local models), GraphExtractor still resolves and persists
+    the typed edge instead of discarding it."""
+    from archon_search.config import GraphConfig
+    from archon_search.graph_enrichment_protocol import LabeledRelationship
+    from archon_search.graph_extractor import GraphExtractor
+
+    text = "Alice and Bob both work at Google."
+    stub = _make_spacy_stub(
+        {text: [("Alice", "PERSON"), ("Bob", "PERSON"), ("Google", "ORG")]}
+    )
+    chunk = ChunkInput(chunk_id="c1", text=text, symbol_type=None, symbol_subtype=None)
+
+    mock_client = MagicMock()
+    mock_client.label_relationships = AsyncMock(
+        return_value=[
+            LabeledRelationship(
+                source_entity="Bob / Google", target_entity="Google", relationship_type="uses"
+            )
+        ]
+    )
+
+    config = GraphConfig(provider="llama_cpp", extraction_model="model-x")
+    extractor = GraphExtractor(config, enrichment_client=mock_client)
+    extractor._nlp = stub["spacy"].load("en_core_web_sm")
+
+    async def _run():
+        return await extractor.extract([chunk], "doc-1", "col")
+
+    result = asyncio.run(_run())
+
+    relationship_types = {e.relationship_type for e in result.edges}
+    assert RelationshipType.uses in relationship_types, (
+        "the garbled-but-recoverable relationship must still produce a typed edge"
+    )
+
+
 def test_graph_extractor_catches_enrichment_error() -> None:
     """label_relationships raising -> per-chunk WARNING + spaCy-only fallback for that
     chunk; extract() does not raise and the co-occurrence edge is still produced (S9)."""

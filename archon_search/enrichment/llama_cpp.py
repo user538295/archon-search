@@ -67,7 +67,9 @@ Omit pairs where the relationship is unclear.
 Text:
 {chunk_text}
 
-Entity pairs to classify:
+Entity pairs to classify (each numbered pair lists the exact source entity name, \
+then the exact target entity name — copy these two names exactly into the \
+"source_entity" and "target_entity" fields; never merge them into one string):
 {entity_pairs}
 """
 
@@ -155,7 +157,10 @@ class LlamaCppEnrichmentClient:
         Raises on transport failure or a whole-body JSON parse failure.
         Individual unparseable items are skipped with a WARNING.
         """
-        pairs_text = "\n".join(f"- {a} / {b}" for a, b in entity_pairs)
+        pairs_text = "\n".join(
+            f'{i}. source_entity="{a}" target_entity="{b}"'
+            for i, (a, b) in enumerate(entity_pairs, start=1)
+        )
         prompt = _LABEL_PROMPT_TEMPLATE.format(
             chunk_text=chunk_text,
             entity_pairs=pairs_text,

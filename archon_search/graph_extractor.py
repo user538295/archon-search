@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -78,6 +79,42 @@ _LABEL_TO_ENTITY_TYPE: dict[str, EntityType] = {
     "LANGUAGE": EntityType.concept,
     "NORP": EntityType.concept,
 }
+
+
+_NAME_SPLIT_PATTERN = re.compile(r"\s*(?:/|,| and )\s*")
+
+
+def _resolve_labeled_pair(
+    source_raw: str, target_raw: str, name_to_id: dict[str, str]
+) -> tuple[str | None, str | None]:
+    """Resolve a labeled relationship's entity names to node IDs.
+
+    Small local models occasionally merge both entity names of a pair into a
+    single field (e.g. ``source_entity="Bob / Google"``,
+    ``target_entity="Google"``) instead of keeping them separate. When one
+    side resolves directly and the other splits into exactly two known
+    names — one of which is the side that already resolved — recover the
+    missing side as the other split part. Returns ``(None, None)`` when
+    recovery isn't possible.
+    """
+    src_id = name_to_id.get(source_raw)
+    tgt_id = name_to_id.get(target_raw)
+    if src_id is not None and tgt_id is not None:
+        return src_id, tgt_id
+
+    if src_id is None and tgt_id is not None:
+        parts = [p for p in _NAME_SPLIT_PATTERN.split(source_raw) if p]
+        others = {name_to_id[p] for p in parts if p in name_to_id} - {tgt_id}
+        if len(parts) == 2 and len(others) == 1:
+            return next(iter(others)), tgt_id
+
+    if tgt_id is None and src_id is not None:
+        parts = [p for p in _NAME_SPLIT_PATTERN.split(target_raw) if p]
+        others = {name_to_id[p] for p in parts if p in name_to_id} - {src_id}
+        if len(parts) == 2 and len(others) == 1:
+            return src_id, next(iter(others))
+
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -370,8 +407,9 @@ class GraphExtractor:
                         )
 
                         for rel in labeled:
-                            src_id = name_to_id.get(rel.source_entity)
-                            tgt_id = name_to_id.get(rel.target_entity)
+                            src_id, tgt_id = _resolve_labeled_pair(
+                                rel.source_entity, rel.target_entity, name_to_id
+                            )
                             if src_id is None or tgt_id is None:
                                 _logger.warning(
                                     "GraphExtractor: LLM returned an unknown entity name "

@@ -1,13 +1,15 @@
 """T-1 — real, executable e2e tests against a live llama-server (LLCP feature).
 
-These tests are deliberately NOT gated by ``pytest.skip()`` or a dedicated
-marker: they make genuine HTTP calls to a live llama-server expected at
-``LLAMA_CPP_BASE_URL_DEFAULT`` (``http://localhost:8080``) and run as part of
-the default ``uv run pytest`` invocation. When no llama-server is running
-there, every test below is EXPECTED to fail loudly — via an uncaught
-connection error or an assertion on a response that never arrived — rather
-than skip silently. Start a real llama-server serving a model at that address
-before running this file to see it pass.
+Marked ``@pytest.mark.live`` (mirrors the existing ``live``/``benchmark``
+convention in this repo — see ``tests/benchmark_routing_latency.py``): they
+make genuine HTTP calls to a live llama-server expected at
+``LLAMA_CPP_BASE_URL_DEFAULT`` (``http://localhost:8080``) and auto-skip via
+the module-level fixture below when no llama-server is reachable there, so
+they never fail the default ``uv run pytest`` invocation on a machine without
+one running. Start a real llama-server serving a model at that address to
+see them actually exercise the implementation:
+
+    uv run pytest tests/integration/test_llama_cpp_e2e.py -v --no-cov
 
 See Documentation/Backlog/llama-cpp-local-provider-tasks.md (T-1) and
 Documentation/Backlog/llama-cpp-local-provider-team-plan.md (S1, S2, S3, S4,
@@ -20,6 +22,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 import pytest
 import tomlkit
 
@@ -28,7 +31,24 @@ from archon_search.install.config_writer import WizardFeatures, _apply_wizard_fe
 from archon_search.install.wizard import _fetch_llama_cpp_models, _prompt_llama_cpp_model
 from tests.integration.conftest import ingest_file_via_path, install_spacy_stub, make_real_app
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.live]
+
+
+def _is_llama_cpp_reachable() -> bool:
+    try:
+        httpx.get(f"{LLAMA_CPP_BASE_URL_DEFAULT}/v1/models", timeout=2.0)
+        return True
+    except (httpx.ConnectError, httpx.TimeoutException):
+        return False
+
+
+@pytest.fixture(autouse=True)
+def _skip_if_llama_cpp_unreachable() -> None:
+    if not _is_llama_cpp_reachable():
+        pytest.skip(
+            f"llama-server not reachable at {LLAMA_CPP_BASE_URL_DEFAULT} — "
+            "start a real llama-server serving a model before running this e2e suite"
+        )
 
 
 def _auth(api_key: str) -> dict[str, str]:
