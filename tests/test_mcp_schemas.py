@@ -42,6 +42,7 @@ def test_mcp_search_result_schema_fields():
         "metadata",
         "acl",
         "collection",
+        "reranker_score",
     }
     assert set(McpSearchResultSchema.model_fields.keys()) == expected
 

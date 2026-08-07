@@ -26,6 +26,7 @@ _EXPECTED_FIELDS = {
     "acl_source",  # G15 — ACL provenance
     "acl_sidecar_path",  # G15 — ACL provenance
     "acl_warning",  # G15 — ACL provenance
+    "reranker_score",  # S343 — cross-encoder reranker score
 }
 
 

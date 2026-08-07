@@ -111,6 +111,7 @@ _SEARCH_RESULT_PUBLIC_FIELDS = {
     "metadata",
     "acl",
     "collection",
+    "reranker_score",
 }
 
 _SEARCH_RESPONSE_PUBLIC_FIELDS = {

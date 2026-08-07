@@ -106,6 +106,7 @@ class SearchResultSchema(BaseModel):
     metadata: dict[str, str] = Field(default_factory=dict)
     acl: list[str] | None = None
     collection: str = ""
+    reranker_score: float | None = None
     acl_gate: AclGateSchema | None = None
 
     @classmethod
@@ -132,6 +133,7 @@ class SearchResultSchema(BaseModel):
             metadata=r.metadata,
             acl=r.acl,
             collection=r.collection,
+            reranker_score=r.reranker_score,
             acl_gate=gate,
         )
 

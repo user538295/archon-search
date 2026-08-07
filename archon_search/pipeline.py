@@ -3245,6 +3245,7 @@ class SearchPipeline:
             acl_source=c.acl_source,
             acl_sidecar_path=c.acl_sidecar_path,
             acl_warning=list(c.acl_warning or []),
+            reranker_score=c.score_breakdown.reranker_score,
         )
 
     async def search_with_context(

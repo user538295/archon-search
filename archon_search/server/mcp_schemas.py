@@ -58,6 +58,7 @@ class McpSearchResultSchema(BaseModel):
     metadata: dict[str, str] = {}
     acl: list[str] | None = None
     collection: str = ""
+    reranker_score: float | None = None
 
     @classmethod
     def from_result(cls, r: SearchResult) -> McpSearchResultSchema:
@@ -75,6 +76,7 @@ class McpSearchResultSchema(BaseModel):
             metadata=r.metadata,
             acl=r.acl,
             collection=r.collection,
+            reranker_score=r.reranker_score,
         )
 
 

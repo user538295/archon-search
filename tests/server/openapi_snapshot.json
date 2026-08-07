@@ -3492,6 +3492,17 @@
             "title": "Metadata",
             "type": "object"
           },
+          "reranker_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reranker Score"
+          },
           "score": {
             "title": "Score",
             "type": "number"

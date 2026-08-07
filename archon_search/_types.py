@@ -134,6 +134,8 @@ class SearchResult:
     """Relative path to the .acl sidecar file; null when not sidecar-sourced."""
     acl_warning: list[str] = field(default_factory=list)
     """Structured warnings emitted during ACL loading; empty list = no issues."""
+    reranker_score: float | None = None
+    """Cross-encoder reranker score; None when no reranker was applied."""
 
 
 @dataclass
