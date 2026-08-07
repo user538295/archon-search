@@ -1204,3 +1204,36 @@ async def test_maintenance_loop_uses_shared_rebuild_lock(tmp_path: Path, _clear_
         f"negative control expected interleaving (distinct locks defeat "
         f"serialisation) but markers did not interleave: {neg_events}"
     )
+
+
+# ---------------------------------------------------------------------------
+# LLCP BE-7 — MaintenanceLoop threads the pre-built enrichment client into the
+# CommunityBuilder it constructs for GC-triggered community rebuilds (S20b).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_maintenance_loop_receives_enrichment_client(tmp_path: Path) -> None:
+    """The enrichment client built once at composition root (app.py) and passed
+    into MaintenanceLoop's constructor is threaded into the CommunityBuilder
+    instance _rebuild_communities_async constructs -- non-None, same object."""
+    from archon_search.config import GraphConfig
+
+    sentinel_client = MagicMock(name="enrichment_client_sentinel")
+
+    loop = MaintenanceLoop(
+        job_store=MagicMock(),
+        search_store=MagicMock(),
+        config=MaintenanceConfig(interval_hours=0),
+        data_dir=tmp_path,
+        graph_store=MagicMock(),
+        graph_config=GraphConfig(),
+        enrichment_client=sentinel_client,
+    )
+
+    with patch("archon_search.community_builder.CommunityBuilder") as mock_builder_cls:
+        mock_builder_cls.return_value.build = AsyncMock(return_value=[])
+        await loop._rebuild_communities_async("default", "col")
+
+    mock_builder_cls.assert_called_once()
+    assert mock_builder_cls.call_args.kwargs["enrichment_client"] is sentinel_client

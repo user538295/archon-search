@@ -461,6 +461,7 @@ def create_app(
             data_dir=get_data_dir(),
             graph_store=_graph_store,
             graph_config=config.graph,
+            enrichment_client=_enrichment_client,
         )
         app.state.maintenance_loop = maintenance_loop
         maintenance_task = asyncio.create_task(maintenance_loop.run())
@@ -643,6 +644,15 @@ def create_app(
     else:
         _lang_detector = None
 
+    # LLCP BE-7: build the enrichment client once, regardless of graph.enabled --
+    # construction is cheap (no I/O; the httpx-based v1 clients only make network
+    # calls when their methods are invoked) and CommunityBuilder is also reachable
+    # via the rebuild-communities route independently of the extractor below.
+    # Returns None when [graph].provider is None (air-gap default) or unset.
+    from archon_search.enrichment.factory import EnrichmentClientFactory  # noqa: PLC0415
+    _enrichment_client = EnrichmentClientFactory.build(config.graph)
+    app.state.enrichment_client = _enrichment_client
+
     if config.graph.enabled:
         from archon_search.graph_store import GraphStore as _GraphStore  # noqa: PLC0415
         from archon_search.graph_extractor import GraphExtractor as _GraphExtractor  # noqa: PLC0415
@@ -650,7 +660,7 @@ def create_app(
         from archon_search.defref_extractor import DefRefExtractor as _DefRefExtractor  # noqa: PLC0415
         from archon_search.ppr_walker import PPRWalker as _PPRWalker  # noqa: PLC0415
         _graph_store = _GraphStore(config.db_path)
-        _graph_extractor = _GraphExtractor(config.graph)
+        _graph_extractor = _GraphExtractor(config.graph, enrichment_client=_enrichment_client)
         _graph_expander = _GraphExpander(_graph_store, naive_max_expansion_terms=config.graph.naive_max_expansion_terms)
         _defref_extractor = _DefRefExtractor(_graph_store)
         _ppr_walker = _PPRWalker(_graph_store)

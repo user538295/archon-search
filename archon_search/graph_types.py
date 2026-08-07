@@ -250,9 +250,10 @@ class GraphExtractionResult:
     graph extraction is enabled.
     """
     llm_fallback_used: bool = False
-    """True when ``extraction_model`` is configured but LLM extraction is deferred to
-    post-E1a (it is not implemented yet); spaCy-only result is used instead.
-    This is a stub indicator, NOT a runtime failure flag.
+    """True when a per-chunk LLM relationship-labeling call (LLCP BE-7) raised and that
+    chunk fell back to spaCy-only co-occurrence edges. False (default) both when the
+    AND-gate (provider + extraction_model + enrichment_client) is closed -- a normal,
+    air-gap-safe configuration, not a failure -- and when every enrichment call succeeded.
     """
     warnings: list[str] = field(default_factory=list)
     """Human-readable warning messages forwarded to ``IngestResult.warnings``."""

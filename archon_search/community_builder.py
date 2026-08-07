@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig
+    from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
     from archon_search.graph_store import GraphStore
     from archon_search.graph_types import Community, GraphEdge, GraphNode
     from archon_search.store import SearchStore
@@ -361,23 +362,26 @@ class CommunityBuilder:
         config: "GraphConfig",
         *,
         search_store: "SearchStore | None" = None,
+        enrichment_client: "LLMEnrichmentClientProtocol | None" = None,
     ) -> None:
         self._store = graph_store
         self._config = config
         self._search_store = search_store
+        self._enrichment_client = enrichment_client
 
     async def _generate_llm_summary(
-        self, community_id: str, chunk_texts: list[str]
-    ) -> str:
-        """LLM summarisation stub — not yet implemented (E1b scope).
+        self, community_id: str, chunk_texts: list[str], entity_names: list[str]
+    ) -> str | None:
+        """Generate an abstractive LLM summary via the injected enrichment client (LLCP BE-7).
 
-        When extraction_model is set, a WARNING is logged here and
-        NotImplementedError is raised so that build() falls back to MMR.
+        Caller (``build()``) only invokes this when the AND-gate is open
+        (``provider`` and ``extraction_model`` are both set and
+        ``self._enrichment_client`` is not ``None``); it is otherwise
+        responsible for catching any exception raised here and substituting
+        ``summary_text=None`` (C2 contract — the adapter raises, callers decide
+        the fallback).
         """
-        raise NotImplementedError(
-            f"LLM community summary for extraction_model={self._config.extraction_model!r} "
-            "is not yet implemented"
-        )
+        return await self._enrichment_client.summarize_community(chunk_texts, entity_names)  # type: ignore[union-attr]
 
     async def _select_representative_chunk_ids(
         self,
@@ -513,7 +517,11 @@ class CommunityBuilder:
             )
 
             summary_text: str | None = None
-            if self._config.extraction_model is not None:
+            if (
+                self._config.provider is not None
+                and self._config.extraction_model is not None
+                and self._enrichment_client is not None
+            ):
                 chunk_texts: list[str] = []
                 if rep_chunk_ids:
                     rep_ids_set = set(rep_chunk_ids)
@@ -524,8 +532,14 @@ class CommunityBuilder:
                             if text:
                                 chunk_texts.append(text)
 
+                entity_names = [
+                    nodes_by_id[eid].entity_name for eid in group if eid in nodes_by_id
+                ]
+
                 try:
-                    summary_text = await self._generate_llm_summary(community_id, chunk_texts)
+                    summary_text = await self._generate_llm_summary(
+                        community_id, chunk_texts, entity_names
+                    )
                 except Exception as exc:
                     _logger.warning(
                         "community_builder: LLM summary failed for community %s "

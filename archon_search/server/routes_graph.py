@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig, SearchConfig
+    from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
     from archon_search.graph_store import GraphStore
     from archon_search.jobs.store import JobStore
     from archon_search.pipeline import SearchPipeline
@@ -72,6 +73,7 @@ async def _community_rebuild_task(
     graph_store: "GraphStore",
     graph_config: "GraphConfig",
     search_store: "SearchStore | None" = None,
+    enrichment_client: "LLMEnrichmentClientProtocol | None" = None,
 ) -> None:
     """Coroutine that drives a single CommunityRebuildJob to completion.
 
@@ -96,7 +98,9 @@ async def _community_rebuild_task(
     that unwedges the collection if this active clear never runs (S16).
     """
     job_id = job.job_id
-    builder = CommunityBuilder(graph_store, graph_config, search_store=search_store)
+    builder = CommunityBuilder(
+        graph_store, graph_config, search_store=search_store, enrichment_client=enrichment_client
+    )
 
     try:
         communities = await builder.build(job.collection, job.namespace)
@@ -247,6 +251,7 @@ async def rebuild_communities(
             graph_store=graph_store,
             graph_config=config.graph,
             search_store=search_store,
+            enrichment_client=request.app.state.enrichment_client,
         )
     )
     request.app.state._background_tasks.add(task)

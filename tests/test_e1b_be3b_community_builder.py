@@ -71,7 +71,11 @@ async def test_mmr_selects_diverse_representatives():
 
 @pytest.mark.asyncio
 async def test_llm_summary_failure_falls_back_to_mmr(caplog):
-    """When LLM raises for one community, other communities are unaffected; warning emitted per failed community (S12)."""
+    """When the injected enrichment client raises for a community, other communities
+    are unaffected; a WARNING is emitted per failed community (S9). LLCP BE-7: the
+    AND-gate (provider + extraction_model + client all set) requires a real injected
+    client for the call to even be attempted -- see test_community_builder_skips_enrichment_when_client_none
+    for the "gate closed" case."""
     from archon_search.community_builder import CommunityBuilder
 
     node_a = make_node("a", source_doc_id="doc-1")
@@ -90,10 +94,15 @@ async def test_llm_summary_failure_falls_back_to_mmr(caplog):
 
     config = GraphConfig(
         enabled=True,
+        provider="anthropic",
         extraction_model="claude-3-5-sonnet-20241022",
         community_summary_chunks=1,
     )
-    builder = CommunityBuilder(graph_store, config, search_store=search_store)
+    enrichment_client = MagicMock()
+    enrichment_client.summarize_community = AsyncMock(side_effect=RuntimeError("LLM boom"))
+    builder = CommunityBuilder(
+        graph_store, config, search_store=search_store, enrichment_client=enrichment_client
+    )
 
     # Leiden returns 2 communities
     with patch(
@@ -107,16 +116,95 @@ async def test_llm_summary_failure_falls_back_to_mmr(caplog):
     assert len(communities) == 2
     for comm in communities:
         assert comm.representative_chunk_ids != [], f"Community {comm.community_id} has no representative chunks"
-        assert comm.summary_text is None, "LLM stub raises, so summary_text must be None"
+        assert comm.summary_text is None, "enrichment client raised, so summary_text must be None"
     # Warning was emitted (one per community)
     warning_msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert len(warning_msgs) >= 1, "Expected at least one WARNING about LLM failure"
     assert any("LLM" in m or "llm" in m.lower() for m in warning_msgs)
+    assert enrichment_client.summarize_community.await_count == 2
     # write_communities called with both communities
     call_args = graph_store.write_communities.call_args
     assert call_args is not None
     written = call_args[0][1]  # second positional arg is the communities list
     assert len(written) == 2
+
+
+@pytest.mark.asyncio
+async def test_community_builder_calls_summarize_when_client_injected():
+    """AND-gate open (provider + extraction_model + client all set) -> _generate_llm_summary
+    invokes summarize_community with entity_names gathered from nodes_by_id over the
+    community's group."""
+    from archon_search.community_builder import CommunityBuilder
+
+    node_a = make_node("a", source_doc_id="doc-1")
+    node_b = make_node("b", source_doc_id="doc-2")
+    nodes = [node_a, node_b]
+
+    graph_store = make_graph_store(nodes, [])
+    search_store = make_search_store({
+        "doc-1": [make_chunk("c1", [1.0, 0.0, 0.0])],
+        "doc-2": [make_chunk("c2", [0.0, 1.0, 0.0])],
+    })
+
+    config = GraphConfig(
+        enabled=True,
+        provider="anthropic",
+        extraction_model="claude-3-5-sonnet-20241022",
+        community_summary_chunks=1,
+    )
+    enrichment_client = MagicMock()
+    enrichment_client.summarize_community = AsyncMock(return_value="a summary")
+    builder = CommunityBuilder(
+        graph_store, config, search_store=search_store, enrichment_client=enrichment_client
+    )
+
+    with patch(
+        "archon_search.community_builder._run_leiden_partition_sync",
+        return_value=[["a", "b"]],
+    ):
+        communities = await builder.build("test-col", ns="default")
+
+    assert len(communities) == 1
+    assert communities[0].summary_text == "a summary"
+    enrichment_client.summarize_community.assert_awaited_once()
+    call_args = enrichment_client.summarize_community.await_args
+    entity_names = call_args.args[1]
+    assert set(entity_names) == {"a", "b"}
+
+
+@pytest.mark.asyncio
+async def test_community_builder_skips_enrichment_when_client_none():
+    """enrichment_client=None (default) -> no summarize_community call is attempted,
+    even when provider and extraction_model are both set (a stale/misconfigured factory
+    result). summary_text stays None; build() still succeeds."""
+    from archon_search.community_builder import CommunityBuilder
+
+    node_a = make_node("a", source_doc_id="doc-1")
+    node_b = make_node("b", source_doc_id="doc-2")
+    nodes = [node_a, node_b]
+
+    graph_store = make_graph_store(nodes, [])
+    search_store = make_search_store({
+        "doc-1": [make_chunk("c1", [1.0, 0.0, 0.0])],
+        "doc-2": [make_chunk("c2", [0.0, 1.0, 0.0])],
+    })
+
+    config = GraphConfig(
+        enabled=True,
+        provider="anthropic",
+        extraction_model="claude-3-5-sonnet-20241022",
+        community_summary_chunks=1,
+    )
+    builder = CommunityBuilder(graph_store, config, search_store=search_store)
+
+    with patch(
+        "archon_search.community_builder._run_leiden_partition_sync",
+        return_value=[["a", "b"]],
+    ):
+        communities = await builder.build("test-col", ns="default")
+
+    assert len(communities) == 1
+    assert communities[0].summary_text is None
 
 
 # ---------------------------------------------------------------------------

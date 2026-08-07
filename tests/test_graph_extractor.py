@@ -3,7 +3,9 @@
 Tests cover:
 - spaCy label → entity type mapping (PERSON→person, ORG→system, CARDINAL skipped, etc.)
 - C3 code-symbol path (symbol_type present → code_symbol entity; spaCy NER NOT called)
-- LLM extraction stub (extraction_model set → llm_fallback_used=True + WARNING)
+- LLM relationship labeling AND-gate (LLCP BE-7): gate closed → silent skip; gate open →
+  per-chunk label_relationships call, additive typed edges; call failure → per-chunk
+  spaCy-only fallback with llm_fallback_used=True + WARNING
 - spaCy absent → fatal_error result with actionable message
 - stable entity IDs match make_stable_entity_id formula
 - spaCy model auto-download: when model not in installed list, download is triggered + INFO logged
@@ -203,8 +205,10 @@ def test_extractor_code_symbol_from_c3() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_extractor_llm_stub_warning() -> None:
-    """extraction_model set → llm_fallback_used=True; WARNING in result.warnings."""
+def test_extractor_extraction_model_without_provider_skips_enrichment_silently() -> None:
+    """LLCP BE-7: the AND-gate (provider + extraction_model + client) replaces the
+    old E1a stub. extraction_model set but provider=None (default, incomplete gate)
+    -> no enrichment call attempted, no warning, llm_fallback_used stays False."""
     from archon_search.config import GraphConfig
     from archon_search.graph_extractor import GraphExtractor
 
@@ -224,12 +228,82 @@ def test_extractor_llm_stub_warning() -> None:
 
     result = asyncio.run(_run())
 
-    assert result.llm_fallback_used is True
-    assert any("LLM" in w or "extraction_model" in w or "gpt-4" in w for w in result.warnings), (
-        f"Expected LLM fallback warning, got: {result.warnings}"
-    )
+    assert result.llm_fallback_used is False
+    assert result.warnings == []
     # No fatal error — spaCy path ran fine
     assert result.fatal_error is None
+
+
+def test_graph_extractor_calls_label_relationships_per_chunk() -> None:
+    """AND-gate open (provider + extraction_model + client all set) -> label_relationships
+    is called once per text chunk with 2+ entities; the LLM-typed edge is persisted
+    additively alongside the related_to co-occurrence edge (S9, S3)."""
+    from archon_search.config import GraphConfig
+    from archon_search.graph_enrichment_protocol import LabeledRelationship
+    from archon_search.graph_extractor import GraphExtractor
+
+    text = "Alice uses Acme."
+    stub = _make_spacy_stub({text: [("Alice", "PERSON"), ("Acme", "ORG")]})
+    chunk = ChunkInput(chunk_id="c1", text=text, symbol_type=None, symbol_subtype=None)
+
+    mock_client = MagicMock()
+    mock_client.label_relationships = AsyncMock(
+        return_value=[
+            LabeledRelationship(
+                source_entity="Alice", target_entity="Acme", relationship_type="uses"
+            )
+        ]
+    )
+
+    config = GraphConfig(provider="llama_cpp", extraction_model="model-x")
+    extractor = GraphExtractor(config, enrichment_client=mock_client)
+    extractor._nlp = stub["spacy"].load("en_core_web_sm")
+
+    async def _run():
+        return await extractor.extract([chunk], "doc-1", "col")
+
+    result = asyncio.run(_run())
+
+    mock_client.label_relationships.assert_awaited_once()
+    called_chunk_text = mock_client.label_relationships.await_args.args[1]
+    assert called_chunk_text == text
+
+    relationship_types = {e.relationship_type for e in result.edges}
+    assert RelationshipType.uses in relationship_types
+    assert RelationshipType.related_to in relationship_types, (
+        "LLM-typed edges must be additive, not replace the co-occurrence edge"
+    )
+    assert len(result.edges) == 2
+    assert result.llm_fallback_used is False
+
+
+def test_graph_extractor_catches_enrichment_error() -> None:
+    """label_relationships raising -> per-chunk WARNING + spaCy-only fallback for that
+    chunk; extract() does not raise and the co-occurrence edge is still produced (S9)."""
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    text = "Alice uses Acme."
+    stub = _make_spacy_stub({text: [("Alice", "PERSON"), ("Acme", "ORG")]})
+    chunk = ChunkInput(chunk_id="c1", text=text, symbol_type=None, symbol_subtype=None)
+
+    mock_client = MagicMock()
+    mock_client.label_relationships = AsyncMock(side_effect=RuntimeError("boom"))
+
+    config = GraphConfig(provider="llama_cpp", extraction_model="model-x")
+    extractor = GraphExtractor(config, enrichment_client=mock_client)
+    extractor._nlp = stub["spacy"].load("en_core_web_sm")
+
+    async def _run():
+        return await extractor.extract([chunk], "doc-1", "col")
+
+    result = asyncio.run(_run())
+
+    assert result.fatal_error is None
+    assert result.llm_fallback_used is True
+    assert len(result.edges) == 1
+    assert result.edges[0].relationship_type == RelationshipType.related_to
+    assert any("boom" in w or "chunk" in w.lower() for w in result.warnings)
 
 
 # ---------------------------------------------------------------------------

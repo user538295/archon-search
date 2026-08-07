@@ -5,10 +5,16 @@ co-occurrence edges.  For C3-enriched code chunks (``symbol_type != None``),
 uses the code-symbol extraction path instead of spaCy NER — this avoids
 double-processing and misclassification of code identifiers.
 
-LLM typed relationship extraction is config-guarded in E1a: when
-``extraction_model`` is configured, a WARNING is logged and the extractor
-falls back to spaCy-only.  Full LLM extraction is deferred until an eval
-baseline exists.
+LLM typed relationship extraction (LLCP BE-7) is gated by an AND-condition:
+``config.provider is not None AND config.extraction_model is not None AND
+enrichment_client is not None``.  When open, one ``label_relationships`` call
+is made per plain-text chunk (after spaCy NER) and the returned typed edges
+are persisted additively alongside the ``related_to`` co-occurrence edges.
+When any part of the gate is unset, enrichment is skipped silently (no
+warning) — this is a normal, air-gap-safe configuration, not a failure.  A
+per-chunk enrichment call that raises is caught, logged as a WARNING, and
+that chunk falls back to spaCy-only co-occurrence edges; it never fails the
+whole ``extract()`` call.
 
 All CPU-bound spaCy operations inside ``extract()`` are wrapped in
 ``asyncio.to_thread()`` because spaCy NER is CPU-bound and the ingest
@@ -46,6 +52,7 @@ from archon_search.graph_types import (
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig
+    from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
 
 _logger = logging.getLogger(__name__)
 
@@ -88,8 +95,13 @@ class GraphExtractor:
     default thread-pool executor.
     """
 
-    def __init__(self, config: "GraphConfig") -> None:
+    def __init__(
+        self,
+        config: "GraphConfig",
+        enrichment_client: "LLMEnrichmentClientProtocol | None" = None,
+    ) -> None:
         self._config = config
+        self._enrichment_client = enrichment_client
         self._nlp: object = None  # spaCy NLP model; loaded lazily on first call
         self._load_lock: asyncio.Lock = asyncio.Lock()
 
@@ -186,19 +198,14 @@ class GraphExtractor:
         llm_fallback_used = False
 
         # ------------------------------------------------------------------
-        # LLM extraction stub (E1a) — log warning and continue spaCy-only.
+        # LLM relationship-labeling AND-gate (LLCP BE-7). When closed, this is
+        # a normal, air-gap-safe configuration -- no warning, no fallback flag.
         # ------------------------------------------------------------------
-        if self._config.extraction_model:
-            _logger.warning(
-                "extraction_model %r is configured but LLM extraction is not "
-                "implemented in E1a; falling back to spaCy-only extraction.",
-                self._config.extraction_model,
-            )
-            warnings.append(
-                f"LLM extraction model {self._config.extraction_model!r} is not "
-                "available in E1a; fell back to spaCy-only extraction."
-            )
-            llm_fallback_used = True
+        enrichment_gate_open = (
+            self._config.provider is not None
+            and self._config.extraction_model is not None
+            and self._enrichment_client is not None
+        )
 
         # ------------------------------------------------------------------
         # Partition chunks into code (C3) vs plain-text.
@@ -212,6 +219,9 @@ class GraphExtractor:
         nodes: dict[str, GraphNode] = {}
         # Mentions: entity incidence records for salience derivation (E2b).
         mentions: list[GraphMention] = []
+        # LLM-typed relationship edges (LLCP BE-7) — additive alongside the
+        # related_to co-occurrence edges built below; merged in after.
+        llm_edges: dict[str, GraphEdge] = {}
 
         # ------------------------------------------------------------------
         # C3 code-symbol path — spaCy NER is NOT run on code chunks.
@@ -328,6 +338,75 @@ class GraphExtractor:
                     ))
                 chunk_entity_ids.append(ids_this_chunk)
 
+                # --------------------------------------------------------
+                # LLM relationship labeling (LLCP BE-7) — one call per text
+                # chunk with 2+ distinct entities, after spaCy NER. Never
+                # fails the whole extract() call: any exception here is
+                # caught, logged as a WARNING, and this chunk falls back to
+                # spaCy-only co-occurrence edges (added below, unaffected).
+                # --------------------------------------------------------
+                seen_this_chunk: set[str] = set()
+                unique_ids_this_chunk: list[str] = []
+                for eid in ids_this_chunk:
+                    if eid not in seen_this_chunk:
+                        unique_ids_this_chunk.append(eid)
+                        seen_this_chunk.add(eid)
+
+                if enrichment_gate_open and len(unique_ids_this_chunk) >= 2:
+                    try:
+                        pairs_this_chunk = list(
+                            itertools.combinations(sorted(unique_ids_this_chunk), 2)
+                        )
+                        entity_pairs_by_name = [
+                            (nodes[a].entity_name, nodes[b].entity_name)
+                            for a, b in pairs_this_chunk
+                        ]
+                        name_to_id = {
+                            nodes[eid].entity_name: eid for eid in unique_ids_this_chunk
+                        }
+
+                        labeled = await self._enrichment_client.label_relationships(  # type: ignore[union-attr]
+                            entity_pairs_by_name, text_chunk.text
+                        )
+
+                        for rel in labeled:
+                            src_id = name_to_id.get(rel.source_entity)
+                            tgt_id = name_to_id.get(rel.target_entity)
+                            if src_id is None or tgt_id is None:
+                                _logger.warning(
+                                    "GraphExtractor: LLM returned an unknown entity name "
+                                    "in relationship (%r -> %r) for chunk %s; skipping",
+                                    rel.source_entity,
+                                    rel.target_entity,
+                                    text_chunk.chunk_id,
+                                )
+                                continue
+                            edge_id = make_stable_edge_id(
+                                src_id, tgt_id, rel.relationship_type
+                            )
+                            if edge_id not in llm_edges:
+                                llm_edges[edge_id] = GraphEdge(
+                                    id=edge_id,
+                                    source_node_id=src_id,
+                                    target_node_id=tgt_id,
+                                    relationship_type=RelationshipType(rel.relationship_type),
+                                    source_doc_id=doc_id,
+                                )
+                    except Exception as exc:  # noqa: BLE001
+                        _logger.warning(
+                            "GraphExtractor: LLM relationship labeling failed for chunk "
+                            "%s: %s; falling back to spaCy-only co-occurrence edges for "
+                            "this chunk",
+                            text_chunk.chunk_id,
+                            exc,
+                        )
+                        warnings.append(
+                            f"LLM relationship labeling failed for chunk "
+                            f"{text_chunk.chunk_id!r}: {exc}; used spaCy-only "
+                            "co-occurrence edges instead."
+                        )
+                        llm_fallback_used = True
+
         # ------------------------------------------------------------------
         # Co-occurrence edge creation (spaCy-only mode).
         # For each chunk: ONE directed edge per ordered pair where
@@ -356,6 +435,11 @@ class GraphExtractor:
                         relationship_type=RelationshipType.related_to,
                         source_doc_id=doc_id,
                     )
+
+        # LLM-typed edges are additive: merge in alongside (never over) the
+        # related_to co-occurrence edges above — distinct relationship_type
+        # values produce distinct stable edge IDs, so no key collision.
+        edges.update(llm_edges)
 
         return GraphExtractionResult(
             nodes=list(nodes.values()),

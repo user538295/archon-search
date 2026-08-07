@@ -42,6 +42,7 @@ from archon_search.types import (
 if TYPE_CHECKING:
     from archon_search.community_builder import CommunityBuilder
     from archon_search.config import GraphConfig, MaintenanceConfig
+    from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
     from archon_search.graph_store import GraphStore
     from archon_search.jobs.store import JobStore
     from archon_search.store import SearchStore
@@ -107,12 +108,14 @@ class MaintenanceLoop:
         data_dir: Path,
         graph_store: "GraphStore | None" = None,
         graph_config: "GraphConfig | None" = None,
+        enrichment_client: "LLMEnrichmentClientProtocol | None" = None,
     ) -> None:
         self._job_store = job_store
         self._search_store = search_store
         self._config = config
         self._graph_store = graph_store
         self._graph_config = graph_config
+        self._enrichment_client = enrichment_client
         self._state_file: Path = data_dir / ".maintenance-state.json"
         # Manual trigger signal: POST /maintenance/trigger sets this event.
         self._trigger_event: asyncio.Event = asyncio.Event()
@@ -587,6 +590,7 @@ class MaintenanceLoop:
                 graph_store=self._graph_store,
                 config=self._graph_config,  # GraphConfig
                 search_store=self._search_store,
+                enrichment_client=self._enrichment_client,
             )
             await builder.build(collection, ns=namespace)
             logger.info(
