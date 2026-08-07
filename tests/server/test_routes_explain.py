@@ -17,7 +17,7 @@ from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder
 from archon_search.jobs.store import JobStore
-from archon_search.pipeline import ExplainPipelineResult, ExplainStageError, SearchPipeline
+from archon_search.pipeline import CollectionNotFoundError, ExplainPipelineResult, ExplainStageError, SearchPipeline
 from archon_search.reranker import Reranker
 from archon_search.router import MultiCollectionRouter
 from archon_search.server.app import create_app
@@ -281,6 +281,22 @@ def test_post_explain_pinned_collection_not_found_returns_404(tmp_path: Path) ->
     pipeline.get_collection_meta = AsyncMock(return_value=None)
     app.state.pipeline = pipeline
     response = client.post("/explain", json={"query": "hello", "collection": "missing"})
+    assert response.status_code == 404
+    assert response.json()["detail"] == "collection not found"
+
+
+def test_post_explain_fanout_all_missing_returns_404(tmp_path: Path) -> None:
+    """Fan-out: every requested collection absent → pipeline raises CollectionNotFoundError → 404."""
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    pipeline.explain = AsyncMock(
+        side_effect=CollectionNotFoundError(["ghost-a", "ghost-b"])
+    )
+    app.state.pipeline = pipeline
+    response = client.post(
+        "/explain",
+        json={"query": "hello", "collections": ["ghost-a", "ghost-b"]},
+    )
     assert response.status_code == 404
     assert response.json()["detail"] == "collection not found"
 

@@ -1729,7 +1729,13 @@ class SearchPipeline:
         fan-out: legs are merged, ACL-filtered, and reranked as a single pool, with
         per-collection provenance preserved on each candidate.  The route layer resolves
         routing before calling this method, so exactly one of ``collection`` /
-        ``collections`` must be supplied.
+        ``collections`` must be supplied.  Requested names absent from the namespace are
+        reported in ``excluded_collections`` with ``reason="not_found"`` and never fail the
+        request; ``CollectionNotFoundError`` is raised only when *every* requested name is
+        absent.  This differs from ``search_many``, which fails loudly on *any* absent
+        name: ``/explain`` is a debugging tool, and a 404 that withholds the trace defeats
+        the purpose; ``/search`` is a data endpoint where silent under-retrieval corrupts
+        downstream results, so failing loudly is correct there.
 
         When ``rag_fusion=True`` and a generator is supplied, the single-collection path
         decomposes the query into variants, searches in parallel, and fuses results via
@@ -1772,13 +1778,25 @@ class SearchPipeline:
 
             meta_by_name = {m.name: m for m in all_meta}
             missing = [name for name in collections if name not in meta_by_name]
-            if missing:
+            if missing and len(missing) == len(collections):
+                # Only raise when EVERY requested name is absent — no leg left to fan
+                # out over.  search_many raises on ANY missing name; the asymmetry is
+                # deliberate (S340): /explain is a debugging tool, so a 404 that
+                # withholds the trace defeats the purpose.
                 raise CollectionNotFoundError(missing)
 
             excluded: list[ExcludedCollection] = []
             collections_in_scope: list[str] = []
             for name in collections:
-                if meta_by_name[name].active_embedding_model != self._global_embedder.model_name:
+                meta = meta_by_name.get(name)
+                if meta is None:
+                    logger.warning(
+                        "explain: collection %r not found in namespace %r; excluded from fan-out",
+                        name,
+                        namespace,
+                    )
+                    excluded.append(ExcludedCollection(name=name, reason="not_found"))
+                elif meta.active_embedding_model != self._global_embedder.model_name:
                     excluded.append(ExcludedCollection(name=name, reason="embedding_model_mismatch"))
                 else:
                     collections_in_scope.append(name)
@@ -2589,6 +2607,9 @@ class SearchPipeline:
         meta_by_name = {m.name: m for m in all_meta}
         missing = [name for name in collections if name not in meta_by_name]
         if missing:
+            # Raise on ANY missing name (fail loud — silent under-retrieval corrupts
+            # downstream results).  explain() intentionally diverges: it only raises
+            # when EVERY name is absent (S340 — see test_pipeline_explain_missing_collection_is_excluded_not_fatal).
             raise CollectionNotFoundError(missing)
 
         excluded_collections: list[ExcludedCollection] = []

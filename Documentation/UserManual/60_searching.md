@@ -1,7 +1,7 @@
 **Purpose**: Query the index over REST and MCP.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-08-07 / **Next review**: 2027-08-07
 
 # Searching
 
@@ -167,7 +167,8 @@ curl -s -X POST http://127.0.0.1:8765/search \
 
 - `collection` and `collections` are mutually exclusive — supplying both (or neither) is a `422`.
 - Names are de-duplicated; the list length is capped at `[search].max_fanout` (default 8), and exceeding it returns `422`.
-- Collections that fail (not found, metadata error) are reported in the response `excluded_collections[]` rather than failing the whole request.
+- Collections whose stored embedding model differs from the live embedder are dropped and reported in the response `excluded_collections[]` (reason `embedding_model_mismatch`) rather than failing the whole request — even when *every* requested collection is excluded, you get a `200` with `results: []`.
+- On `/search`, a name that does not exist in your namespace fails the whole request with `404 collection not found`; a metadata-store failure is a `503`. `/explain` is deliberately more forgiving here: it reports unknown names in `excluded_collections[]` with reason `not_found` and only returns `404` when *every* requested name is unknown (see [`80_explain_and_debugging.md`](80_explain_and_debugging.md)).
 - Filters — including `language` (E0e) — apply across every collection in the fan-out.
 - `graph_mode` is **not** supported with multi-collection fan-out (`ppr` is rejected with `422`; single-collection only for graph modes).
 
