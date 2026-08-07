@@ -2105,6 +2105,29 @@ def test_post_explain_multi_collection_metadata_lookup_failure_returns_503(tmp_p
     assert "metadata store" in body["detail"]
 
 
+def test_post_explain_multi_collection_fanout_timeout_returns_504(tmp_path: Path) -> None:
+    """Multi-collection explain: an injected FanoutTimeoutError maps to 504.
+
+    Handler-level coverage only — the exception is injected into a mock
+    pipeline, so this passes regardless of whether the configured
+    ``fanout_timeout_seconds`` actually reaches the pipeline.  The S435
+    end-to-end reproduction (real pipeline, real TOML timeout) is
+    ``tests/integration/test_e1b_be6_routes_search_integration.py::
+    test_post_explain_fanout_honours_configured_timeout_504``.
+    """
+    from archon_search.pipeline import FanoutTimeoutError
+
+    app, client = _make_app(tmp_path)
+    pipeline = MagicMock()
+    pipeline.explain = AsyncMock(side_effect=FanoutTimeoutError())
+    app.state.pipeline = pipeline
+
+    response = client.post("/explain", json={"query": "hello", "collections": ["A", "B"]})
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "Search timed out"
+
+
 # ---------------------------------------------------------------------------
 # C2 Task 2.3 — three-state language field in explain responses
 # ---------------------------------------------------------------------------

@@ -8,6 +8,30 @@
 
 ## Changelog
 
+### [next release] — `[search].fanout_leg_trim` and `fanout_timeout_seconds` are now enforced on the server (2026-08-07)
+
+**What changed:** `create_app` (`archon_search/server/app.py`) built its `SearchPipeline` without
+passing `max_fanout`, `fanout_leg_trim`, or `fanout_timeout_seconds`, so the pipeline always used
+the `SearchPipeline.__init__` defaults (8 / 40 / 30.0) no matter what `[search]` contained. All
+three are now forwarded. `fanout_leg_trim` and `fanout_timeout_seconds` are genuinely read by the
+pipeline, so operator values take effect for the first time. `max_fanout` is forwarded for parity
+with the `create_pipeline` factory, but fan-out breadth remains enforced solely in the route and
+MCP handlers (`routes_search.py`, `routes_explain.py`, `routes_openai_shim.py`, `mcp.py`) which
+read `config.max_fanout` directly — `SearchPipeline._max_fanout` is not read anywhere, so nothing
+changes for that key.
+
+**Why:** The keys were parsed, validated, and documented in `archon-search.toml.example` and
+`Documentation/Architecture/210_performance_and_scalability.md`, but were inert on the server path.
+Operators tuning fan-out latency or recall saw no effect.
+
+**Migration:** No action required for installations using the defaults. Installations that set
+`[search].fanout_timeout_seconds` below their real fan-out latency will now receive `504
+{"detail": "Search timed out"}` on multi-collection `POST /search` and `POST /explain` where they
+previously received `200`; raise the value if the timeout was set aspirationally. Installations
+that set `[search].fanout_leg_trim` below the default `40` will now get a smaller per-leg candidate
+pool and therefore different (potentially fewer) results; `fanout_leg_trim` is a hard recall
+ceiling applied before the ACL pass and rerank, so raise it if results regress.
+
 ### [next release] — Removed inert `[routing].max_parallel_collections` config key (2026-07-29)
 
 **What changed:** The `[routing].max_parallel_collections` key is removed from `SearchConfig`, the
