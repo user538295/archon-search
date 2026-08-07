@@ -843,7 +843,19 @@ async def test_run_graph_gc_aborts_when_list_chunks_raises_exception(
 ) -> None:
     """BE-7 S10: list_chunks_raw raises RuntimeError → WARNING logged, prune_stale_mentions NOT called."""
     ss = AsyncMock()
-    ss.list_chunks_raw = AsyncMock(side_effect=RuntimeError("db connection lost"))
+
+    # list_chunks_raw is an async generator in production (consumed via `async for`),
+    # not a coroutine — an AsyncMock(side_effect=...) call returns an unawaited
+    # coroutine here (since `async for` never awaits it directly), which leaves it
+    # dangling and triggers "coroutine was never awaited" at GC time. A real async
+    # generator function that raises on the first `__anext__()` call mirrors
+    # production shape and matches the pattern used by the sibling
+    # `_empty_iterator` below.
+    async def _raising_iterator(*args, **kwargs):
+        raise RuntimeError("db connection lost")
+        yield  # pragma: no cover - unreachable; makes this an async generator
+
+    ss.list_chunks_raw = _raising_iterator
 
     gs = MagicMock()
     # C1-I-4: Use AsyncMock so an early-return regression produces a clean

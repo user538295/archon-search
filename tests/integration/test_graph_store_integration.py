@@ -113,7 +113,7 @@ def test_graph_table_names_use_archon_prefix(tmp_path) -> None:
             await gs.ensure_graph_tables(col, ns="default")
             # Get the raw LanceDB table names
             db = await lancedb.connect_async(db_path)
-            raw_tables = await db.table_names()
+            raw_tables = (await db.list_tables()).tables
         finally:
             await gs.disconnect()
 
