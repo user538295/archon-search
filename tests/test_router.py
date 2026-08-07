@@ -182,31 +182,39 @@ async def test_router_fetch_metadata_timeout_returns_empty() -> None:
 
 @pytest.mark.asyncio
 async def test_tier1_skips_decomposer_searches_all() -> None:
-    """≤3 routable collections → returns None, no rank call, _decomposer_was_invoked=False."""
-    router = _router(shortlist_size=5)
+    """≤3 routable collections → returns None, _decomposer_was_invoked=False.
+
+    rank() IS called (S503: confidence gate enforced in all tiers).
+    Collections with no centroid bypass the gate, so both are routable.
+    """
+    embedder = _make_embedder(vector=[1.0, 0.0])
+    router = _router(shortlist_size=5, embedder=embedder)
     routable = [
         _meta("col-a"),
         _meta("col-b"),
     ]
     with patch.object(router, "fetch_metadata", new=AsyncMock(return_value=routable)):
-        with patch.object(router, "rank", wraps=router.rank) as mock_rank:
-            result = await router.get_pre_context("test query", pinned_names=[], available_slots=3)
+        result = await router.get_pre_context("test query", pinned_names=[], available_slots=3)
 
     assert result is None
     assert router._decomposer_was_invoked is False
     assert router._last_routable_names == ["col-a", "col-b"]
-    mock_rank.assert_not_called()
+    embedder.embed_one.assert_awaited_once_with("test query")
 
 
 @pytest.mark.asyncio
 async def test_tier2_skips_centroid_preranking() -> None:
-    """4–shortlist_size routable collections: rank() NOT called, all included in block."""
-    router = _router(shortlist_size=5)
+    """4–shortlist_size routable collections: all included in block (no centroid → gate bypassed).
+
+    rank() IS called (S503: confidence gate enforced in all tiers).
+    Collections with no centroid bypass the gate, so all are routable.
+    """
+    embedder = _make_embedder(vector=[1.0, 0.0])
+    router = _router(shortlist_size=5, embedder=embedder)
     # 4 routable collections (shortlist_size=5, so 4 falls in Tier 2)
     routable = [_meta(f"col-{i}") for i in range(4)]
     with patch.object(router, "fetch_metadata", new=AsyncMock(return_value=routable)):
-        with patch.object(router, "rank") as mock_rank:
-            result = await router.get_pre_context("test query", pinned_names=[], available_slots=3)
+        result = await router.get_pre_context("test query", pinned_names=[], available_slots=3)
 
     assert result is not None
     assert "<search_collections>" in result
@@ -214,7 +222,7 @@ async def test_tier2_skips_centroid_preranking() -> None:
         assert m.name in result
     assert router._decomposer_was_invoked is True
     assert router._last_routable_names == [m.name for m in routable]
-    mock_rank.assert_not_called()
+    embedder.embed_one.assert_awaited_once_with("test query")
 
 
 @pytest.mark.asyncio
@@ -485,6 +493,22 @@ async def test_tier3_confidence_gate_failure_returns_none() -> None:
 
     assert result is None
     assert router._decomposer_was_invoked is False
+    assert router._last_routable_names == []
+
+
+@pytest.mark.asyncio
+async def test_tier1_confidence_gate_filters_routable_names() -> None:
+    """S503: <=3 routable with all scores below threshold → _last_routable_names=[]."""
+    embedder = _make_embedder(vector=[1.0, 0.0])
+    router = _router(shortlist_size=5, confidence_threshold=1.0, embedder=embedder)
+    routable = [
+        _meta("s503_a", centroid=[0.5, 0.5]),  # sim ~0.707 < 1.0
+        _meta("s503_b", centroid=[0.3, 0.7]),  # sim ~0.39 < 1.0
+    ]
+    with patch.object(router, "fetch_metadata", new=AsyncMock(return_value=routable)):
+        result = await router.get_pre_context("query", pinned_names=[], available_slots=3)
+
+    assert result is None
     assert router._last_routable_names == []
 
 

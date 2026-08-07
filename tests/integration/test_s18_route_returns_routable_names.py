@@ -24,6 +24,10 @@ def test_route_lists_single_file_ingest_collection_as_routable(tmp_path, monkeyp
     )
 
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
+        # Stub embedder yields zero vectors → cosine sim = 0.0; disable
+        # the confidence gate so the test exercises collection visibility,
+        # not threshold enforcement (S503 tests cover that separately).
+        _cfg.routing_confidence_threshold = 0.0
         headers = {"Authorization": f"Bearer {api_key}"}
         ingest_file_via_path(client, "container-docs", str(doc), api_key=api_key)
 

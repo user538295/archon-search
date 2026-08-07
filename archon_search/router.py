@@ -255,39 +255,40 @@ class MultiCollectionRouter:
         pinned_set = set(pinned_names)
         routable_meta = [m for m in all_meta if m.name not in pinned_set]
 
-        self._last_routable_names = [m.name for m in routable_meta]
-
         if not all_meta:
+            self._last_routable_names = []
             self._decomposer_was_invoked = False
             return None
 
         if available_slots <= 0:
+            self._last_routable_names = [m.name for m in routable_meta]
+            self._decomposer_was_invoked = False
+            return None
+
+        # Embed once and apply confidence-threshold gate for all tiers
+        vector = await self._embedder.embed_one(query)
+        ranked = self.rank(vector, routable_meta)
+        self._last_routable_names = [m.name for m in ranked]
+
+        if not ranked:
             self._decomposer_was_invoked = False
             return None
 
         n_routable = len(routable_meta)
 
-        # Tier 1: ≤3 routable — skip decomposer, search all
+        # Tier 1: ≤3 routable — skip decomposer, search all passing threshold
         if n_routable <= 3:
             self._decomposer_was_invoked = False
             return None
 
-        # Tier 2: 4 ≤ n_routable ≤ shortlist_size — decomposer selects, no centroid ranking
+        # Tier 2: 4 ≤ n_routable ≤ shortlist_size — decomposer selects
         if n_routable <= self._shortlist_size:
             self._decomposer_was_invoked = True
-            return self._build_block(routable_meta, available_slots)
+            return self._build_block(ranked, available_slots)
 
-        # Tier 3: n_routable > shortlist_size — centroid pre-ranking, then decomposer
-        vector = await self._embedder.embed_one(query)
-        shortlist = self.rank(vector, routable_meta)
-        if not shortlist:
-            # Confidence gate failed — no relevant collections found; skip decomposer
-            self._last_routable_names = []
-            self._decomposer_was_invoked = False
-            return None
-        self._last_routable_names = [m.name for m in shortlist]
+        # Tier 3: n_routable > shortlist_size — centroid pre-ranked
         self._decomposer_was_invoked = True
-        return self._build_block(shortlist, available_slots)
+        return self._build_block(ranked, available_slots)
 
     def _build_block(self, collections: list[CollectionMeta], available_slots: int) -> str:
         effective_slots = max(1, available_slots)

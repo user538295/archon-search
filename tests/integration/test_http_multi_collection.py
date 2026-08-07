@@ -299,7 +299,7 @@ def test_post_route_hybrid_strategy_returns_200_and_uses_blended_ranking(
                 search_url=f"http://{config.host}:{config.port}",
                 embedder=embedder_to_use,
                 shortlist_size=shortlist_size,
-                confidence_threshold=config.routing_confidence_threshold,
+                confidence_threshold=0.0,  # bypass gate; stub embedder yields zero vectors
                 embedding_model=config.embedding_model,
                 initial_metadata=all_meta,  # pre-seeded; no HTTP call
                 strategy="hybrid",
