@@ -217,7 +217,7 @@ flowchart LR
     - needs FE-1, FE-2 · completes (doc: [archon-search.toml.example](../../archon-search.toml.example) corrected)
     - Tests
 
-- [ ] **BE-10** — Create `tests/test_provider_registry_sync.py`: structural CI guard asserting `_VALID_PROVIDERS`, the wizard provider set in `_prompt_provider`, and TOML writer branches each contain exactly the `_PROVIDER_REGISTRY` keys; `_PROVIDER_EXTRA.keys()` is a **strict subset** of registry keys (not equality — some providers have no pip extra); mirrors `tests/test_no_fstring_sql.py` pattern with meta-tests; author only after FE-1 and FE-2 are finalised so all derived sites exist #backend-role
+- [x] **BE-10** — Create `tests/test_provider_registry_sync.py`: structural CI guard asserting `_VALID_PROVIDERS`, the wizard provider set in `_prompt_provider`, and TOML writer branches each contain exactly the `_PROVIDER_REGISTRY` keys; `_PROVIDER_EXTRA.keys()` is a **strict subset** of registry keys (not equality — some providers have no pip extra); mirrors `tests/test_no_fstring_sql.py` pattern with meta-tests; author only after FE-1 and FE-2 are finalised so all derived sites exist #backend-role
     - Frameworks & Drivers · 1.5h
     - needs BE-3, FE-1, FE-2 · completes C4
     - Tests
