@@ -1042,7 +1042,8 @@ class SearchPipeline:
             if not await self.store.has_vector_index(collection):
                 result = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
-                    filters=filters, query_vector=None, scope_filter=scope_filter,
+                    filters=filters, query_vector=None,
+                    rag_fusion_attempted=True, scope_filter=scope_filter,
                 )
                 result.graph_expansion_applied = graph_expansion_applied
                 return result
@@ -1918,6 +1919,7 @@ class SearchPipeline:
                 return await self._explain_standard(
                     query, collection, top_k=top_k, rerank=rerank, namespace=namespace,
                     query_vector=query_vector, embedder=_single_embedder,
+                    rag_fusion_attempted=True,
                     scope_filter=scope_filter,
                 )
 

@@ -264,7 +264,7 @@ Pass `rag_fusion: true` on any `/search` or `/explain` request. The response add
 | --- | --- |
 | `rag_fusion_applied` | `true` when at least one LLM variant was generated and fused. |
 | `rag_fusion_queries_used` | Number of successful variant searches (`0..num_queries`; excludes the original query). |
-| `rag_fusion_attempted` | `true` when the generator was called (even if it returned no variants). |
+| `rag_fusion_attempted` | `true` when the RAG Fusion path was entered — either the generator was called (even if it returned no variants), or the path aborted before calling it (FTS-only collection). |
 
 ### Mutual exclusion with HyDE
 

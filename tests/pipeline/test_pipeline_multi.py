@@ -857,6 +857,56 @@ async def test_search_rag_fusion_fts_only_guard() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_rag_fusion_fts_only_guard_reports_attempted() -> None:
+    """S272 regression: the FTS-only guard must still report rag_fusion_attempted=True.
+
+    RAG Fusion was requested AND config-enabled AND a generator was supplied, so the
+    RAG Fusion branch was entered — i.e. it WAS attempted, then aborted early because
+    the collection has no vector index. Every other fallback inside that branch passes
+    ``rag_fusion_attempted=True`` to ``_search_standard``; this one must too.
+    """
+    from unittest.mock import AsyncMock
+
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
+    mock_store.has_vector_index = AsyncMock(return_value=False)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["v1"])
+
+    rag_config = RAGFusionConfig(enabled=True)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+    await pipeline._global_embedder.embed(["warmup"])
+
+    result = await pipeline.search(
+        "query",
+        "col",
+        embedder=pipeline._global_embedder,
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    assert result.rag_fusion_applied is False
+    assert result.rag_fusion_attempted is True
+
+
+@pytest.mark.asyncio
 async def test_search_rag_fusion_false_no_overhead() -> None:
     """With rag_fusion=False, generate_variants NOT called; no extra store calls."""
     from unittest.mock import AsyncMock
