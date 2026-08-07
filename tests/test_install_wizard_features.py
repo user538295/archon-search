@@ -7,19 +7,23 @@ from unittest.mock import patch
 
 import tomlkit
 
-from archon_search.config import OLLAMA_BASE_URL_DEFAULT, load_config
+from archon_search.config import LLAMA_CPP_BASE_URL_DEFAULT, OLLAMA_BASE_URL_DEFAULT, load_config
 from archon_search.install import (
     WizardFeatures,
     _apply_wizard_features_to_toml,
     _check_claude_cli_present,
+    _fetch_llama_cpp_models,
     _fetch_ollama_models,
     _pick_claude_model,
+    _pick_llama_cpp_model,
     _pick_ollama_model,
     _prompt_gpu_confirm,
+    _prompt_llama_cpp_model,
     _prompt_model_freetext,
     _prompt_multilingual,
     _prompt_ollama_model,
     _prompt_optional_features,
+    _prompt_provider,
 )
 from archon_search.platform.types import GpuType
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES
@@ -44,6 +48,11 @@ class _FakeResp:
 def _tags_response(*names: str) -> _FakeResp:
     """Build a fake /api/tags response body from model names."""
     return _FakeResp(json.dumps({"models": [{"name": n} for n in names]}).encode())
+
+
+def _v1_models_response(*ids: str) -> _FakeResp:
+    """Build a fake OpenAI-compatible /v1/models response body from model ids."""
+    return _FakeResp(json.dumps({"data": [{"id": i} for i in ids]}).encode())
 
 
 class TestWizardFeaturesDefaults:
@@ -1318,6 +1327,215 @@ class TestOllamaPickerE2E:
         assert cfg.rag_fusion.provider == "ollama"
         assert cfg.rag_fusion.model == "llama3.2"
         assert cfg.rag_fusion.ollama_base_url == "http://rag:11434"
+
+
+class TestFetchLlamaCppModels:
+    """Unit tests for _fetch_llama_cpp_models() — HTTP fetch with graceful failure."""
+
+    def test_parses_data_ids(self) -> None:
+        """A well-formed /v1/models response yields the list of data[].id values."""
+        with patch(
+            "archon_search.install.urllib.request.urlopen",
+            return_value=_v1_models_response("qwen2.5-7b-instruct", "llama-3.2-3b"),
+        ):
+            models = _fetch_llama_cpp_models("http://localhost:8080")
+        assert models == ["qwen2.5-7b-instruct", "llama-3.2-3b"]
+
+    def test_hits_v1_models_endpoint(self) -> None:
+        """The fetch targets {base_url}/v1/models with the trailing slash stripped."""
+        with patch(
+            "archon_search.install.urllib.request.urlopen",
+            return_value=_v1_models_response("m1"),
+        ) as mock_urlopen:
+            _fetch_llama_cpp_models("http://box:8080/")
+        called_url = mock_urlopen.call_args.args[0]
+        assert called_url == "http://box:8080/v1/models"
+
+    def test_connection_error_returns_empty(self) -> None:
+        with patch("archon_search.install.urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
+            assert _fetch_llama_cpp_models("http://localhost:8080") == []
+
+    def test_os_error_returns_empty(self) -> None:
+        with patch("archon_search.install.urllib.request.urlopen", side_effect=OSError("timed out")):
+            assert _fetch_llama_cpp_models("http://localhost:8080") == []
+
+    def test_malformed_json_returns_empty(self) -> None:
+        with patch("archon_search.install.urllib.request.urlopen", return_value=_FakeResp(b"not json")):
+            assert _fetch_llama_cpp_models("http://localhost:8080") == []
+
+    def test_missing_data_key_returns_empty(self) -> None:
+        """A response without a 'data' key (e.g. Ollama's {"models": [...]} shape) returns []."""
+        with patch("archon_search.install.urllib.request.urlopen", return_value=_FakeResp(b'{"models": []}')):
+            assert _fetch_llama_cpp_models("http://localhost:8080") == []
+
+    def test_empty_data_list_returns_empty(self) -> None:
+        with patch("archon_search.install.urllib.request.urlopen", return_value=_v1_models_response()):
+            assert _fetch_llama_cpp_models("http://localhost:8080") == []
+
+    def test_skips_entries_without_id(self) -> None:
+        body = _FakeResp(json.dumps({"data": [{"id": "m1"}, {"other": 1}, {}]}).encode())
+        with patch("archon_search.install.urllib.request.urlopen", return_value=body):
+            assert _fetch_llama_cpp_models("http://localhost:8080") == ["m1"]
+
+    def test_non_string_id_does_not_crash(self) -> None:
+        body = _FakeResp(json.dumps({"data": [{"id": "m1"}, {"id": 123}]}).encode())
+        with patch("archon_search.install.urllib.request.urlopen", return_value=body):
+            assert _fetch_llama_cpp_models("http://localhost:8080") == ["m1"]
+
+
+class TestPickLlamaCppModel:
+    """Unit tests for _pick_llama_cpp_model() — numbered menu selection."""
+
+    def test_valid_selection(self) -> None:
+        with patch("builtins.input", return_value="2"):
+            assert _pick_llama_cpp_model(["a", "b", "c"]) == "b"
+
+    def test_out_of_range_then_valid(self) -> None:
+        with patch("builtins.input", side_effect=["9", "1"]):
+            assert _pick_llama_cpp_model(["a", "b"]) == "a"
+
+    def test_non_numeric_then_valid(self) -> None:
+        with patch("builtins.input", side_effect=["abc", "2"]):
+            assert _pick_llama_cpp_model(["a", "b"]) == "b"
+
+    def test_two_invalid_returns_empty(self) -> None:
+        with patch("builtins.input", side_effect=["0", "99"]):
+            assert _pick_llama_cpp_model(["a", "b"]) == ""
+
+    def test_eof_returns_empty(self) -> None:
+        with patch("builtins.input", side_effect=EOFError):
+            assert _pick_llama_cpp_model(["a", "b"]) == ""
+
+
+class TestPromptLlamaCppModel:
+    """Unit tests for _prompt_llama_cpp_model() — base-URL prompt + picker/fallback."""
+
+    def test_default_url_and_picker(self) -> None:
+        """Empty base-URL input keeps the default; picker returns the chosen model."""
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]) as mock_fetch:
+            with patch("builtins.input", side_effect=["", "1"]):
+                base_url, model = _prompt_llama_cpp_model("HyDE")
+        mock_fetch.assert_called_once_with(LLAMA_CPP_BASE_URL_DEFAULT)
+        assert base_url == ""  # resolves to the built-in default → stored empty
+        assert model == "m1"
+
+    def test_custom_url_is_stored_and_fetched(self) -> None:
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]) as mock_fetch:
+            with patch("builtins.input", side_effect=["http://box:8080", "1"]):
+                base_url, model = _prompt_llama_cpp_model("HyDE")
+        mock_fetch.assert_called_once_with("http://box:8080")
+        assert base_url == "http://box:8080"
+        assert model == "m1"
+
+    def test_unreachable_falls_back_to_freetext(self, capsys) -> None:
+        """Empty model list → honest message + free-text fallback (S12)."""
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=[]):
+            with patch("builtins.input", side_effect=["", "mymodel"]):
+                base_url, model = _prompt_llama_cpp_model("HyDE")
+        out = capsys.readouterr().out
+        assert base_url == ""
+        assert model == "mymodel"
+        assert LLAMA_CPP_BASE_URL_DEFAULT in out
+
+    def test_eof_on_base_url_uses_default(self) -> None:
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]) as mock_fetch:
+            with patch("builtins.input", side_effect=[EOFError, "1"]):
+                base_url, model = _prompt_llama_cpp_model("HyDE")
+        mock_fetch.assert_called_once_with(LLAMA_CPP_BASE_URL_DEFAULT)
+        assert base_url == ""
+        assert model == "m1"
+
+
+class TestPromptProviderLlamaCpp:
+    """Unit tests for the llama_cpp branch of _prompt_provider() (FE-1)."""
+
+    def test_includes_llama_cpp_in_choices_and_prompt(self) -> None:
+        """The choice set offered to ask_choice(), and the prompt text, both include llama_cpp (S4)."""
+        captured: dict[str, object] = {}
+
+        def fake_ask_choice(prompt_text: str, valid: set[str], default: str) -> str:
+            captured["prompt_text"] = prompt_text
+            captured["valid"] = valid
+            return "llama_cpp"
+
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]):
+            with patch("builtins.input", side_effect=["", "1"]):
+                provider, model, ollama_url, llama_cpp_url = _prompt_provider(
+                    "HyDE", fake_ask_choice, OLLAMA_BASE_URL_DEFAULT
+                )
+
+        assert "llama_cpp" in captured["valid"]
+        assert "llama_cpp" in captured["prompt_text"]
+        assert provider == "llama_cpp"
+        assert model == "m1"
+        assert ollama_url == ""
+        assert llama_cpp_url == ""
+
+    def test_llama_cpp_custom_base_url_returned(self) -> None:
+        """A custom llama-server base URL is threaded back as the 4th return value."""
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]):
+            with patch("builtins.input", side_effect=["http://box:8080", "1"]):
+                provider, model, ollama_url, llama_cpp_url = _prompt_provider(
+                    "HyDE", lambda *_a, **_k: "llama_cpp", OLLAMA_BASE_URL_DEFAULT
+                )
+        assert provider == "llama_cpp"
+        assert model == "m1"
+        assert ollama_url == ""
+        assert llama_cpp_url == "http://box:8080"
+
+    def test_other_providers_return_empty_llama_cpp_url(self) -> None:
+        """Non-llama_cpp providers keep the 4th tuple slot empty (no behavior change)."""
+        with patch("builtins.input", return_value="gpt-4o-mini"):
+            provider, model, ollama_url, llama_cpp_url = _prompt_provider(
+                "HyDE", lambda *_a, **_k: "openai", OLLAMA_BASE_URL_DEFAULT
+            )
+        assert provider == "openai"
+        assert model == "gpt-4o-mini"
+        assert ollama_url == ""
+        assert llama_cpp_url == ""
+
+
+class TestLlamaCppPickerIntegration:
+    """Integration tests through _prompt_optional_features() — full prompt flow (S4, S12)."""
+
+    _profile = ENGLISH_PROFILES["minimal"]  # reranker is not None
+
+    def _run(self, inputs: list[object], fetch_return, **kwargs) -> WizardFeatures:
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=fetch_return):
+            with patch("builtins.input", side_effect=inputs):
+                return _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile,
+                    install_code=False,
+                    disable_reranker=False,
+                    enable_watch=False,
+                    enable_telemetry=False,
+                    eager_load=False,
+                    routing_strategy="centroid",
+                    log_format="text",
+                    **kwargs,
+                )
+
+    def test_both_features_pick_independently(self) -> None:
+        """HyDE and RAG Fusion each get their own llama_cpp picker; selections are independent (S4)."""
+        # enable=y; hyde: llama_cpp, base "", pick "1"; rag: llama_cpp, base "", pick "2".
+        features = self._run(
+            ["y", "llama_cpp", "", "1", "llama_cpp", "", "2"],
+            fetch_return=["m1", "m2"],
+        )
+        assert features.hyde_provider == "llama_cpp"
+        assert features.hyde_model == "m1"
+        assert features.rag_fusion_provider == "llama_cpp"
+        assert features.rag_fusion_model == "m2"
+
+    def test_unreachable_server_falls_back_for_both(self) -> None:
+        """Unreachable llama-server → free-text fallback for both features (S12)."""
+        features = self._run(
+            ["y", "llama_cpp", "", "hmodel", "llama_cpp", "", "rmodel"],
+            fetch_return=[],
+        )
+        assert features.hyde_model == "hmodel"
+        assert features.rag_fusion_model == "rmodel"
 
 
 class TestOllamaBaseUrlReconciliation:

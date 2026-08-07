@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 import click
 
-from archon_search.config import OLLAMA_BASE_URL_DEFAULT
+from archon_search.config import LLAMA_CPP_BASE_URL_DEFAULT, OLLAMA_BASE_URL_DEFAULT
 from archon_search.platform.types import GpuType
 from archon_search.profiles import VALID_PROFILE_NAMES, InstallProfile
 
@@ -168,6 +168,84 @@ def _prompt_ollama_model(feature_label: str, default_base_url: str) -> tuple[str
     return stored, _prompt_model_freetext(feature_label)
 
 
+_LLAMA_CPP_FETCH_TIMEOUT_SECONDS = 5
+
+
+def _fetch_llama_cpp_models(base_url: str) -> list[str]:
+    """Fetch model ids from a llama-server's OpenAI-compatible ``/v1/models`` endpoint.
+
+    Parses ``data[].id`` (NOT Ollama's ``models[].name`` shape). Returns ``[]`` on
+    any failure — connection refused, timeout, HTTP error, malformed JSON, or zero
+    models loaded. Never raises: the wizard falls back to free-text entry on an
+    empty list.
+    """
+    url = base_url.rstrip("/") + "/v1/models"
+    try:
+        with urllib.request.urlopen(url, timeout=_LLAMA_CPP_FETCH_TIMEOUT_SECONDS) as resp:  # noqa: S310 (operator-supplied llama-server URL)
+            payload = json.loads(resp.read())
+    except Exception:  # noqa: BLE001 — best-effort probe; any failure → free-text fallback
+        return []
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return []
+    # Guard on str: a malformed entry like {"id": 123} must not crash the wizard.
+    return [i for m in data if isinstance(m, dict) and isinstance(i := m.get("id"), str) and i]
+
+
+def _pick_llama_cpp_model(models: list[str]) -> str:
+    """Show a numbered menu of ``models`` and return the chosen name.
+
+    One retry on an out-of-range or non-numeric entry; returns ``""`` on EOF or
+    after a second invalid entry (server startup then rejects the empty model).
+    """
+    print("\nAvailable llama-server models:")
+    for i, name in enumerate(models, start=1):
+        print(f"  {i}. {name}")
+    for attempt in range(2):
+        try:
+            raw = input(f"Select a model by number [1-{len(models)}]: ").strip()
+        except EOFError:
+            return ""
+        if raw.isdigit() and 1 <= int(raw) <= len(models):
+            return models[int(raw) - 1]
+        if attempt == 0:
+            print(f"  Enter a number between 1 and {len(models)}.")
+    return ""
+
+
+def _prompt_llama_cpp_model(feature_label: str) -> tuple[str, str]:
+    """Prompt for the llama-server base URL, then pick a model from ``/v1/models``.
+
+    Base URL is asked first (needed to fetch the model list); an empty answer
+    keeps ``LLAMA_CPP_BASE_URL_DEFAULT``. When models are found the user picks by
+    number; when the server is unreachable or has none, the wizard explains why
+    and falls back to free-text entry.
+
+    Returns ``(llama_cpp_base_url, model)``. ``llama_cpp_base_url`` is ``""``
+    when it resolves to the built-in default (config supplies it), otherwise the
+    custom URL so it survives config regeneration.
+    """
+    try:
+        raw_url = input(f"llama-server base URL for {feature_label} [{LLAMA_CPP_BASE_URL_DEFAULT}]: ").strip()
+    except EOFError:
+        raw_url = ""
+    base_url = raw_url or LLAMA_CPP_BASE_URL_DEFAULT
+    stored = "" if base_url == LLAMA_CPP_BASE_URL_DEFAULT else base_url
+
+    models = _fetch_llama_cpp_models(base_url)
+    if models:
+        return stored, _pick_llama_cpp_model(models)
+
+    print(
+        f"  No models available from {base_url}.\n"
+        f"  llama-server may not be running there, or the address may be wrong.\n"
+        f"  If it is running, make sure it is serving a model, then re-run the\n"
+        f"  wizard to pick from the list.\n"
+        f"  Falling back to manual model-name entry."
+    )
+    return stored, _prompt_model_freetext(feature_label)
+
+
 # Curated Claude model aliases shown by the wizard. The Claude CLI has no
 # runtime `models` subcommand, so this list is hardcoded and MUST be kept
 # current with Anthropic releases.
@@ -218,27 +296,31 @@ def _prompt_provider(
     feature_label: str,
     ask_choice: "Callable[[str, set[str], str], str]",
     ollama_base_url_default: str,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str]:
     """Ask which provider to use for *feature_label* and gather its model settings.
 
-    Returns ``(provider, model, ollama_base_url)``. ``model`` and
-    ``ollama_base_url`` are ``""`` when they resolve to the config default.
+    Returns ``(provider, model, ollama_base_url, llama_cpp_base_url)``. ``model``,
+    ``ollama_base_url``, and ``llama_cpp_base_url`` are ``""`` when they resolve
+    to the config default.
     """
     provider = ask_choice(
         f"Which provider for {feature_label}? "
-        f"(anthropic/openai/ollama/claude_cli) [anthropic]: ",
-        {"anthropic", "openai", "ollama", "claude_cli"},
+        f"(anthropic/openai/ollama/claude_cli/llama_cpp) [anthropic]: ",
+        {"anthropic", "openai", "ollama", "claude_cli", "llama_cpp"},
         "anthropic",
     )
     if provider == "ollama":
         base_url, model = _prompt_ollama_model(feature_label, ollama_base_url_default)
-        return provider, model, base_url
+        return provider, model, base_url, ""
+    if provider == "llama_cpp":
+        base_url, model = _prompt_llama_cpp_model(feature_label)
+        return provider, model, "", base_url
     if provider == "openai":
-        return provider, _prompt_model_freetext(feature_label), ""
+        return provider, _prompt_model_freetext(feature_label), "", ""
     if provider == "claude_cli":
         _check_claude_cli_present()
-        return provider, _pick_claude_model(feature_label), ""
-    return provider, "", ""
+        return provider, _pick_claude_model(feature_label), "", ""
+    return provider, "", "", ""
 
 
 def _prompt_optional_features(
@@ -444,12 +526,14 @@ def _prompt_optional_features(
             # to fetch the installed-model list) then a numbered picker; OpenAI
             # keeps free-text model entry; claude_cli checks PATH then offers a
             # curated alias picker with a free-text fallback.
-            _hyde_provider_val, _hyde_model_val, _hyde_ollama_base_url_val = _prompt_provider(
+            # 4th return value (llama_cpp_base_url) is not yet threaded into
+            # WizardFeatures/TOML — that wiring is a separate task.
+            _hyde_provider_val, _hyde_model_val, _hyde_ollama_base_url_val, _ = _prompt_provider(
                 "HyDE", _ask_choice, hyde_ollama_base_url_default
             )
 
             # Provider selection for RAG Fusion (same flow, independent picker).
-            _rag_fusion_provider_val, _rag_fusion_model_val, _rag_fusion_ollama_base_url_val = (
+            _rag_fusion_provider_val, _rag_fusion_model_val, _rag_fusion_ollama_base_url_val, _ = (
                 _prompt_provider("RAG Fusion", _ask_choice, rag_fusion_ollama_base_url_default)
             )
         else:

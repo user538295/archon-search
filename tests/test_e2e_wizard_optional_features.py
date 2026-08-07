@@ -789,6 +789,91 @@ def test_e2e_hyde_declineProceedPrompt_reverts(runner: CliRunner, tmp_path: Path
 
 
 @pytest.mark.integration
+def test_wizard_llama_cpp_model_picker_reachable(runner: CliRunner, tmp_path: Path) -> None:
+    """Interactive wizard, llama_cpp provider chosen for HyDE + RAG Fusion, reachable
+    llama-server → the numbered /v1/models picker is presented and its choice written
+    to the TOML (S4)."""
+    config_path = tmp_path / "archon-search.toml"
+
+    # Input queue (minimal English profile HAS a reranker):
+    #  1. multilingual: "n"
+    #  2. code enrichment: "n"
+    #  3. disable reranker: "n"
+    #  4. watch: "n"
+    #  5. telemetry: "n"
+    #  6. eager load: "n"
+    #  7. routing strategy: "" (default)
+    #  8. log format: "" (default)
+    #  9. "Enable AI query expansion?": "y"
+    # 10. "Which provider for HyDE?": "llama_cpp"
+    # 11. llama-server base URL for HyDE: "" (default)
+    # 12. numbered model picker for HyDE: "1"
+    # 13. "Which provider for RAG Fusion?": "llama_cpp"
+    # 14. llama-server base URL for RAG Fusion: "" (default)
+    # 15. numbered model picker for RAG Fusion: "2"
+    # 16. "Proceed?": "y"
+    stdin_responses = (
+        "\n".join(
+            ["n", "n", "n", "n", "n", "n", "", "", "y", "llama_cpp", "", "1", "llama_cpp", "", "2", "y"]
+        )
+        + "\n"
+    )
+
+    with _no_anthropic_key():
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1", "m2"]) as mock_fetch:
+            with _patched_wizard():
+                result = runner.invoke(
+                    main,
+                    ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
+                    input=stdin_responses,
+                )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    assert mock_fetch.call_count == 2
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["hyde"]["enabled"] is True
+    assert doc["hyde"]["provider"] == "llama_cpp"
+    assert doc["hyde"]["model"] == "m1"
+    assert doc["rag_fusion"]["enabled"] is True
+    assert doc["rag_fusion"]["provider"] == "llama_cpp"
+    assert doc["rag_fusion"]["model"] == "m2"
+
+
+@pytest.mark.integration
+def test_wizard_llama_cpp_model_picker_unreachable(runner: CliRunner, tmp_path: Path) -> None:
+    """Interactive wizard, llama_cpp provider chosen, unreachable llama-server → free-text
+    model entry is shown instead of the numbered picker, and never raises (S12)."""
+    config_path = tmp_path / "archon-search.toml"
+
+    # Same queue as the reachable case, except steps 12/15 are free-text model names
+    # (no numbered picker is shown when /v1/models returns []).
+    stdin_responses = (
+        "\n".join(
+            ["n", "n", "n", "n", "n", "n", "", "", "y", "llama_cpp", "", "hmodel", "llama_cpp", "", "rmodel", "y"]
+        )
+        + "\n"
+    )
+
+    with _no_anthropic_key():
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=[]):
+            with _patched_wizard():
+                result = runner.invoke(
+                    main,
+                    ["wizard", "--profile", "minimal", "--config", str(config_path), "--skip-preload"],
+                    input=stdin_responses,
+                )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["hyde"]["enabled"] is True
+    assert doc["hyde"]["provider"] == "llama_cpp"
+    assert doc["hyde"]["model"] == "hmodel"
+    assert doc["rag_fusion"]["enabled"] is True
+    assert doc["rag_fusion"]["provider"] == "llama_cpp"
+    assert doc["rag_fusion"]["model"] == "rmodel"
+
+
+@pytest.mark.integration
 def test_e2e_summary_shows_hyde_bullet(runner: CliRunner, tmp_path: Path) -> None:
     """The install summary must visibly confirm HyDE was enabled (mandatory confirmation)."""
     config_path = tmp_path / "archon-search.toml"

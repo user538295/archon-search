@@ -263,7 +263,7 @@ def _revert_query_expansion_flags(
     for section in sections:
         if section in doc and doc[section].get("enabled"):
             doc[section]["enabled"] = False
-            for key in ("provider", "model", "ollama_base_url"):
+            for key in ("provider", "model", "ollama_base_url", "llama_cpp_base_url"):
                 if key in doc[section]:
                     del doc[section][key]
             changed = True

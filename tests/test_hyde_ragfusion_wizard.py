@@ -262,6 +262,22 @@ class TestRevertQueryExpansionFlags:
         assert doc["hyde"]["enabled"] is True
         assert doc["rag_fusion"]["enabled"] is False
 
+    def test_strips_llama_cpp_base_url(self, tmp_path: Path) -> None:
+        """llama_cpp_base_url is stripped from both [hyde] and [rag_fusion] (FE-1)."""
+        cfg = self._write(
+            tmp_path,
+            '[hyde]\nenabled = true\nprovider = "llama_cpp"\nmodel = "x"\n'
+            'llama_cpp_base_url = "http://box:8080"\n'
+            '[rag_fusion]\nenabled = true\nprovider = "llama_cpp"\nmodel = "y"\n'
+            'llama_cpp_base_url = "http://box:8080"\n',
+        )
+        _revert_query_expansion_flags(cfg, dry_run=False)
+        doc = tomlkit.parse(cfg.read_text())
+        assert doc["hyde"]["enabled"] is False
+        assert "llama_cpp_base_url" not in doc["hyde"]
+        assert doc["rag_fusion"]["enabled"] is False
+        assert "llama_cpp_base_url" not in doc["rag_fusion"]
+
 
 # ---------------------------------------------------------------------------
 # _assert_features_persisted — post-write persistence assertion (Q1)

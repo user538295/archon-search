@@ -87,10 +87,13 @@ from .wizard import _CHOICE_MAP as _CHOICE_MAP
 from .wizard import _CLAUDE_MODEL_ALIASES as _CLAUDE_MODEL_ALIASES
 from .wizard import _OLLAMA_FETCH_TIMEOUT_SECONDS as _OLLAMA_FETCH_TIMEOUT_SECONDS
 from .wizard import _check_claude_cli_present as _check_claude_cli_present
+from .wizard import _fetch_llama_cpp_models as _fetch_llama_cpp_models
 from .wizard import _fetch_ollama_models as _fetch_ollama_models
 from .wizard import _pick_claude_model as _pick_claude_model
+from .wizard import _pick_llama_cpp_model as _pick_llama_cpp_model
 from .wizard import _pick_ollama_model as _pick_ollama_model
 from .wizard import _prompt_gpu_confirm as _prompt_gpu_confirm
+from .wizard import _prompt_llama_cpp_model as _prompt_llama_cpp_model
 from .wizard import _prompt_model_freetext as _prompt_model_freetext
 from .wizard import _prompt_multilingual as _prompt_multilingual
 from .wizard import _prompt_ollama_model as _prompt_ollama_model
