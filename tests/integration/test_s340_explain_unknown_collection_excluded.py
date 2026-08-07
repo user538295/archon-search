@@ -74,3 +74,23 @@ def test_explain_unknown_collection_is_excluded_not_fatal(
         assert all(r["collection"] == _VALID_COLLECTION for r in data["results"]), (
             f"unexpected collection in results: {[r['collection'] for r in data['results']]}"
         )
+
+
+def test_explain_all_unknown_collections_returns_404(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When EVERY requested collection is absent, explain must return 404 (S340)."""
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
+        headers = {"Authorization": f"Bearer {api_key}"}
+        resp = client.post(
+            "/explain",
+            json={
+                "query": "no such collection",
+                "collections": ["s340_ghost_a", "s340_ghost_b"],
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 404, (
+            f"expected 404 when every collection is absent, got "
+            f"{resp.status_code}: {resp.text}"
+        )

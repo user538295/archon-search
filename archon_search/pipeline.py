@@ -1769,8 +1769,9 @@ class SearchPipeline:
 
             vector = query_vector if query_vector is not None else await self._global_embedder.embed_one(query)
 
-            # Metadata lookup, validation, namespace + model partitioning
-            # (mirrors search_many step 2).
+            # Metadata lookup, validation, namespace + model partitioning.
+            # Deliberately DIVERGES from search_many (:2608): search_many raises on ANY
+            # missing name; explain only raises when ALL are absent (S340).
             try:
                 all_meta = await self.get_all_collections_meta(namespace)
             except Exception as exc:

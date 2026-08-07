@@ -645,6 +645,24 @@ async def test_pipeline_explain_all_collections_missing_raises_not_found() -> No
         await pipeline.explain("q", collections=["MISSING_1", "MISSING_2"])
 
 
+@pytest.mark.asyncio
+async def test_pipeline_explain_model_mismatch_and_absent_both_excluded_zero_leg() -> None:
+    """One model-mismatched + one absent collection → 200 empty result, two excluded entries (S340)."""
+    pipeline, _store = _explain_multi_pipeline(
+        meta_list=[_meta("MISMATCHED", active_embedding_model="other-model")],
+    )
+    result = await pipeline.explain("q", collections=["MISMATCHED", "ABSENT"])
+
+    assert result.top_results == []
+    reasons = {e.name: e.reason for e in result.excluded_collections}
+    assert reasons.get("MISMATCHED") == "embedding_model_mismatch", (
+        f"expected MISMATCHED→embedding_model_mismatch, got {reasons}"
+    )
+    assert reasons.get("ABSENT") == "not_found", (
+        f"expected ABSENT→not_found, got {reasons}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Task 3.5 — per-collection embedder parameter for explain()
 # ---------------------------------------------------------------------------

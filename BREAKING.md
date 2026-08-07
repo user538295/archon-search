@@ -59,10 +59,14 @@ already had an `excluded_collections` channel for non-fatal per-leg exclusions
 
 **Migration:** Clients that read a `404` as "at least one requested name was wrong" must now
 inspect `excluded_collections[].reason == "not_found"` instead. Clients that only read `results`
-now silently receive a narrower result set where they previously received a `404`. To preserve
-the old strictness, check `excluded_collections` for `reason == "not_found"` and treat it as
-an error client-side. `excluded_collections` is a pre-existing field (added in B3), so there is
-no schema change — only a new `reason` value on the `/explain` path.
+are unaffected when at least one leg survives. A request where *every* requested collection ends
+up excluded — e.g. one absent name plus one embedding-model mismatch — now returns `200` with
+`results: []` and all names in `excluded_collections`, where it previously returned `404`.
+Clients that treat empty `results` as "no matches" must inspect `excluded_collections` to
+distinguish that from "no leg ran". To preserve the old strictness on any unknown name, check
+`excluded_collections` for `reason == "not_found"` and treat it as an error client-side.
+`excluded_collections` is a pre-existing field (added in B3), so there is no schema change —
+only a new `reason` value on the `/explain` path.
 
 ### [next release] — Removed inert `[routing].max_parallel_collections` config key (2026-07-29)
 

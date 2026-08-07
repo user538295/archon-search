@@ -351,6 +351,28 @@ async def test_mcp_explain_telemetry_no_query(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_explain_partial_unknown_collection_is_excluded_not_fatal(tmp_path: Path) -> None:
+    """Partial-unknown collections list → 200 with excluded_collections, not an error (S340)."""
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = "mock-embedder"
+    config.observability.stage_timings_enabled = False
+    pipeline = await _build_real_pipeline(tmp_path, config)
+
+    app = _make_mcp_app(pipeline, config=config)
+    result = await app.tools["explain"](query="common alpha beta", collections=["docs", "s340_mcp_missing"])
+
+    assert "error" not in result, f"expected success, got: {result}"
+    excluded = result.get("excluded_collections", [])
+    missing_entry = next((e for e in excluded if e["name"] == "s340_mcp_missing"), None)
+    assert missing_entry is not None, f"s340_mcp_missing not in excluded_collections: {excluded}"
+    assert missing_entry["reason"] == "not_found", f"unexpected reason: {missing_entry}"
+    assert len(result.get("results", [])) > 0, f"expected results from the valid leg, got: {result}"
+
+    await pipeline.store.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_mcp_explain_metadata_lookup_error_returns_metadata_store_error() -> None:
     """MetadataLookupError during multi-collection explain → code=metadata_store_error."""
     from archon_search.pipeline import MetadataLookupError
