@@ -1911,6 +1911,54 @@ async def test_explain_rag_fusion_exception_sets_failure_reason() -> None:
 
 
 @pytest.mark.asyncio
+async def test_explain_rag_fusion_fts_only_guard_reports_attempted() -> None:
+    """S272 regression (explain() half): the FTS-only guard must report rag_fusion_attempted=True.
+
+    Mirrors ``test_search_rag_fusion_fts_only_guard_reports_attempted`` for the
+    ``explain()`` single-collection RAG-Fusion path: rag_fusion was requested AND
+    config-enabled AND a generator was supplied, so the branch was entered — i.e. it
+    WAS attempted — then aborted early via ``_explain_standard`` because the collection
+    has no vector index. ``generate_variants`` must never be called.
+    """
+    from archon_search.chunker import DocumentChunker
+    from archon_search.config import RAGFusionConfig
+    from archon_search.parser import DocumentParser
+    from archon_search.pipeline import SearchPipeline
+
+    mock_store = MagicMock()
+    mock_store.hybrid_search_with_trace = AsyncMock(return_value=[])
+    mock_store.hybrid_search = AsyncMock(return_value=[])
+    mock_store.has_vector_index = AsyncMock(return_value=False)
+
+    mock_generator = MagicMock()
+    mock_generator.generate_variants = AsyncMock(return_value=["v1"])
+
+    rag_config = RAGFusionConfig(enabled=True)
+
+    pipeline = SearchPipeline(
+        store=mock_store,
+        embedder=make_embedder(),
+        reranker=make_reranker(),
+        chunker=DocumentChunker(chunk_size=128),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+    result = await pipeline.explain(
+        "original query",
+        "col",
+        rag_fusion=True,
+        rag_fusion_generator=mock_generator,
+        rag_fusion_config=rag_config,
+    )
+
+    mock_generator.generate_variants.assert_not_called()
+    assert result.rag_fusion_applied is False
+    assert result.rag_fusion_attempted is True
+
+
+@pytest.mark.asyncio
 async def test_explain_rag_fusion_false_unchanged() -> None:
     """With rag_fusion=False, explain() behavior is identical to pre-C5."""
     from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
