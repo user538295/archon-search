@@ -176,7 +176,7 @@ flowchart LR
 
 ### Phase 3 · Server startup validates and probes *(startup probe result visible in `/status`; boot never blocked)*
 
-- [ ] **BE-9** — Add non-blocking llama-server probe to `archon_search/model_validation.py` (`validate_models_async`: GET `/v1/models` with short timeout when llama_cpp is configured in any section); add `llama_cpp_ok: bool | None` to `ModelValidationResult` dataclass (`:32`); add `llama_cpp_ok: bool | None` to `ModelValidationStatus` Pydantic model (`archon_search/server/schemas.py:169`); add `llama_cpp_ok` to `_build_model_validation_status()` (`archon_search/server/routes_status.py:308`); do **NOT** add `llama_cpp_ok` to the FAIL condition in `archon_search/server/routes_ready.py` — the probe is warn-not-block and must not feed the ready-gate (S25) #backend-role
+- [x] **BE-9** — Add non-blocking llama-server probe to `archon_search/model_validation.py` (`validate_models_async`: GET `/v1/models` with short timeout when llama_cpp is configured in any section); add `llama_cpp_ok: bool | None` to `ModelValidationResult` dataclass (`:32`); add `llama_cpp_ok: bool | None` to `ModelValidationStatus` Pydantic model (`archon_search/server/schemas.py:169`); add `llama_cpp_ok` to `_build_model_validation_status()` (`archon_search/server/routes_status.py:308`); do **NOT** add `llama_cpp_ok` to the FAIL condition in `archon_search/server/routes_ready.py` — the probe is warn-not-block and must not feed the ready-gate (S25) #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-1 · completes S7, S17, S25
     - Tests

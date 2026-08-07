@@ -930,6 +930,25 @@ def test_status_model_validation_failure_with_empty_warnings(tmp_db: Path) -> No
     assert datetime.fromisoformat(mv["validated_at"]) == validated_at
 
 
+def test_status_shows_llama_cpp_ok(tmp_db: Path) -> None:
+    """GET /status mirrors llama_cpp_ok from the (patched) background probe result (S17)."""
+    from archon_search.model_validation import ModelValidationResult
+
+    result = ModelValidationResult(
+        embedder_ok=True,
+        reranker_ok=True,
+        llama_cpp_ok=True,
+        provider_warnings=[],
+        validated_at=datetime.now(UTC),
+    )
+    c = _make_client_with_model_validation(tmp_db, result)
+    response = c.get("/status")
+    assert response.status_code == 200
+    mv = response.json()["model_validation"]
+    assert mv is not None
+    assert mv["llama_cpp_ok"] is True
+
+
 # ---------------------------------------------------------------------------
 # D9 BE-8 — McpStatusDetail in GET /status (C3)
 # ---------------------------------------------------------------------------

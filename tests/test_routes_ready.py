@@ -184,6 +184,20 @@ def test_ready_models_pending_when_probe_flag_unset(client_ping_true: TestClient
     assert response.json()["checks"]["models"] == "pending"
 
 
+def test_ready_not_degraded_by_probe_fail(client_ping_true: TestClient) -> None:
+    """llama_cpp_ok=False must NOT feed the checks.models FAIL condition (S25) —
+    /ready stays 200 and "ok" as long as the embedder/reranker probes pass."""
+    _set_validation(
+        client_ping_true,
+        embedder_ok=True,
+        reranker_ok=True,
+        llama_cpp_ok=False,
+    )
+    response = client_ping_true.get("/ready")
+    assert response.status_code == 200
+    assert response.json()["checks"]["models"] == "ok"
+
+
 def test_ready_always_200_regardless_of_model_status(client_ping_true: TestClient) -> None:
     _set_validation(client_ping_true, embedder_ok=False, reranker_ok=False)
     response = client_ping_true.get("/ready")

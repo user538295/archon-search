@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from fastembed import TextEmbedding
 
 from archon_search.embedder import make_embedder
@@ -23,6 +24,11 @@ if TYPE_CHECKING:
     from archon_search.config import SearchConfig
 
 logger = logging.getLogger(__name__)
+
+# Short, fixed timeout for the llama-server reachability probe (S7/S17) — bounded
+# independently of the caller's overall `timeout_seconds` budget for the
+# embedder/reranker probe, since this is an unrelated side check.
+_LLAMA_CPP_PROBE_TIMEOUT_SECONDS: float = 3.0
 
 
 class ModelValidationError(ValueError):
@@ -36,12 +42,60 @@ class ModelValidationResult:
     A null (``None``) boolean field means the corresponding probe has not run /
     completed. ``validated_at`` is ``None`` while validation is pending and a UTC
     timestamp once it has finished. See ``D6-model-validation-status.tsp`` (C1).
+
+    ``llama_cpp_ok`` (S7, S17, S25): ``None`` while the llama-server reachability
+    probe has not run, or when ``llama_cpp`` is not configured as the provider in
+    any of ``[hyde]``/``[rag_fusion]``/``[graph]`` (no probe is attempted); ``True``
+    when the probe reached ``GET /v1/models``; ``False`` otherwise. This probe is
+    warn-not-block: it must never feed the ``/ready`` FAIL gate (S25).
     """
 
     embedder_ok: bool | None = None
     reranker_ok: bool | None = None
+    llama_cpp_ok: bool | None = None
     provider_warnings: list[str] = field(default_factory=list)
     validated_at: datetime | None = None
+
+
+def _llama_cpp_probe_url(config: SearchConfig) -> str | None:
+    """Return the llama-server base URL to probe, or ``None`` if ``llama_cpp`` is not
+    configured as the provider in any of ``[hyde]``/``[rag_fusion]``/``[graph]``.
+
+    Checked in a fixed section order — the wizard writes the same base URL to every
+    section it configures for a given local llama-server, so the first configured
+    match is representative.
+    """
+    if config.hyde.provider == "llama_cpp":
+        return config.hyde.llama_cpp_base_url
+    if config.rag_fusion.provider == "llama_cpp":
+        return config.rag_fusion.llama_cpp_base_url
+    if config.graph.provider == "llama_cpp":
+        return config.graph.llama_cpp_base_url
+    return None
+
+
+async def _probe_llama_cpp(config: SearchConfig) -> bool | None:
+    """Non-blocking llama-server reachability probe (S7, S17).
+
+    Returns ``None`` when ``llama_cpp`` is not configured anywhere (no probe
+    attempted). Otherwise issues ``GET {base_url}/v1/models`` under a short, fixed
+    timeout and returns ``True`` on any 2xx response, ``False`` on any failure
+    (connection error, timeout, non-2xx status). Never raises — a WARNING is
+    logged on failure so boot can continue uninterrupted (S7).
+    """
+    base_url = _llama_cpp_probe_url(config)
+    if base_url is None:
+        return None
+    try:
+        async with httpx.AsyncClient(
+            base_url=base_url, timeout=_LLAMA_CPP_PROBE_TIMEOUT_SECONDS
+        ) as client:
+            response = await client.get("/v1/models")
+            response.raise_for_status()
+        return True
+    except Exception as exc:  # never raises — any failure reads as unreachable
+        logger.warning("llama-server unreachable at %s: %s", base_url, exc)
+        return False
 
 
 def _available_providers() -> list[str]:
@@ -145,7 +199,13 @@ async def validate_models_async(
     When *embedder_is_warm* is ``True`` the embedder probe is skipped (the caller
     has confirmed the global embedder is already exercised). Note: this is NOT the
     same as ``eager_load_embedders`` — see the brief's S9.
+
+    Also runs the llama-server reachability probe (S7, S17) — see
+    :func:`_probe_llama_cpp`. This is an independent, short-timeout side check;
+    its outcome (``llama_cpp_ok``) is attached to every returned result, including
+    the timeout/failure early-return paths below.
     """
+    llama_cpp_ok = await _probe_llama_cpp(config)
     embedding_model = "" if embedder_is_warm else config.embedding_model
     _start = time.monotonic()
     try:
@@ -162,6 +222,7 @@ async def validate_models_async(
         return ModelValidationResult(
             embedder_ok=False,
             reranker_ok=False,
+            llama_cpp_ok=llama_cpp_ok,
             provider_warnings=[f"validation timed out after {timeout_seconds}s"],
             validated_at=datetime.now(UTC),
         )
@@ -170,6 +231,7 @@ async def validate_models_async(
         return ModelValidationResult(
             embedder_ok=False,
             reranker_ok=False,
+            llama_cpp_ok=llama_cpp_ok,
             provider_warnings=[f"validation failed unexpectedly: {exc}"],
             validated_at=datetime.now(UTC),
         )
@@ -202,6 +264,7 @@ async def validate_models_async(
                 return ModelValidationResult(
                     embedder_ok=embedder_ok,
                     reranker_ok=False,
+                    llama_cpp_ok=llama_cpp_ok,
                     provider_warnings=warnings + [f"reranker split-provider validation failed unexpectedly: {exc}"],
                     validated_at=datetime.now(UTC),
                 )
@@ -209,6 +272,7 @@ async def validate_models_async(
     result = ModelValidationResult(
         embedder_ok=embedder_ok,
         reranker_ok=reranker_ok,
+        llama_cpp_ok=llama_cpp_ok,
         provider_warnings=warnings,
         validated_at=datetime.now(UTC),
     )

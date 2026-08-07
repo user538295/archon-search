@@ -172,10 +172,16 @@ class ModelValidationStatus(BaseModel):
     A null (``None``) boolean field means the corresponding probe has not run /
     completed. ``validated_at`` is ``None`` while validation is pending and a UTC
     timestamp once it has finished. See ``D6-model-validation-status.tsp`` (C1).
+
+    ``llama_cpp_ok`` (S7, S17): ``None`` while pending or when ``llama_cpp`` is not
+    configured as the provider in any of ``[hyde]``/``[rag_fusion]``/``[graph]``;
+    ``True``/``False`` reflects llama-server reachability. Warn-not-block — never
+    feeds the ``/ready`` FAIL gate (S25).
     """
 
     embedder_ok: bool | None = None
     reranker_ok: bool | None = None
+    llama_cpp_ok: bool | None = None
     provider_warnings: list[str] = Field(default_factory=list)
     validated_at: datetime | None = None
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from archon_search.config import SearchConfig
@@ -632,3 +633,83 @@ async def test_split_second_probe_timeout_sets_reranker_ok_false() -> None:
 
     assert result.reranker_ok is False
     assert any("timed out" in w for w in result.provider_warnings)
+
+
+# ---------------------------------------------------------------------------
+# BE-9: non-blocking llama-server reachability probe (S7, S17, S25)
+# ---------------------------------------------------------------------------
+
+
+def _llama_cpp_cfg(**kw) -> SearchConfig:
+    """SearchConfig with [hyde].provider="llama_cpp" — triggers the probe."""
+    cfg = SearchConfig(
+        embedding_model=kw.get("embedding_model", "emb-model"),
+        reranker_model=kw.get("reranker_model", "rer-model"),
+        providers=kw.get("providers", ["CPUExecutionProvider"]),
+    )
+    cfg.hyde.provider = "llama_cpp"
+    cfg.hyde.llama_cpp_base_url = kw.get("llama_cpp_base_url", "http://localhost:8080")
+    return cfg
+
+
+def _make_async_client_cls(response: MagicMock | None = None, get_side_effect=None) -> MagicMock:
+    """Mock class standing in for ``httpx.AsyncClient`` (grounding note: patch
+    ``httpx.AsyncClient`` directly, not ``httpx.MockTransport``)."""
+    mock_client = AsyncMock()
+    if get_side_effect is not None:
+        mock_client.get = AsyncMock(side_effect=get_side_effect)
+    else:
+        mock_client.get = AsyncMock(return_value=response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=mock_client)
+
+
+def _ok_response() -> MagicMock:
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    return response
+
+
+@pytest.mark.asyncio
+async def test_probe_sets_llama_cpp_ok_true():
+    """Reachable llama-server (GET /v1/models succeeds) → llama_cpp_ok=True."""
+    mock_cls = _make_async_client_cls(response=_ok_response())
+    with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
+         patch("archon_search.model_validation.validate_providers_shared", return_value=(True, True, [])):
+        result = await validate_models_async(_llama_cpp_cfg(), timeout_seconds=5)
+    assert result.llama_cpp_ok is True
+
+
+@pytest.mark.asyncio
+async def test_probe_sets_llama_cpp_ok_false():
+    """Unreachable llama-server (httpx.ConnectError) → llama_cpp_ok=False."""
+    mock_cls = _make_async_client_cls(get_side_effect=httpx.ConnectError("refused"))
+    with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
+         patch("archon_search.model_validation.validate_providers_shared", return_value=(True, True, [])):
+        result = await validate_models_async(_llama_cpp_cfg(), timeout_seconds=5)
+    assert result.llama_cpp_ok is False
+
+
+@pytest.mark.asyncio
+async def test_probe_pending_is_none():
+    """llama_cpp not configured as provider anywhere → llama_cpp_ok stays None."""
+    with patch("archon_search.model_validation.validate_providers_shared", return_value=(True, True, [])):
+        result = await validate_models_async(_cfg(), timeout_seconds=5)
+    assert result.llama_cpp_ok is None
+
+
+@pytest.mark.asyncio
+async def test_probe_failure_does_not_block_boot(caplog: pytest.LogCaptureFixture):
+    """Probe ConnectError never raises — validate_models_async returns normally and logs a WARNING."""
+    import logging
+
+    mock_cls = _make_async_client_cls(get_side_effect=httpx.ConnectError("refused"))
+    with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
+         patch("archon_search.model_validation.validate_providers_shared", return_value=(True, True, [])), \
+         caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+        result = await validate_models_async(_llama_cpp_cfg(), timeout_seconds=5)
+
+    assert isinstance(result, ModelValidationResult)
+    assert result.llama_cpp_ok is False
+    assert "llama-server unreachable" in caplog.text

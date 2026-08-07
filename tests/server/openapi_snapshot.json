@@ -2771,7 +2771,7 @@
         "type": "object"
       },
       "ModelValidationStatus": {
-        "description": "API-facing mirror of ModelValidationResult, nested under GET /status (D6 C1).\n\nA null (``None``) boolean field means the corresponding probe has not run /\ncompleted. ``validated_at`` is ``None`` while validation is pending and a UTC\ntimestamp once it has finished. See ``D6-model-validation-status.tsp`` (C1).",
+        "description": "API-facing mirror of ModelValidationResult, nested under GET /status (D6 C1).\n\nA null (``None``) boolean field means the corresponding probe has not run /\ncompleted. ``validated_at`` is ``None`` while validation is pending and a UTC\ntimestamp once it has finished. See ``D6-model-validation-status.tsp`` (C1).\n\n``llama_cpp_ok`` (S7, S17): ``None`` while pending or when ``llama_cpp`` is not\nconfigured as the provider in any of ``[hyde]``/``[rag_fusion]``/``[graph]``;\n``True``/``False`` reflects llama-server reachability. Warn-not-block \u2014 never\nfeeds the ``/ready`` FAIL gate (S25).",
         "properties": {
           "embedder_ok": {
             "anyOf": [
@@ -2783,6 +2783,17 @@
               }
             ],
             "title": "Embedder Ok"
+          },
+          "llama_cpp_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llama Cpp Ok"
           },
           "provider_warnings": {
             "items": {

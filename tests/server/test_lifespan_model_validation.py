@@ -4,8 +4,9 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -80,6 +81,44 @@ def test_background_task_exception_sets_failure_result(tmp_path: Path) -> None:
                 "failed unexpectedly" in w
                 for w in app.state.model_validation.provider_warnings
             )
+
+
+@pytest.mark.integration
+def test_startup_warning_logged_llama_cpp_unreachable(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """BE-9 (S7): unreachable llama-server at startup logs a WARNING and boot completes.
+
+    The real (un-patched) ``validate_models_async`` runs as the lifespan background
+    task; only ``httpx.AsyncClient`` (the llama-server probe transport) is patched
+    to simulate an unreachable server, per the grounding note's mocking convention.
+    """
+    import logging
+
+    cfg = _make_config(tmp_path)
+    cfg.hyde.provider = "llama_cpp"
+    cfg.hyde.llama_cpp_base_url = "http://localhost:8080"
+    job_store = _make_job_store(tmp_path)
+    app = create_app(cfg, job_store)
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_cls = MagicMock(return_value=mock_client)
+
+    with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
+         caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+        with TestClient(app) as client:
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and app.state.model_validation is None:
+                time.sleep(0.05)
+            # Boot completed normally — /ready is reachable despite the probe failure.
+            assert client.get("/ready").status_code == 200
+
+    assert app.state.model_validation is not None
+    assert app.state.model_validation.llama_cpp_ok is False
+    assert "llama-server unreachable" in caplog.text
 
 
 @pytest.mark.integration

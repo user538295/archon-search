@@ -258,12 +258,14 @@ def test_model_validation_status_all_null() -> None:
     status = ModelValidationStatus()
     assert status.embedder_ok is None
     assert status.reranker_ok is None
+    assert status.llama_cpp_ok is None
     assert status.provider_warnings == []
     assert status.validated_at is None
     dumped = status.model_dump()
     assert dumped == {
         "embedder_ok": None,
         "reranker_ok": None,
+        "llama_cpp_ok": None,
         "provider_warnings": [],
         "validated_at": None,
     }
