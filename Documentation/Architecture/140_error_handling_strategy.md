@@ -1,8 +1,8 @@
 **Purpose**: Define how `archon-search` surfaces, classifies, and records errors across config load, the REST surface, jobs, and telemetry.
 **Audience**: Maintainers writing new endpoints, handlers, or jobs.
 **Status**: Draft
-**Last reviewed**: 2026-05-24
-**Next review**: 2026-08-20
+**Last reviewed**: 2026-08-07
+**Next review**: 2026-11-07
 
 # Error Handling Strategy
 
@@ -80,12 +80,14 @@ Verified from `archon_search/server/routes_*.py`:
 | Unmapped exception in `/route` handler body | (re-raised, surfaces per FastAPI default; typically `500`) | `routes_route.py:152-166` | `other` (with `status="internal_error"`) |
 | Telemetry parameter validation | `400` | `routes_telemetry.py:36, 61` | n/a (telemetry endpoint itself) |
 | `/explain` body validation (empty query / `top_k` out of range / extra fields) | `422` | FastAPI default (`ExplainRequest`, `extra="forbid"`) | none (fires before handler body) |
-| `/explain` pinned collection not found | `404` "collection not found" | `routes_explain.py:268` | n/a (not logged) |
-| `/explain` collectionless with no collections available | `404` "no collections available" | `routes_explain.py:278` | n/a (not logged) |
-| `/explain` meta-lookup failure | `503` `{"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"}` | `routes_explain.py:535-539, 601-602, 615-616` (catches `MetadataLookupError`) | `other` (with `status="internal_error"`) |
-| `/explain` collectionless router failure | `503` `{"detail": "service unavailable: routing could not be completed", "code": "service_unavailable"}` | `routes_explain.py:637-638` (catches routing `Exception`) | `other` (with `status="internal_error"`) |
-| `/explain` pipeline-stage failure (store / reranker) | `500` "`<stage>` error: `<ExceptionType>`" | `routes_explain.py:317-325` (`ExplainStageError`) | `other` (with `status="internal_error"`) |
-| `/explain` other handler failure | `500` "explain failed" | `routes_explain.py:326-329` | `other` (with `status="internal_error"`) |
+| `/explain` pinned collection not found | `404` "collection not found" | `routes_explain.py:615` | n/a (not logged) |
+| `/explain` multi-collection fan-out where **every** requested collection is absent from the namespace (**S340**) | `404` "collection not found" | `routes_explain.py:543-544` (catches `CollectionNotFoundError`, raised by `pipeline.explain` only when `len(missing) == len(collections)`) | n/a (not logged) |
+| `/explain` multi-collection fan-out where **some** requested collections are absent (**S340**) | `200` — not an error; absent names are reported in `excluded_collections` with `reason="not_found"` and the surviving legs still run. Diverges from `/search`, where `search_many` raises `CollectionNotFoundError` on *any* missing name. | `pipeline.py` `explain()` | normal success telemetry |
+| `/explain` collectionless with no collections available | `404` "no collections available" | `routes_explain.py:629` | n/a (not logged) |
+| `/explain` meta-lookup failure | `503` `{"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"}` | `routes_explain.py:545-550` (multi-collection, catches `MetadataLookupError`), `607-613` (pinned-collection meta lookup), `621-627` (collectionless meta lookup) | `other` (with `status="internal_error"`) |
+| `/explain` collectionless router failure | `503` `{"detail": "service unavailable: routing could not be completed", "code": "service_unavailable"}` | `routes_explain.py:643-649` (catches routing `Exception`) | `other` (with `status="internal_error"`) |
+| `/explain` pipeline-stage failure (store / reranker) | `500` "`<stage>` error: `<ExceptionType>`" | `routes_explain.py:554-559` (multi-collection), `691-699` (single-collection) — both catch `ExplainStageError` | `other` (with `status="internal_error"`) |
+| `/explain` other handler failure | `500` "explain failed" | `routes_explain.py:560-563` (multi-collection), `700-703` (single-collection) | `other` (with `status="internal_error"`) |
 
 Successful job submissions (POST collection-add, POST reindex, POST ingest) return `202 Accepted` with a `JobResponse`; the job's eventual outcome is observed via `GET /jobs/{job_id}`.
 

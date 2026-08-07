@@ -623,13 +623,26 @@ async def test_pipeline_explain_neither_collection_nor_collections_raises() -> N
 
 
 @pytest.mark.asyncio
-async def test_pipeline_explain_missing_collection_raises_not_found() -> None:
-    """A requested collection absent from metadata raises CollectionNotFoundError."""
+async def test_pipeline_explain_missing_collection_is_excluded_not_fatal() -> None:
+    """An absent collection is reported in excluded_collections, not raised (S340)."""
+    leg_map = {"A": [_scored("A", "a" * 64, f"{'a' * 64}-000000")]}
+    pipeline, _store = _explain_multi_pipeline(leg_map=leg_map, meta_list=[_meta("A")])
+
+    result = await pipeline.explain("q", collections=["A", "MISSING"])
+
+    assert [e.name for e in result.excluded_collections] == ["MISSING"]
+    assert result.excluded_collections[0].reason == "not_found"
+    assert [c.doc_id for c in result.top_results] == ["a" * 64]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_explain_all_collections_missing_raises_not_found() -> None:
+    """With no valid leg left, explain still raises CollectionNotFoundError."""
     from archon_search.pipeline import CollectionNotFoundError
 
     pipeline, _store = _explain_multi_pipeline(meta_list=[_meta("A")])
     with pytest.raises(CollectionNotFoundError):
-        await pipeline.explain("q", collections=["A", "MISSING"])
+        await pipeline.explain("q", collections=["MISSING_1", "MISSING_2"])
 
 
 # ---------------------------------------------------------------------------

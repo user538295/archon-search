@@ -1728,7 +1728,10 @@ class SearchPipeline:
         fan-out: legs are merged, ACL-filtered, and reranked as a single pool, with
         per-collection provenance preserved on each candidate.  The route layer resolves
         routing before calling this method, so exactly one of ``collection`` /
-        ``collections`` must be supplied.
+        ``collections`` must be supplied.  Requested names absent from the namespace are
+        reported in ``excluded_collections`` with ``reason="not_found"`` and never fail the
+        request; ``CollectionNotFoundError`` is raised only when *every* requested name is
+        absent, leaving no leg to fan out over.
 
         When ``rag_fusion=True`` and a generator is supplied, the single-collection path
         decomposes the query into variants, searches in parallel, and fuses results via
@@ -1771,13 +1774,18 @@ class SearchPipeline:
 
             meta_by_name = {m.name: m for m in all_meta}
             missing = [name for name in collections if name not in meta_by_name]
-            if missing:
+            if missing and len(missing) == len(collections):
+                # Nothing left to fan out over — surface the 404 instead of an empty 200.
                 raise CollectionNotFoundError(missing)
 
             excluded: list[ExcludedCollection] = []
             collections_in_scope: list[str] = []
             for name in collections:
-                if meta_by_name[name].active_embedding_model != self._global_embedder.model_name:
+                meta = meta_by_name.get(name)
+                if meta is None:
+                    # A single unknown name must not discard the valid legs (S340).
+                    excluded.append(ExcludedCollection(name=name, reason="not_found"))
+                elif meta.active_embedding_model != self._global_embedder.model_name:
                     excluded.append(ExcludedCollection(name=name, reason="embedding_model_mismatch"))
                 else:
                     collections_in_scope.append(name)

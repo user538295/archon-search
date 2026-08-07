@@ -18,13 +18,32 @@ from archon_search.server.app import create_app
 SNAPSHOT_PATH = Path(__file__).parent / "openapi_snapshot.json"
 UPDATE_FLAG = "--update-openapi-snapshot"
 
+# CPython 3.13 renamed the 422 reason phrase from "Unprocessable Entity" to
+# "Unprocessable Content", and FastAPI derives auto-generated response descriptions
+# from ``http.HTTPStatus``. The phrase is prose, not contract (the status code and the
+# error schema are), so both spellings are folded onto one value — otherwise the
+# snapshot could only ever match the interpreter it was generated on (CI pins 3.12,
+# while ``requires-python`` allows 3.13+).
+_CANONICAL_422_DESCRIPTION = "Unprocessable Entity"
+_422_DESCRIPTION_ALIASES = frozenset({"Unprocessable Entity", "Unprocessable Content"})
+
 
 def _strip_dynamic_fields(spec: dict) -> dict:  # type: ignore[type-arg]
-    """Remove fields that change per build (e.g., dynamic CalVer version) so the
-    snapshot stays stable across releases."""
+    """Remove or canonicalise fields that change per build (dynamic CalVer version) or
+    per interpreter (the HTTP 422 reason phrase) so the snapshot stays stable."""
     info = spec.get("info")
     if isinstance(info, dict):
         info.pop("version", None)
+    for path_item in (spec.get("paths") or {}).values():
+        # A path item also holds non-operation keys ("parameters", "summary"), hence the
+        # isinstance guards rather than a bare .get() chain.
+        for operation in path_item.values():
+            if not isinstance(operation, dict):
+                continue
+            responses = operation.get("responses")
+            response_422 = responses.get("422") if isinstance(responses, dict) else None
+            if isinstance(response_422, dict) and response_422.get("description") in _422_DESCRIPTION_ALIASES:
+                response_422["description"] = _CANONICAL_422_DESCRIPTION
     return spec
 
 

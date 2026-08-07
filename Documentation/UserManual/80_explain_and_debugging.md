@@ -1,7 +1,7 @@
 **Purpose**: Debug and tune retrieval with `POST /explain` — see why a result did or didn't rank where it did.
 **Audience**: End users / operators / integrators tuning routing, reranking, or hybrid scoring.
 **Status**: Stable
-**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-08-07 / **Next review**: 2027-08-07
 
 # Explain and debugging
 
@@ -85,7 +85,8 @@ The response (`ExplainResponse`) has two result lists plus context:
 - `near_misses` — up to 20 candidates that fell just outside the top slice. **No `text` field** (structural — `ExplainNearMiss` omits it) and **no `acl_gate`** (only top-level `results` carry it).
 - `routing` — the routing decision, or `null` when a collection was pinned.
 - `acl_filtered` — `true` if any candidate was dropped by ACL (near-miss counts are computed *after* ACL filtering).
-- `rerank`, `embedding_model`, `hyde_applied`, `rag_fusion_applied`, `graph_mode_applied`, `stage_timings_ms`, `excluded_collections`, `ppr_entities_matched`.
+- `excluded_collections` — `[{name, reason}]`, populated only on a multi-collection fan-out. `reason` is `embedding_model_mismatch` (the collection's stored embedding model differs from the live embedder) or `not_found` (the name does not exist in your namespace). A single unknown name never fails the request: the valid legs still run and the unknown one is reported here. You only get a `404` when **every** requested name is unknown. (This differs from `/search`, where any unknown name is a `404`.)
+- `rerank`, `embedding_model`, `hyde_applied`, `rag_fusion_applied`, `graph_mode_applied`, `stage_timings_ms`, `ppr_entities_matched`.
 
 ### The per-stage breakdown
 
@@ -165,7 +166,7 @@ If a document you expect is missing and `acl_filtered` is `true`, the ACL gate t
 
 - **Same pool as `/search`.** `/explain` uses the identical retrieval config, so its top-`top_k` slice matches `/search` when `rerank=true` and `top_k == [database] top_k_return`. Near-misses are drawn from the leftover pool — they do not widen retrieval.
 - **The query is never logged or echoed.** Telemetry records latency/collection/count only; error responses are sanitized to stage + exception type so an FTS error can't leak the query.
-- **Status codes:** `422` for invalid combinations (e.g. `graph_mode` without `[graph] enabled`, `scope_filter` + `graph_mode`, fanout over `max_fanout`); `400` for a malformed `scope_filter`; `503` for meta-lookup/router failures; `500` for pipeline-stage failures; `504` on fanout timeout.
+- **Status codes:** `422` for invalid combinations (e.g. `graph_mode` without `[graph] enabled`, `scope_filter` + `graph_mode`, fanout over `max_fanout`); `400` for a malformed `scope_filter`; `404` when a pinned `collection` is unknown, when **every** entry in `collections` is unknown, or when the namespace holds no collections at all; `503` for meta-lookup/router failures; `500` for pipeline-stage failures; `504` on fanout timeout.
 - For the exhaustive field list, read `GET /openapi.json` (authoritative) rather than relying on this page.
 
 ## Related documents

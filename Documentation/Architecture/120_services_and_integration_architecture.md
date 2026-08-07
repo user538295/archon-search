@@ -1,8 +1,8 @@
 **Purpose**: Document how clients integrate with `archon-search` synchronously (REST, MCP) and how internal asynchronous flows (watcher, jobs) hang together.
 **Audience**: Engineers integrating clients; engineers debugging long-running ingest/reindex flows.
 **Status**: Draft
-**Last reviewed**: 2026-06-24 (review-corrected)
-**Next review**: 2026-09-24
+**Last reviewed**: 2026-08-07
+**Next review**: 2026-11-07
 
 # Services and Integration Architecture
 
@@ -43,7 +43,7 @@ Error envelopes use `schemas.ErrorDetail`. 401 returns `WWW-Authenticate: Bearer
 The fan-out path (`pipeline.search_many`, implemented via the shared `_fanout_merge_acl` helper) is:
 
 1. **Embed once.** A single `embed_one(query)` produces one query vector reused by every leg — N collections cost one embedding, not N.
-2. **Metadata lookup + partition.** Load all namespace-scoped collection metas. Requested names missing from the namespace raise `CollectionNotFoundError` (→ HTTP 404 — no cross-namespace existence leak). Collections whose stored `embedding_model` differs from the live embedder are dropped and reported in `excluded_collections` (reason `embedding_model_mismatch`). If *every* requested collection is excluded, the result is an empty list with a populated `excluded_collections` (a valid HTTP 200, not an error).
+2. **Metadata lookup + partition.** Load all namespace-scoped collection metas. In `search_many`, requested names missing from the namespace raise `CollectionNotFoundError` (→ HTTP 404 — no cross-namespace existence leak). Collections whose stored `embedding_model` differs from the live embedder are dropped and reported in `excluded_collections` (reason `embedding_model_mismatch`). If *every* requested collection is excluded, the result is an empty list with a populated `excluded_collections` (a valid HTTP 200, not an error). **S340**: `pipeline.explain`'s fan-out diverges here — a missing name is reported in `excluded_collections` with `reason="not_found"` and the surviving legs still run; `CollectionNotFoundError` is raised only when *every* requested name is missing (no leg left to fan out over). The no-existence-leak property is preserved either way: a caller can only probe names inside its own namespace.
 3. **Parallel legs.** Each in-scope collection runs `store.hybrid_search_with_trace` (candidate depth `max(top_k_retrieve * 3, 20)`) as a task inside an `asyncio.TaskGroup`, the whole group wrapped in an `asyncio.timeout(fanout_timeout_seconds)`.
 4. **Per-leg RRF trim.** Each leg's candidates are sorted by `(-rrf_score, chunk_id)` and trimmed to `fanout_leg_trim`. This trim is a hard recall ceiling — the reranker cannot recover candidates dropped here.
 5. **Deterministic merge.** Trimmed legs are concatenated in **ascending collection-name order**, so the merged pool is reproducible.
@@ -56,6 +56,7 @@ Failure mapping (verified against `routes_search.py` / `routes_explain.py`):
 - Any single leg raising → siblings are cancelled by the `TaskGroup`; the first leg exception is re-raised as a plain exception so the route's existing **500** mapping fires.
 - Metadata-lookup failure (`MetadataLookupError`) → **503** `{"detail": "service unavailable"}`.
 - Model-mismatched collections are **not** an error — they are excluded and reported in `excluded_collections`.
+- Unknown collection names (`CollectionNotFoundError`) → **404** `{"detail": "collection not found"}` on `/search` for *any* missing name; on `/explain` only when *every* requested name is missing (**S340**), otherwise a `200` with `reason="not_found"` entries in `excluded_collections`.
 
 Telemetry for the fan-out path uses `TelemetryEntry.from_search_multi_result` (`EndpointKind.search_multi`): it records `collections`, `fanout_count` (legs actually searched after exclusions), `result_count`, and `excluded_count` — never the query text (the no-raw-query invariant holds).
 

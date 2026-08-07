@@ -8,6 +8,26 @@
 
 ## Changelog
 
+### [next release] — `POST /explain` no longer 404s on a partially-unknown `collections` list (2026-08-07)
+
+**What changed:** A multi-collection `POST /explain` (and the MCP `explain` tool) where *some*
+requested collections exist and others do not now returns `200`, with the unknown names reported in
+`excluded_collections` (`reason: "not_found"`) and the surviving legs fully explained. Previously a
+single unknown name failed the whole request with `404 {"detail": "collection not found"}`. `404`
+is now returned only when **every** requested name is absent from the caller's namespace (no leg
+left to fan out over). Pinned single-`collection` requests are unchanged (still `404`), and
+`POST /search` / MCP `search` are unchanged (still `404` on *any* unknown name).
+
+**Why:** `/explain` is a debugging tool — a typo in one of eight collection names discarded the
+trace for the seven valid ones, which is precisely when the trace is most needed. The fan-out
+already had an `excluded_collections` channel for non-fatal per-leg exclusions
+(`embedding_model_mismatch`); absent collections now use the same channel.
+
+**Migration:** Clients that read a `404` as "at least one requested name was wrong" must now
+inspect `excluded_collections[].reason == "not_found"` instead. Clients that only read `results`
+are unaffected. `excluded_collections` is a pre-existing field (added in B3), so there is no
+schema change — only a new `reason` value on the `/explain` path.
+
 ### [next release] — Removed inert `[routing].max_parallel_collections` config key (2026-07-29)
 
 **What changed:** The `[routing].max_parallel_collections` key is removed from `SearchConfig`, the

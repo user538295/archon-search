@@ -1,7 +1,7 @@
 **Purpose**: Authoritative human-readable reference for every public surface (REST, MCP, CLI) exposed by `archon-search`.
 **Audience**: Medior engineers integrating with or operating `archon-search`.
 **Status**: Draft
-**Last reviewed**: 2026-06-24 / **Next review**: 2026-09-24
+**Last reviewed**: 2026-08-07 / **Next review**: 2026-11-07
 
 # API Reference and Public Interface
 
@@ -416,7 +416,7 @@ All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce 
 - **E1c / E2h**: `graph_mode_applied: "naive" | "local" | "global" | "ppr" | null` — set to the mode the pipeline attempted when `graph_mode` was requested (even when no graph candidates were found). `null` when `graph_mode` was not set. **E2h**: `ppr_entities_matched: int | null` — non-null only when `graph_mode="ppr"`; count of seed entities with ≥1 mention row (0 = no match, fell back to hybrid).
 - **E1c**: `results[].graph_provenance` — `GraphProvenanceResponse | null`. Non-null only for candidates that were retrieved via graph traversal. Standard hybrid-search candidates (blended alongside graph candidates) carry `null`. Near-misses never include `graph_provenance` (structurally absent from `ExplainNearMiss`).
 - **E1c** `GraphProvenanceResponse` schema: `{steps: [TraversalStepResponse…]}`. `TraversalStepResponse` fields: `entity: str` (required), `entity_id: str` (required), `relationship: str | null`, `community_id: str | null`, `chunk_id: str | null`. Model validator enforces that at least one of `relationship`, `community_id`, or `chunk_id` is non-null — an all-null step is rejected at the wire boundary.
-- Both `ExplainResult` and `ExplainNearMiss` carry a `collection` field (B3) naming the origin collection (`""` on the single-collection path). The top-level response also carries `excluded_collections` (`[{name, reason}]`), empty except on a multi-collection fan-out. On the multi-collection path `routing` is `null` and the top-level `collection` is `""` (routing is bypassed; provenance is per-result instead).
+- Both `ExplainResult` and `ExplainNearMiss` carry a `collection` field (B3) naming the origin collection (`""` on the single-collection path). The top-level response also carries `excluded_collections` (`[{name, reason}]`), empty except on a multi-collection fan-out. **S340**: reasons are `embedding_model_mismatch` and `not_found` — a requested collection absent from the namespace is excluded rather than failing the request; only an all-absent list is a `404`. On the multi-collection path `routing` is `null` and the top-level `collection` is `""` (routing is bypassed; provenance is per-result instead).
 - `score` is `reranker_score` when `rerank=true`, otherwise `rrf_score`. `breakdown.reranker_score` is `null` when `rerank=false`.
 - `vector_score_kind` is `"distance"` (LanceDB cosine distance — lower is closer). `fts_score_kind` is `"bm25"` when the score is available; `null` when LanceDB omits `_score` from the row.
 - Metadata fields (`file_type`, `indexed_at`, `updated_at`, `ingested_by`, `language`, `metadata`, `acl`) are a **superset of `/search`** — they appear on both `results[]` and `near_misses[]`.
@@ -433,7 +433,7 @@ All schemas in `routes_explain.py` use `extra="forbid"`; unknown fields produce 
 | `graph_mode` non-null and `[graph] enabled = false` | `422` | `{"detail": "graph_mode requires [graph] enabled=true in server config"}` (plain string, no `code` field) |
 | `graph_mode` non-null and `collections` (multi-collection) supplied | `422` | `{"detail": "graph_mode is not supported with multi-collection fanout; use a single collection"}` (plain string, no `code` field) |
 | `graph_mode="local"` or `"global"` and communities not yet built for the collection | `422` | `{"detail": {"code": "graph_communities_not_built", "message": "..."}}` |
-| Pinned `collection` not found, or any requested `collections` entry not in namespace | `404` | `{"detail": "collection not found"}` |
+| Pinned `collection` not found, or **every** requested `collections` entry not in namespace | `404` | `{"detail": "collection not found"}` |
 | Multi-collection fan-out timeout (`fanout_timeout_seconds`) | `504` | `{"detail": "Search timed out"}` |
 | Collectionless + no collections in namespace | `404` | `{"detail": "no collections available"}` |
 | Meta-lookup or router failure | `503` | `{"detail": "service unavailable"}` |
