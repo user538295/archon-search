@@ -34,8 +34,8 @@ async def acquire_collection_lock_or_503(
         retry_after = str(math.ceil(_constants.INGEST_LOCK_TIMEOUT_S))
         return JSONResponse(
             {
-                "error": "store_busy",
                 "detail": "reindex in progress; retry after Retry-After seconds",
+                "code": "store_busy",
             },
             status_code=503,
             headers={"Retry-After": retry_after},

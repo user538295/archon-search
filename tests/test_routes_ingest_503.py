@@ -80,7 +80,7 @@ def test_post_ingest_returns_503_when_lock_held(
     assert response.status_code == 503
     assert response.headers.get("Retry-After") == "30"
     body = response.json()
-    assert body.get("error") == "store_busy"
+    assert body.get("code") == "store_busy"
 
 
 def test_post_ingest_succeeds_when_lock_free(tmp_path: Path) -> None:
@@ -243,7 +243,7 @@ def test_post_ingest_503_on_A_does_not_block_B(
     # POST /ingest for collection A → 503 (lock held).
     r_a = client.post("/ingest", json={"collection": "col-a"})
     assert r_a.status_code == 503, f"Expected 503 for locked col-a, got {r_a.status_code}"
-    assert r_a.json().get("error") == "store_busy"
+    assert r_a.json().get("code") == "store_busy"
 
     # POST /ingest for collection B → 202 (different lock, uncontended).
     r_b = client.post("/ingest", json={"collection": "col-b"})
