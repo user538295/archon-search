@@ -269,14 +269,14 @@ def test_config_rag_fusion_ollama_package_absent_raises_config_error(
 # C1-I-20: path_home_allowlist contains config.py entry with correct line number and SHA
 # ---------------------------------------------------------------------------
 
-_EXPECTED_CONFIG_LINE_NO = 323
+_EXPECTED_CONFIG_LINE_NO = 340
 _EXPECTED_CONFIG_SHA = "8c6844f3268afa9c4a632945843e776075a111407a0540b8a29041b99d669043"
 _CONFIG_REL_PATH = "archon_search/config.py"
 
 
 def test_path_home_allowlist_line_number_updated() -> None:
     """tests/path_home_allowlist.txt must contain the config.py entry with the correct
-    line number (310) and the expected SHA — proving the allowlist was updated after
+    line number (340) and the expected SHA — proving the allowlist was updated after
     the Path.home() callsite moved.
     """
     allowlist_path = Path(__file__).resolve().parent / "path_home_allowlist.txt"

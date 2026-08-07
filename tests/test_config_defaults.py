@@ -211,6 +211,12 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         "graph": {
             "enabled": False,
             "extraction_model": None,
+            "provider": None,
+            "llama_cpp_base_url": "http://localhost:8080",
+            "ollama_base_url": "http://localhost:11434",
+            "extraction_timeout_seconds": 30.0,
+            "extraction_rate_limit_rpm": 60,
+            "extraction_token_budget": 1024,
             "backend_threshold_edges": 10_000,
             "leiden_resolution": 1.0,
             "max_community_size": 10,

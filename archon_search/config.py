@@ -127,6 +127,23 @@ _GRAPH_MAX_GLOBAL_CANDIDATES_DEFAULT: int = 100
 class GraphConfig:
     enabled: bool = False
     extraction_model: str | None = None
+    # BE-4 enrichment provider fields
+    provider: str | None = None
+    """Enrichment provider for community summarisation / relationship labelling.
+    Defaults to `None` (enrichment disabled) — unlike [hyde]/[rag_fusion].provider,
+    which default to "anthropic", graph enrichment has no separate `enabled` gate:
+    this field IS the gate, so `None` is required to preserve the air-gap guarantee."""
+    llama_cpp_base_url: str = LLAMA_CPP_BASE_URL_DEFAULT
+    """Base URL for the llama_cpp enrichment provider."""
+    ollama_base_url: str = OLLAMA_BASE_URL_DEFAULT
+    """Base URL for the ollama enrichment provider."""
+    extraction_timeout_seconds: float = 30.0
+    """Per-request timeout (seconds) for enrichment LLM calls."""
+    extraction_rate_limit_rpm: int = 60
+    """Per-minute rate limit for enrichment LLM calls. Ignored by the llama_cpp
+    enrichment client (local inference, no rate limiting)."""
+    extraction_token_budget: int = 1024
+    """Max output tokens requested per enrichment LLM call."""
     backend_threshold_edges: int = _GRAPH_BACKEND_THRESHOLD_EDGES_DEFAULT
     # E1b community-detection fields
     leiden_resolution: float = _GRAPH_LEIDEN_RESOLUTION_DEFAULT
@@ -358,6 +375,30 @@ def _coerce_str(value: object, field_name: str) -> str:
         return str(value)
     except Exception as exc:
         raise ConfigError(f"Expected string for '{field_name}', got {type(value).__name__}") from exc
+
+
+def _validate_provider_config(provider: str | None, extraction_model: str | None, section: str) -> None:
+    """Validate a nullable provider field, e.g. `[graph].provider`.
+
+    Unlike `[hyde]`/`[rag_fusion]` (whose `provider` always defaults to a non-null
+    `"anthropic"`), `[graph].provider` defaults to `None` — enrichment is disabled
+    unless explicitly configured, preserving the air-gap guarantee. `None` bypasses
+    validation entirely; a set-but-unknown provider still raises `ConfigError`.
+    """
+    if provider is None:
+        return
+    if provider not in _VALID_PROVIDERS:
+        raise ConfigError(
+            f"{section}.provider must be one of {sorted(_VALID_PROVIDERS)}, got {provider!r}"
+        )
+    if not extraction_model:
+        _logger.warning(
+            "%s.provider=%r is configured but %s.extraction_model is not set; "
+            "graph enrichment will remain disabled until extraction_model is configured",
+            section,
+            provider,
+            section,
+        )
 
 
 def load_config(path: Path | None = None, *, serve: bool = False) -> SearchConfig:
@@ -920,6 +961,48 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         graph.naive_max_expansion_terms = _coerce_bounded_int(
             graph_cfg["naive_max_expansion_terms"], "[graph].naive_max_expansion_terms", minimum=1
         )
+    if "provider" in graph_cfg:
+        graph.provider = _coerce_str(graph_cfg["provider"], "[graph].provider")
+    if "llama_cpp_base_url" in graph_cfg:
+        llama_cpp_base_url = _coerce_str(
+            graph_cfg["llama_cpp_base_url"], "[graph].llama_cpp_base_url"
+        ).strip()
+        if not llama_cpp_base_url:
+            raise ConfigError("[graph].llama_cpp_base_url must be a non-empty string")
+        graph.llama_cpp_base_url = llama_cpp_base_url
+    if "ollama_base_url" in graph_cfg:
+        ollama_base_url = _coerce_str(graph_cfg["ollama_base_url"], "[graph].ollama_base_url").strip()
+        if not ollama_base_url:
+            raise ConfigError("[graph].ollama_base_url must be a non-empty string")
+        graph.ollama_base_url = ollama_base_url
+    if "extraction_timeout_seconds" in graph_cfg:
+        extraction_timeout_seconds = _coerce_float(
+            graph_cfg["extraction_timeout_seconds"], "[graph].extraction_timeout_seconds"
+        )
+        if extraction_timeout_seconds <= 0:
+            raise ConfigError(
+                f"[graph].extraction_timeout_seconds must be > 0, got {extraction_timeout_seconds}"
+            )
+        graph.extraction_timeout_seconds = extraction_timeout_seconds
+    if "extraction_rate_limit_rpm" in graph_cfg:
+        extraction_rate_limit_rpm = _coerce_int(
+            graph_cfg["extraction_rate_limit_rpm"], "[graph].extraction_rate_limit_rpm"
+        )
+        if extraction_rate_limit_rpm < 1:
+            raise ConfigError(
+                f"[graph].extraction_rate_limit_rpm must be >= 1, got {extraction_rate_limit_rpm}"
+            )
+        graph.extraction_rate_limit_rpm = extraction_rate_limit_rpm
+    if "extraction_token_budget" in graph_cfg:
+        extraction_token_budget = _coerce_int(
+            graph_cfg["extraction_token_budget"], "[graph].extraction_token_budget"
+        )
+        if extraction_token_budget < 1:
+            raise ConfigError(
+                f"[graph].extraction_token_budget must be >= 1, got {extraction_token_budget}"
+            )
+        graph.extraction_token_budget = extraction_token_budget
+    _validate_provider_config(graph.provider, graph.extraction_model, "[graph]")
     config.graph = graph
 
     openai_shim_cfg = doc.get("openai_shim", {})

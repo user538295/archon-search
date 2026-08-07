@@ -1738,3 +1738,92 @@ def test_graph_config_alias_file_default_none() -> None:
 
     cfg = GraphConfig()
     assert cfg.alias_file is None
+
+
+# ---------------------------------------------------------------------------
+# BE-4: GraphConfig enrichment provider fields
+# ---------------------------------------------------------------------------
+
+
+def test_graph_config_provider_defaults_to_none() -> None:
+    """GraphConfig().provider defaults to None (enrichment disabled, air-gap safe)."""
+    from archon_search.config import GraphConfig
+
+    cfg = GraphConfig()
+    assert cfg.provider is None
+
+
+def test_all_six_graph_fields_loaded_from_toml(tmp_path: Path) -> None:
+    """A [graph] TOML section with all six new fields set to non-default values is fully applied.
+
+    Proves no silent branch omission in the TOML loader.
+    """
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        "[graph]\n"
+        'provider = "llama_cpp"\n'
+        'extraction_model = "qwen2.5-coder"\n'
+        'llama_cpp_base_url = "http://example:9999"\n'
+        'ollama_base_url = "http://example:4444"\n'
+        "extraction_timeout_seconds = 45.0\n"
+        "extraction_rate_limit_rpm = 30\n"
+        "extraction_token_budget = 2048\n",
+        encoding="utf-8",
+    )
+    config = load_config(path=toml_file)
+    assert config.graph.provider == "llama_cpp"
+    assert config.graph.llama_cpp_base_url == "http://example:9999"
+    assert config.graph.ollama_base_url == "http://example:4444"
+    assert config.graph.extraction_timeout_seconds == 45.0
+    assert config.graph.extraction_rate_limit_rpm == 30
+    assert config.graph.extraction_token_budget == 2048
+
+
+def test_unknown_graph_provider_raises_config_error(tmp_path: Path) -> None:
+    """[graph] provider = 'garbage' raises ConfigError naming the value and valid choices."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text('[graph]\nprovider = "garbage"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="garbage"):
+        load_config(path=toml_file)
+
+
+def test_none_graph_provider_boots_cleanly(tmp_path: Path) -> None:
+    """No [graph] provider set → default None → no ConfigError, boots cleanly."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[graph]\nenabled = true\n", encoding="utf-8")
+    config = load_config(path=toml_file)
+    assert config.graph.provider is None
+
+
+def test_provider_without_model_emits_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """[graph] provider set but extraction_model absent → WARNING, not ConfigError."""
+    import logging
+
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text('[graph]\nprovider = "llama_cpp"\n', encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        config = load_config(path=toml_file)
+    assert config.graph.provider == "llama_cpp"
+    assert config.graph.extraction_model is None
+    assert any("extraction_model" in r.message for r in caplog.records)
+
+
+def test_real_graphconfig_constructible_with_all_fields() -> None:
+    """AnthropicEnrichmentClient is constructible from a real (non-MagicMock) GraphConfig instance.
+
+    Regression test for Q6: GraphConfig previously lacked extraction_timeout_seconds /
+    extraction_rate_limit_rpm / extraction_token_budget, so only MagicMock configs
+    (which auto-provide any attribute) could construct an enrichment client.
+    """
+    from archon_search.config import GraphConfig
+    from archon_search.llm_enrichment_client import AnthropicEnrichmentClient
+
+    cfg = GraphConfig(
+        provider="anthropic",
+        extraction_model="claude-haiku-4-5",
+        extraction_timeout_seconds=30.0,
+        extraction_rate_limit_rpm=60,
+        extraction_token_budget=1024,
+    )
+    client = AnthropicEnrichmentClient(model="claude-haiku-4-5", config=cfg)
+    assert client is not None

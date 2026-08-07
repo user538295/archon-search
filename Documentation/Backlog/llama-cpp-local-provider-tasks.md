@@ -116,7 +116,7 @@ flowchart LR
 
 ### Phase 2 · Enrich knowledge-graph via LLM *(enrichment factory + all four v1 clients + CommunityBuilder/GraphExtractor wired end-to-end)*
 
-- [ ] **BE-4** — Add six new fields to `GraphConfig` in `archon_search/config.py:123`: `provider: str | None = None`, `llama_cpp_base_url: str = LLAMA_CPP_BASE_URL_DEFAULT`, `ollama_base_url: str = OLLAMA_BASE_URL_DEFAULT`, `extraction_timeout_seconds: float`, `extraction_rate_limit_rpm: int`, `extraction_token_budget: int`; add six TOML loader branches in the `[graph]` section loader (`:804`); add provider validation: unknown provider → `ConfigError`; `provider=None` → valid, boot cleanly; provider set but `extraction_model` absent → `WARNING` (not `ConfigError`); add `_validate_provider_config()` for `GraphConfig.provider` using the same pattern as the `[hyde]`/`[rag_fusion]` validators at `:649`/`:691` #backend-role
+- [x] **BE-4** — Add six new fields to `GraphConfig` in `archon_search/config.py:123`: `provider: str | None = None`, `llama_cpp_base_url: str = LLAMA_CPP_BASE_URL_DEFAULT`, `ollama_base_url: str = OLLAMA_BASE_URL_DEFAULT`, `extraction_timeout_seconds: float`, `extraction_rate_limit_rpm: int`, `extraction_token_budget: int`; add six TOML loader branches in the `[graph]` section loader (`:804`); add provider validation: unknown provider → `ConfigError`; `provider=None` → valid, boot cleanly; provider set but `extraction_model` absent → `WARNING` (not `ConfigError`); add `_validate_provider_config()` for `GraphConfig.provider` using the same pattern as the `[hyde]`/`[rag_fusion]` validators at `:649`/`:691` #backend-role
     - Frameworks & Drivers · 5.0h
     - needs BE-1 · completes C4, S11, S16, S23, S27, S28
     - Tests
