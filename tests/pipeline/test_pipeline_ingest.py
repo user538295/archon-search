@@ -531,7 +531,7 @@ async def test_pipeline_ingest_directory_all_failures_skips_fts_rebuild(connecte
 async def test_pipeline_ingest_directory_skips_binary_extensions(connected_store, col_name, tmp_path):
     pipeline = make_pipeline(connected_store)
     (tmp_path / "data.txt").write_text("Some text content.\n" * 5)
-    (tmp_path / "image.gif").write_bytes(b"GIF89a" + b"\x00" * 100)
+    (tmp_path / "favicon.ico").write_bytes(b"\x00" * 100)
 
     results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder, rebuild_fts=False)
 
@@ -547,22 +547,48 @@ def test_pipeline_image_extensions_not_in_binary() -> None:
         assert ext not in _BINARY_EXTENSIONS, f"{ext} should not be in _BINARY_EXTENSIONS"
 
 
-def test_pipeline_gif_svg_ico_remain_binary() -> None:
+def test_pipeline_ico_remains_binary() -> None:
     from archon_search.pipeline import _BINARY_EXTENSIONS
 
-    for ext in {".gif", ".svg", ".ico"}:
-        assert ext in _BINARY_EXTENSIONS, f"{ext} must remain in _BINARY_EXTENSIONS"
+    assert ".ico" in _BINARY_EXTENSIONS, ".ico must remain in _BINARY_EXTENSIONS"
+
+
+def test_pipeline_gif_svg_not_in_binary() -> None:
+    """S330: .gif and .svg must NOT be in _BINARY_EXTENSIONS — they reach the plain-text fallback."""
+    from archon_search.pipeline import _BINARY_EXTENSIONS
+
+    for ext in (".gif", ".svg"):
+        assert ext not in _BINARY_EXTENSIONS, f"{ext} must not be in _BINARY_EXTENSIONS (S330)"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ext", [".gif", ".svg", ".ico"])
-async def test_pipeline_ingest_directory_skips_binary_image(ext: str, connected_store, col_name, tmp_path):
+async def test_pipeline_ingest_directory_skips_binary_ico(connected_store, col_name, tmp_path):
     pipeline = make_pipeline(connected_store)
-    (tmp_path / f"binary{ext}").write_bytes(b"\x00" * 50)
+    (tmp_path / "favicon.ico").write_bytes(b"\x00" * 50)
 
     results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder, rebuild_fts=False)
 
-    assert results == [], f"Binary {ext} file should not be ingested"
+    assert results == [], ".ico file should not be ingested"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ext", [".svg", ".gif"])
+async def test_pipeline_ingest_directory_includes_svg_gif_via_fallback(
+    ext: str, connected_store, col_name, tmp_path
+):
+    """S330: .svg and .gif must reach the plain-text fallback parser, not be blocked by _BINARY_EXTENSIONS."""
+    pipeline = make_pipeline(connected_store)
+    content = '<svg xmlns="http://www.w3.org/2000/svg"><text>Hello SVG</text></svg>'
+    target = tmp_path / f"diagram{ext}"
+    target.write_text(content)
+
+    results = await pipeline.ingest_directory(
+        tmp_path, col_name, embedder=pipeline._global_embedder, rebuild_fts=False
+    )
+
+    assert len(results) == 1, f"{ext} file must be ingested via the fallback parser"
+    assert results[0].status == "ok"
+    assert results[0].chunks_created >= 1
 
 
 @pytest.mark.asyncio
@@ -1386,7 +1412,7 @@ async def test_P14_21_pipeline_ingest_directory_zero_markdown_files(connected_st
     """ ingest_directory on a dir with zero accepted files returns [] and does not crash."""
     pipeline = make_pipeline(connected_store)
     # Only binary files present — all should be filtered out
-    (tmp_path / "image.gif").write_bytes(b"GIF89a" + b"\x00" * 50)
+    (tmp_path / "favicon.ico").write_bytes(b"\x00" * 50)
     (tmp_path / "archive.zip").write_bytes(b"PK" + b"\x00" * 50)
 
     results = await pipeline.ingest_directory(tmp_path, col_name, embedder=pipeline._global_embedder, rebuild_fts=False)

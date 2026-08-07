@@ -183,8 +183,8 @@ _BINARY_EXTENSIONS = frozenset(
         ".pyc", ".pyo", ".so", ".dll", ".exe", ".bin", ".o", ".a", ".lib",
         ".whl", ".egg", ".class",
         # Raster images (.png/.jpg/etc.) removed — OCR-indexed via _IMAGE_EXTENSIONS in parser.py
-        # .gif (animated frames), .ico (favicons, tiny), .svg (XML text — handled by plain-text fallback)
-        ".gif", ".ico", ".svg",
+        # .gif and .svg reach the plain-text fallback in parser.py (S330)
+        ".ico",
         ".mp3", ".mp4", ".wav", ".avi", ".mov", ".mkv",
         ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
         ".db", ".sqlite", ".pkl", ".npy", ".npz", ".h5", ".hdf5",
