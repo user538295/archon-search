@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from archon_search.cli.jobs_cmd import jobs
+from archon_search.cli.jobs_cmd import _clean, jobs
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +38,18 @@ def _mock_httpx_get(json_data: dict, status_code: int = 200) -> MagicMock:
     mock_resp.json.return_value = json_data
     mock_resp.text = str(json_data)
     return mock_resp
+
+
+def _data_rows(output: str) -> list[str]:
+    """Physical job rows in `jobs list` output, minus header, rule and footer."""
+    return [
+        line
+        for line in output.splitlines()
+        if line.strip()
+        and not line.startswith("ID ")
+        and set(line.strip()) != {"-"}
+        and not line.startswith("Showing ")
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +479,77 @@ class TestJobsList:
         assert result.exit_code == 0
         assert "Showing 1 of 100" in result.output
 
+    def test_list_one_row_per_job_when_fields_contain_control_chars(self):
+        """S361: control characters in a job row must not split it across physical rows.
+
+        ``collection`` is a free-form, user-controlled string (``POST /ingest``
+        only rejects the empty string). Embedded control characters used to make a
+        single job render as several physical lines, so the printed row count
+        exceeded ``--limit`` and no longer matched the ``Showing N of M jobs``
+        footer, which counts logical items.
+
+        Four of the five displayed fields are poisoned here, so dropping
+        ``_clean`` from any of them fails this test. The fifth, ``created_at``,
+        is pinned by ``test_list_created_at_control_char_kept_on_one_row``.
+        """
+        runner = CliRunner()
+        items = [
+            {
+                "job_id": "ab\ncd\ref12",
+                "job_type": "ing\nest",
+                "status": "PEN\nDING",
+                "collection": "evil\nname\rrows",
+                "created_at": "2026-07-15T10:00:00+00:00",
+                "updated_at": "2026-07-15T10:00:00+00:00",
+            },
+            {
+                "job_id": "beefcafe0000",
+                "job_type": "ingest",
+                "status": "PENDING",
+                "collection": "normal",
+                "created_at": "2026-07-15T10:00:00+00:00",
+                "updated_at": "2026-07-15T10:00:00+00:00",
+            },
+        ]
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"items": items, "total": 100, "next_cursor": "c"}
+        mock_resp.text = ""
+        with patch("httpx.get", return_value=mock_resp):
+            result = runner.invoke(jobs, ["list", "--limit", "2", "--api-key", "test-key"])
+
+        assert result.exit_code == 0, result.output
+        data_rows = _data_rows(result.output)
+        assert len(data_rows) == 2, f"limit=2 but printed {len(data_rows)} physical rows: {data_rows}"
+        assert "Showing 2 of 100" in result.output
+        # The sanitised text is still shown, not dropped.
+        assert "evil name rows" in result.output
+
+    def test_list_created_at_control_char_kept_on_one_row(self):
+        """S361: ``created_at`` gets an extra transform, so it is pinned separately."""
+        runner = CliRunner()
+        items = [
+            {
+                "job_id": "abcdef123456",
+                "job_type": "ingest",
+                "status": "PENDING",
+                "collection": "mycol",
+                "created_at": "2026-07-15\n10:00:00+00:00",
+                "updated_at": "2026-07-15T10:00:00+00:00",
+            },
+        ]
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"items": items, "total": 100, "next_cursor": "c"}
+        mock_resp.text = ""
+        with patch("httpx.get", return_value=mock_resp):
+            result = runner.invoke(jobs, ["list", "--limit", "1", "--api-key", "test-key"])
+
+        assert result.exit_code == 0, result.output
+        data_rows = _data_rows(result.output)
+        assert len(data_rows) == 1, f"printed {len(data_rows)} physical rows: {data_rows}"
+        assert "Showing 1 of 100" in result.output
+
     def test_list_no_footer_when_total_equals_items(self):
         """When total == len(items), no truncation footer is printed."""
         runner = CliRunner()
@@ -586,6 +669,93 @@ class TestJobsShow:
         mock_poll.assert_called_once()
         _, kwargs = mock_poll.call_args
         assert kwargs.get("timeout_seconds") == 120
+
+
+# ---------------------------------------------------------------------------
+# control characters in the detail views
+# ---------------------------------------------------------------------------
+
+class TestDetailViewsSanitised:
+    """S361 follow-up: `jobs show` / `jobs status` echo the same untrusted fields.
+
+    Neither has a row budget, so no `--limit` invariant is at stake — but both
+    would otherwise pass a terminal escape straight through to the operator.
+    """
+
+    @staticmethod
+    def _job() -> dict:
+        return {
+            "job_id": "abcdef123456",
+            "job_type": "ingest",
+            "status": "FAILED",
+            "collection": "evil\nname",
+            "source": "user",
+            "source_path": "/tmp/a\rb",
+            "created_at": "2026-07-15T10:00:00Z",
+            "updated_at": "2026-07-15T10:00:30Z",
+            "error": "boom\x1b[31m\nsecond line",
+        }
+
+    def test_show_output_has_no_control_characters(self):
+        """`jobs show` never emits a non-printable character."""
+        runner = CliRunner()
+        with patch("httpx.get", return_value=_mock_httpx_get(self._job())):
+            result = runner.invoke(jobs, ["show", "abcdef123456", "--api-key", "test-key"])
+
+        assert result.exit_code == 1, result.output  # FAILED job
+        bad = [c for c in result.output if not c.isprintable() and c != "\n"]
+        assert not bad, f"unsanitised characters in output: {bad!r}"
+        assert "evil name" in result.output
+
+    def test_status_output_has_no_control_characters(self):
+        """`jobs status` never emits a non-printable character."""
+        runner = CliRunner()
+        with patch("httpx.get", return_value=_mock_httpx_get(self._job())):
+            result = runner.invoke(jobs, ["status", "abcdef123456", "--api-key", "test-key"])
+
+        assert result.exit_code == 1, result.output  # FAILED job
+        bad = [c for c in result.output if not c.isprintable() and c != "\n"]
+        assert not bad, f"unsanitised characters in output: {bad!r}"
+        assert "evil name" in result.output
+
+
+# ---------------------------------------------------------------------------
+# _clean
+# ---------------------------------------------------------------------------
+
+class TestClean:
+    # Every character str.splitlines() breaks on - these are what can turn one
+    # job into several physical rows (S361). Written as \u escapes on purpose: a
+    # literal separator here would split this very source line for any reader
+    # that uses splitlines(), and an editor "tidying" it into a plain space
+    # would silently make the case vacuous.
+    @pytest.mark.parametrize(
+        "char",
+        ["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"],
+    )
+    def test_clean_neutralises_every_line_boundary(self, char: str):
+        """No output of _clean may ever split into more than one line."""
+        assert _clean(f"a{char}b") == "a b"
+        assert len(_clean(f"a{char}b").splitlines()) == 1
+
+    @pytest.mark.parametrize(
+        "char", ["\x00", "\t", "\x1b", "\x7f", "\u200b", "\u202e"]
+    )
+    def test_clean_replaces_other_control_chars(self, char: str):
+        """Terminal escapes and zero-width/bidi characters are also replaced."""
+        assert _clean(f"a{char}b") == "a b"
+
+    @pytest.mark.parametrize(
+        "value", ["my-col_01", "hello world", "\u65e5\u672c\u8a9e", "caf\u00e9", "\U0001f389"]
+    )
+    def test_clean_preserves_legitimate_text(self, value: str):
+        """Ordinary names, including spaces and non-ASCII, pass through unchanged."""
+        assert _clean(value) == value
+
+    def test_clean_is_length_preserving(self):
+        """1:1 substitution keeps column widths correct when callers slice afterwards."""
+        value = "evil\nname\rrows x"
+        assert len(_clean(value)) == len(value)
 
 
 # ---------------------------------------------------------------------------
