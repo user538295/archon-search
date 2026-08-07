@@ -381,14 +381,36 @@ def create_app(
 
             def _real_dispatch(job: ExportJob | ImportJob | MigrationJob) -> None:
                 if isinstance(job, ExportJob):
-                    task = asyncio.create_task(
-                        _export_task(
-                            job,
-                            app.state.job_store,
-                            app.state.search_store,
-                            config,
+                    if job.source == "backup":
+                        # For backup-sourced jobs, call _drain_completed() immediately
+                        # after the export task finishes so that rotation happens
+                        # synchronously with the backup completion rather than waiting
+                        # for the _completion_loop's 60-second poll (S476).
+                        _bl = app.state.backup_loop
+                        _j = job
+
+                        async def _backup_export_with_rotation(
+                            __j: ExportJob = _j,
+                            __bl: BackupLoop = _bl,
+                        ) -> None:
+                            await _export_task(
+                                __j,
+                                app.state.job_store,
+                                app.state.search_store,
+                                config,
+                            )
+                            __bl._drain_completed()
+
+                        task = asyncio.create_task(_backup_export_with_rotation())
+                    else:
+                        task = asyncio.create_task(
+                            _export_task(
+                                job,
+                                app.state.job_store,
+                                app.state.search_store,
+                                config,
+                            )
                         )
-                    )
                 elif isinstance(job, ImportJob):
                     task = asyncio.create_task(
                         _import_task(
