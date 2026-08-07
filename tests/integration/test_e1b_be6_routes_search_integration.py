@@ -7,6 +7,8 @@ Covers:
 - POST /search graph_mode=local → 200, graph_expansion_applied=false when no entity match (S10)
 - POST /search graph_mode=global: ACL-restricted chunks filtered from response (S15)
 - POST /search graph_mode=* → 422 when graph.enabled=False
+- POST /search multi-collection fan-out → 504 when the TOML-configured
+  [search] fanout_timeout_seconds is exceeded (S443)
 """
 from __future__ import annotations
 
@@ -511,3 +513,151 @@ def test_post_search_graph_mode_disabled_422(
             assert "graph" in detail_text, (
                 f"Expected 'graph' in 422 detail for mode={mode!r}; got: {body['detail']!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# S443: a TOML-configured fan-out timeout must actually fire on POST /search
+# (the create_app→SearchPipeline wiring assertion lives in
+#  tests/server/test_app.py::TestCreateAppPipelineWiring)
+# ---------------------------------------------------------------------------
+
+
+def test_post_search_fanout_honours_configured_timeout_504(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S443 behavioral regression: a configured fan-out timeout must produce 504.
+
+    With ``fanout_timeout_seconds = 0.001`` and every fan-out leg sleeping 0.5 s,
+    ``_fanout_merge_acl``'s ``asyncio.timeout`` must fire and the route must map
+    ``FanoutTimeoutError`` to HTTP 504.  Before the fix the pipeline held the
+    30.0 s default, so the 0.5 s legs completed and the route returned 200.
+    """
+    col_a = "s443-fanout-timeout-a"
+    col_b = "s443-fanout-timeout-b"
+    doc = tmp_path / "s443_doc.txt"
+    doc.write_text("Fan-out timeout regression corpus content.\n" * 5, encoding="utf-8")
+
+    toml_content = "[search]\nfanout_timeout_seconds = 0.001\n"
+
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, cfg, api_key):
+        ingest_file_via_path(client, col_a, str(doc), api_key=api_key)
+        ingest_file_via_path(client, col_b, str(doc), api_key=api_key)
+
+        pipeline = client.app.state.pipeline
+        original = pipeline.store.hybrid_search_with_trace
+
+        async def _slow_hybrid_search_with_trace(*args, **kwargs):
+            await asyncio.sleep(0.5)
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(
+            pipeline.store, "hybrid_search_with_trace", _slow_hybrid_search_with_trace
+        )
+
+        resp = client.post(
+            "/search",
+            json={"collections": [col_a, col_b], "query": "regression corpus"},
+            headers=_auth(api_key),
+        )
+        assert resp.status_code == 504, (
+            "Expected 504 because each fan-out leg (0.5 s) exceeds the configured "
+            f"fanout_timeout_seconds={cfg.fanout_timeout_seconds}; "
+            f"got {resp.status_code}: {resp.text[:300]}"
+        )
+
+
+def test_post_search_fanout_generous_timeout_still_returns_200(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Positive control for the 504 test above: a generous timeout still yields 200.
+
+    Without this, an implementation that raised ``FanoutTimeoutError``
+    unconditionally on every multi-collection request would keep
+    ``test_post_search_fanout_honours_configured_timeout_504`` green.  Same
+    corpus, same slow legs — only ``fanout_timeout_seconds`` differs — so the
+    pair pins the timeout as the actual cause of the 504.
+    """
+    col_a = "s443-generous-timeout-a"
+    col_b = "s443-generous-timeout-b"
+    doc = tmp_path / "s443_generous_doc.txt"
+    doc.write_text("Fan-out timeout regression corpus content.\n" * 5, encoding="utf-8")
+
+    toml_content = "[search]\nfanout_timeout_seconds = 30.0\n"
+
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, cfg, api_key):
+        ingest_file_via_path(client, col_a, str(doc), api_key=api_key)
+        ingest_file_via_path(client, col_b, str(doc), api_key=api_key)
+
+        pipeline = client.app.state.pipeline
+        original = pipeline.store.hybrid_search_with_trace
+
+        async def _slow_hybrid_search_with_trace(*args, **kwargs):
+            await asyncio.sleep(0.5)
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(
+            pipeline.store, "hybrid_search_with_trace", _slow_hybrid_search_with_trace
+        )
+
+        resp = client.post(
+            "/search",
+            json={"collections": [col_a, col_b], "query": "regression corpus"},
+            headers=_auth(api_key),
+        )
+        assert resp.status_code == 200, (
+            "Expected 200: the 0.5 s legs sit well inside the configured "
+            f"fanout_timeout_seconds={cfg.fanout_timeout_seconds}; "
+            f"got {resp.status_code}: {resp.text[:300]}"
+        )
+
+
+def test_post_explain_fanout_honours_configured_timeout_504(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S435 behavioral regression: /explain must 504 on a configured fan-out timeout.
+
+    The S435 report is a live 3-collection ``POST /explain`` with
+    ``fanout_timeout_seconds = 0.001`` that ran for seconds and returned 200,
+    because ``create_app`` never wired the timeout into the pipeline.
+
+    ``tests/server/test_routes_explain.py`` covers the
+    ``FanoutTimeoutError`` → 504 handler by injecting the exception into a mock
+    pipeline; that handler is pre-existing and its test passes with or without
+    the S443 wiring fix.  This test drives the real path —
+    ``pipeline.explain(collections=...)`` → ``_fanout_merge_acl`` →
+    ``asyncio.timeout(self._fanout_timeout_seconds)`` — so it fails if the
+    configured timeout stops reaching the pipeline.
+    """
+    col_a = "s435-explain-timeout-a"
+    col_b = "s435-explain-timeout-b"
+    doc = tmp_path / "s435_doc.txt"
+    doc.write_text("Explain fan-out timeout regression corpus content.\n" * 5, encoding="utf-8")
+
+    toml_content = "[search]\nfanout_timeout_seconds = 0.001\n"
+
+    with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, cfg, api_key):
+        ingest_file_via_path(client, col_a, str(doc), api_key=api_key)
+        ingest_file_via_path(client, col_b, str(doc), api_key=api_key)
+
+        pipeline = client.app.state.pipeline
+        original = pipeline.store.hybrid_search_with_trace
+
+        async def _slow_hybrid_search_with_trace(*args, **kwargs):
+            await asyncio.sleep(0.5)
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(
+            pipeline.store, "hybrid_search_with_trace", _slow_hybrid_search_with_trace
+        )
+
+        resp = client.post(
+            "/explain",
+            json={"collections": [col_a, col_b], "query": "regression corpus"},
+            headers=_auth(api_key),
+        )
+        assert resp.status_code == 504, (
+            "Expected 504 because each fan-out leg (0.5 s) exceeds the configured "
+            f"fanout_timeout_seconds={cfg.fanout_timeout_seconds}; "
+            f"got {resp.status_code}: {resp.text[:300]}"
+        )
+        assert resp.json()["detail"] == "Search timed out"
