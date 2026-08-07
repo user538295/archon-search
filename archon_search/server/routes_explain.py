@@ -488,8 +488,9 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
     routing: RoutingExplain | None = None
     rag_fusion_gen = getattr(request.app.state, "rag_fusion_generator", None)
 
-    # Mutual exclusion: rag_fusion=True suppresses HyDE entirely.
-    if body.rag_fusion:
+    # Mutual exclusion: rag_fusion=True suppresses HyDE entirely — but only when RAG
+    # Fusion can actually run (config kill-switch) — S272.
+    if body.rag_fusion and config.rag_fusion.enabled:
         hyde_vector, hyde_applied = None, False
     else:
         generator = getattr(request.app.state, "hyde_generator", None)

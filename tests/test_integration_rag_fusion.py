@@ -28,7 +28,7 @@ from fastapi.testclient import TestClient
 
 from archon_search._types import ChunkRecord
 from archon_search.collection_meta import CollectionMeta
-from archon_search.config import RAGFusionConfig, SearchConfig
+from archon_search.config import HyDEConfig, RAGFusionConfig, SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from archon_search.store import SearchStore
@@ -91,11 +91,12 @@ async def _ingest_chunk(tmp_path: Path) -> None:
     await store.disconnect()
 
 
-def _make_app(tmp_path: Path, *, rag_fusion_enabled: bool = True):
-    """Return a create_app() instance with RAG Fusion optionally enabled."""
+def _make_app(tmp_path: Path, *, rag_fusion_enabled: bool = True, hyde_enabled: bool = False):
+    """Return a create_app() instance with RAG Fusion (and optionally HyDE) enabled."""
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     config.rag_fusion = RAGFusionConfig(enabled=rag_fusion_enabled)
+    config.hyde = HyDEConfig(enabled=hyde_enabled)
     job_store = JobStore(path=tmp_path / "jobs.json")
     return create_app(config, job_store)
 
@@ -279,6 +280,49 @@ async def test_search_rag_fusion_disabled_config_skips(tmp_path: Path) -> None:
     data = response.json()
     assert data["rag_fusion_applied"] is False
     # Generator was never invoked (kill-switch prevents the LLM call)
+    mock_generate_variants.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_rag_fusion_requested_but_disabled_hyde_still_applies(tmp_path: Path) -> None:
+    """S272: rag_fusion=true+hyde=true with [rag_fusion] disabled must not suppress HyDE.
+
+    Mutual exclusion ("rag_fusion wins") only holds when RAG Fusion can actually run.
+    When the config kill-switch is off, RAG Fusion never attempts (correct — mirrors
+    test_search_rag_fusion_disabled_config_skips above), so it must not "win" and
+    silently swallow a working, enabled HyDE request too.
+    """
+    await _ingest_chunk(tmp_path)
+    # RAG Fusion disabled, HyDE enabled — the combination that exposed S272.
+    app = _make_app(tmp_path, rag_fusion_enabled=False, hyde_enabled=True)
+
+    mock_generate_variants = AsyncMock(return_value=_FIXED_VARIANTS)
+    with patch(
+        "archon_search.rag_fusion.RAGFusionGenerator.generate_variants",
+        new=mock_generate_variants,
+    ):
+        with patch(
+            "archon_search.hyde.HyDEGenerator.generate",
+            new=AsyncMock(return_value=[0.1] * 384),
+        ):
+            with TestClient(app, headers={"Authorization": f"Bearer {_TEST_API_KEY}"}) as client:
+                response = client.post(
+                    "/search",
+                    json={
+                        "query": "hello world",
+                        "collection": _COLLECTION,
+                        "rag_fusion": True,
+                        "hyde": True,
+                    },
+                )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["rag_fusion_applied"] is False
+    assert data["rag_fusion_attempted"] is False
+    # HyDE must not be wrongly suppressed just because rag_fusion=true was requested —
+    # RAG Fusion is disabled by config, so it never "wins" the mutual exclusion.
+    assert data["hyde_applied"] is True
     mock_generate_variants.assert_not_called()
 
 

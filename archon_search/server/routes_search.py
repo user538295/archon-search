@@ -203,9 +203,10 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             status_code=422,
         )
 
-    # Resolve HyDE vector and RAG Fusion generator — mutual exclusion: rag_fusion wins
+    # Resolve HyDE vector and RAG Fusion generator — mutual exclusion: rag_fusion wins,
+    # but only when RAG Fusion can actually run (config kill-switch) — S272.
     rag_fusion_gen = getattr(request.app.state, "rag_fusion_generator", None)
-    if body.rag_fusion:
+    if body.rag_fusion and config.rag_fusion.enabled:
         hyde_vector, hyde_applied = None, False
         hyde_expansion_warning: str | None = None
     else:

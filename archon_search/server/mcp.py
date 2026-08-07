@@ -347,12 +347,13 @@ def create_app(
                 code="scope_filter_graph_mode_incompatible",
             )
 
-        # Mutual exclusion: rag_fusion=True suppresses HyDE entirely.
+        # Mutual exclusion: rag_fusion=True suppresses HyDE entirely — but only when
+        # RAG Fusion can actually run (config kill-switch) — S272.
         _rf_config = getattr(config, "rag_fusion", None)
         if _rf_config is None:
             from archon_search.config import RAGFusionConfig  # noqa: PLC0415
             _rf_config = RAGFusionConfig()
-        if rag_fusion:
+        if rag_fusion and _rf_config.enabled:
             hyde_vector, hyde_applied = None, False
             _search_hyde_expansion_warning: str | None = None
         else:
@@ -644,12 +645,13 @@ def create_app(
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
 
-        # Mutual exclusion: rag_fusion=True suppresses HyDE entirely.
+        # Mutual exclusion: rag_fusion=True suppresses HyDE entirely — but only when
+        # RAG Fusion can actually run (config kill-switch) — S272.
         _swc_rf_config = getattr(config, "rag_fusion", None)
         if _swc_rf_config is None:
             from archon_search.config import RAGFusionConfig  # noqa: PLC0415
             _swc_rf_config = RAGFusionConfig()
-        if rag_fusion:
+        if rag_fusion and _swc_rf_config.enabled:
             swc_hyde_vector, swc_hyde_applied = None, False
             _swc_hyde_expansion_warning: str | None = None
         else:
@@ -852,13 +854,14 @@ def create_app(
             )
 
         # Mutual exclusion: graph_mode wins over HyDE — skip the LLM call entirely.
-        # rag_fusion=True also suppresses HyDE. graph_mode check comes first so the
-        # HyDE LLM call is never made when graph_mode is set (mirrors rag_fusion pattern).
+        # rag_fusion=True also suppresses HyDE, but only when RAG Fusion can actually
+        # run (config kill-switch) — S272. graph_mode check comes first so the HyDE LLM
+        # call is never made when graph_mode is set (mirrors rag_fusion pattern).
         _explain_rf_config = getattr(config, "rag_fusion", None)
         if _explain_rf_config is None:
             from archon_search.config import RAGFusionConfig  # noqa: PLC0415
             _explain_rf_config = RAGFusionConfig()
-        if graph_mode is not None or rag_fusion:
+        if graph_mode is not None or (rag_fusion and _explain_rf_config.enabled):
             explain_hyde_vector, explain_hyde_applied = None, False
         else:
             _explain_hyde_config = getattr(config, "hyde", None)

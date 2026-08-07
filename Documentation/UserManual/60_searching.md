@@ -268,7 +268,7 @@ Pass `rag_fusion: true` on any `/search` or `/explain` request. The response add
 
 ### Mutual exclusion with HyDE
 
-`rag_fusion=true` and `hyde=true` cannot be combined. When both are set, RAG Fusion executes and HyDE is skipped (`hyde_applied: false`) — RAG Fusion subsumes HyDE's intent, and running both would double LLM cost for no meaningful recall gain.
+`rag_fusion=true` and `hyde=true` cannot be combined. When both are set **and `[rag_fusion] enabled=true`**, RAG Fusion executes and HyDE is skipped (`hyde_applied: false`) — RAG Fusion subsumes HyDE's intent, and running both would double LLM cost for no meaningful recall gain. If `[rag_fusion] enabled=false` (the default), RAG Fusion never "wins" the exclusion — it cannot run, so a `hyde=true` request is resolved normally instead of being silently dropped.
 
 ### Fallback behaviour
 

@@ -437,10 +437,16 @@ def test_explain_from_pipeline_result_threads_rag_fusion() -> None:
 
 
 def test_explain_rag_fusion_true_skips_hyde(tmp_path: Path) -> None:
-    """rag_fusion=True and hyde=True: resolve_hyde_vector NOT called; response has hyde_applied=False."""
+    """rag_fusion=True (and enabled in config) and hyde=True: resolve_hyde_vector NOT called; hyde_applied=False.
+
+    Mutual exclusion only holds when RAG Fusion can actually run (S272) — the config
+    kill-switch must be on, otherwise HyDE must not be suppressed (see
+    test_explain_rag_fusion_requested_but_disabled_hyde_still_applies below).
+    """
     from unittest.mock import patch, AsyncMock as AM
 
     app, client = _make_app(tmp_path)
+    app.state.config.rag_fusion.enabled = True
     pipeline = MagicMock()
     meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
     pipeline.get_collection_meta = AsyncMock(return_value=meta)
@@ -464,6 +470,36 @@ def test_explain_rag_fusion_true_skips_hyde(tmp_path: Path) -> None:
     assert data["hyde_applied"] is False
     # resolve_hyde_vector must NOT be called
     mock_hyde.assert_not_awaited()
+
+
+def test_explain_rag_fusion_requested_but_disabled_hyde_still_applies(tmp_path: Path) -> None:
+    """S272: rag_fusion=True with [rag_fusion] disabled must not suppress a real HyDE request."""
+    from unittest.mock import patch, AsyncMock as AM
+
+    app, client = _make_app(tmp_path)
+    assert app.state.config.rag_fusion.enabled is False  # default kill-switch stays off
+    pipeline = MagicMock()
+    meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+    pipeline.explain = AsyncMock(return_value=_make_explain_result())
+    cache = _make_embedder_cache_mock()
+    app.state.pipeline = pipeline
+    app.state.embedder_cache = cache
+
+    with patch(
+        "archon_search.server.routes_explain.resolve_hyde_vector",
+        new=AM(return_value=([0.1, 0.2], True)),
+    ) as mock_hyde:
+        response = client.post(
+            "/explain",
+            json={"collection": "col", "query": "test", "rag_fusion": True, "hyde": True},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    # RAG Fusion never "wins" when it's disabled by config — HyDE must run normally.
+    assert data["hyde_applied"] is True
+    mock_hyde.assert_awaited_once()
 
 
 def test_explain_rag_fusion_true_passes_to_pipeline(tmp_path: Path) -> None:
