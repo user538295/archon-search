@@ -5,12 +5,19 @@
 // LlamaCppQueryExpansionProvider — implements it.
 //
 // Load-bearing contract: these operations MUST NEVER raise. Any failure
-// (transport error, timeout, unreachable llama-server, malformed response)
-// is surfaced as `null` / empty list so the caller silently falls back to
-// plain search. This preserves ADR C4/C5's silent-fallback invariant.
+// (transport error, timeout, unreachable llama-server, malformed response,
+// or a non-2xx HTTP status / HTTPStatusError such as a 503 with a
+// well-formed-but-error body — S8) is surfaced as `null` / empty list so
+// the caller silently falls back to plain search. This preserves ADR
+// C4/C5's silent-fallback invariant.
 //
 // No change to the protocol shape itself — the seam is documented here so
 // the new adapter is held to the exact same signature and never-raise rule.
+//
+// Privacy: the ADR 05 no-raw-query / fingerprint-only logging invariant
+// applies to this contract — the raw QUERY guarantee lives here (this is
+// the actual query-expansion contract); only `_query_fingerprint(query)`
+// may appear in logs, never the raw query string (S15a).
 
 namespace ArchonSearch.QueryExpansion;
 

@@ -72,7 +72,7 @@ flowchart LR
 
 ### Phase 0 · Kickoff *(prerequisite; the one cross-cutting step)*
 
-- [ ] **K1** — Agree Contracts C1–C4 and Scenarios S1–S28 with the team #team
+- [x] **K1** — Agree Contracts C1–C4 and Scenarios S1–S28 with the team #team
     - — · 1.0h
     - completes C1, C2, C3, C4
     - Tests
