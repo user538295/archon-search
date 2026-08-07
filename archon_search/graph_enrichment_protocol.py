@@ -2,7 +2,7 @@
 
 Defines the interface that Use Cases (CommunityBuilder, GraphExtractor) depend on
 for LLM-powered graph enrichment. The concrete adapter (AnthropicEnrichmentClient)
-lives in the Interface Adapters layer (llm_enrichment_client.py).
+lives in the Interface Adapters layer (archon_search/enrichment/anthropic.py).
 
 Pattern mirrors graph_store_protocol.py: the protocol is consumer-owned in Use Cases.
 """

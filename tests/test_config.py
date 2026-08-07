@@ -1816,7 +1816,7 @@ def test_real_graphconfig_constructible_with_all_fields() -> None:
     (which auto-provide any attribute) could construct an enrichment client.
     """
     from archon_search.config import GraphConfig
-    from archon_search.llm_enrichment_client import AnthropicEnrichmentClient
+    from archon_search.enrichment.anthropic import AnthropicEnrichmentClient
 
     cfg = GraphConfig(
         provider="anthropic",

@@ -1,4 +1,4 @@
-"""AnthropicEnrichmentClient — Interface Adapters layer (E2i BE-0).
+"""AnthropicEnrichmentClient — Interface Adapters layer (E2i BE-0; moved in LLCP BE-5).
 
 Concrete implementation of LLMEnrichmentClientProtocol backed by the Anthropic API.
 
@@ -21,11 +21,10 @@ import logging
 import time
 from typing import Any
 
+from archon_search.enrichment import _VALID_RELATIONSHIP_TYPES
 from archon_search.graph_enrichment_protocol import LabeledRelationship
 
 _logger = logging.getLogger(__name__)
-
-_VALID_RELATIONSHIP_TYPES: frozenset[str] = frozenset({"uses", "implements", "depends_on"})
 
 _SUMMARIZE_PROMPT_TEMPLATE = """\
 You are a knowledge-graph summariser. Given a set of representative text passages and \

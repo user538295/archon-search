@@ -19,7 +19,7 @@ import pytest
 
 
 def _make_client(rpm: int = 60, extra_rpm: int | None = None) -> "AnthropicEnrichmentClient":
-    from archon_search.llm_enrichment_client import AnthropicEnrichmentClient
+    from archon_search.enrichment.anthropic import AnthropicEnrichmentClient
 
     config = MagicMock()
     config.extraction_timeout_seconds = 30.0
@@ -491,7 +491,7 @@ async def test_label_relationships_logs_warning_on_unknown_type(caplog) -> None:
     client, _ = _make_ready_client(mock_response_text=payload)
     client._check_rate_limit = AsyncMock(return_value=None)
 
-    with caplog.at_level(logging.WARNING, logger="archon_search.llm_enrichment_client"):
+    with caplog.at_level(logging.WARNING, logger="archon_search.enrichment.anthropic"):
         results = await client.label_relationships(
             entity_pairs=[("X", "Y")], chunk_text="X knows about Y."
         )
@@ -516,7 +516,7 @@ async def test_label_relationships_logs_warning_on_malformed_item(caplog) -> Non
     client, _ = _make_ready_client(mock_response_text=payload)
     client._check_rate_limit = AsyncMock(return_value=None)
 
-    with caplog.at_level(logging.WARNING, logger="archon_search.llm_enrichment_client"):
+    with caplog.at_level(logging.WARNING, logger="archon_search.enrichment.anthropic"):
         results = await client.label_relationships(
             entity_pairs=[("A", "B")], chunk_text="A uses B."
         )
@@ -525,3 +525,30 @@ async def test_label_relationships_logs_warning_on_malformed_item(caplog) -> Non
     assert any("malformed" in record.message for record in caplog.records), (
         "Expected WARNING mentioning malformed relationship item"
     )
+
+
+# ---------------------------------------------------------------------------
+# 21. LLCP BE-5 — constructible from a real (non-MagicMock) GraphConfig
+# ---------------------------------------------------------------------------
+
+
+def test_anthropic_client_constructible_from_real_graphconfig() -> None:
+    """AnthropicEnrichmentClient initialises without error from a real GraphConfig.
+
+    Regression gate for the BE-5 module move: archon_search.enrichment.anthropic
+    must still consume all six GraphConfig enrichment fields correctly.
+    """
+    from archon_search.config import GraphConfig
+    from archon_search.enrichment.anthropic import AnthropicEnrichmentClient
+
+    cfg = GraphConfig(
+        provider="anthropic",
+        extraction_model="claude-haiku-4-5",
+        llama_cpp_base_url="http://localhost:8080",
+        ollama_base_url="http://localhost:11434",
+        extraction_timeout_seconds=30.0,
+        extraction_rate_limit_rpm=60,
+        extraction_token_budget=1024,
+    )
+    client = AnthropicEnrichmentClient(model="claude-haiku-4-5", config=cfg)
+    assert client is not None
