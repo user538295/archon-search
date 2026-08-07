@@ -185,9 +185,10 @@ request_id_header = "X-Request-ID"
 # Disabled by default.
 #
 # Provider options: "anthropic" (default), "ollama" (local; zero-transmission),
-# "openai", "claude_cli" (uses Claude Code's login; no API key). Set provider =
-# "ollama" for fully air-gapped deployments — query text stays on-premise and is
-# never sent to an external API.
+# "openai", "claude_cli" (uses Claude Code's login; no API key), "llama_cpp"
+# (local; zero-transmission, no API key). Set provider = "ollama" or "llama_cpp"
+# for fully air-gapped deployments — query text stays on-premise and is never
+# sent to an external API.
 #
 # WARNING (Anthropic/OpenAI): setting enabled = true with provider = "anthropic" or
 # "openai" causes the raw query text to be sent to the respective API servers on every
@@ -214,26 +215,37 @@ request_id_header = "X-Request-ID"
 #   2. Ensure the `claude` command is on the server's PATH.
 #   3. Set provider = "claude_cli" below. model is optional (see below).
 #
+# Prerequisites (llama.cpp):
+#   1. No pip extra required — uses the existing httpx dependency.
+#   2. Run a llama-server instance (default: http://localhost:8080).
+#   3. Set provider = "llama_cpp" and model = "<model-name-from-/v1/models>" below.
+#
 # When enabled = false (the default), hyde=true in a request is silently ignored and
 # the standard query embedding is used (hyde_applied: false in the response).
 enabled = false
-# LLM provider for HyDE generation: "anthropic" (default), "ollama", "openai", or "claude_cli".
+# LLM provider for HyDE generation: "anthropic" (default), "ollama", "openai",
+# "claude_cli", or "llama_cpp".
 # provider = "anthropic"
 # Model used to generate the hypothetical answer passage.
 # For "anthropic" (default): a Claude model name (e.g. "claude-haiku-4-5-20251001").
-# For "ollama": the Ollama model tag (e.g. "llama3.2:3b"). REQUIRED for ollama/openai.
+# For "ollama": the Ollama model tag (e.g. "llama3.2:3b"). REQUIRED for ollama/openai/llama_cpp.
 # For "openai": an OpenAI model name (e.g. "gpt-4o-mini").
 # For "claude_cli": a model alias (haiku/sonnet/opus/fable) or full ID, passed as
 #   --model. OPTIONAL — blank or the default below omits --model (Claude Code's default).
+# For "llama_cpp": the model name reported by GET /v1/models on the llama-server
+#   (e.g. "qwen2.5-7b-instruct").
 model = "claude-haiku-4-5-20251001"
 # Base URL for the Ollama server. Only used when provider = "ollama".
 # ollama_base_url = "http://localhost:11434"
+# Base URL for the llama-server instance. Only used when provider = "llama_cpp".
+# llama_cpp_base_url = "http://localhost:8080"
 # Per-request timeout (seconds) for the LLM API call. On timeout, the server
 # falls back silently to the original query embedding (hyde_applied: false).
 timeout_seconds = 10.0
 # Per-process rate limit (requests per minute). Requests that exceed this limit
 # are answered with the fallback embedding (hyde_applied: false).
-# NOTE: this limit is NOT enforced for provider = "ollama" or "claude_cli" (local/free; no API cap).
+# NOTE: this limit is NOT enforced for provider = "ollama", "claude_cli", or
+# "llama_cpp" (local/free; no API cap).
 # In multi-worker deployments the effective rate is multiplied by worker count.
 max_requests_per_minute = 60
 
@@ -242,9 +254,10 @@ max_requests_per_minute = 60
 # Disabled by default.
 #
 # Provider options: "anthropic" (default), "ollama" (local; zero-transmission),
-# "openai", "claude_cli" (uses Claude Code's login; no API key). Set provider =
-# "ollama" for fully air-gapped deployments — query text stays on-premise and is
-# never sent to an external API.
+# "openai", "claude_cli" (uses Claude Code's login; no API key), "llama_cpp"
+# (local; zero-transmission, no API key). Set provider = "ollama" or "llama_cpp"
+# for fully air-gapped deployments — query text stays on-premise and is never
+# sent to an external API.
 #
 # WARNING (Anthropic/OpenAI): setting enabled = true with provider = "anthropic" or
 # "openai" causes the raw query text to be sent to the respective API servers on every
@@ -271,32 +284,43 @@ max_requests_per_minute = 60
 #   2. Ensure the `claude` command is on the server's PATH.
 #   3. Set provider = "claude_cli" below. model is optional (see below).
 #
+# Prerequisites (llama.cpp):
+#   1. No pip extra required — uses the existing httpx dependency.
+#   2. Run a llama-server instance (default: http://localhost:8080).
+#   3. Set provider = "llama_cpp" and model = "<model-name-from-/v1/models>" below.
+#
 # When enabled = false (the default), rag_fusion=true in a request is silently ignored and
 # standard single-query search is used (rag_fusion_applied: false in the response).
 #
 # RATE LIMIT WARNING (Anthropic/OpenAI): [hyde].max_requests_per_minute +
 # [rag_fusion].max_requests_per_minute must not exceed your account's rate limit when
-# both features share the same provider. Rate limits are NOT enforced for Ollama or
-# claude_cli. In multi-worker deployments, the effective rate per feature is multiplied
-# by worker count.
+# both features share the same provider. Rate limits are NOT enforced for Ollama,
+# claude_cli, or llama_cpp. In multi-worker deployments, the effective rate per feature
+# is multiplied by worker count.
 enabled = false
-# LLM provider for RAG Fusion generation: "anthropic" (default), "ollama", "openai", or "claude_cli".
+# LLM provider for RAG Fusion generation: "anthropic" (default), "ollama", "openai",
+# "claude_cli", or "llama_cpp".
 # provider = "anthropic"
 # Model used to generate query variants.
 # For "anthropic" (default): a Claude model name (e.g. "claude-haiku-4-5-20251001").
-# For "ollama": the Ollama model tag (e.g. "llama3.2:3b"). REQUIRED for ollama/openai.
+# For "ollama": the Ollama model tag (e.g. "llama3.2:3b"). REQUIRED for ollama/openai/llama_cpp.
 # For "openai": an OpenAI model name (e.g. "gpt-4o-mini").
 # For "claude_cli": a model alias (haiku/sonnet/opus/fable) or full ID, passed as
 #   --model. OPTIONAL — blank or the default below omits --model (Claude Code's default).
+# For "llama_cpp": the model name reported by GET /v1/models on the llama-server
+#   (e.g. "qwen2.5-7b-instruct").
 model = "claude-haiku-4-5-20251001"
 # Base URL for the Ollama server. Only used when provider = "ollama".
 # ollama_base_url = "http://localhost:11434"
+# Base URL for the llama-server instance. Only used when provider = "llama_cpp".
+# llama_cpp_base_url = "http://localhost:8080"
 # Per-request timeout (seconds) for the LLM API call. On timeout, the server
 # falls back silently to single-query search (rag_fusion_applied: false).
 timeout_seconds = 10.0
 # Per-process rate limit (requests per minute). Requests that exceed this limit fall
 # back to single-query search (rag_fusion_applied: false).
-# NOTE: this limit is NOT enforced for provider = "ollama" or "claude_cli" (local/free; no API cap).
+# NOTE: this limit is NOT enforced for provider = "ollama", "claude_cli", or
+# "llama_cpp" (local/free; no API cap).
 # In multi-worker deployments the effective rate is multiplied by worker count.
 max_requests_per_minute = 60
 # Number of LLM-generated query variants (not counting the original query).
@@ -399,13 +423,46 @@ num_queries = 2
 #
 # enabled = false
 
-# Optional: Claude model used for LLM-based typed relationship extraction.
-# When set, each ingest call attempts a typed extraction pass (USES, IMPLEMENTS, etc.)
-# before falling back to spaCy co-occurrence edges on failure.
-# NOTE: LLM extraction is a config-guarded stub in E1a — setting this key logs a WARNING
-# and proceeds with spaCy-only extraction. Full LLM extraction is deferred to E1b.
-# Requires ANTHROPIC_API_KEY in the server environment.
+# Optional: enrichment provider for LLM-based community summarisation and typed
+# relationship extraction. Valid values: "anthropic", "ollama", "openai",
+# "llama_cpp" (local; zero-transmission, no API key), "claude_cli" (accepted but
+# has no v1 enrichment client yet — deferred; a WARNING is logged and enrichment
+# stays disabled). Defaults to unset (None): enrichment is disabled unless BOTH
+# provider and extraction_model below are set — unlike [hyde]/[rag_fusion],
+# whose provider defaults to "anthropic", this preserves the air-gap guarantee.
+# provider = "llama_cpp"
+
+# Model used for community summarisation / relationship labelling — always a
+# bare model name, never a "provider:model" string.
+# For "anthropic": a Claude model name (e.g. "claude-haiku-4-5-20251001").
+#   Requires ANTHROPIC_API_KEY in the server environment.
+# For "ollama": the Ollama model tag (e.g. "llama3.2:3b").
+# For "openai": an OpenAI model name (e.g. "gpt-4o-mini"). Requires
+#   OPENAI_API_KEY in the server environment.
+# For "llama_cpp": the model name reported by GET /v1/models on the
+#   llama-server (e.g. "qwen2.5-7b-instruct"). No API key required.
+# When provider is set but extraction_model is absent, a WARNING is logged at
+# startup and enrichment remains disabled (no ConfigError, no crash).
 # extraction_model = "claude-haiku-4-5-20251001"
+
+# Base URL for the llama_cpp enrichment provider. Only used when
+# provider = "llama_cpp".
+# llama_cpp_base_url = "http://localhost:8080"
+
+# Base URL for the Ollama enrichment provider. Only used when
+# provider = "ollama".
+# ollama_base_url = "http://localhost:11434"
+
+# Per-request timeout (seconds) for enrichment LLM calls (community
+# summarisation / relationship labelling). Must be > 0.
+# extraction_timeout_seconds = 30.0
+
+# Per-minute rate limit for enrichment LLM calls. Must be >= 1. Ignored by the
+# llama_cpp enrichment client (local inference; no rate limiting is applied).
+# extraction_rate_limit_rpm = 60
+
+# Max output tokens requested per enrichment LLM call. Must be >= 1.
+# extraction_token_budget = 1024
 
 # Rough empirical edge-count threshold (integer, default 10,000) above which NetworkX
 # in-memory graph traversal (full LanceDB scan per expansion call) becomes latency-noticeable
