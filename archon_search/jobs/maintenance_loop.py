@@ -698,9 +698,18 @@ class MaintenanceLoop:
         from archon_search.synonym_detector import SynonymDetector  # noqa: PLC0415
 
         # Step 1: Load manual alias edges and produce skip_pairs to exclude from ANN.
+        # S319 race: this method runs as a background task scheduled by the
+        # post-ingest callback.  When two documents contain the two alias
+        # entities and are ingested concurrently, the background task may
+        # execute before the second graph write completes — find_nodes_by_name
+        # returns zero nodes for entities not yet persisted.  A single retry
+        # after a grace period gives concurrent writes time to commit.
         alias_loader = AliasLoader(config=self._graph_config, graph_store=self._graph_store)
         try:
             alias_edges, skip_pairs = await alias_loader.load(collection, ns)
+            if not alias_edges and self._graph_config.alias_file:
+                await asyncio.sleep(0.5)
+                alias_edges, skip_pairs = await alias_loader.load(collection, ns)
         except Exception:  # noqa: BLE001
             logger.warning(
                 "MaintenanceLoop: AliasLoader.load() failed for %s/%s; proceeding with ANN only",

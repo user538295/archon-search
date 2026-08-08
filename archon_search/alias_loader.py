@@ -146,12 +146,14 @@ class AliasLoader:
                 )
                 continue
 
-            # Create edges for each same-type pair across nodes_a × nodes_b.
+            # Create edges for each pair across nodes_a × nodes_b.
+            # Manual aliases (TOML file) are user-declared: the type mismatch
+            # check that the automatic SynonymDetector uses is deliberately
+            # omitted here — NER may assign different entity_types to two names
+            # that the user explicitly declared as synonyms (S319).
             for node_a in nodes_a:
                 for node_b in nodes_b:
                     if node_a.id == node_b.id:
-                        continue
-                    if node_a.entity_type != node_b.entity_type:
                         continue
 
                     # Canonical lexicographic ordering of IDs.

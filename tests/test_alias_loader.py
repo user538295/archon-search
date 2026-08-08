@@ -175,16 +175,18 @@ def test_alias_loader_invalid_toml_logs_warning_and_returns_empty(
     assert caplog.messages, "Expected at least one WARNING to be logged"
 
 
-def test_alias_loader_multiple_nodes_same_type_creates_all_pairs(
+def test_alias_loader_multiple_nodes_creates_all_cross_pairs(
     tmp_path: Path,
 ) -> None:
-    """When a name resolves to multiple nodes, edges are created for same-type pairs only."""
+    """When a name resolves to multiple nodes, manual aliases create edges for ALL pairs
+    regardless of entity_type (S319: type constraint removed for manual aliases).
+    """
     from archon_search.alias_loader import AliasLoader
 
     alias_file = tmp_path / "aliases.toml"
     alias_file.write_text('"K8s" = "Kubernetes"\n', encoding="utf-8")
 
-    # Two K8s concept nodes and one Kubernetes system node (different type → no pair)
+    # Two K8s nodes (concept + system) and one Kubernetes node (concept)
     node_k8s_concept = GraphNode(
         id=make_stable_entity_id("concept", "K8s"),
         entity_name="K8s",
@@ -216,14 +218,45 @@ def test_alias_loader_multiple_nodes_same_type_creates_all_pairs(
     loader = AliasLoader(config=cfg, graph_store=store)
     edges, skip_pairs = asyncio.run(loader.load("test-col", "default"))
 
-    # Only the concept-concept pair qualifies (same entity_type)
-    assert len(edges) == 1
-    edge = edges[0]
-    src_id = min(node_k8s_concept.id, node_kube_concept.id)
-    tgt_id = max(node_k8s_concept.id, node_kube_concept.id)
-    assert edge.source_node_id == src_id
-    assert edge.target_node_id == tgt_id
-    assert skip_pairs == {(src_id, tgt_id)}
+    # Both pairs qualify: concept↔concept and system↔concept (no type constraint)
+    assert len(edges) == 2, (
+        f"Expected 2 edges (all cross-pairs); got {len(edges)}"
+    )
+    assert len(skip_pairs) == 2
+
+
+def test_alias_loader_cross_type_creates_edge(tmp_path: Path) -> None:
+    """S319: manual alias pair with different entity_types still creates synonym_of edge.
+
+    NER may assign K8s=person and Kubernetes=system. The TOML alias file explicitly
+    declares them as synonyms, so the type mismatch must not prevent the edge.
+    """
+    from archon_search.alias_loader import AliasLoader
+
+    alias_file = tmp_path / "aliases.toml"
+    alias_file.write_text('"K8s" = "Kubernetes"\n', encoding="utf-8")
+
+    node_k8s = _make_node("K8s", entity_type=EntityType.person)
+    node_kube = _make_node("Kubernetes", entity_type=EntityType.system)
+
+    store = _make_graph_store_mock()
+    store.find_nodes_by_name = AsyncMock(return_value=[node_k8s, node_kube])
+
+    cfg = GraphConfig(alias_file=str(alias_file))
+    loader = AliasLoader(config=cfg, graph_store=store)
+    edges, skip_pairs = asyncio.run(loader.load("test-col", "default"))
+
+    assert len(edges) == 1, (
+        f"Expected 1 edge despite type mismatch; got {len(edges)}"
+    )
+    assert edges[0].relationship_type == RelationshipType.synonym_of
+    assert edges[0].extraction_method == "manual"
+
+    src_id = min(node_k8s.id, node_kube.id)
+    tgt_id = max(node_k8s.id, node_kube.id)
+    assert edges[0].source_node_id == src_id
+    assert edges[0].target_node_id == tgt_id
+    assert (src_id, tgt_id) in skip_pairs
 
 
 def test_alias_loader_self_alias_produces_no_edge(tmp_path: Path) -> None:
@@ -429,6 +462,76 @@ def test_synonym_enrichment_uses_alias_loader_skip_pairs(tmp_path: Path) -> None
     written_edges = write_call_args.args[2] if len(write_call_args.args) >= 3 else write_call_args.kwargs.get("edges", [])
     assert alias_edge in written_edges, "alias_edge must be written"
     assert ann_edge in written_edges, "ann_edge must be written"
+
+
+def test_synonym_enrichment_retries_alias_on_unresolved_names(tmp_path: Path) -> None:
+    """S319 race: _run_synonym_enrichment retries AliasLoader.load() when alias_file is
+    configured but the first attempt returns empty edges (nodes not yet persisted).
+
+    The retry fires after a grace period, giving concurrent graph writes time to commit.
+    """
+    from archon_search.config import GraphConfig, MaintenanceConfig
+    from archon_search.jobs.maintenance_loop import MaintenanceLoop
+
+    node_a = _make_node("K8s")
+    node_b = _make_node("Kubernetes")
+    src_id = min(node_a.id, node_b.id)
+    tgt_id = max(node_a.id, node_b.id)
+    alias_edge = GraphEdge(
+        id=make_stable_edge_id(src_id, tgt_id, RelationshipType.synonym_of.value),
+        source_node_id=src_id,
+        target_node_id=tgt_id,
+        relationship_type=RelationshipType.synonym_of,
+        source_doc_id="alias-loader",
+        extraction_method="manual",
+    )
+    alias_skip = {(src_id, tgt_id)}
+
+    mock_graph_store = _make_graph_store_mock()
+
+    alias_file = tmp_path / "aliases.toml"
+    alias_file.write_text('"K8s" = "Kubernetes"\n', encoding="utf-8")
+    graph_cfg = GraphConfig(alias_file=str(alias_file))
+
+    loop = MaintenanceLoop(
+        job_store=MagicMock(),
+        search_store=MagicMock(),
+        config=MaintenanceConfig(),
+        data_dir=tmp_path,
+        graph_store=mock_graph_store,
+        graph_config=graph_cfg,
+    )
+
+    with (
+        patch(
+            "archon_search.alias_loader.AliasLoader.load",
+            new_callable=AsyncMock,
+            side_effect=[
+                ([], set()),                          # first attempt: nodes not found
+                ([alias_edge], alias_skip),            # retry: nodes now exist
+            ],
+        ) as mock_load,
+        patch(
+            "archon_search.synonym_detector.SynonymDetector.detect",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+    ):
+        asyncio.run(loop._run_synonym_enrichment("test-col", "default"))
+
+    # AliasLoader.load was called twice (initial + one retry)
+    assert mock_load.call_count == 2, (
+        f"Expected 2 calls to AliasLoader.load (initial + retry); got {mock_load.call_count}"
+    )
+    # Grace period sleep was called before retry
+    mock_sleep.assert_called_once()
+
+    # write_graph was called with the alias edge from the retry
+    mock_graph_store.write_graph.assert_called_once()
+    write_call_args = mock_graph_store.write_graph.call_args
+    written_edges = write_call_args.args[2] if len(write_call_args.args) >= 3 else write_call_args.kwargs.get("edges", [])
+    assert alias_edge in written_edges, "alias edge from retry must be written"
 
 
 def test_synonym_enrichment_alias_load_failure_falls_back_to_ann(tmp_path: Path) -> None:
