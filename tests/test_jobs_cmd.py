@@ -550,8 +550,13 @@ class TestJobsList:
         assert len(data_rows) == 1, f"printed {len(data_rows)} physical rows: {data_rows}"
         assert "Showing 1 of 100" in result.output
 
-    def test_list_no_footer_when_total_equals_items(self):
-        """When total == len(items), no truncation footer is printed."""
+    def test_list_footer_present_when_total_equals_items(self):
+        """S361: the footer is unconditional — it describes the table above it.
+
+        A ``--limit`` larger than the job count is the common case (the harness
+        step that regressed used ``--limit 200`` against 40 jobs). Suppressing
+        the footer there left the row count unaccounted for.
+        """
         runner = CliRunner()
         job = {
             "job_id": "abcdef123456",
@@ -563,9 +568,10 @@ class TestJobsList:
         }
         mock_resp = self._make_list_response(items=[job])
         with patch("httpx.get", return_value=mock_resp):
-            result = runner.invoke(jobs, ["list", "--api-key", "test-key"])
+            result = runner.invoke(jobs, ["list", "--limit", "200", "--api-key", "test-key"])
         assert result.exit_code == 0
-        assert "Showing" not in result.output
+        assert "Showing 1 of 1 jobs — use --limit to see more (max: 200)." in result.output
+        assert len(_data_rows(result.output)) == 1
 
 
 # ---------------------------------------------------------------------------
