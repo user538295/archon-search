@@ -139,6 +139,7 @@ class ImportArchiveReader:
 
     def __init__(self, archive_path: Path) -> None:
         self._archive_path = archive_path
+        self.skipped_lines: int = 0
 
     def read_manifest(self) -> dict:
         """Open the archive, validate its members, and return the parsed manifest.
@@ -166,15 +167,20 @@ class ImportArchiveReader:
 
         return manifest
 
-    def iter_docs(self, skip: int = 0) -> Iterator[dict]:
+    def iter_docs(self, skip: int = 0, on_error: str = "fail") -> Iterator[dict]:
         """Stream documents from ``documents.jsonl``, skipping the first *skip* lines.
 
         Each yielded value is a parsed JSON dict representing one document.
 
+        When *on_error* is ``"skip"``, corrupt JSON lines are logged, counted
+        in :attr:`skipped_lines`, and skipped.  When ``"fail"`` (default), a
+        corrupt line raises immediately.
+
         Raises:
-            ValueError: if a line cannot be parsed as JSON (includes the 1-based
-                line number in the message).
+            ValueError: if *on_error* is ``"fail"`` and a line cannot be parsed
+                as JSON (includes the 1-based line number in the message).
         """
+        self.skipped_lines = 0
         with tarfile.open(self._archive_path, "r:gz") as tf:
             member = tf.getmember("documents.jsonl")
             f = tf.extractfile(member)
@@ -191,6 +197,11 @@ class ImportArchiveReader:
                     lines_skipped += 1
                     continue
                 try:
-                    yield json.loads(line)
+                    parsed = json.loads(line)
                 except json.JSONDecodeError as exc:
+                    if on_error == "skip":
+                        self.skipped_lines += 1
+                        logger.warning("Corrupt line %d: %s", lineno, exc)
+                        continue
                     raise ValueError(f"Corrupt line {lineno}: {exc}") from exc
+                yield parsed

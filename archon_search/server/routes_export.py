@@ -223,18 +223,20 @@ async def _import_task(
         skipped = 0
         batch: list[ChunkRecord] = []
 
-        # Determine embedding dimension from the first document in the archive
-        # (needed to create the LanceDB table before ingesting into it).
+        # Determine embedding dimension from the first valid document in the
+        # archive (needed to create the LanceDB table before ingesting).
+        # When on_error="skip", corrupt JSON lines are skipped internally by
+        # iter_docs so a corrupt first line does not abort the job.
         embedding_dim: int | None = None
         if manifest["doc_count"] > 0:
-            for first_doc in reader.iter_docs(skip=0):
+            for first_doc in reader.iter_docs(skip=0, on_error=job.on_error):
                 try:
                     b64_first = first_doc["vector"]
                     raw_first = base64.standard_b64decode(b64_first)
                     embedding_dim = len(raw_first) // 4
                 except Exception:  # noqa: BLE001
-                    pass
-                break  # only need the first doc
+                    continue  # try next doc for dimension
+                break  # found a valid dimension
 
         # Ensure the LanceDB table exists before we ingest into it.
         # For non-empty archives: dimension is derived from the first vector.
@@ -242,19 +244,8 @@ async def _import_task(
         if embedding_dim is not None:
             await search_store.ensure_collection(job.collection, embedding_dim)
 
-        doc_iter = reader.iter_docs(skip=skip)
-        while True:
-            # Fetch next doc — iter_docs raises ValueError on corrupt JSON lines
-            try:
-                doc = next(doc_iter)
-            except StopIteration:
-                break
-            except ValueError as exc:
-                if job.on_error == "skip":
-                    skipped += 1
-                    logger.warning("_import_task: skipping corrupt line: %s", exc)
-                    continue
-                raise
+        doc_iter = reader.iter_docs(skip=skip, on_error=job.on_error)
+        for doc in doc_iter:
 
             # Decode vector from base64 little-endian float32
             try:
@@ -336,12 +327,16 @@ async def _import_task(
             # Empty archive: table was never created; nothing to index or recompute.
             logger.info("_import_task: archive for %r is empty; skipping FTS rebuild and centroid recompute", job.collection)
 
+        # Total skipped = JSON-parse errors (handled by iter_docs) + vector/doc
+        # errors (handled locally in the while loop above).
+        total_skipped = skipped + reader.skipped_lines
+
         store.update(
             job_id,
             status=JobStatus.DONE,
             result={
                 "imported": processed,
-                "skipped": skipped,
+                "skipped": total_skipped,
                 "total_in_archive": manifest["doc_count"],
             },
         )

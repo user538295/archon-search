@@ -64,12 +64,21 @@ def _make_archive(
     schema_version: int = EXPORT_SCHEMA_VERSION,
     active_embedding_model: str = _DEFAULT_MODEL,
     corrupt_line: bool = False,
+    corrupt_index: int | None = None,
 ) -> None:
-    """Build a minimal valid .tar.gz archive with the given chunks."""
+    """Build a minimal valid .tar.gz archive with the given chunks.
+
+    *corrupt_line=True* corrupts the last line (backward-compat).
+    *corrupt_index* corrupts a specific 0-based line index.
+    """
+    _corrupt_at: int | None = corrupt_index
+    if _corrupt_at is None and corrupt_line:
+        _corrupt_at = len(chunks) - 1
+
     tmp_jsonl = archive_path.parent / ".tmp.jsonl"
     with tmp_jsonl.open("wb") as f:
         for i, chunk in enumerate(chunks):
-            if corrupt_line and i == len(chunks) - 1:
+            if _corrupt_at is not None and i == _corrupt_at:
                 f.write(b"NOT_JSON\n")
             else:
                 doc = {
@@ -484,3 +493,63 @@ async def test_import_task_resume_from_checkpoint(
     assert ingest_call_total[0] == expected_ingested, (
         f"Expected {expected_ingested} docs in second run, got {ingest_call_total[0]}"
     )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_task_on_error_skip_corrupt_first_line(
+    tmp_path: Path,
+    tmp_job_store: JobStore,
+    tmp_search_store: SearchStore,
+    search_config: SearchConfig,
+    mock_pipeline: MagicMock,
+    mock_embedder_cache: MagicMock,
+) -> None:
+    """S355: corrupt FIRST line with on_error='skip' must not abort the job."""
+    col = "onerr-skip-first"
+    chunks = [_chunk(_doc_id(), i) for i in range(3)]
+
+    archive_path = tmp_path / "corrupt-first.tar.gz"
+    _make_archive(archive_path, col, chunks, corrupt_index=0)
+
+    import_job = _make_import_job(col, str(archive_path), tmp_job_store, on_error="skip")
+    await _import_task(
+        import_job, tmp_job_store, tmp_search_store, mock_pipeline, mock_embedder_cache, search_config
+    )
+
+    finished = tmp_job_store.get(import_job.job_id)
+    assert finished is not None
+    assert finished.status == JobStatus.DONE, f"Expected DONE, got {finished.status}: {finished.error}"
+    assert finished.result["skipped"] == 1
+    assert finished.result["imported"] == 2
+    assert finished.result["total_in_archive"] == 3
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_task_on_error_skip_corrupt_middle_line(
+    tmp_path: Path,
+    tmp_job_store: JobStore,
+    tmp_search_store: SearchStore,
+    search_config: SearchConfig,
+    mock_pipeline: MagicMock,
+    mock_embedder_cache: MagicMock,
+) -> None:
+    """S355: valid lines after a corrupt middle line must all be imported."""
+    col = "onerr-skip-middle"
+    chunks = [_chunk(_doc_id(), i) for i in range(3)]
+
+    archive_path = tmp_path / "corrupt-middle.tar.gz"
+    _make_archive(archive_path, col, chunks, corrupt_index=1)
+
+    import_job = _make_import_job(col, str(archive_path), tmp_job_store, on_error="skip")
+    await _import_task(
+        import_job, tmp_job_store, tmp_search_store, mock_pipeline, mock_embedder_cache, search_config
+    )
+
+    finished = tmp_job_store.get(import_job.job_id)
+    assert finished is not None
+    assert finished.status == JobStatus.DONE, f"Expected DONE, got {finished.status}: {finished.error}"
+    assert finished.result["skipped"] == 1
+    assert finished.result["imported"] == 2
+    assert finished.result["total_in_archive"] == 3
