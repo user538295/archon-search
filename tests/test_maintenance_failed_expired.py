@@ -277,17 +277,17 @@ async def test_maintenance_loop_no_age_limit_expired_via_retry_exhaustion(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_maintenance_loop_no_age_limit_eligible_job_is_reenqueued(tmp_path: Path) -> None:
-    """retry_max_age_hours=0 disables age filter; very old job with remaining retries is still re-enqueued."""
+async def test_maintenance_loop_age_zero_expires_regardless_of_retry_budget(tmp_path: Path) -> None:
+    """retry_max_age_hours=0 means cutoff=now, so every job is immediately aged out (FAILED_EXPIRED)."""
     job = _make_failed_ingest_job("/data/file.txt", age_hours=200.0, retry_count=0)
     js = MagicMock()
     js.list.return_value = [job]
-    js.create.return_value = MagicMock()
+    js.transition.return_value = MagicMock()
     loop = _make_loop(tmp_path, job_store=js, retry_max_attempts=3, retry_max_age_hours=0)
-    retry_counts: dict = {}  # dict says 0 (within attempts)
+    retry_counts: dict = {}
     await loop._run_failed_ingest_retry({}, retry_counts)
-    js.create.assert_called_once()
-    js.transition.assert_not_called()
+    js.create.assert_not_called()
+    js.transition.assert_called_once_with(job.job_id, from_statuses={JobStatus.FAILED}, to_status=JobStatus.FAILED_EXPIRED)
 
 
 @pytest.mark.asyncio

@@ -198,11 +198,12 @@ def test_e2e_defaults_produce_clean_config(runner: CliRunner, tmp_path: Path) ->
     assert config_path.exists()
     doc = tomlkit.parse(config_path.read_text())
 
-    # S561: accepted defaults are NOT written — 20_wizard.md:701.
-    assert "enabled" not in doc.get("telemetry", {}), "telemetry.enabled should be omitted (default)"
-    assert "routing_strategy" not in doc.get("routing", {}), "routing_strategy should be omitted (default centroid)"
-    assert "watch" not in doc.get("collections", {}), "watch should be omitted (default false)"
-    assert "format" not in doc.get("logging", {}), "logging.format should be omitted (default text)"
+    # Wizard always writes all configurable fields, even defaults, so
+    # mandatory sections exist on first run and re-run overwrites cleanly.
+    assert doc["telemetry"]["enabled"] is False, "telemetry.enabled should be False (default)"
+    assert doc["routing"]["routing_strategy"] == "centroid", "routing_strategy should be centroid (default)"
+    assert doc["collections"]["watch"] is False, "watch should be False (default)"
+    assert doc["logging"]["format"] == "text", "logging.format should be text (default)"
 
 
 # ---------------------------------------------------------------------------
