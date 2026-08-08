@@ -464,3 +464,40 @@ async def test_retry_deduplication_multiple_failed_jobs_same_path(tmp_path: Path
     # Count incremented once, not twice
     key = "ns1/docs//data/file.txt"
     assert retry_counts.get(key) == 1
+
+
+# ---------------------------------------------------------------------------
+# S499: retry_max_age_hours = 0 disables retry entirely
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retry_max_age_hours_zero_expires_all_jobs(tmp_path: Path) -> None:
+    """S499: retry_max_age_hours=0 means every FAILED job is aged out immediately.
+
+    No job is ever young enough → all transition to FAILED_EXPIRED, none re-enqueued.
+    """
+    job = _make_failed_ingest_job(
+        "/data/file.txt", collection="docs", namespace="default", age_hours=0.001
+    )
+    js = MagicMock()
+    js.list.return_value = [job]
+    js.transition.return_value = MagicMock()
+
+    loop = _make_loop(
+        tmp_path, job_store=js, retry_max_age_hours=0, retry_max_attempts=3
+    )
+
+    health: dict = {}
+    retry_counts: dict = {}
+    await loop._run_failed_ingest_retry(health, retry_counts)
+
+    # No re-enqueue — retry is disabled
+    js.create.assert_not_called()
+
+    # Job should be transitioned to FAILED_EXPIRED
+    js.transition.assert_called_once_with(
+        job.job_id,
+        from_statuses={JobStatus.FAILED},
+        to_status=JobStatus.FAILED_EXPIRED,
+    )

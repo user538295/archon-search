@@ -925,7 +925,7 @@ class MaintenanceLoop:
         max_age_hours = self._config.retry_max_age_hours
         max_attempts = self._config.retry_max_attempts
         now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(hours=max_age_hours) if max_age_hours > 0 else None
+        cutoff = now - timedelta(hours=max_age_hours)
 
         # Track collections that had at least one re-enqueue.
         retried_collections: set[str] = set()
@@ -957,46 +957,47 @@ class MaintenanceLoop:
             current_count = retry_counts.get(retry_key, 0)
 
             # Age filter — aged-out jobs transition to FAILED_EXPIRED regardless of retry count.
-            if cutoff is not None:
-                try:
-                    job_created = datetime.fromisoformat(job.created_at)
-                    aged_out = job_created < cutoff
-                except (ValueError, TypeError):
-                    logger.warning(
-                        "MaintenanceLoop: FAILED job %s for %s in %s/%s has an unparseable "
-                        "created_at timestamp (%r); skipping",
+            # When retry_max_age_hours=0, cutoff=now so every existing job is aged out,
+            # effectively disabling retry (no job is ever young enough).
+            try:
+                job_created = datetime.fromisoformat(job.created_at)
+                aged_out = job_created < cutoff
+            except (ValueError, TypeError):
+                logger.warning(
+                    "MaintenanceLoop: FAILED job %s for %s in %s/%s has an unparseable "
+                    "created_at timestamp (%r); skipping",
+                    job.job_id,
+                    job.source_path,
+                    job.namespace,
+                    job.collection,
+                    job.created_at,
+                )
+                seen_keys.add(retry_key)
+                continue
+            if aged_out:
+                logger.warning(
+                    "MaintenanceLoop: FAILED job %s for %s in %s/%s has aged out "
+                    "(created %s, cutoff %s); transitioning to FAILED_EXPIRED",
+                    job.job_id,
+                    job.source_path,
+                    job.namespace,
+                    job.collection,
+                    job.created_at,
+                    cutoff.isoformat(),
+                )
+                result = self._job_store.transition(
+                    job.job_id,
+                    from_statuses={JobStatus.FAILED},
+                    to_status=JobStatus.FAILED_EXPIRED,
+                )
+                if result is None:
+                    logger.debug(
+                        "MaintenanceLoop: transition to FAILED_EXPIRED for job %s "
+                        "returned None — already handled or evicted",
                         job.job_id,
-                        job.source_path,
-                        job.namespace,
-                        job.collection,
-                        job.created_at,
                     )
-                    seen_keys.add(retry_key)
-                    continue
-                if aged_out:
-                    logger.warning(
-                        "MaintenanceLoop: FAILED job %s for %s in %s/%s has aged out "
-                        "(created %s, cutoff %s); transitioning to FAILED_EXPIRED",
-                        job.job_id,
-                        job.source_path,
-                        job.namespace,
-                        job.collection,
-                        job.created_at,
-                        cutoff.isoformat(),
-                    )
-                    result = self._job_store.transition(
-                        job.job_id,
-                        from_statuses={JobStatus.FAILED},
-                        to_status=JobStatus.FAILED_EXPIRED,
-                    )
-                    if result is None:
-                        logger.debug(
-                            "MaintenanceLoop: transition to FAILED_EXPIRED for job %s "
-                            "returned None — already handled or evicted",
-                            job.job_id,
-                        )
-                    seen_keys.add(retry_key)
-                    continue
+                seen_keys.add(retry_key)
+                continue
 
             # Retry-exhausted jobs (within age cutoff) also transition to FAILED_EXPIRED.
             if current_count >= max_attempts:
