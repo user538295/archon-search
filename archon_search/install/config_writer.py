@@ -144,16 +144,17 @@ def _reconcile_llama_cpp_base_url(section: tomlkit.items.Table, base_url: str) -
 def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFeatures) -> None:
     """Write WizardFeatures fields to *doc* in-place.
 
-    Re-run safe: the five plain feature-flag fields (``eager_load_embedders``,
-    ``watch``, ``telemetry.enabled``, ``routing_strategy``, ``log_format``) are
-    ALWAYS written so a re-run that disables any of them overwrites the old value.
-    ``disable_reranker`` stays conditional — re-run safety there is provided by
-    the profile writer, which writes the profile's ``reranker_model`` default
-    *before* calling this function. Missing sections are created via tomlkit.table().
-    ``install_code_extra`` itself is intentionally NOT written — it controls a
-    subprocess install, not a config key. ``install_graph_extra`` also controls a
-    subprocess install, but additionally writes ``graph.enabled = true`` (BE-11):
-    without it, the auto-installed ``[graph]`` extras are inert (C1-I-1).
+    Only non-default values are written (20_wizard.md:701). When a value
+    matches its default, the key is removed from the doc if it was previously
+    set (re-run safe: a re-run that returns to the default removes the key
+    the prior run wrote). ``disable_reranker`` stays conditional — re-run
+    safety there is provided by the profile writer, which writes the profile's
+    ``reranker_model`` default *before* calling this function. Missing sections
+    are created via tomlkit.table(). ``install_code_extra`` itself is
+    intentionally NOT written — it controls a subprocess install, not a config
+    key. ``install_graph_extra`` also controls a subprocess install, but
+    additionally writes ``graph.enabled = true`` (BE-11): without it, the
+    auto-installed ``[graph]`` extras are inert (C1-I-1).
     ``install_multilingual_extra`` is likewise NOT written here — unlike graph,
     the ``[database].multilingual`` key is written separately by the profile
     config writer (``_write_profile_config``/``_profile_toml``), so no overlay
@@ -164,24 +165,22 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         if name not in doc:
             doc.add(name, tomlkit.table())
 
+    def _set_or_remove(section: str, key: str, value: object, default: object) -> None:
+        if value != default:
+            _ensure_section(section)
+            doc[section][key] = value
+        elif section in doc and key in doc[section]:
+            del doc[section][key]
+
     if features.disable_reranker:
         _ensure_section("database")
         doc["database"]["reranker_model"] = ""  # stays conditional — profile writer pre-fills the default
 
-    _ensure_section("database")
-    doc["database"]["eager_load_embedders"] = features.eager_load_embedders
-
-    _ensure_section("collections")
-    doc["collections"]["watch"] = features.enable_watch
-
-    _ensure_section("telemetry")
-    doc["telemetry"]["enabled"] = features.enable_telemetry
-
-    _ensure_section("routing")
-    doc["routing"]["routing_strategy"] = features.routing_strategy
-
-    _ensure_section("logging")
-    doc["logging"]["format"] = features.log_format
+    _set_or_remove("database", "eager_load_embedders", features.eager_load_embedders, False)
+    _set_or_remove("collections", "watch", features.enable_watch, False)
+    _set_or_remove("telemetry", "enabled", features.enable_telemetry, False)
+    _set_or_remove("routing", "routing_strategy", features.routing_strategy, "centroid")
+    _set_or_remove("logging", "format", features.log_format, "text")
 
     # C15 Tier 1 deployment flags
     if features.host is not None:
