@@ -110,6 +110,7 @@ archon-search collection add /Users/me/docs --wait
 
 - `--wait` — poll `GET /jobs/{id}` until terminal; prints `Collection '<name>' ingested successfully.` on DONE, exits `1` on FAILED. Ctrl-C during `--wait` cancels the local poll only; the server job keeps running.
 - If the path/name is already registered the server returns **409** and the CLI exits `1`.
+- If the path does not exist, the server still accepts the request (**202**) and creates a collection entry, but the background ingest job transitions to **FAILED** with `"path does not exist or is not a file/directory"`. The collection remains registered (with `docs=0`); use `collection remove` to clean it up.
 - There is no "pin" flag — add pinned collections to `pinned_collections` in TOML manually. The request body accepts only `path` and optional `embedding_model` (name is always server-derived).
 
 ### `archon-search collection remove <name>`

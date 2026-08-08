@@ -5153,3 +5153,63 @@ def test_get_collection_info_ttl_null_when_not_set(
     data = response.json()
     assert data["default_ttl_seconds"] is None
     assert data["schema_version"] == 0
+
+
+# ---------------------------------------------------------------------------
+# S284 — collection add with nonexistent path: behavioral + doc-consistency
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_ingest_raises_for_nonexistent_path() -> None:
+    """_dispatch_ingest raises FileNotFoundError when the path does not exist (S284).
+
+    This proves the wire-truth: a nonexistent path → FAILED job, because the
+    except-Exception handler in _default_ingest_task catches this and sets FAILED.
+    """
+    from archon_search.server.routes_jobs import IngestRequest, _dispatch_ingest
+
+    body = IngestRequest(
+        collection="test-col",
+        path="/nonexistent/archon/s284/path",
+    )
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_embedder_cache = MagicMock()
+    mock_embedder_cache.get_or_load = AsyncMock(return_value=MagicMock())
+    mock_config = MagicMock()
+    mock_config.embedding_model = "test-model"
+
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        await _dispatch_ingest(
+            body,
+            namespace="default",
+            search_store=mock_store,
+            embedder_cache=mock_embedder_cache,
+            pipeline=MagicMock(),
+            config=mock_config,
+        )
+
+
+def test_nonexistent_path_behavior_documented() -> None:
+    """User manual documents that a nonexistent path produces a FAILED job (S284).
+
+    The doc section for ``collection add`` must mention the FAILED-job outcome
+    so users know what to expect when the path doesn't exist.
+    """
+    doc_path = (
+        Path(__file__).resolve().parent.parent
+        / "Documentation"
+        / "UserManual"
+        / "50_ingestion_and_collections.md"
+    )
+    content = doc_path.read_text()
+    # Scope to the collection-add section only
+    start = content.index("### `archon-search collection add")
+    # Find the next h3 section
+    next_h3 = content.index("\n### ", start + 1)
+    section = content[start:next_h3]
+    assert "does not exist" in section.lower() or "nonexistent" in section.lower(), (
+        "S284: the 'collection add' doc section must describe the behavior "
+        "when the path does not exist (FAILED job)"
+    )
