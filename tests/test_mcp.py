@@ -473,6 +473,39 @@ def test_mcp_search_with_context_hyde_false_returns_hyde_applied_false() -> None
     assert result.get("hyde_applied") is False
 
 
+def test_mcp_explain_reranker_score_populated_when_rerank_true() -> None:
+    """S391: MCP explain with rerank=true returns non-null reranker_score in breakdown."""
+    import asyncio
+    from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
+    from archon_search.pipeline import ExplainPipelineResult
+
+    breakdown = SearchScoreBreakdown(
+        vector_rank=0, vector_score=0.9, vector_score_kind="distance",
+        fts_rank=0, fts_score=1.5, fts_score_kind="bm25",
+        rrf_score=0.03, reranker_score=2.85,
+    )
+    candidate = ScoredSearchCandidate(
+        doc_id="d1", chunk_id="d1-000000", text="test text",
+        source_path="/tmp/test.md", score_breakdown=breakdown,
+        collection="col1", file_type="md", indexed_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z", ingested_by="http",
+    )
+    explain_result = ExplainPipelineResult(
+        top_results=[candidate], near_misses=[], acl_filtered=False,
+        excluded_collections=[],
+    )
+    pipeline = _make_hyde_pipeline_mock(explain_result=explain_result)
+    config = _make_config_with_hyde(enabled=False)
+    tool_fn = _get_hyde_tool_fn("explain", pipeline, config=config)
+
+    result = asyncio.run(tool_fn(query="test", collection="col1", rerank=True))
+
+    assert isinstance(result, dict)
+    results = result.get("results", [])
+    assert len(results) == 1
+    assert results[0]["breakdown"]["reranker_score"] == pytest.approx(2.85)
+
+
 def test_mcp_explain_hyde() -> None:
     """explain tool accepts hyde=True and returns hyde_applied=True in result dict."""
     import asyncio
