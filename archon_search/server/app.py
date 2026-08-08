@@ -626,6 +626,14 @@ def create_app(
                             exc_info=True,
                         )
 
+                # Startup: sync collections (auto-reindex on chunk_size change, S483)
+                all_cols = list(config.pinned_collections) + list(config.collections)
+                if all_cols:
+                    try:
+                        await app.state.collection_sync.sync(all_cols)
+                    except Exception:  # noqa: BLE001 — sync must never block REST startup
+                        logger.warning("Startup sync failed; continuing", exc_info=True)
+
                 yield
         finally:
             # Shutdown: stop filesystem watcher before disconnecting the store.
