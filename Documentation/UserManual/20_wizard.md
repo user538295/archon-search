@@ -726,7 +726,7 @@ Collections are normally managed through the HTTP API or the `archon-search inge
 
 ### Graph search
 
-The wizard does not configure the `[graph]` section (entity/community graph, synonym enrichment, PageRank, PPR). Graph search is enabled and tuned by editing `[graph]` in the config directly. See [`65_graph_search.md`](./65_graph_search.md) for prose graph search and [`70_code_graph_and_impact.md`](./70_code_graph_and_impact.md) for the code graph and impact analysis.
+The wizard writes `[graph].enabled = true` when `--code` is passed (because code graphing requires the graph subsystem). It also writes `[graph].provider` and `[graph].extraction_model` when the user selects an LLM enrichment provider during the interactive flow. All other `[graph]` keys (synonym enrichment, PageRank, PPR tuning) are configured by editing the config directly. See [`65_graph_search.md`](./65_graph_search.md) for prose graph search and [`70_code_graph_and_impact.md`](./70_code_graph_and_impact.md) for the code graph and impact analysis.
 
 ### Telemetry log directory
 
