@@ -47,7 +47,7 @@ Status codes:
 
 - `200` — success (empty `results` means the search ran but matched nothing).
 - `404` — collection not found in the caller's namespace.
-- `422` — invalid selection (both/neither of `collection`/`collections`), fan-out over `max_fanout`, `top_k` over `top_k_max`, or a config conflict (e.g. missing HyDE/RAG-Fusion provider package).
+- `422` — invalid selection (both/neither of `collection`/`collections`), fan-out over `max_fanout`, `top_k` over `top_k_max`, or an invalid model/parameter. A missing HyDE/RAG-Fusion provider package prevents startup entirely (see `160_troubleshooting.md`).
 - `503` — internal metadata lookup failed.
 - `500` — pipeline stage exception (embedder, store, or reranker raised).
 - `504` — pipeline call timed out (~30 s).
@@ -233,7 +233,7 @@ The response sets `hyde_applied: true` when HyDE was used, or `false` on fallbac
 
 ### Fallback behaviour
 
-HyDE never degrades availability. It falls back silently (`hyde_applied: false`) when: `[hyde] enabled = false`; the required API key is absent (WARNING logged once); the provider call times out (`timeout_seconds`) or errors; or the per-process rate limit is exhausted. The one non-silent case is `hyde=true` with the provider package uninstalled — that returns `422` (a config error, not a runtime fallback). The rate limit is per-process: with N workers the effective call rate is up to `N × max_requests_per_minute`.
+HyDE never degrades availability. It falls back silently (`hyde_applied: false`) when: `[hyde] enabled = false`; the required API key is absent (WARNING logged once); the provider call times out (`timeout_seconds`) or errors; or the per-process rate limit is exhausted. The one non-silent case is `[hyde] enabled = true` with the provider package uninstalled — the server refuses to start with a `ConfigError` naming the missing package (see `160_troubleshooting.md`). The rate limit is per-process: with N workers the effective call rate is up to `N × max_requests_per_minute`.
 
 ## RAG Fusion multi-query recall (C5)
 
