@@ -1249,3 +1249,48 @@ async def test_maintenance_loop_receives_enrichment_client(tmp_path: Path) -> No
 
     mock_builder_cls.assert_called_once()
     assert mock_builder_cls.call_args.kwargs["enrichment_client"] is sentinel_client
+
+
+@pytest.mark.asyncio
+async def test_empty_collection_gets_health_entry(tmp_path: Path) -> None:
+    """S513: empty collections (in metadata but not in list_collections) get a health entry.
+
+    list_collections() only returns collections with LanceDB tables. An empty
+    collection (registered but with zero chunks) has metadata but no table, so
+    the maintenance pass must also consult get_all_collections_meta() to ensure
+    every known collection gets a collection_health entry with last_error=null.
+    """
+    from archon_search.collection_meta import CollectionMeta
+
+    ss = AsyncMock()
+    # list_collections returns only the non-empty collection
+    ss.list_collections = AsyncMock(
+        return_value=[_make_collection_info("filled", namespace="default", chunk_count=5)]
+    )
+    # get_all_collections_meta returns both the filled and the empty collection
+    empty_meta = CollectionMeta(name="empty_corpus", namespace="default", chunk_count=0)
+    filled_meta = CollectionMeta(name="filled", namespace="default", chunk_count=5)
+    ss.get_all_collections_meta = AsyncMock(return_value=[filled_meta, empty_meta])
+    ss.get_collection_meta = AsyncMock(return_value=None)
+
+    loop = _make_loop(tmp_path, search_store=ss)
+    loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
+    loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
+    loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
+    loop._run_graph_gc = AsyncMock(return_value=(0, None))  # type: ignore[method-assign]
+    loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
+
+    await loop._run_one_pass()
+
+    state_file = tmp_path / ".maintenance-state.json"
+    loaded = json.loads(state_file.read_text(encoding="utf-8"))
+    health = loaded["collection_health"]
+
+    # Both collections must have a health entry
+    assert "default/filled" in health, f"filled collection missing from health: {list(health)}"
+    assert "default/empty_corpus" in health, (
+        f"empty collection 'empty_corpus' has no entry in collection_health "
+        f"(entries: {list(health)})"
+    )
+    # Empty collection's health entry must have last_error=null (FTS skip is not an error)
+    assert health["default/empty_corpus"]["last_error"] is None

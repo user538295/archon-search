@@ -1181,6 +1181,30 @@ class MaintenanceLoop:
 
             health[key] = col_health
 
+        # S513: empty collections have metadata but no LanceDB table, so
+        # list_collections() does not return them.  Consult collection metadata
+        # to ensure every known collection gets a health entry.
+        visited_keys: set[str] = {f"{i.namespace}/{i.name}" for i in collections}
+        try:
+            all_meta = await self._search_store.get_all_collections_meta()
+            for meta in all_meta:
+                meta_key = f"{meta.namespace}/{meta.name}"
+                if meta_key in visited_keys:
+                    continue
+                if self._is_excluded(meta.namespace, meta.name):
+                    continue
+                col_health = health.get(meta_key, dict(_EMPTY_HEALTH_ENTRY))
+                col_health["last_error"] = None
+                col_health["meta_chunk_count"] = meta.chunk_count
+                col_health["mutations_since_recompute"] = meta.mutations_since_recompute
+                health[meta_key] = col_health
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "MaintenanceLoop: get_all_collections_meta failed; "
+                "empty collections may lack health entries: %s",
+                exc,
+            )
+
         # After the per-collection loop, record the timestamp of the prune pass when
         # the policy is enabled; preserve the previous value when disabled.
         if self._config.prune_expired_chunks:
