@@ -1,6 +1,48 @@
 # Changelog
 
 
+## [26.8.1916] - 2026-08-08
+
+**Server initialization, configuration wiring, and concurrent-write safety fixes**
+
+**Search & retrieval**
+- `POST /explain` now bounds the candidate pool by `top_k_retrieve` for consistency with `POST /search`
+- `POST /explain` with a partially unknown collections list returns `200` with `excluded_collections[]` instead of failing the whole request with `404`
+- `reranker_score` is now populated in search results when `rerank=true`
+- Parser permits SVG and GIF files through the fallback text handler
+
+**Ingestion robustness**
+- Corrupt JSONL lines with `on_error=skip` are now skipped gracefully without aborting the entire job; corrupt lines are logged and counted separately
+- `ParseError` failures now return the correct error code `"parse_error"` matching the MCP contract (previously returned `null`)
+- Server now creates `WatcherManager` on startup when `watch=true` to detect filesystem changes; new files are ingested automatically instead of remaining undiscovered
+
+**Server initialization & startup**
+- Startup now calls `collection_sync.sync()` to detect `chunk_size` changes and trigger auto-reindex detection
+- `WatcherManager` is instantiated in the lifespan when `watch=true`, making filesystem monitoring functional for the first time
+
+**Configuration & state management**
+- `config_writer` writes all mandatory TOML sections (`telemetry`, `routing`, etc.) even when using defaults, ensuring a valid config file
+- Wizard omits default-valued keys from generated config for cleaner, more readable files
+- `fanout_timeout_seconds`, `max_fanout`, and `fanout_leg_trim` are now properly wired from TOML into `SearchPipeline` (previously silently ignored, causing multi-collection timeouts to never fire)
+- `PATCH /collections/{name}` with a different-dimension embedding model now correctly defers the dimension change to `POST /collections/{name}/reindex` instead of rejecting with `422`
+- Empty collections (metadata-only, zero chunks) are now included in maintenance health entries for consistent `/status` visibility
+
+**Error handling & resilience**
+- `DELETE /collections` returns `503` when an ingest is actively writing to prevent concurrent delete-during-write data corruption
+- `POST /search` and `POST /explain` return `504` when multi-collection fan-out exceeds the configured `fanout_timeout_seconds`
+- Backup export rotation now runs synchronously after the backup job completes instead of waiting up to 60 seconds for the next maintenance poll cycle
+
+**Graph & aliasing**
+- Alias loader retry with 0.5s grace period resolves race condition where synonym edges failed to create on concurrent ingests
+- Manual aliases (TOML) are no longer rejected when source and target entities have mismatched `entity_type`; type constraints remain for automatic synonym detection
+
+**Routing consistency**
+- `routing_confidence_threshold` is now enforced consistently across all collection tiers
+
+**Search result accuracy**
+- `list_collections` now reports actual document counts via `count_documents` instead of hardcoding `0`
+
+
 ## [26.8.1848] - 2026-08-04
 
 **JSON logging: uvicorn startup and error lines now properly formatted**
