@@ -148,7 +148,7 @@ The container reads the same env vars as a host-installed server, plus several t
 | `ARCHON_SEARCH_CONTAINER` | `1` (baked into image) | Adds `StreamHandler(sys.stderr)` to the `archon_search` logger so `docker logs` captures output. |
 | `FASTEMBED_CACHE_PATH` | `/data/fastembed-cache` (baked into image) | Persists fastembed-downloaded model weights on the mounted volume instead of the ephemeral container layer. |
 | `ARCHON_SEARCH_KEY_FILE` | unset | Overrides the key file path. Takes precedence over `ARCHON_SEARCH_DATA_DIR` for the key file only. |
-| `ARCHON_SEARCH_CONFIG` | unset | Points at a TOML config file. Required if you want `archon-search collection add` to work inside the container — that command sends the path to the server which writes it to TOML, and without `ARCHON_SEARCH_CONFIG=/data/archon-search.toml` the server will try to write outside the mounted volume. `collection remove` also proxies through the server. |
+| `ARCHON_SEARCH_CONFIG` | unset | Points at a TOML config file. Optional — when unset, the default path is `~/.archon-search/archon-search.toml`, which resolves to `/data/.archon-search/archon-search.toml` inside the container (because `HOME=/data`), so `collection add/remove` already writes to the mounted volume. Set explicitly (e.g. `ARCHON_SEARCH_CONFIG=/data/archon-search.toml`) only if you need a specific location. |
 | `ARCHON_EXTRAS` | `graph,code,multilingual` | Comma-separated list of optional package extras installed by the entrypoint on first start into `/pip-packages`. Set to `""` to skip extras and run core-only. Change the value and the entrypoint re-installs on the next start (stamp-based detection). |
 | `HOME` | `/data` (baked into image) | Required so pip operations inside the container write to the persistent volume rather than the ephemeral layer. Do not override unless you also relocate `/data`. |
 
@@ -284,7 +284,7 @@ The container speaks plaintext HTTP only. Put a reverse proxy (nginx, Caddy, Tra
 
 - **`GET /ready` does not gate readiness on model availability** — `ready` reflects only whether the LanceDB storage layer is connected. A `checks.models` field reports model-validation state (`pending`/`ok`/`warn`/`fail`) but does not affect the HTTP status or the `ready` flag. The first `/search` after a cold start may still pay a multi-second model-load tax.
 - **In-flight ingest jobs are not awaited on SIGTERM** — the container exits cleanly, but a job in progress is marked `FAILED` on the next start. Tune `stop_grace_period` to your workload.
-- **`archon-search collection add` writes to the TOML file via the server** — see `ARCHON_SEARCH_CONFIG` above. `collection remove` also proxies through the server. Operators who need dynamic collection management inside the container must mount a config file under `/data` and point `ARCHON_SEARCH_CONFIG` at it.
+- **`archon-search collection add` writes to the TOML file via the server** — see `ARCHON_SEARCH_CONFIG` above. `collection remove` also proxies through the server. The default config path (`/data/.archon-search/archon-search.toml`) is already on the mounted volume, so `ARCHON_SEARCH_CONFIG` is optional for collection management.
 - **No Apple Silicon / Metal GPU image.** Apple GPUs are not supported in v1.
 
 ## Development and testing with Docker

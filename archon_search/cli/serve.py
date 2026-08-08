@@ -27,9 +27,8 @@ logger = logging.getLogger(__name__)
 
 _CONTAINER_COLLECTION_WARNING = (
     "ARCHON_SEARCH_DATA_DIR is set but ARCHON_SEARCH_CONFIG is not — "
-    "'collection add/remove' commands will fail; set "
-    "ARCHON_SEARCH_CONFIG=/data/archon-search.toml to enable collection "
-    "management inside the container."
+    "config will be written to the default path (~/.archon-search/archon-search.toml); "
+    "set ARCHON_SEARCH_CONFIG=/data/archon-search.toml for an explicit location."
 )
 
 
