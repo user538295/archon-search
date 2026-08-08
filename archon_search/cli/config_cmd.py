@@ -48,6 +48,26 @@ def _default_toml() -> str:
     return tomlkit.dumps(doc)
 
 
+def _effective_toml(path: Path) -> str:
+    """Return the file's TOML with every missing default section/key filled in.
+
+    The wizard deliberately omits default-valued keys from the written file, so a
+    raw echo would show an incomplete config.
+    """
+    doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.exists() else tomlkit.document()
+    defaults = tomlkit.parse(_default_toml())
+
+    for section, table in defaults.items():
+        if section not in doc:
+            doc[section] = table
+            continue
+        for key, value in table.items():
+            if key not in doc[section]:
+                doc[section][key] = value
+
+    return tomlkit.dumps(doc)
+
+
 @click.group()
 def config() -> None:
     """Show or edit configuration."""
@@ -58,10 +78,7 @@ def config() -> None:
 def show(config_path: Path | None) -> None:
     """Show current configuration."""
     path = config_path or get_default_config_path()
-    if path.exists():
-        click.echo(path.read_text(encoding="utf-8"))
-    else:
-        click.echo(_default_toml())
+    click.echo(_effective_toml(path))
 
 
 @config.command("get")

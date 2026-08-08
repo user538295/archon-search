@@ -179,16 +179,18 @@ After the license gates, the wizard asks about optional features. Each question 
 #### 5a. Code enrichment
 
 ```
-Code enrichment (tree-sitter):
+Code enrichment (tree-sitter) + code graphing:
   Parses and indexes code files structurally — functions, classes, docstrings.
-  Installs tree-sitter and language parsers (~50 MB). Recommended if your corpus
-  includes source code. Default: disabled.
-Index code files (installs tree-sitter enrichment)? [y/N]:
+  Installs tree-sitter language parsers (~50 MB) and graph enrichment (spaCy),
+  and enables graph.enabled in the generated config. Both are set up together
+  automatically so code graphing works out of the box. Recommended if your
+  corpus includes source code. Default: disabled.
+Index code files (installs tree-sitter + graph enrichment, enables graph)? [y/N]:
 ```
 
 **Default**: No.
 
-If you answer `y`, the wizard installs the `archon-search[code]` extra packages (tree-sitter grammars for Python, TypeScript, JavaScript, Go, Rust, Java, and Bash). Once installed, ingesting code files automatically extracts symbol-level metadata (`_symbol_type`, `_containing_function`, `_containing_class`, etc.) from each chunk. This makes code search significantly more precise.
+If you answer `y`, the wizard installs the `archon-search[code]` extra packages (tree-sitter grammars for Python, TypeScript, JavaScript, Go, Rust, Java, and Bash) *and* the `archon-search[graph]` extra plus the `en-core-web-sm` spaCy model, then writes `[graph].enabled = true`. Code enrichment and code graphing are always set up as a bundle so code graphing works out of the box. Once installed, ingesting code files automatically extracts symbol-level metadata (`_symbol_type`, `_containing_function`, `_containing_class`, etc.) from each chunk. This makes code search significantly more precise.
 
 You can install this separately at any time with `pip install archon-search[code]`. Code enrichment also feeds the code graph — see [`70_code_graph_and_impact.md`](./70_code_graph_and_impact.md) for def/ref extraction and impact analysis.
 

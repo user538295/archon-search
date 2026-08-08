@@ -251,6 +251,39 @@ def test_e2e_interactive_watch_and_telemetry(runner: CliRunner, tmp_path: Path) 
     assert doc["telemetry"]["enabled"] is True
 
 
+@pytest.mark.integration
+def test_e2e_interactive_force_delete_db_exits_zero(runner: CliRunner, tmp_path: Path) -> None:
+    """S03: the documented prompt sequence plus the delete confirmation exits 0.
+
+    Guards the prompt count: an extra or missing prompt shifts every later answer
+    by one, so the `yes` meant for the destructive confirmation is swallowed and
+    the wizard aborts with exit 1.
+    """
+    config_path = tmp_path / "archon-search.toml"
+
+    # 1 multilingual n / 2 code n / 3 reranker n / 4 watch n / 5 telemetry n /
+    # 6 eager n / 7 routing "" / 8 log format "" / 9 HyDE n / 10 graph enrichment n /
+    # 11 delete-db confirm "yes" / 12 "Proceed?" y
+    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "", "n", "n", "yes", "y"]) + "\n"
+
+    with _no_anthropic_key():
+        with _patched_wizard():
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "minimal",
+                    "--config", str(config_path),
+                    "--force",
+                    "--delete-db",
+                    "--skip-preload",
+                ],
+                input=stdin_responses,
+            )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+
+
 # ---------------------------------------------------------------------------
 # Use case 5: Interactive — user enables multilingual
 # ---------------------------------------------------------------------------

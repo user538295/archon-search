@@ -158,7 +158,10 @@ def _execute_force_reinstall(
 
     # Step 2: Confirmation gate
     if not non_interactive:
-        response = input("WARNING: This will permanently delete all indexed data. Type 'yes' to confirm: ")
+        try:
+            response = input("WARNING: This will permanently delete all indexed data. Type 'yes' to confirm: ")
+        except EOFError:
+            response = ""
         if response != "yes":
             if has_backup:
                 shutil.copy2(bak_path, config_path)

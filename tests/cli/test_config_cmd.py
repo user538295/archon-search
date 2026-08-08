@@ -112,6 +112,42 @@ def test_config_show_defaults_include_all_sections(runner: CliRunner, tmp_path: 
     assert "[logging]" in result.output
 
 
+def test_config_show_fills_in_missing_server_section(runner: CliRunner, tmp_path: Path) -> None:
+    """S167 — a minimal file without [server] must still show [server].port."""
+    config_file = tmp_path / "archon-search.toml"
+    config_file.write_text('[logging]\nformat = "text"\n')
+    result = runner.invoke(main, ["config", "show", "--config", str(config_file)])
+    assert result.exit_code == 0, result.output
+    doc = tomlkit.parse(result.output)
+    assert "server" in doc
+    assert doc["server"]["port"] == 8765
+
+
+def test_config_show_fills_in_missing_logging_keys(runner: CliRunner, tmp_path: Path) -> None:
+    """S104 — a partial [logging] section must be completed with all four keys."""
+    config_file = tmp_path / "archon-search.toml"
+    config_file.write_text('[logging]\nformat = "text"\n')
+    result = runner.invoke(main, ["config", "show", "--config", str(config_file)])
+    assert result.exit_code == 0, result.output
+    logging_section = tomlkit.parse(result.output)["logging"]
+    assert logging_section["level"] == "INFO"
+    assert str(logging_section["log_file"]).endswith(".archon-search/logs/archon-search.log")
+    assert logging_section["format"] == "text"
+    assert logging_section["backup_count"] == 7
+
+
+def test_config_show_preserves_file_values_and_unknown_sections(runner: CliRunner, tmp_path: Path) -> None:
+    """Filling in defaults must not overwrite file values nor drop extra sections."""
+    config_file = tmp_path / "archon-search.toml"
+    config_file.write_text('[server]\nhost = "0.0.0.0"\n\n[hyde]\nenabled = true\n')
+    result = runner.invoke(main, ["config", "show", "--config", str(config_file)])
+    assert result.exit_code == 0, result.output
+    doc = tomlkit.parse(result.output)
+    assert doc["server"]["host"] == "0.0.0.0"
+    assert doc["server"]["port"] == 8765
+    assert doc["hyde"]["enabled"] is True
+
+
 # ---------------------------------------------------------------------------
 # install subcommand
 # ---------------------------------------------------------------------------

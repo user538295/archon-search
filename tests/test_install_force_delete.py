@@ -128,6 +128,40 @@ def test_force_reinstall_yes_confirmation_proceeds(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Test 3b: EOF at the confirmation prompt is treated as a declined confirmation
+# ---------------------------------------------------------------------------
+
+def test_force_reinstall_eof_aborts_and_restores_backup(tmp_path, capsys):
+    config_path = _make_config(tmp_path, content="[database]\nfoo = 'bar'\n")
+    db_path = _make_db(tmp_path)
+    profile, profile_name = _profile_and_name()
+    original_content = config_path.read_text()
+
+    with (
+        patch("builtins.input", side_effect=EOFError),
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.prewarm._write_profile_config") as mock_write,
+        patch("archon_search.install.shutil.rmtree") as mock_rmtree,
+    ):
+        mock_svc.return_value.stop.return_value = None
+        with pytest.raises(SystemExit) as exc_info:
+            _execute_force_reinstall(
+                config_path=config_path,
+                db_path=db_path,
+                profile=profile,
+                profile_name=profile_name,
+                multilingual=False,
+                non_interactive=False,
+            )
+
+    assert exc_info.value.code == 1
+    mock_rmtree.assert_not_called()
+    mock_write.assert_not_called()
+    assert "Aborted." in capsys.readouterr().out
+    assert config_path.read_text() == original_content
+
+
+# ---------------------------------------------------------------------------
 # Test 4: non_interactive=True skips input()
 # ---------------------------------------------------------------------------
 
