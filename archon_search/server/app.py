@@ -626,7 +626,7 @@ def create_app(
                             exc_info=True,
                         )
 
-                # Startup: sync collections (auto-reindex on chunk_size change, S483)
+                # Startup: sync collections (detects chunk_size changes, auto-reindex)
                 all_cols = list(config.pinned_collections) + list(config.collections)
                 if all_cols:
                     try:

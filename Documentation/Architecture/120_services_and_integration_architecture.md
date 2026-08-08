@@ -20,7 +20,7 @@
 
 ### FastAPI HTTP control plane
 
-Built by `archon_search.server.app.create_app`. The lifespan handler connects `SearchStore` and runs `migrate_namespace` + `migrate_acl` + `migrate_per_collection_model` before traffic flows. **C1**: an `EmbedderCache` (LRU, capacity `config.embedder_cache_size`, default 3) is constructed in the lifespan and injected into `SearchPipeline` so per-collection embedder instances are shared across requests rather than reconstructed per call. Routes are registered as separate `APIRouter`s and grouped by resource. The authoritative wire contract is `GET /openapi.json` (BearerAuth applied to every non-exempt path).
+Built by `archon_search.server.app.create_app`. The lifespan handler connects `SearchStore`, runs `migrate_namespace` + `migrate_acl` + `migrate_per_collection_model`, and then calls `collection_sync.sync()` on all configured collections (detecting chunk-size changes and triggering auto-reindex when `auto_reindex_on_chunk_size_change = true`) before traffic flows. The startup sync is best-effort — a failure logs WARNING and never blocks REST startup. **C1**: an `EmbedderCache` (LRU, capacity `config.embedder_cache_size`, default 3) is constructed in the lifespan and injected into `SearchPipeline` so per-collection embedder instances are shared across requests rather than reconstructed per call. Routes are registered as separate `APIRouter`s and grouped by resource. The authoritative wire contract is `GET /openapi.json` (BearerAuth applied to every non-exempt path).
 
 | Group | File | Endpoints |
 |---|---|---|

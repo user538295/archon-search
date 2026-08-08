@@ -192,5 +192,5 @@ The multilingual minimal profile sets `reranker_model = ""` (no reranker), which
 Crash recovery and error handling are covered in [140_error_handling_strategy.md](140_error_handling_strategy.md). Key invariants set here:
 
 - `JobStore` is the only thing that can declare a job FAILED on restart.
-- The FastAPI lifespan in `server/app.py` calls `SearchStore.connect()`, then `migrate_namespace()`, then `migrate_acl()` as three separate awaits before the app starts serving; `connect()` itself does not invoke the migrations.
+- The FastAPI lifespan in `server/app.py` calls `SearchStore.connect()`, then `migrate_namespace()`, then `migrate_acl()` as three separate awaits, then runs `collection_sync.sync()` on all configured collections (auto-reindex on chunk-size change, best-effort) before the app starts serving; `connect()` itself does not invoke the migrations.
 - The watcher debounces filesystem events (default 5 s) so a burst of writes triggers exactly one reindex.

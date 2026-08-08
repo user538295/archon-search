@@ -31,7 +31,7 @@ def test_auto_reindex_on_chunk_size_change_fires_on_startup(tmp_path, monkeypatc
     Phase 2: restart server with chunk_size=256 + auto_reindex=true.
     Assert: after phase 2 startup, indexed_chunk_size is 256 (reindex fired).
 
-    Fails because lifespan() never calls sync() — the mismatch goes undetected.
+    Regression guard: lifespan() must call sync() so the mismatch is detected.
     """
     # Set up a collection source directory with a real document
     col_dir = tmp_path / "testcol"
@@ -103,27 +103,17 @@ def test_auto_reindex_on_chunk_size_change_fires_on_startup(tmp_path, monkeypatc
     )
 
     with make_real_app(tmp_path, monkeypatch, toml_content=toml_phase2) as (
-        client2,
+        _client2,
         _cfg2,
         _api_key2,
     ):
-        # The lifespan has finished running at this point.
-        # If the bug is fixed, sync() would have been called on startup,
-        # the chunk_size mismatch (128 -> 256) detected, and a full
-        # re-index triggered, updating indexed_chunk_size to 256.
-
         state_after_restart = state_store.read()
         assert state_after_restart is not None, "State store should still exist after restart"
         assert col_name in state_after_restart.collections, (
             f"Collection '{col_name}' missing from state after restart"
         )
 
-        # This assertion proves the bug: if auto-reindex fired on startup,
-        # indexed_chunk_size would be 256.  Because lifespan() never calls
-        # sync(), it is still 128.
         assert state_after_restart.collections[col_name].indexed_chunk_size == 256, (
             f"S483: expected indexed_chunk_size=256 after restart with changed chunk_size, "
-            f"got {state_after_restart.collections[col_name].indexed_chunk_size}. "
-            f"The lifespan() never calls sync(), so the chunk_size change "
-            f"detection in _diff_collection() does not fire on startup."
+            f"got {state_after_restart.collections[col_name].indexed_chunk_size}"
         )
