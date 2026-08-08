@@ -23,7 +23,6 @@ _NAMESPACE = "s311-team"
 _COLLECTION = "s311-ns"
 
 
-@pytest.mark.integration
 def test_s311_malformed_sidecar_acl_gate_warnings_non_empty(tmp_path, monkeypatch) -> None:
     """Sidecar with 'deny-all' produces non-empty acl_gate.warnings on search result.
 
@@ -65,7 +64,10 @@ def test_s311_malformed_sidecar_acl_gate_warnings_non_empty(tmp_path, monkeypatc
 
         warnings = gate.get("warnings", [])
         assert isinstance(warnings, list), f"acl_gate.warnings must be a list, got {type(warnings)}"
-        assert len(warnings) > 0, (
-            f"acl_gate.warnings must be non-empty for a sidecar containing 'deny-all'; "
+        # Assert the specific deny-all invalid-namespace warning, not just any warning.
+        # (collection_root=None on the REST ingest path always produces a truncated-path
+        # warning, so len(warnings) > 0 would be vacuous and not guard S311's bug.)
+        assert any("deny-all" in w for w in warnings), (
+            f"expected invalid-namespace warning mentioning 'deny-all'; "
             f"got: {warnings!r}. gate={gate!r}"
         )

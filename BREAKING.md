@@ -1083,6 +1083,28 @@ For tolerant JSON consumers: fully additive — no client changes required. For 
 
 ---
 
+### [next release] — S310: namespace key collections now stored under the caller's namespace (not `default`)
+
+**Surface**: `POST /ingest`, `GET /collections`, `POST /search` — multi-namespace deployments only.
+
+**Change**: `SearchStore.ingest_chunks` was dropping the `namespace` parameter on its internal meta write, causing every collection to be stored with `namespace='default'` regardless of the bearer token used. Fixed in commit `ddc78995`. Going forward, a collection ingested via a namespace key is stored under that key's namespace.
+
+**Impact on existing deployments**: collections ingested by a namespace key before this fix have their `CollectionMeta.namespace` persisted as `'default'`. After upgrading:
+- `GET /collections` with the namespace key still returns `[]` for those collections.
+- `POST /search` with the namespace key still returns 404 for those collections.
+- The default key can still see and search them (the data is not lost).
+
+**Migration** (per affected collection):
+1. Note the collection name.
+2. Delete it via the **default** key: `DELETE /collections/{name}` — this removes the stale meta row. The chunk data in LanceDB is also dropped, so you must re-ingest.
+3. Re-ingest using the **namespace key**: `POST /ingest` with the namespace bearer token. The collection will now be stored under the correct namespace.
+
+Alternatively, if you cannot tolerate data loss, use `PATCH /collections/{name}` with the default key to update `namespace` to the correct value before re-ingesting.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — brief 270: `BackupTriggerResponse.queued` changed from `list[string]` to `list[QueuedBackupJob]`
 
 **Surface**: REST `POST /backup/trigger` response body field `queued`.

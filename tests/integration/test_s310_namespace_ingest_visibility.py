@@ -54,3 +54,4 @@ def test_s310_namespace_key_collection_not_found(tmp_path, monkeypatch) -> None:
             headers=ns_headers,
         )
         assert resp.status_code == 200, f"search failed: {resp.status_code} {resp.text}"
+        assert resp.json()["results"], f"expected non-empty results, got: {resp.json()}"

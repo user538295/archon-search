@@ -132,9 +132,8 @@ async def _seed_namespace_collection(
 ) -> None:
     """Create a collection table and meta row with the correct namespace.
 
-    Unlike ingest_file_via_path (which stores the meta with DEFAULT_NAMESPACE due to
-    ingest_chunks not propagating namespace to _do_update_meta_on_add), this helper
-    directly calls store.update_collection_meta with the target namespace.
+    Directly calls store.update_collection_meta with the target namespace, which is
+    more explicit than going through the full ingest pipeline for this helper's purpose.
 
     Safe to call via asyncio.run() — opens a fresh SearchStore connection that is
     independent from the running app's connection (LanceDB supports concurrent access).
@@ -645,11 +644,8 @@ def test_get_graph_tfidf_namespace_idf_isolation(
         namespaces={key_a: "ns-a", key_b: "ns-b"},
     ) as (client, cfg, api_key):
         # --- Create 3 collections in ns-A (directly via store, to set namespace correctly) ---
-        # Note: ingest_file_via_path cannot be used here because store.ingest_chunks does not
-        # propagate the namespace argument to _do_update_meta_on_add, so the meta row ends up
-        # with DEFAULT_NAMESPACE="default" even when a non-default namespace key is used.
-        # The direct store approach (same pattern as test_acl_namespace_integration.py) is the
-        # only way to create collections with a non-default namespace in the meta.
+        # Uses direct store seeding rather than ingest_file_via_path — this predates the
+        # ddc78995 fix and is kept as-is since refactoring it is out of scope here.
         for col in ("nsa-1", "nsa-2", "nsa-3"):
             asyncio.run(_seed_namespace_collection(cfg.db_path, col, "ns-a", chunk_count=20))
 

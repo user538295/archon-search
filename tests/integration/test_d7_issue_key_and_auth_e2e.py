@@ -45,13 +45,12 @@ async def _inject_chunks_ns(store, col: str, embedding_model: str, namespace: st
     """Create a collection + insert one chunk under *namespace* so /search can find it.
 
     NOTE: ``embedding_model`` is intentionally NOT passed to ``store.ingest_chunks``.
-    ``store.ingest_chunks`` accepts a ``namespace`` kwarg but does NOT forward it to
-    ``_do_update_meta_on_add``.  When ``embedding_model=None``, ``_do_update_meta_on_add``
-    short-circuits and creates no meta row — so the explicit ``update_collection_meta``
-    call below is the sole source of truth for the namespace.  If you ever add
-    ``embedding_model=...`` to the ``ingest_chunks`` call without fixing that propagation
-    gap, ``_do_update_meta_on_add`` will create a wrong-namespace meta row under namespace
-    'default', breaking the isolation assertion at Step 4.
+    When ``embedding_model=None``, ``_do_update_meta_on_add`` short-circuits and creates
+    no meta row — so the explicit ``update_collection_meta`` call below is the sole source
+    of truth for the namespace, which is the clearest way to express this helper's intent.
+    (The namespace-propagation bug fixed in ddc78995 no longer applies — ``ingest_chunks``
+    now forwards ``namespace`` correctly — but this helper's direct-write pattern is kept
+    because it is more explicit about what it is testing.)
     """
     from archon_search._types import ChunkRecord, normalize_iso_utc
     from archon_search.collection_meta import CollectionMeta
