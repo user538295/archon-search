@@ -1742,6 +1742,7 @@ class SearchStore:
                     db, collection, batch_vectors, distinct_doc_count,
                     embedding_model=embedding_model,
                     embedding_dim=len(batch_vectors[0]),
+                    namespace=namespace,
                 )
 
             return ChunkIngestResult(chunks_ingested=chunks_ingested, needs_recompute=needs_recompute)

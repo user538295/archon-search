@@ -6328,7 +6328,7 @@ async def test_store_ingest_chunks_always_calls_incremental_update(tmp_path) -> 
 
     update_calls: list = []
 
-    async def fake_update(db, collection, batch_vectors, distinct_doc_count, *, embedding_model, embedding_dim):
+    async def fake_update(db, collection, batch_vectors, distinct_doc_count, *, embedding_model, embedding_dim, namespace):
         update_calls.append((batch_vectors, distinct_doc_count))
         return False
 
@@ -8200,3 +8200,31 @@ async def test_list_documents_cursor_with_multi_chunk_docs(
     p1_ids = {d.doc_id for d in items_p1}
     p2_ids = {d.doc_id for d in items_p2}
     assert p1_ids | p2_ids == set(doc_ids)
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunks_uses_caller_namespace_for_collection_meta(tmp_path: Path) -> None:
+    """S310: ingest_chunks must forward its namespace to the collection-meta write.
+
+    Regression guard — when the namespace was dropped, every collection landed in
+    'default' and a namespace-scoped key saw an empty collection list and 404s on search.
+    """
+    ns = "s310-team"
+    col = "s310_col"
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.ensure_collection(col, _DIM)
+        await store.ingest_chunks(
+            col, [_chunk(_doc_id(), 0)], embedding_model="m", namespace=ns
+        )
+
+        meta = await store.get_collection_meta(col, namespace=ns)
+        assert meta is not None, f"collection {col!r} is missing from namespace {ns!r}"
+        assert meta.namespace == ns
+
+        assert await store.get_collection_meta(col, namespace="default") is None, (
+            f"collection {col!r} leaked into the 'default' namespace"
+        )
+    finally:
+        await store.disconnect()
