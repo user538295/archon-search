@@ -1373,6 +1373,35 @@ class SearchStore:
         )
         return self._row_to_meta(row) if row is not None else None
 
+    async def _check_namespace_ownership(
+        self, db: "lancedb.db.AsyncConnection", collection: str, namespace: str
+    ) -> None:
+        # Caller must hold lock_for(collection).
+        all_names: list[str] = (await db.list_tables()).tables
+        if _META_TABLE not in all_names:
+            return
+        meta_tbl = await db.open_table(_META_TABLE)
+        all_meta_rows = await meta_tbl.query().to_list()
+        conflict_row = next(
+            (
+                r for r in all_meta_rows
+                if r["name"] == collection
+                and (r.get("namespace") or DEFAULT_NAMESPACE) != namespace
+            ),
+            None,
+        )
+        if conflict_row is not None:
+            conflict_ns = conflict_row.get("namespace") or DEFAULT_NAMESPACE
+            logger.error(
+                "_check_namespace_ownership: collection %r is owned by namespace %r; "
+                "refusing to create a second ownership record under %r",
+                collection, conflict_ns, namespace,
+            )
+            raise ValueError(
+                f"Collection {collection!r} is owned by namespace {conflict_ns!r}; "
+                f"refusing to create a second ownership record under {namespace!r}"
+            )
+
     async def _do_write_meta_unlocked(
         self, db: "lancedb.db.AsyncConnection", collection: str, meta: "CollectionMeta"
     ) -> None:
@@ -1467,6 +1496,20 @@ class SearchStore:
 
         existing = await self._do_read_meta_unlocked(db, collection, namespace=namespace)
 
+        if existing is None:
+            # No meta row for this namespace. Check if another namespace already owns this
+            # collection — if so, update the owner's meta row rather than creating a fork.
+            all_names = (await db.list_tables()).tables
+            if _META_TABLE in all_names:
+                _meta_tbl = await db.open_table(_META_TABLE)
+                _all_rows = await _meta_tbl.query().to_list()
+                _owner_row = next(
+                    (r for r in _all_rows if r["name"] == collection),
+                    None,
+                )
+                if _owner_row is not None:
+                    existing = self._row_to_meta(_owner_row)
+
         if existing is not None:
             if not _batch_vectors_valid(batch_vectors):
                 logger.warning("Collection %r batch vectors contain NaN/inf; skipping centroid maintenance", collection)
@@ -1559,34 +1602,7 @@ class SearchStore:
             await self._do_write_meta_unlocked(db, collection, new_meta)
             return new_meta.mutations_since_recompute >= self._config.centroid_recompute_threshold or new_meta.needs_recompute
         else:
-            # Brand-new collection: check for cross-namespace name conflict first.
-            # Note: _do_ingest already wrote chunks before this call, so a conflict here
-            # leaves orphaned chunks. This is the minimum viable guard; a pre-ingest check
-            # is a follow-up (requires restructuring ingest_chunks).
-            _all_names_check: list[str] = (await db.list_tables()).tables
-            if _META_TABLE in _all_names_check:
-                _meta_tbl_check = await db.open_table(_META_TABLE)
-                _all_meta_rows = await _meta_tbl_check.query().to_list()
-                _conflict_row = next(
-                    (
-                        r for r in _all_meta_rows
-                        if r["name"] == collection
-                        and (r.get("namespace") or DEFAULT_NAMESPACE) != namespace
-                    ),
-                    None,
-                )
-                if _conflict_row is not None:
-                    _conflict_ns = _conflict_row.get("namespace") or DEFAULT_NAMESPACE
-                    logger.error(
-                        "_do_update_meta_on_add: collection %r is owned by namespace %r; "
-                        "refusing to create a second ownership record under %r",
-                        collection, _conflict_ns, namespace,
-                    )
-                    raise ValueError(
-                        f"Collection {collection!r} is owned by namespace {_conflict_ns!r}; "
-                        f"refusing to create a second ownership record under {namespace!r}"
-                    )
-            # Brand-new collection: batch IS the full collection; no recompute needed.
+            # Truly brand-new collection (no owner at all): batch IS the full collection.
             if not _batch_vectors_valid(batch_vectors):
                 logger.warning("Collection %r batch vectors contain NaN/inf; skipping centroid maintenance", collection)
                 new_meta = CollectionMeta(

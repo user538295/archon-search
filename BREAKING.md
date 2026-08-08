@@ -1099,7 +1099,7 @@ For tolerant JSON consumers: fully additive — no client changes required. For 
 2. Delete it via the **default** key: `DELETE /collections/{name}` — this removes the stale meta row. The chunk data in LanceDB is also dropped, so you must re-ingest.
 3. Re-ingest using the **namespace key**: `POST /ingest` with the namespace bearer token. The collection will now be stored under the correct namespace.
 
-Alternatively, if you cannot tolerate data loss, use `PATCH /collections/{name}` with the default key to update `namespace` to the correct value before re-ingesting.
+There is no in-place namespace update API; the delete + re-ingest path above is the only option.
 
 **Announced in**: this release.
 

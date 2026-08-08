@@ -8231,12 +8231,16 @@ async def test_ingest_chunks_uses_caller_namespace_for_collection_meta(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_ingest_chunks_rejects_cross_namespace_name_conflict(tmp_path: Path) -> None:
-    """Issue 2: ingest_chunks must refuse to fork ownership of a collection name.
+async def test_ingest_chunks_cross_namespace_update_uses_owner_meta(tmp_path: Path) -> None:
+    """Cross-namespace ingest into an existing collection must not create a second meta row.
 
-    If namespace A owns collection 'foo', namespace B ingesting into 'foo' must
-    raise ValueError — not silently create a second meta row over the same
-    physical table.
+    If namespace A owns collection 'foo', namespace B ingesting into 'foo' must:
+    - Succeed (the collection accepts documents from multiple namespaces; ACL controls read).
+    - NOT create a second meta row — the single meta row stays under namespace A.
+    - Update the owner's (namespace A's) meta row with the new chunk counts.
+
+    This preserves the multi-namespace ACL model: a shared physical collection can hold
+    documents from different namespaces, with per-document ACL sidecars controlling access.
     """
     col = "conflict_col"
     store = SearchStore(tmp_path / "db")
@@ -8247,14 +8251,21 @@ async def test_ingest_chunks_rejects_cross_namespace_name_conflict(tmp_path: Pat
         await store.ingest_chunks(col, [_chunk(_doc_id(), 0)], embedding_model="m", namespace="default")
         assert await store.get_collection_meta(col, namespace="default") is not None
 
-        # Second ingest: a different namespace tries to claim the same name.
-        with pytest.raises(ValueError, match="owned by namespace"):
-            await store.ingest_chunks(col, [_chunk(_doc_id(), 0)], embedding_model="m", namespace="ns-b")
+        # Second ingest: a different namespace adds documents to the same collection.
+        # Must succeed and must NOT create a second meta row.
+        await store.ingest_chunks(col, [_chunk(_doc_id(), 0)], embedding_model="m", namespace="ns-b")
 
         # Only one meta row must exist — the original owner's.
         all_meta = await store.get_all_collections_meta()
         foo_rows = [m for m in all_meta if m.name == col]
         assert len(foo_rows) == 1, f"expected 1 meta row for {col!r}, got {len(foo_rows)}: {foo_rows}"
-        assert foo_rows[0].namespace == "default"
+        assert foo_rows[0].namespace == "default", (
+            f"meta row must stay under the original owner's namespace; got {foo_rows[0].namespace!r}"
+        )
+
+        # Owner's chunk_count reflects the physical table (includes namespace B's chunk).
+        assert foo_rows[0].chunk_count == 2, (
+            f"owner's meta should reflect total chunk count; got {foo_rows[0].chunk_count}"
+        )
     finally:
         await store.disconnect()

@@ -306,7 +306,10 @@ class SearchCollectionSync:
                     _col_ns = _m.namespace
                     break
         except Exception:  # noqa: BLE001
-            pass
+            logger.warning(
+                "sync: failed to resolve namespace for %r; falling back to %r",
+                collection_name, _col_ns,
+            )
         try:
             meta = await self._pipeline.store.get_collection_meta(collection_name, _col_ns)
         except Exception:

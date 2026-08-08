@@ -2,7 +2,7 @@
 # install/service_ops.py: legacy launchd (macOS) and systemd-user (Linux) service paths — OS-owned, not the archon-search data tree, so cannot derive from get_data_dir().
 archon_search/install/service_ops.py:37:eb847f85130a2554254bd71b2e86d19045792ac1386208328a40becb8873118c
 archon_search/install/service_ops.py:38:98a9e23568af432bb4fd69741dca5811eb6fba150904f020970b7f5eba350f68
-archon_search/config.py:340:8c6844f3268afa9c4a632945843e776075a111407a0540b8a29041b99d669043
+archon_search/config.py:341:8c6844f3268afa9c4a632945843e776075a111407a0540b8a29041b99d669043
 # linux.py/_unit_path: OS-owned systemd user service path (~/.config/systemd/user/), not the archon-search data tree
 archon_search/platform/linux.py:45:e0848f2f11974468389b5ca93b1a311f959a01090ee2d593bef523eba91ba474
 # macos.py/_plist_path: OS-owned LaunchAgents path (~/Library/LaunchAgents/), not the archon-search data tree

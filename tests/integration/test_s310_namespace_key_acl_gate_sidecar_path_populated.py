@@ -1,12 +1,12 @@
-"""S310: acl_gate.sidecar_path is non-empty when a .acl sidecar is present.
+"""S310: acl_gate.source == 'sidecar' and acl_gate.sidecar_path non-empty for namespace key search.
 
-Regression test for S310-namespace_key_acl_gate_sidecar_path_populated:
-- A namespace key ingests doc.md + doc.md.acl (content: 's310-team\n').
-- POST /search with acl_context=true as the namespace key must return HTTP 200 with
-  results[0].acl_gate.sidecar_path non-empty.
+Regression tests for:
+- S310-namespace_key_acl_gate_sidecar_path_populated: acl_gate.sidecar_path is non-empty.
+- S310-namespace_key_sees_chunk_source_is_sidecar: acl_gate.source == 'sidecar'.
 
-Also validates that the search route is namespace-blind (POST /search does not namespace-gate
-the collection meta lookup; ACL is the per-chunk access control, not namespace).
+Setup: ingest doc.md + doc.md.acl (content: 's310-team\n') via namespace key.
+Assert: POST /search with namespace key + acl_context=true returns results with
+acl_gate.source == 'sidecar' and acl_gate.sidecar_path non-empty.
 """
 from __future__ import annotations
 
@@ -19,11 +19,11 @@ from tests.integration.conftest import ingest_file_via_path, make_real_app
 pytestmark = pytest.mark.integration
 
 _NAMESPACE = "s310-team"
-_COLLECTION = "s310-sidecar-path"
+_COLLECTION = "s310-sidecar-acl-gate"
 
 
-def test_s310_namespace_key_acl_gate_sidecar_path_populated(tmp_path, monkeypatch) -> None:
-    """acl_gate.sidecar_path is non-empty for a sidecar-backed ACL when namespace key searches."""
+def test_s310_namespace_key_acl_gate_sidecar(tmp_path, monkeypatch) -> None:
+    """acl_gate.source == 'sidecar' and acl_gate.sidecar_path non-empty for a sidecar-backed ACL."""
     doc = tmp_path / "doc.md"
     doc.write_text("# S310\nThe quick brown fox jumps over the lazy dog.\n")
 
@@ -55,7 +55,7 @@ def test_s310_namespace_key_acl_gate_sidecar_path_populated(tmp_path, monkeypatc
         assert gate is not None, "acl_gate must be present when acl_context=true"
 
         assert gate.get("source") == "sidecar", (
-            f"expected acl_gate.source='sidecar'; got: {gate.get('source')!r}"
+            f"expected acl_gate.source='sidecar'; got: {gate.get('source')!r}. gate={gate!r}"
         )
         assert gate.get("sidecar_path"), (
             f"expected acl_gate.sidecar_path to be non-empty; got: {gate.get('sidecar_path')!r}. gate={gate!r}"

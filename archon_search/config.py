@@ -664,7 +664,7 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
     raw_ns = doc.get("namespaces", {})
     namespaces: dict[str, str] = {}
     for k, v in raw_ns.items():
-        if not isinstance(k, str) or not isinstance(v, str):
+        if not isinstance(v, str):
             raise ConfigError(
                 f"[namespaces] entries must be string key = string value; got {k!r} = {v!r}"
             )
