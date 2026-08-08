@@ -2276,7 +2276,6 @@ def _make_patch_app(
     *,
     meta,
     count_chunks: int = 5,
-    stored_dim: int | None = None,
     validate_model_dim: int = 384,
     validate_model_raises: Exception | None = None,
 ) -> "tuple[TestClient, MagicMock]":
@@ -2291,7 +2290,6 @@ def _make_patch_app(
     mock_store = MagicMock()
     mock_store.get_collection_meta = AsyncMock(return_value=meta)
     mock_store.count_chunks = AsyncMock(return_value=count_chunks)
-    mock_store.get_stored_vector_dimension = AsyncMock(return_value=stored_dim)
     mock_store.update_collection_meta = AsyncMock()
     mock_store.count_documents = AsyncMock(return_value=0)
     mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
@@ -2459,10 +2457,15 @@ def test_patch_returns_422_on_unknown_model(
     assert response.status_code == 422
 
 
-def test_patch_returns_422_on_dimension_mismatch(
+def test_patch_different_dimension_sets_pending_model(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
-    """PATCH returns 422 when new model dimension differs from stored vectors."""
+    """PATCH with a model whose dimensions differ from stored vectors sets
+    pending_embedding_model and needs_reindex=true (S327).
+
+    The documented behavior is to defer the model change to a reindex, not
+    reject it with 422.
+    """
     from archon_search.collection_meta import CollectionMeta
 
     src = tmp_path / "docs"
@@ -2478,8 +2481,9 @@ def test_patch_returns_422_on_dimension_mismatch(
     mock_store = MagicMock()
     mock_store.get_collection_meta = AsyncMock(return_value=meta)
     mock_store.count_chunks = AsyncMock(return_value=5)
-    mock_store.get_stored_vector_dimension = AsyncMock(return_value=384)  # stored dim
     mock_store.update_collection_meta = AsyncMock()
+    mock_store.count_documents = AsyncMock(return_value=1)
+    mock_store.get_acl_stats = AsyncMock(return_value=(0, 0))
     mock_store.migrate_namespace = AsyncMock()
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
@@ -2494,8 +2498,12 @@ def test_patch_returns_422_on_dimension_mismatch(
     ):
         response = c.patch(f"/collections/{name}", json={"embedding_model": "BAAI/bge-base-en-v1.5"})
 
-    assert response.status_code == 422
-    assert "dimension mismatch" in response.json()["detail"]
+    assert response.status_code == 200
+    mock_store.update_collection_meta.assert_called_once()
+    saved_meta = mock_store.update_collection_meta.call_args[0][0]
+    assert saved_meta.pending_embedding_model == "BAAI/bge-base-en-v1.5"
+    assert saved_meta.needs_reindex is True
+    assert saved_meta.active_embedding_model == "BAAI/bge-small-en-v1.5"
 
 
 def test_patch_idempotent_same_active_model(

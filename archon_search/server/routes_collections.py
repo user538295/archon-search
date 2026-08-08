@@ -615,20 +615,9 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
     if "embedding_model" in payload and body.embedding_model is not None:
         # Validate embedding model — 422 on ModelValidationError
         try:
-            new_dim = await validate_embedding_model(body.embedding_model)
+            await validate_embedding_model(body.embedding_model)
         except ModelValidationError as e:
             raise HTTPException(status_code=422, detail=str(e))
-
-        # Dimension mismatch guard
-        stored_dim = await search_store.get_stored_vector_dimension(name, namespace=ns)
-        if stored_dim is not None and stored_dim != new_dim:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"model dimension mismatch: current vectors are {stored_dim}-dim, "
-                    f"new model produces {new_dim}-dim; delete and recreate collection to change dimensions"
-                ),
-            )
 
         # 409 guard: check if reindex job is still active
         if meta.reindex_job_id is not None:

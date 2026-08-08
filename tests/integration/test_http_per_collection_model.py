@@ -25,8 +25,7 @@ from tests.integration.conftest import ingest_file_via_path, make_real_app, sear
 pytestmark = pytest.mark.integration
 
 # Model names are arbitrary strings — the stubs always produce 384-dim vectors.
-# validate_embedding_model is patched to return 384 (matching the stub dim) so
-# the dimension-mismatch guard never fires.
+# validate_embedding_model is patched so it does not attempt a real model probe.
 _MODEL_A = "BAAI/bge-small-en-v1.5"  # matches SearchConfig.embedding_model default
 _MODEL_B = "BAAI/bge-base-en-v1.5"
 _STUB_DIM = 384
@@ -93,8 +92,7 @@ def test_full_lifecycle_patch_reindex_get(
         ingest_file_via_path(client, col_name, str(doc), api_key=api_key)
 
         # PATCH: set a new embedding model.
-        # validate_embedding_model is patched to return the stub dim (384) so no
-        # dimension-mismatch 422 fires.
+        # validate_embedding_model is patched so it does not attempt a real model probe.
         with patch.object(
             _routes_collections,
             "validate_embedding_model",

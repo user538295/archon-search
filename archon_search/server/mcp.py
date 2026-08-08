@@ -1373,20 +1373,9 @@ def create_app(
 
             # Validate embedding model — 422-equivalent on ModelValidationError
             try:
-                new_dim = await validate_embedding_model(embedding_model)
+                await validate_embedding_model(embedding_model)
             except ModelValidationError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
-
-            # Dimension mismatch guard
-            stored_dim = await store.get_stored_vector_dimension(collection_name, namespace=ns)
-            if stored_dim is not None and stored_dim != new_dim:
-                return McpErrorResponse(
-                    error=(
-                        f"model dimension mismatch: current vectors are {stored_dim}-dim, "
-                        f"new model produces {new_dim}-dim; delete and recreate collection to change dimensions"
-                    ),
-                    code="validation_error",
-                )
 
             # 409 guard: check if reindex job is still active (after validation, before state machine)
             stale_cleared = False
