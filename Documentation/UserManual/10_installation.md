@@ -63,6 +63,7 @@ Some features ship as optional dependency groups (`[project.optional-dependencie
 | `rag_fusion` | anthropic SDK | RAG-Fusion multi-query retrieval — see [`60_searching.md`](./60_searching.md). |
 | `ollama` | ollama SDK | Local Ollama provider for HyDE / RAG-Fusion. |
 | `openai-provider` | openai SDK | OpenAI provider for HyDE / RAG-Fusion. |
+| *(none for llama.cpp)* | `httpx` (core dep) | Local llama-server provider for HyDE / RAG-Fusion / graph enrichment — no extra install. Set `provider = "llama_cpp"` in the relevant config sections. |
 
 `graph.enabled = true` with spaCy absent raises a `ConfigError` at startup; missing `code` parsers only log a warning and skip code files, so prose graphing still works.
 

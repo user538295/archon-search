@@ -176,7 +176,7 @@ curl -s -X POST http://127.0.0.1:8765/search \
 
 HyDE (Hypothetical Document Embeddings) improves recall for vocabulary-mismatch queries. When enabled, the server asks an LLM to write a short hypothetical answer passage, embeds that passage, and uses the resulting vector for ANN lookup instead of the raw query embedding.
 
-> **Privacy notice**: `hyde=true` sends the raw query to the configured LLM provider. With `provider = "anthropic"` (default), `"openai"`, or `"claude_cli"`, the query leaves the host (`claude_cli` goes to Anthropic via Claude Code's login) — do not enable in air-gapped deployments. With `provider = "ollama"`, the query stays on-premise. See `Documentation/ADRs/C4-hyde-external-llm-dependency.md`.
+> **Privacy notice**: `hyde=true` sends the raw query to the configured LLM provider. With `provider = "anthropic"` (default), `"openai"`, or `"claude_cli"`, the query leaves the host (`claude_cli` goes to Anthropic via Claude Code's login) — do not enable in air-gapped deployments. With `provider = "ollama"` or `"llama_cpp"`, the query stays on-premise (zero-transmission). See `Documentation/ADRs/C4-hyde-external-llm-dependency.md`.
 
 ### Installation
 
@@ -195,14 +195,15 @@ Add or edit `[hyde]` in `~/.archon-search/archon-search.toml` (`HyDEConfig`, `ar
 ```toml
 [hyde]
 enabled = true
-# provider = "anthropic"  # "anthropic" (default), "ollama", "openai", or "claude_cli" — G10
+# provider = "anthropic"  # "anthropic" (default), "ollama", "openai", "claude_cli", or "llama_cpp" — G10/LLCP
 model = "claude-haiku-4-5-20251001"
-# ollama_base_url = "http://localhost:11434"  # only used when provider = "ollama"
+# ollama_base_url = "http://localhost:11434"    # only used when provider = "ollama"
+# llama_cpp_base_url = "http://localhost:8080"  # only used when provider = "llama_cpp"
 timeout_seconds = 10.0
 max_requests_per_minute = 60
 ```
 
-### Provider matrix (G10)
+### Provider matrix (G10 / LLCP)
 
 | Provider | API key | `model` | Notes |
 | --- | --- | --- | --- |
@@ -210,6 +211,7 @@ max_requests_per_minute = 60
 | `ollama` | none | required (e.g. `llama3.2`) | Local, zero-transmission; rate limit not enforced. |
 | `openai` | `OPENAI_API_KEY` | required (e.g. `gpt-4o-mini`) | External API. |
 | `claude_cli` | none | optional (alias or full ID; blank = Claude Code default) | Uses Claude Code's login; `claude` must be on PATH; rate limit not enforced. |
+| `llama_cpp` | none | required (model name from `GET /v1/models` on llama-server) | Local llama-server (HTTP), zero-transmission; no extra install (`httpx` is a core dep); rate limit not enforced. Use a small direct-response instruct model — reasoning models exhaust the token budget on hidden chain-of-thought and `hyde_applied` silently stays `false`. |
 
 Set the provider's API key (if any) in the server environment before `archon-search start`. Run `archon-search wizard` for guided provider configuration.
 
@@ -239,7 +241,7 @@ HyDE never degrades availability. It falls back silently (`hyde_applied: false`)
 
 RAG Fusion improves recall for multi-faceted queries. When enabled, the server asks an LLM to generate N semantic variants of the query, searches with all N+1 queries in parallel, and fuses the result sets with a second-pass Reciprocal Rank Fusion (RRF).
 
-> **Privacy notice**: `rag_fusion=true` sends the raw query to the configured LLM provider. Same provider trade-offs as HyDE above (`"ollama"` stays on-premise; all others transmit externally). See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md`.
+> **Privacy notice**: `rag_fusion=true` sends the raw query to the configured LLM provider. Same provider trade-offs as HyDE above (`"ollama"` and `"llama_cpp"` stay on-premise; all others transmit externally). See `Documentation/ADRs/C5-rag-fusion-external-llm-dependency.md`.
 
 ### Configuration
 
