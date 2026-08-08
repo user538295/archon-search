@@ -14,6 +14,7 @@ from archon_search.constants import (
     DEFAULT_FAST_MODEL,
     DEFAULT_ROUTING_DESCRIPTION_WEIGHT,
     LOG_FILE_DISABLED_WARNING,
+    _validate_namespace,
 )
 from archon_search.paths import get_data_dir
 
@@ -667,6 +668,12 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             raise ConfigError(
                 f"[namespaces] entries must be string key = string value; got {k!r} = {v!r}"
             )
+        try:
+            _validate_namespace(v)
+        except ValueError as exc:
+            raise ConfigError(
+                f"[namespaces] invalid namespace name {v!r}: {exc}"
+            ) from exc
         namespaces[k] = v
     config.namespaces = namespaces
 

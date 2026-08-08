@@ -264,3 +264,38 @@ def test_hyde_config_timeout_default_is_10() -> None:
 def test_rag_fusion_config_timeout_default_is_10() -> None:
     """RAGFusionConfig.timeout_seconds must default to 10.0 (raised from 5.0 in E0b/BE-1)."""
     assert RAGFusionConfig().timeout_seconds == 10.0
+
+
+# Issue 3 — [namespaces] config values must be validated at startup
+
+
+def test_load_config_rejects_invalid_namespace_name(tmp_path: Path) -> None:
+    """Invalid namespace names in [namespaces] must raise ConfigError at load time.
+
+    Prevents a mid-ingest partial write caused by _validate_namespace raising
+    inside _do_write_meta_unlocked after chunks have already been committed.
+    """
+    from archon_search.config import ConfigError
+
+    toml = tmp_path / "archon-search.toml"
+    toml.write_text('[namespaces]\n"mykey" = "bad namespace"\n')
+    with pytest.raises(ConfigError, match="invalid namespace name"):
+        load_config(path=toml)
+
+
+def test_load_config_rejects_reserved_namespace_deny_all(tmp_path: Path) -> None:
+    """The reserved sentinel 'deny-all' must be rejected as a namespace value."""
+    from archon_search.config import ConfigError
+
+    toml = tmp_path / "archon-search.toml"
+    toml.write_text('[namespaces]\n"mykey" = "deny-all"\n')
+    with pytest.raises(ConfigError, match="invalid namespace name"):
+        load_config(path=toml)
+
+
+def test_load_config_accepts_valid_namespace_names(tmp_path: Path) -> None:
+    """Valid namespace names must load without error."""
+    toml = tmp_path / "archon-search.toml"
+    toml.write_text('[namespaces]\n"key1" = "team-a"\n"key2" = "org-b"\n')
+    config = load_config(path=toml)
+    assert config.namespaces == {"key1": "team-a", "key2": "org-b"}

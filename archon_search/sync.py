@@ -13,6 +13,7 @@ from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Callable
 
 from archon_search._durable_io import atomic_write_json
+from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.embedder import make_embedder
 
 if TYPE_CHECKING:
@@ -138,6 +139,11 @@ class SearchCollectionSync:
         existing_info = await store.list_collections()
         existing = {c.name for c in existing_info}
 
+        # Build a name→namespace lookup from stored meta so ingest/delete calls use the
+        # correct namespace for each collection rather than always defaulting to 'default'.
+        all_meta = await store.get_all_collections_meta()
+        name_to_ns: dict[str, str] = {m.name: m.namespace for m in all_meta}
+
         # Step 1: build desired {name: resolved_path}
         desired = self.build_desired(collections)
 
@@ -176,6 +182,7 @@ class SearchCollectionSync:
                 continue
             error = await self._ingest_collection(
                 name, p, progress_cb, CollectionProgress, IndexingStatus,
+                namespace=name_to_ns.get(name, DEFAULT_NAMESPACE),
             )
             if error is None:
                 result.added.append(name)
@@ -201,12 +208,14 @@ class SearchCollectionSync:
             if not p.exists():
                 result.errors.append(f"path does not exist: {path_str}")
                 continue
+            _ns = name_to_ns.get(name, DEFAULT_NAMESPACE)
             try:
-                resume_meta = await self._pipeline.store.get_collection_meta(name)
+                resume_meta = await self._pipeline.store.get_collection_meta(name, _ns)
             except Exception:  # noqa: BLE001
                 resume_meta = None
             error = await self._ingest_collection(
-                name, p, progress_cb, CollectionProgress, IndexingStatus, meta=resume_meta,
+                name, p, progress_cb, CollectionProgress, IndexingStatus,
+                meta=resume_meta, namespace=_ns,
             )
             if error is None:
                 result.added.append(name)
@@ -233,9 +242,9 @@ class SearchCollectionSync:
                 cp = state.collections.get(name) if state else None
                 indexed_model = cp.indexed_embedding_model if cp else ""
                 indexed_cs = cp.indexed_chunk_size if cp else 0
-                # TODO: pass namespace when multi-namespace sync is supported
+                _ns = name_to_ns.get(name, DEFAULT_NAMESPACE)
                 try:
-                    meta = await self._pipeline.store.get_collection_meta(name)
+                    meta = await self._pipeline.store.get_collection_meta(name, _ns)
                 except Exception:
                     meta = None
                 new_f, changed_f, deleted_p = self._check_collection_changes(
@@ -247,7 +256,8 @@ class SearchCollectionSync:
                 if new_f or changed_f or deleted_p:
                     to_update.add(name)
                     error = await self._apply_collection_changes(
-                        name, p, new_f, changed_f, deleted_p, file_mtimes, progress_cb, meta=meta,
+                        name, p, new_f, changed_f, deleted_p, file_mtimes, progress_cb,
+                        meta=meta, namespace=_ns,
                     )
                     if error is None:
                         result.updated.append(name)
@@ -286,9 +296,19 @@ class SearchCollectionSync:
         cp = state.collections.get(collection_name)
         indexed_embedding_model = cp.indexed_embedding_model if cp else ""
         indexed_chunk_size = cp.indexed_chunk_size if cp else 0
-        # TODO: pass namespace when multi-namespace sync is supported
+        # Resolve the collection's namespace from stored meta so watcher-triggered
+        # ingest/delete use the right namespace rather than always defaulting to 'default'.
+        _col_ns = DEFAULT_NAMESPACE
         try:
-            meta = await self._pipeline.store.get_collection_meta(collection_name)
+            _all_meta = await self._pipeline.store.get_all_collections_meta()
+            for _m in _all_meta:
+                if _m.name == collection_name:
+                    _col_ns = _m.namespace
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            meta = await self._pipeline.store.get_collection_meta(collection_name, _col_ns)
         except Exception:
             meta = None
 
@@ -303,7 +323,8 @@ class SearchCollectionSync:
 
         if new_f or changed_f or deleted_p:
             result = await self._apply_collection_changes(
-                collection_name, source_path, new_f, changed_f, deleted_p, file_mtimes, meta=meta,
+                collection_name, source_path, new_f, changed_f, deleted_p, file_mtimes,
+                meta=meta, namespace=_col_ns,
             )
             if result is not None:
                 logger.warning(
@@ -480,6 +501,7 @@ class SearchCollectionSync:
         CollectionProgress: type,  # noqa: N803 — forwarded from caller
         IndexingStatus: type,  # noqa: N803
         meta=None,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> str | None:
         """Ingest a single collection with resume support. Returns None on success, error string on failure."""
         resume_paths = self._load_processed_paths(name)
@@ -554,6 +576,7 @@ class SearchCollectionSync:
                     embedder=embedder,
                     ingested_by="watcher",
                     collection_root=p,
+                    namespace=namespace,
                 )
 
                 # Compute file_mtimes for all successfully ingested paths
@@ -629,6 +652,7 @@ class SearchCollectionSync:
         file_mtimes: dict[str, float],
         progress_cb=None,
         meta=None,
+        namespace: str = DEFAULT_NAMESPACE,
     ) -> str | None:
         """Apply incremental file changes (add/update/delete) to an existing collection.
 
@@ -673,7 +697,7 @@ class SearchCollectionSync:
                 # Deletions
                 for path in deleted_paths:
                     await self._pipeline.delete_by_source_path(
-                        name, path, skip_fts_optimize=True
+                        name, path, namespace=namespace, skip_fts_optimize=True
                     )
                     file_mtimes.pop(path, None)
                     if path in processed_paths:
@@ -692,7 +716,7 @@ class SearchCollectionSync:
 
                 # Changed files
                 for file in changed_files:
-                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by="watcher", collection_root=source_path)
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by="watcher", collection_root=source_path, namespace=namespace)
                     resolved_str = str(file.resolve())
                     if ingest_result.status == "ok":
                         try:
@@ -719,7 +743,7 @@ class SearchCollectionSync:
 
                 # New files
                 for file in new_files:
-                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by="watcher", collection_root=source_path)
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by="watcher", collection_root=source_path, namespace=namespace)
                     if ingest_result.status == "ok":
                         try:
                             file_mtimes[str(file.resolve())] = file.stat().st_mtime
@@ -751,14 +775,14 @@ class SearchCollectionSync:
                 try:
                     store_cfg = getattr(self._pipeline.store, "_config", None)
                     threshold = int(getattr(store_cfg, "centroid_recompute_threshold", 10_000))
-                    centroid_meta = await self._pipeline.store.get_collection_meta(name)
+                    centroid_meta = await self._pipeline.store.get_collection_meta(name, namespace)
                     if centroid_meta and (
                         centroid_meta.needs_recompute
                         or centroid_meta.mutations_since_recompute >= threshold
                     ):
                         logger.debug("Recompute collection meta for %r after sync", name)
                         # TODO(C1): pass per-collection embedder once centroid IoC is updated
-                        await self._pipeline.recompute_collection_meta(name, self._pipeline._global_embedder)
+                        await self._pipeline.recompute_collection_meta(name, self._pipeline._global_embedder, namespace=namespace)
                 except Exception:  # noqa: BLE001
                     logger.warning(
                         "Failed to recompute collection meta for %r after sync; centroid may be stale",

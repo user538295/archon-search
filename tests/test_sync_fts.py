@@ -32,6 +32,7 @@ def _make_pipeline(
     ])
     pipeline.store.drop_collection = AsyncMock()
     pipeline.store.rename_collection = AsyncMock()
+    pipeline.store.get_all_collections_meta = AsyncMock(return_value=[])
     pipeline.delete_by_source_path = AsyncMock(return_value=1)
     pipeline.store.get_dominant_language = AsyncMock(return_value="en")
     pipeline.store.optimize_fts = AsyncMock()

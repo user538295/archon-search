@@ -8228,3 +8228,33 @@ async def test_ingest_chunks_uses_caller_namespace_for_collection_meta(tmp_path:
         )
     finally:
         await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_ingest_chunks_rejects_cross_namespace_name_conflict(tmp_path: Path) -> None:
+    """Issue 2: ingest_chunks must refuse to fork ownership of a collection name.
+
+    If namespace A owns collection 'foo', namespace B ingesting into 'foo' must
+    raise ValueError — not silently create a second meta row over the same
+    physical table.
+    """
+    col = "conflict_col"
+    store = SearchStore(tmp_path / "db")
+    await store.connect()
+    try:
+        await store.ensure_collection(col, _DIM)
+        # First ingest: default namespace owns the collection.
+        await store.ingest_chunks(col, [_chunk(_doc_id(), 0)], embedding_model="m", namespace="default")
+        assert await store.get_collection_meta(col, namespace="default") is not None
+
+        # Second ingest: a different namespace tries to claim the same name.
+        with pytest.raises(ValueError, match="owned by namespace"):
+            await store.ingest_chunks(col, [_chunk(_doc_id(), 0)], embedding_model="m", namespace="ns-b")
+
+        # Only one meta row must exist — the original owner's.
+        all_meta = await store.get_all_collections_meta()
+        foo_rows = [m for m in all_meta if m.name == col]
+        assert len(foo_rows) == 1, f"expected 1 meta row for {col!r}, got {len(foo_rows)}: {foo_rows}"
+        assert foo_rows[0].namespace == "default"
+    finally:
+        await store.disconnect()

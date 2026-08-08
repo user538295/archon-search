@@ -67,6 +67,7 @@ def make_mock_pipeline(tmp_path, existing_collections=None, manifest=None):
     ])
     pipeline.store.drop_collection = AsyncMock()
     pipeline.store.rename_collection = AsyncMock()
+    pipeline.store.get_all_collections_meta = AsyncMock(return_value=[])
     pipeline.ingest_directory = AsyncMock(return_value=[])
     # Write manifest if provided
     if manifest is not None:
@@ -3543,7 +3544,7 @@ class TestTask46:
         syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=512)
         result = await syncer.sync([str(col_dir)])
 
-        pipeline.delete_by_source_path.assert_called_once_with("myproject", ghost_path, skip_fts_optimize=True)
+        pipeline.delete_by_source_path.assert_called_once_with("myproject", ghost_path, namespace=ANY, skip_fts_optimize=True)
         assert "myproject" in result.updated
         assert result.errors == []
 
@@ -3763,7 +3764,7 @@ class TestTask46:
         syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=512)
         await syncer.sync([str(col_dir)])
 
-        pipeline.recompute_collection_meta.assert_called_once_with("myproject", ANY)
+        pipeline.recompute_collection_meta.assert_called_once_with("myproject", ANY, namespace=ANY)
 
     # ------------------------------------------------------------------
     # Test 11: new collection ingest populates file_mtimes
@@ -4081,7 +4082,7 @@ class TestTask46:
         assert pipeline.ingest_file.call_count == 2
 
         # delete_by_source_path called for deleted file
-        pipeline.delete_by_source_path.assert_called_once_with("myproject", deleted_key, skip_fts_optimize=True)
+        pipeline.delete_by_source_path.assert_called_once_with("myproject", deleted_key, namespace=ANY, skip_fts_optimize=True)
 
         # Final state should have correct file_mtimes
         state = state_store.read()
@@ -4255,7 +4256,7 @@ class TestTask46:
 
         # ingest_file must have been called with the changed file, collection name, and rebuild_fts=False
         from unittest.mock import ANY
-        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False, embedder=ANY, ingested_by="watcher", collection_root=ANY)
+        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False, embedder=ANY, ingested_by="watcher", collection_root=ANY, namespace=ANY)
 
         # The collection should be in errors (FAILED), not updated
         assert len(result.errors) == 1
@@ -4413,7 +4414,7 @@ class TestTask46:
 
         # ingest_file must have been called with the changed file, collection name, and rebuild_fts=False
         from unittest.mock import ANY
-        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False, embedder=ANY, ingested_by="watcher", collection_root=ANY)
+        pipeline.ingest_file.assert_called_once_with(ANY, "myproject", rebuild_fts=False, embedder=ANY, ingested_by="watcher", collection_root=ANY, namespace=ANY)
         assert "myproject" in result.updated
         assert result.errors == []
 
@@ -4979,7 +4980,7 @@ async def test_sync_calls_recompute_when_signal_raised(tmp_path) -> None:
     syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=512)
     await syncer.sync([str(col_dir)])
 
-    pipeline.recompute_collection_meta.assert_called_once_with("myproject", ANY)
+    pipeline.recompute_collection_meta.assert_called_once_with("myproject", ANY, namespace=ANY)
 
 
 @pytest.mark.asyncio
@@ -5024,7 +5025,7 @@ async def test_sync_recompute_on_delete_threshold_crossing(tmp_path) -> None:
     syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=512)
     await syncer.sync([str(col_dir)])
 
-    pipeline.recompute_collection_meta.assert_called_once_with("myproject", ANY)
+    pipeline.recompute_collection_meta.assert_called_once_with("myproject", ANY, namespace=ANY)
 
 
 # ---------------------------------------------------------------------------

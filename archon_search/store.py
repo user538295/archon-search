@@ -1559,6 +1559,33 @@ class SearchStore:
             await self._do_write_meta_unlocked(db, collection, new_meta)
             return new_meta.mutations_since_recompute >= self._config.centroid_recompute_threshold or new_meta.needs_recompute
         else:
+            # Brand-new collection: check for cross-namespace name conflict first.
+            # Note: _do_ingest already wrote chunks before this call, so a conflict here
+            # leaves orphaned chunks. This is the minimum viable guard; a pre-ingest check
+            # is a follow-up (requires restructuring ingest_chunks).
+            _all_names_check: list[str] = (await db.list_tables()).tables
+            if _META_TABLE in _all_names_check:
+                _meta_tbl_check = await db.open_table(_META_TABLE)
+                _all_meta_rows = await _meta_tbl_check.query().to_list()
+                _conflict_row = next(
+                    (
+                        r for r in _all_meta_rows
+                        if r["name"] == collection
+                        and (r.get("namespace") or DEFAULT_NAMESPACE) != namespace
+                    ),
+                    None,
+                )
+                if _conflict_row is not None:
+                    _conflict_ns = _conflict_row.get("namespace") or DEFAULT_NAMESPACE
+                    logger.error(
+                        "_do_update_meta_on_add: collection %r is owned by namespace %r; "
+                        "refusing to create a second ownership record under %r",
+                        collection, _conflict_ns, namespace,
+                    )
+                    raise ValueError(
+                        f"Collection {collection!r} is owned by namespace {_conflict_ns!r}; "
+                        f"refusing to create a second ownership record under {namespace!r}"
+                    )
             # Brand-new collection: batch IS the full collection; no recompute needed.
             if not _batch_vectors_valid(batch_vectors):
                 logger.warning("Collection %r batch vectors contain NaN/inf; skipping centroid maintenance", collection)
