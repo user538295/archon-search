@@ -171,6 +171,17 @@ The same operations are available over HTTP for programmatic use (all require a 
 
 See `archon_search/server/routes_collections.py` and `routes_jobs.py`, and [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) (the live `GET /openapi.json` is authoritative) for full request/response shapes.
 
+## MCP tools
+
+The MCP surface (`POST /mcp`, streamable HTTP transport) exposes two ingest tools. Both are **synchronous** — they block until done and return the result directly, unlike REST which returns a job.
+
+| Tool | Parameters | Output |
+| --- | --- | --- |
+| `ingest_file` | `path: str` (required), `collection?: str`, `chunk_ttl_seconds?: int \| null`, `chunk_scopes?: list[str] \| null` | `IngestResultSchema dict` — fields: `doc_id`, `chunks_created`, `status`, `error`, `warnings: list[str]`, `code: str \| null`. On unsafe `path`: `{error, code: "path_unsafe"}`; when a reindex holds the lock: `{error, code: "store_busy"}`; when file exceeds `max_file_mb`: `{status: "error", code: "file_too_large"}`. |
+| `ingest_directory` | `path: str` (required), `glob_pattern: str = "**/*"`, `collection?: str`, `chunk_ttl_seconds?: int \| null`, `chunk_scopes?: list[str] \| null` | `list[IngestResultSchema dict]`; progress reported via MCP progress notifications. |
+
+For MCP client setup and the complete tool reference, see [`../DeveloperGuide/05_mcp_integration.md`](../DeveloperGuide/05_mcp_integration.md).
+
 ## Watcher behavior
 
 When `[collections].watch = true`, the server starts a watchdog observer (`archon_search/watcher.py`) on each collection's source directory. Create/modify/delete events trigger an incremental ingest through `pipeline.ingest_file()` (so the `max_file_mb` guard applies automatically). The watcher does **not** delete a collection when its source directory is deleted — use `collection remove` for that.

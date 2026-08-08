@@ -7,7 +7,7 @@
 
 `archon-search` defines an MCP server that mirrors the REST pipeline. The MCP transport is built by `create_mcp_http_app` in `archon_search/server/mcp.py` (lines 237-252): it wraps the `FastMCP` app's `streamable_http_app()` with the same `APIKeyMiddleware` used for REST. The Starlette app it returns exposes the streamable HTTP endpoint at `/mcp`.
 
-**#Unverified — Runtime wiring**: As of this revision, `create_mcp_http_app` has no caller inside `archon_search/` — `server/app.py:create_app` only assembles the FastAPI app, and `run_server` (`app.py:152-155`) starts uvicorn against that FastAPI app with no Starlette mount for `/mcp`. The only caller of `create_mcp_http_app` is `tests/server/test_mcp_auth.py`. The "Registering with Claude Code" and `curl` examples below assume a process that exposes the Starlette MCP app on `/mcp`; against the shipped server they will not resolve until the MCP app is wired into the runtime.
+The MCP app is mounted at `/mcp` by the app lifespan in `server/app.py` when `[mcp].enabled = true` (the default). `app.state.mcp_bound` tracks whether the mount succeeded.
 
 ## Principles
 
@@ -25,8 +25,8 @@ Verified against `archon_search/server/mcp.py`. The `collection` argument defaul
 | `search` | `query: str`, `collection?: str` | `{"results": [SearchResult dict ...], "acl_filtered": bool}` |
 | `search_with_context` | `query: str`, `collection?: str`, `context_window: int = 1` | `list[{result, context_before, context_after}]` |
 | `explain` | `query: str`, `collection?: str`, `top_k: int = 5`, `rerank: bool = True` | `ExplainResponse` dict (`{rerank, routing, collection, acl_filtered, results, near_misses}`) — same structure as REST `POST /explain` (serialized via `response.model_dump(mode="json", exclude_none=False)`) |
-| `ingest_file` | `path: str`, `collection?: str` | `IngestResultSchema dict` — fields: `doc_id`, `chunks_created`, `status`, `error` (`needs_recompute` excluded). On unsafe `path`: `{"error": <phrase>, "code": "path_unsafe"}`; when a reindex holds the lock: `{"error": ..., "code": "store_busy"}`. |
-| `ingest_directory` | `path: str`, `glob_pattern: str = "**/*"`, `collection?: str` | `list[IngestResultSchema dict]`; progress reported via `ctx.report_progress`. On unsafe `path`: `{"error": <phrase>, "code": "path_unsafe"}`; when a reindex holds the lock: `{"error": ..., "code": "store_busy"}`. |
+| `ingest_file` | `path: str`, `collection?: str`, `chunk_ttl_seconds?: int \| null`, `chunk_scopes?: list[str] \| null` | `IngestResultSchema dict` — fields: `doc_id`, `chunks_created`, `status`, `error`, `warnings: list[str]`, `code: str \| null` (`needs_recompute` excluded). On unsafe `path`: `{"error": <phrase>, "code": "path_unsafe"}`; when a reindex holds the lock: `{"error": ..., "code": "store_busy"}`; when file exceeds `max_file_mb`: `{status: "error", code: "file_too_large"}`. |
+| `ingest_directory` | `path: str`, `glob_pattern: str = "**/*"`, `collection?: str`, `chunk_ttl_seconds?: int \| null`, `chunk_scopes?: list[str] \| null` | `list[IngestResultSchema dict]`; progress reported via `ctx.report_progress`. On unsafe `path`: `{"error": <phrase>, "code": "path_unsafe"}`; when a reindex holds the lock: `{"error": ..., "code": "store_busy"}`. |
 | `list_collections` | — | `list[CollectionListItemSchema dict]` — public fields: `name`, `description`, `doc_count`, `chunk_count`, `last_indexed`, `last_described`, `embedding_model`, `pending_embedding_model`. All internal fields stripped. See `BREAKING.md` C7 entry. |
 | `get_collections_meta` | `include_description_embedding: bool = False` | `list[CollectionMetaMcpSchema dict]` — same as `list_collections` plus `description_embedding: list[float] \| null` (always present; `null` when not requested). See `BREAKING.md` C7 entry. |
 | `get_collection_meta` | `name: str` | `CollectionDetailSchema dict` — same public fields as `list_collections` (no `description_embedding`). Or `{"error": "Collection 'X' not found", "code": "not_found"}`. See `BREAKING.md` C7 entry. |
@@ -44,8 +44,6 @@ Each `McpSearchResultSchema` dict has the fields `{doc_id, chunk_id, text, score
 - `list_documents` and `delete_document` are **MCP-only**. REST has no per-document routes.
 
 ## Registering with Claude Code
-
-> **#Unverified — Operational status.** The configuration and `curl` recipes in this section assume the Starlette MCP app (`create_mcp_http_app`) is mounted by the running server. In the current code that wiring does not exist (see the runtime-wiring note at the top of this document); these examples will only work once a caller of `create_mcp_http_app` runs the Starlette app alongside (or in place of) the FastAPI app on the same host/port.
 
 Claude Code reads `~/.claude/settings.json` (and `.mcp.json` in the project root). Add a server entry that points to the streamable HTTP endpoint at `/mcp` and supplies the bearer token in the `Authorization` header. Example:
 
@@ -92,8 +90,6 @@ For TypeScript, use `@modelcontextprotocol/sdk`'s streamable HTTP client with th
 
 ## Verifying the connection
 
-> **#Unverified — Operational status.** The `/mcp` endpoint is currently not exposed by `run_server` (see the runtime-wiring note above); the following `curl` will not succeed against the shipped server until the Starlette MCP app is mounted.
-
 A quick liveness check that exercises auth:
 
 ```bash
@@ -108,7 +104,7 @@ A `200` response with a `result.tools` array of ten entries confirms the MCP sur
 ## Operational notes
 
 - **No streaming results.** `ingest_directory` reports *progress* via `ctx.report_progress(done, total)`; search tools return whole payloads.
-- **Default collection.** Every tool that takes `collection?` falls back to the `default_collection` argument passed to `create_app` / `create_mcp_http_app` (`mcp.py:30-34`, `:237-241`). #Unverified — `SearchConfig` has no `default_collection` field (only `namespaces: dict[str, str]` at `config.py:54`); the previous claim that this resolves to "the first registered collection in config" has no source-code basis, and the actual value depends on the (currently missing) caller of these factories. Pass `collection` explicitly if your client manages multiple collections.
+- **Default collection.** Every tool that takes `collection?` falls back to the `default_collection` argument passed to `create_mcp_http_app`. At startup, `app.py` sets it to `config.collections[0]` (first collection in config) or `"default"` when none are configured. Pass `collection` explicitly if your client manages multiple collections.
 - **Telemetry side effects.** The MCP `search` and `search_with_context` tools enqueue telemetry entries when a `TelemetryWriter` is configured (`mcp.py:47-58` for `search`, `:88-99` for `search_with_context`). The entries never include the raw query — structural invariant from `archon_search/telemetry/entry.py`.
 
 ## Related documents
