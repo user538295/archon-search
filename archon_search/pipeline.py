@@ -1824,10 +1824,11 @@ class SearchPipeline:
                 candidates = merged
 
             candidates.sort(key=lambda c: (-_final_score(c), c.doc_id, c.chunk_id))
+            candidates = candidates[:self._top_k_retrieve]
 
             return ExplainPipelineResult(
                 top_results=candidates[:top_k],
-                near_misses=candidates[top_k : top_k + 20],
+                near_misses=candidates[top_k:],
                 acl_filtered=acl_filtered,
                 excluded_collections=excluded,
             )
@@ -2036,9 +2037,10 @@ class SearchPipeline:
                     raise ExplainStageError("reranker", exc) from exc
 
             fused.sort(key=lambda c: (-_final_score(c), c.doc_id, c.chunk_id))
+            fused = fused[:self._top_k_retrieve]
 
             top_results = fused[:top_k]
-            near_misses = fused[top_k : top_k + 20]
+            near_misses = fused[top_k:]
 
             # Build sub_query_results — only for successful searches (failed variants omitted).
             sub_query_results = [
@@ -2328,10 +2330,11 @@ class SearchPipeline:
                 raise ExplainStageError("reranker", exc) from exc
 
         merged.sort(key=lambda c: (-_final_score(c), c.doc_id, c.chunk_id))
+        merged = merged[:self._top_k_retrieve]
 
         return ExplainPipelineResult(
             top_results=merged[:top_k],
-            near_misses=merged[top_k : top_k + 20],
+            near_misses=merged[top_k:],
             acl_filtered=acl_filtered,
             rag_fusion_applied=False,
             rag_fusion_attempted=False,
@@ -2571,9 +2574,10 @@ class SearchPipeline:
                 raise ExplainStageError("reranker", exc) from exc
 
         candidates.sort(key=lambda c: (-_final_score(c), c.doc_id, c.chunk_id))
+        candidates = candidates[:self._top_k_retrieve]
 
         top_results = candidates[:top_k]
-        near_misses = candidates[top_k : top_k + 20]
+        near_misses = candidates[top_k:]
 
         return ExplainPipelineResult(
             top_results=top_results,

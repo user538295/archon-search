@@ -1052,7 +1052,7 @@ async def test_post_explain_rerank_false_collectionless(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_post_explain_near_miss_pool_sizes(tmp_path: Path) -> None:
-    """3 corpus sizes → near_miss count == min(20, max(0, P - top_k))."""
+    """3 corpus sizes → near_miss count bounded by top_k_retrieve."""
     from archon_search.store import SearchStore
 
     config = SearchConfig()
@@ -1061,14 +1061,14 @@ async def test_post_explain_near_miss_pool_sizes(tmp_path: Path) -> None:
     job_store = JobStore(path=tmp_path / "jobs.json")
 
     top_k = 5
+    top_k_retrieve = 10
 
     # (corpus_size, expected_near_miss_count) with top_k=5, top_k_retrieve=10
-    # P is corpus_size (small enough to fit in retrieve window)
-    # near_misses = min(20, max(0, P - top_k))
+    # pool = min(corpus_size, top_k_retrieve); near_misses = max(0, pool - top_k)
     test_cases = [
-        (3, min(20, max(0, 3 - top_k))),   # 3 < top_k → 0
-        (8, min(20, max(0, 8 - top_k))),   # 8 - 5 = 3
-        (30, min(20, max(0, 30 - top_k))),  # capped at 20
+        (3, max(0, min(3, top_k_retrieve) - top_k)),    # 3 < top_k → 0
+        (8, max(0, min(8, top_k_retrieve) - top_k)),    # 8 - 5 = 3
+        (30, max(0, min(30, top_k_retrieve) - top_k)),  # 10 - 5 = 5 (bounded by top_k_retrieve)
     ]
 
     for corpus_size, expected_near in test_cases:
@@ -1121,7 +1121,7 @@ async def test_post_explain_near_miss_pool_sizes(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_post_explain_near_miss_at_exact_boundary(tmp_path: Path) -> None:
-    """Pool top_k+20 and top_k+21 → near_misses == 20 in both cases (capped)."""
+    """Large corpora → near_misses bounded by top_k_retrieve - top_k."""
     from archon_search.store import SearchStore
 
     config = SearchConfig()
@@ -1130,6 +1130,7 @@ async def test_post_explain_near_miss_at_exact_boundary(tmp_path: Path) -> None:
     job_store = JobStore(path=tmp_path / "jobs.json")
 
     top_k = 5
+    top_k_retrieve = 10
 
     for corpus_size, col_suffix in [(top_k + 20, "a"), (top_k + 21, "b")]:
         app = create_app(config, job_store)
@@ -1172,8 +1173,10 @@ async def test_post_explain_near_miss_at_exact_boundary(tmp_path: Path) -> None:
 
         assert resp.status_code == 200, f"corpus={corpus_size}: {resp.text}"
         actual_near = len(resp.json()["near_misses"])
-        assert actual_near == 20, (
-            f"corpus_size={corpus_size}: expected 20 near_misses, got {actual_near}"
+        expected_near = top_k_retrieve - top_k
+        assert actual_near == expected_near, (
+            f"corpus_size={corpus_size}: expected {expected_near} near_misses "
+            f"(top_k_retrieve - top_k), got {actual_near}"
         )
         await store.disconnect()
 

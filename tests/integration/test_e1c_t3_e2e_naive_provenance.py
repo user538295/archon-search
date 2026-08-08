@@ -324,15 +324,15 @@ def _build_corpus(tmp_path: Path) -> tuple[Path, Path]:
 def _build_large_corpus_for_s7(tmp_path: Path) -> tuple[Path, Path, Path]:
     """Build a corpus whose mixed graph/hybrid results are DETERMINISTIC.
 
-    top_k_retrieve=3 (pinned in toml) → candidate_depth = max(3×3, 20) = 20.
+    top_k_retrieve=10 (pinned in toml) → candidate_depth = max(10×3, 20) = 30.
 
     The S7 intent is a response containing BOTH graph-provenance results and a
     hybrid-only (null-provenance) result. That requires one document the plain
-    query retrieves but the graph-EXPANDED query ranks below the top-20. With
-    the deterministic content-aware embedder (_install_deterministic_embedding),
+    query retrieves but the graph-EXPANDED query ranks below candidate_depth.
+    With the deterministic content-aware embedder (_install_deterministic_embedding),
     similarity tracks two axes — AuthService (dim 0), TokenValidator (dim 1):
 
-    - doc1: 30 DISTINCT 16-word chunks, each carrying BOTH "AuthService" and
+    - doc1: 80 DISTINCT 16-word chunks, each carrying BOTH "AuthService" and
       "TokenValidator" (+ a unique "segmentNNN" marker → distinct vectors) →
       vector ≈ [1, 1]. These are the graph-provenance results.
     - doc3: a single chunk with ONLY "AuthService" → vector ≈ [1, 0].
@@ -352,12 +352,12 @@ def _build_large_corpus_for_s7(tmp_path: Path) -> tuple[Path, Path, Path]:
     top_k=80 ensures all merged candidates land in results[]; near_misses empty.
     """
     doc1 = tmp_path / "auth_service_large_doc.txt"
-    # 30 distinct 16-word chunks, each with BOTH concept terms + a unique marker.
+    # 80 distinct 16-word chunks, each with BOTH concept terms + a unique marker.
     doc1.write_text(
         " ".join(
             f"AuthService TokenValidator segment{i:03d} handles authentication for the "
             f"security gateway validating credentials issuing session tokens login"
-            for i in range(30)
+            for i in range(80)
         ),
         encoding="utf-8",
     )
@@ -474,23 +474,24 @@ def test_explain_naive_mixed_results_e2e(
     carry graph_provenance, hybrid-only chunks carry graph_provenance=null  (S7).
     Also verifies chunk-id uniqueness (dedup: graph provenance wins — S8).
 
-    Design: top_k_retrieve=3 pins candidate_depth = max(9, 20) = 20.
-    doc1 has ~60 chunks (30 reps, chunk_size=16) → far exceeds candidate_depth=20.
+    Design: top_k_retrieve=10 pins candidate_depth = max(30, 20) = 30.
+    doc1 has ~80 chunks (80 reps, chunk_size=16) → 82 total chunks far
+    exceed candidate_depth, so doc3 falls outside the expanded graph search.
 
-    Expanded graph search "AuthService TokenValidator" (union of vec+FTS top-20):
-      - doc2 (TokenValidator: fts_rank=0 rare IDF; vec_rank=0: ingested first).
-      - Top ~19 doc1 chunks.
-      - Graph candidates: ~20 unique (all assigned graph provenance).
+    Expanded graph search "AuthService TokenValidator" (union of vec+FTS top-30):
+      - ~30 doc1 chunks (both terms, closest vecs) with graph provenance.
+      - doc3 ranks 31st+ in both vec and FTS (only "AuthService") → excluded.
 
-    Standard hybrid "AuthService" (union of vec+FTS top-20):
-      - FTS top-20: doc1[0..19] (doc2 absent from FTS — no "AuthService" text).
-      - Vec top-20: doc2 + doc1[0..18].
-      - Union: 21 unique candidates.
-      - Of these, doc2 + doc1[0..18] are in graph_by_chunk (dedup → dropped).
-      - doc1[19] is NOT in graph_by_chunk → added with graph_provenance=None.
+    Standard hybrid "AuthService" (union of vec+FTS top-30):
+      - doc3 (closest vec match to [1,0,0]) + doc1 chunks.
+      - doc3 is NOT in graph_by_chunk → added with graph_provenance=None.
 
-    Merged: ~20 graph-provenance + several null-provenance ≈ 30 total.
-    top_k=80 ensures all fit in results[]; near_misses must be empty.
+    Merged: ~30 graph-provenance + doc3 null-provenance + non-graph doc1
+    chunks from standard search ≈ 60+ total.
+    S489 pool truncation: merged[:top_k_retrieve] = 10 candidates.
+    doc3's standard-search RRF (vec_rank=1) outranks the 10th graph
+    candidate, so it survives truncation into the top 10.
+    top_k=80 ensures all 10 fit in results[]; near_misses empty.
 
     S7: both provenance and null-provenance appear in results[].
     S8: no duplicate chunk_ids (graph provenance wins in dedup).
@@ -505,9 +506,10 @@ def test_explain_naive_mixed_results_e2e(
         tmp_path,
         monkeypatch,
         graph_enabled=True,
-        # chunk_size=16 → 30 doc1 chunks; top_k_retrieve=3 → candidate_depth=20.
-        # Pinning top_k_retrieve removes dependency on the config default.
-        toml_content="[database]\nchunk_size = 16\ntop_k_retrieve = 3\n",
+        # chunk_size=16 → 80 doc1 chunks; top_k_retrieve=10 → candidate_depth=30
+        # so doc3 falls outside graph search (82 total >> 30), and doc3's
+        # standard-search RRF outranks the 10th graph candidate.
+        toml_content="[database]\nchunk_size = 16\ntop_k_retrieve = 10\n",
     ) as (client, _cfg, api_key):
         auth = _auth(api_key)
 

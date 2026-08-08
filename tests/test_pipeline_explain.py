@@ -261,9 +261,9 @@ async def test_explain_accepts_precomputed_query_vector_and_skips_embedding(
 
 @pytest.mark.asyncio
 async def test_explain_near_miss_pool_capped_at_20(connected_store, col_name):
-    """Pool ≥ top_k+20; near_misses must be exactly 20.
+    """Pool bounded by top_k_retrieve; near_misses = top_k_retrieve - top_k.
 
-    top_k_retrieve=20 → candidate_depth=max(60,20)=60; ingest 30 distinct chunks.
+    top_k_retrieve=20, top_k=5 → near_misses <= 15 (pool capped at 20 total).
     """
     pipeline = _make_pipeline(connected_store, top_k_retrieve=20, top_k_return=5)
     records = _make_records(30)
@@ -272,8 +272,8 @@ async def test_explain_near_miss_pool_capped_at_20(connected_store, col_name):
     result = await pipeline.explain("common alpha beta", col_name, top_k=5)
 
     assert len(result.top_results) == 5
-    assert len(result.near_misses) == 20, (
-        f"Expected near_misses==20, got {len(result.near_misses)}"
+    assert len(result.near_misses) == 15, (
+        f"Expected near_misses==15 (top_k_retrieve - top_k), got {len(result.near_misses)}"
     )
 
 
