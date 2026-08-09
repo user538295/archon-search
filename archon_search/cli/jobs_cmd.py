@@ -160,6 +160,8 @@ def list_cmd(status: tuple[str, ...], limit: int, api_url: str, api_key: str | N
 
     if len(items) < total:
         click.echo(f"Showing {len(items)} of {total} jobs — use --limit to see more (max: 200).")
+    else:
+        click.echo(f"Showing {len(items)} of {total} jobs.")
 
 
 @jobs.command("show")

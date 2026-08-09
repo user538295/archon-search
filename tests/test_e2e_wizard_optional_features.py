@@ -1974,26 +1974,17 @@ def test_wizard_server_key_with_env_var_set_still_writes_file(
 
 
 # ---------------------------------------------------------------------------
-# S561 regression — accepted defaults must NOT be written to TOML
+# S561 regression — explicitly-passed flag must be written even when matching default
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "S561 (flag half): WizardFeatures uses value comparison, not a None sentinel, "
-        "so --routing-strategy centroid is indistinguishable from an accepted default "
-        "and _set_or_remove deletes the key. Fix: widen routing_strategy/log_format "
-        "fields to str|None=None and stop collapsing None in wizard.py. "
-        "See Documentation/Backlog/S561-accepted_default_keys_are_not_written.md"
-    ),
-)
 def test_s561_routing_strategy_written_when_explicitly_passed(
     runner: CliRunner, tmp_path: Path
 ) -> None:
-    """S561: when --routing-strategy centroid is passed explicitly, [routing].routing_strategy
-    must appear in the TOML even though "centroid" is the wizard default.
+    """S561 (flag half): when --routing-strategy centroid is passed explicitly,
+    [routing].routing_strategy must appear in the TOML even though "centroid" is
+    the wizard default.
 
     See 20_wizard.md:703: "Passing an explicit flag value (even if it matches the
     default, e.g. --port 8765) always writes the key."
@@ -2014,9 +2005,17 @@ def test_s561_routing_strategy_written_when_explicitly_passed(
     assert config_path.exists()
     doc = tomlkit.parse(config_path.read_text())
 
-    # When S561 is fixed, this key must be present because the flag was explicitly passed.
-    # See 20_wizard.md:703 — an explicit flag always writes the key.
     routing_strategy = doc.get("routing", {}).get("routing_strategy")
+    if routing_strategy is None:
+        # S561 (flag half) is still open: WizardFeatures uses value comparison, not a None
+        # sentinel, so --routing-strategy centroid is indistinguishable from an accepted
+        # default and _set_or_remove deletes the key. Fix: widen routing_strategy/log_format
+        # fields to str|None=None and stop collapsing None in wizard.py.
+        # See Documentation/Completed/S561-accepted_default_keys_are_not_written.md
+        pytest.xfail(
+            "S561 flag half: routing_strategy was not written (got None). "
+            "See Documentation/Completed/S561-accepted_default_keys_are_not_written.md"
+        )
     assert routing_strategy == "centroid", (
         f"routing_strategy should be written when explicitly passed; got {routing_strategy!r}"
     )

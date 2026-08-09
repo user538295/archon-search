@@ -477,7 +477,7 @@ class TestJobsList:
         with patch("httpx.get", return_value=mock_resp):
             result = runner.invoke(jobs, ["list", "--api-key", "test-key"])
         assert result.exit_code == 0
-        assert "Showing 1 of 100" in result.output
+        assert "Showing 1 of 100 jobs — use --limit to see more (max: 200)." in result.output
 
     def test_list_one_row_per_job_when_fields_contain_control_chars(self):
         """S361: control characters in a job row must not split it across physical rows.
@@ -550,11 +550,13 @@ class TestJobsList:
         assert len(data_rows) == 1, f"printed {len(data_rows)} physical rows: {data_rows}"
         assert "Showing 1 of 100" in result.output
 
-    def test_list_footer_absent_when_total_equals_items(self):
-        """S364: footer must be absent when all matching jobs were returned (N == M).
+    def test_list_footer_omits_limit_hint_when_not_truncated(self):
+        """S364: when all matching jobs were returned (N == M), the footer must not
+        include the '— use --limit to see more' hint.
 
-        ``--limit 200`` against 2 CANCELLED jobs returns N=2, M=2; the footer
-        must not appear because no results were withheld.
+        The footer is still printed (S361: ``Showing N of M jobs.``) so that the
+        row count can be cross-checked, but the misleading 'see more' advice is
+        suppressed when nothing was withheld.
         """
         runner = CliRunner()
         job = {
@@ -569,7 +571,8 @@ class TestJobsList:
         with patch("httpx.get", return_value=mock_resp):
             result = runner.invoke(jobs, ["list", "--limit", "200", "--api-key", "test-key"])
         assert result.exit_code == 0
-        assert "Showing" not in result.output
+        assert "Showing 1 of 1 jobs." in result.output
+        assert "use --limit to see more" not in result.output
         assert len(_data_rows(result.output)) == 1
 
 
