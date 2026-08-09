@@ -1,6 +1,13 @@
 # Changelog
 
 
+## [26.8.1931] - 2026-08-09
+
+**Community rebuild race condition fix**
+
+- Fixed a timing race in `POST /graph/{collection}/rebuild-communities` where the `community_rebuild_job_id` guard field was cleared after the job transitioned to terminal state, causing observers (like tests and status polls) to read stale metadata on slower I/O. Now clears the field before the job-store update, ensuring consistent metadata from the moment the job is marked DONE or FAILED.
+
+
 ## [26.8.1928] - 2026-08-09
 
 **Namespace isolation fixes, configuration command improvements, and complete llama_cpp documentation**
