@@ -101,6 +101,23 @@ def test_config_get_routing_key_with_no_file(runner: CliRunner, tmp_path: Path) 
     assert "8" in result.output  # default value
 
 
+def test_config_get_returns_defaults_for_keys_absent_from_wizard_config(runner: CliRunner, tmp_path: Path) -> None:
+    """S561 follow-up: config get must return defaults for keys the wizard omits."""
+    # Simulate a wizard-minimal file: routing_strategy, format, watch, eager_load_embedders absent
+    config_file = tmp_path / "archon-search.toml"
+    config_file.write_text("[database]\nembedding_model = \"BAAI/bge-small-en-v1.5\"\n")
+
+    for key, expected in [
+        ("routing.routing_strategy", "centroid"),
+        ("logging.format", "text"),
+        ("database.eager_load_embedders", "false"),
+        ("collections.watch", "false"),
+    ]:
+        result = runner.invoke(main, ["config", "get", key, "--config", str(config_file)])
+        assert result.exit_code == 0, f"config get {key} failed: {result.output}"
+        assert expected in result.output.lower(), f"config get {key}: expected {expected!r} in {result.output!r}"
+
+
 def test_config_show_defaults_include_all_sections(runner: CliRunner, tmp_path: Path) -> None:
     missing = tmp_path / "nonexistent.toml"
     result = runner.invoke(main, ["config", "show", "--config", str(missing)])

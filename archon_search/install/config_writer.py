@@ -144,7 +144,7 @@ def _reconcile_llama_cpp_base_url(section: tomlkit.items.Table, base_url: str) -
 def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFeatures) -> None:
     """Write WizardFeatures fields to *doc* in-place.
 
-    Only non-default values are written (20_wizard.md:701). When a value
+    Only non-default values are written (20_wizard.md §"Only non-default values are written"). When a value
     matches its default, the key is removed from the doc if it was previously
     set (re-run safe: a re-run that returns to the default removes the key
     the prior run wrote). ``disable_reranker`` stays conditional — re-run
@@ -166,7 +166,7 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
             doc.add(name, tomlkit.table())
 
     def _set_or_remove(section: str, key: str, value: object, default: object) -> None:
-        _ensure_section(section)  # always create section so config stays complete
+        _ensure_section(section)  # section must exist before the elif key-lookup below
         if value != default:
             doc[section][key] = value
         elif key in doc[section]:
@@ -207,6 +207,8 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
     if features.telemetry_retention_days is not None and features.enable_telemetry:
         _ensure_section("telemetry")
         doc["telemetry"]["retention_days"] = features.telemetry_retention_days
+    elif not features.enable_telemetry and "telemetry" in doc and "retention_days" in doc["telemetry"]:
+        del doc["telemetry"]["retention_days"]
 
     # C15 Tier 2 AI query expansion flags (G10 BE-8: provider/model/base_url)
     if features.enable_hyde:

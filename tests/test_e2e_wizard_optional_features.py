@@ -198,7 +198,7 @@ def test_e2e_defaults_produce_clean_config(runner: CliRunner, tmp_path: Path) ->
     assert config_path.exists()
     doc = tomlkit.parse(config_path.read_text())
 
-    # S561: accepted defaults are NOT written — 20_wizard.md:665
+    # S561: accepted defaults are NOT written — 20_wizard.md §"Only non-default values are written"
     assert "enabled" not in doc.get("telemetry", {}), "telemetry.enabled should be omitted (default)"
     assert "routing_strategy" not in doc.get("routing", {}), "routing_strategy should be omitted (default centroid)"
     assert "watch" not in doc.get("collections", {}), "watch should be omitted (default false)"
@@ -1979,16 +1979,24 @@ def test_wizard_server_key_with_env_var_set_still_writes_file(
 
 
 @pytest.mark.integration
-def test_s561_accepted_defaults_not_written(runner: CliRunner, tmp_path: Path) -> None:
-    """S561: wizard must not write keys whose values equal the wizard default.
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "S561 (flag half): WizardFeatures uses value comparison, not a None sentinel, "
+        "so --routing-strategy centroid is indistinguishable from an accepted default "
+        "and _set_or_remove deletes the key. Fix: widen routing_strategy/log_format "
+        "fields to str|None=None and stop collapsing None in wizard.py. "
+        "See Documentation/Backlog/S561-accepted_default_keys_are_not_written.md"
+    ),
+)
+def test_s561_routing_strategy_written_when_explicitly_passed(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """S561: when --routing-strategy centroid is passed explicitly, [routing].routing_strategy
+    must appear in the TOML even though "centroid" is the wizard default.
 
-    20_wizard.md:665 names the text log format as the canonical example:
-    when the operator accepts the default, that key is absent from the file.
-    Same rule applies to collections.watch and telemetry.enabled.
-
-    The routing_strategy key IS written when --routing-strategy centroid is
-    passed explicitly (sentence 3 of :665 — a flag is an affirmative choice
-    even when it matches the default value).
+    See 20_wizard.md:703: "Passing an explicit flag value (even if it matches the
+    default, e.g. --port 8765) always writes the key."
     """
     config_path = tmp_path / "archon-search.toml"
 
@@ -2006,17 +2014,9 @@ def test_s561_accepted_defaults_not_written(runner: CliRunner, tmp_path: Path) -
     assert config_path.exists()
     doc = tomlkit.parse(config_path.read_text())
 
-    # S561: accepted defaults are NOT written — 20_wizard.md:665
-    assert "format" not in doc.get("logging", {}), (
-        "logging.format should be absent (default 'text' was accepted, not specified)"
-    )
-    assert "watch" not in doc.get("collections", {}), (
-        "collections.watch should be absent (default False was accepted, not specified)"
-    )
-    assert "enabled" not in doc.get("telemetry", {}), (
-        "telemetry.enabled should be absent (default False was accepted, not specified)"
-    )
-    # routing_strategy: --routing-strategy centroid matches the default, so the key is absent
-    assert "routing_strategy" not in doc.get("routing", {}), (
-        "routing_strategy should be absent when --routing-strategy centroid equals the wizard default"
+    # When S561 is fixed, this key must be present because the flag was explicitly passed.
+    # See 20_wizard.md:703 — an explicit flag always writes the key.
+    routing_strategy = doc.get("routing", {}).get("routing_strategy")
+    assert routing_strategy == "centroid", (
+        f"routing_strategy should be written when explicitly passed; got {routing_strategy!r}"
     )

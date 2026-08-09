@@ -228,7 +228,7 @@ class TestApplyWizardFeaturesToToml:
         # hyde/rag_fusion always write their enabled key (not via _set_or_remove)
         assert doc["hyde"]["enabled"] is False
         assert doc["rag_fusion"]["enabled"] is False
-        # default-valued keys are NOT written (20_wizard.md:665)
+        # default-valued keys are NOT written (20_wizard.md §"Only non-default values are written")
         assert "eager_load_embedders" not in doc.get("database", {})
         assert "watch" not in doc.get("collections", {})
         assert "enabled" not in doc.get("telemetry", {})
@@ -601,7 +601,7 @@ class TestApplyWizardFeaturesFE2LlamaCppAndGraph:
 
 
 class TestApplyWizardFeaturesElseBranches:
-    """S561: keys equal to their default are REMOVED (not written) — 20_wizard.md:665."""
+    """S561: keys equal to their default are REMOVED (not written) — 20_wizard.md §"Only non-default values are written"."""
 
     def _enabled_doc(self) -> tomlkit.TOMLDocument:
         from archon_search.install import _apply_wizard_features_to_toml
@@ -902,3 +902,27 @@ class TestRevertMultilingualFlag:
 
         # No exception — multilingual=false is a no-op for the dependency check.
         _check_multilingual_deps(load_config(config_path))
+
+
+# ---------------------------------------------------------------------------
+# WizardFeatures ↔ SearchConfig default parity guard
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_features_defaults_match_search_config() -> None:
+    """Guard that WizardFeatures defaults stay in sync with SearchConfig defaults.
+
+    _set_or_remove deletes keys when value == default, trusting that the
+    SearchConfig default will apply. If these diverge, a deletion silently
+    activates a different default. See S561 and C1-I-5.
+    """
+    from archon_search.config import SearchConfig
+    from archon_search.install import WizardFeatures
+
+    wf = WizardFeatures()
+    cfg = SearchConfig()
+    assert wf.eager_load_embedders == cfg.eager_load_embedders
+    assert wf.enable_watch == cfg.watch
+    assert wf.enable_telemetry == cfg.telemetry.enabled
+    assert wf.routing_strategy == cfg.routing_strategy
+    assert wf.log_format == cfg.log_format

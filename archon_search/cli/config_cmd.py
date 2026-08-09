@@ -25,11 +25,13 @@ def _default_toml() -> str:
     database.add("reranker_model", cfg.reranker_model)
     database.add("chunk_size", cfg.chunk_size)
     database.add("auto_reindex_on_chunk_size_change", cfg.auto_reindex_on_chunk_size_change)
+    database.add("eager_load_embedders", cfg.eager_load_embedders)
     doc.add("database", database)
 
     routing = tomlkit.table()
     routing.add("routing_shortlist_size", cfg.routing_shortlist_size)
     routing.add("routing_confidence_threshold", cfg.routing_confidence_threshold)
+    routing.add("routing_strategy", cfg.routing_strategy)
     doc.add("routing", routing)
 
     collections = tomlkit.table()
@@ -87,10 +89,7 @@ def show(config_path: Path | None) -> None:
 def get(key: str, config_path: Path | None) -> None:
     """Get a configuration value by dotted key (e.g. server.port)."""
     path = config_path or get_default_config_path()
-    if path.exists():
-        doc = tomlkit.parse(path.read_text(encoding="utf-8"))
-    else:
-        doc = tomlkit.parse(_default_toml())
+    doc = tomlkit.parse(_effective_toml(path))
 
     parts = key.split(".")
     if len(parts) != 2:
