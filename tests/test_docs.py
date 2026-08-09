@@ -149,3 +149,81 @@ def test_50_ingestion_reindex_metadata_dry_run_example_includes_wait() -> None:
     assert "reindex-metadata docs --dry-run\n" not in doc55, (
         "55_chunk_metadata_and_enrichment.md must not show a bare --dry-run example"
     )
+
+
+def test_wizard_md_documents_graph_enabled_for_code_flag() -> None:
+    """S552: wizard.md must document that --code writes [graph].enabled = true.
+
+    Gate re-implementation: wizard.md was updated so the old sentinel
+    'The wizard does not configure the [graph] section' is gone. The new
+    documented behavior is that --code writes [graph].enabled = true.
+    This test asserts the new statement; if it vanishes again, it will catch
+    a doc regression that diverges from the wizard's actual behavior.
+
+    Wire-truth: test_wizard_declinesCode_doesNotWriteGraphEnabled confirms
+    that --no-code leaves [graph] absent, and test_wizard_code_installs_graph_bundle
+    confirms --code writes graph.enabled = true.
+    """
+    content = (
+        REPO_ROOT / "Documentation" / "UserManual" / "20_wizard.md"
+    ).read_text(encoding="utf-8")
+
+    # New documented behavior: --code causes [graph].enabled = true
+    assert "[graph].enabled = true" in content, (
+        "20_wizard.md must state that --code writes [graph].enabled = true "
+        "(S552 re-implementation: old sentinel 'does not configure [graph]' was removed)"
+    )
+    assert "--code" in content, (
+        "20_wizard.md must document the --code flag"
+    )
+
+
+def test_security_guide_home_mention_is_not_data_dir_relocation() -> None:
+    """S570: SecurityGuide/02_authentication_and_keys.md mentions HOME, but only
+    in the context of ARCHON_SEARCH_KEY_FILE tilde expansion — NOT data dir relocation.
+
+    Gate re-implementation: the expected doc-set mentioning HOME changed when
+    SecurityGuide/02 was added. This test asserts:
+    1. HOME is mentioned in the three expected docs (not more, not fewer).
+    2. SecurityGuide/02's HOME mention is scoped to ARCHON_SEARCH_KEY_FILE
+       (tilde expansion), not to the data directory.
+    """
+    docs_root = REPO_ROOT / "Documentation"
+
+    # Scan only published user-facing doc directories, not Backlog/Completed/node_modules.
+    scan_dirs = ["SecurityGuide", "UserManual", "OperatorGuide", "DeveloperGuide"]
+    home_docs = set()
+    for subdir in scan_dirs:
+        dir_path = docs_root / subdir
+        if not dir_path.exists():
+            continue
+        for md_file in dir_path.rglob("*.md"):
+            if "HOME" in md_file.read_text(encoding="utf-8"):
+                rel = md_file.relative_to(REPO_ROOT)
+                home_docs.add(str(rel).replace("\\", "/"))
+
+    expected = {
+        "Documentation/SecurityGuide/02_authentication_and_keys.md",
+        "Documentation/UserManual/140_running_with_docker.md",
+        "Documentation/UserManual/30_configuration.md",
+    }
+    assert home_docs == expected, (
+        f"S570 gate: the set of docs mentioning HOME changed.\n"
+        f"  Expected: {sorted(expected)}\n"
+        f"  Got:      {sorted(home_docs)}\n"
+        "Re-check whether HOME is now documented as relocating the data directory "
+        "and update this test accordingly."
+    )
+
+    # SecurityGuide/02 must scope its HOME mention to ARCHON_SEARCH_KEY_FILE only,
+    # not to data directory relocation.
+    security_doc = (
+        docs_root / "SecurityGuide" / "02_authentication_and_keys.md"
+    ).read_text(encoding="utf-8")
+    assert "ARCHON_SEARCH_KEY_FILE" in security_doc, (
+        "SecurityGuide/02 must mention ARCHON_SEARCH_KEY_FILE near its HOME reference"
+    )
+    assert "data dir" not in security_doc.lower() or "ARCHON_SEARCH_DATA_DIR" in security_doc, (
+        "SecurityGuide/02's HOME mention must not document data-dir relocation via HOME; "
+        "use ARCHON_SEARCH_DATA_DIR for that"
+    )

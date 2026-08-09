@@ -219,20 +219,27 @@ class TestApplyWizardFeaturesToToml:
     def _empty_doc(self) -> tomlkit.TOMLDocument:
         return tomlkit.document()
 
-    def test_apply_defaults_writes_all_mandatory_sections(self) -> None:
-        """WizardFeatures() always writes all wizard-configurable fields with their defaults."""
+    def test_apply_defaults_creates_mandatory_sections_but_omits_default_keys(self) -> None:
+        """WizardFeatures() creates mandatory sections but omits default-valued keys (S561)."""
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = self._empty_doc()
         _apply_wizard_features_to_toml(doc, WizardFeatures())
+        # hyde/rag_fusion always write their enabled key (not via _set_or_remove)
         assert doc["hyde"]["enabled"] is False
         assert doc["rag_fusion"]["enabled"] is False
-        assert doc["database"]["eager_load_embedders"] is False
-        assert doc["collections"]["watch"] is False
-        assert doc["telemetry"]["enabled"] is False
-        assert doc["routing"]["routing_strategy"] == "centroid"
-        assert doc["logging"]["format"] == "text"
-        assert set(doc.keys()) == {"hyde", "rag_fusion", "database", "collections", "telemetry", "routing", "logging"}
+        # default-valued keys are NOT written (20_wizard.md:665)
+        assert "eager_load_embedders" not in doc.get("database", {})
+        assert "watch" not in doc.get("collections", {})
+        assert "enabled" not in doc.get("telemetry", {})
+        assert "routing_strategy" not in doc.get("routing", {})
+        assert "format" not in doc.get("logging", {})
+        # sections ARE created so config_show can find them
+        assert "database" in doc
+        assert "collections" in doc
+        assert "telemetry" in doc
+        assert "routing" in doc
+        assert "logging" in doc
 
     def test_apply_disable_reranker(self) -> None:
         """disable_reranker=True writes doc['database']['reranker_model'] = ''."""
@@ -594,7 +601,7 @@ class TestApplyWizardFeaturesFE2LlamaCppAndGraph:
 
 
 class TestApplyWizardFeaturesElseBranches:
-    """Brief 150: all 5 settings always written — else-branches cover the disable/default path."""
+    """S561: keys equal to their default are REMOVED (not written) — 20_wizard.md:665."""
 
     def _enabled_doc(self) -> tomlkit.TOMLDocument:
         from archon_search.install import _apply_wizard_features_to_toml
@@ -612,8 +619,8 @@ class TestApplyWizardFeaturesElseBranches:
         )
         return doc
 
-    def test_rerun_with_defaults_overrides_all_five_settings(self) -> None:
-        """Re-running wizard with defaults OVERWRITES each previously-enabled value."""
+    def test_rerun_with_defaults_removes_all_five_settings(self) -> None:
+        """Re-running wizard with defaults REMOVES each previously-enabled key (S561)."""
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = self._enabled_doc()
@@ -625,46 +632,46 @@ class TestApplyWizardFeaturesElseBranches:
 
         _apply_wizard_features_to_toml(doc, WizardFeatures())
 
-        assert doc["database"]["eager_load_embedders"] is False
-        assert doc["collections"]["watch"] is False
-        assert doc["telemetry"]["enabled"] is False
-        assert doc["routing"]["routing_strategy"] == "centroid"
-        assert doc["logging"]["format"] == "text"
+        assert "eager_load_embedders" not in doc.get("database", {})
+        assert "watch" not in doc.get("collections", {})
+        assert "enabled" not in doc.get("telemetry", {})
+        assert "routing_strategy" not in doc.get("routing", {})
+        assert "format" not in doc.get("logging", {})
 
-    def test_eager_load_disabled_writes_false(self) -> None:
+    def test_eager_load_default_not_written(self) -> None:
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = tomlkit.document()
         _apply_wizard_features_to_toml(doc, WizardFeatures(eager_load_embedders=False))
-        assert doc["database"]["eager_load_embedders"] is False
+        assert "eager_load_embedders" not in doc.get("database", {})
 
-    def test_watch_disabled_writes_false(self) -> None:
+    def test_watch_default_not_written(self) -> None:
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = tomlkit.document()
         _apply_wizard_features_to_toml(doc, WizardFeatures(enable_watch=False))
-        assert doc["collections"]["watch"] is False
+        assert "watch" not in doc.get("collections", {})
 
-    def test_telemetry_disabled_writes_false(self) -> None:
+    def test_telemetry_default_not_written(self) -> None:
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = tomlkit.document()
         _apply_wizard_features_to_toml(doc, WizardFeatures(enable_telemetry=False))
-        assert doc["telemetry"]["enabled"] is False
+        assert "enabled" not in doc.get("telemetry", {})
 
-    def test_default_routing_strategy_writes_centroid(self) -> None:
+    def test_default_routing_strategy_not_written(self) -> None:
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = tomlkit.document()
         _apply_wizard_features_to_toml(doc, WizardFeatures())
-        assert doc["routing"]["routing_strategy"] == "centroid"
+        assert "routing_strategy" not in doc.get("routing", {})
 
-    def test_default_log_format_writes_text(self) -> None:
+    def test_default_log_format_not_written(self) -> None:
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = tomlkit.document()
         _apply_wizard_features_to_toml(doc, WizardFeatures())
-        assert doc["logging"]["format"] == "text"
+        assert "format" not in doc.get("logging", {})
 
 
 # ---------------------------------------------------------------------------

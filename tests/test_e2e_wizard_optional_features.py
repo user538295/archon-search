@@ -198,12 +198,11 @@ def test_e2e_defaults_produce_clean_config(runner: CliRunner, tmp_path: Path) ->
     assert config_path.exists()
     doc = tomlkit.parse(config_path.read_text())
 
-    # Wizard always writes all configurable fields, even defaults, so
-    # mandatory sections exist on first run and re-run overwrites cleanly.
-    assert doc["telemetry"]["enabled"] is False, "telemetry.enabled should be False (default)"
-    assert doc["routing"]["routing_strategy"] == "centroid", "routing_strategy should be centroid (default)"
-    assert doc["collections"]["watch"] is False, "watch should be False (default)"
-    assert doc["logging"]["format"] == "text", "logging.format should be text (default)"
+    # S561: accepted defaults are NOT written — 20_wizard.md:665
+    assert "enabled" not in doc.get("telemetry", {}), "telemetry.enabled should be omitted (default)"
+    assert "routing_strategy" not in doc.get("routing", {}), "routing_strategy should be omitted (default centroid)"
+    assert "watch" not in doc.get("collections", {}), "watch should be omitted (default false)"
+    assert "format" not in doc.get("logging", {}), "logging.format should be omitted (default text)"
 
 
 # ---------------------------------------------------------------------------
@@ -1971,4 +1970,53 @@ def test_wizard_server_key_with_env_var_set_still_writes_file(
     content = key_file.read_text()
     assert f"ARCHON_SEARCH_API_KEY={_VALID_SERVER_KEY}" in content, (
         f"key file should contain the --server-key value: {content!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# S561 regression — accepted defaults must NOT be written to TOML
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_s561_accepted_defaults_not_written(runner: CliRunner, tmp_path: Path) -> None:
+    """S561: wizard must not write keys whose values equal the wizard default.
+
+    20_wizard.md:665 names the text log format as the canonical example:
+    when the operator accepts the default, that key is absent from the file.
+    Same rule applies to collections.watch and telemetry.enabled.
+
+    The routing_strategy key IS written when --routing-strategy centroid is
+    passed explicitly (sentence 3 of :665 — a flag is an affirmative choice
+    even when it matches the default value).
+    """
+    config_path = tmp_path / "archon-search.toml"
+
+    with _patched_wizard():
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+            "--routing-strategy", "centroid",
+        ])
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    assert config_path.exists()
+    doc = tomlkit.parse(config_path.read_text())
+
+    # S561: accepted defaults are NOT written — 20_wizard.md:665
+    assert "format" not in doc.get("logging", {}), (
+        "logging.format should be absent (default 'text' was accepted, not specified)"
+    )
+    assert "watch" not in doc.get("collections", {}), (
+        "collections.watch should be absent (default False was accepted, not specified)"
+    )
+    assert "enabled" not in doc.get("telemetry", {}), (
+        "telemetry.enabled should be absent (default False was accepted, not specified)"
+    )
+    # routing_strategy: --routing-strategy centroid matches the default, so the key is absent
+    assert "routing_strategy" not in doc.get("routing", {}), (
+        "routing_strategy should be absent when --routing-strategy centroid equals the wizard default"
     )

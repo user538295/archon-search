@@ -3,7 +3,7 @@
 **ID**: S292-added_file_becomes_searchable_document
 **Scenario**: S292
 **Severity**: medium
-**Version**: archon-search, version 26.8.1848
+**Version**: archon-search, version 26.8.1931
 
 ### What happened
 AssertionError: Watcher did not make the new file 's292_new.md' searchable within 30 seconds; no result with that source_path for query 'plugh_watcher_e2e_5678' in collection 'watch_e2e' (UserManual/50_ingestion_and_collections.md — Watcher behavior)

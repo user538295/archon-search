@@ -3508,7 +3508,7 @@ class SearchPipeline:
             description_embedding=description_embedding,
             mutations_since_recompute=0,
             needs_recompute=False,
-            schema_version=existing_meta.schema_version if existing_meta else 0,
+            schema_version=existing_meta.schema_version if existing_meta else STORE_SCHEMA_VERSION,
             default_ttl_seconds=existing_meta.default_ttl_seconds if existing_meta else None,
         )
         await self.store.update_collection_meta(meta)

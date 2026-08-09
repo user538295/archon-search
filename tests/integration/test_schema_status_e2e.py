@@ -172,3 +172,51 @@ def test_schema_status_reflects_migration_state_e2e(tmp_path, monkeypatch) -> No
         assert STORE_SCHEMA_VERSION == 1, (
             "STORE_SCHEMA_VERSION was bumped again; review Step 2 fresh collection path."
         )
+
+
+def test_nonempty_collection_not_behind_on_first_ingest(tmp_path, monkeypatch) -> None:
+    """S377/S381 regression: a non-empty collection must have schema_version=STORE_SCHEMA_VERSION
+    after its first successful ingest, not 0.
+
+    Root cause: pipeline._recompute_collection_meta used `else 0` for the new-collection
+    branch, setting schema_version=0 even though the collection was freshly created with
+    the current schema. Every new non-empty ingest therefore showed collections_schema_behind=1.
+    """
+    import time
+
+    from archon_search.store import STORE_SCHEMA_VERSION
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        col_path = tmp_path / "s377_docs"
+        col_path.mkdir()
+        (col_path / "doc.md").write_text(
+            "# S377\nThe quick brown fox jumps over the lazy dog.\n" * 8
+        )
+
+        resp = client.post("/collections/", json={"path": str(col_path)}, headers=headers)
+        assert resp.status_code == 202, f"POST /collections/ failed: {resp.text}"
+
+        job_id = resp.json()["job_id"]
+        deadline = time.monotonic() + 15.0
+        status = None
+        while time.monotonic() < deadline:
+            r = client.get(f"/jobs/{job_id}", headers=headers)
+            assert r.status_code == 200
+            status = r.json()["status"]
+            if status in ("DONE", "FAILED"):
+                break
+            time.sleep(0.1)
+        assert status == "DONE", f"ingest job must reach DONE (got {status!r})"
+
+        resp = client.get("/status", headers=headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["collections_schema_behind"] == 0, (
+            f"S377/S381: a freshly ingested non-empty collection must not show as behind; "
+            f"got collections_schema_behind={body['collections_schema_behind']} "
+            f"(root cause: pipeline._recompute_collection_meta used else 0 instead of "
+            f"else STORE_SCHEMA_VERSION for the new-collection branch)"
+        )
+        assert body["store_schema_version"] == STORE_SCHEMA_VERSION

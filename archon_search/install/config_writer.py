@@ -166,8 +166,11 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
             doc.add(name, tomlkit.table())
 
     def _set_or_remove(section: str, key: str, value: object, default: object) -> None:
-        _ensure_section(section)
-        doc[section][key] = value
+        _ensure_section(section)  # always create section so config stays complete
+        if value != default:
+            doc[section][key] = value
+        elif key in doc[section]:
+            del doc[section][key]
 
     if features.disable_reranker:
         _ensure_section("database")

@@ -3,7 +3,7 @@
 **ID**: S296-documented_behavior
 **Scenario**: S296
 **Severity**: medium
-**Version**: archon-search, version 26.8.1848
+**Version**: archon-search, version 26.8.1931
 
 ### What happened
 Failed: S296: documentation gap — MCP ingest_file → search flow is untestable. Docs checked: UserManual/60_searching.md (MCP tools), README.md (line 216), UserManual/50_ingestion_and_collections.md, UserManual/130_ttl_and_scoping.md, UserManual/150_multi_instance_setup.md. Missing: stdlib-usable MCP wire protocol (referenced DeveloperGuide/05_mcp_integration.md and Architecture/600_api_reference_or_public_interface.md do not exist), ingest_file input parameter names, and ingest_file output schema.
