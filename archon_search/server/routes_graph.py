@@ -102,22 +102,17 @@ async def _community_rebuild_task(
         graph_store, graph_config, search_store=search_store, enrichment_client=enrichment_client
     )
 
+    build_exc: Exception | None = None
+    communities = None
     try:
         communities = await builder.build(job.collection, job.namespace)
-        job_store.update(
-            job_id,
-            status=JobStatus.DONE,
-            result={"communities_built": len(communities)},
-        )
     except (ValueError, ImportError, RuntimeError) as exc:
         logger.exception("_community_rebuild_task: job %s failed", job_id)
-        try:
-            job_store.update(job_id, status=JobStatus.FAILED, error=str(exc))
-        except (KeyError, OSError):
-            logger.error(
-                "_community_rebuild_task: could not persist FAILED status for job %s", job_id
-            )
+        build_exc = exc
 
+    # Clear community_rebuild_job_id BEFORE transitioning to a terminal state
+    # so any observer that sees DONE/FAILED is guaranteed to also see it cleared.
+    # ponytail: eager clear prevents the poll→read race that only manifests on slow CI disks.
     if search_store is not None:
         try:
             meta = await search_store.get_collection_meta(job.collection, namespace=job.namespace)
@@ -129,6 +124,20 @@ async def _community_rebuild_task(
                 "_community_rebuild_task: failed to clear community_rebuild_job_id for job %s",
                 job_id,
             )
+
+    if build_exc is not None:
+        try:
+            job_store.update(job_id, status=JobStatus.FAILED, error=str(build_exc))
+        except (KeyError, OSError):
+            logger.error(
+                "_community_rebuild_task: could not persist FAILED status for job %s", job_id
+            )
+    else:
+        job_store.update(
+            job_id,
+            status=JobStatus.DONE,
+            result={"communities_built": len(communities)},
+        )
 
 
 @router.post(
