@@ -3,17 +3,17 @@
 **ID**: S561-accepted_default_keys_are_not_written
 **Scenario**: S561
 **Severity**: medium
-**Version**: archon-search, version 26.8.1848
+**Version**: archon-search, version 26.8.1931
 
 ### What happened
 AssertionError: UserManual/20_wizard.md:665 states that a question whose default is accepted has its key NOT written to the file, naming the `text` log format as its own example. No --log-format, --watch or --telemetry flag was passed, yet the wizard wrote: [('[logging].format', 'text'), ('[collections].watch', False), ('[telemetry].enabled', False)] (doc refs: ['20_wizard.md:506 log format text / :650 (json only)', '20_wizard.md:502 watcher Disabled / :631', '20_wizard.md:503 telemetry Disabled / :637']). The wizard exited 0 and materialised every default as an explicit key.
---- /var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-7dm2y23q/archon-search.toml ---
+--- /var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-x7u6h_nv/archon-search.toml ---
 [server]
 host = "127.0.0.1"
 port = 8765
 
 [database]
-db_path = "/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-7dm2y23q/data/search"
+db_path = "/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-x7u6h_nv/data/search"
 embedding_model = "BAAI/bge-small-en-v1.5"
 reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
 chunk_size = 512
@@ -63,13 +63,13 @@ assert not [('[logging].format', 'text', '20_wizard.md:506 log format text / :65
 ### Evidence
 ```
 E   AssertionError: UserManual/20_wizard.md:665 states that a question whose default is accepted has its key NOT written to the file, naming the `text` log format as its own example. No --log-format, --watch or --telemetry flag was passed, yet the wizard wrote: [('[logging].format', 'text'), ('[collections].watch', False), ('[telemetry].enabled', False)] (doc refs: ['20_wizard.md:506 log format text / :650 (json only)', '20_wizard.md:502 watcher Disabled / :631', '20_wizard.md:503 telemetry Disabled / :637']). The wizard exited 0 and materialised every default as an explicit key.
-E     --- /var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-7dm2y23q/archon-search.toml ---
+E     --- /var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-x7u6h_nv/archon-search.toml ---
 E     [server]
 E     host = "127.0.0.1"
 E     port = 8765
 E     
 E     [database]
-E     db_path = "/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-7dm2y23q/data/search"
+E     db_path = "/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-wiz-full-x7u6h_nv/data/search"
 E     embedding_model = "BAAI/bge-small-en-v1.5"
 E     reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
 E     chunk_size = 512
