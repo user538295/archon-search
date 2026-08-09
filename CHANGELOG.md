@@ -1,6 +1,29 @@
 # Changelog
 
 
+## [26.8.1928] - 2026-08-09
+
+**Namespace isolation fixes, configuration command improvements, and complete llama_cpp documentation**
+
+**Namespace ownership and ACL provenance**
+
+- Fixed `ingest_chunks` not propagating namespace to collection-metadata writes — collections were always created under the default namespace regardless of caller's namespace, causing namespace-key bearer tokens to see empty collection lists and 404 on search. Now correctly threads namespace through to `_do_update_meta_on_add`.
+- Redesigned cross-namespace ownership guard in `_do_update_meta_on_add` to detect existing owner rows and update them instead of raising, preventing metadata forking while preserving multi-namespace ACL semantics.
+- Added namespace validation to `[namespaces]` TOML loading at startup, preventing mid-ingest partial writes from invalid namespace names reaching the store layer after chunks are already committed.
+- Fixed `SearchCollectionSync.sync()` to resolve owning namespace from stored metadata before ingesting, threading namespace through all downstream pipeline calls (`delete_by_source_path`, `ingest_file`, `recompute_collection_meta`, `get_collection_meta`).
+- Added regression tests for sidecar ACL provenance: `acl_gate.source='sidecar'` and `acl_gate.sidecar_path` populated on namespace-key searches with `acl_context=true`.
+
+**Configuration and wizard**
+
+- `archon-search config show` now displays the **effective** configuration — merging TOML file with `SearchConfig` defaults so all keys appear, fixing the gap where recently-added optional keys weren't shown after wizard rewrites.
+- Wizard `--force --delete-db` confirmation prompt now handles `EOFError` gracefully (non-interactive environments) instead of propagating the exception; returns to abort if no input is available.
+- Wizard documentation and prompts corrected to accurately state that `--code` flag also enables `graph.enabled=true` (it was already doing this, but the UI text didn't say so).
+
+**Provider documentation completeness**
+
+- Added `llama_cpp` (local llama.cpp server integration, zero-credential model provider) to all provider enumerations across user manual and API reference: Installation guide, Wizard guide, Searching guide, and API reference. Restored visibility for the feature that was fully implemented but missing from documentation surfaces.
+
+
 ## [26.8.1916] - 2026-08-08
 
 **Server initialization, configuration wiring, and concurrent-write safety fixes**
