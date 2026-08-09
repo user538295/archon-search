@@ -42,12 +42,21 @@ def test_mcp_ingest_file_doc_in_ingestion_guide() -> None:
     assert "`path`" in doc or "`path: str`" in doc, (
         "50_ingestion_and_collections.md must name the `path` parameter"
     )
-    # Must name the output fields
+    # Must name all output fields documented at line 180 (S469)
     assert "`doc_id`" in doc, (
         "50_ingestion_and_collections.md must name the `doc_id` output field"
     )
     assert "`chunks_created`" in doc, (
         "50_ingestion_and_collections.md must name the `chunks_created` output field"
+    )
+    assert "`status`" in doc, (
+        "50_ingestion_and_collections.md must name the `status` output field"
+    )
+    assert "`warnings`" in doc or "warnings" in doc, (
+        "50_ingestion_and_collections.md must name the `warnings` output field"
+    )
+    assert "`code`" in doc or "`code: str" in doc, (
+        "50_ingestion_and_collections.md must name the `code` output field"
     )
 
 

@@ -115,6 +115,43 @@ def test_mcp_ingest_file_accepts_chunk_ttl_seconds() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Unit test 1b — ingest_file result shape matches documented fields (S469)
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_ingest_file_result_has_all_documented_fields() -> None:
+    """S469: ingest_file result must carry all fields documented at
+    UserManual/50_ingestion_and_collections.md:180 (IngestResultSchema dict):
+    doc_id, chunks_created, status, error, warnings, code.
+    """
+    pipeline = _make_pipeline_with_ingest_result()
+    app = _make_mcp_app(pipeline)
+    tool_fn = app.tools["ingest_file"]
+
+    result = asyncio.run(tool_fn(path="/tmp/test.md", collection="col1"))
+
+    assert isinstance(result, dict), f"Expected dict, got: {type(result)!r}: {result!r}"
+    assert "doc_id" in result and isinstance(result["doc_id"], str) and result["doc_id"], (
+        f"result must have a non-empty string doc_id (50_ingestion_and_collections.md:180); got: {result!r}"
+    )
+    assert "chunks_created" in result and isinstance(result["chunks_created"], int), (
+        f"result must have an integer chunks_created (50_ingestion_and_collections.md:180); got: {result!r}"
+    )
+    assert "status" in result and isinstance(result["status"], str), (
+        f"result must have a string status (50_ingestion_and_collections.md:180); got: {result!r}"
+    )
+    assert "error" in result, (
+        f"result must have an error key (50_ingestion_and_collections.md:180); got: {result!r}"
+    )
+    assert "warnings" in result and isinstance(result["warnings"], list), (
+        f"result must have a list warnings (50_ingestion_and_collections.md:180); got: {result!r}"
+    )
+    assert "code" in result, (
+        f"result must have a code key (50_ingestion_and_collections.md:180); got: {result!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Unit test 2 — ingest_directory passes chunk_scopes to pipeline
 # ---------------------------------------------------------------------------
 
@@ -384,15 +421,26 @@ def test_mcp_ingest_file_with_ttl_stores_expires_at(tmp_path: Any, monkeypatch: 
         )
         ingest_result = _extract_tool_text(ingest_rpc, "ingest_file")
 
+        # S469: assert the documented result shape directly
+        # (50_ingestion_and_collections.md:180 — IngestResultSchema dict)
         assert isinstance(ingest_result, dict), f"Expected dict: {ingest_result!r}"
         assert ingest_result.get("status") == "ok", (
             f"Expected status='ok' after ingest with TTL; got: {ingest_result!r}"
         )
-        assert ingest_result.get("code") != "invalid_parameter", (
-            f"Unexpected invalid_parameter error: {ingest_result!r}"
+        assert ingest_result.get("code") is None, (
+            f"Expected code=None on successful ingest; got: {ingest_result!r}"
+        )
+        assert isinstance(ingest_result.get("doc_id"), str) and ingest_result["doc_id"], (
+            f"Expected non-empty string doc_id; got: {ingest_result!r}"
+        )
+        assert isinstance(ingest_result.get("chunks_created"), int) and ingest_result["chunks_created"] >= 1, (
+            f"Expected chunks_created >= 1; got: {ingest_result!r}"
+        )
+        assert isinstance(ingest_result.get("warnings"), list), (
+            f"Expected warnings to be a list; got: {ingest_result!r}"
         )
 
-        # Verify the chunk appears in the /expiring endpoint (within_hours=3 > 2h TTL).
+        # TTL verification: the chunk appears in the /expiring endpoint (within_hours=3 > 2h TTL).
         # The /expiring route only requires the collection to exist in the namespace
         # meta table — no config-path registration needed.
         expiring_resp = client.get(
