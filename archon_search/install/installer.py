@@ -766,8 +766,11 @@ class BaseInstaller(ABC):
 
             # Step 13: confirmation
             if not non_interactive:
-                answer = input("Proceed? [Y/n]: ").strip().lower()
-                if answer not in ("y", ""):
+                try:
+                    answer = input("Proceed? [Y/n]: ").strip().lower()
+                except EOFError:
+                    answer = "n"
+                if answer not in ("y", "yes", ""):
                     print("Installation aborted.")
                     if features.install_graph_extra:
                         _revert_graph_enabled_flag(config_path, self.dry_run)

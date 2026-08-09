@@ -220,7 +220,7 @@ def test_e2e_interactive_watch_and_telemetry(runner: CliRunner, tmp_path: Path) 
     # + confirmation prompt):
     #  1. multilingual: "n"
     #  2. code enrichment: "n"
-    #  3. disable reranker: "n"   (profile=balanced has reranker)
+    #  3. keep reranker enabled: "n" (disables — profile=balanced has reranker)
     #  4. watch: "y"
     #  5. telemetry: "y"
     #  6. eager load: "n"
@@ -282,6 +282,128 @@ def test_e2e_interactive_force_delete_db_exits_zero(runner: CliRunner, tmp_path:
             )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+
+
+@pytest.mark.integration
+def test_proceed_prompt_accepts_yes_exits_zero(runner: CliRunner, tmp_path: Path) -> None:
+    """Proceed? prompt accepts 'yes' (full word) as confirmation — exits 0.
+
+    Guards the EOFError + 'yes' acceptance fix in installer.py:769-773.
+    Same input sequence as test_e2e_interactive_force_delete_db_exits_zero
+    but 'yes' replaces 'y' at the final Proceed? prompt.
+    """
+    config_path = tmp_path / "archon-search.toml"
+
+    # 1 multilingual n / 2 code n / 3 reranker n / 4 watch n / 5 telemetry n /
+    # 6 eager n / 7 routing "" / 8 log format "" / 9 HyDE n / 10 graph enrichment n /
+    # 11 delete-db confirm "yes" / 12 "Proceed?" yes
+    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "", "n", "n", "yes", "yes"]) + "\n"
+
+    with _no_anthropic_key():
+        with _patched_wizard():
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "minimal",
+                    "--config", str(config_path),
+                    "--force",
+                    "--delete-db",
+                    "--skip-preload",
+                ],
+                input=stdin_responses,
+            )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+
+
+@pytest.mark.integration
+def test_proceed_prompt_eof_aborts_installation(runner: CliRunner, tmp_path: Path) -> None:
+    """Proceed? prompt receiving EOF aborts the installation — exits non-zero.
+
+    Guards the EOFError guard in installer.py:769-773: stdin exhausts at Proceed?,
+    the EOFError handler sets answer='n', which aborts with exit 1.
+    """
+    config_path = tmp_path / "archon-search.toml"
+
+    # Same as test_proceed_prompt_accepts_yes_exits_zero but the final 'yes' for
+    # Proceed? is omitted so stdin exhausts there, triggering the EOFError path.
+    # 1 multilingual n / 2 code n / 3 reranker n / 4 watch n / 5 telemetry n /
+    # 6 eager n / 7 routing "" / 8 log format "" / 9 HyDE n / 10 graph enrichment n /
+    # 11 delete-db confirm "yes"  (stdin exhausted → EOFError at Proceed?)
+    stdin_responses = "\n".join(["n", "n", "n", "n", "n", "n", "", "", "n", "n", "yes"]) + "\n"
+
+    with _no_anthropic_key():
+        with _patched_wizard():
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "minimal",
+                    "--config", str(config_path),
+                    "--force",
+                    "--delete-db",
+                    "--skip-preload",
+                ],
+                input=stdin_responses,
+            )
+
+    assert result.exit_code != 0, f"Expected non-zero exit, got {result.exit_code}:\nOUT: {result.output}"
+    assert "Installation aborted." in result.output, (
+        f"Expected 'Installation aborted.' in output:\n{result.output}"
+    )
+
+
+@pytest.mark.integration
+def test_e2e_interactive_no_profile_flag_metal_gpu_force_delete_exits_zero(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """S03 regression: no --profile + Metal GPU path must have all 14 inputs aligned.
+
+    Without --profile the profile-choice prompt fires.  With Metal GPU detected
+    the GPU-confirm prompt fires.  Graph enrichment (section 5i) fires right
+    after HyDE.  A test that omits the 'n' for graph enrichment sends its
+    'yes' to the wrong gate and the wizard aborts with exit 1.
+    """
+    config_path = tmp_path / "archon-search.toml"
+
+    # 1 multilingual n / 2 profile "" (→ minimal) / 3 GPU "" (accept Metal) /
+    # 4 code n / 5 reranker n / 6 watch n / 7 telemetry n / 8 eager n /
+    # 9 routing "" / 10 log "" / 11 HyDE n / 12 graph enrichment n /
+    # 13 delete-db confirm "yes" / 14 "Proceed?" y
+    stdin_responses = "\n".join(
+        ["n", "", "", "n", "n", "n", "n", "n", "", "", "n", "n", "yes", "y"]
+    ) + "\n"
+
+    with _no_anthropic_key():
+        with _patched_wizard():
+            with patch.multiple(
+                RealInstaller,
+                detect_gpu=MagicMock(return_value=GpuType.METAL),
+                validate_embedder_only=MagicMock(return_value=False),
+            ):
+                result = runner.invoke(
+                    main,
+                    [
+                        "wizard",
+                        "--config", str(config_path),
+                        "--force",
+                        "--delete-db",
+                        "--skip-preload",
+                    ],
+                    input=stdin_responses,
+                )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["embedding_model"] == "BAAI/bge-small-en-v1.5", (
+        "Profile '' (Enter) should resolve to minimal English"
+    )
+    # Pin input #5 (reranker "n") to its actual prompt via the config effect
+    assert doc["database"]["reranker_model"] == ""  # "n" at reranker → disabled → empty
+    # General alignment oracle: no input was silently swallowed by _ask_choice retry
+    assert "Invalid value" not in result.output
+    assert "Invalid choice" not in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +470,7 @@ def test_e2e_interactive_invalid_routing_retries(runner: CliRunner, tmp_path: Pa
     # Input queue (minimal profile HAS a reranker, so reranker question IS shown):
     #  1. multilingual: "n"
     #  2. code: "n"
-    #  3. disable reranker: "n"  (minimal has reranker → question shown)
+    #  3. keep reranker enabled: "n" (disables — minimal has reranker → question shown)
     #  4. watch: "n"
     #  5. telemetry: "n"
     #  6. eager load: "n"
@@ -621,7 +743,7 @@ def test_wizard_declineProceedPrompt_revertsGraphEnabled(runner: CliRunner, tmp_
     # Input queue (minimal profile HAS a reranker, so reranker question IS shown):
     #  1. multilingual: "n"
     #  2. code enrichment: "y"   (triggers install_graph_extra bundling too)
-    #  3. disable reranker: "n"
+    #  3. keep reranker enabled: "n" (disables)
     #  4. watch: "n"
     #  5. telemetry: "n"
     #  6. eager load: "n"
@@ -792,7 +914,7 @@ def test_e2e_hyde_declineProceedPrompt_reverts(runner: CliRunner, tmp_path: Path
     # the HyDE/RAG Fusion prompt):
     #  1. multilingual: "n"
     #  2. code enrichment: "n"
-    #  3. disable reranker: "n"
+    #  3. keep reranker enabled: "n" (disables)
     #  4. watch: "n"
     #  5. telemetry: "n"
     #  6. eager load: "n"
@@ -835,7 +957,7 @@ def test_wizard_llama_cpp_model_picker_reachable(runner: CliRunner, tmp_path: Pa
     # Input queue (minimal English profile HAS a reranker):
     #  1. multilingual: "n"
     #  2. code enrichment: "n"
-    #  3. disable reranker: "n"
+    #  3. keep reranker enabled: "n" (disables)
     #  4. watch: "n"
     #  5. telemetry: "n"
     #  6. eager load: "n"
@@ -921,7 +1043,7 @@ def test_wizard_graph_provider_step_writes_all_three_fields(runner: CliRunner, t
     # Input queue (minimal English profile HAS a reranker):
     #  1. multilingual: "n"
     #  2. code enrichment: "n"
-    #  3. disable reranker: "n"
+    #  3. keep reranker enabled: "n" (disables)
     #  4. watch: "n"
     #  5. telemetry: "n"
     #  6. eager load: "n"
@@ -969,7 +1091,7 @@ def test_wizard_abort_reverts_graph_enrichment_only(runner: CliRunner, tmp_path:
     # Input queue (minimal English profile HAS a reranker):
     #  1. multilingual: "n"
     #  2. code enrichment: "n"   (install_graph_extra stays False — isolates the assertion)
-    #  3. disable reranker: "n"
+    #  3. keep reranker enabled: "n" (disables)
     #  4. watch: "n"
     #  5. telemetry: "n"
     #  6. eager load: "n"

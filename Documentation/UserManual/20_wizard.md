@@ -201,10 +201,10 @@ Reranker:
   A second-stage cross-encoder model that re-scores results for better precision.
   Disabling it reduces latency and RAM but lowers recall quality.
   Default: enabled (for profiles that include a reranker).
-Disable reranker for lower latency? [y/N]:
+Keep reranker enabled? [Y/n]:
 ```
 
-**Default**: No (reranker stays enabled).
+**Default**: Yes (for profiles that include a reranker). Answering `n` disables the reranker, equivalent to passing `--no-reranker` on the command line.
 
 **This question is only shown when your selected profile includes a reranker.** The Minimal multilingual profile has no reranker, so this question is skipped for that combination.
 
@@ -423,7 +423,7 @@ Only non-default optional features are listed. When you enable AI query expansio
 Proceed? [Y/n]:
 ```
 
-Press Enter or type `y` to continue. Type `n` to abort without making any changes.
+Press Enter or type `y` or `yes` to continue. Any other input (including EOF) aborts the installation. On abort, graph-enabled, multilingual, and query-expansion flags are reverted in the config file, but the config file itself was already written to disk before this prompt appeared.
 
 ### Step 7 — Code enrichment package install (if requested)
 

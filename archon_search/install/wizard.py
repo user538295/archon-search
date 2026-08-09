@@ -390,11 +390,21 @@ def _prompt_optional_features(
     """
 
     def _ask_yn(prompt_text: str, default: bool = False) -> bool:
-        """Ask a yes/no question; return ``default`` on EOFError or empty input."""
+        """Ask a yes/no question; return ``default`` on EOFError or empty input.
+
+        For [Y/n] prompts (``default=True``): any input that is not explicitly
+        ``n`` / ``no`` is treated as yes, matching the bracket convention.
+        For [y/N] prompts (``default=False``): only explicit ``y`` / ``yes``
+        is treated as yes.
+        """
         try:
             raw = input(prompt_text).strip().lower()
         except EOFError:
             return default
+        if not raw:
+            return default
+        if default:
+            return raw not in {"n", "no"}
         return raw in {"y", "yes"}
 
     def _ask_choice(prompt_text: str, valid: set[str], default: str) -> str:

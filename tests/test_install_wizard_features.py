@@ -414,6 +414,139 @@ class TestPromptOptionalFeatures:
         assert features.routing_strategy == "centroid"
         assert features.log_format == "text"
 
+    def test_ask_yn_empty_input_default_true_keeps_reranker(self) -> None:
+        """Pressing Enter at [Y/n] prompt (default=True) keeps the reranker enabled.
+
+        Guards the _ask_yn fix: empty input must return default (True), so
+        disable_reranker = not True = False (reranker stays on).
+        """
+        # code=n, reranker=""(Enter→default=True=keep), watch=n, telemetry=n,
+        # eager=n, routing="", log=""
+        responses = iter(["n", "", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
+        assert features.disable_reranker is False, (
+            "_ask_yn with default=True returned False for empty input — reranker was disabled"
+        )
+
+    def test_ask_yn_n_input_default_true_disables_reranker(self) -> None:
+        """Answering 'n' at [Y/n] prompt (default=True) disables the reranker.
+
+        The mutation-killing negative case: 'n' must explicitly decline,
+        so disable_reranker = not False = True.
+        """
+        # code=n, reranker="n"(decline keep→disable), watch=n, telemetry=n,
+        # eager=n, routing="", log=""
+        responses = iter(["n", "n", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
+        assert features.disable_reranker is True, (
+            "'n' at [Y/n] prompt must disable the reranker"
+        )
+
+    def test_ask_yn_empty_input_default_false_leaves_code_disabled(self) -> None:
+        """Pressing Enter at [y/N] prompt (default=False) keeps the feature disabled.
+
+        Guards that the default=True fix did not break default=False: empty input
+        must return False for code enrichment.
+        """
+        # code=""(Enter→default=False=don't install), reranker=n, watch=n,
+        # telemetry=n, eager=n, routing="", log=""
+        responses = iter(["", "n", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
+        assert features.install_code_extra is False, (
+            "Empty input at [y/N] prompt must return False (default)"
+        )
+
+    def test_ask_yn_unrecognized_input_default_true_keeps_reranker(self) -> None:
+        """Unrecognized non-empty input at [Y/n] prompt (default=True) keeps the reranker.
+
+        Guards the M1 fix: 'yep' is not in {'n', 'no'}, so _ask_yn returns True
+        and disable_reranker = not True = False.
+        """
+        # code=n, reranker="yep"(not 'n'/'no'→True=keep enabled), watch=n,
+        # telemetry=n, eager=n, routing="", log=""
+        responses = iter(["n", "yep", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
+        assert features.disable_reranker is False, (
+            "Unrecognized input 'yep' at [Y/n] prompt must be treated as yes (keep enabled)"
+        )
+
+    def test_ask_yn_no_variant_default_true_disables_reranker(self) -> None:
+        """'no' (full word) at [Y/n] prompt also disables the reranker."""
+        # code=n, reranker="no" (full word, in {"n","no"}→False=decline keep→disable),
+        # watch=n, telemetry=n, eager=n, routing="", log=""
+        responses = iter(["n", "no", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
+        assert features.disable_reranker is True
+
+    def test_ask_yn_yes_variant_default_false_enables_code(self) -> None:
+        """'yes' (full word) at [y/N] prompt enables code enrichment."""
+        # code="yes" (full word, in {"y","yes"}→True=install),
+        # reranker=n, watch=n, telemetry=n, eager=n, routing="", log=""
+        responses = iter(["yes", "n", "n", "n", "n", "", ""])
+        with patch("builtins.input", side_effect=responses):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
+        assert features.install_code_extra is True
+
+    def test_ask_yn_eof_default_true_keeps_reranker(self) -> None:
+        """EOFError at [Y/n] prompt (default=True) keeps the reranker enabled.
+
+        Uses the StopIteration→EOFError pattern from test_wizard_eof_during_model_prompt:
+        first call returns "n" for code enrichment; every subsequent call raises EOFError.
+        The reranker prompt (second input call) gets EOFError → _ask_yn returns True
+        (default) → disable_reranker = not True = False.
+        """
+        inputs = iter(["n"])
+
+        def mock_input(prompt: str = "") -> str:  # noqa: ARG001
+            try:
+                return next(inputs)
+            except StopIteration:
+                raise EOFError
+
+        with patch("builtins.input", side_effect=mock_input):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
+        assert features.disable_reranker is False
+
 
 class TestPromptOptionalFeaturesExplanations:
     """Tests for Task 4.1 — explanation print blocks in _prompt_optional_features."""
