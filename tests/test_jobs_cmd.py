@@ -550,12 +550,11 @@ class TestJobsList:
         assert len(data_rows) == 1, f"printed {len(data_rows)} physical rows: {data_rows}"
         assert "Showing 1 of 100" in result.output
 
-    def test_list_footer_present_when_total_equals_items(self):
-        """S361: the footer is unconditional — it describes the table above it.
+    def test_list_footer_absent_when_total_equals_items(self):
+        """S364: footer must be absent when all matching jobs were returned (N == M).
 
-        A ``--limit`` larger than the job count is the common case (the harness
-        step that regressed used ``--limit 200`` against 40 jobs). Suppressing
-        the footer there left the row count unaccounted for.
+        ``--limit 200`` against 2 CANCELLED jobs returns N=2, M=2; the footer
+        must not appear because no results were withheld.
         """
         runner = CliRunner()
         job = {
@@ -570,7 +569,7 @@ class TestJobsList:
         with patch("httpx.get", return_value=mock_resp):
             result = runner.invoke(jobs, ["list", "--limit", "200", "--api-key", "test-key"])
         assert result.exit_code == 0
-        assert "Showing 1 of 1 jobs — use --limit to see more (max: 200)." in result.output
+        assert "Showing" not in result.output
         assert len(_data_rows(result.output)) == 1
 
 

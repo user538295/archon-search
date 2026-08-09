@@ -69,7 +69,7 @@ archon-search jobs list --status running --status queued   # repeatable filter
 archon-search jobs list --limit 100                         # 1..200, default 50
 ```
 
-Output columns: `ID` (first 8 chars), `TYPE`, `COLLECTION`, `STATUS`, `STARTED`, `ELAPSED`. Below the table it always prints `Showing N of M jobs — use --limit to see more (max: 200).`, where `N` is the number of rows above it and `M` the total across all pages.
+Output columns: `ID` (first 8 chars), `TYPE`, `COLLECTION`, `STATUS`, `STARTED`, `ELAPSED`. When more jobs exist than were returned (`N < M`), it prints `Showing N of M jobs — use --limit to see more (max: 200).` below the table, where `N` is the number of rows above it and `M` the total across all pages.
 
 ### `jobs show <id>`
 
