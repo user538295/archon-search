@@ -247,7 +247,7 @@ class SearchCollectionSync:
                     meta = await self._pipeline.store.get_collection_meta(name, _ns)
                 except Exception:
                     meta = None
-                new_f, changed_f, deleted_p = self._check_collection_changes(
+                new_f, changed_f, deleted_p, force_reindex = self._check_collection_changes(
                     name, p, file_mtimes,
                     indexed_embedding_model=indexed_model,
                     indexed_chunk_size=indexed_cs,
@@ -258,6 +258,7 @@ class SearchCollectionSync:
                     error = await self._apply_collection_changes(
                         name, p, new_f, changed_f, deleted_p, file_mtimes, progress_cb,
                         meta=meta, namespace=_ns,
+                        ingested_by="reindex" if force_reindex else "watcher",
                     )
                     if error is None:
                         result.updated.append(name)
@@ -315,7 +316,7 @@ class SearchCollectionSync:
         except Exception:
             meta = None
 
-        new_f, changed_f, deleted_p = self._check_collection_changes(
+        new_f, changed_f, deleted_p, force_reindex = self._check_collection_changes(
             collection_name,
             source_path,
             file_mtimes,
@@ -328,6 +329,7 @@ class SearchCollectionSync:
             result = await self._apply_collection_changes(
                 collection_name, source_path, new_f, changed_f, deleted_p, file_mtimes,
                 meta=meta, namespace=_col_ns,
+                ingested_by="reindex" if force_reindex else "watcher",
             )
             if result is not None:
                 logger.warning(
@@ -410,10 +412,10 @@ class SearchCollectionSync:
         indexed_embedding_model: str,
         indexed_chunk_size: int,
         meta: CollectionMeta | None = None,
-    ) -> tuple[list[Path], list[Path], list[str]]:
+    ) -> tuple[list[Path], list[Path], list[str], bool]:
         """Detect new, changed, and deleted files compared to stored file_mtimes.
 
-        Returns (new_files, changed_files, deleted_paths).
+        Returns (new_files, changed_files, deleted_paths, force_full_reindex).
         """
         force_full_reindex = False
 
@@ -454,7 +456,7 @@ class SearchCollectionSync:
         deleted_paths = [p for p in file_mtimes if p not in eligible_keys]
 
         if force_full_reindex:
-            return [], [p for p, _ in eligible], deleted_paths
+            return [], [p for p, _ in eligible], deleted_paths, True
 
         new_files: list[Path] = []
         changed_files: list[Path] = []
@@ -470,7 +472,7 @@ class SearchCollectionSync:
                 if mtime != file_mtimes[key]:
                     changed_files.append(file)
 
-        return new_files, changed_files, deleted_paths
+        return new_files, changed_files, deleted_paths, False
 
     # ------------------------------------------------------------------
     # Collection ingestion (shared by to_add and to_resume)
@@ -656,6 +658,7 @@ class SearchCollectionSync:
         progress_cb=None,
         meta=None,
         namespace: str = DEFAULT_NAMESPACE,
+        ingested_by: str = "watcher",
     ) -> str | None:
         """Apply incremental file changes (add/update/delete) to an existing collection.
 
@@ -719,7 +722,7 @@ class SearchCollectionSync:
 
                 # Changed files
                 for file in changed_files:
-                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by="watcher", collection_root=source_path, namespace=namespace)
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by=ingested_by, collection_root=source_path, namespace=namespace)
                     resolved_str = str(file.resolve())
                     if ingest_result.status == "ok":
                         try:
@@ -746,7 +749,7 @@ class SearchCollectionSync:
 
                 # New files
                 for file in new_files:
-                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by="watcher", collection_root=source_path, namespace=namespace)
+                    ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by=ingested_by, collection_root=source_path, namespace=namespace)
                     if ingest_result.status == "ok":
                         try:
                             file_mtimes[str(file.resolve())] = file.stat().st_mtime

@@ -481,7 +481,7 @@ class TestSearchCollectionSync:
 
         # Force _check_collection_changes to report a changed file so to_update is populated
         syncer._check_collection_changes = MagicMock(
-            return_value=([existing_dir / "file.txt"], [], [])
+            return_value=([existing_dir / "file.txt"], [], [], False)
         )
         # Force _apply_collection_changes to return an error (simulate failure)
         syncer._apply_collection_changes = AsyncMock(return_value="ingest failed: disk full")
@@ -522,7 +522,7 @@ class TestSearchCollectionSync:
         syncer = SearchCollectionSync(pipeline, state_store=state_store)
 
         syncer._check_collection_changes = MagicMock(
-            return_value=([existing_dir / "file.txt"], [], [])
+            return_value=([existing_dir / "file.txt"], [], [], False)
         )
         # Successful apply returns None
         syncer._apply_collection_changes = AsyncMock(return_value=None)
@@ -538,6 +538,57 @@ class TestSearchCollectionSync:
         )
         assert "goodproject" in result.updated
         assert not result.errors
+
+    @pytest.mark.asyncio
+    async def test_chunk_size_change_auto_reindex_uses_reindex_ingested_by(self, tmp_path):
+        """S483 regression: chunk_size change with auto_reindex=True must use ingested_by='reindex'."""
+        from archon_search._types import IngestResult
+        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        doc = col_dir / "doc.md"
+        doc.write_text("Some content here.")
+        resolved = str(col_dir.resolve())
+        doc_resolved = str(doc.resolve())
+
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path,
+            existing_collections=["myproject"],
+            manifest={"myproject": resolved},
+        )
+
+        captured_ingested_by: list[str] = []
+
+        async def mock_ingest_file(file, collection, **kwargs):
+            captured_ingested_by.append(kwargs.get("ingested_by"))
+            return IngestResult(doc_id="d0", chunks_created=1, status="ok")
+
+        pipeline.ingest_file = AsyncMock(side_effect=mock_ingest_file)
+
+        state_store = IndexingStateStore(tmp_path / "state")
+        state_store.update_collection("myproject", CollectionProgress(
+            status=IndexingStatus.DONE,
+            total_files=1,
+            processed_files=1,
+            indexed_chunk_size=512,
+            file_mtimes={doc_resolved: doc.stat().st_mtime},
+        ))
+
+        syncer = SearchCollectionSync(
+            pipeline,
+            state_store=state_store,
+            auto_reindex_on_chunk_size_change=True,
+            chunk_size=96,
+        )
+        result = await syncer.sync([resolved])
+
+        assert "myproject" in result.updated
+        assert captured_ingested_by, "ingest_file must have been called"
+        assert all(v == "reindex" for v in captured_ingested_by), (
+            f"S483: chunk-size reindex must use ingested_by='reindex', got {captured_ingested_by!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3113,7 +3164,7 @@ class TestTask45:
 
         syncer = self._make_syncer(tmp_path)
         key = str(f.resolve())
-        new_files, changed_files, deleted = syncer._check_collection_changes(
+        new_files, changed_files, deleted, _ = syncer._check_collection_changes(
             "col", source, {key: mtime}, "", 0
         )
         assert new_files == []
@@ -3131,7 +3182,7 @@ class TestTask45:
 
         syncer = self._make_syncer(tmp_path)
         # Empty mtimes — file is "new"
-        new_files, changed_files, deleted = syncer._check_collection_changes(
+        new_files, changed_files, deleted, _ = syncer._check_collection_changes(
             "col", source, {}, "", 0
         )
         assert f.resolve() in new_files
@@ -3150,7 +3201,7 @@ class TestTask45:
 
         syncer = self._make_syncer(tmp_path)
         # Use an mtime that won't match the actual file mtime
-        new_files, changed_files, deleted = syncer._check_collection_changes(
+        new_files, changed_files, deleted, _ = syncer._check_collection_changes(
             "col", source, {key: 0.0}, "", 0
         )
         assert new_files == []
@@ -3166,7 +3217,7 @@ class TestTask45:
 
         syncer = self._make_syncer(tmp_path)
         ghost_key = str(source / "ghost.md")
-        new_files, changed_files, deleted = syncer._check_collection_changes(
+        new_files, changed_files, deleted, _ = syncer._check_collection_changes(
             "col", source, {ghost_key: 1.0}, "", 0
         )
         assert new_files == []
@@ -3184,10 +3235,11 @@ class TestTask45:
 
         # syncer has new model; indexed with old model
         syncer = self._make_syncer(tmp_path, embedding_model="new-model")
-        new_files, changed_files, deleted = syncer._check_collection_changes(
+        new_files, changed_files, deleted, force = syncer._check_collection_changes(
             "col", source, {}, "old-model", 0
         )
         # force_full_reindex → eligible files go to changed_files, new_files empty
+        assert force is True
         assert f.resolve() in changed_files
         assert new_files == []
 
@@ -3199,9 +3251,10 @@ class TestTask45:
         f.write_text("hello")
 
         syncer = self._make_syncer(tmp_path, chunk_size=1024, auto_reindex=True)
-        new_files, changed_files, deleted = syncer._check_collection_changes(
+        new_files, changed_files, deleted, force = syncer._check_collection_changes(
             "col", source, {}, "", 512
         )
+        assert force is True
         assert f.resolve() in changed_files
         assert new_files == []
 
@@ -3218,11 +3271,12 @@ class TestTask45:
 
         syncer = self._make_syncer(tmp_path, chunk_size=1024, auto_reindex=False)
         with caplog.at_level(logging.WARNING, logger="archon"):
-            new_files, changed_files, deleted = syncer._check_collection_changes(
+            new_files, changed_files, deleted, force = syncer._check_collection_changes(
                 "col", source, {key: mtime}, "", 512
             )
 
         # No force_full_reindex → no changes detected for this file
+        assert force is False
         assert new_files == []
         assert changed_files == []
         # Warning must be logged
@@ -3239,7 +3293,7 @@ class TestTask45:
 
         # syncer has a model set, but indexed_embedding_model is "" (first sync)
         syncer = self._make_syncer(tmp_path, embedding_model="some-model")
-        new_files, changed_files, deleted = syncer._check_collection_changes(
+        new_files, changed_files, deleted, _ = syncer._check_collection_changes(
             "col", source, {key: mtime}, "", 0
         )
         # Guard skipped → no force_full_reindex, file is unchanged
@@ -3257,7 +3311,7 @@ class TestTask45:
 
         syncer = self._make_syncer(tmp_path, chunk_size=1024)
         # indexed_chunk_size=0 means first sync — guard should be skipped
-        new_files, changed_files, deleted = syncer._check_collection_changes(
+        new_files, changed_files, deleted, _ = syncer._check_collection_changes(
             "col", source, {key: mtime}, "", 0
         )
         assert new_files == []
@@ -3296,7 +3350,7 @@ class TestTask45:
         f.symlink_to(target)
 
         syncer = self._make_syncer(tmp_path)
-        new_files, changed_files, deleted = syncer._check_collection_changes(
+        new_files, changed_files, deleted, _ = syncer._check_collection_changes(
             "col", source, {key: mtime}, "", 0
         )
         # Symlinks are excluded from eligible → path not in eligible_keys → deleted
@@ -3364,7 +3418,7 @@ class TestTask45:
             return [FakePath(p) for p in real_iter(path)]
 
         syncer._iter_eligible_files = patched_iter
-        new_files, changed_files, deleted = syncer._check_collection_changes(
+        new_files, changed_files, deleted, _ = syncer._check_collection_changes(
             "col", source, {key: 1.0}, "", 0
         )
         # changed_files contains FakePath objects; check by resolved string
@@ -3384,7 +3438,7 @@ class TestTask45:
 
         syncer = self._make_syncer(tmp_path)
         meta = CollectionMeta(name="col", active_embedding_model="bge-small")
-        new_files, changed_files, deleted = syncer._check_collection_changes(
+        new_files, changed_files, deleted, _ = syncer._check_collection_changes(
             "col", source, {key: mtime}, "bge-small", 0, meta=meta
         )
         # Same model → no force_full_reindex → file with matching mtime is unchanged
@@ -3412,7 +3466,7 @@ class TestTask45:
         f.write_text("hello")
 
         syncer = self._make_syncer(tmp_path, embedding_model="new-model")
-        new_files, changed_files, deleted = syncer._check_collection_changes(
+        new_files, changed_files, deleted, _ = syncer._check_collection_changes(
             "col", source, {}, "old-model", 0
         )
         assert f.resolve() in changed_files
@@ -4699,7 +4753,7 @@ class TestSyncCollectionMethod:
         pipeline = make_mock_pipeline(tmp_path)
         syncer = SearchCollectionSync(pipeline, state_store=state_store)
 
-        with patch.object(syncer, "_check_collection_changes", return_value=([], [], [])) as mock_check, \
+        with patch.object(syncer, "_check_collection_changes", return_value=([], [], [], False)) as mock_check, \
              patch.object(syncer, "_apply_collection_changes", new_callable=AsyncMock) as mock_apply:
             await syncer.sync_collection("myproject", col_dir)
 
@@ -4724,7 +4778,7 @@ class TestSyncCollectionMethod:
         pipeline = make_mock_pipeline(tmp_path)
         syncer = SearchCollectionSync(pipeline, state_store=state_store)
 
-        with patch.object(syncer, "_check_collection_changes", return_value=([new_file], [], [])), \
+        with patch.object(syncer, "_check_collection_changes", return_value=([new_file], [], [], False)), \
              patch.object(syncer, "_apply_collection_changes", new_callable=AsyncMock, return_value=None) as mock_apply:
             await syncer.sync_collection("myproject", col_dir)
 
@@ -4751,7 +4805,7 @@ class TestSyncCollectionMethod:
         pipeline = make_mock_pipeline(tmp_path)
         syncer = SearchCollectionSync(pipeline, state_store=state_store)
 
-        with patch.object(syncer, "_check_collection_changes", return_value=([], [], [deleted])), \
+        with patch.object(syncer, "_check_collection_changes", return_value=([], [], [deleted], False)), \
              patch.object(syncer, "_apply_collection_changes", new_callable=AsyncMock, return_value=None) as mock_apply:
             await syncer.sync_collection("myproject", col_dir)
 
@@ -4798,7 +4852,7 @@ class TestSyncCollectionMethod:
                 execution_log.append("end")
             return None
 
-        with patch.object(syncer, "_check_collection_changes", return_value=([new_file], [], [])), \
+        with patch.object(syncer, "_check_collection_changes", return_value=([new_file], [], [], False)), \
              patch.object(syncer, "_apply_collection_changes", side_effect=slow_apply):
             task1 = asyncio.create_task(syncer.sync_collection("myproject", col_dir))
             await lock_event.wait()  # wait until first call has started
@@ -4849,7 +4903,7 @@ class TestSyncCollectionMethod:
         pipeline = make_mock_pipeline(tmp_path)
         syncer = SearchCollectionSync(pipeline, state_store=state_store)
 
-        with patch.object(syncer, "_check_collection_changes", return_value=([Path("new.md")], [], [])), \
+        with patch.object(syncer, "_check_collection_changes", return_value=([Path("new.md")], [], [], False)), \
              patch.object(syncer, "_apply_collection_changes", new_callable=AsyncMock, return_value="partial failure") as mock_apply, \
              caplog.at_level(logging.WARNING, logger="archon_search.sync"):
             await syncer.sync_collection("myproject", col_dir)
@@ -4875,7 +4929,7 @@ class TestSyncCollectionMethod:
         pipeline = make_mock_pipeline(tmp_path)
         syncer = SearchCollectionSync(pipeline, state_store=state_store)
 
-        with patch.object(syncer, "_check_collection_changes", return_value=([], [changed], [])), \
+        with patch.object(syncer, "_check_collection_changes", return_value=([], [changed], [], False)), \
              patch.object(syncer, "_apply_collection_changes", new_callable=AsyncMock, return_value=None) as mock_apply:
             await syncer.sync_collection("myproject", col_dir)
 
@@ -4900,7 +4954,7 @@ class TestSyncCollectionMethod:
         pipeline = make_mock_pipeline(tmp_path)
         syncer = SearchCollectionSync(pipeline, state_store=state_store)
 
-        with patch.object(syncer, "_check_collection_changes", return_value=([], [], [])) as mock_check, \
+        with patch.object(syncer, "_check_collection_changes", return_value=([], [], [], False)) as mock_check, \
              patch.object(syncer, "_apply_collection_changes", new_callable=AsyncMock):
             await syncer.sync_collection("myproject", col_dir)
 
@@ -5051,7 +5105,7 @@ def test_sync_no_spurious_reindex_for_non_default_model(tmp_path):
 
     meta = CollectionMeta(name="myproject", active_embedding_model="model-X")
     # indexed model matches collection's active model → no reindex
-    new_f, changed_f, deleted = syncer._check_collection_changes(
+    new_f, changed_f, deleted, _ = syncer._check_collection_changes(
         "myproject",
         source_path,
         file_mtimes={real_key: real_mtime},  # up-to-date
@@ -5085,7 +5139,7 @@ def test_sync_uses_collection_meta_over_state_store(tmp_path):
     # Collection was updated to use a new model that doesn't match what was indexed
     meta = CollectionMeta(name="myproject", active_embedding_model="model-X")
     # indexed_embedding_model matches global but not meta.active → reindex triggered
-    new_f, changed_f, deleted = syncer._check_collection_changes(
+    new_f, changed_f, deleted, _ = syncer._check_collection_changes(
         "myproject",
         source_path,
         file_mtimes={real_key: real_mtime},
@@ -5114,7 +5168,7 @@ def test_sync_meta_none_no_reindex_guard(tmp_path):
     real_mtime = doc.stat().st_mtime
 
     # meta=None → effective_model=""; indexed_embedding_model="" (as written on first sync) → guard skipped
-    new_f, changed_f, deleted = syncer._check_collection_changes(
+    new_f, changed_f, deleted, _ = syncer._check_collection_changes(
         "myproject",
         source_path,
         file_mtimes={real_key: real_mtime},
@@ -5142,7 +5196,7 @@ def test_sync_model_change_triggers_reindex(tmp_path):
 
     meta = CollectionMeta(name="myproject", active_embedding_model="model-new")
     # was indexed with model-old, now active is model-new → reindex triggered
-    new_f, changed_f, deleted = syncer._check_collection_changes(
+    new_f, changed_f, deleted, _ = syncer._check_collection_changes(
         "myproject",
         source_path,
         file_mtimes={real_key: real_mtime},
