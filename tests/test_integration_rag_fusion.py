@@ -230,6 +230,7 @@ async def test_search_rag_fusion_true_hyde_true_mutual_exclusion(tmp_path: Path)
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["rag_fusion_applied"] is True
+    assert data["rag_fusion_attempted"] is True  # S272: must be true when rag_fusion wins
     assert data["hyde_applied"] is False
     mock_resolve_hyde.assert_not_called()
 
