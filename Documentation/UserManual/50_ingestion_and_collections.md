@@ -85,6 +85,8 @@ archon-search ingest --path /Users/me/docs --collection docs --wait
 
 Output (no `--wait`): `Ingest job submitted: <job_id>. Collection: '<name>'` plus a tracking hint. See [`100_jobs_and_async_operations.md`](./100_jobs_and_async_operations.md) for polling patterns.
 
+- If the path does not exist, the server still accepts the request (**202**) and the background ingest job transitions to **FAILED** with `"path does not exist or is not a file/directory"`. The collection remains registered (with `docs=0`); use `collection remove` to clean it up.
+
 ### `archon-search sync`
 
 Submits a server-side `POST /sync` job that re-syncs all configured collections incrementally.

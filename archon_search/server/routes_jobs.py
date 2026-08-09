@@ -151,6 +151,25 @@ async def _dispatch_ingest(
             ]
             return warnings, file_results
         else:
+            # Write a stub meta row so the collection appears in GET /collections/
+            # with docs=0 after the job transitions to FAILED — mirrors the guarantee
+            # documented in 50_ingestion_and_collections.md:113 for POST /collections/.
+            if meta is None:
+                from archon_search.collection_meta import CollectionMeta  # noqa: PLC0415
+                from archon_search.store import STORE_SCHEMA_VERSION  # noqa: PLC0415
+                try:
+                    await search_store.update_collection_meta(CollectionMeta(
+                        name=body.collection,
+                        namespace=namespace,
+                        active_embedding_model=active_model,
+                        schema_version=STORE_SCHEMA_VERSION,
+                    ))
+                except Exception:
+                    logger.warning(
+                        "_dispatch_ingest: could not write stub meta for %r on path-not-found",
+                        body.collection,
+                        exc_info=True,
+                    )
             raise FileNotFoundError(f"path does not exist or is not a file/directory: {body.path}")
     elif body.documents is not None:
         if hasattr(pipeline, "ingest_documents"):
