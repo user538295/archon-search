@@ -211,6 +211,40 @@ class TestDetectConfigHandEdits:
         result = _detect_config_hand_edits(config_path, "balanced", False)
         assert result is True
 
+    def test_detect_present_routing_default_is_not_hand_edit(self, tmp_path: Path) -> None:
+        """S561: `--routing-strategy centroid` writes the key; a present-but-default
+        value must NOT be reported as a hand edit (else every re-run falsely warns)."""
+        from archon_search.install import _detect_config_hand_edits
+
+        config_path = tmp_path / "archon-search.toml"
+        _write_wizard_config(config_path, "balanced", False)
+
+        doc = tomlkit.parse(config_path.read_text())
+        if "routing" not in doc:
+            doc.add("routing", tomlkit.table())
+        doc["routing"]["routing_strategy"] = "centroid"
+        config_path.write_text(tomlkit.dumps(doc))
+
+        result = _detect_config_hand_edits(config_path, "balanced", False)
+        assert result is False
+
+    def test_detect_present_log_format_default_is_not_hand_edit(self, tmp_path: Path) -> None:
+        """S561: `--log-format text` writes the key; a present-but-default value must
+        NOT be reported as a hand edit (else every re-run falsely warns)."""
+        from archon_search.install import _detect_config_hand_edits
+
+        config_path = tmp_path / "archon-search.toml"
+        _write_wizard_config(config_path, "balanced", False)
+
+        doc = tomlkit.parse(config_path.read_text())
+        if "logging" not in doc:
+            doc.add("logging", tomlkit.table())
+        doc["logging"]["format"] = "text"
+        config_path.write_text(tomlkit.dumps(doc))
+
+        result = _detect_config_hand_edits(config_path, "balanced", False)
+        assert result is False
+
     def test_detect_present_eager_load_true_is_hand_edit(self, tmp_path: Path) -> None:
         """[database].eager_load_embedders = true → hand edit (default is False)."""
         from archon_search.install import _detect_config_hand_edits

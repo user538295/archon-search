@@ -29,8 +29,10 @@ class WizardFeatures:
     enable_watch: bool = False
     enable_telemetry: bool = False
     eager_load_embedders: bool = False
-    routing_strategy: str = "centroid"
-    log_format: str = "text"
+    # None = accepted default (key omitted from config); str = explicitly chosen (key written),
+    # even when the chosen value equals the config default. Plain defaults cannot express this.
+    routing_strategy: str | None = None
+    log_format: str | None = None
     # C15 Tier 1 deployment flags
     host: str | None = None
     port: int | None = None
@@ -144,10 +146,16 @@ def _reconcile_llama_cpp_base_url(section: tomlkit.items.Table, base_url: str) -
 def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFeatures) -> None:
     """Write WizardFeatures fields to *doc* in-place.
 
-    Only non-default values are written (20_wizard.md §"Only non-default values are written"). When a value
-    matches its default, the key is removed from the doc if it was previously
-    set (re-run safe: a re-run that returns to the default removes the key
-    the prior run wrote). ``disable_reranker`` stays conditional — re-run
+    Only the operator's actual choices are written (20_wizard.md §"Only the
+    choices you actually made are written"). For the ``bool`` fields, "a choice"
+    means a non-default value: when the value matches its default the key is
+    removed from the doc if it was previously set (re-run safe: a re-run that
+    returns to the default removes the key the prior run wrote).
+    ``routing_strategy`` and ``log_format`` are ``str | None`` instead, because a
+    bare default cannot distinguish "explicitly asked for the default" from
+    "never answered": ``None`` means unanswered (key removed), and any string —
+    including one equal to the config default — is written.
+    ``disable_reranker`` stays conditional — re-run
     safety there is provided by the profile writer, which writes the profile's
     ``reranker_model`` default *before* calling this function. Missing sections
     are created via tomlkit.table(). ``install_code_extra`` itself is
@@ -172,6 +180,14 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         elif key in doc[section]:
             del doc[section][key]
 
+    def _set_optional(section: str, key: str, value: str | None) -> None:
+        """None = unanswered (key removed); any string is written, even if it equals the default."""
+        _ensure_section(section)  # section must exist before the elif key-lookup below
+        if value is not None:
+            doc[section][key] = value
+        elif key in doc[section]:
+            del doc[section][key]
+
     if features.disable_reranker:
         _ensure_section("database")
         doc["database"]["reranker_model"] = ""  # stays conditional — profile writer pre-fills the default
@@ -179,8 +195,10 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
     _set_or_remove("database", "eager_load_embedders", features.eager_load_embedders, False)
     _set_or_remove("collections", "watch", features.enable_watch, False)
     _set_or_remove("telemetry", "enabled", features.enable_telemetry, False)
-    _set_or_remove("routing", "routing_strategy", features.routing_strategy, "centroid")
-    _set_or_remove("logging", "format", features.log_format, "text")
+    # routing_strategy / log_format use a None sentinel for "accepted default" so an
+    # explicitly-passed flag is written even when it equals the default value.
+    _set_optional("routing", "routing_strategy", features.routing_strategy)
+    _set_optional("logging", "format", features.log_format)
 
     # C15 Tier 1 deployment flags
     if features.host is not None:
@@ -316,6 +334,9 @@ def _detect_config_hand_edits(
     # Absent key = static default in effect — NOT a hand-edit.
     # Only a key that is PRESENT and DIFFERENT from the static default counts.
     defaults = WizardFeatures()
+    # routing_strategy/log_format hold the None sentinel on WizardFeatures, so the real
+    # default values come from SearchConfig (the single source of truth for both keys).
+    config_defaults = SearchConfig()
 
     # eager_load_embedders (in [database])
     if "eager_load_embedders" in db and db["eager_load_embedders"] != defaults.eager_load_embedders:
@@ -333,12 +354,12 @@ def _detect_config_hand_edits(
 
     # routing.routing_strategy
     routing = doc.get("routing", {})
-    if "routing_strategy" in routing and routing["routing_strategy"] != defaults.routing_strategy:
+    if "routing_strategy" in routing and routing["routing_strategy"] != config_defaults.routing_strategy:
         return True
 
     # logging.format
     logging_section = doc.get("logging", {})
-    if "format" in logging_section and logging_section["format"] != defaults.log_format:
+    if "format" in logging_section and logging_section["format"] != config_defaults.log_format:
         return True
 
     return False

@@ -198,7 +198,7 @@ def test_e2e_defaults_produce_clean_config(runner: CliRunner, tmp_path: Path) ->
     assert config_path.exists()
     doc = tomlkit.parse(config_path.read_text())
 
-    # S561: accepted defaults are NOT written — 20_wizard.md §"Only non-default values are written"
+    # S561: accepted defaults are NOT written — 20_wizard.md §"Only the choices you actually made are written"
     assert "enabled" not in doc.get("telemetry", {}), "telemetry.enabled should be omitted (default)"
     assert "routing_strategy" not in doc.get("routing", {}), "routing_strategy should be omitted (default centroid)"
     assert "watch" not in doc.get("collections", {}), "watch should be omitted (default false)"
@@ -2006,16 +2006,38 @@ def test_s561_routing_strategy_written_when_explicitly_passed(
     doc = tomlkit.parse(config_path.read_text())
 
     routing_strategy = doc.get("routing", {}).get("routing_strategy")
-    if routing_strategy is None:
-        # S561 (flag half) is still open: WizardFeatures uses value comparison, not a None
-        # sentinel, so --routing-strategy centroid is indistinguishable from an accepted
-        # default and _set_or_remove deletes the key. Fix: widen routing_strategy/log_format
-        # fields to str|None=None and stop collapsing None in wizard.py.
-        # See Documentation/Completed/S561-accepted_default_keys_are_not_written.md
-        pytest.xfail(
-            "S561 flag half: routing_strategy was not written (got None). "
-            "See Documentation/Completed/S561-accepted_default_keys_are_not_written.md"
-        )
     assert routing_strategy == "centroid", (
         f"routing_strategy should be written when explicitly passed; got {routing_strategy!r}"
+    )
+
+
+@pytest.mark.integration
+def test_s561_log_format_written_when_explicitly_passed(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """S561 (flag half, log_format twin): when --log-format text is passed explicitly,
+    [logging].format must appear in the TOML even though "text" is the wizard default.
+
+    See 20_wizard.md: "Passing an explicit flag value (even if it matches the
+    default, e.g. --port 8765) always writes the key."
+    """
+    config_path = tmp_path / "archon-search.toml"
+
+    with _patched_wizard():
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+            "--log-format", "text",
+        ])
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    assert config_path.exists()
+    doc = tomlkit.parse(config_path.read_text())
+
+    log_format = doc.get("logging", {}).get("format")
+    assert log_format == "text", (
+        f"log_format should be written when explicitly passed; got {log_format!r}"
     )

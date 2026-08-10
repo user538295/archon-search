@@ -129,9 +129,9 @@ def _render_summary(
             feature_bullets.append("• Telemetry enabled")
         if features.eager_load_embedders:
             feature_bullets.append("• Eager load embedders at startup")
-        if features.routing_strategy != "centroid":
+        if features.routing_strategy not in (None, "centroid"):
             feature_bullets.append(f"• Routing: {features.routing_strategy}")
-        if features.log_format != "text":
+        if features.log_format not in (None, "text"):
             feature_bullets.append(f"• Log format: {features.log_format}")
         if feature_bullets:
             lines.append("")

@@ -65,8 +65,10 @@ class TestWizardFeaturesDefaults:
         assert f.enable_watch is False
         assert f.enable_telemetry is False
         assert f.eager_load_embedders is False
-        assert f.routing_strategy == "centroid"
-        assert f.log_format == "text"
+        # None sentinel = "accepted default" → key omitted from the written TOML (S561).
+        # An explicitly-chosen value (CLI flag or interactive answer) is a str and is written.
+        assert f.routing_strategy is None
+        assert f.log_format is None
 
     def test_install_multilingual_extra_accepts_value(self) -> None:
         f = WizardFeatures(install_multilingual_extra=True)
@@ -335,7 +337,9 @@ class TestPromptOptionalFeatures:
                 non_interactive=False,
                 profile=self._profile_with_reranker,
             )
-        assert features == WizardFeatures()
+        # routing_strategy/log_format come back as the concrete prompt defaults (not the
+        # None sentinel): this is the interactive path, where _ask_choice always yields a str.
+        assert features == WizardFeatures(routing_strategy="centroid", log_format="text")
 
     def test_invalid_log_format_retries(self) -> None:
         """First 'bad' then 'json' → log_format='json'."""

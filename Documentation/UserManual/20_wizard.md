@@ -270,7 +270,7 @@ This setting only matters if you have multiple collections. The router decides w
 - `centroid` — routes using pure vector centroid similarity between the query and each collection's document centroids. Fast and works well for most setups.
 - `hybrid` — blends centroid similarity with description-embedding cosine similarity. More precise for corpora where collections have distinct domain boundaries and clear descriptions.
 
-Type `centroid` or `hybrid`, or press Enter to keep the default.
+Type `centroid` or `hybrid`, or press Enter to keep the default. Either way the answer is recorded — `[routing].routing_strategy` is written to the config even when you keep `centroid`.
 
 #### 5g. Log format
 
@@ -287,7 +287,7 @@ Log format (text/json) [text]:
 - `text` — human-readable log lines. Best for local development and direct log reading.
 - `json` — structured JSON log lines. Best for container deployments (Docker, Kubernetes) or log aggregation pipelines (Datadog, Loki, Splunk).
 
-Type `text` or `json`, or press Enter to keep the default.
+Type `text` or `json`, or press Enter to keep the default. Either way the answer is recorded — `[logging].format` is written to the config even when you keep `text`.
 
 #### 5h. AI query expansion (HyDE + RAG Fusion)
 
@@ -540,8 +540,8 @@ Pass `--non-interactive` to run the wizard without any prompts. Combined with fe
 | Filesystem watcher | Disabled |
 | Telemetry | Disabled |
 | Eager load | Disabled |
-| Routing strategy | `centroid` |
-| Log format | `text` |
+| Routing strategy | `centroid` (key not written — pass `--routing-strategy` to write it explicitly) |
+| Log format | `text` (key not written — pass `--log-format` to write it explicitly) |
 | AI query expansion (HyDE/RAG Fusion) | Skipped (use `--enable-hyde --enable-rag-fusion` to enable; configure provider in TOML or re-run the interactive wizard) |
 | GPU acceleration | Auto-enabled if detected |
 | Jina license | Declined (install aborts for multilingual balanced/max unless `--accept-jina-license` is passed) |
@@ -679,13 +679,13 @@ The wizard writes to `~/.archon-search/archon-search.toml`. The following table 
 
 | Wizard choice / flag | TOML key | Example value |
 |---|---|---|
-| Routing strategy (hybrid only) | `routing_strategy` | `"hybrid"` |
+| Routing strategy (interactive answer, or `--routing-strategy`) | `routing_strategy` | `"hybrid"` |
 
 ### `[logging]` section
 
 | Wizard choice / flag | TOML key | Example value |
 |---|---|---|
-| Log format (json only) | `format` | `"json"` |
+| Log format (interactive answer, or `--log-format`) | `format` | `"json"` |
 | `--log-level TEXT` | `level` | `"DEBUG"` |
 
 ### `[hyde]` section
@@ -700,7 +700,7 @@ The wizard writes to `~/.archon-search/archon-search.toml`. The following table 
 |---|---|---|
 | `--enable-rag-fusion` | `enabled` | `true` |
 
-**Only non-default values are written.** If you accept the default for a question (e.g., keep `centroid` routing or `text` log format), that key is not written to the file. Passing an explicit flag value (even if it matches the default, e.g., `--port 8765`) always writes the key. All other keys in `archon-search.toml` remain at their defaults.
+**Only the choices you actually made are written.** A default you never answered — a `--non-interactive` run without the matching flag — is not written to the file. An answer you actually gave *is* written, even when it matches the default: passing an explicit flag (e.g., `--port 8765`, `--routing-strategy centroid`) always writes the key, and so does answering the interactive `routing_strategy` or `log_format` prompt — including pressing Enter to accept the shown default, which counts as an answer. In an interactive run this also applies when stdin closes early (EOF, piped input): the wizard falls back to the shown default and records it as your answer, so `[routing].routing_strategy` and `[logging].format` are still written. All other keys in `archon-search.toml` remain at their defaults.
 
 The wizard also backs up your existing config to `~/.archon-search/archon-search.toml.bak` before making any changes.
 

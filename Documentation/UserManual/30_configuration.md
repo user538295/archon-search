@@ -31,7 +31,7 @@ archon-search config get server.port
 archon-search config set server.port 9000
 ```
 
-`config show` prints the *effective* config: the file's contents plus every `[server]`, `[database]`, `[routing]`, `[collections]`, and `[logging]` key the file omits, filled in with its `SearchConfig` default. The install wizard deliberately writes only non-default keys, so the file on disk is normally shorter than what `config show` prints. Values present in the file are echoed verbatim, and sections the defaults do not cover (`[hyde]`, `[telemetry]`, …) are passed through unchanged.
+`config show` prints the *effective* config: the file's contents plus every `[server]`, `[database]`, `[routing]`, `[collections]`, and `[logging]` key the file omits, filled in with its `SearchConfig` default. The install wizard deliberately writes only the choices you actually made — a default it never asked about (a `--non-interactive` run without the matching flag) is left out — so the file on disk is normally shorter than what `config show` prints. Values present in the file are echoed verbatim, and sections the defaults do not cover (`[hyde]`, `[telemetry]`, …) are passed through unchanged.
 
 `config set` coerces the value in this order: bool (case-insensitive `"true"`/`"false"`) → int → float → string. Keys must be in `section.field` form. `config set` writes to the TOML file **without** validating against `SearchConfig` — unknown sections or fields silently succeed and are only caught on the next `load_config` call.
 

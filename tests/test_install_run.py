@@ -749,7 +749,7 @@ def test_run_prompts_multilingual_question(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_optional_features", return_value=MagicMock(
             install_code_extra=False, install_graph_extra=False, disable_reranker=False,
             enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy="centroid", log_format="text",
+            routing_strategy=None, log_format=None,
             host=None, port=None, db_path=None, log_level=None,
             top_k=None, telemetry_retention_days=None, enable_hyde=False, enable_rag_fusion=False,
             graph_provider="",
@@ -787,7 +787,7 @@ def test_run_multilingual_flag_skips_prompt(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_optional_features", return_value=MagicMock(
             install_code_extra=False, install_graph_extra=False, disable_reranker=False,
             enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy="centroid", log_format="text",
+            routing_strategy=None, log_format=None,
             host=None, port=None, db_path=None, log_level=None,
             top_k=None, telemetry_retention_days=None, enable_hyde=False, enable_rag_fusion=False,
             graph_provider="",
@@ -1378,7 +1378,7 @@ def test_overwrite_warning_triggers_on_hand_edit(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_optional_features", return_value=MagicMock(
             install_code_extra=False, install_graph_extra=False, disable_reranker=False,
             enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy="centroid", log_format="text",
+            routing_strategy=None, log_format=None,
             # Explicit False: a bare MagicMock returns a truthy attribute, which would
             # trip the post-write HyDE/RAG Fusion or graph-extra installation code.
             enable_hyde=False, enable_rag_fusion=False,
@@ -1422,7 +1422,7 @@ def test_overwrite_warning_aborts_on_n(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_optional_features", return_value=MagicMock(
             install_code_extra=False, install_graph_extra=False, disable_reranker=False,
             enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy="centroid", log_format="text"
+            routing_strategy=None, log_format=None
         )),
         # "n" causes the overwrite prompt to abort
         patch("builtins.input", return_value="n"),
@@ -1460,7 +1460,7 @@ def test_overwrite_warning_bak_not_created_on_n(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prompt_optional_features", return_value=MagicMock(
             install_code_extra=False, install_graph_extra=False, disable_reranker=False,
             enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy="centroid", log_format="text"
+            routing_strategy=None, log_format=None
         )),
         patch("builtins.input", return_value="n"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
@@ -1685,7 +1685,7 @@ def test_overwrite_eof_on_prompt_aborts(tmp_path: Path, capsys) -> None:
         patch("archon_search.install.installer._prompt_optional_features", return_value=MagicMock(
             install_code_extra=False, install_graph_extra=False, disable_reranker=False,
             enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy="centroid", log_format="text"
+            routing_strategy=None, log_format=None
         )),
         # EOFError on the overwrite prompt (piped/non-tty stdin)
         patch("builtins.input", side_effect=EOFError),
@@ -2101,7 +2101,7 @@ def _multilingual_run_patches(config_path: Path, fake_legacy: Path, **overrides:
     features = MagicMock(
         install_code_extra=False, install_graph_extra=False, disable_reranker=False,
         enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-        routing_strategy="centroid", log_format="text",
+        routing_strategy=None, log_format=None,
         host=None, port=None, db_path=None, log_level=None,
         top_k=None, telemetry_retention_days=None,
         enable_hyde=False, enable_rag_fusion=False,

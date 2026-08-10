@@ -514,9 +514,9 @@ def _prompt_optional_features(
         "  Default: centroid."
     )
     if routing_strategy is not None:
-        _routing_val = routing_strategy
+        _routing_val = routing_strategy   # explicit CLI flag → always written
     elif non_interactive:
-        _routing_val = "centroid"
+        _routing_val = None               # accepted default → key omitted
     else:
         _routing_val = _ask_choice(
             "Routing strategy (centroid/hybrid) [centroid]: ",
@@ -532,9 +532,9 @@ def _prompt_optional_features(
         "  Default: text."
     )
     if log_format is not None:
-        _log_format_val = log_format
+        _log_format_val = log_format      # explicit CLI flag → always written
     elif non_interactive:
-        _log_format_val = "text"
+        _log_format_val = None            # accepted default → key omitted
     else:
         _log_format_val = _ask_choice(
             "Log format (text/json) [text]: ",

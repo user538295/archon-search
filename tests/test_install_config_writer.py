@@ -228,7 +228,7 @@ class TestApplyWizardFeaturesToToml:
         # hyde/rag_fusion always write their enabled key (not via _set_or_remove)
         assert doc["hyde"]["enabled"] is False
         assert doc["rag_fusion"]["enabled"] is False
-        # default-valued keys are NOT written (20_wizard.md §"Only non-default values are written")
+        # default-valued keys are NOT written (20_wizard.md §"Only the choices you actually made are written")
         assert "eager_load_embedders" not in doc.get("database", {})
         assert "watch" not in doc.get("collections", {})
         assert "enabled" not in doc.get("telemetry", {})
@@ -601,7 +601,7 @@ class TestApplyWizardFeaturesFE2LlamaCppAndGraph:
 
 
 class TestApplyWizardFeaturesElseBranches:
-    """S561: keys equal to their default are REMOVED (not written) — 20_wizard.md §"Only non-default values are written"."""
+    """S561: keys equal to their default are REMOVED (not written) — 20_wizard.md §"Only the choices you actually made are written"."""
 
     def _enabled_doc(self) -> tomlkit.TOMLDocument:
         from archon_search.install import _apply_wizard_features_to_toml
@@ -672,6 +672,22 @@ class TestApplyWizardFeaturesElseBranches:
         doc = tomlkit.document()
         _apply_wizard_features_to_toml(doc, WizardFeatures())
         assert "format" not in doc.get("logging", {})
+
+    def test_explicit_default_routing_strategy_is_written(self) -> None:
+        """S561: an explicitly-chosen 'centroid' IS written, unlike the None sentinel."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.document()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(routing_strategy="centroid"))
+        assert doc["routing"]["routing_strategy"] == "centroid"
+
+    def test_explicit_default_log_format_is_written(self) -> None:
+        """S561: an explicitly-chosen 'text' IS written, unlike the None sentinel."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.document()
+        _apply_wizard_features_to_toml(doc, WizardFeatures(log_format="text"))
+        assert doc["logging"]["format"] == "text"
 
 
 # ---------------------------------------------------------------------------
@@ -924,5 +940,10 @@ def test_wizard_features_defaults_match_search_config() -> None:
     assert wf.eager_load_embedders == cfg.eager_load_embedders
     assert wf.enable_watch == cfg.watch
     assert wf.enable_telemetry == cfg.telemetry.enabled
-    assert wf.routing_strategy == cfg.routing_strategy
-    assert wf.log_format == cfg.log_format
+    # routing_strategy and log_format carry a None sentinel meaning "accepted default,
+    # omit the key" — they are deliberately NOT the config default string, so the
+    # equality guard above does not apply. Pin both sides instead.
+    assert wf.routing_strategy is None, "None sentinel = accepted default (omitted from config)"
+    assert wf.log_format is None, "None sentinel = accepted default (omitted from config)"
+    assert cfg.routing_strategy == "centroid"
+    assert cfg.log_format == "text"
