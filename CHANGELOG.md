@@ -1,6 +1,36 @@
 # Changelog
 
 
+## [26.8.1945] - 2026-08-10
+
+canary
+
+**Collections, configuration, and wizard robustness improvements**
+
+**Collections & Ingestion**
+
+- `POST /ingest` with a nonexistent path now registers the collection with `docs=0` as documented, rather than leaving it entirely unregistered
+- New non-empty collections are now created with the correct `schema_version=STORE_SCHEMA_VERSION` instead of 0, fixing false positives in collection-schema-version checks
+- Auto-reindex triggered by `auto_reindex_on_chunk_size_change=true` now correctly stamps chunks as `ingested_by='reindex'` instead of misattributing them to the watcher
+
+**Configuration & Wizard**
+
+- `archon-search config get` now returns defaults for keys absent from the config file (e.g., `logging.format`, `routing.routing_strategy`, `database.eager_load_embedders`) instead of exiting with an error, improving usage with wizard-minimal configurations
+- `_default_toml` now includes `eager_load_embedders` and `routing_strategy` so `config show` displays them even when the wizard omitted them
+- Stale `telemetry.retention_days` is now cleaned up when telemetry is disabled on re-run, preventing the orphaned key from implying telemetry is enabled
+- Wizard reranker prompt now uses [Y/n] framing with correct default handling — empty Enter keeps the reranker enabled, and `_ask_yn` now properly respects defaults on both [Y/n] and [y/N] polarities
+- `Proceed?` prompt is now more robust: accepts both `y` and `yes`, and gracefully aborts on EOF instead of crashing
+
+**Jobs Management**
+
+- `jobs list` footer now only displays the `use --limit to see more` hint when results are actually truncated, while the row count `Showing N of M jobs.` always appears for consistency
+
+**Testing & Contracts**
+
+- Added direct field assertions for `IngestResultSchema` in MCP tests, verifying all documented fields (`doc_id`, `chunks_created`, `status`, `error`, `warnings`, `code`) are present and well-formed
+- RAG Fusion mutual-exclusion regression test now also asserts `rag_fusion_attempted=True` to prevent regressions in the flag-tracking path
+
+
 ## [26.8.1931] - 2026-08-09
 
 **Community rebuild race condition fix**
