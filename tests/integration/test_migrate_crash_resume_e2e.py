@@ -62,13 +62,13 @@ def test_migration_crash_inject_and_resume_e2e(
     1. Register a collection.
     2. Patch pending_migrations to return a dummy REWRITE spec.
     3. Patch apply_rewrite_migration to return 3 (3 chunks).
-    4. Create a QUEUED MigrationJob directly in job_store (bypassing route).
-    5. Force it to FAILED with a progress checkpoint {processed: 50, total: 100}
-       to simulate a mid-run crash.
-    6. Verify the checkpoint is preserved on the crashed job (S13).
-    7. POST /jobs/{id}/resume -> 202, job back in QUEUED (S12).
-    8. Scheduler picks up QUEUED job, dispatches _migration_task, job reaches DONE.
-    9. Assert final job: status=DONE, result["migrated_chunks"]==3.
+    4. Create a MigrationJob; crash it directly to FAILED with a checkpoint
+       {processed: 50, total: 100} via update() (bypassing the QUEUED→RUNNING
+       step to avoid the scheduler race — see inline comment).
+    5. Verify the checkpoint is preserved on the crashed job (S13).
+    6. POST /jobs/{id}/resume -> 202, job back in QUEUED (S12).
+    7. Scheduler picks up QUEUED job, dispatches _migration_task, job reaches DONE.
+    8. Assert final job: status=DONE, result["migrated_chunks"]==3.
     """
     monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
 
@@ -109,23 +109,20 @@ def test_migration_crash_inject_and_resume_e2e(
         with patch.object(search_store, "pending_migrations", _fake_pending_migrations), \
              patch.object(search_store, "apply_rewrite_migration", _fake_apply_rewrite):
 
-            # Create a QUEUED MigrationJob directly in job_store (no route needed).
+            # Create a MigrationJob and immediately crash it to FAILED with a checkpoint.
+            # We set FAILED directly via update() (no status guard) rather than going
+            # through QUEUED→RUNNING→FAILED, because the scheduler runs every 0.1 s in a
+            # background thread and can pick up the QUEUED job between create_migration()
+            # and a manual transition() call — a race that causes spurious failures under
+            # parallel load.
             queued_job = job_store.create_migration(
                 collection=col_name,
                 kind=MigrationKind.REWRITE,
                 backup_confirmed=True,
                 namespace="default",
             )
-            assert queued_job.status == JobStatus.QUEUED
-
-            # First transition QUEUED -> RUNNING (simulating scheduler dispatch).
-            running = job_store.transition(queued_job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
-            assert running is not None and running.status == JobStatus.RUNNING
-
-            # Then simulate crash: process crashes while RUNNING -> FAILED with checkpoint.
-            # The checkpoint (processed=50) represents the last saved progress before
-            # the crash. It is preserved for observability; resume restarts
-            # apply_rewrite_migration from scratch (idempotent), not from processed=50.
+            # Crash directly: the checkpoint represents the last saved progress before
+            # the crash.  Resume restarts apply_rewrite_migration from scratch (idempotent).
             job_store.update(
                 queued_job.job_id,
                 status=JobStatus.FAILED,
