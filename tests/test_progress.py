@@ -433,7 +433,7 @@ class TestCollectionProgressNewFields:
 
     def test_collection_progress_indexed_chunk_size_default(self) -> None:
         cp = CollectionProgress(status=IndexingStatus.PENDING)
-        assert cp.indexed_chunk_size == 0
+        assert cp.indexed_chunk_size is None
 
     # --- to_dict includes new fields ---
 
@@ -547,7 +547,7 @@ class TestCollectionProgressNewFields:
             }
         }
         state = from_dict(d)
-        assert state.collections["col"].indexed_chunk_size == 0
+        assert state.collections["col"].indexed_chunk_size is None
 
     def test_from_dict_file_mtimes_with_non_float_values(self) -> None:
         d = {

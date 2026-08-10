@@ -242,7 +242,7 @@ class SearchCollectionSync:
                 file_mtimes = self._load_file_mtimes(name, state=state)
                 cp = state.collections.get(name) if state else None
                 indexed_model = cp.indexed_embedding_model if cp else ""
-                indexed_cs = cp.indexed_chunk_size if cp else 0
+                indexed_cs = cp.indexed_chunk_size if cp else None
                 _ns = name_to_ns.get(name, DEFAULT_NAMESPACE)
                 try:
                     meta = await self._pipeline.store.get_collection_meta(name, _ns)
@@ -256,25 +256,13 @@ class SearchCollectionSync:
                 )
                 if new_f or changed_f or deleted_p:
                     to_update.add(name)
-                    # A collection that already holds chunks but has no recorded sync state
-                    # (indexed outside sync — HTTP/job/MCP) has empty file_mtimes, so every
-                    # file looks "new" and the whole collection is rebuilt from scratch. When
-                    # auto_reindex_on_chunk_size_change=True this is a reindex, not an
-                    # incremental watcher update: the prior chunk_size is unknown so the
-                    # rebuild may use a different size. Without this gate the
-                    # `indexed_chunk_size != 0` sentinel in _check_collection_changes leaves
-                    # force_reindex False and rebuilt chunks are mislabelled "watcher" (S483).
-                    # ponytail: call-site gate rather than guard-level None sentinel; same fix
-                    # in sync_collection() is intentionally omitted — watcher keeps "watcher".
-                    is_full_rebuild = force_reindex or (
-                        not file_mtimes
-                        and self._auto_reindex_on_chunk_size_change
-                        and name_to_chunk_count.get(name, 0) > 0
-                    )
                     error = await self._apply_collection_changes(
                         name, p, new_f, changed_f, deleted_p, file_mtimes, progress_cb,
                         meta=meta, namespace=_ns,
-                        ingested_by="reindex" if is_full_rebuild else "watcher",
+                        ingested_by="reindex" if (
+                            force_reindex
+                            and (indexed_cs is not None or name_to_chunk_count.get(name, 0) > 0)
+                        ) else "watcher",
                     )
                     if error is None:
                         result.updated.append(name)
@@ -312,7 +300,7 @@ class SearchCollectionSync:
         file_mtimes = self._load_file_mtimes(collection_name, state=state)
         cp = state.collections.get(collection_name)
         indexed_embedding_model = cp.indexed_embedding_model if cp else ""
-        indexed_chunk_size = cp.indexed_chunk_size if cp else 0
+        indexed_chunk_size = cp.indexed_chunk_size if cp else None
         # Resolve the collection's namespace from stored meta so watcher-triggered
         # ingest/delete use the right namespace rather than always defaulting to 'default'.
         _col_ns = DEFAULT_NAMESPACE
@@ -426,7 +414,7 @@ class SearchCollectionSync:
         source_path: Path,
         file_mtimes: dict[str, float],
         indexed_embedding_model: str,
-        indexed_chunk_size: int,
+        indexed_chunk_size: int | None,
         meta: CollectionMeta | None = None,
     ) -> tuple[list[Path], list[Path], list[str], bool]:
         """Detect new, changed, and deleted files compared to stored file_mtimes.
@@ -446,8 +434,14 @@ class SearchCollectionSync:
             )
             force_full_reindex = True
 
-        # Chunk size guard
-        if self._chunk_size != indexed_chunk_size and indexed_chunk_size != 0:
+        # Chunk size guard.
+        # None means prior size unknown — collection was not indexed via sync (HTTP/job/MCP
+        # ingest paths do not write to IndexingStateStore). Treat as a potential mismatch and
+        # reindex if the flag permits; skip the warning (we have no "before" value to report).
+        if indexed_chunk_size is None:
+            if self._auto_reindex_on_chunk_size_change:
+                force_full_reindex = True
+        elif self._chunk_size != indexed_chunk_size:
             if self._auto_reindex_on_chunk_size_change:
                 logger.info(
                     "Chunk size changed (%d → %d), triggering full re-index of '%s'",

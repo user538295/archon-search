@@ -5064,11 +5064,11 @@ class TestSyncCollectionMethod:
              patch.object(syncer, "_apply_collection_changes", new_callable=AsyncMock):
             await syncer.sync_collection("myproject", col_dir)
 
-        # Verify defaults were used: indexed_embedding_model="" and indexed_chunk_size=0
+        # Verify defaults were used: indexed_embedding_model="" and indexed_chunk_size=None (unknown)
         mock_check.assert_called_once()
         _, kwargs = mock_check.call_args
         assert kwargs.get("indexed_embedding_model") == ""
-        assert kwargs.get("indexed_chunk_size") == 0
+        assert kwargs.get("indexed_chunk_size") is None
 
 
 # ===========================================================================

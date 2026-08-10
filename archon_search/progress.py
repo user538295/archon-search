@@ -42,7 +42,7 @@ class CollectionProgress:
     file_mtimes: dict[str, float] = field(default_factory=dict)
     file_hashes: dict[str, str] = field(default_factory=dict)
     indexed_embedding_model: str = ""
-    indexed_chunk_size: int = 0
+    indexed_chunk_size: int | None = None
 
 
 @dataclass
@@ -259,7 +259,7 @@ def from_dict(data: dict) -> IndexingState:
                 file_mtimes=file_mtimes,
                 file_hashes=file_hashes,
                 indexed_embedding_model=indexed_embedding_model,
-                indexed_chunk_size=_safe_int(raw.get("indexed_chunk_size", 0)),
+                indexed_chunk_size=_safe_int(raw.get("indexed_chunk_size"), 0) or None,
             )
         last_updated = data.get("last_updated", datetime.now(UTC).isoformat())
         raw_trigger = data.get("trigger")

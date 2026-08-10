@@ -3,8 +3,6 @@
 
 ## [26.8.1945] - 2026-08-10
 
-canary
-
 **Collections, configuration, and wizard robustness improvements**
 
 **Collections & Ingestion**
