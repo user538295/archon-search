@@ -4,6 +4,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import threading
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -46,6 +47,7 @@ class JobStore:
 
     def __init__(self, path: Path | None = None) -> None:
         self._path = path if path is not None else get_jobs_file()
+        self._lock = threading.Lock()
         self._jobs: dict[str, IngestJob] = {}
         changed = self._load()
         if changed:
@@ -343,32 +345,33 @@ class JobStore:
             return False
 
     def _write_atomic(self) -> None:
-        self._evict_old()  # evict BEFORE serializing so stale jobs are never written
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        data = []
-        for job in self._jobs.values():
-            item = dataclasses.asdict(job)
-            item["status"] = item["status"].value if hasattr(item["status"], "value") else item["status"]
-            if isinstance(job, MigrationJob):
-                item["job_type"] = "migration"
-            elif isinstance(job, ExportJob):
-                item["job_type"] = "export"
-            elif isinstance(job, ImportJob):
-                item["job_type"] = "import"
-            elif isinstance(job, ReindexJob):
-                item["job_type"] = "reindex"
-            elif isinstance(job, DeleteJob):
-                item["job_type"] = "delete"
-            elif isinstance(job, CommunityRebuildJob):
-                item["job_type"] = "community_rebuild"
-            elif isinstance(job, SyncJob):
-                item["job_type"] = JobKind.sync.value
-            elif isinstance(job, MetadataReindexJob):
-                item["job_type"] = JobKind.metadata_reindex.value
-            else:
-                item["job_type"] = "ingest"
-            data.append(item)
-        atomic_write_json(self._path, data)
+        with self._lock:
+            self._evict_old()  # evict BEFORE serializing so stale jobs are never written
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            data = []
+            for job in self._jobs.values():
+                item = dataclasses.asdict(job)
+                item["status"] = item["status"].value if hasattr(item["status"], "value") else item["status"]
+                if isinstance(job, MigrationJob):
+                    item["job_type"] = "migration"
+                elif isinstance(job, ExportJob):
+                    item["job_type"] = "export"
+                elif isinstance(job, ImportJob):
+                    item["job_type"] = "import"
+                elif isinstance(job, ReindexJob):
+                    item["job_type"] = "reindex"
+                elif isinstance(job, DeleteJob):
+                    item["job_type"] = "delete"
+                elif isinstance(job, CommunityRebuildJob):
+                    item["job_type"] = "community_rebuild"
+                elif isinstance(job, SyncJob):
+                    item["job_type"] = JobKind.sync.value
+                elif isinstance(job, MetadataReindexJob):
+                    item["job_type"] = JobKind.metadata_reindex.value
+                else:
+                    item["job_type"] = "ingest"
+                data.append(item)
+            atomic_write_json(self._path, data)
 
     def _evict_old(self) -> None:
         cutoff = datetime.now(timezone.utc) - timedelta(days=_EVICTION_DAYS)
