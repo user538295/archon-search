@@ -590,6 +590,112 @@ class TestSearchCollectionSync:
             f"S483: chunk-size reindex must use ingested_by='reindex', got {captured_ingested_by!r}"
         )
 
+    @staticmethod
+    def _make_no_state_syncer(tmp_path, *, chunk_count, auto_reindex):
+        """Build a syncer for a collection that already holds ``chunk_count`` chunks but has
+        NO entry in the sync state (as after an HTTP/job/MCP ingest).
+
+        Returns ``(syncer, resolved_path, captured_ingested_by)``.
+        """
+        from archon_search._types import IngestResult
+        from archon_search.progress import IndexingStateStore
+        from archon_search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "myproject"
+        col_dir.mkdir()
+        (col_dir / "doc.md").write_text("Some content here.")
+        resolved = str(col_dir.resolve())
+
+        pipeline = _make_mock_pipeline_with_ingest_file(
+            tmp_path,
+            existing_collections=["myproject"],
+            manifest={"myproject": resolved},
+        )
+        pipeline.store.list_collections = AsyncMock(return_value=[
+            CollectionInfo(name="myproject", doc_count=1 if chunk_count else 0,
+                           chunk_count=chunk_count),
+        ])
+
+        captured_ingested_by: list[str] = []
+
+        async def mock_ingest_file(file, collection, **kwargs):
+            captured_ingested_by.append(kwargs.get("ingested_by"))
+            return IngestResult(doc_id="d0", chunks_created=1, status="ok")
+
+        pipeline.ingest_file = AsyncMock(side_effect=mock_ingest_file)
+
+        # State store exists but has NO entry for "myproject".
+        state_store = IndexingStateStore(tmp_path / "state")
+        syncer = SearchCollectionSync(
+            pipeline,
+            state_store=state_store,
+            auto_reindex_on_chunk_size_change=auto_reindex,
+            chunk_size=96,
+        )
+        assert syncer._load_file_mtimes("myproject") == {}, (
+            "precondition: the collection must have no recorded mtimes"
+        )
+        return syncer, resolved, captured_ingested_by
+
+    @pytest.mark.asyncio
+    async def test_chunk_size_change_no_state_uses_reindex_ingested_by(self, tmp_path):
+        """S483 regression: a collection that already holds chunks but has NO sync state
+        (initial ingest via HTTP/job) must use ingested_by='reindex'.
+
+        With no state entry, file_mtimes is empty so every file is classified as new and the
+        whole collection is rebuilt; indexed_chunk_size also falls back to 0, which
+        short-circuits the chunk-size guard in _check_collection_changes, leaving
+        force_reindex False. Before the fix those rebuilt chunks were labelled 'watcher'.
+        """
+        syncer, resolved, captured_ingested_by = self._make_no_state_syncer(
+            tmp_path, chunk_count=3, auto_reindex=True,
+        )
+        result = await syncer.sync([resolved])
+
+        assert "myproject" in result.updated
+        assert captured_ingested_by, "ingest_file must have been called"
+        assert all(v == "reindex" for v in captured_ingested_by), (
+            f"S483: full rebuild with empty sync state must use "
+            f"ingested_by='reindex', got {captured_ingested_by!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_state_auto_reindex_false_keeps_watcher_ingested_by(self, tmp_path):
+        """S483 complement: when auto_reindex_on_chunk_size_change=False the user opted out
+        of automatic reindexing; even if the collection has no sync state and is fully
+        rebuilt, the chunks must keep ingested_by='watcher'.
+        """
+        syncer, resolved, captured_ingested_by = self._make_no_state_syncer(
+            tmp_path, chunk_count=3, auto_reindex=False,
+        )
+        result = await syncer.sync([resolved])
+
+        assert "myproject" in result.updated
+        assert captured_ingested_by, "ingest_file must have been called"
+        assert all(v == "watcher" for v in captured_ingested_by), (
+            f"S483: rebuild with auto_reindex=False must stay ingested_by='watcher', "
+            f"got {captured_ingested_by!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_state_empty_collection_keeps_watcher_ingested_by(self, tmp_path):
+        """S483 guard: an EMPTY collection (0 chunks) gaining its first file is an ordinary
+        incremental add, not a rebuild — it must stay ingested_by='watcher'.
+
+        Without this the `not file_mtimes` proxy would mislabel every first-file ingest.
+        """
+        syncer, resolved, captured_ingested_by = self._make_no_state_syncer(
+            tmp_path, chunk_count=0, auto_reindex=True,
+        )
+        result = await syncer.sync([resolved])
+
+        assert "myproject" in result.updated
+        assert captured_ingested_by, "ingest_file must have been called"
+        assert all(v == "watcher" for v in captured_ingested_by), (
+            f"S483: first file into an empty collection must stay "
+            f"ingested_by='watcher', got {captured_ingested_by!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # manifest_lookup_by_path tests

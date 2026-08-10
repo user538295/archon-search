@@ -3,17 +3,39 @@
 **ID**: S483-reindexed_chunks_are_marked_ingested_by_reindex
 **Scenario**: S483
 **Severity**: medium
-**Version**: archon-search, version 26.8.1931
+**Version**: archon-search, version 26.8.1945
+
+**Fixed in**: `archon_search/sync.py` — `SearchCollectionSync.sync()` Step 7. The
+`ingested_by` argument passed to `_apply_collection_changes` is now derived from a named
+`is_full_rebuild` local: `"reindex"` when `force_reindex` is true **or** when the collection
+already holds chunks (`chunk_count > 0`, read from the `store.list_collections()` snapshot) but
+has no recorded `file_mtimes`; previously it fell through to `"watcher"` whenever `force_reindex`
+was false. Root cause: the shared chunk-size guard in `_check_collection_changes` is
+short-circuited by the `indexed_chunk_size != 0` sentinel, so a collection ingested via HTTP/job
+(which writes no sync state) never sets `force_reindex`, even though the restart does rebuild
+every file at the new chunk size.
+
+The `chunk_count > 0` conjunct is load-bearing: with empty `file_mtimes` every eligible file is
+classified as *new*, so an empty collection gaining its first file would otherwise be mislabelled
+a rebuild. The label deliberately does **not** depend on `auto_reindex_on_chunk_size_change` —
+that flag only governs whether a *detected* chunk-size change forces a rebuild, and with no sync
+state the whole collection is rebuilt either way. The fix is at the `sync()` call site only;
+`sync_collection()` (the watcher path) deliberately keeps `"watcher"`, locked in by
+`tests/integration/test_s276_watcher_server_wiring.py::test_sync_collection_uses_watcher_ingested_by`.
+
+Documentation was already correct and needed no change: `UserManual/55_chunk_metadata_and_enrichment.md:28`
+and `Architecture/130_data_architecture_and_persistence.md:118` both list `reindex` as the call-site
+value a reindexed chunk carries.
 
 ### What happened
 AssertionError: chunks report ingested_by=['watcher'], expected ['reindex'] — 55_chunk_metadata_and_enrichment.md:28 lists `reindex` as the call site a reindexed chunk carries, and the automatic chunk-size rebuild (50_ingestion_and_collections.md:181) is a reindex.
 config after the change:
 [server]
 host = "127.0.0.1"
-port = 58168
+port = 62415
 
 [database]
-db_path = "/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-iso-e2llk15y/search"
+db_path = "/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-iso-ulc63juj/search"
 embedding_model = "BAAI/bge-small-en-v1.5"
 reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
 chunk_size = 96
@@ -24,13 +46,13 @@ auto_reindex_on_chunk_size_change = true
 
 [logging]
 level = "INFO"
-log_file = "/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-iso-e2llk15y/logs/archon-search.log"
+log_file = "/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-iso-ulc63juj/logs/archon-search.log"
 format = "text"
 backup_count = 7
 
 
 [collections]
-collections = ["/private/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-iso-e2llk15y/corpus"]
+collections = ["/private/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-iso-ulc63juj/corpus"]
 pinned_collections = []
 
 before (chunk_size=512): chunk_count=3, text_lengths=[2576, 2574, 2592], ingested_by=['cli']
@@ -40,7 +62,10 @@ control (explicit `collection reindex`, exit 0): chunk_count=24, text_lengths=[1
 assert ['watcher'] == ['reindex']
 
 At index 0 diff: 'watcher' != 'reindex'
-Use -v to get more diff
+
+Full diff:
+[
+-     'reindex',
 
 ### What should happen
 - Step 2 exits `0` and step 3 reports `chunk_count > 0` with a non-empty `path` — the precondition
@@ -75,10 +100,10 @@ E   AssertionError: chunks report ingested_by=['watcher'], expected ['reindex'] 
 E     config after the change:
 E     [server]
 E     host = "127.0.0.1"
-E     port = 58168
+E     port = 62415
 E     
 E     [database]
-E     db_path = "/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-iso-e2llk15y/search"
+E     db_path = "/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-iso-ulc63juj/search"
 E     embedding_model = "BAAI/bge-small-en-v1.5"
 E     reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
 E     chunk_size = 96
@@ -89,13 +114,13 @@ E     auto_reindex_on_chunk_size_change = true
 E     
 E     [logging]
 E     level = "INFO"
-E     log_file = "/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-iso-e2llk15y/logs/archon-search.log"
+E     log_file = "/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-iso-ulc63juj/logs/archon-search.log"
 E     format = "text"
 E     backup_count = 7
 E     
 E     
 E     [collections]
-E     collections = ["/private/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-iso-e2llk15y/corpus"]
+E     collections = ["/private/var/folders/gs/sbbzb00933x9j4738dgrlv5r0000gp/T/archon-iso-ulc63juj/corpus"]
 E     pinned_collections = []
 E     
 E     before (chunk_size=512): chunk_count=3, text_lengths=[2576, 2574, 2592], ingested_by=['cli']
@@ -105,5 +130,10 @@ E
 E   assert ['watcher'] == ['reindex']
 E     
 E     At index 0 diff: 'watcher' != 'reindex'
-E     Use -v to get more diff
+E     
+E     Full diff:
+E       [
+E     -     'reindex',
+E     +     'watcher',
+E       ]
 ```

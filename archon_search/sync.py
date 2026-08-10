@@ -143,6 +143,7 @@ class SearchCollectionSync:
         # correct namespace for each collection rather than always defaulting to 'default'.
         all_meta = await store.get_all_collections_meta()
         name_to_ns: dict[str, str] = {m.name: m.namespace for m in all_meta}
+        name_to_chunk_count: dict[str, int] = {c.name: c.chunk_count for c in existing_info}
 
         # Step 1: build desired {name: resolved_path}
         desired = self.build_desired(collections)
@@ -255,10 +256,25 @@ class SearchCollectionSync:
                 )
                 if new_f or changed_f or deleted_p:
                     to_update.add(name)
+                    # A collection that already holds chunks but has no recorded sync state
+                    # (indexed outside sync — HTTP/job/MCP) has empty file_mtimes, so every
+                    # file looks "new" and the whole collection is rebuilt from scratch. When
+                    # auto_reindex_on_chunk_size_change=True this is a reindex, not an
+                    # incremental watcher update: the prior chunk_size is unknown so the
+                    # rebuild may use a different size. Without this gate the
+                    # `indexed_chunk_size != 0` sentinel in _check_collection_changes leaves
+                    # force_reindex False and rebuilt chunks are mislabelled "watcher" (S483).
+                    # ponytail: call-site gate rather than guard-level None sentinel; same fix
+                    # in sync_collection() is intentionally omitted — watcher keeps "watcher".
+                    is_full_rebuild = force_reindex or (
+                        not file_mtimes
+                        and self._auto_reindex_on_chunk_size_change
+                        and name_to_chunk_count.get(name, 0) > 0
+                    )
                     error = await self._apply_collection_changes(
                         name, p, new_f, changed_f, deleted_p, file_mtimes, progress_cb,
                         meta=meta, namespace=_ns,
-                        ingested_by="reindex" if force_reindex else "watcher",
+                        ingested_by="reindex" if is_full_rebuild else "watcher",
                     )
                     if error is None:
                         result.updated.append(name)
