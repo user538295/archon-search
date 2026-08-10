@@ -1,6 +1,19 @@
 # Changelog
 
 
+## [26.8.1950] - 2026-08-10
+
+canary
+
+**CLI configuration persistence + sync state tracking fixes**
+
+- `--routing-strategy` and `--log-format` installation flags now correctly persist to configuration even when values match defaults, preventing configuration loss on re-runs. Changed internal representation from string defaults to a `None` sentinel to distinguish explicit flag choices from accepted defaults. Fixes S561.
+
+- Sync state tracking replaced a fundamentally flawed `0` sentinel with `int | None = None` to properly represent unknown prior chunk sizes, enabling correct reindex detection and chunk labeling. Collections ingested via HTTP, jobs, or MCP—which lack recorded sync state—now correctly label rebuilt chunks as `"reindex"` instead of `"watcher"`. Fixes S483.
+
+- Eliminated scheduler race in migration crash-resume test that caused intermittent failures under parallel load.
+
+
 ## [26.8.1945] - 2026-08-10
 
 **Collections, configuration, and wizard robustness improvements**
