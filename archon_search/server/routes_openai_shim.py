@@ -34,6 +34,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response, StreamingResponse
 
+from archon_search.config import resolve_active_model
 from archon_search.pipeline import CollectionNotFoundError, FanoutTimeoutError, MetadataLookupError
 from archon_search.server.schemas_openai import (
     ChatCompletionChoice,
@@ -194,7 +195,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
     # --- Resolve embedder (single-collection path) ---
     async def _resolve_embedder(meta):
         embedder_cache = getattr(request.app.state, "embedder_cache", None)
-        active_model = meta.active_embedding_model or config.embedding_model
+        active_model = resolve_active_model(meta, config)
         if embedder_cache is not None:
             return await embedder_cache.get_or_load(active_model)
         logger.warning("chat_completions: embedder_cache absent from app.state — falling back to global embedder")

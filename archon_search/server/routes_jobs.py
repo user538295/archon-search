@@ -14,7 +14,7 @@ from pydantic import BaseModel, field_validator
 
 from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search._types import IngestError, _file_exceeds_limit
-from archon_search.config import SearchConfig
+from archon_search.config import SearchConfig, resolve_active_model
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.embedder_cache import EmbedderCache
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
@@ -120,7 +120,7 @@ async def _dispatch_ingest(
       (non-empty only when at least one file has a non-None code, e.g. ``"file_too_large"``)
     """
     meta = await search_store.get_collection_meta(body.collection, namespace)
-    active_model = (meta.active_embedding_model if meta else "") or config.embedding_model
+    active_model = resolve_active_model(meta, config)
     embedder = await embedder_cache.get_or_load(active_model)
 
     if body.path is not None:

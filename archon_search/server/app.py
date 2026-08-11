@@ -23,6 +23,7 @@ from archon_search.config import (
     ConfigError,
     SearchConfig,
     get_default_config_path,
+    resolve_active_model,
     resolve_reranker_providers,
     warn_gc_cpu_priority,
 )
@@ -338,12 +339,14 @@ def create_app(
                 app.state.graph_store = None
 
         # Startup: create embedder cache and optionally preload models
-        embedder_cache = EmbedderCache(config.embedder_cache_size)
+        embedder_cache = EmbedderCache(config.embedder_cache_size, providers=config.providers or None)
         app.state.embedder_cache = embedder_cache
         if config.eager_load_embedders:
             metas = await app.state.search_store.get_all_collections_meta()
-            distinct_models: set[str] = {config.embedding_model}
-            distinct_models.update(m.active_embedding_model for m in metas if m.active_embedding_model)
+            # Seed with the global default: collections that pin no model resolve to it.
+            distinct_models: set[str] = {config.embedding_model} | {
+                resolve_active_model(m, config) for m in metas
+            }
             if len(distinct_models) > config.embedder_cache_size:
                 logger.warning(
                     "eager_load_embedders: %d distinct models exceed embedder_cache_size=%d — "

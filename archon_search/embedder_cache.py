@@ -19,10 +19,15 @@ class EmbedderCache:
 
     Concurrent callers requesting the same model are deduplicated: only one
     thread calls make_embedder; the others await the result via an asyncio.Event.
+
+    ``providers`` is the ONNX Runtime execution-provider list (``[database]
+    providers``) forwarded to every ``make_embedder`` call, so cached embedders
+    — which serve every search — use the same accelerator as the global one.
     """
 
-    def __init__(self, max_size: int) -> None:
+    def __init__(self, max_size: int, providers: list[str] | None = None) -> None:
         self._max_size = max_size
+        self._providers = providers
         self._cache: OrderedDict[str, Embedder] = OrderedDict()
         self._lock = asyncio.Lock()
         self._loading: dict[str, asyncio.Event] = {}
@@ -57,7 +62,7 @@ class EmbedderCache:
 
         # --- We are the loader (lock released at the break above) ---
         try:
-            embedder = await asyncio.to_thread(make_embedder, model_name)
+            embedder = await asyncio.to_thread(make_embedder, model_name, providers=self._providers)
         except Exception:
             async with self._lock:
                 ev = self._loading.pop(model_name, None)
@@ -83,21 +88,30 @@ class EmbedderCache:
         whose ONNX weights are only constructed on the first encode(). The
         warm-up embed() call pays that cost at startup so the first real query
         does not.
+
+        A model whose warm-up fails is evicted: leaving it cached would turn the
+        next search into a cache hit on a cold embedder, silently re-paying the
+        first-query penalty with no further warning.
         """
 
         async def _load_and_warm(model: str) -> None:
-            embedder = await self.get_or_load(model)
-            await embedder.embed(["warmup"])
-
-        results = await asyncio.gather(
-            *[_load_and_warm(m) for m in model_names],
-            return_exceptions=True,
-        )
-        for model, result in zip(model_names, results):
-            if isinstance(result, Exception):
+            try:
+                embedder = await self.get_or_load(model)
+            except Exception as exc:  # noqa: BLE001 — one bad model must not abort the rest
+                logger.warning("EmbedderCache.preload: failed to load %r — %s", model, exc)
+                return
+            try:
+                await embedder.embed(["warmup"])
+            except Exception as exc:  # noqa: BLE001 — same: never fail startup
+                async with self._lock:
+                    self._cache.pop(model, None)
                 logger.warning(
-                    "EmbedderCache.preload: failed to preload %r — %s", model, result
+                    "EmbedderCache.preload: failed to warm up %r; evicting from cache — %s",
+                    model,
+                    exc,
                 )
+
+        await asyncio.gather(*[_load_and_warm(m) for m in model_names])
 
     def cached_models(self) -> list[str]:
         """Return the list of currently cached model names (LRU order, oldest first)."""

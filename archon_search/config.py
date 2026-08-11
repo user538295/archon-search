@@ -7,6 +7,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import tomlkit
 
@@ -17,6 +18,9 @@ from archon_search.constants import (
     _validate_namespace,
 )
 from archon_search.paths import get_data_dir
+
+if TYPE_CHECKING:  # pragma: no cover — import cycle guard, typing only
+    from archon_search.collection_meta import CollectionMeta
 
 _logger = logging.getLogger(__name__)
 
@@ -298,6 +302,18 @@ class SearchConfig:
 def resolve_reranker_providers(cfg: "SearchConfig") -> list[str] | None:
     """Return providers to use for the reranker, normalising [] to None (CPU)."""
     return (cfg.reranker_providers if cfg.reranker_providers is not None else cfg.providers) or None
+
+
+def resolve_active_model(meta: "CollectionMeta | None", cfg: "SearchConfig | None") -> str:
+    """Return the embedding model a collection actually searches with.
+
+    A collection pins its model in ``active_embedding_model``; the empty string
+    (the dataclass default) means "use the global default". A missing meta record
+    resolves to the global default too. Returns "" only when neither is available.
+    """
+    return (meta.active_embedding_model if meta is not None else "") or (
+        cfg.embedding_model if cfg is not None else ""
+    )
 
 
 def save_config(config: SearchConfig, path: Path | str) -> None:

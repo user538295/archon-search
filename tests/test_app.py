@@ -465,7 +465,8 @@ async def test_eager_load_embedders_preloads_default_model(tmp_path: Path, job_s
         with TestClient(app):
             cache = app.state.embedder_cache
             assert cfg.embedding_model in cache.cached_models()
-            assert cache._cache[cfg.embedding_model].is_warm is True
+            # Cached AND warm: get_or_load returns the cached instance on a hit.
+            assert (await cache.get_or_load(cfg.embedding_model)).is_warm is True
 
 
 @pytest.mark.asyncio
@@ -501,6 +502,34 @@ async def test_eager_load_warns_when_models_exceed_cache_size(
             pass
 
     assert "exceed embedder_cache_size=1" in caplog.text
+
+
+def test_embedder_cache_receives_configured_providers(tmp_path: Path, job_store: JobStore) -> None:
+    """[database] providers must reach the cache — every search embeds through it, not app.state.embedder."""
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from starlette.testclient import TestClient
+    from archon_search.store import SearchStore
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.providers = ["CoreMLExecutionProvider"]
+    cfg.eager_load_embedders = True
+
+    stub = MagicMock()
+    stub.embed = AsyncMock(return_value=[[0.0]])
+
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+        patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[])),
+        patch("archon_search.embedder_cache.make_embedder", return_value=stub) as mock_make,
+    ):
+        app = create_app(cfg, job_store)
+        with TestClient(app):
+            pass
+
+    assert mock_make.call_args.kwargs["providers"] == ["CoreMLExecutionProvider"]
 
 
 def test_inbound_id_echoed(tmp_path: Path, job_store: JobStore) -> None:

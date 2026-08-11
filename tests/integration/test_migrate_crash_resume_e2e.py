@@ -63,8 +63,8 @@ def test_migration_crash_inject_and_resume_e2e(
     2. Patch pending_migrations to return a dummy REWRITE spec.
     3. Patch apply_rewrite_migration to return 3 (3 chunks).
     4. Create a MigrationJob; crash it directly to FAILED with a checkpoint
-       {processed: 50, total: 100} via update() (bypassing the QUEUED→RUNNING
-       step to avoid the scheduler race — see inline comment).
+       {processed: 50, total: 100} via update(), with the scheduler tick
+       suppressed so it cannot run the job first (see inline comment).
     5. Verify the checkpoint is preserved on the crashed job (S13).
     6. POST /jobs/{id}/resume -> 202, job back in QUEUED (S12).
     7. Scheduler picks up QUEUED job, dispatches _migration_task, job reaches DONE.
@@ -111,25 +111,29 @@ def test_migration_crash_inject_and_resume_e2e(
 
             # Create a MigrationJob and immediately crash it to FAILED with a checkpoint.
             # We set FAILED directly via update() (no status guard) rather than going
-            # through QUEUED→RUNNING→FAILED, because the scheduler runs every 0.1 s in a
-            # background thread and can pick up the QUEUED job between create_migration()
-            # and a manual transition() call — a race that causes spurious failures under
-            # parallel load.
-            queued_job = job_store.create_migration(
-                collection=col_name,
-                kind=MigrationKind.REWRITE,
-                backup_confirmed=True,
-                namespace="default",
-            )
-            # Crash directly: the checkpoint represents the last saved progress before
-            # the crash.  Resume restarts apply_rewrite_migration from scratch (idempotent).
-            job_store.update(
-                queued_job.job_id,
-                status=JobStatus.FAILED,
-                error="process_restart",
-                progress={"processed": 50, "total": 100, "phase": "rewriting"},
-            )
-            crashed = job_store.get(queued_job.job_id)
+            # through QUEUED→RUNNING→FAILED.  That alone is not enough: create_migration()
+            # itself enqueues the job as QUEUED, and the scheduler tick (0.1 s here) runs
+            # in the TestClient's background event loop, so it promotes the job and runs it
+            # to DONE within ~one tick.  Whether this test then reads FAILED or DONE comes
+            # down to which write lands last, which is why it failed "DONE != FAILED" under
+            # full-suite load.  Neutering _tick for the duration of the injection removes
+            # the competing writer instead of relying on winning a timing race.
+            with patch.object(_scheduler_module.JobScheduler, "_tick", lambda self: None):
+                queued_job = job_store.create_migration(
+                    collection=col_name,
+                    kind=MigrationKind.REWRITE,
+                    backup_confirmed=True,
+                    namespace="default",
+                )
+                # Crash directly: the checkpoint represents the last saved progress before
+                # the crash.  Resume restarts apply_rewrite_migration from scratch (idempotent).
+                job_store.update(
+                    queued_job.job_id,
+                    status=JobStatus.FAILED,
+                    error="process_restart",
+                    progress={"processed": 50, "total": 100, "phase": "rewriting"},
+                )
+                crashed = job_store.get(queued_job.job_id)
             assert crashed is not None
             assert crashed.status == JobStatus.FAILED
 

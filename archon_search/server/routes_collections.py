@@ -14,7 +14,7 @@ import math
 
 from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search.collection_meta import CollectionMeta
-from archon_search.config import SearchConfig, save_config
+from archon_search.config import SearchConfig, resolve_active_model, save_config
 from archon_search.constants import DEFAULT_NAMESPACE, INGEST_LOCK_TIMEOUT_S
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
@@ -139,7 +139,7 @@ async def list_collections(request: Request) -> list[CollectionSummary]:
             chunk_count=chunk_count,
             namespace=namespace,
             status=status,
-            active_embedding_model=(col_meta.active_embedding_model or config.embedding_model) if col_meta is not None else config.embedding_model,
+            active_embedding_model=resolve_active_model(col_meta, config),
             needs_reindex=col_meta.needs_reindex if col_meta is not None else False,
         ))
 
@@ -485,7 +485,7 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
         "doc_count": doc_count,
         "chunk_count": chunk_count,
         "status": status,
-        "active_embedding_model": (meta.active_embedding_model or config.embedding_model) if meta is not None else config.embedding_model,
+        "active_embedding_model": resolve_active_model(meta, config),
         "pending_embedding_model": meta.pending_embedding_model if meta is not None else None,
         "needs_reindex": meta.needs_reindex if meta is not None else False,
         "reindex_job_id": meta.reindex_job_id if meta is not None else None,
@@ -717,7 +717,7 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
         doc_count=doc_count,
         chunk_count=chunk_count,
         status=status,
-        active_embedding_model=meta.active_embedding_model or config.embedding_model,
+        active_embedding_model=resolve_active_model(meta, config),
         pending_embedding_model=meta.pending_embedding_model,
         needs_reindex=meta.needs_reindex,
         reindex_job_id=meta.reindex_job_id,

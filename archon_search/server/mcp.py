@@ -19,6 +19,7 @@ from starlette.responses import JSONResponse
 import tarfile
 
 from archon_search._path_safety import PathUnsafeError, validate_archive_members, validate_export_path, validate_ingest_path
+from archon_search.config import resolve_active_model
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.filters import SearchFilters
 from archon_search.hyde import resolve_hyde_vector
@@ -246,11 +247,9 @@ async def _resolve_embedder(
     """
     if embedder_cache is None:
         return pipeline._global_embedder
-    active_model: str = config.embedding_model if config is not None else ""
     if meta is None:
         meta = await pipeline.get_collection_meta(collection, namespace=namespace)
-    if meta is not None:
-        active_model = meta.active_embedding_model or active_model
+    active_model = resolve_active_model(meta, config)
     if not active_model:
         return pipeline._global_embedder
     return await embedder_cache.get_or_load(active_model)
@@ -982,7 +981,7 @@ def create_app(
                     if meta is None:
                         return McpErrorResponse(error=f"Collection {req.collection!r} not found", code="not_found")
                     chosen = req.collection
-                    _explain_active_model = meta.active_embedding_model or _explain_active_model
+                    _explain_active_model = resolve_active_model(meta, config)
                 elif config is None:
                     # No routing config — fall back to the default collection (like search).
                     chosen = default_collection
@@ -1003,7 +1002,7 @@ def create_app(
                     ranked = col_router.rank_with_scores(query_vector, all_meta)
                     chosen_meta, chosen_score = ranked[0]
                     chosen = chosen_meta.name
-                    _explain_active_model = chosen_meta.active_embedding_model or _explain_active_model
+                    _explain_active_model = resolve_active_model(chosen_meta, config)
                     threshold = config.routing_confidence_threshold
                     routing = RoutingExplain(
                         invoked=True,

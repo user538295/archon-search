@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from archon_search._types import SearchResult
+from archon_search.config import resolve_active_model
 from archon_search.filters import SearchFilters
 from archon_search.hyde import resolve_hyde_vector
 from archon_search.pipeline import (
@@ -319,7 +320,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
 
         try:
             embedder_cache = getattr(request.app.state, "embedder_cache", None)
-            active_model = meta.active_embedding_model or config.embedding_model
+            active_model = resolve_active_model(meta, config)
             if embedder_cache is not None:
                 embedder = await embedder_cache.get_or_load(active_model)
             else:

@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from archon_search._types import IngestedBy
+from archon_search.config import resolve_active_model
 from archon_search.hyde import resolve_hyde_vector
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.pipeline import (
@@ -615,7 +616,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             if meta is None:
                 return JSONResponse({"detail": "collection not found"}, status_code=404)
             chosen = body.collection
-            active_model = meta.active_embedding_model or config.embedding_model
+            active_model = resolve_active_model(meta, config)
         else:
             try:
                 all_meta = await pipeline.get_all_collections_meta(namespace=ns)
@@ -651,7 +652,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             # rank_with_scores returns every supplied collection, so ranked is non-empty.
             chosen_meta, chosen_score = ranked[0]
             chosen = chosen_meta.name
-            active_model = chosen_meta.active_embedding_model or config.embedding_model
+            active_model = resolve_active_model(chosen_meta, config)
             threshold = config.routing_confidence_threshold
             routing = RoutingExplain(
                 invoked=True,

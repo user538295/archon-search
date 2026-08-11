@@ -1827,3 +1827,44 @@ def test_real_graphconfig_constructible_with_all_fields() -> None:
     )
     client = AnthropicEnrichmentClient(model="claude-haiku-4-5", config=cfg)
     assert client is not None
+
+
+# ---------------------------------------------------------------------------
+# resolve_active_model — the single source of the per-collection model fallback
+# ---------------------------------------------------------------------------
+
+def test_resolve_active_model_prefers_pinned_collection_model() -> None:
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import resolve_active_model
+
+    cfg = SearchConfig()
+    meta = CollectionMeta(name="docs", active_embedding_model="model-X")
+    assert resolve_active_model(meta, cfg) == "model-X"
+
+
+def test_resolve_active_model_falls_back_to_global_default() -> None:
+    """The empty string is CollectionMeta's default and means "use the global model"."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import resolve_active_model
+
+    cfg = SearchConfig()
+    meta = CollectionMeta(name="docs")
+    assert meta.active_embedding_model == ""
+    assert resolve_active_model(meta, cfg) == cfg.embedding_model
+
+
+def test_resolve_active_model_without_meta_uses_global_default() -> None:
+    """Routes that may not find a meta record still resolve to the configured model."""
+    from archon_search.config import resolve_active_model
+
+    cfg = SearchConfig()
+    assert resolve_active_model(None, cfg) == cfg.embedding_model
+
+
+def test_resolve_active_model_without_config_returns_empty() -> None:
+    """MCP tools may run without a SearchConfig; "" signals "fall back to the global embedder"."""
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import resolve_active_model
+
+    assert resolve_active_model(None, None) == ""
+    assert resolve_active_model(CollectionMeta(name="docs"), None) == ""
