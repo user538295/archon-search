@@ -77,15 +77,26 @@ class EmbedderCache:
         return embedder
 
     async def preload(self, model_names: list[str]) -> None:
-        """Load multiple models concurrently; log and skip any that fail."""
+        """Load and warm up models concurrently; log and skip any that fail.
+
+        Caching an Embedder is not enough: make_embedder builds a lazy backend
+        whose ONNX weights are only constructed on the first encode(). The
+        warm-up embed() call pays that cost at startup so the first real query
+        does not.
+        """
+
+        async def _load_and_warm(model: str) -> None:
+            embedder = await self.get_or_load(model)
+            await embedder.embed(["warmup"])
+
         results = await asyncio.gather(
-            *[self.get_or_load(m) for m in model_names],
+            *[_load_and_warm(m) for m in model_names],
             return_exceptions=True,
         )
         for model, result in zip(model_names, results):
             if isinstance(result, Exception):
                 logger.warning(
-                    "EmbedderCache.preload: failed to load %r — %s", model, result
+                    "EmbedderCache.preload: failed to preload %r — %s", model, result
                 )
 
     def cached_models(self) -> list[str]:

@@ -342,7 +342,15 @@ def create_app(
         app.state.embedder_cache = embedder_cache
         if config.eager_load_embedders:
             metas = await app.state.search_store.get_all_collections_meta()
-            distinct_models = {m.active_embedding_model for m in metas if m.active_embedding_model}
+            distinct_models: set[str] = {config.embedding_model}
+            distinct_models.update(m.active_embedding_model for m in metas if m.active_embedding_model)
+            if len(distinct_models) > config.embedder_cache_size:
+                logger.warning(
+                    "eager_load_embedders: %d distinct models exceed embedder_cache_size=%d — "
+                    "some preloaded models will be evicted before first use",
+                    len(distinct_models),
+                    config.embedder_cache_size,
+                )
             await embedder_cache.preload(list(distinct_models))
 
         # All startup migrations complete before the lifespan context yields control to the request loop
@@ -352,8 +360,9 @@ def create_app(
         # ``app.state.model_validation`` (None while pending) and surfaced via
         # ``GET /status`` and ``GET /ready``. ``embedder_is_warm`` is read from
         # the global default embedder: only True when it has been exercised
-        # directly (eager_load_embedders warms per-collection caches, not this
-        # global instance, so it is typically False at startup).
+        # directly. eager_load_embedders populates ``embedder_cache`` — including
+        # a separate instance for ``config.embedding_model`` — never this global
+        # instance, so it is typically False at startup.
         app.state.model_validation = None
 
         async def _run_model_validation() -> None:

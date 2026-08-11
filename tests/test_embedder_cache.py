@@ -5,7 +5,7 @@ import asyncio
 import time
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 from archon_search.embedder_cache import EmbedderCache
 
@@ -17,6 +17,8 @@ from archon_search.embedder_cache import EmbedderCache
 def _mock_embedder(name: str) -> MagicMock:
     m = MagicMock()
     m.model_name = name
+    # Embedder.embed is async — preload awaits it to warm the backend up.
+    m.embed = AsyncMock(return_value=[[0.0]])
     return m
 
 
@@ -155,6 +157,42 @@ async def test_preload_skips_unknown_model_without_abort():
 
     assert "good-model" in cache.cached_models()
     assert "bad-model" not in cache.cached_models()
+
+
+@pytest.mark.asyncio
+async def test_preload_warms_up_each_loaded_model():
+    """S485: preload must exercise embed() so the lazy ONNX backend is built at startup."""
+    cache = EmbedderCache(max_size=3)
+    embedders = {name: _mock_embedder(name) for name in ("model-A", "model-B")}
+
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n: embedders[n]):
+        await cache.preload(["model-A", "model-B"])
+
+    for embedder in embedders.values():
+        embedder.embed.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_preload_warmup_failure_does_not_abort_other_models():
+    """S485: a failing warm-up embed() is logged and skipped, not fatal.
+
+    The load itself succeeded, so the model stays cached (cold); the other model
+    must still be loaded and warmed.
+    """
+    cache = EmbedderCache(max_size=3)
+    good = _mock_embedder("good-model")
+    cold = _mock_embedder("cold-model")
+    cold.embed = AsyncMock(side_effect=RuntimeError("warm-up failed"))
+    embedders = {"good-model": good, "cold-model": cold}
+
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n: embedders[n]):
+        await cache.preload(["good-model", "cold-model"])  # must not raise
+
+    assert "good-model" in cache.cached_models()
+    good.embed.assert_awaited_once()
+    # The load succeeded — only the warm-up did not — so the model stays cached.
+    assert "cold-model" in cache.cached_models()
+    cold.embed.assert_awaited_once()
 
 
 @pytest.mark.asyncio

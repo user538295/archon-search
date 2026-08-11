@@ -427,6 +427,82 @@ async def test_eager_load_embedders_true_preloads_collection_models(tmp_path: Pa
     assert any("model-X" in names for names in preloaded)
 
 
+@pytest.mark.asyncio
+async def test_eager_load_embedders_preloads_default_model(tmp_path: Path, job_store: JobStore) -> None:
+    """S485: a collection on the default model (active_embedding_model == "") is preloaded.
+
+    ``routes_search`` resolves ``meta.active_embedding_model or config.embedding_model``,
+    so a collection with an empty ``active_embedding_model`` searches with the global
+    default model. Eager loading must therefore warm that default model too, otherwise
+    such collections still pay the first-query load penalty.
+
+    ``EmbedderCache.preload`` runs for real here (fastembed is stubbed by the shared
+    test stubs, so no ONNX weights are loaded): merely caching an ``Embedder`` is not
+    enough — the backend model must actually be constructed, i.e. ``is_warm`` is True.
+    """
+    from unittest.mock import AsyncMock, patch
+    from starlette.testclient import TestClient
+    from archon_search.store import SearchStore
+    from archon_search.collection_meta import CollectionMeta
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.eager_load_embedders = True
+
+    # Collection using the global default model — active_embedding_model is "".
+    default_model_meta = CollectionMeta(name="docs")
+    assert default_model_meta.active_embedding_model == ""
+
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+        patch.object(
+            SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[default_model_meta])
+        ),
+    ):
+        app = create_app(cfg, job_store)
+        with TestClient(app):
+            cache = app.state.embedder_cache
+            assert cfg.embedding_model in cache.cached_models()
+            assert cache._cache[cfg.embedding_model].is_warm is True
+
+
+@pytest.mark.asyncio
+async def test_eager_load_warns_when_models_exceed_cache_size(
+    tmp_path: Path, job_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """S485: preloading more models than the cache holds evicts just-warmed models — warn."""
+    import logging
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from starlette.testclient import TestClient
+    from archon_search.store import SearchStore
+    from archon_search.embedder_cache import EmbedderCache
+    from archon_search.collection_meta import CollectionMeta
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.eager_load_embedders = True
+    cfg.embedder_cache_size = 1  # default model + model-X > 1
+
+    fake_meta = MagicMock(spec=CollectionMeta)
+    fake_meta.active_embedding_model = "model-X"
+
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+        patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[fake_meta])),
+        patch.object(EmbedderCache, "preload", new=AsyncMock()),
+        caplog.at_level(logging.WARNING, logger="archon_search.server.app"),
+    ):
+        app = create_app(cfg, job_store)
+        with TestClient(app):
+            pass
+
+    assert "exceed embedder_cache_size=1" in caplog.text
+
+
 def test_inbound_id_echoed(tmp_path: Path, job_store: JobStore) -> None:
     from unittest.mock import AsyncMock, patch
     from starlette.testclient import TestClient

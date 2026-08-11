@@ -74,7 +74,9 @@ multilingual = false
 # Maximum number of embedder model instances to cache in memory (LRU cache, minimum 1).
 # embedder_cache_size = 3
 
-# If true, pre-warm all distinct embedding models at server startup (eager loading).
+# If true, pre-warm embedding models at server startup (eager loading): the default
+# embedding_model above — always, so collections left on it are covered — plus every
+# distinct per-collection active_embedding_model.
 # Eliminates the ~5–15s first-query latency by loading models before any request arrives.
 # Set interactively via `archon-search wizard` or with the `--eager-load / --no-eager-load` flag.
 # eager_load_embedders = false
