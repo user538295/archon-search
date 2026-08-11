@@ -1,6 +1,15 @@
 # Changelog
 
 
+## [26.8.1952] - 2026-08-11
+
+canary
+
+**JobStore write serialization**
+
+- Fixed a race condition in `JobStore._write_atomic()` where concurrent writes from the test thread and the scheduler's asyncio event loop could attempt to rename the same temporary file simultaneously, causing one to fail with `FileNotFoundError`. Added a `threading.Lock` to serialize all `JobStore` writes, ensuring atomic file operations complete without interference — this resolves intermittent test failures in `test_migration_job_resume_from_failed_state_reaches_done` on CI.
+
+
 ## [26.8.1950] - 2026-08-10
 
 canary
