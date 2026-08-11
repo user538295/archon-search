@@ -15,9 +15,12 @@ from archon_search.embedder_cache import EmbedderCache
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _mock_embedder(name: str) -> MagicMock:
+def _mock_embedder(name: str, is_warm: bool = True) -> MagicMock:
     m = MagicMock()
     m.model_name = name
+    # Explicit bool: a bare MagicMock attribute is truthy, which would make the
+    # cold-embedder eviction branch in preload() untestable.
+    m.is_warm = is_warm
     # Embedder.embed is async — preload awaits it to warm the backend up.
     m.embed = AsyncMock(return_value=[[0.0]])
     return m
@@ -185,7 +188,7 @@ async def test_preload_warmup_failure_evicts_and_does_not_abort_other_models(
     """
     cache = EmbedderCache(max_size=3)
     good = _mock_embedder("good-model")
-    cold = _mock_embedder("cold-model")
+    cold = _mock_embedder("cold-model", is_warm=False)
     cold.embed = AsyncMock(side_effect=RuntimeError("warm-up failed"))
     embedders = {"good-model": good, "cold-model": cold}
 
@@ -200,6 +203,29 @@ async def test_preload_warmup_failure_evicts_and_does_not_abort_other_models(
     cold.embed.assert_awaited_once()
     assert "failed to warm up 'cold-model'" in caplog.text
     assert "evicting from cache" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_preload_warmup_failure_keeps_an_already_warm_embedder(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A warm embedder survives a failing warm-up embed().
+
+    ``ModelEmbedder.encode`` assigns the backend model BEFORE running inference, so
+    embed() can raise on an embedder whose ONNX weights are already built. Evicting
+    it would throw away a fully paid load and force the next search to redo it.
+    """
+    cache = EmbedderCache(max_size=3)
+    warm = _mock_embedder("warm-model", is_warm=True)
+    warm.embed = AsyncMock(side_effect=RuntimeError("inference blew up after load"))
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.embedder_cache"):
+        with patch("archon_search.embedder_cache.make_embedder", return_value=warm):
+            await cache.preload(["warm-model"])  # must not raise
+
+    assert "warm-model" in cache.cached_models()
+    assert "failed to warm up 'warm-model'" in caplog.text
+    assert "evicting from cache" not in caplog.text
 
 
 @pytest.mark.asyncio

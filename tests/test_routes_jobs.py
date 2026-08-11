@@ -803,6 +803,7 @@ async def test_reindex_task_promotes_active_on_success(tmp_path: Path) -> None:
         collection="col",
         namespace=DEFAULT_NAMESPACE,
         collection_path=tmp_path,
+        config=SearchConfig(),
     )
 
     # update_collection_meta was called; inspect the meta that was written
@@ -845,6 +846,7 @@ async def test_reindex_task_no_source_dir_skips_scan_and_completes() -> None:
         collection="col",
         namespace=DEFAULT_NAMESPACE,
         collection_path=None,
+        config=SearchConfig(),
     )
 
     # The directory scan was skipped entirely — the core of the S22 fix.
@@ -883,6 +885,7 @@ async def test_reindex_task_preserves_active_on_failure(tmp_path: Path) -> None:
         collection="col",
         namespace=DEFAULT_NAMESPACE,
         collection_path=tmp_path,
+        config=SearchConfig(),
     )
 
     written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
@@ -923,6 +926,7 @@ async def test_reindex_task_writes_collection_meta_before_job_done(tmp_path: Pat
         collection="col",
         namespace=DEFAULT_NAMESPACE,
         collection_path=tmp_path,
+        config=SearchConfig(),
     )
 
     meta_idx = call_order.index("meta_write")
@@ -948,6 +952,7 @@ async def test_reindex_task_uses_target_model_from_job(tmp_path: Path) -> None:
         collection="col",
         namespace=DEFAULT_NAMESPACE,
         collection_path=tmp_path,
+        config=SearchConfig(),
     )
 
     embedder_cache.get_or_load.assert_called_once_with("model-X")
@@ -988,6 +993,7 @@ async def test_reindex_task_concurrent_patch_preserves_new_pending(tmp_path: Pat
         collection="col",
         namespace=DEFAULT_NAMESPACE,
         collection_path=tmp_path,
+        config=SearchConfig(),
     )
 
     written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
@@ -1024,12 +1030,45 @@ async def test_reindex_task_after_patch_revert_promotes_active_clears_needs_rein
         collection="col",
         namespace=DEFAULT_NAMESPACE,
         collection_path=tmp_path,
+        config=SearchConfig(),
     )
 
     written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
     assert written_meta.active_embedding_model == "model-B"
     assert written_meta.pending_embedding_model is None
     assert written_meta.needs_reindex is False
+
+
+@pytest.mark.anyio
+async def test_reindex_task_data_only_resolves_default_model_for_unpinned_collection(
+    tmp_path: Path,
+) -> None:
+    """A collection pinning no model re-embeds with config.embedding_model, not "".
+
+    ``active_embedding_model`` defaults to "" meaning "use the global default"
+    (``resolve_active_model``). Passing "" straight to the cache would build an
+    embedder for an empty model name instead of the model the collection searches with.
+    """
+    from archon_search.server.routes_jobs import _reindex_task
+
+    job = _make_reindex_job(target_embedding_model=None)
+    meta = _make_collection_meta(active_embedding_model="")
+    job_store, search_store, embedder_cache, pipeline = _make_mocks(job, meta)
+    config = SearchConfig()
+
+    await _reindex_task(
+        job_id=job.job_id,
+        store=search_store,
+        job_store=job_store,
+        embedder_cache=embedder_cache,
+        pipeline=pipeline,
+        collection="col",
+        namespace=DEFAULT_NAMESPACE,
+        collection_path=tmp_path,
+        config=config,
+    )
+
+    embedder_cache.get_or_load.assert_awaited_once_with(config.embedding_model)
 
 
 @pytest.mark.anyio
@@ -1055,6 +1094,7 @@ async def test_reindex_task_data_only_preserves_active_model(tmp_path: Path) -> 
         collection="col",
         namespace=DEFAULT_NAMESPACE,
         collection_path=tmp_path,
+        config=SearchConfig(),
     )
 
     written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
@@ -1092,6 +1132,7 @@ async def test_reindex_task_data_only_failure_clears_job_id_only(tmp_path: Path)
         collection="col",
         namespace=DEFAULT_NAMESPACE,
         collection_path=tmp_path,
+        config=SearchConfig(),
     )
 
     written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
@@ -1124,6 +1165,7 @@ async def test_reindex_task_embedder_cache_failure_marks_job_failed(tmp_path: Pa
         collection="col",
         namespace=DEFAULT_NAMESPACE,
         collection_path=tmp_path,
+        config=SearchConfig(),
     )
 
     # reindex_job_id must be cleared

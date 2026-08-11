@@ -5557,6 +5557,75 @@ class TestTask93PerCollectionEmbedderAtIngestSites:
                 assert call_kwargs.kwargs.get("embedder") is sentinel_embedder
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["initial_sync", "file_add"])
+    async def test_sync_ingest_forwards_configured_providers(self, tmp_path, path):
+        """[database] providers reach make_embedder — the re-embed path is not CPU-only."""
+        from archon_search.collection_meta import CollectionMeta
+        from archon_search.progress import IndexingStateStore
+        from archon_search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "testcol"
+        col_dir.mkdir()
+        a_file = col_dir / "doc.md"
+        a_file.write_text("hello")
+
+        pipeline = _make_mock_pipeline_with_ingest_file(tmp_path)
+        state_store = IndexingStateStore(tmp_path / "state")
+        meta = CollectionMeta(name="testcol", active_embedding_model="model-X")
+
+        with patch("archon_search.sync.make_embedder") as mock_make_embedder:
+            syncer = SearchCollectionSync(
+                pipeline,
+                state_store=state_store,
+                chunk_size=256,
+                providers=["CoreMLExecutionProvider"],
+            )
+
+            if path == "initial_sync":
+                from archon_search.progress import CollectionProgress as CP, IndexingStatus as IS
+                await syncer._ingest_collection(
+                    "testcol", col_dir, progress_cb=None,
+                    CollectionProgress=CP, IndexingStatus=IS, meta=meta,
+                )
+            else:
+                await syncer._apply_collection_changes(
+                    "testcol", col_dir,
+                    new_files=[a_file], changed_files=[], deleted_paths=[],
+                    file_mtimes={}, meta=meta,
+                )
+
+        mock_make_embedder.assert_called_once_with(
+            "model-X", providers=["CoreMLExecutionProvider"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_sync_ingest_defaults_providers_to_none(self, tmp_path):
+        """No providers configured → make_embedder gets None (CPU), not an empty list."""
+        from archon_search.collection_meta import CollectionMeta
+        from archon_search.progress import CollectionProgress as CP, IndexingStatus as IS
+        from archon_search.progress import IndexingStateStore
+        from archon_search.sync import SearchCollectionSync
+
+        col_dir = tmp_path / "testcol"
+        col_dir.mkdir()
+        (col_dir / "doc.md").write_text("hello")
+
+        pipeline = _make_mock_pipeline_with_ingest_file(tmp_path)
+        state_store = IndexingStateStore(tmp_path / "state")
+        meta = CollectionMeta(name="testcol", active_embedding_model="model-X")
+
+        with patch("archon_search.sync.make_embedder") as mock_make_embedder:
+            syncer = SearchCollectionSync(
+                pipeline, state_store=state_store, chunk_size=256, providers=[]
+            )
+            await syncer._ingest_collection(
+                "testcol", col_dir, progress_cb=None,
+                CollectionProgress=CP, IndexingStatus=IS, meta=meta,
+            )
+
+        assert mock_make_embedder.call_args.kwargs["providers"] is None
+
+    @pytest.mark.asyncio
     async def test_sync_ingest_creates_embedder_once_per_cycle_not_per_event(self, tmp_path):
         """make_embedder is called exactly ONCE per _apply_collection_changes cycle,
         and the same embedder object is reused for all ingest_file calls."""

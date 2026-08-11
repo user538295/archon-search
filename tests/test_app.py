@@ -392,7 +392,12 @@ async def test_eager_load_embedders_false_does_not_preload(tmp_path: Path, job_s
 
 @pytest.mark.asyncio
 async def test_eager_load_embedders_true_preloads_collection_models(tmp_path: Path, job_store: JobStore) -> None:
-    """eager_load_embedders=True: collection active_embedding_model is preloaded."""
+    """eager_load_embedders=True: a collection's pinned model reaches preload().
+
+    ``preload`` is replaced so no model is really loaded; the assertion is on the
+    model-name set app.py hands it — the caching itself is EmbedderCache's contract
+    and is covered by ``test_eager_load_embedders_preloads_default_model``.
+    """
     from unittest.mock import AsyncMock, patch, MagicMock
     from starlette.testclient import TestClient
     from archon_search.store import SearchStore
@@ -410,9 +415,6 @@ async def test_eager_load_embedders_true_preloads_collection_models(tmp_path: Pa
 
     async def fake_preload(self: EmbedderCache, model_names: list[str]) -> None:
         preloaded.append(model_names)
-        # Simulate loading by inserting a stub into the cache
-        for name in model_names:
-            self._cache[name] = MagicMock()
 
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
@@ -423,7 +425,7 @@ async def test_eager_load_embedders_true_preloads_collection_models(tmp_path: Pa
     ):
         app = create_app(cfg, job_store)
         with TestClient(app):
-            assert "model-X" in app.state.embedder_cache.cached_models()
+            pass
     assert any("model-X" in names for names in preloaded)
 
 
@@ -504,6 +506,41 @@ async def test_eager_load_warns_when_models_exceed_cache_size(
     assert "exceed embedder_cache_size=1" in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_eager_load_does_not_warn_when_models_exactly_fill_cache(
+    tmp_path: Path, job_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """S485 boundary: distinct models == embedder_cache_size fits — no eviction, no warning."""
+    import logging
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from starlette.testclient import TestClient
+    from archon_search.store import SearchStore
+    from archon_search.embedder_cache import EmbedderCache
+    from archon_search.collection_meta import CollectionMeta
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.eager_load_embedders = True
+    cfg.embedder_cache_size = 2  # default model + model-X == 2
+
+    fake_meta = MagicMock(spec=CollectionMeta)
+    fake_meta.active_embedding_model = "model-X"
+
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+        patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[fake_meta])),
+        patch.object(EmbedderCache, "preload", new=AsyncMock()),
+        caplog.at_level(logging.WARNING, logger="archon_search.server.app"),
+    ):
+        app = create_app(cfg, job_store)
+        with TestClient(app):
+            pass
+
+    assert "exceed embedder_cache_size" not in caplog.text
+
+
 def test_embedder_cache_receives_configured_providers(tmp_path: Path, job_store: JobStore) -> None:
     """[database] providers must reach the cache — every search embeds through it, not app.state.embedder."""
     from unittest.mock import AsyncMock, patch, MagicMock
@@ -530,6 +567,17 @@ def test_embedder_cache_receives_configured_providers(tmp_path: Path, job_store:
             pass
 
     assert mock_make.call_args.kwargs["providers"] == ["CoreMLExecutionProvider"]
+
+
+def test_collection_sync_receives_configured_providers(tmp_path: Path, job_store: JobStore) -> None:
+    """[database] providers must reach SearchCollectionSync — sync/reindex re-embeds too."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.providers = ["CoreMLExecutionProvider"]
+
+    app = create_app(cfg, job_store)
+
+    assert app.state.collection_sync._providers == ["CoreMLExecutionProvider"]
 
 
 def test_inbound_id_echoed(tmp_path: Path, job_store: JobStore) -> None:

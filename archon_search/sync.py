@@ -96,6 +96,7 @@ class SearchCollectionSync:
         pinned_collections: list[str] | None = None,
         chunk_size: int = 0,
         auto_reindex_on_chunk_size_change: bool = False,
+        providers: list[str] | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._state_store = state_store
@@ -103,6 +104,9 @@ class SearchCollectionSync:
         self._collection_locks: dict[str, asyncio.Lock] = {}
         self._chunk_size = chunk_size
         self._auto_reindex_on_chunk_size_change = auto_reindex_on_chunk_size_change
+        # ONNX Runtime execution providers ([database] providers) for the per-collection
+        # embedders built below — without them the re-embed path would silently run on CPU.
+        self._providers = providers or None
 
     async def sync(
         self,
@@ -574,7 +578,7 @@ class SearchCollectionSync:
                 embedder = _global
             else:
                 try:
-                    embedder = make_embedder(_active_model)
+                    embedder = make_embedder(_active_model, providers=self._providers)
                 except Exception:  # noqa: BLE001
                     logger.warning(
                         "Could not load stored embedder %r for collection %r; using global embedder",
@@ -682,7 +686,7 @@ class SearchCollectionSync:
             embedder = _global
         else:
             try:
-                embedder = make_embedder(_active_model)
+                embedder = make_embedder(_active_model, providers=self._providers)
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "Could not load stored embedder %r for collection %r; using global embedder",

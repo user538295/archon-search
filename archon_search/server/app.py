@@ -810,6 +810,7 @@ def create_app(
         pinned_collections=config.pinned_collections,
         chunk_size=config.chunk_size,
         auto_reindex_on_chunk_size_change=config.auto_reindex_on_chunk_size_change,
+        providers=config.providers or None,
     )
 
     from archon_search.hyde import HyDEGenerator  # noqa: PLC0415

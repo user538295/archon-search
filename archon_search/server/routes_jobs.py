@@ -293,6 +293,7 @@ async def _reindex_task(
     collection: str,
     namespace: str,
     collection_path: Path | None,
+    config: SearchConfig,
 ) -> None:
     """Lifecycle wrapper for reindex: resolves embedder, ingests, promotes model on success.
 
@@ -331,8 +332,7 @@ async def _reindex_task(
             embedder = await embedder_cache.get_or_load(target_model)
         else:
             meta = await store.get_collection_meta(collection, namespace)
-            active_model = meta.active_embedding_model if meta is not None else ""
-            embedder = await embedder_cache.get_or_load(active_model)
+            embedder = await embedder_cache.get_or_load(resolve_active_model(meta, config))
     except Exception as exc:  # noqa: BLE001
         logger.exception("_reindex_task: embedder resolution failed for job %s", job_id)
         meta = await store.get_collection_meta(collection, namespace)

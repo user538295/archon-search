@@ -322,6 +322,10 @@ async def validate_embedding_model(
     # Step 2: instantiate then probe with a timeout guard.
     # make_embedder() is non-blocking (no I/O). The first embed() call triggers
     # model download + initialization inside a thread, which is what we guard.
+    # No `providers=` on purpose: this probe answers "what output dimension does
+    # this model name have?", which is provider-independent. Running it under an
+    # accelerator would only make a PATCH slower and could fail for provider
+    # reasons that say nothing about the model name's validity.
     embedder = make_embedder(model_name)
     try:
         await asyncio.wait_for(embedder.embed(["probe"]), timeout=timeout_seconds)

@@ -275,6 +275,7 @@ class BaseInstaller(ABC):
                 pinned_collections=self.cfg.pinned_collections,
                 chunk_size=self.cfg.chunk_size,
                 auto_reindex_on_chunk_size_change=self.cfg.auto_reindex_on_chunk_size_change,
+                providers=self.cfg.providers or None,
             )
             await sync.sync(self.cfg.pinned_collections)
         finally:

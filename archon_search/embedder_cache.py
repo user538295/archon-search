@@ -9,9 +9,11 @@ from archon_search.embedder import Embedder, make_embedder
 
 logger = logging.getLogger(__name__)
 
-# Unknown model validation: EmbedderCache relies on make_embedder() to raise
-# for unknown model names. validate_embedding_model() (Task 4.2) provides
-# dimension validation at PATCH time without requiring a full model load.
+# Unknown model validation: make_embedder() builds a LAZY backend, so it returns
+# an Embedder for ANY name — the name is only checked when fastembed is reached by
+# the first encode(), i.e. by preload()'s warm-up embed() or the first real query.
+# validate_embedding_model() (Task 4.2) is the up-front check at PATCH time, and
+# resolves known names from fastembed's registry without loading the model at all.
 
 
 class EmbedderCache:
@@ -89,9 +91,11 @@ class EmbedderCache:
         warm-up embed() call pays that cost at startup so the first real query
         does not.
 
-        A model whose warm-up fails is evicted: leaving it cached would turn the
-        next search into a cache hit on a cold embedder, silently re-paying the
-        first-query penalty with no further warning.
+        A model whose warm-up fails is evicted only when its backend never loaded:
+        leaving a cold embedder cached would make cached_models() report it as
+        preloaded when no ONNX weights were ever built. A warm embedder whose
+        warm-up embed() nevertheless raised is kept — the load cost is already paid
+        and evicting it would only throw that work away.
         """
 
         async def _load_and_warm(model: str) -> None:
@@ -103,11 +107,17 @@ class EmbedderCache:
             try:
                 await embedder.embed(["warmup"])
             except Exception as exc:  # noqa: BLE001 — same: never fail startup
+                # encode() assigns the backend model BEFORE running inference, so a
+                # failure here does not prove the model failed to load.
                 async with self._lock:
-                    self._cache.pop(model, None)
+                    cached = self._cache.get(model)
+                    evicted = cached is not None and not cached.is_warm
+                    if evicted:
+                        del self._cache[model]
                 logger.warning(
-                    "EmbedderCache.preload: failed to warm up %r; evicting from cache — %s",
+                    "EmbedderCache.preload: failed to warm up %r%s — %s",
                     model,
+                    "; evicting from cache" if evicted else "",
                     exc,
                 )
 
