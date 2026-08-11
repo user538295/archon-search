@@ -1,6 +1,28 @@
 # Changelog
 
 
+## [26.8.1956] - 2026-08-11
+
+canary
+
+**Embedder cache fixes: providers now honored on sync paths, cold models properly evicted, eager preload actually warms**
+
+**Embedder acceleration now reaches the sync path**
+The `[database] providers` configuration (CUDA, CoreML, etc.) was previously used only for the search path via `EmbedderCache`. The sync/reindex path (`SearchCollectionSync`) called `make_embedder()` directly without providers, silently running on CPU even on accelerator-configured deployments. `SearchCollectionSync` now receives and forwards configured providers to all embedder construction calls, ensuring consistent acceleration across all paths.
+
+**Conditional eviction prevents cold-model cache hits**
+When embedder warm-up failed at startup, the model remained cached but uninitialized (cold). The next search would hit the cache and silently re-pay the full ONNX load penalty instead of failing loudly. Eviction now guards on whether a model is actually warm: cold embedders (never loaded) are evicted so they cannot be served from cache; warm embedders that fail inference are retained, since the load succeeded and only the encode failed. Separate log messages now distinguish load failures from warm-up failures.
+
+**`eager_load_embedders = true` now actually pre-warms models**
+The setting was documented to eliminate first-query latency but was non-functional for two reasons: (1) the preload set filtered out the default embedding model (empty string), so collections using the configured default were never preloaded; (2) even for collections with custom models, `preload()` only called `get_or_load()`, which returns a lazy wrapper — the ONNX backend was not constructed until first query. Preload now unconditionally seeds with `config.embedding_model`, includes all non-empty per-collection `active_embedding_model` values, and calls `embed(["warmup"])` to actually construct the backend. A startup warning fires if the model set exceeds `embedder_cache_size`, preventing just-warmed models from being evicted before first use.
+
+**Centralized model resolution via `resolve_active_model()`**
+The pattern `meta.active_embedding_model or config.embedding_model` was repeated at twelve call sites across four modules in variants that sometimes special-cased absent metadata and sometimes used truthiness inconsistently. All variants are now routed through `resolve_active_model(meta, cfg)` in `config.py`, beside the existing `resolve_reranker_providers()`, eliminating duplication and drift.
+
+**Models forwarded to reindex tasks**
+Reindex operations resolve an unpinned collection's active model to an empty string and fed that to the embedder cache, building an embedder for the wrong model name. Reindex tasks now call `resolve_active_model()` to use the correct active model.
+
+
 ## [26.8.1952] - 2026-08-11
 
 canary
