@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import urllib.error
+from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import tomlkit
 
 from archon_search.config import LLAMA_CPP_BASE_URL_DEFAULT, OLLAMA_BASE_URL_DEFAULT, load_config
@@ -1732,11 +1735,51 @@ class TestOllamaPickerE2E:
         assert cfg.rag_fusion.ollama_base_url == "http://rag:11434"
 
 
+@pytest.fixture
+def isolated_gguf_env(monkeypatch, tmp_path):
+    """Point every GGUF cache root at an empty directory.
+
+    Without this the tier-2 directory scan would see whatever the developer's or
+    CI runner's real llama.cpp cache happens to hold, making any "returns []"
+    assertion environment-dependent. Returns the fake home directory.
+    """
+    for var in ("LLAMA_CACHE", "HF_HOME", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "XDG_CACHE_HOME"):
+        monkeypatch.delenv(var, raising=False)
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    return fake_home
+
+
+def _write_gguf(root: Path, *relative_paths: str) -> None:
+    """Create empty .gguf files at ``relative_paths`` under ``root``."""
+    for rel in relative_paths:
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"")
+
+
+def _cache_list_run(stdout: str, returncode: int = 0):
+    """Build a ``subprocess.run`` stand-in replaying ``stdout``, honouring the text kwargs."""
+
+    def _run(cmd, *_args, **kwargs):
+        decoded = kwargs.get("text") or kwargs.get("universal_newlines") or kwargs.get("encoding")
+        return subprocess.CompletedProcess(cmd, returncode, stdout if decoded else stdout.encode(), b"")
+
+    return _run
+
+
+@pytest.mark.usefixtures("isolated_gguf_env")
 class TestFetchLlamaCppModels:
     """Unit tests for _fetch_llama_cpp_models() — `llama cli -cl` probe, graceful failure.
 
     The model list comes from the local llama.cpp cache, never from a running
     llama-server (see TestLlamaCppModelsComeFromLocalCache for that guard).
+
+    Every ``== []`` assertion here means "both tiers empty": tier 1 is forced
+    empty by the stub, and ``isolated_gguf_env`` guarantees the tier-2 directory
+    scan finds nothing. Without that fixture these would depend on whatever GGUF
+    files the machine running the suite happens to hold.
     """
 
     _TWO_MODEL_STDOUT = (
@@ -1745,20 +1788,10 @@ class TestFetchLlamaCppModels:
         "   2. ggml-org/Qwen3-1.7B-GGUF:Q8_0\n"
     )
 
-    @staticmethod
-    def _run_returning(stdout: str, returncode: int = 0):
-        """Build a ``subprocess.run`` stand-in replaying ``stdout``, honouring the text kwargs."""
-
-        def _run(cmd, *_args, **kwargs):
-            decoded = kwargs.get("text") or kwargs.get("universal_newlines") or kwargs.get("encoding")
-            return subprocess.CompletedProcess(cmd, returncode, stdout if decoded else stdout.encode(), b"")
-
-        return _run
-
     def test_parses_numbered_cache_entries(self) -> None:
         """Numbered lines yield model names, in order; the header line is not one of them."""
         with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
-            with patch("subprocess.run", side_effect=self._run_returning(self._TWO_MODEL_STDOUT)):
+            with patch("subprocess.run", side_effect=_cache_list_run(self._TWO_MODEL_STDOUT)):
                 models = _fetch_llama_cpp_models()
         assert models == ["squ11z1/gpt-oss-nano:Q4_K_M", "ggml-org/Qwen3-1.7B-GGUF:Q8_0"]
 
@@ -1790,7 +1823,7 @@ class TestFetchLlamaCppModels:
 
     def test_non_zero_exit_returns_empty(self) -> None:
         with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
-            with patch("subprocess.run", side_effect=self._run_returning(self._TWO_MODEL_STDOUT, returncode=1)):
+            with patch("subprocess.run", side_effect=_cache_list_run(self._TWO_MODEL_STDOUT, returncode=1)):
                 assert _fetch_llama_cpp_models() == []
 
     def test_timeout_returns_empty(self) -> None:
@@ -1806,15 +1839,285 @@ class TestFetchLlamaCppModels:
     def test_unparsable_output_returns_empty(self) -> None:
         """Output with no numbered entries (e.g. a usage banner) yields [], not a crash."""
         with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
-            with patch("subprocess.run", side_effect=self._run_returning("usage: llama cli [options]\n")):
+            with patch("subprocess.run", side_effect=_cache_list_run("usage: llama cli [options]\n")):
                 assert _fetch_llama_cpp_models() == []
 
     def test_empty_output_returns_empty(self) -> None:
         with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
-            with patch("subprocess.run", side_effect=self._run_returning("")):
+            with patch("subprocess.run", side_effect=_cache_list_run("")):
                 assert _fetch_llama_cpp_models() == []
 
 
+@pytest.mark.usefixtures("isolated_gguf_env")
+class TestFetchLlamaCppModelsGgufDirFallback:
+    """Tier 2 of _fetch_llama_cpp_models() — scanning known GGUF cache directories.
+
+    When ``llama cli -cl`` yields nothing (binary absent, or an empty cache) the
+    wizard scans the directories llama.cpp and huggingface_hub download into, so
+    an operator who has GGUF files but no ``llama`` binary on PATH still gets a
+    picker instead of free-text entry. ``shutil.which`` returns ``None``
+    throughout so tier 1 is always the empty branch.
+    """
+
+    def test_llama_cache_env_dir_is_scanned(self, monkeypatch, tmp_path) -> None:
+        """$LLAMA_CACHE is scanned recursively; entries are paths relative to that root."""
+        root = tmp_path / "llama-cache"
+        _write_gguf(root, "squ11z1/gpt-oss-nano/Q4_K_M.gguf", "flat.gguf")
+        monkeypatch.setenv("LLAMA_CACHE", str(root))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["flat.gguf", "squ11z1/gpt-oss-nano/Q4_K_M.gguf"]
+
+    def test_hf_home_hub_subdir_is_scanned(self, monkeypatch, tmp_path) -> None:
+        """$HF_HOME is scanned at its `hub/` subdirectory, not at its root."""
+        hf_home = tmp_path / "hf"
+        _write_gguf(hf_home / "hub", "models--org--m/snapshots/abc/m.Q4_K_M.gguf")
+        _write_gguf(hf_home, "outside-hub.gguf")
+        monkeypatch.setenv("HF_HOME", str(hf_home))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["models--org--m/snapshots/abc/m.Q4_K_M.gguf"]
+
+    def test_huggingface_default_cache_is_scanned_when_hf_home_unset(self, isolated_gguf_env) -> None:
+        """huggingface_hub's default ~/.cache/huggingface/hub is scanned with no env vars set.
+
+        This is the common case for anyone who ran `huggingface-cli download` —
+        HF_HOME is normally unset, so scanning only $HF_HOME/hub would miss it.
+        """
+        _write_gguf(isolated_gguf_env / ".cache" / "huggingface" / "hub", "models--org--m/m.gguf")
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["models--org--m/m.gguf"]
+
+    def test_hf_home_overrides_the_huggingface_default_cache(self, monkeypatch, tmp_path, isolated_gguf_env) -> None:
+        """$HF_HOME relocates the huggingface cache — the default is then not scanned."""
+        _write_gguf(isolated_gguf_env / ".cache" / "huggingface" / "hub", "default.gguf")
+        _write_gguf(tmp_path / "hf" / "hub", "relocated.gguf")
+        monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["relocated.gguf"]
+
+    def test_xdg_cache_home_llama_cpp_subdir_is_scanned(self, monkeypatch, tmp_path) -> None:
+        """$XDG_CACHE_HOME is scanned at its `llama.cpp/` subdirectory."""
+        xdg = tmp_path / "xdg"
+        _write_gguf(xdg / "llama.cpp", "org/model.gguf")
+        monkeypatch.setenv("XDG_CACHE_HOME", str(xdg))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["org/model.gguf"]
+
+    def test_macos_default_dir_is_scanned_when_no_env_vars_set(self, monkeypatch, isolated_gguf_env) -> None:
+        """With no env vars set, macOS falls back to ~/Library/Caches/llama.cpp."""
+        _write_gguf(isolated_gguf_env / "Library" / "Caches" / "llama.cpp", "org/mac.gguf")
+        _write_gguf(isolated_gguf_env / ".cache" / "llama.cpp", "org/linux.gguf")
+        monkeypatch.setattr(sys, "platform", "darwin")
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["org/mac.gguf"]
+
+    def test_linux_default_dir_is_scanned_when_no_env_vars_set(self, monkeypatch, isolated_gguf_env) -> None:
+        """With no env vars set, non-macOS platforms fall back to ~/.cache/llama.cpp."""
+        _write_gguf(isolated_gguf_env / "Library" / "Caches" / "llama.cpp", "org/mac.gguf")
+        _write_gguf(isolated_gguf_env / ".cache" / "llama.cpp", "org/linux.gguf")
+        monkeypatch.setattr(sys, "platform", "linux")
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["org/linux.gguf"]
+
+    def test_multiple_dirs_are_unioned_and_sorted(self, monkeypatch, tmp_path) -> None:
+        """Results from several roots merge into one globally sorted list.
+
+        ``zzz.gguf`` sits under the highest-priority root and ``aaa.gguf`` under a
+        later one, so returning them in root order rather than sorted order fails.
+        """
+        _write_gguf(tmp_path / "llama-cache", "zzz.gguf")
+        _write_gguf(tmp_path / "hf" / "hub", "aaa.gguf")
+        _write_gguf(tmp_path / "xdg" / "llama.cpp", "mmm.gguf")
+        monkeypatch.setenv("LLAMA_CACHE", str(tmp_path / "llama-cache"))
+        monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["aaa.gguf", "mmm.gguf", "zzz.gguf"]
+
+    def test_one_file_reachable_through_two_roots_is_listed_once(self, monkeypatch, tmp_path) -> None:
+        """A single file reachable under two roots is listed once, under the first root's name.
+
+        ``$XDG_CACHE_HOME/llama.cpp`` is a symlink to a subdirectory of
+        ``$LLAMA_CACHE``, so the same file is reachable as ``nested/m.gguf`` and as
+        ``m.gguf``. Only resolving each hit to its real path collapses the two —
+        comparing the globbed paths alone offers the same file twice under two names.
+        """
+        real = tmp_path / "real-cache"
+        _write_gguf(real, "nested/m.gguf")
+        (tmp_path / "xdg").mkdir()
+        (tmp_path / "xdg" / "llama.cpp").symlink_to(real / "nested", target_is_directory=True)
+        monkeypatch.setenv("LLAMA_CACHE", str(real))
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["nested/m.gguf"]
+
+    def test_earliest_root_decides_the_name_of_a_shared_file(self, monkeypatch, tmp_path) -> None:
+        """When a file sits under two nested roots, the higher-priority root names it.
+
+        ``$LLAMA_CACHE`` points deeper than ``$HF_HOME/hub``, so the same file is
+        reachable as ``m.gguf`` or as ``nested/m.gguf``; priority order picks the former.
+        """
+        hub = tmp_path / "hf" / "hub"
+        _write_gguf(hub, "nested/m.gguf")
+        monkeypatch.setenv("LLAMA_CACHE", str(hub / "nested"))
+        monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["m.gguf"]
+
+    def test_distinct_files_sharing_a_name_are_listed_once(self, monkeypatch, tmp_path) -> None:
+        """Two different files that produce the same relative name yield one menu entry.
+
+        The picker shows the returned strings verbatim, so emitting the same
+        string twice would render two indistinguishable, interchangeable choices.
+        """
+        _write_gguf(tmp_path / "llama-cache", "m.gguf")
+        _write_gguf(tmp_path / "hf" / "hub", "m.gguf")
+        monkeypatch.setenv("LLAMA_CACHE", str(tmp_path / "llama-cache"))
+        monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["m.gguf"]
+
+    def test_cli_cache_list_wins_over_dir_scan(self, monkeypatch, tmp_path) -> None:
+        """Tier 1 short-circuits: a non-empty `llama cli -cl` list suppresses the dir scan."""
+        _write_gguf(tmp_path / "llama-cache", "never-listed.gguf")
+        monkeypatch.setenv("LLAMA_CACHE", str(tmp_path / "llama-cache"))
+        stdout = "number of models in cache: 1\n   1. squ11z1/gpt-oss-nano:Q4_K_M\n"
+
+        with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
+            with patch("subprocess.run", side_effect=_cache_list_run(stdout)):
+                assert _fetch_llama_cpp_models() == ["squ11z1/gpt-oss-nano:Q4_K_M"]
+
+    def test_dir_scan_is_not_even_run_when_the_cli_lists_models(self, monkeypatch, tmp_path) -> None:
+        """Tier 1 short-circuits execution, not just the result.
+
+        Evaluating the scan eagerly and discarding it would still return the right
+        models while walking every cache root on each wizard run.
+        """
+        monkeypatch.setenv("LLAMA_CACHE", str(tmp_path))
+        stdout = "number of models in cache: 1\n   1. squ11z1/gpt-oss-nano:Q4_K_M\n"
+
+        with patch("archon_search.install.wizard._scan_gguf_cache_dirs") as mock_scan:
+            with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
+                with patch("subprocess.run", side_effect=_cache_list_run(stdout)):
+                    assert _fetch_llama_cpp_models() == ["squ11z1/gpt-oss-nano:Q4_K_M"]
+
+        mock_scan.assert_not_called()
+
+    def test_both_tiers_empty_returns_empty(self, monkeypatch, tmp_path) -> None:
+        """No binary and no GGUF file anywhere yields [] — the free-text fallback path."""
+        empty = tmp_path / "llama-cache"
+        empty.mkdir()
+        (empty / "not-a-model.txt").write_text("x", encoding="utf-8")
+        monkeypatch.setenv("LLAMA_CACHE", str(empty))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == []
+
+    def test_missing_dirs_are_skipped_without_raising(self, monkeypatch, tmp_path) -> None:
+        """A configured root that does not exist yields no entries and no exception."""
+        monkeypatch.setenv("LLAMA_CACHE", str(tmp_path / "does-not-exist"))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == []
+
+    def test_directories_named_like_models_are_not_listed(self, monkeypatch, tmp_path) -> None:
+        """A directory whose name ends in .gguf is not a selectable model."""
+        root = tmp_path / "llama-cache"
+        (root / "decoy.gguf").mkdir(parents=True)
+        _write_gguf(root, "real.gguf")
+        monkeypatch.setenv("LLAMA_CACHE", str(root))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["real.gguf"]
+
+    def test_unresolvable_home_yields_no_models_instead_of_raising(self, monkeypatch, tmp_path) -> None:
+        """Path.home() raising (HOME unset in a container) ends the scan, it does not propagate.
+
+        `_fetch_llama_cpp_models` documents that it never raises; the caller
+        relies on `[]` to reach the free-text prompt.
+        """
+        _write_gguf(tmp_path / "llama-cache", "env.gguf")
+        monkeypatch.setenv("LLAMA_CACHE", str(tmp_path / "llama-cache"))
+
+        with patch.object(Path, "home", side_effect=RuntimeError("Could not determine home directory")):
+            with patch("shutil.which", return_value=None):
+                assert _fetch_llama_cpp_models() == []
+
+    def test_hf_hub_cache_names_the_hub_directory_outright(self, monkeypatch, tmp_path) -> None:
+        """$HF_HUB_CACHE points at the hub dir itself, so no `hub/` suffix is appended.
+
+        It also outranks $HF_HOME, mirroring huggingface_hub's own resolution order.
+        """
+        _write_gguf(tmp_path / "hub-cache", "direct.gguf")
+        _write_gguf(tmp_path / "hf" / "hub", "via-hf-home.gguf")
+        monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub-cache"))
+        monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["direct.gguf"]
+
+    def test_legacy_huggingface_hub_cache_is_honoured(self, monkeypatch, tmp_path) -> None:
+        """The legacy $HUGGINGFACE_HUB_CACHE spelling still names the hub directory."""
+        _write_gguf(tmp_path / "hub-cache", "legacy.gguf")
+        monkeypatch.setenv("HUGGINGFACE_HUB_CACHE", str(tmp_path / "hub-cache"))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["legacy.gguf"]
+
+    def test_xdg_cache_home_relocates_the_huggingface_default(self, monkeypatch, tmp_path, isolated_gguf_env) -> None:
+        """With $HF_HOME unset, the huggingface cache follows $XDG_CACHE_HOME.
+
+        huggingface_hub derives HF_HOME as `$XDG_CACHE_HOME/huggingface`, so
+        scanning `~/.cache/huggingface/hub` unconditionally would miss it on a
+        standard Linux setup that sets XDG_CACHE_HOME.
+        """
+        _write_gguf(isolated_gguf_env / ".cache" / "huggingface" / "hub", "under-home.gguf")
+        _write_gguf(tmp_path / "xdg" / "huggingface" / "hub", "under-xdg.gguf")
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["under-xdg.gguf"]
+
+    def test_tilde_is_expanded_in_every_env_var_root(self, monkeypatch, isolated_gguf_env) -> None:
+        """Each root env var accepts `~/...` — a literal "~" directory is never scanned."""
+        _write_gguf(isolated_gguf_env / "llama", "a.gguf")
+        _write_gguf(isolated_gguf_env / "hub", "b.gguf")
+        _write_gguf(isolated_gguf_env / "xdg" / "llama.cpp", "c.gguf")
+        monkeypatch.setenv("LLAMA_CACHE", "~/llama")
+        monkeypatch.setenv("HF_HUB_CACHE", "~/hub")
+        monkeypatch.setenv("XDG_CACHE_HOME", "~/xdg")
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == ["a.gguf", "b.gguf", "c.gguf"]
+
+    def test_empty_env_vars_never_scan_a_relative_path(self, monkeypatch, tmp_path) -> None:
+        """Every root env var set to "" is treated as unset, not as a relative path.
+
+        `Path("") / "hub"` is the relative path `hub`, so a stray `hub/` or
+        `llama.cpp/` directory in the working directory would otherwise be scanned.
+        """
+        _write_gguf(tmp_path, "cwd.gguf")
+        _write_gguf(tmp_path / "hub", "hub.gguf")
+        _write_gguf(tmp_path / "llama.cpp", "xdg.gguf")
+        monkeypatch.chdir(tmp_path)
+        for var in ("LLAMA_CACHE", "HF_HOME", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "XDG_CACHE_HOME"):
+            monkeypatch.setenv(var, "")
+
+        with patch("shutil.which", return_value=None):
+            assert _fetch_llama_cpp_models() == []
+
+
+@pytest.mark.usefixtures("isolated_gguf_env")
 class TestLlamaCppModelsComeFromLocalCache:
     """The llama.cpp model list must come from the local cache, not a running llama-server.
 

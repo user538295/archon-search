@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
+import sys
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 
 import click
 
@@ -198,15 +201,22 @@ _LLAMA_CPP_CACHE_LIST_ENTRY = re.compile(r"^\s*\d+\.\s+(.+?)\s*$")
 
 
 def _fetch_llama_cpp_models() -> list[str]:
-    """List the llama.cpp models cached locally, as ``llama cli -cl`` reports them.
+    """List the llama.cpp models available locally.
 
-    The cache directory is not reliably derivable in Python (``LLAMA_CACHE``,
-    ``HF_HOME``, ``HUGGINGFACE_HUB_CACHE``, ``XDG_CACHE_HOME``, platform default,
-    manifest layout), so the CLI is the source of truth and its output is parsed.
+    ``llama cli -cl`` is the authoritative source, but it needs the ``llama``
+    binary on PATH and reports only models it downloaded itself. When it yields
+    nothing, the known GGUF download directories are scanned so operators who
+    fetched models by other means (``huggingface-cli``, a manual download) still
+    get a picker instead of free-text entry.
 
     Never raises — every failure yields ``[]`` and the wizard falls back to
     free-text entry.
     """
+    return _list_cached_models_via_cli() or _scan_gguf_cache_dirs()
+
+
+def _list_cached_models_via_cli() -> list[str]:
+    """Tier 1: the models ``llama cli -cl`` reports, or ``[]`` on any failure."""
     binary = shutil.which("llama")
     if binary is None:
         return []
@@ -224,6 +234,60 @@ def _fetch_llama_cpp_models() -> list[str]:
     if proc.returncode != 0:
         return []
     return [m.group(1) for line in proc.stdout.splitlines() if (m := _LLAMA_CPP_CACHE_LIST_ENTRY.match(line))]
+
+
+def _gguf_cache_roots() -> list[Path]:
+    """The directories llama.cpp and huggingface_hub download GGUF files into, most specific first.
+
+    The huggingface root mirrors ``huggingface_hub.constants``: ``HF_HUB_CACHE``
+    (or legacy ``HUGGINGFACE_HUB_CACHE``) names the hub directory outright,
+    otherwise it is ``hub/`` under ``$HF_HOME``, which itself defaults to
+    ``huggingface/`` under ``$XDG_CACHE_HOME``. Deriving that here rather than
+    importing huggingface_hub keeps the installer independent of it.
+    """
+    roots: list[Path] = []
+    if llama_cache := os.environ.get("LLAMA_CACHE"):
+        roots.append(Path(llama_cache).expanduser())
+
+    xdg_cache_env = os.environ.get("XDG_CACHE_HOME")
+    xdg_cache = Path(xdg_cache_env or "~/.cache").expanduser()
+    if hf_hub := os.environ.get("HF_HUB_CACHE") or os.environ.get("HUGGINGFACE_HUB_CACHE"):
+        roots.append(Path(hf_hub).expanduser())
+    elif hf_home := os.environ.get("HF_HOME"):
+        roots.append(Path(hf_home).expanduser() / "hub")
+    else:
+        roots.append(xdg_cache / "huggingface" / "hub")
+
+    if xdg_cache_env:
+        roots.append(xdg_cache / "llama.cpp")
+    home = Path.home()
+    if sys.platform == "darwin":
+        roots.append(home / "Library" / "Caches" / "llama.cpp")
+    else:
+        roots.append(home / ".cache" / "llama.cpp")
+    return roots
+
+
+def _scan_gguf_cache_dirs() -> list[str]:
+    """Tier 2: GGUF files under the known cache roots, named relative to their root.
+
+    Files are deduplicated by resolved path, so huggingface_hub's per-revision
+    snapshot symlinks — and two roots naming the same directory — yield one
+    entry, named after the earliest (most specific) root it was found under.
+    Each root is walked in sorted order so that choice is reproducible.
+
+    Never raises: a root that cannot be walked, or an unresolvable home
+    directory, ends the scan with whatever was found so far.
+    """
+    found: dict[Path, str] = {}
+    try:
+        for root in _gguf_cache_roots():
+            for path in sorted(root.glob("**/*.gguf")):
+                if path.is_file():
+                    found.setdefault(path.resolve(), path.relative_to(root).as_posix())
+    except Exception:  # noqa: BLE001 — best-effort probe; any failure → free-text fallback
+        pass
+    return sorted(set(found.values()))
 
 
 def _pick_llama_cpp_model(models: list[str]) -> str:
@@ -252,11 +316,11 @@ def _prompt_llama_cpp_model(feature_label: str) -> tuple[str, str]:
 
     The base URL is still asked — the server address is what ``[hyde]``,
     ``[rag_fusion]`` and ``[graph]`` talk to at runtime — but it does not decide
-    the model list: that comes from the local llama.cpp model cache
+    the model list: that comes from the local model caches
     (``_fetch_llama_cpp_models``). An empty answer keeps
-    ``LLAMA_CPP_BASE_URL_DEFAULT``. When the cache holds models the user picks by
-    number; when it is empty the wizard explains how to populate it and falls
-    back to free-text entry.
+    ``LLAMA_CPP_BASE_URL_DEFAULT``. When a cache holds models the user picks by
+    number; when none do the wizard explains how to populate one and falls back
+    to free-text entry.
 
     Returns ``(llama_cpp_base_url, model)``. ``llama_cpp_base_url`` is ``""``
     when it resolves to the built-in default (config supplies it), otherwise the
@@ -275,10 +339,12 @@ def _prompt_llama_cpp_model(feature_label: str) -> tuple[str, str]:
 
     print(
         "  No locally cached llama.cpp models found.\n"
-        "  Either the 'llama' command is not on your PATH, or its model cache is\n"
-        '  empty. Install a model with "llama download -hf <user>/<model>[:quant]"\n'
-        '  (list them with "llama cli -cl"), then re-run the wizard to pick from\n'
-        "  the list.\n"
+        '  "llama cli -cl" listed nothing (the command may be missing from your\n'
+        "  PATH, or its cache may be empty), and no .gguf file was found under\n"
+        "  $LLAMA_CACHE, the huggingface hub cache (~/.cache/huggingface/hub\n"
+        "  unless $HF_HUB_CACHE/$HF_HOME/$XDG_CACHE_HOME move it), or the\n"
+        '  llama.cpp cache. Install a model with "llama download -hf\n'
+        '  <user>/<model>[:quant]", then re-run the wizard to pick from the list.\n'
         "  Falling back to manual model-name entry."
     )
     return stored, _prompt_model_freetext(feature_label)

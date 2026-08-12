@@ -29,7 +29,7 @@ import tomlkit
 
 from archon_search.config import LLAMA_CPP_BASE_URL_DEFAULT
 from archon_search.install.config_writer import WizardFeatures, _apply_wizard_features_to_toml
-from archon_search.install.wizard import _fetch_llama_cpp_models, _prompt_llama_cpp_model
+from archon_search.install.wizard import _list_cached_models_via_cli, _prompt_llama_cpp_model
 from tests.integration.conftest import ingest_file_via_path, install_spacy_stub, make_real_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.live]
@@ -212,15 +212,18 @@ def test_live_graph_enrichment_via_llama_cpp(tmp_path: Path, monkeypatch: pytest
 def test_wizard_local_cache_model_picker_live() -> None:
     """S4: the wizard's model picker against the real local llama.cpp model cache.
 
-    ``_fetch_llama_cpp_models`` really shells out to ``llama cli -cl`` (no
-    mocking) and swallows every failure into ``[]`` by design (never raises),
-    so a missing ``llama`` binary or an empty cache skips this test rather than
-    failing it — no llama-server is needed. The listed
-    model is then routed through the real ``_prompt_llama_cpp_model`` picker and
-    the real TOML writer to confirm the whole wizard chain wires it through to
-    ``[graph] provider``/``extraction_model``/``llama_cpp_base_url``.
+    Gated on tier 1 — ``_list_cached_models_via_cli`` really shells out to
+    ``llama cli -cl`` (no mocking) and swallows every failure into ``[]`` by
+    design (never raises), so a missing ``llama`` binary or an empty cache skips
+    this test rather than failing it — no llama-server is needed. Gating on
+    ``_fetch_llama_cpp_models`` instead would skip only when the tier-2 GGUF
+    directory scan ALSO came up empty, letting an unrelated ``.gguf`` file
+    anywhere under the developer's home directory decide whether this test runs.
+    The listed model is then routed through the real ``_prompt_llama_cpp_model``
+    picker and the real TOML writer to confirm the whole wizard chain wires it
+    through to ``[graph] provider``/``extraction_model``/``llama_cpp_base_url``.
     """
-    models = _fetch_llama_cpp_models()
+    models = _list_cached_models_via_cli()
     if not models:
         pytest.skip(
             "llama.cpp model cache is empty — download a model "
