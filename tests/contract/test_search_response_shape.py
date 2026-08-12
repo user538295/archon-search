@@ -51,6 +51,7 @@ def _make_client(tmp_path: Path) -> TestClient:
             acl_filtered=False,
         )
     )
+    pipeline.warmup_models = AsyncMock()
     app.state.pipeline = pipeline
     return client
 

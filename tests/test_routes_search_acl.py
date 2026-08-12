@@ -88,6 +88,7 @@ def _make_pipeline_mock(
     pipeline.search = AsyncMock(
         return_value=SearchPipelineResult(results=results or [], acl_filtered=acl_filtered)
     )
+    pipeline.warmup_models = AsyncMock()
     return pipeline
 
 
@@ -200,6 +201,7 @@ def _make_pipeline_mock_with_model(
         return_value=SearchPipelineResult(results=results or [], acl_filtered=False)
     )
     pipeline._global_embedder = MagicMock()
+    pipeline.warmup_models = AsyncMock()
     return pipeline
 
 
@@ -215,6 +217,7 @@ def test_search_single_collection_uses_active_embedding_model(tmp_path: Path) ->
     app, client = _make_app(tmp_path)
     pipeline = _make_pipeline_mock_with_model(model_name="model-X")
     cache = _make_embedder_cache_mock()
+    pipeline.warmup_models = AsyncMock()
     app.state.pipeline = pipeline
     app.state.embedder_cache = cache
 
@@ -228,6 +231,7 @@ def test_search_response_includes_embedding_model(tmp_path: Path) -> None:
     app, client = _make_app(tmp_path)
     pipeline = _make_pipeline_mock_with_model(model_name="model-X")
     cache = _make_embedder_cache_mock()
+    pipeline.warmup_models = AsyncMock()
     app.state.pipeline = pipeline
     app.state.embedder_cache = cache
 
@@ -253,6 +257,7 @@ def test_search_during_needs_reindex_uses_active_not_pending(tmp_path: Path) -> 
         return_value=SearchPipelineResult(results=[], acl_filtered=False)
     )
     cache = _make_embedder_cache_mock()
+    pipeline.warmup_models = AsyncMock()
     app.state.pipeline = pipeline
     app.state.embedder_cache = cache
 
@@ -271,6 +276,7 @@ def test_search_multi_collection_uses_global_model(tmp_path: Path) -> None:
     pipeline.search_many = AsyncMock(
         return_value=SearchPipelineResult(results=[], acl_filtered=False)
     )
+    pipeline.warmup_models = AsyncMock()
     app.state.pipeline = pipeline
 
     response = client.post(
@@ -293,6 +299,7 @@ def test_search_empty_active_embedding_model_falls_back_to_global(tmp_path: Path
         return_value=SearchPipelineResult(results=[], acl_filtered=False)
     )
     cache = _make_embedder_cache_mock()
+    pipeline.warmup_models = AsyncMock()
     app.state.pipeline = pipeline
     app.state.embedder_cache = cache
 

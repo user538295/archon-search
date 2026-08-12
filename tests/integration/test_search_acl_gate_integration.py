@@ -53,6 +53,7 @@ def test_search_acl_context_false_no_gate(tmp_path, monkeypatch) -> None:
         mock_pipeline.search = AsyncMock(
             return_value=SearchPipelineResult(results=[result], acl_filtered=False)
         )
+        mock_pipeline.warmup_models = AsyncMock()
         client.app.state.pipeline = mock_pipeline
 
         resp = client.post(
@@ -86,6 +87,7 @@ def test_search_acl_context_true_has_gate(tmp_path, monkeypatch) -> None:
         mock_pipeline.search = AsyncMock(
             return_value=SearchPipelineResult(results=[result], acl_filtered=False)
         )
+        mock_pipeline.warmup_models = AsyncMock()
         client.app.state.pipeline = mock_pipeline
 
         resp = client.post(
@@ -132,6 +134,7 @@ def test_acl_context_and_include_metadata_independent(tmp_path, monkeypatch) -> 
         mock_pipeline.search = AsyncMock(
             return_value=SearchPipelineResult(results=[result], acl_filtered=False)
         )
+        mock_pipeline.warmup_models = AsyncMock()
         client.app.state.pipeline = mock_pipeline
 
         resp = client.post(
