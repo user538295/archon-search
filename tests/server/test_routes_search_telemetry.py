@@ -36,6 +36,7 @@ def _make_test_app(
     # Build a default pipeline mock if none supplied.
     if pipeline_mock is None:
         pipeline_mock = MagicMock()
+        pipeline_mock.warmup_models = AsyncMock()
         pipeline_mock.get_collection_meta = AsyncMock(
             return_value=CollectionMeta(name="col", namespace="default")
         )
@@ -67,6 +68,7 @@ def _make_mock_writer() -> MagicMock:
 def test_store_exception_enqueues_telemetry_entry() -> None:
     writer_mock = _make_mock_writer()
     pipeline_mock = MagicMock()
+    pipeline_mock.warmup_models = AsyncMock()
     pipeline_mock.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
@@ -94,6 +96,7 @@ def test_store_exception_enqueues_telemetry_entry() -> None:
 def test_embedder_exception_enqueues_telemetry_entry() -> None:
     writer_mock = _make_mock_writer()
     pipeline_mock = MagicMock()
+    pipeline_mock.warmup_models = AsyncMock()
     pipeline_mock.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
@@ -121,6 +124,7 @@ def test_embedder_exception_enqueues_telemetry_entry() -> None:
 def test_reranker_exception_enqueues_telemetry_entry() -> None:
     writer_mock = _make_mock_writer()
     pipeline_mock = MagicMock()
+    pipeline_mock.warmup_models = AsyncMock()
     pipeline_mock.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
@@ -148,6 +152,7 @@ def test_reranker_exception_enqueues_telemetry_entry() -> None:
 def test_pipeline_failure_logs_structured_event_type(caplog: pytest.LogCaptureFixture) -> None:
     writer_mock = _make_mock_writer()
     pipeline_mock = MagicMock()
+    pipeline_mock.warmup_models = AsyncMock()
     pipeline_mock.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
@@ -195,6 +200,7 @@ def test_telemetry_enqueue_failure_does_not_break_route(
     writer_mock.enqueue.side_effect = RuntimeError("telemetry down")
 
     pipeline_mock = MagicMock()
+    pipeline_mock.warmup_models = AsyncMock()
     pipeline_mock.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
@@ -223,6 +229,7 @@ def test_telemetry_enqueue_failure_does_not_break_route(
 def test_sequential_failure_then_success_on_same_app() -> None:
     writer_mock = _make_mock_writer()
     pipeline_mock = MagicMock()
+    pipeline_mock.warmup_models = AsyncMock()
     pipeline_mock.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
@@ -261,6 +268,7 @@ def test_serialization_error_in_response_construction_enqueues_telemetry(
 
     writer_mock = _make_mock_writer()
     pipeline_mock = MagicMock()
+    pipeline_mock.warmup_models = AsyncMock()
     pipeline_mock.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
@@ -300,6 +308,7 @@ def test_serialization_error_in_response_construction_enqueues_telemetry(
 def test_healthy_search_enqueues_success_telemetry() -> None:
     writer_mock = _make_mock_writer()
     pipeline_mock = MagicMock()
+    pipeline_mock.warmup_models = AsyncMock()
     pipeline_mock.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
@@ -329,6 +338,7 @@ def test_query_text_never_in_error_enqueue_args() -> None:
     sentinel = "PRIVACY-LEAK-SENTINEL-SEARCH-ERROR-ABC"
     writer_mock = _make_mock_writer()
     pipeline_mock = MagicMock()
+    pipeline_mock.warmup_models = AsyncMock()
     pipeline_mock.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
@@ -351,6 +361,7 @@ def test_query_text_never_in_error_enqueue_args() -> None:
 
 def test_writer_none_pipeline_failure_does_not_crash() -> None:
     pipeline_mock = MagicMock()
+    pipeline_mock.warmup_models = AsyncMock()
     pipeline_mock.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
@@ -380,6 +391,7 @@ def test_search_pipeline_timeout_returns_504_and_enqueues_telemetry(
 
     writer_mock = _make_mock_writer()
     pipeline_mock = MagicMock()
+    pipeline_mock.warmup_models = AsyncMock()
     pipeline_mock.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
@@ -435,6 +447,7 @@ def _make_test_app_with_correlation(
 
     if pipeline_mock is None:
         pipeline_mock = MagicMock()
+        pipeline_mock.warmup_models = AsyncMock()
         pipeline_mock.get_collection_meta = AsyncMock(
             return_value=CollectionMeta(name="col", namespace="default")
         )

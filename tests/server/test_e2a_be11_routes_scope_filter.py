@@ -48,6 +48,7 @@ def _make_app(tmp_path: Path) -> tuple:
 def _make_search_pipeline_mock() -> MagicMock:
     """Return a mock SearchPipeline suitable for /search tests."""
     pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock()
     pipeline.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
@@ -64,6 +65,7 @@ def _make_search_pipeline_mock() -> MagicMock:
 def _make_explain_pipeline_mock() -> MagicMock:
     """Return a mock SearchPipeline suitable for /explain tests."""
     pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock()
     pipeline.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )

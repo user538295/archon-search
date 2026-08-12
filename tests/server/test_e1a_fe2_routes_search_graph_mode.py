@@ -72,6 +72,7 @@ def _make_pipeline_mock(
     from archon_search.collection_meta import CollectionMeta
 
     pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock()
     if meta_return is ...:
         pipeline.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="col", namespace="default"))
     else:

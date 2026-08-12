@@ -64,6 +64,7 @@ def _make_pipeline_mock(
     from archon_search.collection_meta import CollectionMeta
 
     pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock()
 
     if meta_raises is not None:
         pipeline.get_collection_meta = AsyncMock(side_effect=meta_raises)
@@ -842,6 +843,7 @@ def _make_multi_pipeline_mock(
     search_many_raises: Exception | None = None,
 ) -> MagicMock:
     pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock()
     if search_many_raises is not None:
         pipeline.search_many = AsyncMock(side_effect=search_many_raises)
     else:

@@ -40,6 +40,7 @@ def _make_search_app(
 
     if pipeline_mock is None:
         pipeline_mock = MagicMock()
+        pipeline_mock.warmup_models = AsyncMock()
         pipeline_mock.get_collection_meta = AsyncMock(
             return_value=CollectionMeta(name="col", namespace=DEFAULT_NAMESPACE)
         )
@@ -239,6 +240,7 @@ def test_search_emits_partial_stage_timings_on_timeout(caplog: pytest.LogCapture
         raise asyncio.TimeoutError
 
     pipeline_mock = MagicMock()
+    pipeline_mock.warmup_models = AsyncMock()
     pipeline_mock.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace=DEFAULT_NAMESPACE)
     )

@@ -12,6 +12,7 @@ from archon_search.observability import record_stage
 
 # Trivial (query, document) pair used only to force a cold backend to load.
 _WARMUP_PAIR = ("warmup", "warmup")
+_WARMUP_TIMEOUT_SECONDS = 300.0
 
 
 @runtime_checkable
@@ -56,6 +57,8 @@ class Reranker:
 
     def __init__(self, backend: RerankerBackend) -> None:
         self._backend = backend
+        self._warmup_lock = asyncio.Lock()
+        self._warmup_failed = False
 
     @property
     def is_warm(self) -> bool:
@@ -69,11 +72,24 @@ class Reranker:
         budget, otherwise the one-off load consumes the whole budget and an
         otherwise valid search fails with 504 (S184).
 
-        Idempotent: a no-op once the backend is warm.
+        Idempotent: no-op once warm or after a permanent failure.
+        Single-flight: concurrent cold callers wait on a lock; only one load runs.
+        Bounded by ``_WARMUP_TIMEOUT_SECONDS`` so a hung model download cannot
+        pin a request forever.
         """
-        if self._backend.is_warm:
+        if self._backend.is_warm or self._warmup_failed:
             return
-        await asyncio.to_thread(self._backend.predict, [_WARMUP_PAIR])
+        async with self._warmup_lock:
+            if self._backend.is_warm or self._warmup_failed:
+                return
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(self._backend.predict, [_WARMUP_PAIR]),
+                    timeout=_WARMUP_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                self._warmup_failed = True
+                raise
 
     async def rerank(
         self, query: str, candidates: list[SearchResult], top_k: int

@@ -65,6 +65,7 @@ def _make_stub_app(
         metas.append(m)
 
     stub_pipeline = MagicMock()
+    stub_pipeline.warmup_models = AsyncMock()
     stub_pipeline.get_all_collections_meta = AsyncMock(return_value=metas)
     app.state.pipeline = stub_pipeline
 

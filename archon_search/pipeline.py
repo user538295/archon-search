@@ -391,11 +391,28 @@ class SearchPipeline:
     def embedder_is_warm(self) -> bool:
         return self._global_embedder.is_warm
 
-    async def warmup_reranker(self) -> None:
-        """Load the reranker model now. No-op when no reranker is configured."""
-        if self._reranker is not None:
-            await self._reranker.warmup()
+    async def warmup_models(self, embedder: Embedder | None = None) -> None:
+        """Build the lazy ONNX models now, off any request-timeout budget (S184).
 
+        Both ML backends load their weights on first use, inside the callers'
+        ``asyncio.wait_for`` budget — so an uninitialised model turned a valid
+        first search into a 504. Callers must invoke this *before* entering that
+        budget. Pass the embedder actually serving the request; omit it on
+        fan-out paths, which resolve per-collection embedders themselves.
+
+        Never raises: a failed warm-up logs a WARNING and the search proceeds
+        with a cold model rather than failing outright.
+        """
+        if embedder is not None:
+            try:
+                await embedder.warmup()
+            except Exception:
+                logger.warning("warm-up: embedder failed; first search will pay the init cost", exc_info=True)
+        if self._reranker is not None:
+            try:
+                await self._reranker.warmup()
+            except Exception:
+                logger.warning("warm-up: reranker failed; first search will pay the init cost", exc_info=True)
 
     # ------------------------------------------------------------------
     # Ingest

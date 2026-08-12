@@ -262,6 +262,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
             )
 
         embedder = await _resolve_embedder(meta)
+        await pipeline.warmup_models(embedder)
 
         try:
             result = await asyncio.wait_for(

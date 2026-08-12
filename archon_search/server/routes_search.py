@@ -221,16 +221,10 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         # HyDE failure: requested but returned no vector
         hyde_expansion_warning = _HYDE_EXPANSION_FAILED_WARNING if (body.hyde and not hyde_applied) else None
 
-    # S184: the cross-encoder builds its ONNX weights on first use. Pay that
-    # one-off cost here — OUTSIDE the search timeout budget below — because
-    # inside it the load consumes the whole budget and a valid query 504s.
-    if not pipeline.reranker_is_warm:
-        try:
-            await pipeline.warmup_reranker()
-        except Exception:
-            logger.warning("reranker warm-up failed; continuing with search", exc_info=True)
-
     if body.collections is not None:
+        # Fan-out resolves its own per-collection embedders, but the reranker is
+        # shared and lazy — warm it outside the fan-out budget (S184).
+        await pipeline.warmup_models()
         try:
             result = await pipeline.search_many(
                 body.query,
@@ -336,6 +330,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 logger.warning("search: embedder_cache absent from app.state — falling back to global embedder")
                 embedder = pipeline._global_embedder
                 active_model = config.embedding_model
+            await pipeline.warmup_models(embedder)
             result = await asyncio.wait_for(
                 pipeline.search(
                     body.query,

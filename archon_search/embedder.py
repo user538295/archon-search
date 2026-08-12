@@ -7,6 +7,9 @@ from typing import Any, Protocol, runtime_checkable
 
 from archon_search.observability import record_stage
 
+_WARMUP_TEXT = "warmup"
+_WARMUP_TIMEOUT_SECONDS = 300.0
+
 
 @runtime_checkable
 class EmbedderBackend(Protocol):
@@ -48,6 +51,8 @@ class Embedder:
     def __init__(self, backend: EmbedderBackend) -> None:
         self._backend = backend
         self._embedding_dim: int | None = None
+        self._warmup_lock = asyncio.Lock()
+        self._warmup_failed = False
 
     @property
     def model_name(self) -> str:
@@ -69,6 +74,30 @@ class Embedder:
                 "embedding_dim not yet initialized — call embed() first"
             )
         return self._embedding_dim
+
+    async def warmup(self) -> None:
+        """Load the backend's ONNX model now, off the request path.
+
+        ``ModelEmbedder`` constructs its ONNX model on the *first* ``encode``
+        call. Callers must run this outside any request timeout budget,
+        otherwise the one-off load consumes the whole budget and an otherwise
+        valid search fails with 504 (S184).
+
+        Idempotent: no-op once warm or after a permanent failure.
+        Single-flight: concurrent cold callers wait on a lock; only one load runs.
+        Bounded by ``_WARMUP_TIMEOUT_SECONDS`` so a hung model download cannot
+        pin a request forever.
+        """
+        if self._backend.is_warm or self._warmup_failed:
+            return
+        async with self._warmup_lock:
+            if self._backend.is_warm or self._warmup_failed:
+                return
+            try:
+                await asyncio.wait_for(self.embed([_WARMUP_TEXT]), timeout=_WARMUP_TIMEOUT_SECONDS)
+            except Exception:
+                self._warmup_failed = True
+                raise
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """Encode texts in a thread pool; lazily initialises embedding_dim."""
