@@ -30,7 +30,13 @@ from archon_search.install import (
     _prompt_optional_features,
     _prompt_provider,
 )
-from archon_search.install.wizard import _LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS, _normalise_base_url
+from archon_search.install.wizard import (
+    _LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS,
+    _LLAMA_CPP_DEFAULT_PORT,
+    _gguf_cache_roots,
+    _normalise_base_url,
+    _strip_root_qualifier,
+)
 from archon_search.platform.types import GpuType
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES
 
@@ -1522,6 +1528,10 @@ class TestNormaliseBaseUrl:
     def test_scheme_less_host_with_port_and_path_keeps_both(self) -> None:
         assert _normalise_base_url("myhost:8080/api/v1", 11434) == "http://myhost:8080/api/v1"
 
+    def test_ipv6_literal_with_explicit_port_keeps_that_port(self) -> None:
+        """The `]`-aware split must find the port that follows the closing bracket."""
+        assert _normalise_base_url("[::1]:8080", 8080) == "http://[::1]:8080"
+
     def test_scheme_less_trailing_slash_is_stripped_before_the_port_check(self) -> None:
         """`localhost:8080/` must not be read as host `localhost:8080` + path `/`.
 
@@ -1965,6 +1975,82 @@ class TestFetchLlamaCppModels:
         with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
             with patch("subprocess.run", side_effect=_cache_list_run("")):
                 assert _fetch_llama_cpp_models() == []
+
+
+class TestLlamaCppDefaultPort:
+    """`_LLAMA_CPP_DEFAULT_PORT` is parsed out of `LLAMA_CPP_BASE_URL_DEFAULT`."""
+
+    def test_default_port_is_8080(self) -> None:
+        """`urlsplit(...).port` returns None for a portless or malformed URL.
+
+        `_normalise_base_url` would then interpolate the literal `None` into the
+        address (`http://host:None`) rather than failing, so the parse result is
+        pinned rather than merely assumed non-null.
+        """
+        assert _LLAMA_CPP_DEFAULT_PORT == 8080
+
+
+class TestStripRootQualifier:
+    """The ` [cache-root]` suffix is display-only and must never reach the config."""
+
+    def test_plain_label_is_unchanged(self) -> None:
+        assert _strip_root_qualifier("m.gguf") == "m.gguf"
+
+    def test_qualified_label_loses_the_suffix(self) -> None:
+        assert _strip_root_qualifier("m.gguf [/root]") == "m.gguf"
+
+    def test_bracketed_cache_root_is_still_stripped(self) -> None:
+        """A root containing brackets defeats a `[^\\[\\]]*` character class.
+
+        `LLAMA_CACHE=/Users/x/[cache]` yields `m.gguf [/Users/x/[cache]]`; a
+        non-nesting regex finds no match and the whole label is stored as the
+        model name.
+        """
+        assert _strip_root_qualifier("m.gguf [/Users/x/[cache]]") == "m.gguf"
+
+    def test_bracketed_filename_is_not_over_stripped(self) -> None:
+        """The opposite failure: a greedy `.*` would truncate this to `my`.
+
+        Splitting on the LAST ` [` removes only the appended qualifier, leaving a
+        filename that legitimately contains brackets intact.
+        """
+        assert _strip_root_qualifier("my [v2].gguf [/root]") == "my [v2].gguf"
+
+    def test_unqualified_bracketed_filename_is_untouched(self) -> None:
+        assert _strip_root_qualifier("my [v2].gguf") == "my [v2].gguf"
+
+
+class TestGgufCacheRootsPartialFailure:
+    """One unresolvable env var must not discard the roots already collected."""
+
+    def test_unresolvable_hf_home_keeps_the_earlier_llama_cache_root(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """`expanduser()` raises RuntimeError on `~` with no home directory.
+
+        `LLAMA_CACHE` is read first, so an unguarded failure on the later
+        `HF_HOME` block would propagate out of `_gguf_cache_roots`, and
+        `_scan_gguf_cache_dirs`'s outer `except` would return `[]` — silently
+        losing a cache the operator explicitly configured.
+        """
+        for var in ("LLAMA_CACHE", "HF_HOME", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "XDG_CACHE_HOME"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("LLAMA_CACHE", str(tmp_path / "llama-cache"))
+        monkeypatch.setenv("HF_HOME", "~/hf")
+
+        real_expanduser = Path.expanduser
+
+        def _fail_on_tilde(self):
+            if str(self).startswith("~"):
+                raise RuntimeError("Could not determine home directory.")
+            return real_expanduser(self)
+
+        with patch.object(Path, "expanduser", _fail_on_tilde):
+            roots = _gguf_cache_roots()
+
+        assert tmp_path / "llama-cache" in roots, (
+            f"the explicitly configured LLAMA_CACHE root was discarded: {roots}"
+        )
 
 
 @pytest.mark.usefixtures("isolated_gguf_env")

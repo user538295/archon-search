@@ -211,11 +211,19 @@ _LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS = 5
 # numbered line per cached model: "   1. squ11z1/gpt-oss-nano:Q4_K_M".
 _LLAMA_CPP_CACHE_LIST_ENTRY = re.compile(r"^\s*\d+\.\s+(.+?)\s*$")
 
-# Trailing " [<cache-root>]" that _scan_gguf_cache_dirs appends to two GGUF files
-# sharing one relative label. Display-only — stripped before the choice is stored
-# as a model name. Anchored at end-of-string, and cache roots are absolute paths,
-# so a name that merely contains brackets is left alone.
-_ROOT_QUALIFIER = re.compile(r" \[[^\[\]]*\]$")
+def _strip_root_qualifier(label: str) -> str:
+    """Drop the trailing ``" [<cache-root>]"`` that `_scan_gguf_cache_dirs` appends.
+
+    The qualifier disambiguates two GGUF files sharing one relative label; it is
+    display-only and must not reach the config. Split on the LAST ``" ["`` rather
+    than matching a regex: a root may itself contain brackets
+    (``/Users/x/[cache]``), which defeats a ``[^\\[\\]]*`` character class, while
+    a greedy ``.*`` over-matches in the opposite direction and would truncate a
+    filename that legitimately contains ``" [v2]"`` down to its first word.
+    """
+    if label.endswith("]") and " [" in label:
+        return label.rsplit(" [", 1)[0]
+    return label
 
 
 @functools.cache
@@ -265,6 +273,19 @@ def _list_cached_models_via_cli() -> list[str]:
     return [m.group(1) for line in proc.stdout.splitlines() if (m := _LLAMA_CPP_CACHE_LIST_ENTRY.match(line))]
 
 
+def _expanded(value: str) -> Path | None:
+    """``Path(value).expanduser()``, or ``None`` when ``~`` cannot be resolved.
+
+    ``expanduser`` raises ``RuntimeError`` on a ``~``-prefixed path when no home
+    directory can be determined (a container with no ``HOME``). Each cache root
+    is independent, so one unresolvable env var must not discard the others.
+    """
+    try:
+        return Path(value).expanduser()
+    except RuntimeError:
+        return None
+
+
 def _gguf_cache_roots() -> list[Path]:
     """The directories llama.cpp and huggingface_hub download GGUF files into, most specific first.
 
@@ -281,18 +302,21 @@ def _gguf_cache_roots() -> list[Path]:
     """
     roots: list[Path] = []
     if llama_cache := os.environ.get("LLAMA_CACHE"):
-        roots.append(Path(llama_cache).expanduser())
+        if (root := _expanded(llama_cache)) is not None:
+            roots.append(root)
 
     xdg_cache_env = os.environ.get("XDG_CACHE_HOME")
-    xdg_cache = Path(xdg_cache_env or "~/.cache").expanduser()
+    xdg_cache = _expanded(xdg_cache_env or "~/.cache")
     if hf_hub := os.environ.get("HF_HUB_CACHE") or os.environ.get("HUGGINGFACE_HUB_CACHE"):
-        roots.append(Path(hf_hub).expanduser())
+        if (root := _expanded(hf_hub)) is not None:
+            roots.append(root)
     elif hf_home := os.environ.get("HF_HOME"):
-        roots.append(Path(hf_home).expanduser() / "hub")
-    else:
+        if (root := _expanded(hf_home)) is not None:
+            roots.append(root / "hub")
+    elif xdg_cache is not None:
         roots.append(xdg_cache / "huggingface" / "hub")
 
-    if xdg_cache_env:
+    if xdg_cache_env and xdg_cache is not None:
         roots.append(xdg_cache / "llama.cpp")
 
     try:
@@ -315,7 +339,7 @@ def _scan_gguf_cache_dirs() -> list[str]:
     When two DIFFERENT resolved paths would render the identical relative
     label (distinct files that merely share a name under different roots),
     each colliding label is qualified with its cache root — see
-    :data:`_ROOT_QUALIFIER` — so both stay selectable instead of one silently
+    :func:`_strip_root_qualifier` — so both stay selectable instead of one silently
     disappearing. That suffix is a menu-display aid only and is stripped again
     before the choice becomes a model name. Each root is walked in sorted order
     so ties are reproducible.
@@ -368,7 +392,7 @@ def _pick_llama_cpp_model(models: list[str]) -> str:
         except EOFError:
             return ""
         if raw.isdigit() and 1 <= int(raw) <= len(models):
-            return _ROOT_QUALIFIER.sub("", models[int(raw) - 1])
+            return _strip_root_qualifier(models[int(raw) - 1])
         if attempt == 0:
             print(f"  Enter a number between 1 and {len(models)}.")
     return ""
