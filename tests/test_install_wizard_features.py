@@ -30,9 +30,24 @@ from archon_search.install import (
     _prompt_optional_features,
     _prompt_provider,
 )
-from archon_search.install.wizard import _LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS
+from archon_search.install.wizard import _LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS, _normalise_base_url
 from archon_search.platform.types import GpuType
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES
+
+
+@pytest.fixture(autouse=True)
+def _clear_llama_cpp_model_cache():
+    """Drop ``_fetch_llama_cpp_models``'s ``functools.cache`` around every test.
+
+    The cache lives on the module, so it outlives any single test and is shared
+    by every test in the same xdist worker. Relying on individual tests to call
+    ``cache_clear()`` makes isolation a convention that a newly added test
+    silently opts out of — one real scan of the developer's or CI runner's
+    actual GGUF cache would then leak its result into unrelated tests.
+    """
+    _fetch_llama_cpp_models.cache_clear()
+    yield
+    _fetch_llama_cpp_models.cache_clear()
 
 
 class _FakeResp:
@@ -1444,6 +1459,42 @@ class TestFetchOllamaModelsSchemeLessBaseUrl:
         assert mock_urlopen.call_args.args[0] == "https://ollama.example.com/api/tags"
 
 
+class TestNormaliseBaseUrl:
+    """Direct unit tests for _normalise_base_url().
+
+    The helper was previously exercised only through the prompt functions, so a
+    malformed result was visible in a test only if it happened to change a
+    `stored` value. Its output is both probed by the wizard AND written to
+    `[hyde]`/`[rag_fusion]`/`[graph]`, so each input shape is pinned here.
+    """
+
+    def test_bare_host_gains_scheme_and_port(self) -> None:
+        assert _normalise_base_url("localhost", 11434) == "http://localhost:11434"
+
+    def test_host_with_port_gains_only_the_scheme(self) -> None:
+        assert _normalise_base_url("localhost:11434", 11434) == "http://localhost:11434"
+
+    def test_url_with_scheme_is_left_alone_apart_from_trailing_slash(self) -> None:
+        assert _normalise_base_url("http://localhost:11434/", 11434) == "http://localhost:11434"
+
+    def test_ipv6_literal_is_not_mistaken_for_a_port(self) -> None:
+        """The `]`-aware split must not read the address colons as a port separator."""
+        assert _normalise_base_url("[::1]", 11434) == "http://[::1]:11434"
+
+    def test_scheme_less_host_with_path_puts_the_port_on_the_authority(self) -> None:
+        """The port belongs on the host, not after the path.
+
+        Appending it to the whole string yields `http://myhost/ollama:11434`,
+        which the wizard then probes (reporting a false "no models available")
+        and stores verbatim, pointing the runtime provider at an unresolvable
+        address.
+        """
+        assert _normalise_base_url("myhost/ollama", 11434) == "http://myhost:11434/ollama"
+
+    def test_scheme_less_host_with_port_and_path_keeps_both(self) -> None:
+        assert _normalise_base_url("myhost:8080/api/v1", 11434) == "http://myhost:8080/api/v1"
+
+
 class TestPromptOllamaModelStoresNormalisedUrl:
     """A scheme-less spelling of the default address must not pin a custom URL.
 
@@ -1755,18 +1806,16 @@ def isolated_gguf_env(monkeypatch, tmp_path):
     CI runner's real llama.cpp cache happens to hold, making any "returns []"
     assertion environment-dependent. Returns the fake home directory.
 
-    F10: also clears ``_fetch_llama_cpp_models``'s ``functools.cache`` before and
-    after each test, so a real scan run by one test can never leak its cached
-    result into another.
+    The ``functools.cache`` on ``_fetch_llama_cpp_models`` is cleared by the
+    autouse ``_clear_llama_cpp_model_cache`` fixture, which covers every test in
+    this module rather than only the ones requesting this one.
     """
-    _fetch_llama_cpp_models.cache_clear()
     for var in ("LLAMA_CACHE", "HF_HOME", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "XDG_CACHE_HOME"):
         monkeypatch.delenv(var, raising=False)
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
-    yield fake_home
-    _fetch_llama_cpp_models.cache_clear()
+    return fake_home
 
 
 def _write_gguf(root: Path, *relative_paths: str) -> None:
@@ -1835,9 +1884,24 @@ class TestFetchLlamaCppModels:
         assert kwargs["capture_output"] is True
 
     def test_missing_binary_returns_empty_without_running_anything(self) -> None:
+        """No `llama` on PATH must short-circuit before any process is spawned.
+
+        Asserted with a call recorder, not a raising stub: ``subprocess.run`` is
+        called inside ``_list_cached_models_via_cli``'s blanket ``except
+        Exception``, so an ``AssertionError`` side effect would be swallowed and
+        the test would pass whether or not the guard exists.
+        """
+        calls: list[object] = []
+
+        def _record(cmd, *_args, **_kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
         with patch("shutil.which", return_value=None):
-            with patch("subprocess.run", side_effect=AssertionError("no binary — nothing may be executed")):
+            with patch("subprocess.run", side_effect=_record):
                 assert _fetch_llama_cpp_models() == []
+
+        assert calls == [], f"nothing may be executed when the binary is absent, but ran: {calls}"
 
     def test_non_zero_exit_returns_empty(self) -> None:
         with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
@@ -2009,6 +2073,34 @@ class TestFetchLlamaCppModelsGgufDirFallback:
         assert len(models) == 2, f"both distinct files must be offered, got {models!r}"
         assert len(set(models)) == 2, "the two colliding labels must be disambiguated, not identical"
         assert all("m.gguf" in m for m in models)
+
+    def test_root_qualifier_is_menu_only_and_never_becomes_the_model_name(
+        self, monkeypatch, tmp_path, capsys
+    ) -> None:
+        """The ` [cache-root]` disambiguator must not survive into the stored model name.
+
+        The suffix exists to tell the operator which cache a colliding file came
+        from. Returning it verbatim would write
+        `m.gguf [/tmp/.../llama-cache]` into `[hyde].model`, which no
+        llama-server can resolve.
+        """
+        _write_gguf(tmp_path / "llama-cache", "m.gguf")
+        _write_gguf(tmp_path / "hf" / "hub", "m.gguf")
+        monkeypatch.setenv("LLAMA_CACHE", str(tmp_path / "llama-cache"))
+        monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+
+        with patch("shutil.which", return_value=None):
+            models = _fetch_llama_cpp_models()
+        assert any(" [" in m for m in models), (
+            "precondition: this fixture must produce a root-qualified label"
+        )
+
+        with patch("builtins.input", side_effect=["1"]):
+            chosen = _pick_llama_cpp_model(models)
+
+        assert chosen == "m.gguf", f"the picker returned a menu label, not a model name: {chosen!r}"
+        assert " [" not in chosen
+        assert models[0] in capsys.readouterr().out, "the menu must still show the qualified label"
 
     def test_cli_cache_list_wins_over_dir_scan(self, monkeypatch, tmp_path) -> None:
         """Tier 1 short-circuits: a non-empty `llama cli -cl` list suppresses the dir scan."""

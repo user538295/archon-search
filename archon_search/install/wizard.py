@@ -103,10 +103,14 @@ def _normalise_base_url(base_url: str, default_port: int) -> str:
     """
     if "://" in base_url:
         return base_url.rstrip("/")
-    host = base_url.rstrip("/")
+    # Split the path off first: the port belongs on the authority, so a
+    # scheme-less "host/prefix" must become "http://host:port/prefix", never
+    # "http://host/prefix:port" — the latter is stored to config verbatim and
+    # would point the runtime provider at an address that cannot resolve.
+    host, slash, path = base_url.rstrip("/").partition("/")
     if ":" not in host.rsplit("]", 1)[-1]:
         host = f"{host}:{default_port}"
-    return "http://" + host
+    return "http://" + host + slash + path
 
 
 def _fetch_ollama_models(base_url: str) -> list[str]:
@@ -207,6 +211,12 @@ _LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS = 5
 # numbered line per cached model: "   1. squ11z1/gpt-oss-nano:Q4_K_M".
 _LLAMA_CPP_CACHE_LIST_ENTRY = re.compile(r"^\s*\d+\.\s+(.+?)\s*$")
 
+# Trailing " [<cache-root>]" that _scan_gguf_cache_dirs appends to two GGUF files
+# sharing one relative label. Display-only — stripped before the choice is stored
+# as a model name. Anchored at end-of-string, and cache roots are absolute paths,
+# so a name that merely contains brackets is left alone.
+_ROOT_QUALIFIER = re.compile(r" \[[^\[\]]*\]$")
+
 
 @functools.cache
 def _fetch_llama_cpp_models() -> list[str]:
@@ -304,15 +314,21 @@ def _scan_gguf_cache_dirs() -> list[str]:
     entry, named after the earliest (most specific) root it was found under.
     When two DIFFERENT resolved paths would render the identical relative
     label (distinct files that merely share a name under different roots),
-    each colliding label is qualified with its cache root so both stay
-    selectable instead of one silently disappearing. Each root is walked in
-    sorted order so ties are reproducible.
+    each colliding label is qualified with its cache root — see
+    :data:`_ROOT_QUALIFIER` — so both stay selectable instead of one silently
+    disappearing. That suffix is a menu-display aid only and is stripped again
+    before the choice becomes a model name. Each root is walked in sorted order
+    so ties are reproducible.
 
-    Never raises: a root that cannot be walked is skipped without cancelling
-    the scan of the remaining roots.
+    Never raises: enumerating the roots, and walking any one of them, are both
+    best-effort — a failure skips that root without cancelling the scan.
     """
     found: dict[Path, tuple[Path, str]] = {}
-    for root in _gguf_cache_roots():
+    try:
+        roots = _gguf_cache_roots()
+    except Exception:  # noqa: BLE001 — best-effort probe; any failure → free-text fallback
+        return []
+    for root in roots:
         try:
             for path in sorted(root.glob("**/*.gguf")):
                 if path.is_file():
@@ -333,10 +349,15 @@ def _scan_gguf_cache_dirs() -> list[str]:
 
 
 def _pick_llama_cpp_model(models: list[str]) -> str:
-    """Show a numbered menu of ``models`` and return the chosen name.
+    """Show a numbered menu of ``models`` and return the chosen model name.
 
     One retry on an out-of-range or non-numeric entry; returns ``""`` on EOF or
     after a second invalid entry (server startup then rejects the empty model).
+
+    The entry is shown verbatim but returned with any ``[cache-root]``
+    disambiguation suffix removed: that suffix tells the operator which cache a
+    colliding file came from, and would otherwise be written to
+    ``[hyde]``/``[rag_fusion]``/``[graph]`` as part of the model name.
     """
     print("\nLocally cached llama.cpp models:")
     for i, name in enumerate(models, start=1):
@@ -347,7 +368,7 @@ def _pick_llama_cpp_model(models: list[str]) -> str:
         except EOFError:
             return ""
         if raw.isdigit() and 1 <= int(raw) <= len(models):
-            return models[int(raw) - 1]
+            return _ROOT_QUALIFIER.sub("", models[int(raw) - 1])
         if attempt == 0:
             print(f"  Enter a number between 1 and {len(models)}.")
     return ""

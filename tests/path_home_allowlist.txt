@@ -8,4 +8,4 @@ archon_search/platform/linux.py:45:e0848f2f11974468389b5ca93b1a311f959a01090ee2d
 # macos.py/_plist_path: OS-owned LaunchAgents path (~/Library/LaunchAgents/), not the archon-search data tree
 archon_search/platform/macos.py:66:eb847f85130a2554254bd71b2e86d19045792ac1386208328a40becb8873118c
 # wizard.py/_gguf_cache_roots: llama.cpp- and huggingface_hub-owned GGUF download dirs, not the archon-search data tree
-archon_search/install/wizard.py:289:752b1a297cd222193f45833544f1634ba707221ce8f131c4bb91ed89e6cc383a
+archon_search/install/wizard.py:299:752b1a297cd222193f45833544f1634ba707221ce8f131c4bb91ed89e6cc383a
