@@ -211,7 +211,7 @@ max_requests_per_minute = 60
 | `ollama` | none | required (e.g. `llama3.2`) | Local, zero-transmission; rate limit not enforced. |
 | `openai` | `OPENAI_API_KEY` | required (e.g. `gpt-4o-mini`) | External API. |
 | `claude_cli` | none | optional (alias or full ID; blank = Claude Code default) | Uses Claude Code's login; `claude` must be on PATH; rate limit not enforced. |
-| `llama_cpp` | none | required, non-empty (llama-server does not validate it; the wizard offers your locally cached names from `llama cli -cl`) | Local llama-server (HTTP), zero-transmission; no extra install (`httpx` is a core dep); rate limit not enforced. Use a small direct-response instruct model — reasoning models exhaust the token budget on hidden chain-of-thought and `hyde_applied` silently stays `false`. |
+| `llama_cpp` | none | required, non-empty (llama-server does not validate it; the wizard offers your locally cached names from `llama cli -cl`, falling back to a scan of your GGUF cache directories — those entries are file paths, which only a router-mode llama-server resolves) | Local llama-server (HTTP), zero-transmission; no extra install (`httpx` is a core dep); rate limit not enforced. Use a small direct-response instruct model — reasoning models exhaust the token budget on hidden chain-of-thought and `hyde_applied` silently stays `false`. |
 
 Set the provider's API key (if any) in the server environment before `archon-search start`. Run `archon-search wizard` for guided provider configuration.
 

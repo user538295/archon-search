@@ -221,7 +221,8 @@ request_id_header = "X-Request-ID"
 #   1. No pip extra required — uses the existing httpx dependency.
 #   2. Run a llama-server instance (default: http://localhost:8080).
 #   3. Set provider = "llama_cpp" and model = "<cached-model-name>" below
-#      (list your locally cached models with "llama cli -cl").
+#      (list your locally cached models with "llama cli -cl"; without that
+#      command the wizard scans your GGUF cache directories instead).
 #
 # When enabled = false (the default), hyde=true in a request is silently ignored and
 # the standard query embedding is used (hyde_applied: false in the response).
@@ -237,6 +238,9 @@ enabled = false
 #   --model. OPTIONAL — blank or the default below omits --model (Claude Code's default).
 # For "llama_cpp": a llama.cpp model name from your local cache, as listed by
 #   "llama cli -cl" (e.g. "ggml-org/Qwen3-1.7B-GGUF:Q8_0") — the wizard writes that name.
+#   When that command is unavailable the wizard instead offers .gguf files found
+#   in your cache directories, named as paths (e.g. "models/gpt-oss-nano/Q4_K_M.gguf");
+#   only a router-mode llama-server resolves those.
 model = "claude-haiku-4-5-20251001"
 # Base URL for the Ollama server. Only used when provider = "ollama".
 # ollama_base_url = "http://localhost:11434"
@@ -291,7 +295,8 @@ max_requests_per_minute = 60
 #   1. No pip extra required — uses the existing httpx dependency.
 #   2. Run a llama-server instance (default: http://localhost:8080).
 #   3. Set provider = "llama_cpp" and model = "<cached-model-name>" below
-#      (list your locally cached models with "llama cli -cl").
+#      (list your locally cached models with "llama cli -cl"; without that
+#      command the wizard scans your GGUF cache directories instead).
 #
 # When enabled = false (the default), rag_fusion=true in a request is silently ignored and
 # standard single-query search is used (rag_fusion_applied: false in the response).
@@ -313,6 +318,9 @@ enabled = false
 #   --model. OPTIONAL — blank or the default below omits --model (Claude Code's default).
 # For "llama_cpp": a llama.cpp model name from your local cache, as listed by
 #   "llama cli -cl" (e.g. "ggml-org/Qwen3-1.7B-GGUF:Q8_0") — the wizard writes that name.
+#   When that command is unavailable the wizard instead offers .gguf files found
+#   in your cache directories, named as paths (e.g. "models/gpt-oss-nano/Q4_K_M.gguf");
+#   only a router-mode llama-server resolves those.
 model = "claude-haiku-4-5-20251001"
 # Base URL for the Ollama server. Only used when provider = "ollama".
 # ollama_base_url = "http://localhost:11434"
@@ -445,6 +453,9 @@ num_queries = 2
 #   OPENAI_API_KEY in the server environment.
 # For "llama_cpp": a llama.cpp model name from your local cache, as listed by
 #   "llama cli -cl" (e.g. "ggml-org/Qwen3-1.7B-GGUF:Q8_0"). No API key required.
+#   When that command is unavailable the wizard instead offers .gguf files found
+#   in your cache directories, named as paths (e.g. "models/gpt-oss-nano/Q4_K_M.gguf");
+#   only a router-mode llama-server resolves those.
 # When provider is set but extraction_model is absent, a WARNING is logged at
 # startup and enrichment remains disabled (no ConfigError, no crash).
 # extraction_model = "claude-haiku-4-5-20251001"
