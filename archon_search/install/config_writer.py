@@ -279,7 +279,16 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
     # FE-2: LLM-backed graph enrichment provider — independent of graph.enabled
     # (BE-11, below): `[graph].provider` is itself the enrichment gate (no
     # separate `enabled` key), so nothing is written when the operator declined.
-    if features.graph_provider:
+    # A provider chosen with no model (EOF, or two invalid free-text entries)
+    # would otherwise write `extraction_model = ""`, which config.py rejects at
+    # load time with an unhandled ConfigError — so the whole block is skipped
+    # and enrichment stays disabled instead.
+    if features.graph_provider and not features.graph_extraction_model:
+        print(
+            "Warning: graph enrichment was left disabled because no model was chosen.",
+            file=sys.stderr,
+        )
+    elif features.graph_provider:
         _ensure_section("graph")
         doc["graph"]["provider"] = features.graph_provider
         doc["graph"]["extraction_model"] = features.graph_extraction_model

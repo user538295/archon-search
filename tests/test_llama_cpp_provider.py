@@ -128,6 +128,26 @@ async def test_generate_hypothetical_doc_returns_none_on_connect_error() -> None
 
 
 @pytest.mark.asyncio
+async def test_generate_hypothetical_doc_returns_none_on_unsupported_protocol() -> None:
+    """F3: a scheme-less base URL (e.g. from a mis-normalised wizard config) must not raise.
+
+    ``httpx.AsyncClient(base_url="localhost:8080").post(...)`` raises
+    ``httpx.UnsupportedProtocol`` — a ``httpx.HTTPError`` subclass not covered by
+    ``ConnectError``/``TimeoutException``/``HTTPStatusError`` — which must still be
+    swallowed to hold the "never raises to callers" contract.
+    """
+    from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
+
+    mock_cls = _make_async_client_cls(post_side_effect=httpx.UnsupportedProtocol("Request URL is missing scheme"))
+
+    provider = LlamaCppQueryExpansionProvider(model="local-model", base_url="localhost:8080")
+    with patch("archon_search.providers.llama_cpp_provider.httpx.AsyncClient", mock_cls):
+        result = await provider.generate_hypothetical_doc("what is archon search?")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_generate_hypothetical_doc_returns_none_on_503() -> None:
     """S8: llama-server returns 503 'Loading model' when no model is loaded."""
     from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider

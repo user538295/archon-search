@@ -622,6 +622,27 @@ class TestApplyWizardFeaturesFE2LlamaCppAndGraph:
         _apply_wizard_features_to_toml(doc, WizardFeatures())
         assert "graph" not in doc
 
+    def test_graph_provider_without_model_leaves_config_loadable(self, tmp_path: Path) -> None:
+        """F4: a provider chosen with no model must not write an unloadable config.
+
+        `_pick_ollama_model`/`_pick_llama_cpp_model`/`_prompt_model_freetext` return
+        ``""`` on EOF or two invalid entries, so `graph_extraction_model` can be empty
+        while `graph_provider` is set. Writing `extraction_model = ""` anyway makes
+        `load_config` raise `ConfigError` — the whole enrichment block must be skipped
+        instead, leaving `[graph].provider` absent and the config loadable.
+        """
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        features = WizardFeatures(graph_provider="ollama", graph_extraction_model="")
+        _apply_wizard_features_to_toml(doc, features)
+        assert "provider" not in doc.get("graph", {})
+
+        config_path = tmp_path / "archon-search.toml"
+        config_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+        cfg = load_config(config_path)
+        assert cfg.graph.provider is None
+
 
 # ---------------------------------------------------------------------------
 # Brief 150: re-run wizard with settings disabled writes the off/default value

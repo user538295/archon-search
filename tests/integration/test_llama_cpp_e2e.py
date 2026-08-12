@@ -232,7 +232,7 @@ def test_wizard_local_cache_model_picker_live() -> None:
         )
 
     with patch("builtins.input", side_effect=["", "1"]):
-        base_url, model = _prompt_llama_cpp_model("graph enrichment")
+        base_url, model = _prompt_llama_cpp_model("graph enrichment", LLAMA_CPP_BASE_URL_DEFAULT)
     assert base_url == ""  # "" means "use the built-in default" (config default resolves it)
     assert model == models[0]
 

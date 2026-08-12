@@ -219,6 +219,13 @@ class LlamaCppQueryExpansionProvider:
                 _query_fingerprint(query),
             )
             return None
+        except httpx.HTTPError as exc:
+            _logger.warning(
+                "LlamaCppQueryExpansionProvider: transport error %s (fp=%s)",
+                exc,
+                _query_fingerprint(query),
+            )
+            return None
 
     @staticmethod
     def _extract_content(query: str, data: dict[str, Any]) -> str | None:

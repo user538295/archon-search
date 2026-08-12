@@ -300,6 +300,19 @@ class TestRevertGraphEnrichmentFlags:
         assert "extraction_model" not in doc["graph"]
         assert "llama_cpp_base_url" not in doc["graph"]
 
+    def test_revert_graph_enrichment_flags_strips_ollama_base_url(self, tmp_path: Path) -> None:
+        """F1: the wizard also writes [graph].ollama_base_url — it must be stripped too."""
+        cfg = self._write(
+            tmp_path,
+            '[graph]\nenabled = true\nprovider = "ollama"\nextraction_model = "m1"\n'
+            'ollama_base_url = "http://box:11434"\n',
+        )
+        _revert_graph_enrichment_flags(cfg, dry_run=False)
+        doc = tomlkit.parse(cfg.read_text())
+        assert "provider" not in doc["graph"]
+        assert "extraction_model" not in doc["graph"]
+        assert "ollama_base_url" not in doc["graph"]
+
     def test_revert_graph_enrichment_flags_preserves_graph_enabled(self, tmp_path: Path) -> None:
         """graph.enabled is untouched — it gates the graph subsystem, not enrichment (S22)."""
         cfg = self._write(

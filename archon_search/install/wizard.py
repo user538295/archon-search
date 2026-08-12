@@ -1,6 +1,7 @@
 """Interactive prompts and pickers for the install wizard."""
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
@@ -8,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -82,22 +84,28 @@ def _select_profile(
 
 _OLLAMA_FETCH_TIMEOUT_SECONDS = 5
 _OLLAMA_DEFAULT_PORT = 11434
+# Derived from LLAMA_CPP_BASE_URL_DEFAULT so the two can never drift apart
+# (mirrors how _CUDA_LOCAL_TAG is derived from _CUDA_TORCH_INDEX_URL in extras.py).
+_LLAMA_CPP_DEFAULT_PORT = urllib.parse.urlsplit(LLAMA_CPP_BASE_URL_DEFAULT).port
 
 
-def _normalise_ollama_base_url(base_url: str) -> str:
-    """Fill in the scheme and port that ``ollama.AsyncClient`` would infer.
+def _normalise_base_url(base_url: str, default_port: int) -> str:
+    """Fill in the scheme and port a bare ``host`` client is missing, and strip a trailing slash.
 
-    The runtime resolves a bare ``host`` to ``http://host:11434``, but ``urllib``
-    rejects a scheme-less URL with ``URLError("unknown url type")`` — so without
-    this the wizard reports an address as unreachable that the server then uses
-    happily. Mirroring the port too keeps the probe pointed at the same server the
-    runtime will talk to.
+    The runtime (``ollama.AsyncClient`` / the llama.cpp httpx adapter) resolves a
+    bare ``host`` to ``http://host:{default_port}``, but ``urllib`` rejects a
+    scheme-less URL with ``URLError("unknown url type")`` — so without this the
+    wizard reports an address as unreachable that the server then uses happily.
+    Mirroring the port too keeps the probe pointed at the same server the runtime
+    will talk to. The trailing slash is stripped on both branches so
+    ``http://host:port/`` and a scheme-less ``host:port`` normalise to the same
+    form and compare equal to the bare ``*_BASE_URL_DEFAULT`` constant.
     """
     if "://" in base_url:
-        return base_url
+        return base_url.rstrip("/")
     host = base_url.rstrip("/")
     if ":" not in host.rsplit("]", 1)[-1]:
-        host = f"{host}:{_OLLAMA_DEFAULT_PORT}"
+        host = f"{host}:{default_port}"
     return "http://" + host
 
 
@@ -108,7 +116,7 @@ def _fetch_ollama_models(base_url: str) -> list[str]:
     refused, timeout, HTTP error, malformed JSON, or zero models installed.
     Never raises: the wizard falls back to free-text entry on an empty list.
     """
-    url = _normalise_ollama_base_url(base_url).rstrip("/") + "/api/tags"
+    url = _normalise_base_url(base_url, _OLLAMA_DEFAULT_PORT) + "/api/tags"
     try:
         with urllib.request.urlopen(url, timeout=_OLLAMA_FETCH_TIMEOUT_SECONDS) as resp:  # noqa: S310 (operator-supplied Ollama URL)
             payload = json.loads(resp.read())
@@ -176,7 +184,7 @@ def _prompt_ollama_model(feature_label: str, default_base_url: str) -> tuple[str
         raw_url = input(f"Ollama base URL for {feature_label} [{default_base_url}]: ").strip()
     except EOFError:
         raw_url = ""
-    base_url = _normalise_ollama_base_url(raw_url or default_base_url)
+    base_url = _normalise_base_url(raw_url or default_base_url, _OLLAMA_DEFAULT_PORT)
     stored = "" if base_url == OLLAMA_BASE_URL_DEFAULT else base_url
 
     models = _fetch_ollama_models(base_url)
@@ -200,6 +208,7 @@ _LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS = 5
 _LLAMA_CPP_CACHE_LIST_ENTRY = re.compile(r"^\s*\d+\.\s+(.+?)\s*$")
 
 
+@functools.cache
 def _fetch_llama_cpp_models() -> list[str]:
     """List the llama.cpp models available locally.
 
@@ -209,10 +218,20 @@ def _fetch_llama_cpp_models() -> list[str]:
     fetched models by other means (``huggingface-cli``, a manual download) still
     get a picker instead of free-text entry.
 
+    Memoised with ``functools.cache``: the wizard calls this independently for
+    HyDE, RAG Fusion, and graph enrichment, and the local model cache cannot
+    change mid-run, so without memoisation a large HF cache would be walked up
+    to three times per wizard invocation. Tests clear the cache via
+    ``_fetch_llama_cpp_models.cache_clear()`` so results never leak between them.
+
     Never raises — every failure yields ``[]`` and the wizard falls back to
     free-text entry.
     """
-    return _list_cached_models_via_cli() or _scan_gguf_cache_dirs()
+    models = _list_cached_models_via_cli()
+    if models:
+        return models
+    print("Scanning local GGUF caches…")
+    return _scan_gguf_cache_dirs()
 
 
 def _list_cached_models_via_cli() -> list[str]:
@@ -244,6 +263,11 @@ def _gguf_cache_roots() -> list[Path]:
     otherwise it is ``hub/`` under ``$HF_HOME``, which itself defaults to
     ``huggingface/`` under ``$XDG_CACHE_HOME``. Deriving that here rather than
     importing huggingface_hub keeps the installer independent of it.
+
+    Never raises: if the home directory cannot be resolved (e.g. inside a
+    container with no ``HOME`` set), the env-var-derived roots already collected
+    are returned rather than discarded — only the final, home-relative default
+    root is skipped.
     """
     roots: list[Path] = []
     if llama_cache := os.environ.get("LLAMA_CACHE"):
@@ -260,7 +284,11 @@ def _gguf_cache_roots() -> list[Path]:
 
     if xdg_cache_env:
         roots.append(xdg_cache / "llama.cpp")
-    home = Path.home()
+
+    try:
+        home = Path.home()
+    except RuntimeError:
+        return roots
     if sys.platform == "darwin":
         roots.append(home / "Library" / "Caches" / "llama.cpp")
     else:
@@ -274,20 +302,34 @@ def _scan_gguf_cache_dirs() -> list[str]:
     Files are deduplicated by resolved path, so huggingface_hub's per-revision
     snapshot symlinks — and two roots naming the same directory — yield one
     entry, named after the earliest (most specific) root it was found under.
-    Each root is walked in sorted order so that choice is reproducible.
+    When two DIFFERENT resolved paths would render the identical relative
+    label (distinct files that merely share a name under different roots),
+    each colliding label is qualified with its cache root so both stay
+    selectable instead of one silently disappearing. Each root is walked in
+    sorted order so ties are reproducible.
 
-    Never raises: a root that cannot be walked, or an unresolvable home
-    directory, ends the scan with whatever was found so far.
+    Never raises: a root that cannot be walked is skipped without cancelling
+    the scan of the remaining roots.
     """
-    found: dict[Path, str] = {}
-    try:
-        for root in _gguf_cache_roots():
+    found: dict[Path, tuple[Path, str]] = {}
+    for root in _gguf_cache_roots():
+        try:
             for path in sorted(root.glob("**/*.gguf")):
                 if path.is_file():
-                    found.setdefault(path.resolve(), path.relative_to(root).as_posix())
-    except Exception:  # noqa: BLE001 — best-effort probe; any failure → free-text fallback
-        pass
-    return sorted(set(found.values()))
+                    resolved = path.resolve()
+                    if resolved not in found:
+                        found[resolved] = (root, path.relative_to(root).as_posix())
+        except Exception:  # noqa: BLE001 — best-effort probe; one bad root must not cancel the others
+            continue
+
+    label_counts: dict[str, int] = {}
+    for _root, label in found.values():
+        label_counts[label] = label_counts.get(label, 0) + 1
+
+    return sorted(
+        f"{label} [{root}]" if label_counts[label] > 1 else label
+        for root, label in found.values()
+    )
 
 
 def _pick_llama_cpp_model(models: list[str]) -> str:
@@ -311,26 +353,28 @@ def _pick_llama_cpp_model(models: list[str]) -> str:
     return ""
 
 
-def _prompt_llama_cpp_model(feature_label: str) -> tuple[str, str]:
+def _prompt_llama_cpp_model(feature_label: str, default_base_url: str) -> tuple[str, str]:
     """Prompt for the llama-server base URL, then pick a locally cached model.
 
     The base URL is still asked — the server address is what ``[hyde]``,
     ``[rag_fusion]`` and ``[graph]`` talk to at runtime — but it does not decide
     the model list: that comes from the local model caches
-    (``_fetch_llama_cpp_models``). An empty answer keeps
-    ``LLAMA_CPP_BASE_URL_DEFAULT``. When a cache holds models the user picks by
-    number; when none do the wizard explains how to populate one and falls back
-    to free-text entry.
+    (``_fetch_llama_cpp_models``). An empty answer keeps ``default_base_url``.
+    When a cache holds models the user picks by number; when none do the
+    wizard explains how to populate one and falls back to free-text entry.
 
     Returns ``(llama_cpp_base_url, model)``. ``llama_cpp_base_url`` is ``""``
     when it resolves to the built-in default (config supplies it), otherwise the
-    custom URL so it survives config regeneration.
+    custom URL so it survives config regeneration. The answer is normalised
+    before the comparison, so a scheme-less spelling of the default address, or
+    one with a trailing slash, still collapses to ``""`` instead of pinning a
+    redundant custom URL.
     """
     try:
-        raw_url = input(f"llama-server base URL for {feature_label} [{LLAMA_CPP_BASE_URL_DEFAULT}]: ").strip()
+        raw_url = input(f"llama-server base URL for {feature_label} [{default_base_url}]: ").strip()
     except EOFError:
         raw_url = ""
-    base_url = raw_url or LLAMA_CPP_BASE_URL_DEFAULT
+    base_url = _normalise_base_url(raw_url or default_base_url, _LLAMA_CPP_DEFAULT_PORT)
     stored = "" if base_url == LLAMA_CPP_BASE_URL_DEFAULT else base_url
 
     models = _fetch_llama_cpp_models()
@@ -350,10 +394,34 @@ def _prompt_llama_cpp_model(feature_label: str) -> tuple[str, str]:
     return stored, _prompt_model_freetext(feature_label)
 
 
+def _prompt_local_provider_model(
+    provider: str,
+    feature_label: str,
+    ollama_base_url_default: str,
+    llama_cpp_base_url_default: str,
+) -> tuple[str, str, str] | None:
+    """Prompt for the model + base URL when *provider* is ``ollama`` or ``llama_cpp``.
+
+    Shared by :func:`_prompt_provider` and :func:`_prompt_graph_provider`, whose
+    dispatch for these two providers was otherwise byte-identical. Returns
+    ``(model, ollama_base_url, llama_cpp_base_url)``, or ``None`` when
+    *provider* is neither — the caller then falls through to its own remaining
+    branches.
+    """
+    if provider == "ollama":
+        base_url, model = _prompt_ollama_model(feature_label, ollama_base_url_default)
+        return model, base_url, ""
+    if provider == "llama_cpp":
+        base_url, model = _prompt_llama_cpp_model(feature_label, llama_cpp_base_url_default)
+        return model, "", base_url
+    return None
+
+
 def _prompt_graph_provider(
     ask_yn: "Callable[[str], bool]",
     ask_choice: "Callable[[str, set[str], str], str]",
     ollama_base_url_default: str,
+    llama_cpp_base_url_default: str = LLAMA_CPP_BASE_URL_DEFAULT,
 ) -> tuple[str, str, str, str]:
     """Ask whether to enable LLM-backed graph enrichment and gather its settings.
 
@@ -387,12 +455,12 @@ def _prompt_graph_provider(
         {"anthropic", "openai", "ollama", "llama_cpp"},
         "anthropic",
     )
-    if provider == "ollama":
-        base_url, model = _prompt_ollama_model("graph enrichment", ollama_base_url_default)
-        return provider, model, base_url, ""
-    if provider == "llama_cpp":
-        base_url, model = _prompt_llama_cpp_model("graph enrichment")
-        return provider, model, "", base_url
+    local = _prompt_local_provider_model(
+        provider, "graph enrichment", ollama_base_url_default, llama_cpp_base_url_default
+    )
+    if local is not None:
+        model, ollama_url, llama_cpp_url = local
+        return provider, model, ollama_url, llama_cpp_url
     return provider, _prompt_model_freetext("graph enrichment"), "", ""
 
 
@@ -446,6 +514,7 @@ def _prompt_provider(
     feature_label: str,
     ask_choice: "Callable[[str, set[str], str], str]",
     ollama_base_url_default: str,
+    llama_cpp_base_url_default: str = LLAMA_CPP_BASE_URL_DEFAULT,
 ) -> tuple[str, str, str, str]:
     """Ask which provider to use for *feature_label* and gather its model settings.
 
@@ -459,12 +528,10 @@ def _prompt_provider(
         {"anthropic", "openai", "ollama", "claude_cli", "llama_cpp"},
         "anthropic",
     )
-    if provider == "ollama":
-        base_url, model = _prompt_ollama_model(feature_label, ollama_base_url_default)
-        return provider, model, base_url, ""
-    if provider == "llama_cpp":
-        base_url, model = _prompt_llama_cpp_model(feature_label)
-        return provider, model, "", base_url
+    local = _prompt_local_provider_model(provider, feature_label, ollama_base_url_default, llama_cpp_base_url_default)
+    if local is not None:
+        model, ollama_url, llama_cpp_url = local
+        return provider, model, ollama_url, llama_cpp_url
     if provider == "openai":
         return provider, _prompt_model_freetext(feature_label), "", ""
     if provider == "claude_cli":
@@ -489,13 +556,17 @@ def _prompt_optional_features(
     hyde_ollama_base_url_default: str = OLLAMA_BASE_URL_DEFAULT,
     rag_fusion_ollama_base_url_default: str = OLLAMA_BASE_URL_DEFAULT,
     graph_ollama_base_url_default: str = OLLAMA_BASE_URL_DEFAULT,
+    hyde_llama_cpp_base_url_default: str = LLAMA_CPP_BASE_URL_DEFAULT,
+    rag_fusion_llama_cpp_base_url_default: str = LLAMA_CPP_BASE_URL_DEFAULT,
+    graph_llama_cpp_base_url_default: str = LLAMA_CPP_BASE_URL_DEFAULT,
 ) -> WizardFeatures:
     """Ask seven optional-feature questions after profile selection.
 
     Each keyword argument pre-answers its question when not None; None triggers
     an interactive prompt (or the default in non-interactive mode). The
-    ``*_ollama_base_url_default`` values pre-fill the Ollama base-URL prompt so a
-    re-run keeps the address already saved in config with a single Enter.
+    ``*_ollama_base_url_default`` / ``*_llama_cpp_base_url_default`` values
+    pre-fill the Ollama / llama-server base-URL prompts so a re-run keeps the
+    address already saved in config with a single Enter.
     """
 
     def _ask_yn(prompt_text: str, default: bool = False) -> bool:
@@ -698,7 +769,7 @@ def _prompt_optional_features(
                 _hyde_model_val,
                 _hyde_ollama_base_url_val,
                 _hyde_llama_cpp_base_url_val,
-            ) = _prompt_provider("HyDE", _ask_choice, hyde_ollama_base_url_default)
+            ) = _prompt_provider("HyDE", _ask_choice, hyde_ollama_base_url_default, hyde_llama_cpp_base_url_default)
 
             # Provider selection for RAG Fusion (same flow, independent picker).
             (
@@ -706,7 +777,9 @@ def _prompt_optional_features(
                 _rag_fusion_model_val,
                 _rag_fusion_ollama_base_url_val,
                 _rag_fusion_llama_cpp_base_url_val,
-            ) = _prompt_provider("RAG Fusion", _ask_choice, rag_fusion_ollama_base_url_default)
+            ) = _prompt_provider(
+                "RAG Fusion", _ask_choice, rag_fusion_ollama_base_url_default, rag_fusion_llama_cpp_base_url_default
+            )
         else:
             _enable_hyde_val = False
             _enable_rag_fusion_val = False
@@ -719,7 +792,9 @@ def _prompt_optional_features(
             _graph_extraction_model_val,
             _graph_ollama_base_url_val,
             _graph_llama_cpp_base_url_val,
-        ) = _prompt_graph_provider(_ask_yn, _ask_choice, graph_ollama_base_url_default)
+        ) = _prompt_graph_provider(
+            _ask_yn, _ask_choice, graph_ollama_base_url_default, graph_llama_cpp_base_url_default
+        )
 
     return WizardFeatures(
         install_code_extra=_install_code_extra_val,

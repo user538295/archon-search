@@ -348,7 +348,7 @@ Model for HyDE (number, name, or blank):
 
 Leaving it blank omits `--model` so Claude Code uses its own configured default. If `claude` is not found, the wizard prints an install pointer (https://claude.ai/code) and still writes the config — install Claude Code before starting the server, and query expansion falls back silently until it is available. Unlike Ollama, this alias list is hardcoded in the wizard (the Claude CLI has no runtime model-listing command) and is updated with each release.
 
-For **llama.cpp**: the wizard asks for the llama-server base URL first (always offered as the built-in default `http://localhost:8080`) — that address is what the server talks to at runtime. The model list is independent of it and is built in two tiers: first `llama cli -cl`, which lists your **local llama.cpp cache**; when that command is missing or its cache is empty, the wizard scans the known GGUF download directories for `.gguf` files. Either way you pick by number instead of typing a name:
+For **llama.cpp**: the wizard asks for the llama-server base URL first — that address is what the server talks to at runtime. On a first run the prompt offers the built-in default `http://localhost:8080`; on a re-run it is pre-filled with the address already saved in config instead, so pressing Enter keeps a previously configured custom URL rather than reverting to the default. The model list is independent of it and is built in two tiers: first `llama cli -cl`, which lists your **local llama.cpp cache**; when that command is missing or its cache is empty, the wizard scans the known GGUF download directories for `.gguf` files. Either way you pick by number instead of typing a name:
 
 ```
 llama-server base URL for HyDE [http://localhost:8080]:

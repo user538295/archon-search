@@ -26,6 +26,7 @@ def _make_search_config(tmp_path: Path) -> object:
     @dataclass
     class FakeProviderConfig:
         ollama_base_url: str = "http://localhost:11434"
+        llama_cpp_base_url: str = "http://localhost:8080"
 
     @dataclass
     class FakeSearchConfig:
@@ -677,6 +678,9 @@ class TestRun:
         installer = _make_installer(tmp_path)
         installer.cfg.hyde.ollama_base_url = "http://saved-hyde:11434"
         installer.cfg.rag_fusion.ollama_base_url = "http://saved-rag:11434"
+        installer.cfg.hyde.llama_cpp_base_url = "http://saved-hyde:8080"
+        installer.cfg.rag_fusion.llama_cpp_base_url = "http://saved-rag:8080"
+        installer.cfg.graph.llama_cpp_base_url = "http://saved-graph:8080"
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
 
@@ -705,6 +709,9 @@ class TestRun:
         assert result == 0
         assert captured["hyde_ollama_base_url_default"] == "http://saved-hyde:11434"
         assert captured["rag_fusion_ollama_base_url_default"] == "http://saved-rag:11434"
+        assert captured["hyde_llama_cpp_base_url_default"] == "http://saved-hyde:8080"
+        assert captured["rag_fusion_llama_cpp_base_url_default"] == "http://saved-rag:8080"
+        assert captured["graph_llama_cpp_base_url_default"] == "http://saved-graph:8080"
 
     def test_run_prints_validating_message_for_apple_silicon(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         """For METAL GPU with validate_providers=True, CoreML appears in providers summary."""

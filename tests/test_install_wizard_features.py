@@ -213,6 +213,18 @@ class TestPromptGraphProvider:
         assert ollama_url == "http://saved-box:11434"
         assert fetch.call_args.args[0] == "http://saved-box:11434"
 
+    def test_llama_cpp_base_url_default_prefills_the_prompt(self) -> None:
+        """F2: a graph-enrichment re-run must not wipe a previously saved llama-server URL."""
+        ask_yn = lambda *_a, **_k: True  # noqa: E731
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]):
+            with patch("builtins.input", side_effect=["", "1"]) as mock_input:
+                _, _, ollama_url, llama_url = _prompt_graph_provider(
+                    ask_yn, self._ask_choice_from("llama_cpp"), OLLAMA_BASE_URL_DEFAULT, "http://saved-box:8080"
+                )
+        assert "http://saved-box:8080" in mock_input.call_args_list[0].args[0]
+        assert llama_url == "http://saved-box:8080"
+        assert ollama_url == ""
+
 
 class TestPromptMultilingual:
     def test_flag_true_skips_prompt(self) -> None:
@@ -1742,13 +1754,19 @@ def isolated_gguf_env(monkeypatch, tmp_path):
     Without this the tier-2 directory scan would see whatever the developer's or
     CI runner's real llama.cpp cache happens to hold, making any "returns []"
     assertion environment-dependent. Returns the fake home directory.
+
+    F10: also clears ``_fetch_llama_cpp_models``'s ``functools.cache`` before and
+    after each test, so a real scan run by one test can never leak its cached
+    result into another.
     """
+    _fetch_llama_cpp_models.cache_clear()
     for var in ("LLAMA_CACHE", "HF_HOME", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "XDG_CACHE_HOME"):
         monkeypatch.delenv(var, raising=False)
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
-    return fake_home
+    yield fake_home
+    _fetch_llama_cpp_models.cache_clear()
 
 
 def _write_gguf(root: Path, *relative_paths: str) -> None:
@@ -1973,11 +1991,12 @@ class TestFetchLlamaCppModelsGgufDirFallback:
         with patch("shutil.which", return_value=None):
             assert _fetch_llama_cpp_models() == ["m.gguf"]
 
-    def test_distinct_files_sharing_a_name_are_listed_once(self, monkeypatch, tmp_path) -> None:
-        """Two different files that produce the same relative name yield one menu entry.
+    def test_distinct_files_sharing_a_name_are_both_listed_with_distinct_labels(self, monkeypatch, tmp_path) -> None:
+        """F9: two DIFFERENT files that would render the same relative name must both stay selectable.
 
-        The picker shows the returned strings verbatim, so emitting the same
-        string twice would render two indistinguishable, interchangeable choices.
+        Collapsing them to one label (the old behaviour) made one of the two models
+        permanently unreachable from the picker; each colliding label must instead
+        be qualified so both remain distinguishable menu entries.
         """
         _write_gguf(tmp_path / "llama-cache", "m.gguf")
         _write_gguf(tmp_path / "hf" / "hub", "m.gguf")
@@ -1985,7 +2004,11 @@ class TestFetchLlamaCppModelsGgufDirFallback:
         monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
 
         with patch("shutil.which", return_value=None):
-            assert _fetch_llama_cpp_models() == ["m.gguf"]
+            models = _fetch_llama_cpp_models()
+
+        assert len(models) == 2, f"both distinct files must be offered, got {models!r}"
+        assert len(set(models)) == 2, "the two colliding labels must be disambiguated, not identical"
+        assert all("m.gguf" in m for m in models)
 
     def test_cli_cache_list_wins_over_dir_scan(self, monkeypatch, tmp_path) -> None:
         """Tier 1 short-circuits: a non-empty `llama cli -cl` list suppresses the dir scan."""
@@ -2040,18 +2063,40 @@ class TestFetchLlamaCppModelsGgufDirFallback:
         with patch("shutil.which", return_value=None):
             assert _fetch_llama_cpp_models() == ["real.gguf"]
 
-    def test_unresolvable_home_yields_no_models_instead_of_raising(self, monkeypatch, tmp_path) -> None:
-        """Path.home() raising (HOME unset in a container) ends the scan, it does not propagate.
+    def test_unresolvable_home_yields_roots_found_so_far_instead_of_raising(self, monkeypatch, tmp_path) -> None:
+        """F8: Path.home() raising (HOME unset in a container) must not discard already-collected roots.
 
         `_fetch_llama_cpp_models` documents that it never raises; the caller
-        relies on `[]` to reach the free-text prompt.
+        relies on `[]` (only) to reach the free-text prompt — an unresolvable
+        home directory must not throw away results already found under
+        `$LLAMA_CACHE` or the huggingface cache, both resolved before the
+        `Path.home()`-dependent default root is computed.
         """
         _write_gguf(tmp_path / "llama-cache", "env.gguf")
         monkeypatch.setenv("LLAMA_CACHE", str(tmp_path / "llama-cache"))
 
         with patch.object(Path, "home", side_effect=RuntimeError("Could not determine home directory")):
             with patch("shutil.which", return_value=None):
-                assert _fetch_llama_cpp_models() == []
+                assert _fetch_llama_cpp_models() == ["env.gguf"]
+
+    def test_unwalkable_root_does_not_suppress_a_later_root(self, monkeypatch, tmp_path) -> None:
+        """F8: one root failing to glob (e.g. a permission error) must not cancel the remaining roots."""
+        bad_root = tmp_path / "bad-root"
+        good_root = tmp_path / "hf" / "hub"
+        _write_gguf(good_root, "good.gguf")
+        monkeypatch.setenv("LLAMA_CACHE", str(bad_root))
+        monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+
+        real_glob = Path.glob
+
+        def _flaky_glob(self: Path, pattern: str):
+            if self == bad_root:
+                raise PermissionError("denied")
+            return real_glob(self, pattern)
+
+        with patch("shutil.which", return_value=None):
+            with patch.object(Path, "glob", _flaky_glob):
+                assert _fetch_llama_cpp_models() == ["good.gguf"]
 
     def test_hf_hub_cache_names_the_hub_directory_outright(self, monkeypatch, tmp_path) -> None:
         """$HF_HUB_CACHE points at the hub dir itself, so no `hub/` suffix is appended.
@@ -2192,7 +2237,7 @@ class TestLlamaCppModelsComeFromLocalCache:
             with patch("subprocess.run", side_effect=self._fake_run(recorded, self._CACHE_LIST_STDOUT)):
                 with self._no_http_allowed() as mock_urlopen:
                     with patch("builtins.input", side_effect=["", "1"]):
-                        _base_url, model = _prompt_llama_cpp_model("HyDE")
+                        _base_url, model = _prompt_llama_cpp_model("HyDE", LLAMA_CPP_BASE_URL_DEFAULT)
 
         assert mock_urlopen.call_count == 0, (
             "the wizard prompt must offer locally cached llama.cpp models, "
@@ -2238,7 +2283,7 @@ class TestPromptLlamaCppModel:
         """Empty base-URL input keeps the default; picker returns the chosen model."""
         with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]) as mock_fetch:
             with patch("builtins.input", side_effect=["", "1"]):
-                base_url, model = _prompt_llama_cpp_model("HyDE")
+                base_url, model = _prompt_llama_cpp_model("HyDE", LLAMA_CPP_BASE_URL_DEFAULT)
         mock_fetch.assert_called_once_with()
         assert base_url == ""  # resolves to the built-in default → stored empty
         assert model == "m1"
@@ -2247,7 +2292,7 @@ class TestPromptLlamaCppModel:
         """A custom base URL is stored for the config; the cache probe is URL-independent."""
         with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]) as mock_fetch:
             with patch("builtins.input", side_effect=["http://box:8080", "1"]):
-                base_url, model = _prompt_llama_cpp_model("HyDE")
+                base_url, model = _prompt_llama_cpp_model("HyDE", LLAMA_CPP_BASE_URL_DEFAULT)
         mock_fetch.assert_called_once_with()
         assert base_url == "http://box:8080"
         assert model == "m1"
@@ -2256,7 +2301,7 @@ class TestPromptLlamaCppModel:
         """Empty model list → honest local-cache message + free-text fallback (S12)."""
         with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=[]):
             with patch("builtins.input", side_effect=["", "mymodel"]):
-                base_url, model = _prompt_llama_cpp_model("HyDE")
+                base_url, model = _prompt_llama_cpp_model("HyDE", LLAMA_CPP_BASE_URL_DEFAULT)
         out = capsys.readouterr().out
         assert base_url == ""
         assert model == "mymodel"
@@ -2270,10 +2315,39 @@ class TestPromptLlamaCppModel:
     def test_eof_on_base_url_uses_default(self) -> None:
         with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]) as mock_fetch:
             with patch("builtins.input", side_effect=[EOFError, "1"]):
-                base_url, model = _prompt_llama_cpp_model("HyDE")
+                base_url, model = _prompt_llama_cpp_model("HyDE", LLAMA_CPP_BASE_URL_DEFAULT)
         mock_fetch.assert_called_once_with()
         assert base_url == ""
         assert model == "m1"
+
+    def test_saved_default_is_prefilled_and_preserved_on_enter(self) -> None:
+        """F2: a re-run must not wipe a previously saved custom base URL.
+
+        Pressing Enter (empty input) must keep the SAVED address, not fall back
+        to the built-in default — the old signature had no way to express this.
+        """
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]):
+            with patch("builtins.input", side_effect=["", "1"]) as mock_input:
+                base_url, model = _prompt_llama_cpp_model("graph enrichment", "http://saved-box:8080")
+        assert "http://saved-box:8080" in mock_input.call_args_list[0].args[0], (
+            "the base-URL prompt text must show the saved default"
+        )
+        assert base_url == "http://saved-box:8080"
+        assert model == "m1"
+
+    def test_scheme_less_saved_default_is_normalised_before_comparison(self) -> None:
+        """F3a: a bare host:port default is normalised the same way _prompt_ollama_model does."""
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]):
+            with patch("builtins.input", side_effect=["", "1"]):
+                base_url, _model = _prompt_llama_cpp_model("HyDE", "localhost:8080")
+        assert base_url == ""  # normalises to the built-in default → stored empty
+
+    def test_trailing_slash_on_default_url_is_stripped(self) -> None:
+        """F3b: a trailing slash must not pin a redundant custom URL for the default address."""
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]):
+            with patch("builtins.input", side_effect=["", "1"]):
+                base_url, _model = _prompt_llama_cpp_model("HyDE", f"{LLAMA_CPP_BASE_URL_DEFAULT}/")
+        assert base_url == ""
 
 
 class TestPromptProviderLlamaCpp:
@@ -2312,6 +2386,19 @@ class TestPromptProviderLlamaCpp:
         assert model == "m1"
         assert ollama_url == ""
         assert llama_cpp_url == "http://box:8080"
+
+    def test_llama_cpp_base_url_default_prefills_the_prompt(self) -> None:
+        """F2: a re-run must not wipe a previously saved custom llama-server URL."""
+        with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]):
+            with patch("builtins.input", side_effect=["", "1"]) as mock_input:
+                provider, model, ollama_url, llama_cpp_url = _prompt_provider(
+                    "HyDE", lambda *_a, **_k: "llama_cpp", OLLAMA_BASE_URL_DEFAULT, "http://saved-box:8080"
+                )
+        assert "http://saved-box:8080" in mock_input.call_args_list[0].args[0]
+        assert provider == "llama_cpp"
+        assert model == "m1"
+        assert ollama_url == ""
+        assert llama_cpp_url == "http://saved-box:8080"
 
     def test_other_providers_return_empty_llama_cpp_url(self) -> None:
         """Non-llama_cpp providers keep the 4th tuple slot empty (no behavior change)."""
@@ -2366,6 +2453,17 @@ class TestLlamaCppPickerIntegration:
         )
         assert features.hyde_model == "hmodel"
         assert features.rag_fusion_model == "rmodel"
+
+    def test_saved_llama_cpp_base_url_defaults_are_threaded_through(self) -> None:
+        """F2: end-to-end — a saved llama-server URL survives a re-run with Enter presses."""
+        features = self._run(
+            ["y", "llama_cpp", "", "1", "llama_cpp", "", "1", "n"],
+            fetch_return=["m1"],
+            hyde_llama_cpp_base_url_default="http://hyde-box:8080",
+            rag_fusion_llama_cpp_base_url_default="http://rag-box:8080",
+        )
+        assert features.hyde_llama_cpp_base_url == "http://hyde-box:8080"
+        assert features.rag_fusion_llama_cpp_base_url == "http://rag-box:8080"
 
 
 class TestOllamaBaseUrlReconciliation:

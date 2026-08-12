@@ -286,9 +286,10 @@ def _revert_graph_enrichment_flags(config_path: Path, dry_run: bool) -> None:
     Mirrors :func:`_revert_query_expansion_flags`, but scoped to ``[graph]``'s
     enrichment fields only. Unlike HyDE/RAG Fusion (which have their own
     ``enabled`` gate), ``[graph].provider`` IS the enrichment gate — this only
-    strips ``provider``/``extraction_model``/``llama_cpp_base_url``, and
-    deliberately does NOT touch ``graph.enabled``, which independently gates
-    the graph subsystem itself (entity extraction, PPR, communities) via
+    strips ``provider``/``extraction_model``/``llama_cpp_base_url``/
+    ``ollama_base_url``, and deliberately does NOT touch ``graph.enabled``,
+    which independently gates the graph subsystem itself (entity extraction,
+    PPR, communities) via
     :func:`archon_search.install.config_writer._revert_graph_enabled_flag`.
     """
     if dry_run or not config_path.exists():
@@ -297,7 +298,7 @@ def _revert_graph_enrichment_flags(config_path: Path, dry_run: bool) -> None:
     if "graph" not in doc:
         return
     changed = False
-    for key in ("provider", "extraction_model", "llama_cpp_base_url"):
+    for key in ("provider", "extraction_model", "llama_cpp_base_url", "ollama_base_url"):
         if key in doc["graph"]:
             del doc["graph"][key]
             changed = True
