@@ -56,6 +56,7 @@ class WizardFeatures:
     graph_provider: str = ""                  # "" = enrichment disabled (GraphConfig.provider stays None)
     graph_extraction_model: str = ""
     graph_llama_cpp_base_url: str = ""        # empty = use config default
+    graph_ollama_base_url: str = ""           # empty = use config default
 
 
 def _write_profile_config(
@@ -284,6 +285,8 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         doc["graph"]["extraction_model"] = features.graph_extraction_model
         if features.graph_provider == "llama_cpp":
             _reconcile_llama_cpp_base_url(doc["graph"], features.graph_llama_cpp_base_url)
+        elif features.graph_provider == "ollama":
+            _reconcile_ollama_base_url(doc["graph"], features.graph_ollama_base_url)
 
     # BE-11: [graph] enabled must be written whenever the [graph] extras were
     # auto-installed, or the install is inert — see C1-I-1 / C1-A-4.

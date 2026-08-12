@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import urllib.error
 from unittest.mock import patch
 
@@ -26,6 +27,7 @@ from archon_search.install import (
     _prompt_optional_features,
     _prompt_provider,
 )
+from archon_search.install.wizard import _LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS
 from archon_search.platform.types import GpuType
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES
 
@@ -49,11 +51,6 @@ class _FakeResp:
 def _tags_response(*names: str) -> _FakeResp:
     """Build a fake /api/tags response body from model names."""
     return _FakeResp(json.dumps({"models": [{"name": n} for n in names]}).encode())
-
-
-def _v1_models_response(*ids: str) -> _FakeResp:
-    """Build a fake OpenAI-compatible /v1/models response body from model ids."""
-    return _FakeResp(json.dumps({"data": [{"id": i} for i in ids]}).encode())
 
 
 class TestWizardFeaturesDefaults:
@@ -94,16 +91,17 @@ class TestWizardFeaturesDefaults:
 
 
 class TestWizardFeaturesFE2GraphProviderFields:
-    """FE-2: WizardFeatures carries five new llama.cpp/graph-provider fields."""
+    """FE-2: WizardFeatures carries the llama.cpp/graph-provider fields."""
 
     def test_wizard_features_has_five_new_fields(self) -> None:
-        """All five new fields exist with correct empty-string defaults."""
+        """All new fields exist with correct empty-string defaults."""
         f = WizardFeatures()
         assert f.hyde_llama_cpp_base_url == ""
         assert f.rag_fusion_llama_cpp_base_url == ""
         assert f.graph_provider == ""
         assert f.graph_extraction_model == ""
         assert f.graph_llama_cpp_base_url == ""
+        assert f.graph_ollama_base_url == ""
 
     def test_new_fields_accept_values(self) -> None:
         f = WizardFeatures(
@@ -112,12 +110,14 @@ class TestWizardFeaturesFE2GraphProviderFields:
             graph_provider="llama_cpp",
             graph_extraction_model="qwen2.5-coder",
             graph_llama_cpp_base_url="http://graph-box:8080",
+            graph_ollama_base_url="http://graph-box:11434",
         )
         assert f.hyde_llama_cpp_base_url == "http://hyde-box:8080"
         assert f.rag_fusion_llama_cpp_base_url == "http://rag-box:8080"
         assert f.graph_provider == "llama_cpp"
         assert f.graph_extraction_model == "qwen2.5-coder"
         assert f.graph_llama_cpp_base_url == "http://graph-box:8080"
+        assert f.graph_ollama_base_url == "http://graph-box:11434"
 
 
 class TestPromptGraphProvider:
@@ -131,39 +131,84 @@ class TestPromptGraphProvider:
         return _ask_choice
 
     def test_declined_returns_all_empty(self) -> None:
-        """Answering 'n' to the enable question returns ('', '', '') — S27 default."""
+        """Answering 'n' to the enable question returns all-empty — S27 default."""
         ask_yn = lambda *_a, **_k: False  # noqa: E731
-        provider, model, base_url = _prompt_graph_provider(ask_yn, lambda *_a: "anthropic")
-        assert (provider, model, base_url) == ("", "", "")
+        result = _prompt_graph_provider(ask_yn, lambda *_a: "anthropic", OLLAMA_BASE_URL_DEFAULT)
+        assert result == ("", "", "", "")
 
     def test_anthropic_prompts_for_model_no_base_url(self) -> None:
         """Anthropic still prompts for extraction_model (no built-in default, unlike HyDE)."""
         ask_yn = lambda *_a, **_k: True  # noqa: E731
         with patch("builtins.input", return_value="claude-haiku-4-5"):
-            provider, model, base_url = _prompt_graph_provider(ask_yn, self._ask_choice_from("anthropic"))
+            provider, model, ollama_url, llama_url = _prompt_graph_provider(
+                ask_yn, self._ask_choice_from("anthropic"), OLLAMA_BASE_URL_DEFAULT
+            )
         assert provider == "anthropic"
         assert model == "claude-haiku-4-5"
-        assert base_url == ""
+        assert (ollama_url, llama_url) == ("", "")
 
     def test_llama_cpp_uses_model_picker_and_returns_base_url(self) -> None:
-        """llama_cpp fetches /v1/models and returns the picked model + base URL (S18)."""
+        """llama_cpp lists the locally cached models and returns the picked model + base URL (S18)."""
         ask_yn = lambda *_a, **_k: True  # noqa: E731
         with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1", "m2"]):
             with patch("builtins.input", side_effect=["", "2"]):
-                provider, model, base_url = _prompt_graph_provider(ask_yn, self._ask_choice_from("llama_cpp"))
+                provider, model, ollama_url, llama_url = _prompt_graph_provider(
+                    ask_yn, self._ask_choice_from("llama_cpp"), OLLAMA_BASE_URL_DEFAULT
+                )
         assert provider == "llama_cpp"
         assert model == "m2"
-        assert base_url == ""
+        assert (ollama_url, llama_url) == ("", "")
 
-    def test_llama_cpp_unreachable_falls_back_to_freetext(self) -> None:
-        """Unreachable llama-server falls back to free-text model entry (S12/S18)."""
+    def test_llama_cpp_empty_cache_falls_back_to_freetext(self) -> None:
+        """An empty local model cache falls back to free-text model entry (S12/S18)."""
         ask_yn = lambda *_a, **_k: True  # noqa: E731
         with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=[]):
             with patch("builtins.input", side_effect=["", "my-model"]):
-                provider, model, base_url = _prompt_graph_provider(ask_yn, self._ask_choice_from("llama_cpp"))
+                provider, model, ollama_url, llama_url = _prompt_graph_provider(
+                    ask_yn, self._ask_choice_from("llama_cpp"), OLLAMA_BASE_URL_DEFAULT
+                )
         assert provider == "llama_cpp"
         assert model == "my-model"
-        assert base_url == ""
+        assert (ollama_url, llama_url) == ("", "")
+
+    def test_ollama_uses_the_installed_model_picker(self) -> None:
+        """Ollama gets the same numbered picker HyDE/RAG-Fusion have — not free text."""
+        ask_yn = lambda *_a, **_k: True  # noqa: E731
+        with patch(
+            "archon_search.install.wizard._fetch_ollama_models", return_value=["llama3", "qwen3"]
+        ):
+            with patch("builtins.input", side_effect=["", "2"]):
+                provider, model, ollama_url, llama_url = _prompt_graph_provider(
+                    ask_yn, self._ask_choice_from("ollama"), OLLAMA_BASE_URL_DEFAULT
+                )
+        assert provider == "ollama"
+        assert model == "qwen3"
+        assert (ollama_url, llama_url) == ("", "")
+
+    def test_ollama_custom_base_url_is_returned_for_storage(self) -> None:
+        """A custom Ollama address reaches GraphConfig.ollama_base_url instead of being dropped."""
+        ask_yn = lambda *_a, **_k: True  # noqa: E731
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3"]) as fetch:
+            with patch("builtins.input", side_effect=["graph-box:11434", "1"]):
+                provider, model, ollama_url, llama_url = _prompt_graph_provider(
+                    ask_yn, self._ask_choice_from("ollama"), OLLAMA_BASE_URL_DEFAULT
+                )
+        assert provider == "ollama"
+        assert model == "llama3"
+        assert ollama_url == "http://graph-box:11434"
+        assert llama_url == ""
+        assert fetch.call_args.args[0] == "http://graph-box:11434"
+
+    def test_ollama_base_url_default_prefills_the_prompt(self) -> None:
+        """A re-run keeps the address already in [graph] when the operator presses Enter."""
+        ask_yn = lambda *_a, **_k: True  # noqa: E731
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3"]) as fetch:
+            with patch("builtins.input", side_effect=["", "1"]):
+                _, _, ollama_url, _ = _prompt_graph_provider(
+                    ask_yn, self._ask_choice_from("ollama"), "http://saved-box:11434"
+                )
+        assert ollama_url == "http://saved-box:11434"
+        assert fetch.call_args.args[0] == "http://saved-box:11434"
 
 
 class TestPromptMultilingual:
@@ -1275,6 +1320,150 @@ class TestFetchOllamaModels:
         assert mock_urlopen.call_args.kwargs["timeout"] == _OLLAMA_FETCH_TIMEOUT_SECONDS
 
 
+def _scheme_strict_urlopen(response_factory):
+    """Build a ``urlopen`` stand-in that behaves like the real one w.r.t. URL schemes.
+
+    ``urllib.request.urlopen("localhost:11434/api/tags")`` does NOT silently assume
+    HTTP — it raises ``URLError("unknown url type: localhost")``. A mock that answers
+    any URL would make a scheme-normalisation test pass vacuously, so this stand-in
+    reproduces that failure mode: scheme-less URLs raise, ``http(s)://`` URLs are served.
+    """
+
+    def _open(url, *_args, **_kwargs):
+        text = str(url)
+        # Real urllib lowercases the scheme before dispatching, so "HTTP://" is served.
+        if not text.lower().startswith(("http://", "https://")):
+            raise urllib.error.URLError(f"unknown url type: {text.split(':', 1)[0]}")
+        return response_factory()
+
+    return _open
+
+
+class TestFetchOllamaModelsSchemeLessBaseUrl:
+    """_fetch_ollama_models() must normalise a base URL that omits the scheme.
+
+    The runtime Ollama client accepts a scheme-less host (``ollama.AsyncClient(
+    host="localhost:11434")`` normalises to ``http://localhost:11434``), so an
+    operator who types ``localhost:11434`` at the wizard prompt has given a value
+    that works at runtime. The wizard, however, concatenates the answer straight
+    onto ``/api/tags`` and hands it to ``urllib``, which rejects it with
+    ``unknown url type`` — swallowed by the blanket ``except Exception`` into an
+    empty list, so the wizard prints the misleading "No models available from
+    localhost:11434. Ollama may not be running there…" while Ollama IS running.
+    """
+
+    def test_scheme_less_hostname_base_url_is_normalised(self) -> None:
+        base = "localhost:11434"
+        with patch(
+            "archon_search.install.urllib.request.urlopen",
+            side_effect=_scheme_strict_urlopen(lambda: _tags_response("mistral", "llama3.2")),
+        ) as mock_urlopen:
+            models = _fetch_ollama_models(base)
+
+        requested = mock_urlopen.call_args.args[0]
+        assert models == ["llama3.2", "mistral"], (
+            f"scheme-less base URL {base!r} was requested verbatim as {requested!r}; "
+            "urllib raises URLError('unknown url type: localhost') for that, the blanket "
+            "except swallows it, and the wizard claims 'No models available' although "
+            "Ollama is running"
+        )
+        assert requested == "http://localhost:11434/api/tags"
+
+    def test_scheme_less_ip_base_url_is_normalised(self) -> None:
+        base = "127.0.0.1:11434"
+        with patch(
+            "archon_search.install.urllib.request.urlopen",
+            side_effect=_scheme_strict_urlopen(lambda: _tags_response("llama3.2")),
+        ) as mock_urlopen:
+            models = _fetch_ollama_models(base)
+
+        requested = mock_urlopen.call_args.args[0]
+        assert models == ["llama3.2"], (
+            f"scheme-less IP base URL {base!r} was requested verbatim as {requested!r}; "
+            "urllib raises URLError('unknown url type: 127.0.0.1') for that, so the "
+            "wizard falsely reports Ollama as unreachable"
+        )
+        assert requested == "http://127.0.0.1:11434/api/tags"
+
+    def test_scheme_less_host_without_port_gets_the_ollama_default_port(self) -> None:
+        """A bare hostname must probe :11434 — the port the runtime client infers.
+
+        ``ollama.AsyncClient(host="myollama.internal")`` resolves to
+        ``http://myollama.internal:11434``. Prefixing only the scheme would send the
+        probe to port 80, so the wizard could confirm a model list from one server
+        while the running server talks to another.
+        """
+        base = "myollama.internal"
+        with patch(
+            "archon_search.install.urllib.request.urlopen",
+            side_effect=_scheme_strict_urlopen(lambda: _tags_response("llama3.2")),
+        ) as mock_urlopen:
+            models = _fetch_ollama_models(base)
+
+        requested = mock_urlopen.call_args.args[0]
+        assert models == ["llama3.2"]
+        assert requested == "http://myollama.internal:11434/api/tags", (
+            f"bare hostname {base!r} was probed as {requested!r}; the runtime Ollama "
+            "client would use port 11434, so the wizard must probe the same server"
+        )
+
+    def test_scheme_less_ipv6_host_keeps_its_explicit_port(self) -> None:
+        base = "[::1]:11434"
+        with patch(
+            "archon_search.install.urllib.request.urlopen",
+            side_effect=_scheme_strict_urlopen(lambda: _tags_response("llama3.2")),
+        ) as mock_urlopen:
+            _fetch_ollama_models(base)
+
+        assert mock_urlopen.call_args.args[0] == "http://[::1]:11434/api/tags"
+
+    def test_https_base_url_is_left_untouched(self) -> None:
+        """An address that already carries a scheme must never be rewritten."""
+        with patch(
+            "archon_search.install.urllib.request.urlopen",
+            side_effect=_scheme_strict_urlopen(lambda: _tags_response("llama3.2")),
+        ) as mock_urlopen:
+            models = _fetch_ollama_models("https://ollama.example.com")
+
+        assert models == ["llama3.2"]
+        assert mock_urlopen.call_args.args[0] == "https://ollama.example.com/api/tags"
+
+
+class TestPromptOllamaModelStoresNormalisedUrl:
+    """A scheme-less spelling of the default address must not pin a custom URL.
+
+    ``_reconcile_ollama_base_url`` deletes ``ollama_base_url`` from the config when
+    the wizard reports ``""`` — the "still on the default" signal. Comparing the raw
+    answer against ``OLLAMA_BASE_URL_DEFAULT`` means an operator who types
+    ``localhost:11434`` probes the default server but gets a redundant custom URL
+    written to their config, which then stops tracking the default.
+    """
+
+    def test_scheme_less_default_address_collapses_to_empty(self) -> None:
+        with patch(
+            "archon_search.install.urllib.request.urlopen",
+            side_effect=_scheme_strict_urlopen(lambda: _tags_response("llama3.2")),
+        ):
+            with patch("builtins.input", side_effect=["localhost:11434", "1"]):
+                stored, model = _prompt_ollama_model("HyDE", OLLAMA_BASE_URL_DEFAULT)
+
+        assert model == "llama3.2"
+        assert stored == "", (
+            f"typing the default address without a scheme stored {stored!r}; it resolves "
+            "to OLLAMA_BASE_URL_DEFAULT, so the key must be omitted from the config"
+        )
+
+    def test_custom_address_is_still_stored(self) -> None:
+        with patch(
+            "archon_search.install.urllib.request.urlopen",
+            side_effect=_scheme_strict_urlopen(lambda: _tags_response("llama3.2")),
+        ):
+            with patch("builtins.input", side_effect=["box:11434", "1"]):
+                stored, _model = _prompt_ollama_model("HyDE", OLLAMA_BASE_URL_DEFAULT)
+
+        assert stored == "http://box:11434"
+
+
 class TestPickOllamaModel:
     """Unit tests for _pick_ollama_model() — numbered menu selection."""
 
@@ -1544,57 +1733,170 @@ class TestOllamaPickerE2E:
 
 
 class TestFetchLlamaCppModels:
-    """Unit tests for _fetch_llama_cpp_models() — HTTP fetch with graceful failure."""
+    """Unit tests for _fetch_llama_cpp_models() — `llama cli -cl` probe, graceful failure.
 
-    def test_parses_data_ids(self) -> None:
-        """A well-formed /v1/models response yields the list of data[].id values."""
-        with patch(
-            "archon_search.install.urllib.request.urlopen",
-            return_value=_v1_models_response("qwen2.5-7b-instruct", "llama-3.2-3b"),
-        ):
-            models = _fetch_llama_cpp_models("http://localhost:8080")
-        assert models == ["qwen2.5-7b-instruct", "llama-3.2-3b"]
+    The model list comes from the local llama.cpp cache, never from a running
+    llama-server (see TestLlamaCppModelsComeFromLocalCache for that guard).
+    """
 
-    def test_hits_v1_models_endpoint(self) -> None:
-        """The fetch targets {base_url}/v1/models with the trailing slash stripped."""
-        with patch(
-            "archon_search.install.urllib.request.urlopen",
-            return_value=_v1_models_response("m1"),
-        ) as mock_urlopen:
-            _fetch_llama_cpp_models("http://box:8080/")
-        called_url = mock_urlopen.call_args.args[0]
-        assert called_url == "http://box:8080/v1/models"
+    _TWO_MODEL_STDOUT = (
+        "number of models in cache: 2\n"
+        "   1. squ11z1/gpt-oss-nano:Q4_K_M\n"
+        "   2. ggml-org/Qwen3-1.7B-GGUF:Q8_0\n"
+    )
 
-    def test_connection_error_returns_empty(self) -> None:
-        with patch("archon_search.install.urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
-            assert _fetch_llama_cpp_models("http://localhost:8080") == []
+    @staticmethod
+    def _run_returning(stdout: str, returncode: int = 0):
+        """Build a ``subprocess.run`` stand-in replaying ``stdout``, honouring the text kwargs."""
+
+        def _run(cmd, *_args, **kwargs):
+            decoded = kwargs.get("text") or kwargs.get("universal_newlines") or kwargs.get("encoding")
+            return subprocess.CompletedProcess(cmd, returncode, stdout if decoded else stdout.encode(), b"")
+
+        return _run
+
+    def test_parses_numbered_cache_entries(self) -> None:
+        """Numbered lines yield model names, in order; the header line is not one of them."""
+        with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
+            with patch("subprocess.run", side_effect=self._run_returning(self._TWO_MODEL_STDOUT)):
+                models = _fetch_llama_cpp_models()
+        assert models == ["squ11z1/gpt-oss-nano:Q4_K_M", "ggml-org/Qwen3-1.7B-GGUF:Q8_0"]
+
+    def test_invokes_llama_cache_list_as_argv_without_shell(self) -> None:
+        """The probe runs the resolved binary with a fixed argv, a timeout, and check=False."""
+        recorded: dict[str, object] = {}
+
+        def _run(cmd, *_args, **kwargs):
+            recorded["cmd"] = cmd
+            recorded["kwargs"] = kwargs
+            return subprocess.CompletedProcess(cmd, 0, self._TWO_MODEL_STDOUT, "")
+
+        with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
+            with patch("subprocess.run", side_effect=_run):
+                _fetch_llama_cpp_models()
+
+        assert recorded["cmd"] == ["/opt/homebrew/bin/llama", "cli", "-cl"]
+        kwargs = recorded["kwargs"]
+        assert kwargs.get("shell") is not True, "the probe must never build a shell command string"
+        assert kwargs["timeout"] == _LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS
+        assert kwargs["check"] is False
+        assert kwargs["text"] is True
+        assert kwargs["capture_output"] is True
+
+    def test_missing_binary_returns_empty_without_running_anything(self) -> None:
+        with patch("shutil.which", return_value=None):
+            with patch("subprocess.run", side_effect=AssertionError("no binary — nothing may be executed")):
+                assert _fetch_llama_cpp_models() == []
+
+    def test_non_zero_exit_returns_empty(self) -> None:
+        with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
+            with patch("subprocess.run", side_effect=self._run_returning(self._TWO_MODEL_STDOUT, returncode=1)):
+                assert _fetch_llama_cpp_models() == []
+
+    def test_timeout_returns_empty(self) -> None:
+        with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
+            with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="llama", timeout=5)):
+                assert _fetch_llama_cpp_models() == []
 
     def test_os_error_returns_empty(self) -> None:
-        with patch("archon_search.install.urllib.request.urlopen", side_effect=OSError("timed out")):
-            assert _fetch_llama_cpp_models("http://localhost:8080") == []
+        with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
+            with patch("subprocess.run", side_effect=OSError("exec format error")):
+                assert _fetch_llama_cpp_models() == []
 
-    def test_malformed_json_returns_empty(self) -> None:
-        with patch("archon_search.install.urllib.request.urlopen", return_value=_FakeResp(b"not json")):
-            assert _fetch_llama_cpp_models("http://localhost:8080") == []
+    def test_unparsable_output_returns_empty(self) -> None:
+        """Output with no numbered entries (e.g. a usage banner) yields [], not a crash."""
+        with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
+            with patch("subprocess.run", side_effect=self._run_returning("usage: llama cli [options]\n")):
+                assert _fetch_llama_cpp_models() == []
 
-    def test_missing_data_key_returns_empty(self) -> None:
-        """A response without a 'data' key (e.g. Ollama's {"models": [...]} shape) returns []."""
-        with patch("archon_search.install.urllib.request.urlopen", return_value=_FakeResp(b'{"models": []}')):
-            assert _fetch_llama_cpp_models("http://localhost:8080") == []
+    def test_empty_output_returns_empty(self) -> None:
+        with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
+            with patch("subprocess.run", side_effect=self._run_returning("")):
+                assert _fetch_llama_cpp_models() == []
 
-    def test_empty_data_list_returns_empty(self) -> None:
-        with patch("archon_search.install.urllib.request.urlopen", return_value=_v1_models_response()):
-            assert _fetch_llama_cpp_models("http://localhost:8080") == []
 
-    def test_skips_entries_without_id(self) -> None:
-        body = _FakeResp(json.dumps({"data": [{"id": "m1"}, {"other": 1}, {}]}).encode())
-        with patch("archon_search.install.urllib.request.urlopen", return_value=body):
-            assert _fetch_llama_cpp_models("http://localhost:8080") == ["m1"]
+class TestLlamaCppModelsComeFromLocalCache:
+    """The llama.cpp model list must come from the local cache, not a running llama-server.
 
-    def test_non_string_id_does_not_crash(self) -> None:
-        body = _FakeResp(json.dumps({"data": [{"id": "m1"}, {"id": 123}]}).encode())
-        with patch("archon_search.install.urllib.request.urlopen", return_value=body):
-            assert _fetch_llama_cpp_models("http://localhost:8080") == ["m1"]
+    Regression guard: the wizard used to fetch ``{base_url}/v1/models`` over HTTP,
+    which surfaces whatever ad-hoc path/model a running llama-server happens to
+    have loaded (e.g. a ``/private/tmp/...`` scratchpad path) instead of the
+    operator's locally available models. The correct source is the model cache
+    that ``llama cli -cl`` (``--cache-list``) reports.
+
+    ``subprocess.run`` and ``shutil.which`` are stubbed so the tests never depend
+    on a real ``llama`` binary or on any real model being cached; ``urlopen`` is
+    stubbed to fail and its call count is asserted to be zero so an HTTP-backed
+    implementation can never satisfy these tests.
+    """
+
+    # Verbatim `llama cli -cl` output for a single cached model.
+    _CACHE_LIST_STDOUT = "number of models in cache: 1\n   1. squ11z1/gpt-oss-nano:Q4_K_M\n"
+    _CACHE_LIST_EMPTY_STDOUT = "number of models in cache: 0\n"
+
+    @staticmethod
+    def _fake_run(recorded: list, stdout: str):
+        """Return a ``subprocess.run`` stand-in that records argv and replays ``stdout``."""
+
+        def _run(cmd, *_args, **kwargs):
+            recorded.append(cmd)
+            decoded = kwargs.get("text") or kwargs.get("universal_newlines") or kwargs.get("encoding")
+            return subprocess.CompletedProcess(cmd, 0, stdout if decoded else stdout.encode(), b"")
+
+        return _run
+
+    def _no_http_allowed(self):
+        """Patch urlopen so any HTTP attempt is recorded (and fails) rather than served."""
+        return patch(
+            "archon_search.install.urllib.request.urlopen",
+            side_effect=urllib.error.URLError("HTTP must not be used to list llama.cpp models"),
+        )
+
+    def test_lists_locally_cached_models_not_llama_server_models(self) -> None:
+        """_fetch_llama_cpp_models() returns the models `llama cli -cl` reports, with no HTTP call."""
+        recorded: list = []
+        with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
+            with patch("subprocess.run", side_effect=self._fake_run(recorded, self._CACHE_LIST_STDOUT)):
+                with self._no_http_allowed() as mock_urlopen:
+                    models = _fetch_llama_cpp_models()
+
+        assert mock_urlopen.call_count == 0, (
+            "the wizard must list locally cached llama.cpp models via `llama cli -cl`, "
+            f"but it made {mock_urlopen.call_count} HTTP call(s) to a running llama-server"
+        )
+        assert models == ["squ11z1/gpt-oss-nano:Q4_K_M"]
+        assert recorded[0] == ["/opt/homebrew/bin/llama", "cli", "-cl"]
+
+    def test_empty_cache_returns_empty_without_http_fallback(self) -> None:
+        """Zero cached models yields [] — and must not fall back to querying llama-server."""
+        recorded: list = []
+        with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
+            with patch("subprocess.run", side_effect=self._fake_run(recorded, self._CACHE_LIST_EMPTY_STDOUT)):
+                with self._no_http_allowed() as mock_urlopen:
+                    models = _fetch_llama_cpp_models()
+
+        assert mock_urlopen.call_count == 0, (
+            "an empty llama.cpp model cache must not trigger an HTTP fallback to llama-server, "
+            f"but {mock_urlopen.call_count} HTTP call(s) were made"
+        )
+        assert models == []
+        assert recorded, "expected the wizard to invoke the llama CLI"
+
+    def test_prompt_offers_locally_cached_models(self) -> None:
+        """The wizard prompt picks from the local cache list (base URL '' + selection '1')."""
+        recorded: list = []
+        with patch("shutil.which", return_value="/opt/homebrew/bin/llama"):
+            with patch("subprocess.run", side_effect=self._fake_run(recorded, self._CACHE_LIST_STDOUT)):
+                with self._no_http_allowed() as mock_urlopen:
+                    with patch("builtins.input", side_effect=["", "1"]):
+                        _base_url, model = _prompt_llama_cpp_model("HyDE")
+
+        assert mock_urlopen.call_count == 0, (
+            "the wizard prompt must offer locally cached llama.cpp models, "
+            f"but it made {mock_urlopen.call_count} HTTP call(s) to a running llama-server"
+        )
+        assert model == "squ11z1/gpt-oss-nano:Q4_K_M"
+        assert recorded, "expected the wizard to invoke the llama CLI"
 
 
 class TestPickLlamaCppModel:
@@ -1622,40 +1924,51 @@ class TestPickLlamaCppModel:
 
 
 class TestPromptLlamaCppModel:
-    """Unit tests for _prompt_llama_cpp_model() — base-URL prompt + picker/fallback."""
+    """Unit tests for _prompt_llama_cpp_model() — base-URL prompt + picker/fallback.
+
+    The base URL is still prompted (``[hyde]``/``[rag_fusion]``/``[graph]`` need
+    the server address at runtime) but it no longer decides the model list — that
+    is read from the local llama.cpp cache, so the probe takes no URL.
+    """
 
     def test_default_url_and_picker(self) -> None:
         """Empty base-URL input keeps the default; picker returns the chosen model."""
         with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]) as mock_fetch:
             with patch("builtins.input", side_effect=["", "1"]):
                 base_url, model = _prompt_llama_cpp_model("HyDE")
-        mock_fetch.assert_called_once_with(LLAMA_CPP_BASE_URL_DEFAULT)
+        mock_fetch.assert_called_once_with()
         assert base_url == ""  # resolves to the built-in default → stored empty
         assert model == "m1"
 
-    def test_custom_url_is_stored_and_fetched(self) -> None:
+    def test_custom_url_is_stored_but_does_not_drive_the_model_list(self) -> None:
+        """A custom base URL is stored for the config; the cache probe is URL-independent."""
         with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]) as mock_fetch:
             with patch("builtins.input", side_effect=["http://box:8080", "1"]):
                 base_url, model = _prompt_llama_cpp_model("HyDE")
-        mock_fetch.assert_called_once_with("http://box:8080")
+        mock_fetch.assert_called_once_with()
         assert base_url == "http://box:8080"
         assert model == "m1"
 
-    def test_unreachable_falls_back_to_freetext(self, capsys) -> None:
-        """Empty model list → honest message + free-text fallback (S12)."""
+    def test_empty_cache_falls_back_to_freetext(self, capsys) -> None:
+        """Empty model list → honest local-cache message + free-text fallback (S12)."""
         with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=[]):
             with patch("builtins.input", side_effect=["", "mymodel"]):
                 base_url, model = _prompt_llama_cpp_model("HyDE")
         out = capsys.readouterr().out
         assert base_url == ""
         assert model == "mymodel"
-        assert LLAMA_CPP_BASE_URL_DEFAULT in out
+        assert "No locally cached llama.cpp models found." in out
+        assert "llama download" in out, "the message must say how to populate the cache"
+        assert LLAMA_CPP_BASE_URL_DEFAULT not in out, (
+            "the fallback message must not blame an unreachable llama-server — the model "
+            "list comes from the local cache, not from the server at the base URL"
+        )
 
     def test_eof_on_base_url_uses_default(self) -> None:
         with patch("archon_search.install.wizard._fetch_llama_cpp_models", return_value=["m1"]) as mock_fetch:
             with patch("builtins.input", side_effect=[EOFError, "1"]):
                 base_url, model = _prompt_llama_cpp_model("HyDE")
-        mock_fetch.assert_called_once_with(LLAMA_CPP_BASE_URL_DEFAULT)
+        mock_fetch.assert_called_once_with()
         assert base_url == ""
         assert model == "m1"
 

@@ -220,7 +220,8 @@ request_id_header = "X-Request-ID"
 # Prerequisites (llama.cpp):
 #   1. No pip extra required — uses the existing httpx dependency.
 #   2. Run a llama-server instance (default: http://localhost:8080).
-#   3. Set provider = "llama_cpp" and model = "<model-name-from-/v1/models>" below.
+#   3. Set provider = "llama_cpp" and model = "<cached-model-name>" below
+#      (list your locally cached models with "llama cli -cl").
 #
 # When enabled = false (the default), hyde=true in a request is silently ignored and
 # the standard query embedding is used (hyde_applied: false in the response).
@@ -234,8 +235,8 @@ enabled = false
 # For "openai": an OpenAI model name (e.g. "gpt-4o-mini").
 # For "claude_cli": a model alias (haiku/sonnet/opus/fable) or full ID, passed as
 #   --model. OPTIONAL — blank or the default below omits --model (Claude Code's default).
-# For "llama_cpp": the model name reported by GET /v1/models on the llama-server
-#   (e.g. "qwen2.5-7b-instruct").
+# For "llama_cpp": a llama.cpp model name from your local cache, as listed by
+#   "llama cli -cl" (e.g. "ggml-org/Qwen3-1.7B-GGUF:Q8_0") — the wizard writes that name.
 model = "claude-haiku-4-5-20251001"
 # Base URL for the Ollama server. Only used when provider = "ollama".
 # ollama_base_url = "http://localhost:11434"
@@ -289,7 +290,8 @@ max_requests_per_minute = 60
 # Prerequisites (llama.cpp):
 #   1. No pip extra required — uses the existing httpx dependency.
 #   2. Run a llama-server instance (default: http://localhost:8080).
-#   3. Set provider = "llama_cpp" and model = "<model-name-from-/v1/models>" below.
+#   3. Set provider = "llama_cpp" and model = "<cached-model-name>" below
+#      (list your locally cached models with "llama cli -cl").
 #
 # When enabled = false (the default), rag_fusion=true in a request is silently ignored and
 # standard single-query search is used (rag_fusion_applied: false in the response).
@@ -309,8 +311,8 @@ enabled = false
 # For "openai": an OpenAI model name (e.g. "gpt-4o-mini").
 # For "claude_cli": a model alias (haiku/sonnet/opus/fable) or full ID, passed as
 #   --model. OPTIONAL — blank or the default below omits --model (Claude Code's default).
-# For "llama_cpp": the model name reported by GET /v1/models on the llama-server
-#   (e.g. "qwen2.5-7b-instruct").
+# For "llama_cpp": a llama.cpp model name from your local cache, as listed by
+#   "llama cli -cl" (e.g. "ggml-org/Qwen3-1.7B-GGUF:Q8_0") — the wizard writes that name.
 model = "claude-haiku-4-5-20251001"
 # Base URL for the Ollama server. Only used when provider = "ollama".
 # ollama_base_url = "http://localhost:11434"
@@ -441,8 +443,8 @@ num_queries = 2
 # For "ollama": the Ollama model tag (e.g. "llama3.2:3b").
 # For "openai": an OpenAI model name (e.g. "gpt-4o-mini"). Requires
 #   OPENAI_API_KEY in the server environment.
-# For "llama_cpp": the model name reported by GET /v1/models on the
-#   llama-server (e.g. "qwen2.5-7b-instruct"). No API key required.
+# For "llama_cpp": a llama.cpp model name from your local cache, as listed by
+#   "llama cli -cl" (e.g. "ggml-org/Qwen3-1.7B-GGUF:Q8_0"). No API key required.
 # When provider is set but extraction_model is absent, a WARNING is logged at
 # startup and enrichment remains disabled (no ConfigError, no crash).
 # extraction_model = "claude-haiku-4-5-20251001"

@@ -18,6 +18,7 @@ S17) for the scenarios this file proves against real infrastructure.
 from __future__ import annotations
 
 import asyncio
+import shutil
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -43,7 +44,9 @@ def _is_llama_cpp_reachable() -> bool:
 
 
 @pytest.fixture(autouse=True)
-def _skip_if_llama_cpp_unreachable() -> None:
+def _skip_if_llama_cpp_unreachable(request: pytest.FixtureRequest) -> None:
+    if request.node.name == "test_wizard_local_cache_model_picker_live":
+        return  # gated on the local `llama` CLI cache instead — no llama-server needed
     if not _is_llama_cpp_reachable():
         pytest.skip(
             f"llama-server not reachable at {LLAMA_CPP_BASE_URL_DEFAULT} — "
@@ -205,22 +208,25 @@ def test_live_graph_enrichment_via_llama_cpp(tmp_path: Path, monkeypatch: pytest
         )
 
 
-def test_wizard_v1_models_picker_live() -> None:
-    """S4: the wizard's llama-server model picker against a live llama-server.
+@pytest.mark.skipif(shutil.which("llama") is None, reason="llama CLI not on PATH")
+def test_wizard_local_cache_model_picker_live() -> None:
+    """S4: the wizard's model picker against the real local llama.cpp model cache.
 
-    ``_fetch_llama_cpp_models`` makes a real ``GET /v1/models`` call (no
+    ``_fetch_llama_cpp_models`` really shells out to ``llama cli -cl`` (no
     mocking) and swallows every failure into ``[]`` by design (never raises),
-    so an unreachable server surfaces as a plain, informative assertion
-    failure below rather than an exception. The fetched model is then routed
-    through the real ``_prompt_llama_cpp_model`` picker and the real TOML
-    writer to confirm the whole wizard chain wires it through to
+    so a missing ``llama`` binary or an empty cache skips this test rather than
+    failing it — no llama-server is needed. The listed
+    model is then routed through the real ``_prompt_llama_cpp_model`` picker and
+    the real TOML writer to confirm the whole wizard chain wires it through to
     ``[graph] provider``/``extraction_model``/``llama_cpp_base_url``.
     """
-    models = _fetch_llama_cpp_models(LLAMA_CPP_BASE_URL_DEFAULT)
-    assert models, (
-        f"the wizard fetched no models from a live llama-server at {LLAMA_CPP_BASE_URL_DEFAULT} — "
-        "start llama-server with a loaded model before running this e2e suite"
-    )
+    models = _fetch_llama_cpp_models()
+    if not models:
+        pytest.skip(
+            "llama.cpp model cache is empty — download a model "
+            '("llama download -hf <user>/<model>[:quant]", verify with "llama cli -cl") '
+            "before running this e2e test"
+        )
 
     with patch("builtins.input", side_effect=["", "1"]):
         base_url, model = _prompt_llama_cpp_model("graph enrichment")

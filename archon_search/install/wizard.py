@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
+import subprocess
 import urllib.request
 from collections.abc import Callable
 
@@ -76,6 +78,24 @@ def _select_profile(
 
 
 _OLLAMA_FETCH_TIMEOUT_SECONDS = 5
+_OLLAMA_DEFAULT_PORT = 11434
+
+
+def _normalise_ollama_base_url(base_url: str) -> str:
+    """Fill in the scheme and port that ``ollama.AsyncClient`` would infer.
+
+    The runtime resolves a bare ``host`` to ``http://host:11434``, but ``urllib``
+    rejects a scheme-less URL with ``URLError("unknown url type")`` — so without
+    this the wizard reports an address as unreachable that the server then uses
+    happily. Mirroring the port too keeps the probe pointed at the same server the
+    runtime will talk to.
+    """
+    if "://" in base_url:
+        return base_url
+    host = base_url.rstrip("/")
+    if ":" not in host.rsplit("]", 1)[-1]:
+        host = f"{host}:{_OLLAMA_DEFAULT_PORT}"
+    return "http://" + host
 
 
 def _fetch_ollama_models(base_url: str) -> list[str]:
@@ -85,7 +105,7 @@ def _fetch_ollama_models(base_url: str) -> list[str]:
     refused, timeout, HTTP error, malformed JSON, or zero models installed.
     Never raises: the wizard falls back to free-text entry on an empty list.
     """
-    url = base_url.rstrip("/") + "/api/tags"
+    url = _normalise_ollama_base_url(base_url).rstrip("/") + "/api/tags"
     try:
         with urllib.request.urlopen(url, timeout=_OLLAMA_FETCH_TIMEOUT_SECONDS) as resp:  # noqa: S310 (operator-supplied Ollama URL)
             payload = json.loads(resp.read())
@@ -145,13 +165,15 @@ def _prompt_ollama_model(feature_label: str, default_base_url: str) -> tuple[str
 
     Returns ``(ollama_base_url, model)``. ``ollama_base_url`` is ``""`` when it
     resolves to the built-in default (config supplies it), otherwise the custom
-    URL so it survives config regeneration.
+    URL so it survives config regeneration. The answer is normalised before both
+    the probe and the comparison, so a scheme-less spelling of the default address
+    still collapses to ``""`` instead of pinning a redundant custom URL.
     """
     try:
         raw_url = input(f"Ollama base URL for {feature_label} [{default_base_url}]: ").strip()
     except EOFError:
         raw_url = ""
-    base_url = raw_url or default_base_url
+    base_url = _normalise_ollama_base_url(raw_url or default_base_url)
     stored = "" if base_url == OLLAMA_BASE_URL_DEFAULT else base_url
 
     models = _fetch_ollama_models(base_url)
@@ -168,28 +190,40 @@ def _prompt_ollama_model(feature_label: str, default_base_url: str) -> tuple[str
     return stored, _prompt_model_freetext(feature_label)
 
 
-_LLAMA_CPP_FETCH_TIMEOUT_SECONDS = 5
+_LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS = 5
+
+# `llama cli -cl` prints a "number of models in cache: N" header followed by one
+# numbered line per cached model: "   1. squ11z1/gpt-oss-nano:Q4_K_M".
+_LLAMA_CPP_CACHE_LIST_ENTRY = re.compile(r"^\s*\d+\.\s+(.+?)\s*$")
 
 
-def _fetch_llama_cpp_models(base_url: str) -> list[str]:
-    """Fetch model ids from a llama-server's OpenAI-compatible ``/v1/models`` endpoint.
+def _fetch_llama_cpp_models() -> list[str]:
+    """List the llama.cpp models cached locally, as ``llama cli -cl`` reports them.
 
-    Parses ``data[].id`` (NOT Ollama's ``models[].name`` shape). Returns ``[]`` on
-    any failure — connection refused, timeout, HTTP error, malformed JSON, or zero
-    models loaded. Never raises: the wizard falls back to free-text entry on an
-    empty list.
+    The cache directory is not reliably derivable in Python (``LLAMA_CACHE``,
+    ``HF_HOME``, ``HUGGINGFACE_HUB_CACHE``, ``XDG_CACHE_HOME``, platform default,
+    manifest layout), so the CLI is the source of truth and its output is parsed.
+
+    Never raises — every failure yields ``[]`` and the wizard falls back to
+    free-text entry.
     """
-    url = base_url.rstrip("/") + "/v1/models"
+    binary = shutil.which("llama")
+    if binary is None:
+        return []
     try:
-        with urllib.request.urlopen(url, timeout=_LLAMA_CPP_FETCH_TIMEOUT_SECONDS) as resp:  # noqa: S310 (operator-supplied llama-server URL)
-            payload = json.loads(resp.read())
+        proc = subprocess.run(  # noqa: S603 — fixed argv, no shell, binary resolved from PATH
+            [binary, "cli", "-cl"],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=_LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS,
+            check=False,
+        )
     except Exception:  # noqa: BLE001 — best-effort probe; any failure → free-text fallback
         return []
-    data = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(data, list):
+    if proc.returncode != 0:
         return []
-    # Guard on str: a malformed entry like {"id": 123} must not crash the wizard.
-    return [i for m in data if isinstance(m, dict) and isinstance(i := m.get("id"), str) and i]
+    return [m.group(1) for line in proc.stdout.splitlines() if (m := _LLAMA_CPP_CACHE_LIST_ENTRY.match(line))]
 
 
 def _pick_llama_cpp_model(models: list[str]) -> str:
@@ -198,7 +232,7 @@ def _pick_llama_cpp_model(models: list[str]) -> str:
     One retry on an out-of-range or non-numeric entry; returns ``""`` on EOF or
     after a second invalid entry (server startup then rejects the empty model).
     """
-    print("\nAvailable llama-server models:")
+    print("\nLocally cached llama.cpp models:")
     for i, name in enumerate(models, start=1):
         print(f"  {i}. {name}")
     for attempt in range(2):
@@ -214,12 +248,15 @@ def _pick_llama_cpp_model(models: list[str]) -> str:
 
 
 def _prompt_llama_cpp_model(feature_label: str) -> tuple[str, str]:
-    """Prompt for the llama-server base URL, then pick a model from ``/v1/models``.
+    """Prompt for the llama-server base URL, then pick a locally cached model.
 
-    Base URL is asked first (needed to fetch the model list); an empty answer
-    keeps ``LLAMA_CPP_BASE_URL_DEFAULT``. When models are found the user picks by
-    number; when the server is unreachable or has none, the wizard explains why
-    and falls back to free-text entry.
+    The base URL is still asked — the server address is what ``[hyde]``,
+    ``[rag_fusion]`` and ``[graph]`` talk to at runtime — but it does not decide
+    the model list: that comes from the local llama.cpp model cache
+    (``_fetch_llama_cpp_models``). An empty answer keeps
+    ``LLAMA_CPP_BASE_URL_DEFAULT``. When the cache holds models the user picks by
+    number; when it is empty the wizard explains how to populate it and falls
+    back to free-text entry.
 
     Returns ``(llama_cpp_base_url, model)``. ``llama_cpp_base_url`` is ``""``
     when it resolves to the built-in default (config supplies it), otherwise the
@@ -232,16 +269,17 @@ def _prompt_llama_cpp_model(feature_label: str) -> tuple[str, str]:
     base_url = raw_url or LLAMA_CPP_BASE_URL_DEFAULT
     stored = "" if base_url == LLAMA_CPP_BASE_URL_DEFAULT else base_url
 
-    models = _fetch_llama_cpp_models(base_url)
+    models = _fetch_llama_cpp_models()
     if models:
         return stored, _pick_llama_cpp_model(models)
 
     print(
-        f"  No models available from {base_url}.\n"
-        f"  llama-server may not be running there, or the address may be wrong.\n"
-        f"  If it is running, make sure it is serving a model, then re-run the\n"
-        f"  wizard to pick from the list.\n"
-        f"  Falling back to manual model-name entry."
+        "  No locally cached llama.cpp models found.\n"
+        "  Either the 'llama' command is not on your PATH, or its model cache is\n"
+        '  empty. Install a model with "llama download -hf <user>/<model>[:quant]"\n'
+        '  (list them with "llama cli -cl"), then re-run the wizard to pick from\n'
+        "  the list.\n"
+        "  Falling back to manual model-name entry."
     )
     return stored, _prompt_model_freetext(feature_label)
 
@@ -249,7 +287,8 @@ def _prompt_llama_cpp_model(feature_label: str) -> tuple[str, str]:
 def _prompt_graph_provider(
     ask_yn: "Callable[[str], bool]",
     ask_choice: "Callable[[str, set[str], str], str]",
-) -> tuple[str, str, str]:
+    ollama_base_url_default: str,
+) -> tuple[str, str, str, str]:
     """Ask whether to enable LLM-backed graph enrichment and gather its settings.
 
     Graph enrichment (community summaries, relationship labels) is optional and
@@ -261,11 +300,11 @@ def _prompt_graph_provider(
     enrichment client (deferred; see ``EnrichmentClientFactory``) and is
     intentionally not offered here.
 
-    Returns ``(provider, extraction_model, llama_cpp_base_url)``, all ``""``
-    when the operator declines enrichment. ``extraction_model`` is always
-    prompted (even for anthropic) because, unlike ``HyDEConfig``/
-    ``RAGFusionConfig``, ``GraphConfig.extraction_model`` has no built-in
-    default model.
+    Returns ``(provider, extraction_model, ollama_base_url, llama_cpp_base_url)``
+    — the same shape :func:`_prompt_provider` returns — all ``""`` when the
+    operator declines enrichment. ``extraction_model`` is always prompted (even
+    for anthropic) because, unlike ``HyDEConfig``/``RAGFusionConfig``,
+    ``GraphConfig.extraction_model`` has no built-in default model.
     """
     print(
         "\nLLM-backed graph enrichment:\n"
@@ -275,17 +314,20 @@ def _prompt_graph_provider(
         "  Default: disabled."
     )
     if not ask_yn("Enable LLM-backed graph enrichment? [y/N]: "):
-        return "", "", ""
+        return "", "", "", ""
 
     provider = ask_choice(
         "Which provider for graph enrichment? (anthropic/openai/ollama/llama_cpp) [anthropic]: ",
         {"anthropic", "openai", "ollama", "llama_cpp"},
         "anthropic",
     )
+    if provider == "ollama":
+        base_url, model = _prompt_ollama_model("graph enrichment", ollama_base_url_default)
+        return provider, model, base_url, ""
     if provider == "llama_cpp":
         base_url, model = _prompt_llama_cpp_model("graph enrichment")
-        return provider, model, base_url
-    return provider, _prompt_model_freetext("graph enrichment"), ""
+        return provider, model, "", base_url
+    return provider, _prompt_model_freetext("graph enrichment"), "", ""
 
 
 # Curated Claude model aliases shown by the wizard. The Claude CLI has no
@@ -380,6 +422,7 @@ def _prompt_optional_features(
     enable_rag_fusion: bool | None = None,
     hyde_ollama_base_url_default: str = OLLAMA_BASE_URL_DEFAULT,
     rag_fusion_ollama_base_url_default: str = OLLAMA_BASE_URL_DEFAULT,
+    graph_ollama_base_url_default: str = OLLAMA_BASE_URL_DEFAULT,
 ) -> WizardFeatures:
     """Ask seven optional-feature questions after profile selection.
 
@@ -554,6 +597,7 @@ def _prompt_optional_features(
     _rag_fusion_llama_cpp_base_url_val = ""
     _graph_provider_val = ""
     _graph_extraction_model_val = ""
+    _graph_ollama_base_url_val = ""
     _graph_llama_cpp_base_url_val = ""
 
     if enable_hyde is not None or enable_rag_fusion is not None:
@@ -604,9 +648,12 @@ def _prompt_optional_features(
         # Graph enrichment provider step (FE-2): independent of HyDE/RAG Fusion,
         # but shares their "truly interactive" gate — skipped whenever either
         # flag was pre-answered or the wizard is running non-interactively.
-        _graph_provider_val, _graph_extraction_model_val, _graph_llama_cpp_base_url_val = (
-            _prompt_graph_provider(_ask_yn, _ask_choice)
-        )
+        (
+            _graph_provider_val,
+            _graph_extraction_model_val,
+            _graph_ollama_base_url_val,
+            _graph_llama_cpp_base_url_val,
+        ) = _prompt_graph_provider(_ask_yn, _ask_choice, graph_ollama_base_url_default)
 
     return WizardFeatures(
         install_code_extra=_install_code_extra_val,
@@ -629,6 +676,7 @@ def _prompt_optional_features(
         rag_fusion_llama_cpp_base_url=_rag_fusion_llama_cpp_base_url_val,
         graph_provider=_graph_provider_val,
         graph_extraction_model=_graph_extraction_model_val,
+        graph_ollama_base_url=_graph_ollama_base_url_val,
         graph_llama_cpp_base_url=_graph_llama_cpp_base_url_val,
     )
 

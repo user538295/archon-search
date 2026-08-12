@@ -320,7 +320,7 @@ For **Anthropic** (default): no further prompts. Add your API key to `~/.archon-
 
 For **OpenAI**: the wizard prompts for a model name (required). Add `OPENAI_API_KEY=<key>` to `~/.archon-search/.secrets.env`. Query text is sent to OpenAI's API on every request — do not enable in air-gapped deployments or where data residency requirements apply.
 
-For **Ollama**: the wizard asks for the server base URL first (default `http://localhost:11434`; on a re-run it pre-fills the address already in your config, so pressing Enter keeps it), then contacts that address and lists the models installed there as a numbered menu — you pick by number instead of typing a name:
+For **Ollama**: the wizard asks for the server base URL first (default `http://localhost:11434`; on a re-run it pre-fills the address already in your config, so pressing Enter keeps it), then contacts that address and lists the models installed there as a numbered menu — you pick by number instead of typing a name. An address without a scheme, such as `localhost:11434` or `myollama.internal`, is accepted: the wizard fills in `http://` and, when no port is given, Ollama's default `11434` — the same address the Ollama client resolves at runtime. The completed address is what gets written to `ollama_base_url`, so typing `localhost:11434` is recorded as the default and leaves the key out of your config entirely:
 
 ```
 Ollama base URL for HyDE [http://localhost:11434]:
@@ -348,17 +348,17 @@ Model for HyDE (number, name, or blank):
 
 Leaving it blank omits `--model` so Claude Code uses its own configured default. If `claude` is not found, the wizard prints an install pointer (https://claude.ai/code) and still writes the config — install Claude Code before starting the server, and query expansion falls back silently until it is available. Unlike Ollama, this alias list is hardcoded in the wizard (the Claude CLI has no runtime model-listing command) and is updated with each release.
 
-For **llama.cpp**: the wizard asks for the llama-server base URL first (default `http://localhost:8080`; a re-run pre-fills the address already in your config), then contacts that address's OpenAI-compatible `/v1/models` endpoint and lists the loaded models as a numbered menu — you pick by number instead of typing a name:
+For **llama.cpp**: the wizard asks for the llama-server base URL first (always offered as the built-in default `http://localhost:8080`) — that address is what the server talks to at runtime. The model list is independent of it: the wizard runs `llama cli -cl` and lists the models in your **local llama.cpp cache** as a numbered menu, so you pick by number instead of typing a name:
 
 ```
 llama-server base URL for HyDE [http://localhost:8080]:
 
-Available llama-server models:
-  1. qwen2.5-0.5b-instruct
+Locally cached llama.cpp models:
+  1. ggml-org/Qwen3-1.7B-GGUF:Q8_0
 Select a model by number [1-1]:
 ```
 
-If the server is unreachable or has no models loaded, the wizard says so and falls back to manual model-name entry so you can still finish setup. HyDE and RAG Fusion each get their own base-URL prompt and picker. No API key is needed — query text never leaves your host, so it is safe for air-gapped deployments. Use a small, direct-response instruct model, not a reasoning model — a reasoning model spends the whole `max_tokens` budget on hidden chain-of-thought and HyDE/RAG Fusion silently stay disabled (`hyde_applied`/`rag_fusion_applied: false`) even though the server is reachable.
+The list deliberately comes from the cache rather than from a running llama-server: a live server reports only the single model it currently has loaded, often as an ad-hoc absolute path you cannot re-use in the config. If the `llama` command is not on your PATH or the cache is empty, the wizard says so, points you at `llama download -hf <user>/<model>[:quant]`, and falls back to manual model-name entry so you can still finish setup. The name you pick is only honoured by a router-mode llama-server (started with `--models-dir`); a single-model llama-server ignores it and answers with whatever model it has loaded, so serve the model you pick. HyDE and RAG Fusion each get their own base-URL prompt and picker. No API key is needed — query text never leaves your host, so it is safe for air-gapped deployments. Use a small, direct-response instruct model, not a reasoning model — a reasoning model spends the whole `max_tokens` budget on hidden chain-of-thought and HyDE/RAG Fusion silently stay disabled (`hyde_applied`/`rag_fusion_applied: false`) even though the server is reachable.
 
 After answering, the wizard:
 
@@ -390,7 +390,7 @@ If you answer `y`, the wizard prompts for one of the four v1 enrichment provider
 Which provider for graph enrichment? (anthropic/openai/ollama/llama_cpp) [anthropic]:
 ```
 
-`extraction_model` is always prompted as free text (even for `anthropic`), because unlike `HyDEConfig`/`RAGFusionConfig`, `GraphConfig.extraction_model` has no built-in default. Choosing `llama_cpp` uses the same base-URL-then-`/v1/models`-picker flow shown above for HyDE/RAG Fusion. After answering, the wizard writes `[graph].provider`, `[graph].extraction_model`, and (for `llama_cpp`) `[graph].llama_cpp_base_url` to your config.
+`extraction_model` is prompted as free text for `anthropic` and `openai`, because unlike `HyDEConfig`/`RAGFusionConfig`, `GraphConfig.extraction_model` has no built-in default. Choosing `ollama` or `llama_cpp` instead gets the same base-URL-then-model-picker flow shown above for HyDE/RAG Fusion — for `ollama` the list comes from the server you name, for `llama_cpp` from `llama cli -cl`. After answering, the wizard writes `[graph].provider`, `[graph].extraction_model`, and the base URL for whichever local provider you picked (`[graph].ollama_base_url` or `[graph].llama_cpp_base_url`) to your config. As everywhere else, a base URL equal to the built-in default is left out of the config rather than written, and on a re-run the prompt is pre-filled with the address already saved in `[graph]`.
 
 ### Step 6 — Summary screen
 

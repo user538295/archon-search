@@ -947,10 +947,10 @@ def test_e2e_hyde_declineProceedPrompt_reverts(runner: CliRunner, tmp_path: Path
 
 
 @pytest.mark.integration
-def test_wizard_llama_cpp_model_picker_reachable(runner: CliRunner, tmp_path: Path) -> None:
-    """Interactive wizard, llama_cpp provider chosen for HyDE + RAG Fusion, reachable
-    llama-server → the numbered /v1/models picker is presented and its choice written
-    to the TOML (S4)."""
+def test_wizard_llama_cpp_model_picker_cache_populated(runner: CliRunner, tmp_path: Path) -> None:
+    """Interactive wizard, llama_cpp provider chosen for HyDE + RAG Fusion, non-empty
+    local model cache → the numbered picker is presented and its choice written to the
+    TOML (S4)."""
     config_path = tmp_path / "archon-search.toml"
 
     # Input queue (minimal English profile HAS a reranker):
@@ -999,13 +999,13 @@ def test_wizard_llama_cpp_model_picker_reachable(runner: CliRunner, tmp_path: Pa
 
 
 @pytest.mark.integration
-def test_wizard_llama_cpp_model_picker_unreachable(runner: CliRunner, tmp_path: Path) -> None:
-    """Interactive wizard, llama_cpp provider chosen, unreachable llama-server → free-text
+def test_wizard_llama_cpp_model_picker_cache_empty(runner: CliRunner, tmp_path: Path) -> None:
+    """Interactive wizard, llama_cpp provider chosen, empty local model cache → free-text
     model entry is shown instead of the numbered picker, and never raises (S12)."""
     config_path = tmp_path / "archon-search.toml"
 
     # Same queue as the reachable case, except steps 12/15 are free-text model names
-    # (no numbered picker is shown when /v1/models returns []); trailing "n" declines
+    # (no numbered picker is shown when the local cache is empty); trailing "n" declines
     # the FE-2 graph-enrichment step before "Proceed?".
     stdin_responses = (
         "\n".join(
@@ -1071,7 +1071,7 @@ def test_wizard_graph_provider_step_writes_all_three_fields(runner: CliRunner, t
                 )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
-    mock_fetch.assert_called_once_with("http://box:8080")
+    mock_fetch.assert_called_once_with()  # the local cache probe takes no base URL
     doc = tomlkit.parse(config_path.read_text())
     assert doc["graph"]["provider"] == "llama_cpp"
     assert doc["graph"]["extraction_model"] == "m1"

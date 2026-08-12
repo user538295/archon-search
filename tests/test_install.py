@@ -46,6 +46,7 @@ def _make_search_config(tmp_path: Path) -> object:
         # G10 Ollama picker: run() threads these into the wizard's base-URL prompt.
         hyde: FakeProviderConfig = field(default_factory=FakeProviderConfig)
         rag_fusion: FakeProviderConfig = field(default_factory=FakeProviderConfig)
+        graph: FakeProviderConfig = field(default_factory=FakeProviderConfig)
 
     return FakeSearchConfig()
 

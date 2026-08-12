@@ -79,7 +79,7 @@ def _prompt_provider(feature_label, ask_choice, ollama_base_url_default):
     return provider
 
 
-def _prompt_graph_provider(ask_yn, ask_choice):
+def _prompt_graph_provider(ask_yn, ask_choice, ollama_base_url_default):
     provider = ask_choice(
         "graph? ",
         {"anthropic", "openai", "ollama", "llama_cpp"},
@@ -102,7 +102,7 @@ def _prompt_provider(feature_label, ask_choice, ollama_base_url_default):
     return provider
 
 
-def _prompt_graph_provider(ask_yn, ask_choice):
+def _prompt_graph_provider(ask_yn, ask_choice, ollama_base_url_default):
     provider = ask_choice(
         "graph? ",
         {"anthropic", "openai", "ollama", "llama_cpp", "claude_cli", "extra_provider"},

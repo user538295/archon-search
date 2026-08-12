@@ -563,6 +563,7 @@ class BaseInstaller(ABC):
                 enable_rag_fusion=enable_rag_fusion if enable_rag_fusion else None,
                 hyde_ollama_base_url_default=self.cfg.hyde.ollama_base_url,
                 rag_fusion_ollama_base_url_default=self.cfg.rag_fusion.ollama_base_url,
+                graph_ollama_base_url_default=self.cfg.graph.ollama_base_url,
             )
 
             # Step 3d: overlay C15 Tier 1 flag values onto features

@@ -586,6 +586,34 @@ class TestApplyWizardFeaturesFE2LlamaCppAndGraph:
         assert doc["graph"]["extraction_model"] == "claude-haiku-4-5"
         assert "llama_cpp_base_url" not in doc["graph"]
 
+    def test_graph_provider_ollama_writes_custom_base_url(self) -> None:
+        """A custom Ollama address reaches [graph].ollama_base_url."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        features = WizardFeatures(
+            graph_provider="ollama",
+            graph_extraction_model="qwen3",
+            graph_ollama_base_url="http://graph-box:11434",
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert doc["graph"]["provider"] == "ollama"
+        assert doc["graph"]["extraction_model"] == "qwen3"
+        assert doc["graph"]["ollama_base_url"] == "http://graph-box:11434"
+
+    def test_graph_provider_ollama_default_base_url_clears_stale_key(self) -> None:
+        """Reverting to the default address deletes a URL a prior run wrote (re-run hygiene)."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        doc["graph"] = tomlkit.table()
+        doc["graph"]["ollama_base_url"] = "http://old-box:11434"
+        features = WizardFeatures(
+            graph_provider="ollama", graph_extraction_model="qwen3", graph_ollama_base_url=""
+        )
+        _apply_wizard_features_to_toml(doc, features)
+        assert "ollama_base_url" not in doc["graph"]
+
     def test_graph_provider_empty_writes_nothing(self) -> None:
         """graph_provider='' (declined enrichment) writes no [graph] section at all."""
         from archon_search.install import _apply_wizard_features_to_toml
