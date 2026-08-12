@@ -391,6 +391,11 @@ class SearchPipeline:
     def embedder_is_warm(self) -> bool:
         return self._global_embedder.is_warm
 
+    async def warmup_reranker(self) -> None:
+        """Load the reranker model now. No-op when no reranker is configured."""
+        if self._reranker is not None:
+            await self._reranker.warmup()
+
 
     # ------------------------------------------------------------------
     # Ingest

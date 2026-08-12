@@ -242,15 +242,15 @@ If you answer `y`, archon-search appends one JSON line per search request to dai
 
 ```
 Eager embedder loading:
-  Pre-loads the embedding model at server startup instead of on the first query.
+  Pre-loads the embedding model and reranker at server startup instead of on the first query.
   Eliminates first-query latency (~5-15s on first search without this).
   Default: disabled.
-Pre-load embedding models at startup (eliminates first-query latency)? [y/N]:
+Pre-load embedding models and reranker at startup (eliminates first-query latency)? [y/N]:
 ```
 
 **Default**: No.
 
-By default, embedding models are loaded lazily on the first search request, which causes a ~5–15 second delay for that request. If you answer `y`, models are loaded when the server starts instead. This increases startup time but makes every query fast from the first one. Recommended for automated workflows or production use where predictable latency matters.
+By default, the embedding model and the cross-encoder reranker are loaded lazily on the first search request, which causes a ~5–15 second delay for that request. If you answer `y`, both are loaded when the server starts instead. This increases startup time but makes every query fast from the first one. Recommended for automated workflows or production use where predictable latency matters.
 
 #### 5f. Routing strategy
 

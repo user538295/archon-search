@@ -116,7 +116,7 @@ All knobs live in `archon-search.toml`; `archon-search.toml.example` is the cano
 - `top_k_retrieve` / `top_k_return` (15 / 5). Linear effect on reranker latency.
 - `top_k_max` (100). Hard cap on a per-request `top_k`.
 - `embedder_cache_size` (3). Number of embedder models held in the LRU cache; raise only for genuine multi-model workloads.
-- `eager_load_embedders` (false). When true, ONNX weights are reconstructed at startup — slower boot, no first-query latency spike.
+- `eager_load_embedders` (false). When true, ONNX weights are reconstructed at startup — for the embedder cache *and* the reranker cross-encoder — so boot is slower but there is no first-query latency spike.
 - `centroid_recompute_threshold` (10 000). Chunk-count trigger for a full centroid re-read on the paths that still recompute.
 - `[search] max_fanout` (8) / `fanout_leg_trim` (40) / `fanout_timeout_seconds` (30.0). Bound multi-collection / RAG-Fusion fan-out cost.
 

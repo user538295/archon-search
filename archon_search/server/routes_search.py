@@ -221,6 +221,15 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         # HyDE failure: requested but returned no vector
         hyde_expansion_warning = _HYDE_EXPANSION_FAILED_WARNING if (body.hyde and not hyde_applied) else None
 
+    # S184: the cross-encoder builds its ONNX weights on first use. Pay that
+    # one-off cost here — OUTSIDE the search timeout budget below — because
+    # inside it the load consumes the whole budget and a valid query 504s.
+    if not pipeline.reranker_is_warm:
+        try:
+            await pipeline.warmup_reranker()
+        except Exception:
+            logger.warning("reranker warm-up failed; continuing with search", exc_info=True)
+
     if body.collections is not None:
         try:
             result = await pipeline.search_many(

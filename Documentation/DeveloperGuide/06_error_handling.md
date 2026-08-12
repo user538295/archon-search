@@ -34,7 +34,7 @@ Verified against the route modules under `archon_search/server/`:
 | `503` | `POST /search` — any exception raised by `pipeline.get_collection_meta` (`routes_search.py:67-71`) | `{"detail": "service unavailable"}` | Retry with exponential backoff. |
 | `503` | `POST /collections/` — a reindex holds the per-collection ingest lock | `{"detail": "store busy; retry in N seconds"}` + header `Retry-After: N` | Honour `Retry-After`, then retry. Ingest to a *different* collection is unaffected. |
 | `503` | `POST /ingest` — a reindex holds the per-collection ingest lock | `{"error": "store_busy", "detail": "..."}` + header `Retry-After: 30` (note: `error` key, not `detail`-only — normalisation deferred) | Honour `Retry-After`, then retry. |
-| `504` | `POST /route` — 30 s routing timeout; `POST /search` — pipeline call timed out (~30 s) | `{"detail": "routing timed out"}` / `{"detail": "Search timed out"}` | Retry at most once; if persistent, check CPU pressure or model load. |
+| `504` | `POST /route` — 30 s routing timeout; `POST /search` — pipeline call timed out (~30 s) | `{"detail": "routing timed out"}` / `{"detail": "Search timed out"}` | Retry at most once; if persistent, check CPU pressure or model load. On `/search`, model load is no longer a cause — the reranker is warmed before the timer starts (S184). |
 
 The full server-side mapping with file:line citations is in `Architecture/140_error_handling_strategy.md`.
 

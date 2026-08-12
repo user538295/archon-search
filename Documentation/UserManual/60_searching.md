@@ -50,7 +50,7 @@ Status codes:
 - `422` — invalid selection (both/neither of `collection`/`collections`), fan-out over `max_fanout`, `top_k` over `top_k_max`, or an invalid model/parameter. A missing HyDE/RAG-Fusion provider package prevents startup entirely (see `160_troubleshooting.md`).
 - `503` — internal metadata lookup failed.
 - `500` — pipeline stage exception (embedder, store, or reranker raised).
-- `504` — pipeline call timed out (~30 s).
+- `504` — pipeline call timed out (~30 s). The timer starts after the reranker is loaded, so a cold model no longer causes this on the first search after a restart.
 
 ### `curl` example
 

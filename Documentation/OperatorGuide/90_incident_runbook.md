@@ -88,7 +88,7 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 **Diagnosis** (log strings and telemetry statuses verified against `server/routes_search.py`):
 
 - **HTTP 500** — a pipeline stage failed (embedder, store query, or reranker). The server logs at ERROR with `event_type="search_pipeline_failure"` and message `search pipeline failed: <ExceptionClass>` (full traceback attached). Telemetry entry: `endpoint="search"`, `status="internal_error"`.
-- **HTTP 504** — the pipeline call timed out (>30 s). ERROR record with `event_type="search_timeout"`, message `search pipeline timed out`. Telemetry entry: `status="timeout"`.
+- **HTTP 504** — the pipeline call timed out (>30 s). ERROR record with `event_type="search_timeout"`, message `search pipeline timed out`. Telemetry entry: `status="timeout"`. A cold cross-encoder is **not** a cause: since S184 the handler warms the reranker before the timer starts, so a 504 means the search itself was slow (store contention, an oversized candidate pool, CPU pressure) rather than a one-off model load.
 - **HTTP 503** — collection metadata could not be reached (body `{"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"}`). ERROR message `search: meta lookup failed for collection ...`. **No telemetry entry is emitted** — triage as a store connectivity issue (see LanceDB lock contention above).
 - **HTTP 200 + `results: []`** — success, no matches. Not a failure.
 

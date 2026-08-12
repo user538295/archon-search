@@ -10,6 +10,9 @@ from archon_search._diagnostics import ScoredSearchCandidate
 from archon_search._types import SearchResult
 from archon_search.observability import record_stage
 
+# Trivial (query, document) pair used only to force a cold backend to load.
+_WARMUP_PAIR = ("warmup", "warmup")
+
 
 @runtime_checkable
 class RerankerBackend(Protocol):
@@ -57,6 +60,20 @@ class Reranker:
     @property
     def is_warm(self) -> bool:
         return self._backend.is_warm
+
+    async def warmup(self) -> None:
+        """Build the backend's model now, off the request path.
+
+        ``ModelReranker`` constructs its ONNX cross-encoder on the *first*
+        ``predict`` call. Callers must run this outside any request timeout
+        budget, otherwise the one-off load consumes the whole budget and an
+        otherwise valid search fails with 504 (S184).
+
+        Idempotent: a no-op once the backend is warm.
+        """
+        if self._backend.is_warm:
+            return
+        await asyncio.to_thread(self._backend.predict, [_WARMUP_PAIR])
 
     async def rerank(
         self, query: str, candidates: list[SearchResult], top_k: int

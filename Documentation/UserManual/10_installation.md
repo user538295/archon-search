@@ -154,7 +154,7 @@ Key `wizard` flags (verified against `archon_search/cli/install_cmd.py`):
 | `--code / --no-code` | Install tree-sitter code enrichment packages (`archon-search[code]`). Enables symbol extraction for code files. |
 | `--watch / --no-watch` | Enable filesystem watcher: auto-reindex collection source directories on file changes. |
 | `--telemetry / --no-telemetry` | Enable local query telemetry (structural metadata only, no raw query strings). |
-| `--eager-load / --no-eager-load` | Pre-load embedding models at startup (eliminates ~5–15s first-query latency). |
+| `--eager-load / --no-eager-load` | Pre-load embedding models and the reranker at startup (eliminates ~5–15s first-query latency). |
 | `--no-reranker` | Disable the cross-encoder reranker for lower latency (less precise results). |
 | `--routing-strategy {centroid,hybrid}` | Set routing strategy. `hybrid` blends centroid + description-embedding scores. |
 | `--log-format {text,json}` | Log format. Use `json` for container deployments and log aggregators. |

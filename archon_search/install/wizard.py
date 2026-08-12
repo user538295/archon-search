@@ -492,7 +492,7 @@ def _prompt_optional_features(
     # --- eager_load_embedders ---
     print(
         "\nEager embedder loading:\n"
-        "  Pre-loads the embedding model at server startup instead of on the first query.\n"
+        "  Pre-loads the embedding model and reranker at server startup instead of on the first query.\n"
         "  Eliminates first-query latency (~5-15s on first search without this).\n"
         "  Default: disabled."
     )
@@ -502,7 +502,7 @@ def _prompt_optional_features(
         _eager_load_val = False
     else:
         _eager_load_val = _ask_yn(
-            "Pre-load embedding models at startup (eliminates first-query latency)? [y/N]: "
+            "Pre-load embedding models and reranker at startup (eliminates first-query latency)? [y/N]: "
         )
 
     # --- routing_strategy ---

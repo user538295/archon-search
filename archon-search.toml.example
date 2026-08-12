@@ -76,7 +76,7 @@ multilingual = false
 
 # If true, pre-warm embedding models at server startup (eager loading): the default
 # embedding_model above — always, so collections left on it are covered — plus every
-# distinct per-collection active_embedding_model.
+# distinct per-collection active_embedding_model — and the reranker cross-encoder.
 # Eliminates the ~5–15s first-query latency by loading models before any request arrives.
 # Set interactively via `archon-search wizard` or with the `--eager-load / --no-eager-load` flag.
 # eager_load_embedders = false

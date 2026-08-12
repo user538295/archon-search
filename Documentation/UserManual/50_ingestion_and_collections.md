@@ -216,7 +216,7 @@ curl -X POST http://localhost:8765/collections/ \
 
 `GET /collections/{name}` reports `active_embedding_model`, `pending_embedding_model`, `needs_reindex`, and `reindex_job_id`; `GET /collections/` and `GET /status` surface `needs_reindex` per collection. Commit the change with `POST /collections/{name}/reindex` — on success `active_embedding_model` is updated and `needs_reindex` cleared. The MCP `update_collection` tool exposes the same state machine.
 
-**Embedder cache.** With mixed models the server keeps an LRU cache of loaded embedders (capacity `[database].embedder_cache_size`, default 3). Set `[database].eager_load_embedders = true` to populate that cache at startup with the default `[database].embedding_model` plus every per-collection `active_embedding_model` — collections left on the default model are included.
+**Embedder cache.** With mixed models the server keeps an LRU cache of loaded embedders (capacity `[database].embedder_cache_size`, default 3). Set `[database].eager_load_embedders = true` to populate that cache at startup with the default `[database].embedding_model` plus every per-collection `active_embedding_model` — collections left on the default model are included. The same setting also warms the reranker cross-encoder.
 
 ## FTS index maintenance
 

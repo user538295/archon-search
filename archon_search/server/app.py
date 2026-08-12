@@ -355,6 +355,16 @@ def create_app(
                     config.embedder_cache_size,
                 )
             await embedder_cache.preload(list(distinct_models))
+            # The cross-encoder is lazy too (S184): warm it here so the first
+            # /search does not build ONNX weights inside its timeout budget.
+            try:
+                await app.state.pipeline.warmup_reranker()
+            except Exception:
+                logger.warning(
+                    "eager_load_embedders: reranker warm-up failed; the first search "
+                    "will load the cross-encoder instead",
+                    exc_info=True,
+                )
 
         # All startup migrations complete before the lifespan context yields control to the request loop
 
