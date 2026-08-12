@@ -1,6 +1,23 @@
 # Changelog
 
 
+## [26.8.1969] - 2026-08-12
+
+**Llama.cpp model discovery + configuration stability improvements**
+
+**Two-tier GGUF cache discovery**
+- The llama.cpp model picker now falls back to scanning local GGUF directories when `llama cli -cl` yields nothing, making models installed via `huggingface-cli` or manual download discoverable. Scans `$LLAMA_CACHE`, the huggingface hub cache, `$XDG_CACHE_HOME/llama.cpp`, and platform-specific defaults (`~/Library/Caches/llama.cpp` on macOS, `~/.cache/llama.cpp` elsewhere) in order.
+- Cache scanning is now robust to edge cases: handles cache-root paths containing brackets (e.g., `/home/user/[cache]`), deduplicates files reachable through symlinks or multiple configured roots, preserves already-discovered models if a single env var is unresolvable, and uses sorted walks for reproducible menu order.
+
+**Base URL persistence in wizard re-runs**
+- Saved provider base URLs for llama.cpp, Ollama, and graph enrichment are now pre-filled when re-running the wizard, eliminating silent reversion to defaults when you press Enter. The wizard detects and strips trailing slashes for proper comparison against stored values.
+- Base URL normalization is now consistent: automatically injects `http://` scheme when needed, correctly places ports in the authority component (before any path), and applies the same rules at entry time and config save time.
+
+**Model picker and URL storage correctness**
+- Cache-root disambiguation qualifiers shown in the llama.cpp model picker (e.g., `model.gguf [/cache/path]`) are now stripped at save time, preventing malformed model names in your config file. The picker still shows qualifiers for disambiguation.
+- Llama.cpp and Ollama base URLs are now correctly stored; ports are inserted into the hostname, not appended to paths. Fixes URLs like `http://host/path:8080` that would point providers at invalid addresses.
+
+
 ## [26.8.1956] - 2026-08-11
 
 canary
