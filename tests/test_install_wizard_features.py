@@ -345,6 +345,34 @@ class TestPromptOptionalFeatures:
         assert features.routing_strategy == "hybrid"
         assert features.log_format == "json"
 
+    def test_graph_base_url_defaults_are_forwarded_to_the_right_parameters(self) -> None:
+        """The two graph base-URL defaults must not be transposed on the way through.
+
+        `_prompt_graph_provider` takes `ollama_base_url_default` and
+        `llama_cpp_base_url_default` as adjacent positional `str` parameters, so
+        swapping them at the call site is silent: the types match, every unit
+        test of `_prompt_graph_provider` itself passes, and the operator only
+        finds out when a re-run offers the llama-server address as the Ollama
+        default. Distinct ports here make a transposition fail loudly.
+        """
+        with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3"]):
+            with patch("builtins.input", side_effect=["n", "y", "ollama", "", "1"]):
+                features = _prompt_optional_features(
+                    non_interactive=False,
+                    profile=self._profile_with_reranker,
+                    install_code=False,
+                    disable_reranker=False,
+                    enable_watch=False,
+                    enable_telemetry=False,
+                    eager_load=False,
+                    routing_strategy="hybrid",
+                    log_format="json",
+                    graph_ollama_base_url_default="http://saved-graph:11434",
+                    graph_llama_cpp_base_url_default="http://saved-graph:8080",
+                )
+        assert features.graph_provider == "ollama"
+        assert features.graph_ollama_base_url == "http://saved-graph:11434"
+
     def test_interactive_all_yes(self) -> None:
         """All 'y' inputs (and valid choices) produce all-enabled features."""
         # 7 questions: code(y), reranker(y=keep enabled), watch(y), telemetry(y), eager_load(y),
@@ -1493,6 +1521,15 @@ class TestNormaliseBaseUrl:
 
     def test_scheme_less_host_with_port_and_path_keeps_both(self) -> None:
         assert _normalise_base_url("myhost:8080/api/v1", 11434) == "http://myhost:8080/api/v1"
+
+    def test_scheme_less_trailing_slash_is_stripped_before_the_port_check(self) -> None:
+        """`localhost:8080/` must not be read as host `localhost:8080` + path `/`.
+
+        The `rstrip("/")` has to run before `partition("/")`, otherwise the
+        empty path is re-appended and the stored URL keeps a trailing slash
+        that the `"://" in base_url` branch strips for every other spelling.
+        """
+        assert _normalise_base_url("localhost:8080/", 8080) == "http://localhost:8080"
 
 
 class TestPromptOllamaModelStoresNormalisedUrl:
