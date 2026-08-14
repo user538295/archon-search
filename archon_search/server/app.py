@@ -354,10 +354,32 @@ def create_app(
                     len(distinct_models),
                     config.embedder_cache_size,
                 )
-            await embedder_cache.preload(list(distinct_models))
-            # preload() already warmed every embedder; only the equally lazy
-            # cross-encoder is still cold (S184).
-            await app.state.pipeline.warmup_models()
+
+            async def _run_eager_warmup(model_names: list[str]) -> None:
+                try:
+                    await embedder_cache.preload(model_names)
+                    # preload() already warmed every embedder; only the equally lazy
+                    # cross-encoder is still cold (S184).
+                    await app.state.pipeline.warmup_models()
+                    # Startup returning no longer implies warm-up finished, so this
+                    # is the only signal an operator has that it completed at all.
+                    logger.info(
+                        "eager model warm-up complete (%d embedding models + reranker)",
+                        len(model_names),
+                    )
+                except asyncio.CancelledError:
+                    logger.info("eager model warm-up cancelled during shutdown")
+                    raise
+                except BaseException as exc:  # noqa: BLE001 — never let the task escape
+                    logger.warning("eager model warm-up failed: %s", exc, exc_info=True)
+
+            # Warm-up must never be awaited here: uvicorn binds the listening socket
+            # only after lifespan startup returns, so a cold model cache (3-5 min)
+            # would keep the port closed for the whole window.
+            warmup_task = asyncio.create_task(_run_eager_warmup(list(distinct_models)))
+            app.state._warmup_task = warmup_task
+            app.state._background_tasks.add(warmup_task)
+            warmup_task.add_done_callback(app.state._background_tasks.discard)
 
         # All startup migrations complete before the lifespan context yields control to the request loop
 
@@ -731,6 +753,9 @@ def create_app(
     app.state.job_store = job_store
     app.state.config_path = Path(config_path) if config_path is not None else None
     app.state._background_tasks: set = set()
+    # Set to a Task by the lifespan only when eager_load_embedders is on; the None
+    # default keeps the attribute readable on every path.
+    app.state._warmup_task = None
     app.state.state_store = IndexingStateStore(config.db_path)
     app.state.search_store = SearchStore(config.db_path)
     app.state.watcher_manager = None

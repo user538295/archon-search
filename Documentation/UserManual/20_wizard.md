@@ -250,7 +250,7 @@ Pre-load embedding models and reranker at startup (eliminates first-query latenc
 
 **Default**: No.
 
-By default, the embedding model and the cross-encoder reranker are loaded lazily on the first search request, which causes a ~5–15 second delay for that request. If you answer `y`, both are loaded when the server starts instead. This increases startup time but makes every query fast from the first one. Recommended for automated workflows or production use where predictable latency matters.
+By default, the embedding model and the cross-encoder reranker are loaded lazily on the first search request, which causes a ~5–15 second delay for that request. If you answer `y`, both are loaded when the server starts instead. The load runs as a background task, so the server still starts accepting connections immediately; a query that arrives before the warm-up finishes still pays the lazy load. Recommended for automated workflows or production use where predictable latency matters.
 
 #### 5f. Routing strategy
 

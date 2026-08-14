@@ -39,6 +39,28 @@ def job_store(tmp_path: Path) -> JobStore:
     return JobStore(path=tmp_path / "jobs.json")
 
 
+def wait_for_warmup(app: FastAPI, timeout: float = 10.0) -> None:
+    """Block the calling thread until the backgrounded eager warm-up has finished.
+
+    ``eager_load_embedders`` hands warm-up to ``asyncio.create_task`` so lifespan
+    startup returns immediately (uvicorn binds the port only afterwards), which
+    means its effects are not observable the moment ``TestClient.__enter__``
+    returns. The task runs on the TestClient portal thread's loop, so it cannot be
+    awaited from here — poll it instead.
+    """
+    import time  # noqa: PLC0415
+
+    task = getattr(app.state, "_warmup_task", None)
+    assert task is not None, (
+        "eager warm-up task was never created — eager_load_embedders is off, or the "
+        "asyncio.create_task() call was removed from the lifespan"
+    )
+    deadline = time.monotonic() + timeout
+    while not task.done() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert task.done(), "eager warm-up task did not finish within the timeout"
+
+
 def test_create_app_returns_fastapi_instance(config: SearchConfig, job_store: JobStore) -> None:
     app = create_app(config, job_store)
     assert isinstance(app, FastAPI)
@@ -425,7 +447,7 @@ async def test_eager_load_embedders_true_preloads_collection_models(tmp_path: Pa
     ):
         app = create_app(cfg, job_store)
         with TestClient(app):
-            pass
+            wait_for_warmup(app)
     assert any("model-X" in names for names in preloaded)
 
 
@@ -465,6 +487,7 @@ async def test_eager_load_embedders_preloads_default_model(tmp_path: Path, job_s
     ):
         app = create_app(cfg, job_store)
         with TestClient(app):
+            wait_for_warmup(app)
             cache = app.state.embedder_cache
             assert cfg.embedding_model in cache.cached_models()
             # Cached AND warm: get_or_load returns the cached instance on a hit.
@@ -541,6 +564,196 @@ async def test_eager_load_does_not_warn_when_models_exactly_fill_cache(
     assert "exceed embedder_cache_size" not in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_warmup_does_not_block_lifespan_startup(tmp_path: Path, job_store: JobStore) -> None:
+    """Eager model warm-up must NOT be awaited inside the lifespan startup.
+
+    uvicorn's ``Server.startup()`` runs ``lifespan.startup()`` to completion *before*
+    it binds the listening socket, so every second spent warming ONNX weights is a
+    second in which the port is closed and clients get ``ConnectError``. Warm-up
+    takes 3-5 minutes on a cold model cache.
+
+    Oracle: both eager warm-up calls (``EmbedderCache.preload`` and
+    ``SearchPipeline.warmup_models``) are replaced with coroutines that park on an
+    event this test controls. Startup must still complete while they are parked —
+    i.e. warm-up has to be handed to ``asyncio.create_task`` rather than awaited.
+    The second assertion keeps the test honest: warm-up must still actually run,
+    so deleting it outright cannot make this test pass.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from archon_search.embedder_cache import EmbedderCache
+    from archon_search.pipeline import SearchPipeline
+    from archon_search.store import SearchStore
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.eager_load_embedders = True
+
+    release = asyncio.Event()
+    warmup_started = asyncio.Event()
+
+    async def parked_preload(self: EmbedderCache, model_names: list[str]) -> None:
+        warmup_started.set()
+        await release.wait()
+
+    async def parked_warmup_models(self: SearchPipeline, embedder: object | None = None) -> None:
+        warmup_started.set()
+        await release.wait()
+
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+        patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[])),
+        patch.object(EmbedderCache, "preload", new=parked_preload),
+        patch.object(SearchPipeline, "warmup_models", new=parked_warmup_models),
+    ):
+        app = create_app(cfg, job_store)
+        startup_done = asyncio.Event()
+        shutdown = asyncio.Event()
+
+        # Enter and exit the lifespan inside ONE task: the mounted FastMCP lifespan
+        # resets a ContextVar on exit and raises if entry/exit run in different
+        # contexts (as they do when only __aenter__ is wrapped in a task).
+        async def run_lifespan() -> None:
+            async with app.router.lifespan_context(app):
+                startup_done.set()
+                await shutdown.wait()
+
+        lifespan_task = asyncio.create_task(run_lifespan())
+        waiter = asyncio.create_task(startup_done.wait())
+        try:
+            # The timeout elapses only on the FAILURE path (a blocking startup never
+            # sets the event), so a generous budget costs nothing when green and keeps
+            # the test off the flake list under -n 8 contention.
+            await asyncio.wait(
+                {waiter, lifespan_task}, timeout=30.0, return_when=asyncio.FIRST_COMPLETED
+            )
+            startup_completed_while_warmup_parked = startup_done.is_set()
+        finally:
+            waiter.cancel()
+            release.set()
+            shutdown.set()
+            await lifespan_task
+
+    assert startup_completed_while_warmup_parked, (
+        "lifespan startup blocked on model warm-up — uvicorn cannot bind the port "
+        "until it returns, so clients get ConnectError for the whole warm-up window; "
+        "warm-up must run via asyncio.create_task()"
+    )
+    assert warmup_started.is_set(), "warm-up never ran at all"
+
+
+def test_eager_warmup_failure_is_contained_and_logged(
+    tmp_path: Path, job_store: JobStore, caplog
+) -> None:
+    """A raising warm-up must log a WARNING and never escape the task.
+
+    Warm-up now runs detached from the lifespan, so an exception has no caller to
+    propagate to — it would surface as an "exception was never retrieved" noise line
+    and silently lose the diagnostic. The ``except BaseException`` branch has to
+    absorb it, and the server has to keep serving.
+    """
+    import logging  # noqa: PLC0415
+    from unittest.mock import AsyncMock, patch  # noqa: PLC0415
+
+    from starlette.testclient import TestClient  # noqa: PLC0415
+
+    from archon_search.embedder_cache import EmbedderCache  # noqa: PLC0415
+    from archon_search.store import SearchStore  # noqa: PLC0415
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.eager_load_embedders = True
+
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+        patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[])),
+        patch.object(
+            EmbedderCache, "preload", new=AsyncMock(side_effect=RuntimeError("onnx exploded"))
+        ),
+        caplog.at_level(logging.WARNING, logger="archon_search.server.app"),
+    ):
+        app = create_app(cfg, job_store)
+        with TestClient(app) as client:
+            wait_for_warmup(app)
+            # The failure must not take the server down with it.
+            assert client.get("/health").status_code == 200
+
+    task = app.state._warmup_task
+    assert task.exception() is None, "warm-up exception escaped the task instead of being logged"
+    assert "eager model warm-up failed" in caplog.text
+    assert "onnx exploded" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_eager_warmup_cancelled_on_shutdown_is_logged(
+    tmp_path: Path, job_store: JobStore, caplog
+) -> None:
+    """Shutting down mid-warm-up cancels the task cleanly and logs it.
+
+    The lifespan shutdown cancels everything in ``_background_tasks``; the warm-up
+    task must re-raise ``CancelledError`` (so the gather sees a real cancellation)
+    rather than swallowing it into the generic failure branch.
+    """
+    import asyncio  # noqa: PLC0415
+    import logging  # noqa: PLC0415
+    from unittest.mock import AsyncMock, patch  # noqa: PLC0415
+
+    from archon_search.embedder_cache import EmbedderCache  # noqa: PLC0415
+    from archon_search.store import SearchStore  # noqa: PLC0415
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.eager_load_embedders = True
+
+    warmup_started = asyncio.Event()
+
+    async def never_finishes(self: EmbedderCache, model_names: list[str]) -> None:
+        warmup_started.set()
+        await asyncio.Event().wait()  # parked until cancelled
+
+    with (
+        patch.object(SearchStore, "connect", new=AsyncMock()),
+        patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
+        patch.object(SearchStore, "disconnect", new=AsyncMock()),
+        patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[])),
+        patch.object(EmbedderCache, "preload", new=never_finishes),
+        caplog.at_level(logging.INFO, logger="archon_search.server.app"),
+    ):
+        app = create_app(cfg, job_store)
+        async with app.router.lifespan_context(app):
+            await asyncio.wait_for(warmup_started.wait(), timeout=10.0)
+            task = app.state._warmup_task
+            assert not task.done(), "warm-up should still be parked at this point"
+
+    assert task.cancelled(), "shutdown must cancel the warm-up task, not leave it running"
+    assert "eager model warm-up cancelled during shutdown" in caplog.text
+    assert "eager model warm-up failed" not in caplog.text, (
+        "cancellation must not be reported through the generic failure branch"
+    )
+
+
+def test_warmup_task_attribute_exists_when_eager_load_disabled(
+    tmp_path: Path, job_store: JobStore
+) -> None:
+    """``app.state._warmup_task`` must be readable even with eager_load_embedders off.
+
+    The lifespan only assigns it inside the eager branch; without a construction-time
+    default any reader on the lazy path gets an AttributeError.
+    """
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.eager_load_embedders = False
+
+    app = create_app(cfg, job_store)
+    assert app.state._warmup_task is None
+
+
 def test_embedder_cache_receives_configured_providers(tmp_path: Path, job_store: JobStore) -> None:
     """[database] providers must reach the cache — every search embeds through it, not app.state.embedder."""
     from unittest.mock import AsyncMock, patch, MagicMock
@@ -564,7 +777,7 @@ def test_embedder_cache_receives_configured_providers(tmp_path: Path, job_store:
     ):
         app = create_app(cfg, job_store)
         with TestClient(app):
-            pass
+            wait_for_warmup(app)
 
     assert mock_make.call_args.kwargs["providers"] == ["CoreMLExecutionProvider"]
 

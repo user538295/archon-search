@@ -28,8 +28,14 @@ _CONTAINER_MSG = (
 def _server_connect_fail_msg() -> str:
     """Return the appropriate message when a connection attempt fails.
 
-    If the server process is alive (port not bound yet during warmup), returns the
-    'starting up' message. Otherwise returns the 'not running' message.
+    A live PID with an unreachable port means the server is still starting up, so
+    that case gets the 'starting up' hint instead of the 'not running' message.
+
+    Liveness is probed through the *managed* service only (launchd / systemd /
+    Windows), so a foreground ``archon-search serve`` — which no service manager
+    knows about — still falls back to the 'not running' message. Any probe failure
+    (``NotImplementedError`` on an unsupported platform, a missing ``launchctl``)
+    falls back the same way: the message is a hint, never a hard diagnosis.
     """
     try:
         if _get_service().status().running:
