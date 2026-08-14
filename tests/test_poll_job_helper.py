@@ -10,6 +10,14 @@ Covers:
 - test_poll_job_connect_error_exits_1: httpx.ConnectError → exit 1
 - test_poll_job_non200_exits_1: non-200 response → exit 1
 - test_poll_job_missing_status_exits_1: 200 with no status field → exit 1 (not infinite hang)
+- test_poll_job_connect_error_server_alive_shows_starting_up: connect failure while the service
+  process IS alive (warmup, port not bound yet) → "starting up" hint, not "not running"
+- test_poll_job_connect_error_server_dead_shows_not_running: connect failure while the service
+  process is NOT alive → the existing "not running" message
+- test_poll_job_connect_error_unsupported_platform_falls_back_to_not_running: _get_service()
+  raising (unsupported platform) → "not running" fallback, exit 1, no traceback
+- test_poll_job_connect_error_status_probe_failure_falls_back_to_not_running: status() raising
+  (launchctl/systemctl unavailable) → "not running" fallback, exit 1
 """
 from __future__ import annotations
 
@@ -19,6 +27,7 @@ import httpx
 import pytest
 
 from archon_search.cli._helpers import _poll_job
+from archon_search.platform.service import ServiceStatus
 
 
 def _job_response(status: str, progress: dict | None = None, error: str | None = None) -> MagicMock:
@@ -32,6 +41,17 @@ def _job_response(status: str, progress: dict | None = None, error: str | None =
     resp.json.return_value = body
     resp.text = str(body)
     return resp
+
+
+def _service_mock(running: bool) -> MagicMock:
+    """A SearchServiceLifecycle double whose status() reports the given running state."""
+    service = MagicMock()
+    service.status.return_value = ServiceStatus(
+        running=running,
+        pid=4242 if running else None,
+        uptime_seconds=3.0 if running else None,
+    )
+    return service
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +220,12 @@ def test_poll_job_connect_error_exits_1(capsys) -> None:
             side_effect=httpx.ConnectError("Connection refused"),
         ),
         patch("archon_search.cli._helpers.time.sleep"),
+        # Dead server: without this the real service probe runs and the assertion below
+        # would flip depending on whether the dev machine's launchd service is up.
+        patch(
+            "archon_search.cli._helpers._get_service",
+            return_value=_service_mock(running=False),
+        ),
     ):
         with pytest.raises(SystemExit) as exc_info:
             _poll_job("job-123", "http://localhost:8765", {"Authorization": "Bearer test-key"})
@@ -230,6 +256,148 @@ def test_poll_job_non200_exits_1(capsys) -> None:
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "500" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# test_poll_job_connect_error_server_alive_shows_starting_up
+# ---------------------------------------------------------------------------
+
+
+def test_poll_job_connect_error_server_alive_shows_starting_up(capsys) -> None:
+    """Connect failure while the service process IS alive → 'starting up', not 'not running'.
+
+    The port is unbound during warmup (model loading), so a ConnectError does not mean the
+    server is dead. launchd/systemd still reports a live PID, and the message must say so.
+    """
+    with (
+        patch(
+            "archon_search.cli._helpers.httpx.get",
+            side_effect=httpx.ConnectError("Connection refused"),
+        ),
+        patch("archon_search.cli._helpers.time.sleep"),
+        patch(
+            "archon_search.cli._helpers._get_service",
+            return_value=_service_mock(running=True),
+        ),
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            _poll_job("job-123", "http://localhost:8765", {"Authorization": "Bearer test-key"})
+
+    assert exc_info.value.code == 1, f"Expected exit code 1, got {exc_info.value.code}"
+
+    captured = capsys.readouterr()
+    assert "starting up" in captured.err, (
+        f"Expected a 'starting up' hint when the service process is alive, got: {captured.err!r}"
+    )
+    assert "not running" not in captured.err, (
+        f"Must NOT claim the server is not running while its PID is alive, got: {captured.err!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# test_poll_job_connect_error_server_dead_shows_not_running
+# ---------------------------------------------------------------------------
+
+
+def test_poll_job_connect_error_server_dead_shows_not_running(capsys) -> None:
+    """Connect failure while the service process is NOT alive → the existing 'not running' text."""
+    with (
+        patch(
+            "archon_search.cli._helpers.httpx.get",
+            side_effect=httpx.ConnectError("Connection refused"),
+        ),
+        patch("archon_search.cli._helpers.time.sleep"),
+        patch(
+            "archon_search.cli._helpers._get_service",
+            return_value=_service_mock(running=False),
+        ),
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            _poll_job("job-123", "http://localhost:8765", {"Authorization": "Bearer test-key"})
+
+    assert exc_info.value.code == 1, f"Expected exit code 1, got {exc_info.value.code}"
+
+    captured = capsys.readouterr()
+    assert "not running" in captured.err, (
+        f"Expected the 'not running' message for a dead server, got: {captured.err!r}"
+    )
+    assert "starting up" not in captured.err, (
+        f"Must NOT claim the server is starting up when no PID is alive, got: {captured.err!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# test_poll_job_connect_error_unsupported_platform_falls_back_to_not_running
+# ---------------------------------------------------------------------------
+
+
+def test_poll_job_connect_error_unsupported_platform_falls_back_to_not_running(capsys) -> None:
+    """_get_service() raising (unsupported platform) → 'not running', never a traceback.
+
+    _get_service raises NotImplementedError on any platform that is neither darwin, linux,
+    nor win32. The probe is best-effort: it must degrade to the pre-existing message and
+    still exit 1, not crash the CLI on the error path.
+    """
+    with (
+        patch(
+            "archon_search.cli._helpers.httpx.get",
+            side_effect=httpx.ConnectError("Connection refused"),
+        ),
+        patch("archon_search.cli._helpers.time.sleep"),
+        patch(
+            "archon_search.cli._helpers._get_service",
+            side_effect=NotImplementedError("Unsupported platform: sunos5"),
+        ),
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            _poll_job("job-123", "http://localhost:8765", {"Authorization": "Bearer test-key"})
+
+    assert exc_info.value.code == 1, f"Expected exit code 1, got {exc_info.value.code}"
+
+    captured = capsys.readouterr()
+    assert "not running" in captured.err, (
+        f"Expected the 'not running' fallback when the service probe is unavailable, "
+        f"got: {captured.err!r}"
+    )
+    assert "starting up" not in captured.err, (
+        f"Must NOT claim the server is starting up when the probe failed, got: {captured.err!r}"
+    )
+    assert "sunos5" not in captured.err, (
+        f"The swallowed probe exception must not leak into user output, got: {captured.err!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# test_poll_job_connect_error_status_probe_failure_falls_back_to_not_running
+# ---------------------------------------------------------------------------
+
+
+def test_poll_job_connect_error_status_probe_failure_falls_back_to_not_running(capsys) -> None:
+    """service.status() raising (e.g. launchctl/systemctl missing) → 'not running', exit 1."""
+    service = MagicMock()
+    service.status.side_effect = OSError("launchctl not found")
+
+    with (
+        patch(
+            "archon_search.cli._helpers.httpx.get",
+            side_effect=httpx.ConnectError("Connection refused"),
+        ),
+        patch("archon_search.cli._helpers.time.sleep"),
+        patch("archon_search.cli._helpers._get_service", return_value=service),
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            _poll_job("job-123", "http://localhost:8765", {"Authorization": "Bearer test-key"})
+
+    assert exc_info.value.code == 1, f"Expected exit code 1, got {exc_info.value.code}"
+    assert service.status.called, "the service probe must actually be attempted"
+
+    captured = capsys.readouterr()
+    assert "not running" in captured.err, (
+        f"Expected the 'not running' fallback when status() raises, got: {captured.err!r}"
+    )
+    assert "launchctl not found" not in captured.err, (
+        f"The swallowed probe exception must not leak into user output, got: {captured.err!r}"
+    )
 
 
 def test_poll_job_missing_status_exits_1(capsys) -> None:

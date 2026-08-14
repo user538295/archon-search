@@ -11,13 +11,32 @@ from archon_search.platform.service import SearchServiceLifecycle
 
 _POLL_INTERVAL_SECONDS = 2
 _TERMINAL_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
-# ponytail: ConnectTimeout (bound-not-listening) and ConnectError (refused) both mean server absent.
+# ConnectTimeout (bound-not-listening) and ConnectError (refused) both mean the port is
+# unreachable; _server_connect_fail_msg() decides whether that is "stopped" or "still starting".
 _SERVER_NOT_RUNNING_MSG = "archon-search serve is not running. Start it first with: archon-search serve"
+_SERVER_STARTING_MSG = (
+    "archon-search is starting up. "
+    "Please wait for it to finish loading models, then retry."
+)
 _CONNECT_FAIL = (httpx.ConnectError, httpx.ConnectTimeout)
 _CONTAINER_MSG = (
     "Service management is not available in container mode. "
     "Use 'archon-search serve' to run the server."
 )
+
+
+def _server_connect_fail_msg() -> str:
+    """Return the appropriate message when a connection attempt fails.
+
+    If the server process is alive (port not bound yet during warmup), returns the
+    'starting up' message. Otherwise returns the 'not running' message.
+    """
+    try:
+        if _get_service().status().running:
+            return _SERVER_STARTING_MSG
+    except Exception:
+        pass
+    return _SERVER_NOT_RUNNING_MSG
 
 
 def _poll_job(
@@ -52,7 +71,7 @@ def _poll_job(
             try:
                 resp = httpx.get(url, headers=headers)
             except _CONNECT_FAIL:
-                click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+                click.echo(_server_connect_fail_msg(), err=True)
                 raise SystemExit(1)
             except httpx.HTTPError as exc:
                 click.echo(f"Error polling job: {exc}", err=True)
