@@ -13,7 +13,7 @@ from __future__ import annotations
 import click
 import httpx
 
-from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _SERVER_NOT_RUNNING_MSG
+from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _SERVER_NOT_RUNNING_MSG, _server_connect_fail_msg
 from archon_search.cli.collection import (
     _DEFAULT_API_URL,
     _resolve_api_key,
@@ -75,7 +75,7 @@ def build_communities_cmd(
             params={"namespace": namespace},
         )
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(base_url), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)

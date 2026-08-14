@@ -8,6 +8,14 @@
 
 ## Changelog
 
+### [next release] — `GET /ready` returns 503 while eager model warm-up is pending (2026-08-14)
+
+**What changed:** `ready: bool` (and the HTTP status) on `GET /ready` was previously storage-only — see the D6 entry below, which explicitly promised it would stay that way. It is now `SearchStore.ping()` **and** "no eager warm-up outstanding": when `[database].eager_load_embedders = true` and the background warm-up task has not finished, `/ready` answers `503` with `{"ready": false, "checks": {"storage": "ok", "models": "pending"}}`. Nothing changes on the default lazy path (`eager_load_embedders = false`), and the D6 model-*validation* result (`ok`/`warn`/`fail`) still never gates `ready`.
+
+**Why:** With eager loading on, the server accepted traffic while the ONNX models were still being built, so the first `/search` blocked for minutes behind warm-up. A readiness probe that reports ready in that window is wrong: load balancers and the CLI's "is it up?" logic had no way to tell "starting" from "serving". The CLI now uses exactly this signal — `_server_connect_fail_msg(base_url)` prints "archon-search is starting up…" on a 503 with `models: "pending"`.
+
+**Migration:** Operators who set `eager_load_embedders = true` and gate on `/ready` (Kubernetes readiness probes, the Docker `HEALTHCHECK`, load-balancer health checks) must allow enough startup grace for warm-up to complete — the container reports unhealthy until then, which is the intended behaviour. Probes that must ignore warm-up should use `GET /health` (liveness, never 503) instead. No action is required with `eager_load_embedders = false`.
+
 ### [next release] — `DELETE /collections/{name}` returns 503 while an ingest job is active (2026-08-07)
 
 **What changed:** `DELETE /collections/{name}` now returns HTTP 503 with `{"detail": "...", "code": "store_busy"}` and a `Retry-After: 30` header when a base `IngestJob` with status `RUNNING` or `CANCELLING` exists for that collection in the job store.  Previously the endpoint returned 200 and dropped the collection while the ingest was mid-flight, because the per-collection lock is released before actual disk writes complete.

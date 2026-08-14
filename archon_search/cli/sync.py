@@ -5,7 +5,7 @@ import click
 import httpx
 
 from archon_search.cli.collection import _DEFAULT_API_URL, _resolve_api_key
-from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _SERVER_NOT_RUNNING_MSG
+from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _SERVER_NOT_RUNNING_MSG, _server_connect_fail_msg
 
 
 @click.command()
@@ -31,7 +31,7 @@ def sync(wait_flag: bool, api_url: str, api_key: str | None) -> None:
     try:
         resp = httpx.post(post_url, headers=headers)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(base_url), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)

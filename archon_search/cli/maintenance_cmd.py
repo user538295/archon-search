@@ -22,7 +22,7 @@ import httpx
 from archon_search.config import ConfigError, load_config
 from archon_search.key_manager import load_key
 from archon_search.paths import get_data_dir
-from archon_search.cli._helpers import _CONNECT_FAIL, _SERVER_NOT_RUNNING_MSG
+from archon_search.cli._helpers import _CONNECT_FAIL, _SERVER_NOT_RUNNING_MSG, _server_connect_fail_msg
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
@@ -324,7 +324,7 @@ def run_subcommand(
         try:
             original_last_run_at = _get_last_run_at(status_url, headers)
         except _CONNECT_FAIL:
-            click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+            click.echo(_server_connect_fail_msg(api_url.rstrip('/')), err=True)
             raise SystemExit(0)
 
     try:
@@ -332,7 +332,7 @@ def run_subcommand(
     except _CONNECT_FAIL:
         # ponytail: narrow connect-fail catch before broad HTTPError — ReadTimeout must NOT
         # be misreported as "server not running"; ConnectTimeout (no listener) is fine.
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(api_url.rstrip('/')), err=True)
         raise SystemExit(0)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)

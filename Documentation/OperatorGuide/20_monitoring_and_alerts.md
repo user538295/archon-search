@@ -44,13 +44,14 @@ For exhaustive request/response fields, treat `GET /openapi.json` as authoritati
 
 A passing `/health` only proves the HTTP listener is alive. Use it for `launchd`/`systemd`/reverse-proxy liveness and the install-time up-check — never as a readiness gate.
 
-### `GET /ready` — readiness (storage only, everything else informational)
+### `GET /ready` — readiness (storage + eager warm-up; everything else informational)
 
-`/ready` runs a **single gating check**: a storage ping (`SearchStore.ping()`, TTL-cached, timeout-guarded). It returns `200 {ready:true}` once the store is connected and `503 {ready:false}` when the ping fails or times out (`routes_ready.py:42-53`). The `503` body is the `ReadinessResponse` model itself, **not** the `{"detail": ...}` error envelope — a 503 here is an expected "not ready yet" signal, not a pipeline error.
+`/ready` runs **two gating checks**: a storage ping (`SearchStore.ping()`, TTL-cached, timeout-guarded) and, only when `[database].eager_load_embedders = true`, whether that eager warm-up is still pending. It returns `200 {ready:true}` once the store is connected and no warm-up is outstanding, and `503 {ready:false}` when the ping fails or times out, or while the warm-up task is still building the ONNX models (`routes_ready.py`). The `503` body is the `ReadinessResponse` model itself, **not** the `{"detail": ...}` error envelope — a 503 here is an expected "not ready yet" signal, not a pipeline error. Distinguish the two causes from the body: `checks.storage: "fail"` is a datastore fault; `checks.storage: "ok"` with `checks.models: "pending"` is just warm-up in progress.
 
-Everything else — model warmth, watcher liveness, index-build state, queue depth — is **reported informationally on `/status`** and does **not** gate `/ready`. In particular:
+Everything else — model-validation outcome, watcher liveness, index-build state, queue depth — is **reported informationally on `/status`** and does **not** gate `/ready`. In particular:
 
-- Cold models (`embedder_warm: false` / `reranker_warm: false`) are normal right after start and keep `/ready` at `200`. Reading warm-status never triggers a load (lazy-load contract preserved).
+- Cold models (`embedder_warm: false` / `reranker_warm: false`) are normal right after start and keep `/ready` at `200` on the default lazy-load path (`eager_load_embedders = false`). Reading warm-status never triggers a load (lazy-load contract preserved).
+- A `warn`/`fail` model-validation result (`checks.models`) is informational and never flips `/ready` to `503` — the lazy-load contract means a search may still succeed.
 - A `failed` collection surfaces only as the `collections_failed` count on `/status`; it never flips `/ready` to `503`.
 - A missing/corrupt indexing-state file never gates readiness (search reads LanceDB, not the state file).
 

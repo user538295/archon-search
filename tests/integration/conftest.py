@@ -162,7 +162,28 @@ def make_real_app(
 
     app = create_app(cfg, job_store, scheduler=scheduler)
     with TestClient(app) as client:
+        _await_startup_sync(app)
         yield client, cfg, api_key
+
+
+def _await_startup_sync(app, timeout_s: float = 30.0) -> None:
+    """Block until the lifespan's background startup sync has finished.
+
+    The lifespan hands ``collection_sync.sync()`` to ``asyncio.create_task`` so uvicorn
+    can bind the port immediately. That makes the sync concurrent with the first
+    requests, which every integration test would otherwise race — the sync ingests the
+    same configured directories the tests ingest explicitly. The task lives on
+    TestClient's portal-thread loop, so it cannot be awaited from here; poll ``.done()``.
+    """
+    task = getattr(app.state, "_startup_sync_task", None)
+    if task is None:
+        return
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if task.done():
+            return
+        time.sleep(0.01)
+    raise TimeoutError(f"startup sync did not finish within {timeout_s}s")
 
 
 def ingest_doc(

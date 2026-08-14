@@ -367,15 +367,20 @@ def create_app(
                         "eager model warm-up complete (%d embedding models + reranker)",
                         len(model_names),
                     )
+                    app.state.warmup_result = "done"
                 except asyncio.CancelledError:
                     logger.info("eager model warm-up cancelled during shutdown")
                     raise
                 except BaseException as exc:  # noqa: BLE001 — never let the task escape
                     logger.warning("eager model warm-up failed: %s", exc, exc_info=True)
+                    app.state.warmup_result = "failed"
 
             # Warm-up must never be awaited here: uvicorn binds the listening socket
             # only after lifespan startup returns, so a cold model cache (3-5 min)
-            # would keep the port closed for the whole window.
+            # would keep the port closed for the whole window. ``warmup_result`` is
+            # set to "pending" BEFORE the task starts so /ready never reports models
+            # as ready during the gap between startup returning and the task running.
+            app.state.warmup_result = "pending"
             warmup_task = asyncio.create_task(_run_eager_warmup(list(distinct_models)))
             app.state._warmup_task = warmup_task
             app.state._background_tasks.add(warmup_task)
@@ -663,13 +668,27 @@ def create_app(
                             exc_info=True,
                         )
 
-                # Startup: sync collections (detects chunk_size changes, auto-reindex)
+                # Startup: sync collections (detects chunk_size changes, auto-reindex).
+                # Never awaited here: uvicorn binds the listening socket only after
+                # lifespan startup returns, so a full corpus sync would keep the port
+                # closed — clients would get ConnectError instead of a 503.
                 all_cols = list(config.pinned_collections) + list(config.collections)
                 if all_cols:
-                    try:
-                        await app.state.collection_sync.sync(all_cols)
-                    except Exception:  # noqa: BLE001 — sync must never block REST startup
-                        logger.warning("Startup sync failed; continuing", exc_info=True)
+
+                    async def _run_startup_sync(cols: list[str]) -> None:
+                        try:
+                            await app.state.collection_sync.sync(cols)
+                            logger.info("startup sync complete (%d collection(s))", len(cols))
+                        except asyncio.CancelledError:
+                            logger.info("startup sync cancelled during shutdown")
+                            raise
+                        except BaseException as exc:  # noqa: BLE001 — never let the task escape
+                            logger.warning("startup sync failed: %s", exc, exc_info=True)
+
+                    sync_task = asyncio.create_task(_run_startup_sync(all_cols))
+                    app.state._startup_sync_task = sync_task
+                    app.state._background_tasks.add(sync_task)
+                    sync_task.add_done_callback(app.state._background_tasks.discard)
 
                 yield
         finally:
@@ -756,6 +775,12 @@ def create_app(
     # Set to a Task by the lifespan only when eager_load_embedders is on; the None
     # default keeps the attribute readable on every path.
     app.state._warmup_task = None
+    # Set to a Task by the lifespan only when at least one collection is configured;
+    # the None default keeps the attribute readable on every path.
+    app.state._startup_sync_task = None
+    # Warm-up progress for /ready and /status: set to "pending"/"done"/"failed" by
+    # the lifespan when eager_load_embedders is on; None means no warm-up was run.
+    app.state.warmup_result = None
     app.state.state_store = IndexingStateStore(config.db_path)
     app.state.search_store = SearchStore(config.db_path)
     app.state.watcher_manager = None

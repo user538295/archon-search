@@ -7,7 +7,7 @@
 
 ## Principles
 
-1. **Start at `/health` and `/ready`, then `/status`.** They are the cheapest probes. `GET /health` tells you the process is alive; `GET /ready` tells you whether storage (and, informationally, the models) are ready; `GET /status` tells you what the indexer, jobs, and optional features are doing. All three are auth-exempt for `/health` and `/ready`; `/status` needs a Bearer token.
+1. **Start at `/health` and `/ready`, then `/status`.** They are the cheapest probes. `GET /health` tells you the process is alive; `GET /ready` tells you whether storage is connected and any eager model warm-up has finished (the model-*validation* result it also reports is informational); `GET /status` tells you what the indexer, jobs, and optional features are doing. All three are auth-exempt for `/health` and `/ready`; `/status` needs a Bearer token.
 2. **Logs first, code second.** `~/.archon-search/logs/archon-search.log` captures most failures; check it before reading the source.
 3. **Config errors are surfaced loudly.** `ConfigError` from `archon_search/config.py` (and the startup dependency checks in `server/app.py`) will refuse to start the server — read the message; it names the offending key or missing package.
 4. **Most empty-result issues are configuration, not retrieval.** Check the collection exists, has been indexed, and that routing is letting it through before suspecting the model.
@@ -142,10 +142,10 @@ The server exits with a `ConfigError` naming `[hyde]` or `[rag_fusion]`, e.g. `[
 
 ## Symptom: `/ready` returns 503 (not ready)
 
-`GET /ready` returns **503** only when the **storage** check fails (`store.ping()` — LanceDB unreachable / not initialised). The `models` check is **informational**: it never flips `ready` to false. In the JSON body:
+`GET /ready` returns **503** in two cases: the **storage** check fails (`store.ping()` — LanceDB unreachable / not initialised), or an eager model warm-up is still running. A `warn`/`fail` model-validation result is **informational** and never flips `ready` to false. In the JSON body:
 
 - `checks.storage` — `ok` / `fail`. `fail` → HTTP 503; fix the datastore (disk, permissions, `db_path`).
-- `checks.models` — `ok` / `warn` / `fail` / `pending`. `pending` means the background model probe has not finished yet (normal right after start); `warn`/`fail` do not block readiness but flag a model/provider issue — see below.
+- `checks.models` — `ok` / `warn` / `fail` / `pending`. `pending` means either the background model probe has not finished yet, or (with `[database].eager_load_embedders = true`) the eager warm-up is still loading models — the latter also returns HTTP 503, and is normal right after start; just wait and retry. `warn`/`fail` do not block readiness but flag a model/provider issue — see below.
 
 ## Symptom: provider / model validation failures in `/ready` and `/status`
 

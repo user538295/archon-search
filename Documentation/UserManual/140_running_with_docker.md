@@ -93,7 +93,7 @@ Smoke-test from the host:
 
 ```bash
 curl http://127.0.0.1:8765/health    # liveness — always 200 when the process is up
-curl http://127.0.0.1:8765/ready     # readiness — 200 once storage is connected, 503 before
+curl http://127.0.0.1:8765/ready     # readiness — 200 once storage is connected (and any eager warm-up finished), 503 before
 curl -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY" http://127.0.0.1:8765/status
 ```
 
@@ -282,7 +282,7 @@ The container speaks plaintext HTTP only. Put a reverse proxy (nginx, Caddy, Tra
 
 ## Known limitations
 
-- **`GET /ready` does not gate readiness on model availability** — `ready` reflects only whether the LanceDB storage layer is connected. A `checks.models` field reports model-validation state (`pending`/`ok`/`warn`/`fail`) but does not affect the HTTP status or the `ready` flag. The first `/search` after a cold start may still pay a multi-second model-load tax.
+- **`GET /ready` does not gate readiness on model-validation state** — a `checks.models` value of `ok`/`warn`/`fail` reports the background probe result and does not affect the HTTP status or the `ready` flag. It **does** gate on eager warm-up: with `[database].eager_load_embedders = true` the container stays unhealthy (503, `checks.models: "pending"`) until warm-up finishes. Without that flag the first `/search` after a cold start still pays a multi-second model-load tax.
 - **In-flight ingest jobs are not awaited on SIGTERM** — the container exits cleanly, but a job in progress is marked `FAILED` on the next start. Tune `stop_grace_period` to your workload.
 - **`archon-search collection add` writes to the TOML file via the server** — see `ARCHON_SEARCH_CONFIG` above. `collection remove` also proxies through the server. The default config path (`/data/.archon-search/archon-search.toml`) is already on the mounted volume, so `ARCHON_SEARCH_CONFIG` is optional for collection management.
 - **No Apple Silicon / Metal GPU image.** Apple GPUs are not supported in v1.

@@ -7,7 +7,7 @@ from pathlib import Path
 import click
 import httpx
 
-from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _SERVER_NOT_RUNNING_MSG
+from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _SERVER_NOT_RUNNING_MSG, _server_connect_fail_msg
 from archon_search.key_manager import load_key
 
 _DEFAULT_API_URL = "http://localhost:8765"
@@ -56,7 +56,7 @@ def list_cmd(api_url: str, api_key: str | None) -> None:
     try:
         resp = httpx.get(url, headers=headers)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(api_url.rstrip('/')), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -102,7 +102,7 @@ def add(path: str, wait_flag: bool, api_url: str, api_key: str | None) -> None:
     try:
         resp = httpx.post(post_url, json={"path": path}, headers=headers)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(base_url), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -155,7 +155,7 @@ def remove(name: str, api_url: str, api_key: str | None) -> None:
     try:
         resp = httpx.delete(delete_url, headers=headers)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(base_url), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -209,7 +209,7 @@ def info(collection_name: str, api_url: str, api_key: str | None) -> None:
     try:
         resp = httpx.get(url, headers=headers)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(api_url.rstrip('/')), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -282,7 +282,7 @@ def reindex_metadata_cmd(
     try:
         resp = httpx.post(post_url, json=body, headers=headers)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(base_url), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -385,7 +385,7 @@ def migrate_cmd(
         try:
             resp = httpx.post(post_url, json=body, headers=headers)
         except _CONNECT_FAIL:
-            click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+            click.echo(_server_connect_fail_msg(base_url), err=True)
             raise SystemExit(1)
         except httpx.HTTPError as exc:
             click.echo(f"Error contacting server: {exc}", err=True)
@@ -423,7 +423,7 @@ def migrate_cmd(
     try:
         resp = httpx.get(url, headers=headers)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(base_url), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -482,7 +482,7 @@ def reindex(collection_name: str, wait_flag: bool, api_url: str, api_key: str | 
     try:
         resp = httpx.post(post_url, headers=headers)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(base_url), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)

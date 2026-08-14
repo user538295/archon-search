@@ -34,7 +34,7 @@ import click
 import httpx
 
 from archon_search.key_manager import load_key
-from archon_search.cli._helpers import _CONNECT_FAIL, _SERVER_NOT_RUNNING_MSG
+from archon_search.cli._helpers import _CONNECT_FAIL, _SERVER_NOT_RUNNING_MSG, _server_connect_fail_msg
 
 _DEFAULT_API_URL = "http://localhost:8765"
 
@@ -183,7 +183,7 @@ def create_subcommand(
         with httpx.Client() as client:
             resp = client.post(url, headers=headers, json=body)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(api_url.rstrip('/')), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -283,7 +283,7 @@ def list_subcommand(
         with httpx.Client() as client:
             resp = client.get(url, headers=headers, params=params if params else None)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(api_url.rstrip('/')), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -410,7 +410,7 @@ def revoke_subcommand(
         with httpx.Client() as client:
             resp = client.delete(url, headers=headers)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(base_url), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -512,7 +512,7 @@ def rotate_subcommand(
         with httpx.Client() as client:
             resp = client.post(url, headers=headers, json=body)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(api_url.rstrip('/')), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)

@@ -9,6 +9,23 @@ from archon_search.server.schemas import CheckStatus, ReadinessChecks, Readiness
 router = APIRouter()
 
 
+def _warmup_pending(request: Request) -> bool:
+    """True while eager model warm-up is still running.
+
+    ``model_validation`` only probes that the models are *resolvable* (seconds);
+    eager warm-up builds the ONNX weights (minutes). Only the latter means the
+    first real search would block, so it is the one signal that gates readiness.
+    The ``getattr`` guards keep the endpoint resilient to app factories that set
+    neither attribute.
+    """
+    config = getattr(request.app.state, "config", None)
+    return (
+        config is not None
+        and getattr(config, "eager_load_embedders", False)
+        and getattr(request.app.state, "warmup_result", None) == "pending"
+    )
+
+
 def _model_check_status(request: Request) -> CheckStatus:
     """Map ``app.state.model_validation`` to a ``CheckStatus`` for ``checks.models``.
 
@@ -20,7 +37,13 @@ def _model_check_status(request: Request) -> CheckStatus:
     condition positively so a partially-populated result can never read as OK/WARN.
     The ``getattr`` guard keeps the endpoint resilient to app factories that never
     set ``app.state.model_validation``.
+
+    Eager warm-up outranks everything: while it is pending the models are not
+    usable yet no matter what ``model_validation`` already concluded.
     """
+    if _warmup_pending(request):
+        return CheckStatus.PENDING
+
     result = getattr(request.app.state, "model_validation", None)
     if result is None:
         return CheckStatus.PENDING
@@ -42,12 +65,18 @@ def _model_check_status(request: Request) -> CheckStatus:
 async def ready(request: Request) -> JSONResponse:
     store = request.app.state.search_store
     storage_ok = await store.ping()
+    models_status = _model_check_status(request)
+    # Readiness gates on storage plus eager warm-up only. A failed/warned
+    # model_validation stays informational (the lazy-load contract means a search can
+    # still succeed), but a pending eager warm-up means the first search would block
+    # on ONNX construction — a load balancer must not route real traffic here yet.
+    ready_flag = storage_ok and not _warmup_pending(request)
     body = ReadinessResponse(
-        ready=storage_ok,
+        ready=ready_flag,
         checks=ReadinessChecks(
             storage=CheckStatus.OK if storage_ok else CheckStatus.FAIL,
-            models=_model_check_status(request),
+            models=models_status,
         ),
     )
-    status_code = 200 if storage_ok else 503
+    status_code = 200 if ready_flag else 503
     return JSONResponse(body.model_dump(mode="json"), status_code=status_code)

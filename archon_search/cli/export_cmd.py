@@ -7,7 +7,7 @@ import click
 import httpx
 
 from archon_search.key_manager import load_key
-from archon_search.cli._helpers import _CONNECT_FAIL, _SERVER_NOT_RUNNING_MSG
+from archon_search.cli._helpers import _CONNECT_FAIL, _SERVER_NOT_RUNNING_MSG, _server_connect_fail_msg
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
@@ -86,7 +86,7 @@ def export_cmd(
     try:
         resp = httpx.post(url, json=body, headers=headers)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(api_url.rstrip('/')), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -131,7 +131,7 @@ def _poll_job(
             try:
                 resp = httpx.get(url, headers=headers)
             except _CONNECT_FAIL:
-                click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+                click.echo(_server_connect_fail_msg(api_url.rstrip('/')), err=True)
                 raise SystemExit(1)
             except httpx.HTTPError as exc:
                 click.echo(f"Error polling job: {exc}", err=True)
@@ -244,7 +244,7 @@ def import_cmd(
     try:
         resp = httpx.post(url, json=body, headers=headers)
     except _CONNECT_FAIL:
-        click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+        click.echo(_server_connect_fail_msg(api_url.rstrip('/')), err=True)
         raise SystemExit(1)
     except httpx.HTTPError as exc:
         click.echo(f"Error contacting server: {exc}", err=True)
@@ -287,7 +287,7 @@ def _poll_import_job(job_id: str, api_url: str, headers: dict) -> None:
             try:
                 resp = httpx.get(url, headers=headers)
             except _CONNECT_FAIL:
-                click.echo(_SERVER_NOT_RUNNING_MSG, err=True)
+                click.echo(_server_connect_fail_msg(api_url.rstrip('/')), err=True)
                 raise SystemExit(1)
             except httpx.HTTPError as exc:
                 click.echo(f"Error polling job: {exc}", err=True)

@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 # validate_embedding_model() (Task 4.2) is the up-front check at PATCH time, and
 # resolves known names from fastembed's registry without loading the model at all.
 
+# Upper bound on how long a deduplicated waiter blocks on the active loader. A
+# stalled loader (slow disk, wedged ONNX init) must not hang every concurrent
+# search for that model forever with no diagnostic.
+_WARMUP_TIMEOUT_SECONDS: float = 120.0
+
 
 class EmbedderCache:
     """Async LRU cache for Embedder objects.
@@ -39,6 +44,10 @@ class EmbedderCache:
 
         Concurrent calls for the same model are deduplicated: make_embedder
         is called at most once while a load is in progress.
+
+        Raises RuntimeError when a deduplicated waiter blocks longer than
+        ``_WARMUP_TIMEOUT_SECONDS`` on the active loader — a wedged load must
+        surface as a diagnosable error, not as a permanently hung request.
         """
         while True:  # retry loop — handles the case where the loader failed
             async with self._lock:
@@ -57,7 +66,13 @@ class EmbedderCache:
                     break  # exit lock, proceed to load
 
             # Await the in-progress load OUTSIDE the lock to avoid deadlock
-            await event.wait()
+            try:
+                await asyncio.wait_for(event.wait(), timeout=_WARMUP_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    f"EmbedderCache: timed out after {_WARMUP_TIMEOUT_SECONDS}s waiting for "
+                    f"model {model_name!r} to load"
+                ) from None
             # After event fires the loader either stored the embedder or raised.
             # Loop back to re-check the cache; if the load failed the event is
             # cleared from _loading so we will become the next loader ourselves.

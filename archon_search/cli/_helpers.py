@@ -25,18 +25,29 @@ _CONTAINER_MSG = (
 )
 
 
-def _server_connect_fail_msg() -> str:
+def _server_connect_fail_msg(base_url: str | None = None) -> str:
     """Return the appropriate message when a connection attempt fails.
 
-    A live PID with an unreachable port means the server is still starting up, so
-    that case gets the 'starting up' hint instead of the 'not running' message.
+    When ``base_url`` is given, ``{base_url}/ready`` is probed: a 503 with
+    ``checks.models == "pending"`` is the authoritative "still starting up" signal
+    and works for every launch mode, including a foreground ``archon-search serve``
+    that no service manager knows about. Any probe failure (including a
+    ``ConnectError`` on ``/ready`` too) means the server really is down.
 
-    Liveness is probed through the *managed* service only (launchd / systemd /
-    Windows), so a foreground ``archon-search serve`` — which no service manager
-    knows about — still falls back to the 'not running' message. Any probe failure
-    (``NotImplementedError`` on an unsupported platform, a missing ``launchctl``)
-    falls back the same way: the message is a hint, never a hard diagnosis.
+    Without ``base_url`` liveness is probed through the *managed* service only
+    (launchd / systemd / Windows), so a foreground ``archon-search serve`` falls
+    back to the 'not running' message. Any probe failure (``NotImplementedError``
+    on an unsupported platform, a missing ``launchctl``) falls back the same way:
+    the message is a hint, never a hard diagnosis.
     """
+    if base_url is not None:
+        try:
+            resp = httpx.get(f"{base_url}/ready", timeout=2)
+            if resp.status_code == 503 and resp.json().get("checks", {}).get("models") == "pending":
+                return _SERVER_STARTING_MSG
+        except Exception:  # noqa: BLE001 — the probe is best-effort
+            pass
+        return _SERVER_NOT_RUNNING_MSG
     try:
         if _get_service().status().running:
             return _SERVER_STARTING_MSG
@@ -77,7 +88,7 @@ def _poll_job(
             try:
                 resp = httpx.get(url, headers=headers)
             except _CONNECT_FAIL:
-                click.echo(_server_connect_fail_msg(), err=True)
+                click.echo(_server_connect_fail_msg(base_url), err=True)
                 raise SystemExit(1)
             except httpx.HTTPError as exc:
                 click.echo(f"Error polling job: {exc}", err=True)
