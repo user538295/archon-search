@@ -1,6 +1,42 @@
 # Changelog
 
 
+## [26.8.1980] - 2026-08-15
+
+**Startup & readiness overhaul: non-blocking warmup, bounded timeouts, uniform embedder errors**
+
+**Startup improvements**
+
+- Eager model warm-up and collection sync now run in the background via `asyncio.create_task`, allowing the HTTP port to bind immediately instead of staying closed for minutes while ONNX models load. The `GET /ready` endpoint gates on warmup completion when `eager_load_embedders = true` and surfaces `checks.models = "pending"` — clients can now detect mid-startup gracefully.
+- Startup sync is now tracked in `app.state` with a bounded `asyncio.timeout()` (1800 seconds). `POST /sync` is gated during startup to prevent concurrent syncs; if the sync times out, `/ready` returns 200 with `checks.sync = "fail"` (non-gating, so a slow sync cannot wedge the pod).
+- Fixed `CancelledError` handling during shutdown: the warmup and sync tasks are now cancelled and awaited before stores disconnect, preventing in-flight tasks from calling closed resources.
+
+**Uniform embedder error handling**
+
+- `EmbedderNotReadyError` (new exception type) replaces bare `RuntimeError` when the embedder cache is still loading or wedged. Every surface — `/explain`, `/v1/chat/completions`, MCP tools, and ingest/reindex jobs — now returns a sanitized 503 with `code: "embedder_not_ready"` and `Retry-After: 30` instead of leaking exception details (`str(exc)`) into job error fields or generic 500 responses. Fixes both HTTP retryability and observability.
+- `POST /search` now bounds its embedder wait to 30 seconds (separate from the cache's 120-second dedup-wait), so cold-start searches fail fast with a clear message rather than holding the connection open for 2 minutes.
+
+**Timeout bounds**
+
+- Eager warmup is bounded to 600 seconds via `asyncio.timeout()`. Startup sync is bounded to 1800 seconds. Embedder cache loader waits are bounded to 120 seconds — a stalled ONNX init no longer parks concurrent searches indefinitely.
+
+**CLI improvements**
+
+- `_server_connect_fail_msg` now probes `GET {base_url}/ready` directly when a connection fails, detecting "server is alive but starting up" (warmup or sync pending) and printing an accurate hint instead of "server not running". The improved detection covers foreground `archon-search serve` as well as managed services (launchd/systemd). All ~25 submit/poll call sites across 9 CLI modules now use this unified hint.
+
+**Bug fixes**
+
+- Disabled `torch.compile` on macOS by setting `TORCHDYNAMO_DISABLE=1` at import time in `archon_search/__init__.py`. The RT-DETR V2 layout model triggers a torch compilation failure on Apple Silicon (MPS backend), causing docling to crash and launchd to restart the server in a loop. The fix uses `setdefault` so operator overrides (`TORCHDYNAMO_DISABLE=0` in the environment) are preserved.
+- Aligned `--eager-load` help text in `cli/install_cmd.py` to document that it pre-loads both embedding models and the reranker, matching the behavior documented in the installation guide.
+- Added `llama_cpp` to the wizard's Step 5h provider explanation block so users see all five query-expansion backends (anthropic, openai, ollama, claude_cli, llama_cpp) before answering the prompt.
+- Added `test_eager_load_surface_matches_documented_wording` to catch wizard drift: asserts every prompt line from the documentation appears verbatim in `wizard.py` and that the help text mentions the reranker.
+
+**Schema changes**
+
+- `ReadinessChecks` gains `sync: CheckStatus` (default `PENDING`). `StatusResponse` gains `warmup_result` and `sync_result` string fields reflecting the background task state (`"pending"`, `"done"`, or `"failed"`).
+- See `BREAKING.md` for migration notes: `GET /ready` now returns 503 while eager warmup is pending if `eager_load_embedders = true`, and all surfaces now return the unified `embedder_not_ready` code.
+
+
 ## [26.8.1969] - 2026-08-12
 
 **Llama.cpp model discovery + configuration stability improvements**
