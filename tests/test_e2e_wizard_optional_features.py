@@ -283,6 +283,58 @@ def test_e2e_interactive_force_delete_db_exits_zero(runner: CliRunner, tmp_path:
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
 
 
+# Every prompt and provider line of the interactive flow, in the order
+# documented in Documentation/UserManual/20_wizard.md (Step 1 → Step 6).
+# --profile is omitted so the Step 2 profile prompt fires; GPU is NONE so
+# Step 3 shows no prompt.
+_DOCUMENTED_PROMPT_ORDER = [
+    "Will your corpus include non-English documents? [y/N]: ",
+    "Choice [1-3, default 1]: ",
+    "Index code files (installs tree-sitter + graph enrichment, enables graph)? [y/N]: ",
+    "Keep reranker enabled? [Y/n]: ",
+    "Auto-watch directories and re-index on file changes? [y/N]: ",
+    "Enable local query telemetry? [y/N]: ",
+    "Pre-load embedding models and reranker at startup (eliminates first-query latency)? [y/N]: ",
+    "Routing strategy (centroid/hybrid) [centroid]: ",
+    "Log format (text/json) [text]: ",
+    "    anthropic  - Anthropic API (needs ANTHROPIC_API_KEY)",
+    "    openai     - OpenAI API (needs OPENAI_API_KEY)",
+    "    ollama     - runs locally, no API key",
+    "    claude_cli - uses Claude Code's login, no API key",
+    "    llama_cpp  - runs against a local llama-server, no API key",
+    "Enable AI query expansion (HyDE + RAG Fusion)? [y/N]: ",
+    "Enable LLM-backed graph enrichment? [y/N]: ",
+    "Proceed? [Y/n]: ",
+]
+
+
+@pytest.mark.integration
+def test_wizard_prompts_appear_in_documented_order(runner: CliRunner, tmp_path: Path) -> None:
+    """S03: every documented prompt is printed, once, in the documented order."""
+    config_path = tmp_path / "archon-search.toml"
+
+    # 1 multilingual n / 2 profile "" (→ minimal) / 3 code n / 4 reranker n /
+    # 5 watch n / 6 telemetry n / 7 eager n / 8 routing "" / 9 log "" /
+    # 10 HyDE n / 11 graph enrichment n / 12 "Proceed?" y
+    stdin_responses = "\n".join(["n", "", "n", "n", "n", "n", "n", "", "", "n", "n", "y"]) + "\n"
+
+    with _no_anthropic_key():
+        with _patched_wizard():
+            result = runner.invoke(
+                main,
+                ["wizard", "--config", str(config_path), "--skip-preload"],
+                input=stdin_responses,
+            )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+
+    position = -1
+    for expected in _DOCUMENTED_PROMPT_ORDER:
+        found = result.output.find(expected, position + 1)
+        assert found != -1, f"Prompt not found after position {position}: {expected!r}\nOUT: {result.output}"
+        position = found
+
+
 @pytest.mark.integration
 def test_proceed_prompt_accepts_yes_exits_zero(runner: CliRunner, tmp_path: Path) -> None:
     """Proceed? prompt accepts 'yes' (full word) as confirmation — exits 0.

@@ -799,6 +799,7 @@ def _prompt_optional_features(
             "    openai     - OpenAI API (needs OPENAI_API_KEY)\n"
             "    ollama     - runs locally, no API key\n"
             "    claude_cli - uses Claude Code's login, no API key\n"
+            "    llama_cpp  - runs against a local llama-server, no API key\n"
             "  Default: disabled."
         )
         if _ask_yn("Enable AI query expansion (HyDE + RAG Fusion)? [y/N]: "):
