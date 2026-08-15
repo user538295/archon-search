@@ -118,6 +118,14 @@ Production-grade operations documentation for SREs and sysadmins running `archon
 | [`ADRs/04_multi_collection_router_with_centroid_preranking.md`](../ADRs/04_multi_collection_router_with_centroid_preranking.md) | Why centroid pre-ranking for multi-collection routing. |
 | [`ADRs/05_opt_in_local_telemetry_no_raw_query.md`](../ADRs/05_opt_in_local_telemetry_no_raw_query.md) | Telemetry: opt-in, local-only, no raw queries. |
 | [`ADRs/06_durable_state_writes_via_fsync.md`](../ADRs/06_durable_state_writes_via_fsync.md) | Durable state writes via fsync (file + parent dir), rotate-only telemetry fsync. |
+| [`ADRs/07_description_embedding_hybrid_routing.md`](../ADRs/07_description_embedding_hybrid_routing.md) | Why centroid-only routing stays the default, and how description-embedding hybrid routing is opted into per collection. |
+| [`ADRs/08_per_collection_embedder_lru_cache.md`](../ADRs/08_per_collection_embedder_lru_cache.md) | Why a per-collection `EmbedderCache` LRU, keyed on model name, replaces one global embedder. |
+| [`ADRs/09_mcp_http_mount_and_namespace_propagation.md`](../ADRs/09_mcp_http_mount_and_namespace_propagation.md) | Why MCP mounts under the same FastAPI lifespan/port instead of a second server, and how namespace auth propagates into it. |
+| [`ADRs/10_coreml_split_providers.md`](../ADRs/10_coreml_split_providers.md) | Why the reranker gets its own `reranker_providers` ONNX execution-provider override, independent of the embedder's `providers`. |
+| [`ADRs/11_embedder_cache_bounded_waiter_timeout.md`](../ADRs/11_embedder_cache_bounded_waiter_timeout.md) | Why a deduplicated `EmbedderCache` waiter is bounded with a timeout instead of waiting on the loader forever. |
+| [`ADRs/C4-hyde-external-llm-dependency.md`](../ADRs/C4-hyde-external-llm-dependency.md) | HyDE's external-LLM dependency: opt-in gating, privacy tradeoffs, and fail-open behavior on provider error. |
+| [`ADRs/C5-rag-fusion-external-llm-dependency.md`](../ADRs/C5-rag-fusion-external-llm-dependency.md) | RAG Fusion's external-LLM dependency, privacy tradeoffs, and mutual exclusion with HyDE. |
+| [`ADRs/C6-local-llm-provider.md`](../ADRs/C6-local-llm-provider.md) | Why `llama_cpp` is a fifth query-expansion provider (HyDE, RAG Fusion, graph enrichment) rather than a generic OpenAI-compatible provider. |
 
 ## Security Guide
 

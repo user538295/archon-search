@@ -21,7 +21,7 @@ This runbook lists the failure modes the codebase produces today, each paired wi
 # 1. Liveness (auth-exempt)
 curl -fsS http://127.0.0.1:8765/health || echo "process down"
 
-# 2. Readiness — storage + model-probe status (auth-exempt)
+# 2. Readiness — storage, eager warm-up, and startup-sync status (auth-exempt)
 curl -fsS http://127.0.0.1:8765/ready | jq
 
 # 3. Status — per-collection progress, error counts, ETA (Bearer required)
@@ -98,7 +98,7 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 2. `GET /status` and `GET /indexing-state` — look for `status: "failed"` or a non-zero `error_count`.
 3. Grep the log for `search pipeline failed` and `meta lookup failed`.
 4. If telemetry is on, `GET /telemetry/entries` and filter `endpoint="search"` with `status="internal_error"` or `status="timeout"`.
-5. Verify the store is reachable and the embedding model is loaded (`GET /ready` → `checks.models`).
+5. Verify the store is reachable and the embedding model is loaded (`GET /ready` → `checks.storage` / `checks.models`). Also check `checks.sync`: `"pending"` means the lifespan's startup collection sync is still (re)building the index — `/ready` answers 503 and search results may be incomplete until it flips to `"ok"`. This is expected on first boot against a large corpus and is not itself a fault. `checks.sync: "fail"` means the startup sync either raised an exception or completed but recorded per-collection errors in `SyncResult.errors` (e.g. a missing collection path or an ingest failure) — unlike `"pending"`, this does NOT make `/ready` answer 503 (a corrupted collection must not wedge readiness forever), so it is easy to miss; grep the log for `"startup sync failed"` or `"startup sync completed with"` and re-run `POST /sync` (or `archon-search sync`) once the underlying cause (missing path, bad config) is fixed.
 6. Restart if pipeline stages are in a bad state.
 
 **Escalation**: if 500s or 504s persist after a restart, file an issue with the full ERROR record, the `GET /status` snapshot, and `archon-search --version`.
@@ -110,8 +110,9 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 **Triage** (D6, verified against `server/routes_ready.py`):
 
 - The model probe runs in the background at startup and **never blocks boot or raises** — the server accepts requests while the probe is `pending`.
-- `checks.models` priority is strict: **FAIL** (an embedder or reranker model could not load) > **WARN** (both loaded, but a provider fallback warning was emitted) > **OK**. `pending` means the probe has not produced a result yet.
-- **FAIL** → the configured `embedding_model` / `reranker_model` cannot be loaded (bad name, missing model cache, no network for first download). Fix the model name in `[database]` or pre-warm the fastembed cache, then restart. Search will surface 500s until a model loads.
+- `checks.models` priority is strict: eager warm-up **PENDING** > eager warm-up **FAILED** > `model_validation` **FAIL** (an embedder or reranker model could not load) > **WARN** (both loaded, but a provider fallback warning was emitted) > **OK**. `pending` means the probe has not produced a result yet.
+- **FAIL from `model_validation`** → the configured `embedding_model` / `reranker_model` cannot be loaded (bad name, missing model cache, no network for first download). Fix the model name in `[database]` or pre-warm the fastembed cache, then restart. Search will surface 500s until a model loads.
+- **FAIL from a terminally-failed eager warm-up** (`eager_load_embedders = true`; the log carries `"eager model warm-up failed: ..."`) — reported *before* `model_validation` is even consulted, so `checks.models: "fail"` can appear even when `model_validation` itself is clean. Unlike the `model_validation` FAIL above, this is **not** immediately search-breaking: a failed/wedged warm-up falls back to lazy loading on the first real query, so search still works (just paying the first-query load cost). Investigate why the warm-up failed (same causes as above — bad model name, disk/network), but do not treat it as equivalent severity to a `model_validation` FAIL.
 - **WARN** → models loaded but an LLM provider fell back (e.g. HyDE / RAG Fusion provider unreachable). Read `provider_warnings` for the specific provider and check `[hyde]` / `[rag_fusion]` credentials and reachability.
 
 ### Graph search failures

@@ -32,7 +32,7 @@ def test_readiness_checks_has_models_field() -> None:
 
     checks = ReadinessChecks(storage=CheckStatus.OK, models=CheckStatus.PENDING)
     dumped = checks.model_dump()
-    assert dumped == {"storage": "ok", "models": "pending"}
+    assert dumped == {"storage": "ok", "models": "pending", "sync": "pending"}
 
 
 def test_readiness_checks_models_defaults_to_pending() -> None:
@@ -40,6 +40,20 @@ def test_readiness_checks_models_defaults_to_pending() -> None:
 
     checks = ReadinessChecks(storage=CheckStatus.OK)
     assert checks.models == CheckStatus.PENDING
+
+
+def test_readiness_checks_sync_defaults_to_pending() -> None:
+    from archon_search.server.schemas import CheckStatus, ReadinessChecks
+
+    checks = ReadinessChecks(storage=CheckStatus.OK)
+    assert checks.sync == CheckStatus.PENDING
+
+
+def test_readiness_checks_sync_accepts_ok_and_fail() -> None:
+    from archon_search.server.schemas import CheckStatus, ReadinessChecks
+
+    assert ReadinessChecks(storage=CheckStatus.OK, sync=CheckStatus.OK).sync == CheckStatus.OK
+    assert ReadinessChecks(storage=CheckStatus.OK, sync=CheckStatus.FAIL).sync == CheckStatus.FAIL
 
 
 def test_readiness_response_ready_not_gated_on_models() -> None:
@@ -60,10 +74,15 @@ def test_readiness_response_ready_not_gated_on_models() -> None:
 def test_readiness_response_ok_shape() -> None:
     from archon_search.server.schemas import CheckStatus, ReadinessChecks, ReadinessResponse
 
-    obj = ReadinessResponse(ready=True, checks=ReadinessChecks(storage=CheckStatus.OK))
+    # sync=OK is explicit: ready=True with sync="pending" is unreachable from
+    # routes_ready.ready (ready_flag is gated on not sync_pending), so pinning
+    # the default here would document an impossible wire response.
+    obj = ReadinessResponse(
+        ready=True, checks=ReadinessChecks(storage=CheckStatus.OK, sync=CheckStatus.OK)
+    )
     assert obj.model_dump() == {
         "ready": True,
-        "checks": {"storage": "ok", "models": "pending"},
+        "checks": {"storage": "ok", "models": "pending", "sync": "ok"},
     }
 
 
@@ -73,7 +92,7 @@ def test_readiness_response_fail_shape() -> None:
     obj = ReadinessResponse(ready=False, checks=ReadinessChecks(storage=CheckStatus.FAIL))
     assert obj.model_dump() == {
         "ready": False,
-        "checks": {"storage": "fail", "models": "pending"},
+        "checks": {"storage": "fail", "models": "pending", "sync": "pending"},
     }
 
 
@@ -144,13 +163,18 @@ def test_status_response_readiness_defaults_to_none() -> None:
 def test_readiness_response_ok_snapshot() -> None:
     from archon_search.server.schemas import CheckStatus, ReadinessChecks, ReadinessResponse
 
-    obj = ReadinessResponse(ready=True, checks=ReadinessChecks(storage=CheckStatus.OK))
+    # sync=OK is explicit: ready=True with sync="pending" is unreachable from
+    # routes_ready.ready (ready_flag is gated on not sync_pending), so pinning
+    # the default here would document an impossible wire response.
+    obj = ReadinessResponse(
+        ready=True, checks=ReadinessChecks(storage=CheckStatus.OK, sync=CheckStatus.OK)
+    )
     assert obj.model_dump(mode="json") == {
         "ready": True,
-        "checks": {"storage": "ok", "models": "pending"},
+        "checks": {"storage": "ok", "models": "pending", "sync": "ok"},
     }
     assert json.dumps(obj.model_dump(mode="json"), sort_keys=True) == (
-        '{"checks": {"models": "pending", "storage": "ok"}, "ready": true}'
+        '{"checks": {"models": "pending", "storage": "ok", "sync": "ok"}, "ready": true}'
     )
 
 
@@ -159,7 +183,7 @@ def test_readiness_response_fail_snapshot() -> None:
 
     obj = ReadinessResponse(ready=False, checks=ReadinessChecks(storage=CheckStatus.FAIL))
     assert json.dumps(obj.model_dump(mode="json"), sort_keys=True) == (
-        '{"checks": {"models": "pending", "storage": "fail"}, "ready": false}'
+        '{"checks": {"models": "pending", "storage": "fail", "sync": "pending"}, "ready": false}'
     )
 
 

@@ -2930,6 +2930,10 @@
           },
           "storage": {
             "$ref": "#/components/schemas/CheckStatus"
+          },
+          "sync": {
+            "$ref": "#/components/schemas/CheckStatus",
+            "default": "pending"
           }
         },
         "required": [
@@ -3569,6 +3573,16 @@
         "title": "SkippedItem",
         "type": "object"
       },
+      "StartupSyncResult": {
+        "description": "Startup collection-sync progress, mirrored onto ``app.state.sync_result``.\n\nSet by the lifespan's startup sync task: ``PENDING`` before/while the task\nruns, ``DONE`` on a clean completion, ``FAILED`` on a bounded timeout, a\nper-collection error (``SyncResult.errors`` non-empty), cancellation, or any\nother exception. ``None`` (not a member of this enum) means no startup sync\nwas ever run, i.e. no collections are configured. Named ``StartupSyncResult``\nrather than ``SyncResult`` to avoid colliding with\n``archon_search.sync.SyncResult``, which is a different, unrelated type.",
+        "enum": [
+          "pending",
+          "done",
+          "failed"
+        ],
+        "title": "StartupSyncResult",
+        "type": "string"
+      },
       "StatsResponse": {
         "properties": {
           "by_collection": {
@@ -3905,6 +3919,16 @@
             "title": "Store Schema Version",
             "type": "integer"
           },
+          "sync_result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StartupSyncResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "telemetry": {
             "anyOf": [
               {
@@ -3918,6 +3942,16 @@
           "version": {
             "title": "Version",
             "type": "string"
+          },
+          "warmup_result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WarmupResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -4040,6 +4074,16 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "WarmupResult": {
+        "description": "Eager model warm-up progress, mirrored onto ``app.state.warmup_result``.\n\nSet by the lifespan's eager warm-up task: ``PENDING`` before the task\nstarts, ``DONE``/``FAILED`` once it finishes. ``None`` (not a member of\nthis enum) means eager warm-up was never run, i.e.\n``eager_load_embedders = false``.",
+        "enum": [
+          "pending",
+          "done",
+          "failed"
+        ],
+        "title": "WarmupResult",
+        "type": "string"
       },
       "WatcherReport": {
         "properties": {
@@ -4209,7 +4253,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "503": {
             "content": {
@@ -4450,7 +4494,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           }
         },
         "security": [
@@ -4543,7 +4587,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           }
         },
         "security": [
@@ -4647,7 +4691,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           }
         },
         "security": [
@@ -4923,7 +4967,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           },
           "500": {
             "content": {
@@ -5554,7 +5598,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           }
         },
         "security": [
@@ -6066,7 +6110,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           }
         },
         "security": [
@@ -6143,7 +6187,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           }
         },
         "security": [
@@ -6198,7 +6242,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Unprocessable Entity"
           }
         },
         "security": [

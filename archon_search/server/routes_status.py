@@ -207,6 +207,8 @@ async def status(request: Request) -> StatusResponse:
         failed_expired_ingest_count=failed_expired_count,
         graph=graph_detail,
         code_parsers=code_parsers_detail,
+        warmup_result=getattr(request.app.state, "warmup_result", None),
+        sync_result=getattr(request.app.state, "sync_result", None),
     )
 
 

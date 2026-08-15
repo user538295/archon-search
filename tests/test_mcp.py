@@ -308,6 +308,53 @@ def test_mcp_delete_document_forwards_namespace() -> None:
 
 
 # ---------------------------------------------------------------------------
+# C6-1 — MCP tools must map EmbedderNotReadyError to code='embedder_not_ready'
+# instead of letting it fall into the generic except Exception -> 'internal_error'
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_search_tool_maps_embedder_not_ready_to_embedder_not_ready_code() -> None:
+    """The ``search`` MCP tool returns ``code='embedder_not_ready'``, not raising.
+
+    A mounted FastMCP sub-app does not inherit FastAPI's exception handlers, and
+    every MCP tool already wraps its body in a broad ``except Exception`` that
+    returns an ``McpErrorResponse`` dict — without an explicit
+    ``except EmbedderNotReadyError`` clause ahead of it, a wedged/slow model load
+    would be misclassified as ``code='internal_error'`` instead of the retryable
+    ``'embedder_not_ready'``.
+    """
+    import asyncio
+    import importlib
+
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.embedder_cache import EmbedderNotReadyError
+    import archon_search.server.mcp as mcp_mod
+
+    importlib.reload(mcp_mod)
+    # active_embedding_model must be non-empty: resolve_active_model() falls
+    # back to pipeline._global_embedder (never calling embedder_cache) when the
+    # resolved model name is empty.
+    meta = CollectionMeta(name="col1", namespace="default", active_embedding_model="some-model")
+    pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=meta)
+
+    embedder_cache = MagicMock()
+    embedder_cache.get_or_load = AsyncMock(
+        side_effect=EmbedderNotReadyError("model still loading")
+    )
+
+    app = mcp_mod.create_app(pipeline, "col1", embedder_cache=embedder_cache)
+    tool_fn = app._tools["search"]
+
+    result = asyncio.run(tool_fn(query="test", collection="col1"))
+
+    assert isinstance(result, dict)
+    assert result.get("code") == "embedder_not_ready", (
+        f"expected code='embedder_not_ready' from a wedged model load, got {result!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Task 5.1 — MCP HyDE wiring: search, search_with_context, explain tools
 # ---------------------------------------------------------------------------
 

@@ -161,7 +161,11 @@ async def test_ready_returns_200_while_warmup_pending() -> None:
     from unittest.mock import AsyncMock  # noqa: PLC0415
 
     from archon_search.model_validation import ModelValidationResult  # noqa: PLC0415
-    from archon_search.server.routes_ready import _model_check_status, ready  # noqa: PLC0415
+    from archon_search.server.routes_ready import (  # noqa: PLC0415
+        _model_check_status,
+        _warmup_pending,
+        ready,
+    )
     from archon_search.server.schemas import CheckStatus  # noqa: PLC0415
 
     cfg = SearchConfig()
@@ -189,7 +193,10 @@ async def test_ready_returns_200_while_warmup_pending() -> None:
 
     request = FakeRequest()
 
-    assert _model_check_status(request) is CheckStatus.PENDING, (
+    # Computed via the real _warmup_pending(), not hardcoded — a hardcoded
+    # warmup_pending=True made this a tautology (C2-I-34), since warmup_pending
+    # is _model_check_status's first-checked branch regardless of state.
+    assert _model_check_status(request, _warmup_pending(request)) is CheckStatus.PENDING, (
         "_model_check_status() ignores app.state.warmup_result — it reports OK while "
         "eager warm-up is still pending, because it only inspects model_validation"
     )
@@ -201,6 +208,77 @@ async def test_ready_returns_200_while_warmup_pending() -> None:
         "/ready answered 200 while eager warm-up was still pending — load balancers "
         "will send real traffic to a server whose first search blocks on ONNX init"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Bug 3b — a *failed* eager warm-up must report checks.models="fail" (but must
+# NOT gate ready) — and this must hold whether app.state.warmup_result holds
+# the real WarmupResult.FAILED enum member or the raw string "failed".
+# ``_model_check_status`` matches it with ``==``, not ``is``: WarmupResult is a
+# str-Enum, so ``is`` only matches the actual member, silently failing to fire
+# for a raw-string assignment — and raw-string assignment of this attribute is
+# established practice elsewhere in this test suite (e.g. "pending" above).
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "warmup_result_value",
+    [
+        pytest.param(None, id="enum_member"),  # filled in below per-param
+        pytest.param("failed", id="raw_string"),
+    ],
+)
+async def test_ready_reports_fail_after_failed_warmup(warmup_result_value: str | None) -> None:
+    """A failed eager warm-up must surface as checks.models="fail", ready stays true."""
+    import json  # noqa: PLC0415
+    from datetime import UTC, datetime  # noqa: PLC0415
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    from archon_search.model_validation import ModelValidationResult  # noqa: PLC0415
+    from archon_search.server.routes_ready import ready  # noqa: PLC0415
+    from archon_search.server.schemas import WarmupResult  # noqa: PLC0415
+
+    if warmup_result_value is None:
+        warmup_result_value = WarmupResult.FAILED
+
+    cfg = SearchConfig()
+    cfg.eager_load_embedders = True
+
+    class FakeStore:
+        ping = AsyncMock(return_value=True)
+
+    class FakeState:
+        # Deliberately a healthy model_validation result — proves the FAIL
+        # comes from warmup_result, not from a coincidentally-unhealthy probe.
+        model_validation = ModelValidationResult(
+            embedder_ok=True,
+            reranker_ok=True,
+            provider_warnings=[],
+            validated_at=datetime.now(UTC),
+        )
+        warmup_result = warmup_result_value
+        config = cfg
+        search_store = FakeStore()
+
+    class FakeApp:
+        state = FakeState()
+
+    class FakeRequest:
+        app = FakeApp()
+
+    request = FakeRequest()
+
+    response = await ready(request)
+    body = json.loads(response.body)
+    assert body["checks"]["models"] == "fail", (
+        f"warmup_result={warmup_result_value!r} did not surface as checks.models="
+        f"'fail' — got {body['checks']['models']!r}. A failed eager warm-up is "
+        f"indistinguishable from a healthy one once model_validation reports OK."
+    )
+    assert body["ready"] is True, (
+        "a failed eager warm-up must stay informational-only and NOT wedge "
+        "/ready — only a PENDING warm-up (still running) gates readiness"
+    )
+    assert response.status_code == 200
 
 
 # --------------------------------------------------------------------------- #
@@ -230,9 +308,21 @@ def test_server_connect_fail_msg_probes_ready_endpoint() -> None:
 
     fake_resp = MagicMock()
     fake_resp.status_code = 503
-    fake_resp.json.return_value = {"ready": False, "checks": {"models": "pending"}}
+    # Mirrors the real ReadinessResponse: ``checks`` always carries all three keys.
+    fake_resp.json.return_value = {
+        "ready": False,
+        "checks": {"models": "pending", "storage": "ok", "sync": "ok"},
+    }
 
-    with patch.object(_helpers.httpx, "get", return_value=fake_resp):
+    with (
+        patch.object(_helpers.httpx, "get", return_value=fake_resp),
+        # If the /ready-probe branch ever regresses so `usable` is False, control
+        # falls to the launchd/systemd fallback — on a machine with a live
+        # archon-search service that would return the "starting up" message for
+        # the wrong reason. Force that fallback to fail loudly instead (mirrors
+        # tests/test_cli_260_connection_refused_ux.py's `_isolate_liveness_probes`).
+        patch.object(_helpers, "_get_service", side_effect=NotImplementedError),
+    ):
         msg = _helpers._server_connect_fail_msg(base_url="http://127.0.0.1:8765")
 
     assert "starting" in msg.lower(), (

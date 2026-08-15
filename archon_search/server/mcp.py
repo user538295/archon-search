@@ -49,7 +49,7 @@ from archon_search.observability import bind_stage_recorder, correlation_id as _
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
-from archon_search.embedder_cache import EmbedderCache
+from archon_search.embedder_cache import EMBEDDER_NOT_READY_CODE, EMBEDDER_NOT_READY_DETAIL, EmbedderCache, EmbedderNotReadyError
 from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION, ImportArchiveReader
 from archon_search.jobs.model import job_to_dict
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
@@ -579,6 +579,10 @@ def create_app(
             return McpErrorResponse(error=str(exc), code="validation_error")
         except GraphCommunitiesNotBuiltError as exc:
             return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
+        except EmbedderNotReadyError as exc:
+            # The model is still loading (or its load is wedged) — retryable.
+            logger.warning("search: embedder not ready — %s", exc)
+            return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
         except Exception as exc:
             if writer is not None:
                 try:
@@ -765,6 +769,10 @@ def create_app(
                 return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except RAGFusionDependencyError as exc:
             return McpErrorResponse(error=str(exc), code="validation_error")
+        except EmbedderNotReadyError as exc:
+            # The model is still loading (or its load is wedged) — retryable.
+            logger.warning("search_with_context: embedder not ready — %s", exc)
+            return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
         except Exception as exc:
             if writer is not None:
                 try:
@@ -1104,6 +1112,10 @@ def create_app(
             # Sanitize: the original message could echo the query (e.g. an FTS error).
             logger.warning("explain stage %s failed: %s", exc.stage, exc.original, exc_info=exc.original)
             return McpErrorResponse(error=f"{exc.stage} error: {type(exc.original).__name__}", code="internal_error")
+        except EmbedderNotReadyError as exc:
+            # The model is still loading (or its load is wedged) — retryable.
+            logger.warning("explain: embedder not ready — %s", exc)
+            return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
         except Exception:
             if writer is not None:
                 try:
@@ -1169,6 +1181,10 @@ def create_app(
                 return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except StoreBusyError as exc:
             return McpErrorResponse(error=str(exc), code="store_busy")
+        except EmbedderNotReadyError as exc:
+            # The model is still loading (or its load is wedged) — retryable.
+            logger.warning("ingest_file: embedder not ready — %s", exc)
+            return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
         except Exception as exc:
             logger.exception("ingest_file failed")
             return McpErrorResponse(error=str(exc), code="internal_error")
@@ -1233,6 +1249,10 @@ def create_app(
                 return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
         except StoreBusyError as exc:
             return McpErrorResponse(error=str(exc), code="store_busy")
+        except EmbedderNotReadyError as exc:
+            # The model is still loading (or its load is wedged) — retryable.
+            logger.warning("ingest_directory: embedder not ready — %s", exc)
+            return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
         except Exception as exc:
             logger.exception("ingest_directory failed")
             return McpErrorResponse(error=str(exc), code="internal_error")

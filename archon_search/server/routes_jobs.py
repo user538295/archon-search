@@ -16,7 +16,7 @@ from archon_search._path_safety import PathUnsafeError, validate_ingest_path
 from archon_search._types import IngestError, _file_exceeds_limit
 from archon_search.config import SearchConfig, resolve_active_model
 from archon_search.constants import DEFAULT_NAMESPACE
-from archon_search.embedder_cache import EmbedderCache
+from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderCache, EmbedderNotReadyError
 from archon_search.jobs.model import IngestJob, JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
@@ -217,6 +217,16 @@ async def _default_ingest_task(
         except (KeyError, OSError):
             logger.error("background ingest: could not persist CANCELLED status for job %s", job_id)
         raise
+    except EmbedderNotReadyError as exc:
+        # Retryable, not a genuine failure: MaintenanceLoop._run_failed_ingest_retry
+        # re-enqueues FAILED base IngestJob instances (up to retry_max_attempts)
+        # before they age into FAILED_EXPIRED, so leaving this job FAILED with a
+        # clean message is sufficient — no extra retry wiring needed here.
+        logger.warning("Ingest task %s: embedder not ready — %s", job_id, exc)
+        try:
+            store.update(job_id, status=JobStatus.FAILED, error=EMBEDDER_NOT_READY_DETAIL)
+        except (KeyError, OSError):
+            logger.error("background ingest: could not persist FAILED status for job %s", job_id)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Ingest task %s failed", job_id)
         try:
@@ -272,6 +282,14 @@ async def _default_ingest_task_with_lock(
         except KeyError:
             pass
         raise
+    except EmbedderNotReadyError as exc:
+        # Retryable, not a genuine failure — see the sibling handler in
+        # _default_ingest_task for why FAILED is sufficient here.
+        logger.warning("Ingest task %s: embedder not ready — %s", job_id, exc)
+        try:
+            store.update(job_id, status=JobStatus.FAILED, error=EMBEDDER_NOT_READY_DETAIL)
+        except KeyError:
+            pass
     except Exception as exc:  # noqa: BLE001
         logger.exception("Ingest task %s failed", job_id)
         try:
@@ -333,6 +351,19 @@ async def _reindex_task(
         else:
             meta = await store.get_collection_meta(collection, namespace)
             embedder = await embedder_cache.get_or_load(resolve_active_model(meta, config))
+    except EmbedderNotReadyError as exc:
+        # Unlike _default_ingest_task's IngestJob, a FAILED ReindexJob is not
+        # auto-retried by MaintenanceLoop._run_failed_ingest_retry (exact
+        # ``type(job) is IngestJob`` only) — an operator must manually re-run
+        # `collection reindex`. That gap predates this fix and is out of scope
+        # here; this only sanitizes the error message (never str(exc) on the wire).
+        logger.warning("_reindex_task: embedder not ready for job %s — %s", job_id, exc)
+        meta = await store.get_collection_meta(collection, namespace)
+        if meta is not None:
+            meta.reindex_job_id = None
+            await store.update_collection_meta(meta)
+        job_store.update(job_id, status=JobStatus.FAILED, error=EMBEDDER_NOT_READY_DETAIL)
+        return
     except Exception as exc:  # noqa: BLE001
         logger.exception("_reindex_task: embedder resolution failed for job %s", job_id)
         meta = await store.get_collection_meta(collection, namespace)

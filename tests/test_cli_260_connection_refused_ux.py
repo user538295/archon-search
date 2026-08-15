@@ -32,6 +32,26 @@ def _mock_response(status_code: int, body: dict | None = None) -> MagicMock:
 
 _FRIENDLY_PHRASES = ("not running", "start it first")
 
+
+@pytest.fixture(autouse=True)
+def _isolate_liveness_probes():
+    """Keep every connect-failure path off the developer's machine.
+
+    ``_server_connect_fail_msg()`` probes ``{base_url}/ready`` with a bare
+    ``httpx.get`` and, when that fails, falls back to the managed service. Neither
+    is stubbed by the per-command ``httpx.Client`` mocks below, so without this
+    fixture the outcome flips with whether a local server or launchd job happens
+    to be up. Both are forced into the "unreachable" branch here, which is the
+    precondition these tests are written for.
+    """
+    from archon_search.cli import _helpers
+
+    with (
+        patch.object(_helpers.httpx, "get", side_effect=httpx.ConnectError("refused")),
+        patch.object(_helpers, "_get_service", side_effect=NotImplementedError),
+    ):
+        yield
+
 # ---------------------------------------------------------------------------
 # key create
 # ---------------------------------------------------------------------------
@@ -248,8 +268,14 @@ def test_shared_constant_in_helpers() -> None:
 
 
 def test_message_consistent_across_modules() -> None:
-    """Every affected module imports _SERVER_NOT_RUNNING_MSG from _helpers."""
-    from archon_search.cli._helpers import _SERVER_NOT_RUNNING_MSG
+    """Every affected module uses _server_connect_fail_msg from _helpers.
+
+    The modules no longer import ``_SERVER_NOT_RUNNING_MSG`` directly — every one
+    of them routes through ``_server_connect_fail_msg()``, which decides between
+    the "not running" and "starting up" wording. That shared function is what must
+    be the same object everywhere.
+    """
+    from archon_search.cli._helpers import _server_connect_fail_msg
     import archon_search.cli.key_cmd as km
     import archon_search.cli.backup_cmd as bm
     import archon_search.cli.maintenance_cmd as mm
@@ -261,9 +287,10 @@ def test_message_consistent_across_modules() -> None:
     import archon_search.cli.export_cmd as em
 
     for mod in (km, bm, mm, sm, im, gm, jm, cm, em):
-        assert hasattr(mod, "_SERVER_NOT_RUNNING_MSG"), (
-            f"{mod.__name__} must import _SERVER_NOT_RUNNING_MSG from _helpers"
+        assert hasattr(mod, "_server_connect_fail_msg"), (
+            f"{mod.__name__} must import _server_connect_fail_msg from _helpers"
         )
-        assert mod._SERVER_NOT_RUNNING_MSG is _SERVER_NOT_RUNNING_MSG, (
-            f"{mod.__name__}._SERVER_NOT_RUNNING_MSG must be the same object as _helpers._SERVER_NOT_RUNNING_MSG"
+        assert mod._server_connect_fail_msg is _server_connect_fail_msg, (
+            f"{mod.__name__}._server_connect_fail_msg must be the same object as "
+            "_helpers._server_connect_fail_msg"
         )

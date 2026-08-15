@@ -1,6 +1,7 @@
 """Shared CLI helpers for archon-search."""
 from __future__ import annotations
 
+import logging
 import sys
 import time
 
@@ -8,6 +9,8 @@ import click
 import httpx
 
 from archon_search.platform.service import SearchServiceLifecycle
+
+logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_SECONDS = 2
 _TERMINAL_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
@@ -28,26 +31,53 @@ _CONTAINER_MSG = (
 def _server_connect_fail_msg(base_url: str | None = None) -> str:
     """Return the appropriate message when a connection attempt fails.
 
-    When ``base_url`` is given, ``{base_url}/ready`` is probed: a 503 with
-    ``checks.models == "pending"`` is the authoritative "still starting up" signal
-    and works for every launch mode, including a foreground ``archon-search serve``
-    that no service manager knows about. Any probe failure (including a
-    ``ConnectError`` on ``/ready`` too) means the server really is down.
+    When ``base_url`` is given, ``{base_url}/ready`` is probed first. The probe is
+    authoritative only when it answers with a usable ``checks`` object — one that
+    actually carries a ``models`` verdict. Then a 503 with ``storage == "ok"`` and
+    either ``models == "pending"`` or ``sync == "pending"`` means "still starting
+    up" (the latter covers the startup-sync window, where models is already
+    "ok"), and works for every launch mode including a foreground ``archon-search
+    serve`` that no service manager knows about; anything else means the server
+    will not become ready on its own. Storage must be OK too: a server whose
+    storage check failed also answers 503 with pending models, but telling the
+    operator to wait for it would be wrong.
 
-    Without ``base_url`` liveness is probed through the *managed* service only
-    (launchd / systemd / Windows), so a foreground ``archon-search serve`` falls
-    back to the 'not running' message. Any probe failure (``NotImplementedError``
-    on an unsupported platform, a missing ``launchctl``) falls back the same way:
-    the message is a hint, never a hard diagnosis.
+    ``usable`` keys off ``checks.get("models") is not None`` only — every real
+    ``/ready`` body always includes a ``models`` key (``ReadinessChecks``
+    defaults it), so a body carrying only ``sync`` never occurs in practice, and
+    widening the gate would just accept more malformed bodies as "usable".
+
+    Every other outcome — a connection failure (the port is not bound yet), a
+    non-JSON body, a non-dict body (``null``, an array, a bare string), or a
+    ``"checks": null`` payload — carries no usable signal, so it falls through to
+    the *managed* service check (launchd / systemd / Windows). That is also the
+    only path taken when ``base_url`` is absent. A failure there
+    (``NotImplementedError`` on an unsupported platform, a missing ``launchctl``)
+    falls back to 'not running': the message is a hint, never a hard diagnosis.
     """
     if base_url is not None:
         try:
             resp = httpx.get(f"{base_url}/ready", timeout=2)
-            if resp.status_code == 503 and resp.json().get("checks", {}).get("models") == "pending":
+            body = resp.json()
+            checks = body.get("checks") if isinstance(body, dict) else None
+            usable = isinstance(checks, dict) and checks.get("models") is not None
+        except (httpx.HTTPError, ValueError):
+            # httpx.HTTPError covers connection failures (ConnectError,
+            # ConnectTimeout are subclasses); ValueError covers a non-JSON
+            # response body from resp.json(). Both mean the probe itself is
+            # unusable — fall through to the managed-service check. Anything
+            # else is an internal defect and must propagate, not be silently
+            # treated as "server down".
+            logger.debug("_server_connect_fail_msg: /ready probe failed", exc_info=True)
+            usable = False
+        if usable:
+            if (
+                resp.status_code == 503
+                and checks.get("storage") == "ok"
+                and (checks.get("models") == "pending" or checks.get("sync") == "pending")
+            ):
                 return _SERVER_STARTING_MSG
-        except Exception:  # noqa: BLE001 — the probe is best-effort
-            pass
-        return _SERVER_NOT_RUNNING_MSG
+            return _SERVER_NOT_RUNNING_MSG
     try:
         if _get_service().status().running:
             return _SERVER_STARTING_MSG

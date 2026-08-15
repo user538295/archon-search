@@ -39,12 +39,51 @@ class CheckStatus(str, Enum):
     WARN = "warn"
 
 
+class WarmupResult(str, Enum):
+    """Eager model warm-up progress, mirrored onto ``app.state.warmup_result``.
+
+    Set by the lifespan's eager warm-up task: ``PENDING`` before the task
+    starts, ``DONE``/``FAILED`` once it finishes. ``None`` (not a member of
+    this enum) means eager warm-up was never run, i.e.
+    ``eager_load_embedders = false``.
+    """
+
+    PENDING = "pending"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class StartupSyncResult(str, Enum):
+    """Startup collection-sync progress, mirrored onto ``app.state.sync_result``.
+
+    Set by the lifespan's startup sync task: ``PENDING`` before/while the task
+    runs, ``DONE`` on a clean completion, ``FAILED`` on a bounded timeout, a
+    per-collection error (``SyncResult.errors`` non-empty), cancellation, or any
+    other exception. ``None`` (not a member of this enum) means no startup sync
+    was ever run, i.e. no collections are configured. Named ``StartupSyncResult``
+    rather than ``SyncResult`` to avoid colliding with
+    ``archon_search.sync.SyncResult``, which is a different, unrelated type.
+    """
+
+    PENDING = "pending"
+    DONE = "done"
+    FAILED = "failed"
+
+
 class ReadinessChecks(BaseModel):
     storage: CheckStatus
     # D6 BE-5 — model validation check; PENDING until background validation
     # completes. Default required: routes_ready.py constructs this with only
     # ``storage=`` while validation may still be running.
     models: CheckStatus = CheckStatus.PENDING
+    # Startup-sync check: PENDING while the lifespan's startup sync task is
+    # still running (the index is mid-(re)build), FAIL if it crashed or
+    # returned with non-empty SyncResult.errors, else OK.
+    # Defaults to PENDING (unknown ⇒ not ready), matching ``models`` above — the
+    # safe direction for a field that can gate a 503. ``routes_ready.ready``
+    # always passes this explicitly, so the default is only reachable from
+    # other constructions.
+    sync: CheckStatus = CheckStatus.PENDING
 
 
 class ReadinessResponse(BaseModel):
@@ -420,6 +459,13 @@ class StatusResponse(BaseModel):
     # E2g BE-11 — code parser (tree-sitter) soft-degrade status (additive, nullable);
     # null when graph.enabled=false
     code_parsers: CodeParsersStatusDetail | None = None
+    # Eager model warm-up progress; null when eager_load_embedders=false (no
+    # warm-up was ever run).
+    warmup_result: WarmupResult | None = None
+    # Startup collection-sync progress; null when no collections are configured
+    # (no startup sync was ever run). Mirrors warmup_result above — see
+    # StartupSyncResult for the state machine.
+    sync_result: StartupSyncResult | None = None
 
 
 class IndexingStateCollectionEntry(BaseModel):

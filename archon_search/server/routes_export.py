@@ -27,7 +27,7 @@ from archon_search._path_safety import PathUnsafeError, validate_archive_members
 from archon_search._types import ChunkRecord
 from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
-from archon_search.embedder_cache import EmbedderCache
+from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderCache, EmbedderNotReadyError
 from archon_search.jobs.export_archive import (
     EXPORT_SCHEMA_VERSION,
     ExportArchiveWriter,
@@ -341,6 +341,15 @@ async def _import_task(
             },
         )
 
+    except EmbedderNotReadyError as exc:
+        # Retryable, not a genuine failure: ImportJob supports manual resume via
+        # POST /jobs/{id}/resume while status==FAILED (routes_jobs.py), so leaving
+        # this job FAILED with a clean, non-leaking message is sufficient.
+        logger.warning("_import_task: embedder not ready for job %s — %s", job_id, exc)
+        try:
+            store.update(job_id, status=JobStatus.FAILED, error=EMBEDDER_NOT_READY_DETAIL)
+        except (KeyError, OSError):
+            logger.error("_import_task: could not persist FAILED status for job %s", job_id)
     except Exception as exc:  # noqa: BLE001
         logger.exception("_import_task: job %s failed", job_id)
         try:

@@ -14,9 +14,10 @@ if TYPE_CHECKING:
     from archon_search.query_expansion_protocol import QueryExpansionProvider
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
 
 from archon_search.chunker import ASTChunker, DocumentChunker
 from archon_search.config import (
@@ -29,7 +30,12 @@ from archon_search.config import (
 )
 from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, get_fasttext_models_dir
 from archon_search.embedder import Embedder, ModelEmbedder
-from archon_search.embedder_cache import EmbedderCache
+from archon_search.embedder_cache import (
+    EMBEDDER_NOT_READY_CODE,
+    EMBEDDER_NOT_READY_DETAIL,
+    EmbedderCache,
+    EmbedderNotReadyError,
+)
 from archon_search.jobs.backup_loop import BackupLoop
 from archon_search.jobs.maintenance_loop import MaintenanceLoop
 from archon_search.jobs.scheduler import JobScheduler
@@ -44,6 +50,7 @@ from archon_search.progress import IndexingStateStore
 from archon_search.reranker import ModelReranker, Reranker
 from archon_search.server.middleware_auth import APIKeyMiddleware, _EXEMPT_PATHS
 from archon_search.server.middleware_context import RequestContextMiddleware
+from archon_search.server.schemas import StartupSyncResult, WarmupResult
 from archon_search.graph_store import check_and_warn_legacy_graph_tables
 from archon_search.store import SearchStore
 
@@ -74,6 +81,24 @@ from archon_search.telemetry.pruner import Pruner
 from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger(__name__)
+
+# Terminal ceiling for the eager model warm-up task. A cold cache legitimately
+# takes minutes (ONNX build + download), but an unbounded await would pin
+# ``app.state.warmup_result`` at "pending" — and ``GET /ready`` at 503 — forever.
+_EAGER_WARMUP_TIMEOUT_SECONDS: float = 600.0
+
+# Terminal ceiling for the startup collection sync. A full corpus (re)index is
+# legitimately slower than a model load, so this is set well above
+# _EAGER_WARMUP_TIMEOUT_SECONDS. Docker's HEALTHCHECK (Dockerfile) uses
+# --start-period=600s --interval=15s --retries=3 against /ready, i.e. ~645s of
+# grace before the container is marked unhealthy; an unbounded sync exceeding
+# that boot-loops under an orchestrator that restarts unhealthy containers
+# (the sync restarts from the top every time, never converging on a large
+# corpus). Bounding the sync here and marking ``sync: "fail"`` (which does NOT
+# gate /ready — see _sync_check_status in routes_ready.py) breaks that loop:
+# the container reports healthy and the operator still sees the failure on
+# /ready and in the log.
+_STARTUP_SYNC_TIMEOUT_SECONDS: float = 1800.0
 
 
 def _multilingual_model_path() -> Path:
@@ -357,30 +382,35 @@ def create_app(
 
             async def _run_eager_warmup(model_names: list[str]) -> None:
                 try:
-                    await embedder_cache.preload(model_names)
-                    # preload() already warmed every embedder; only the equally lazy
-                    # cross-encoder is still cold (S184).
-                    await app.state.pipeline.warmup_models()
+                    # A wedged model load must not leave warmup_result "pending"
+                    # forever — /ready would answer 503 for the process lifetime
+                    # with no diagnostic and no recovery.
+                    async with asyncio.timeout(_EAGER_WARMUP_TIMEOUT_SECONDS):
+                        await embedder_cache.preload(model_names)
+                        # preload() already warmed every embedder; only the equally lazy
+                        # cross-encoder is still cold (S184).
+                        await app.state.pipeline.warmup_models()
                     # Startup returning no longer implies warm-up finished, so this
                     # is the only signal an operator has that it completed at all.
                     logger.info(
                         "eager model warm-up complete (%d embedding models + reranker)",
                         len(model_names),
                     )
-                    app.state.warmup_result = "done"
+                    app.state.warmup_result = WarmupResult.DONE
                 except asyncio.CancelledError:
                     logger.info("eager model warm-up cancelled during shutdown")
+                    app.state.warmup_result = WarmupResult.FAILED
                     raise
                 except BaseException as exc:  # noqa: BLE001 — never let the task escape
                     logger.warning("eager model warm-up failed: %s", exc, exc_info=True)
-                    app.state.warmup_result = "failed"
+                    app.state.warmup_result = WarmupResult.FAILED
 
             # Warm-up must never be awaited here: uvicorn binds the listening socket
             # only after lifespan startup returns, so a cold model cache (3-5 min)
             # would keep the port closed for the whole window. ``warmup_result`` is
             # set to "pending" BEFORE the task starts so /ready never reports models
             # as ready during the gap between startup returning and the task running.
-            app.state.warmup_result = "pending"
+            app.state.warmup_result = WarmupResult.PENDING
             warmup_task = asyncio.create_task(_run_eager_warmup(list(distinct_models)))
             app.state._warmup_task = warmup_task
             app.state._background_tasks.add(warmup_task)
@@ -677,14 +707,49 @@ def create_app(
 
                     async def _run_startup_sync(cols: list[str]) -> None:
                         try:
-                            await app.state.collection_sync.sync(cols)
-                            logger.info("startup sync complete (%d collection(s))", len(cols))
+                            # A wedged/oversized sync must not leave /ready gated at 503
+                            # for the process lifetime — see _STARTUP_SYNC_TIMEOUT_SECONDS.
+                            async with asyncio.timeout(_STARTUP_SYNC_TIMEOUT_SECONDS):
+                                # Held for the whole sync so a POST /sync arriving during
+                                # startup gets a 409 instead of starting a second,
+                                # concurrent sync over the same collections.
+                                async with app.state.sync_lock:
+                                    result = await app.state.collection_sync.sync(cols)
+                                if result.errors:
+                                    # sync() does not raise on a per-collection failure — it
+                                    # accumulates messages in SyncResult.errors and returns
+                                    # normally, so this is the common failure mode (missing
+                                    # path, ingest error, chunk-size reindex failure).
+                                    app.state._startup_sync_failed = True
+                                    app.state.sync_result = StartupSyncResult.FAILED
+                                    logger.warning(
+                                        "startup sync completed with %d error(s): %s",
+                                        len(result.errors),
+                                        result.errors,
+                                    )
+                                else:
+                                    logger.info(
+                                        "startup sync complete (%d collection(s))", len(cols)
+                                    )
+                                    app.state.sync_result = StartupSyncResult.DONE
                         except asyncio.CancelledError:
                             logger.info("startup sync cancelled during shutdown")
+                            app.state.sync_result = StartupSyncResult.FAILED
                             raise
+                        except TimeoutError:
+                            logger.warning(
+                                "startup sync timed out after %.0fs; marking sync failed so "
+                                "/ready can recover instead of gating forever",
+                                _STARTUP_SYNC_TIMEOUT_SECONDS,
+                            )
+                            app.state._startup_sync_failed = True
+                            app.state.sync_result = StartupSyncResult.FAILED
                         except BaseException as exc:  # noqa: BLE001 — never let the task escape
                             logger.warning("startup sync failed: %s", exc, exc_info=True)
+                            app.state._startup_sync_failed = True
+                            app.state.sync_result = StartupSyncResult.FAILED
 
+                    app.state.sync_result = StartupSyncResult.PENDING
                     sync_task = asyncio.create_task(_run_startup_sync(all_cols))
                     app.state._startup_sync_task = sync_task
                     app.state._background_tasks.add(sync_task)
@@ -699,20 +764,30 @@ def create_app(
                 except Exception:  # noqa: BLE001
                     logger.warning("Filesystem watcher stop_all() raised", exc_info=True)
 
+            # Shutdown ordering is load-bearing in two directions at once:
+            # - the telemetry writer must drain BEFORE its own background task is
+            #   cancelled — drain_and_stop() cancels writer._task internally, so
+            #   cancelling app.state._background_tasks first would leave
+            #   queue.join() unsatisfiable and every buffered entry would be lost.
+            # - background tasks (startup sync, eager warm-up, model validation)
+            #   must be cancelled and drained BEFORE the stores disconnect, or an
+            #   in-flight task keeps calling into a closed store.
+            # Draining telemetry first, then cancelling the rest, then
+            # disconnecting the stores last satisfies both.
+            if app.state.telemetry_writer is not None:
+                await app.state.telemetry_writer.drain_and_stop()
+
+            tasks = list(app.state._background_tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
             # Shutdown: disconnect search store
             await app.state.search_store.disconnect()
 
             # Shutdown: disconnect graph store (if enabled)
             if app.state.graph_store is not None:
                 await app.state.graph_store.disconnect()
-
-            # Shutdown: drain writer before cancelling background tasks
-            if app.state.telemetry_writer is not None:
-                await app.state.telemetry_writer.drain_and_stop()
-            tasks = list(app.state._background_tasks)
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
 
     # Instantiate the key store pointing to keys.json under the data directory.
     # Each app (HTTP and MCP) creates its own KeyStore instance; cross-process
@@ -778,9 +853,17 @@ def create_app(
     # Set to a Task by the lifespan only when at least one collection is configured;
     # the None default keeps the attribute readable on every path.
     app.state._startup_sync_task = None
+    # Set to True by _run_startup_sync when the sync crashed (except branch) or
+    # completed with per-collection errors (result.errors non-empty); the False
+    # default keeps the attribute readable on every path.
+    app.state._startup_sync_failed = False
     # Warm-up progress for /ready and /status: set to "pending"/"done"/"failed" by
     # the lifespan when eager_load_embedders is on; None means no warm-up was run.
     app.state.warmup_result = None
+    # Startup-sync progress for GET /status: set to "pending"/"done"/"failed" by the
+    # lifespan when at least one collection is configured; None means no startup
+    # sync was ever run (mirrors warmup_result above).
+    app.state.sync_result = None
     app.state.state_store = IndexingStateStore(config.db_path)
     app.state.search_store = SearchStore(config.db_path)
     app.state.watcher_manager = None
@@ -890,6 +973,42 @@ def create_app(
             config.rag_fusion.provider,
             config.rag_fusion.model,
         )
+    @app.exception_handler(EmbedderNotReadyError)
+    async def _embedder_not_ready_handler(request: Request, exc: EmbedderNotReadyError) -> JSONResponse:
+        """Map a wedged/slow model load to a uniform 503 across every HTTP route.
+
+        ``routes_search.search`` keeps its own local ``except EmbedderNotReadyError``
+        handler (it also emits the ExitStack-scoped stage-timings recorder before
+        returning — this generic handler has no access to that recorder); every
+        other route that resolves an embedder via ``EmbedderCache.get_or_load``
+        without its own handling (``/explain``, ``/v1/chat/completions``) falls
+        through to this one instead of surfacing as a 500.
+
+        ``mcp.py`` is NOT covered here, for two independent reasons: (1) it is a
+        mounted Starlette sub-app (``app.mount("/mcp", mcp_starlette)``), which
+        does not share this app's ``exception_handlers`` registry — a FastMCP/
+        Starlette app builds its own middleware stack; and (2) every MCP tool
+        already wraps its body in its own ``try/except Exception`` that returns an
+        ``McpErrorResponse`` dict rather than raising, so nothing ever reaches an
+        ASGI-level exception handler regardless. Each tool therefore catches
+        ``EmbedderNotReadyError`` explicitly, before its generic ``except
+        Exception``, and returns the dict directly (see ``mcp.py``).
+        """
+        logger.warning("embedder not ready: %s", exc)
+        # Retry-After matches every other retryable 503 in the server
+        # (_ingest_lock.py, routes_collections.py) — same condition, same hint,
+        # regardless of which surface (REST, OpenAI shim) maps it.
+        if request.url.path.startswith("/v1/"):
+            from archon_search.server.routes_openai_shim import _openai_error  # noqa: PLC0415
+            response = _openai_error(503, "Service temporarily unavailable.", "server_error")
+            response.headers["Retry-After"] = "30"
+            return response
+        return JSONResponse(
+            {"detail": EMBEDDER_NOT_READY_DETAIL, "code": EMBEDDER_NOT_READY_CODE},
+            status_code=503,
+            headers={"Retry-After": "30"},
+        )
+
     app.include_router(collections_router)
     app.include_router(export_router, prefix="/collections")
     app.include_router(graph_router)

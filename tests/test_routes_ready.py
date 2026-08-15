@@ -68,7 +68,7 @@ def test_ready_body_schema_is_bounded(client_ping_true: TestClient) -> None:
     response = client_ping_true.get("/ready")
     body = response.json()
     assert set(body.keys()) == {"ready", "checks"}
-    assert set(body["checks"].keys()) == {"storage", "models"}
+    assert set(body["checks"].keys()) == {"storage", "models", "sync"}
 
 
 def test_ready_503_body_is_readiness_response_not_error_detail(

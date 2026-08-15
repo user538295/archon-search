@@ -22,7 +22,7 @@ import httpx
 from archon_search.config import ConfigError, load_config
 from archon_search.key_manager import load_key
 from archon_search.paths import get_data_dir
-from archon_search.cli._helpers import _CONNECT_FAIL, _SERVER_NOT_RUNNING_MSG, _server_connect_fail_msg
+from archon_search.cli._helpers import _CONNECT_FAIL, _server_connect_fail_msg
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2

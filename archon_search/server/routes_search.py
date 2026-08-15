@@ -14,6 +14,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from archon_search._types import SearchResult
 from archon_search.config import resolve_active_model
+from archon_search.embedder_cache import (
+    EMBEDDER_NOT_READY_CODE,
+    EMBEDDER_NOT_READY_DETAIL,
+    EmbedderNotReadyError,
+)
 from archon_search.filters import SearchFilters
 from archon_search.hyde import resolve_hyde_vector
 from archon_search.pipeline import (
@@ -30,6 +35,17 @@ from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 
 # TODO: make configurable via config.py (see /route for parity)
 _SEARCH_TIMEOUT_SECONDS = 30.0
+
+# Upper bound on how long a single POST /search request waits on
+# embedder_cache.get_or_load() before giving up with a fast 503. The cache's
+# own internal dedup wait (_LOAD_WAIT_TIMEOUT_SECONDS in embedder_cache.py) is
+# 120s — tuned for the cache's own waiter/loader handoff, not one HTTP
+# request's patience. Bounding it here separately means a cold-start request
+# fails fast with a Retry-After hint instead of holding the connection for up
+# to 120s; a concurrent loader for the same model (if this request is only a
+# dedup waiter, not the loader) keeps running in the background regardless, so
+# the next request is likely to hit a warm cache.
+_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS = 30.0
 
 _VALID_ACL_SOURCES = frozenset({"frontmatter", "sidecar", "collection_default"})
 
@@ -325,7 +341,20 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             embedder_cache = getattr(request.app.state, "embedder_cache", None)
             active_model = resolve_active_model(meta, config)
             if embedder_cache is not None:
-                embedder = await embedder_cache.get_or_load(active_model)
+                try:
+                    embedder = await asyncio.wait_for(
+                        embedder_cache.get_or_load(active_model),
+                        timeout=_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    # The cache's own dedup wait (120s) is deliberately longer
+                    # than one HTTP request should hold a connection for — map
+                    # to the same retryable 503 as EmbedderNotReadyError below,
+                    # rather than parking this request for up to 120s.
+                    raise EmbedderNotReadyError(
+                        f"get_or_load({active_model!r}) exceeded the "
+                        f"{_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS}s HTTP-facing wait bound"
+                    ) from None
             else:
                 logger.warning("search: embedder_cache absent from app.state — falling back to global embedder")
                 embedder = pipeline._global_embedder
@@ -389,6 +418,32 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 expansion_warning=_expansion_warning,
                 applied_filters=body.filters,
                 ppr_entities_matched=result.ppr_entities_matched,
+            )
+        except EmbedderNotReadyError as exc:
+            # The model is still loading (or its load is wedged) — retryable, so
+            # 503, never 500. Kept as its own handler (rather than relying on the
+            # generic app-level EmbedderNotReadyError handler in app.py) because it
+            # also emits stage timings for the recorder bound above — the generic
+            # handler has no access to that ExitStack-scoped recorder.
+            _emit_timings()
+            if writer is not None:
+                try:
+                    writer.enqueue(
+                        TelemetryEntry.from_error(
+                            endpoint="search",
+                            status="internal_error",
+                            error_kind="other",
+                            latency_ms=(monotonic() - start) * 1000.0,
+                            correlation_id=_correlation_id.get(),
+                        )
+                    )
+                except Exception as tel_exc:
+                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+            logger.warning("search: embedder not ready — %s", exc)
+            return JSONResponse(
+                {"detail": EMBEDDER_NOT_READY_DETAIL, "code": EMBEDDER_NOT_READY_CODE},
+                status_code=503,
+                headers={"Retry-After": "30"},
             )
         except RAGFusionDependencyError as exc:
             _emit_timings()

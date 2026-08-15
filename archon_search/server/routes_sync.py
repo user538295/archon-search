@@ -12,6 +12,11 @@ QUEUED -> RUNNING pre-transition pattern from ``routes_graph.py`` (rebuild_commu
 
 ``_sync_task`` releases the lock in a ``finally`` block so any sync() exception
 (``OSError``, ``KeyError``, or any other) always frees the lock (S23).
+
+Exemption: ``app.state.sync_lock`` only serialises this route and the lifespan's
+startup sync (``app.py``) — a watcher-driven sync (``app.py``'s ``_watch_callback``
+-> ``collection_sync.sync_collection()``) does not take the lock and can run
+concurrently with either.
 """
 from __future__ import annotations
 

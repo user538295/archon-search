@@ -7,7 +7,7 @@ from pathlib import Path
 import click
 import httpx
 
-from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _SERVER_NOT_RUNNING_MSG, _server_connect_fail_msg
+from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _server_connect_fail_msg
 from archon_search.key_manager import load_key
 
 _DEFAULT_API_URL = "http://localhost:8765"
