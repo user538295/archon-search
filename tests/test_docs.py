@@ -227,3 +227,40 @@ def test_security_guide_home_mention_is_not_data_dir_relocation() -> None:
         "SecurityGuide/02's HOME mention must not document data-dir relocation via HOME; "
         "use ARCHON_SEARCH_DATA_DIR for that"
     )
+
+
+def test_eager_load_surface_matches_documented_wording() -> None:
+    """S03-step5e: every eager-load user-facing string must match its doc.
+
+    Commit 32b783ca widened eager loading to warm the cross-encoder too and
+    reworded the wizard's Step 5e prompt from "Pre-load embedding models at
+    startup" to "...and reranker at startup", updating `20_wizard.md` and
+    `10_installation.md` but leaving the `--eager-load` help on the old text.
+    Nothing in-repo caught the drift, so the S03 scenario kept asserting the
+    retired wording. This pins both surfaces to the docs that describe them.
+    """
+    wizard_src = (
+        REPO_ROOT / "archon_search" / "install" / "wizard.py"
+    ).read_text(encoding="utf-8")
+
+    wizard_doc = (
+        REPO_ROOT / "Documentation" / "UserManual" / "20_wizard.md"
+    ).read_text(encoding="utf-8")
+    section = wizard_doc[wizard_doc.index("#### 5e. Eager load") :]
+    section = section[: section.index("#### 5f.")]
+    transcript = section.split("```")[1]
+    for line in filter(None, transcript.splitlines()):
+        assert line in wizard_src, (
+            f"20_wizard.md section 5e transcripts a line the wizard never "
+            f"prints: {line!r}"
+        )
+
+    install_src = (
+        REPO_ROOT / "archon_search" / "cli" / "install_cmd.py"
+    ).read_text(encoding="utf-8")
+    eager_option = install_src[install_src.index('"--eager-load/--no-eager-load"') :]
+    eager_option = eager_option[: eager_option.index(")\n")]
+    assert "reranker" in eager_option, (
+        "the --eager-load help must say the reranker is pre-loaded too, as "
+        "10_installation.md documents"
+    )
