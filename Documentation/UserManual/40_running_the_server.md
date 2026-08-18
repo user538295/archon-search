@@ -119,7 +119,7 @@ Write operations from the CLI submit jobs to the running server. These commands 
 - `sync` — proxies `POST /sync`
 - `graph build-communities <collection>` — proxies `POST /graph/{collection}/rebuild-communities`
 
-They accept `--api-url` / `--api-key` and print a friendly message on connection refused; there is no in-process fallback. `--wait` (where supported) polls `GET /jobs/{id}`.
+They accept `--api-url` / `--api-key` and print a diagnostic message on connection refused — either `"archon-search serve is not running. Start it first with: archon-search serve"` or `"archon-search is starting up. Please wait..."` depending on a `GET /ready` probe; there is no in-process fallback. For a custom `--api-url`, probe failure always returns the not-running message (S530 — the local service describes a different server). See [`100_jobs_and_async_operations.md`](100_jobs_and_async_operations.md) for the full probe logic. `--wait` (where supported) polls `GET /jobs/{id}`.
 
 The read-only `collection list` and `collection info` are **also** server proxies now (`GET /collections/` and `GET /collections/{name}`, `cli/collection.py`) — they too require the server. See [`50_ingestion_and_collections.md`](50_ingestion_and_collections.md).
 
