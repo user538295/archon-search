@@ -232,12 +232,20 @@ def test_security_guide_home_mention_is_not_data_dir_relocation() -> None:
 def test_eager_load_surface_matches_documented_wording() -> None:
     """S03-step5e: every eager-load user-facing string must match its doc.
 
-    Commit 32b783ca widened eager loading to warm the cross-encoder too and
-    reworded the wizard's Step 5e prompt from "Pre-load embedding models at
-    startup" to "...and reranker at startup", updating `20_wizard.md` and
-    `10_installation.md` but leaving the `--eager-load` help on the old text.
-    Nothing in-repo caught the drift, so the S03 scenario kept asserting the
-    retired wording. This pins both surfaces to the docs that describe them.
+    The Step 5e prompt wording flipped three times: 32b783ca widened eager
+    loading to warm the cross-encoder and reworded the prompt to "...and
+    reranker at startup"; b5994d73 pinned that wording and fixed the one
+    surface it had left behind (`--eager-load`'s help); 0d01dd3e restored the
+    shorter "Pre-load embedding models at startup" the S03 scenario greps for.
+
+    The settled contract is that the two surfaces are worded *differently on
+    purpose* and each must match the doc that describes it:
+      - the wizard prompt is short (`20_wizard.md` section 5e transcribes it),
+        because the description block printed directly above it already names
+        the reranker;
+      - the `--eager-load` help stands alone, so it must name the reranker, as
+        `10_installation.md` documents.
+    Do not "unify" them — that is what caused each flip.
     """
     wizard_src = (
         REPO_ROOT / "archon_search" / "install" / "wizard.py"

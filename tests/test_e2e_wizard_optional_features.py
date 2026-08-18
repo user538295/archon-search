@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import tomlkit
-from click.testing import CliRunner
+from click.testing import CliRunner, Result
 
 from archon_search.cli.main import main
 from archon_search.install import InstallError, RealInstaller
@@ -308,25 +308,40 @@ _DOCUMENTED_PROMPT_ORDER = [
 ]
 
 
-@pytest.mark.integration
-def test_wizard_prompts_appear_in_documented_order(runner: CliRunner, tmp_path: Path) -> None:
-    """S03: every documented prompt is printed, once, in the documented order."""
-    config_path = tmp_path / "archon-search.toml"
+# Answers driving the full interactive flow above: 1 multilingual n /
+# 2 profile "" (→ minimal) / 3 code n / 4 reranker n / 5 watch n /
+# 6 telemetry n / 7 eager n / 8 routing "" / 9 log "" / 10 HyDE n /
+# 11 graph enrichment n / 12 "Proceed?" y
+_DOCUMENTED_FLOW_ANSWERS = (
+    "\n".join(["n", "", "n", "n", "n", "n", "n", "", "", "n", "n", "y"]) + "\n"
+)
 
-    # 1 multilingual n / 2 profile "" (→ minimal) / 3 code n / 4 reranker n /
-    # 5 watch n / 6 telemetry n / 7 eager n / 8 routing "" / 9 log "" /
-    # 10 HyDE n / 11 graph enrichment n / 12 "Proceed?" y
-    stdin_responses = "\n".join(["n", "", "n", "n", "n", "n", "n", "", "", "n", "n", "y"]) + "\n"
+
+def _run_documented_flow(runner: CliRunner, tmp_path: Path) -> Result:
+    """Drive the wizard through the whole documented prompt sequence.
+
+    Answers every prompt in `_DOCUMENTED_PROMPT_ORDER` with its default, so the
+    captured output is the reference transcript that `20_wizard.md` documents.
+    Asserts a clean exit so callers can assume the flow completed.
+    """
+    config_path = tmp_path / "archon-search.toml"
 
     with _no_anthropic_key():
         with _patched_wizard():
             result = runner.invoke(
                 main,
                 ["wizard", "--config", str(config_path), "--skip-preload"],
-                input=stdin_responses,
+                input=_DOCUMENTED_FLOW_ANSWERS,
             )
 
     assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    return result
+
+
+@pytest.mark.integration
+def test_wizard_prompts_appear_in_documented_order(runner: CliRunner, tmp_path: Path) -> None:
+    """S03: every documented prompt is printed, once, in the documented order."""
+    result = _run_documented_flow(runner, tmp_path)
 
     position = -1
     for expected in _DOCUMENTED_PROMPT_ORDER:
@@ -335,43 +350,36 @@ def test_wizard_prompts_appear_in_documented_order(runner: CliRunner, tmp_path: 
         position = found
 
 
-# The phrase the S03 acceptance scenario (and `10_installation.md`'s
-# `--eager-load` row) uses to locate the Step 5e prompt in wizard output.
+# The phrase the S03 acceptance scenario greps for to locate the Step 5e prompt
+# in wizard output.  It is a contiguous substring of the prompt transcribed in
+# `Documentation/UserManual/20_wizard.md` section "5e. Eager load" — note that
+# `10_installation.md`'s `--eager-load` row describes the CLI flag, not this
+# prompt, and deliberately says "and the reranker" instead.
 _STEP5E_EAGER_LOAD_PHRASE = "Pre-load embedding models at startup"
 
 
 @pytest.mark.integration
 def test_step5e_eager_load_prompt_wording(runner: CliRunner, tmp_path: Path) -> None:
-    """S03-step5e: the Step 5e prompt must contain the eager-load phrase.
+    """S03-step5e: exactly one Step 5e prompt, and it carries the eager-load phrase.
 
-    Commit 32b783ca widened eager loading to warm the cross-encoder too and
-    reworded the prompt to "Pre-load embedding models **and reranker** at
-    startup ...", which no longer contains the contiguous phrase "Pre-load
-    embedding models at startup" that the S03 scenario greps for.  The
-    interjected words split the substring, so the scenario's assertion fails
-    even though the prompt is emitted in the documented position.
+    `_DOCUMENTED_PROMPT_ORDER` pins the full prompt string but only checks that
+    it appears *somewhere after* the previous prompt.  This test additionally
+    pins that the eager-load prompt is emitted exactly **once**, so a duplicated
+    or relocated Step 5e is a distinct, self-describing failure rather than a
+    silent pass.
+
+    The phrase itself has flipped three times (32b783ca added "and reranker" when
+    eager loading grew to warm the cross-encoder; b5994d73 pinned that wording;
+    0d01dd3e restored this one).  The wording here is the settled contract — the
+    description block printed directly above the prompt still names the reranker.
     """
-    config_path = tmp_path / "archon-search.toml"
-
-    # 1 multilingual n / 2 profile "" (→ minimal) / 3 code n / 4 reranker n /
-    # 5 watch n / 6 telemetry n / 7 eager n / 8 routing "" / 9 log "" /
-    # 10 HyDE n / 11 graph enrichment n / 12 "Proceed?" y
-    stdin_responses = "\n".join(["n", "", "n", "n", "n", "n", "n", "", "", "n", "n", "y"]) + "\n"
-
-    with _no_anthropic_key():
-        with _patched_wizard():
-            result = runner.invoke(
-                main,
-                ["wizard", "--config", str(config_path), "--skip-preload"],
-                input=stdin_responses,
-            )
-
-    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    result = _run_documented_flow(runner, tmp_path)
 
     # Locate the Step 5e prompt itself, so a failure below is a wording defect
     # and not a missing/relocated prompt.
     step5e_lines = [
-        line for line in result.output.splitlines()
+        line
+        for line in result.output.splitlines()
         if "at startup (eliminates first-query latency)?" in line
     ]
     assert len(step5e_lines) == 1, (
