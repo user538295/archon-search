@@ -363,3 +363,69 @@ def test_server_connect_fail_msg_custom_url_local_service_running_returns_not_ru
         f"Got:      {msg!r}\n"
         f"Expected: {_SERVER_NOT_RUNNING_MSG!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Sequential `collection add` in the default (no --api-url) flow
+# ---------------------------------------------------------------------------
+
+
+def test_sequential_collection_add_second_reports_starting_not_stopped() -> None:
+    """Two `collection add` runs in a row: the second must say "starting up".
+
+    Scenario, entirely in the default flow — the operator never passes
+    ``--api-url``:
+
+    1. ``collection add /corpus/a`` is accepted (202). The ingest it enqueues
+       drives the server into the ONNX model-load window, which can take tens
+       of seconds (``c7829cbd``).
+    2. ``collection add /corpus/b`` is issued right after. The port is not
+       answering yet, so ``httpx.post`` raises ``ConnectError`` and the
+       ``{base_url}/ready`` probe fails too — but the managed service IS alive
+       (launchd/systemd reports a PID).
+
+    ``c7829cbd`` established the contract for exactly this window: a connect
+    failure while the server process is alive must print ``_SERVER_STARTING_MSG``
+    ("is starting up ... wait for it to finish loading models"), never
+    ``_SERVER_NOT_RUNNING_MSG`` ("not running. Start it first"), which sends the
+    operator off to restart a server that is already running.
+
+    ``ca54533b`` (S530) made ``_server_connect_fail_msg`` return
+    ``_SERVER_NOT_RUNNING_MSG`` immediately whenever ``base_url is not None``.
+    Every CLI ``--api-url`` option carries a click default
+    (``collection.py:_DEFAULT_API_URL``), so ``base_url`` is never ``None`` at
+    any call site and the managed-service branch — documented in
+    ``_helpers.py:54`` as "only reached when ``base_url`` is absent" — is dead
+    for the default local flow as well as for an explicit ``--api-url``.
+    """
+    from archon_search.cli import _helpers
+    from archon_search.cli._helpers import _SERVER_NOT_RUNNING_MSG, _SERVER_STARTING_MSG
+    from archon_search.cli.collection import collection
+    from archon_search.platform.service import ServiceStatus
+
+    running_service = MagicMock()
+    running_service.status.return_value = ServiceStatus(running=True, pid=4242, uptime_seconds=3.0)
+
+    accepted = _mock_response(202, {"job_id": "job-a", "collection": "a"})
+    runner = CliRunner()
+
+    with (
+        patch.object(_helpers, "_get_service", return_value=running_service),
+        patch(
+            "archon_search.cli.collection.httpx.post",
+            side_effect=[accepted, httpx.ConnectError("Connection refused")],
+        ),
+    ):
+        first = runner.invoke(collection, ["add", "/corpus/a", "--api-key", "test-key"])
+        second = runner.invoke(collection, ["add", "/corpus/b", "--api-key", "test-key"])
+
+    assert first.exit_code == 0, repr(first.output)
+
+    assert second.exit_code == 1, repr(second.output)
+    assert _SERVER_NOT_RUNNING_MSG not in second.output, (
+        "Second `collection add` told the operator to start a server that the "
+        "service manager reports as running.\n"
+        f"Got:      {second.output!r}\n"
+        f"Expected: {_SERVER_STARTING_MSG!r}"
+    )
+    assert _SERVER_STARTING_MSG in second.output, repr(second.output)

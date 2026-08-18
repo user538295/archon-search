@@ -17,6 +17,7 @@ C1-I-10  the ``/ready`` probe ignores ``checks.storage``
 C1-I-12  ``app.state.warmup_result`` is not surfaced by ``GET /status``
 C1-I-14  ``_warmup_pending()`` is evaluated twice per ``GET /ready``
 C1-I-15  a ``"checks": null`` body makes the probe raise AttributeError into a blanket except
+C1-I-16  probe succeeds with non-usable body but service-manager leak survives (sequential-add)
 """
 from __future__ import annotations
 
@@ -1448,9 +1449,13 @@ def test_cli_sync_connect_failure_uses_patched_probe_only() -> None:
     ``ConnectError``, which issues a real ``httpx.get`` unless the test patches
     ``archon_search.cli._helpers.httpx.get``. Every such test must patch it — an
     unpatched one hits the developer's machine and its result flips with whether
-    a local server happens to be up. Here the probe *is* patched (ConnectError),
-    so connection refused to the target URL must produce the NOT_RUNNING message
-    regardless of local service manager state (S530: no in-process fallback).
+    a local server happens to be up.
+
+    Here the probe *is* patched (ConnectError) and the managed service reports
+    running=True. The default URL is used (no ``--api-url``), so after the probe
+    fails the managed-service check is consulted (c7829cbd): the output must be
+    the "starting up" message, not "not running". For a custom ``--api-url``, the
+    service manager is never consulted (S530).
     """
     from archon_search.cli import _helpers  # noqa: PLC0415
     from archon_search.cli.sync import sync as sync_cmd  # noqa: PLC0415
@@ -1476,9 +1481,11 @@ def test_cli_sync_connect_failure_uses_patched_probe_only() -> None:
         "archon_search.cli._helpers.httpx.get — a CLI connect-failure test that "
         f"does not patch it makes a live network call. Calls: {probe_calls!r}"
     )
-    assert "not running" in output.lower(), (
-        "connection refused to the target URL must report not-running — "
-        f"local service manager state must not influence the message (S530). Got: {output!r}"
+    # Default URL + probe fail + service running → "starting up" (c7829cbd).
+    # Custom --api-url + probe fail → "not running" regardless (S530).
+    assert "starting up" in output.lower(), (
+        "default URL: probe failed but managed service is alive — must report 'starting up'. "
+        f"Got: {output!r}"
     )
 
 
@@ -1664,15 +1671,17 @@ async def test_warmup_pending_evaluated_once_per_ready_request(
 # C1-I-15 — a null `checks` body raises AttributeError into the blanket except
 # --------------------------------------------------------------------------- #
 def test_connect_fail_msg_handles_null_checks_without_swallowing() -> None:
-    """``"checks": null`` must be handled, not thrown into the blanket ``except``.
+    """``"checks": null`` must be handled gracefully — not crash, not consult service manager.
 
     ``resp.json().get("checks", {}).get("models")`` guards a *missing* key but not
     a ``null`` value: ``None.get(...)`` raises ``AttributeError``, which the
-    blanket ``except Exception`` swallows. The probe result is discarded and the
-    service-manager fallback is skipped entirely.
+    blanket ``except Exception`` swallows. After the C1-I-15 fix the body is
+    type-checked before ``.get`` is called, so ``checks=null`` sets ``usable=False``
+    without crashing.
 
-    Oracle: with the null handled, the function finds no "pending" signal and
-    falls through to ``_get_service()`` — which is never reached today.
+    After C1-I-16: when ``base_url`` is given and ``usable=False`` (regardless of
+    whether the probe failed or returned a non-usable body), the service manager is
+    *never* consulted. The function returns ``_SERVER_NOT_RUNNING_MSG`` immediately.
     """
     from archon_search.cli import _helpers  # noqa: PLC0415
 
@@ -1685,19 +1694,16 @@ def test_connect_fail_msg_handles_null_checks_without_swallowing() -> None:
 
     with (
         patch.object(_helpers.httpx, "get", return_value=resp),
-        patch.object(_helpers, "_get_service", return_value=service) as get_service,
+        patch.object(_helpers, "_get_service", return_value=service),
     ):
         msg = _helpers._server_connect_fail_msg("http://127.0.0.1:8765")
 
-    assert get_service.called, (
-        "a null `checks` body raised AttributeError inside the probe and was "
-        "swallowed by the blanket `except Exception`, so the service-manager "
-        "fallback never ran"
+    assert msg == _helpers._SERVER_NOT_RUNNING_MSG, (
+        "A null checks body with base_url given must yield NOT_RUNNING_MSG — "
+        "service manager must not be consulted (C1-I-16). "
+        f"Got: {msg!r}"
     )
-    assert msg == _helpers._SERVER_STARTING_MSG, (
-        "/ready answered but carried no usable checks, and the service manager "
-        f"reports the server as running — expected the 'starting up' hint, got {msg!r}"
-    )
+    service.status.assert_not_called()
 
 
 # --------------------------------------------------------------------------- #
@@ -1734,14 +1740,13 @@ def test_connect_fail_msg_handles_non_dict_body_without_crashing(body: object) -
     ``resp.json().get("checks")`` assumes the decoded body is a dict. A body of
     literal ``null``, a JSON array, or a bare JSON string — all valid JSON that a
     reverse proxy, load balancer error page, or captive portal can serve on
-    ``/ready`` — makes ``.get`` raise ``AttributeError``, which is neither
-    ``httpx.HTTPError`` nor ``ValueError`` and escapes the narrowed except,
-    aborting the CLI with a traceback on the exact path whose job is to print a
-    friendly hint after a connection failure.
+    ``/ready`` — would make ``.get`` raise ``AttributeError`` before the C1-I-15
+    fix. After that fix the body is type-checked first, so these bodies produce
+    ``usable=False`` without crashing.
 
-    Oracle: with the body type-checked before ``.get`` is called, the probe
-    finds no usable ``checks`` and falls through to the service-manager
-    fallback, exactly like the null-``checks``-value case above.
+    After C1-I-16: when ``base_url`` is given and ``usable=False``, the service
+    manager is *never* consulted. The function returns ``_SERVER_NOT_RUNNING_MSG``
+    immediately — whether the probe failed or returned a non-usable body.
     """
     from archon_search.cli import _helpers  # noqa: PLC0415
 
@@ -1754,20 +1759,16 @@ def test_connect_fail_msg_handles_non_dict_body_without_crashing(body: object) -
 
     with (
         patch.object(_helpers.httpx, "get", return_value=resp),
-        patch.object(_helpers, "_get_service", return_value=service) as get_service,
+        patch.object(_helpers, "_get_service", return_value=service),
     ):
         msg = _helpers._server_connect_fail_msg("http://127.0.0.1:8765")
 
-    assert get_service.called, (
-        f"a non-dict body ({body!r}) raised AttributeError inside the probe and "
-        "was NOT caught by the narrowed except, so the service-manager fallback "
-        "never ran"
+    assert msg == _helpers._SERVER_NOT_RUNNING_MSG, (
+        f"A non-dict body ({body!r}) with base_url given must yield NOT_RUNNING_MSG — "
+        "service manager must not be consulted (C1-I-16). "
+        f"Got: {msg!r}"
     )
-    assert msg == _helpers._SERVER_STARTING_MSG, (
-        f"/ready answered with a non-dict body ({body!r}), and the service "
-        f"manager reports the server as running — expected the 'starting up' "
-        f"hint, got {msg!r}"
-    )
+    service.status.assert_not_called()
 
 
 # --------------------------------------------------------------------------- #
@@ -1810,4 +1811,99 @@ def test_connect_fail_msg_recognizes_sync_pending_as_starting_up() -> None:
     assert msg == _helpers._SERVER_STARTING_MSG, (
         "checks.sync == 'pending' with storage ok means the server is up and "
         f"mid-startup-sync — expected the 'starting up' hint, got {msg!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# C1-I-16 — probe succeeds with non-usable body but service-manager still consulted
+# --------------------------------------------------------------------------- #
+def test_connect_fail_msg_probe_succeeds_non_usable_body_does_not_consult_service_manager() -> None:
+    """When ``base_url`` is given and probe SUCCEEDS but body is not usable, service manager is NOT consulted.
+
+    ca54533b fixed the case where the probe *fails* (raises HTTPError/ValueError): the
+    function now returns ``_SERVER_NOT_RUNNING_MSG`` immediately. But the peer case —
+    probe returns an HTTP response whose body has no ``checks.models`` (``usable=False``) —
+    still falls through to ``_get_service().status().running``. If the managed service
+    happens to be running (launchd / systemd), the function returns ``_SERVER_STARTING_MSG``
+    even for the default localhost URL, which is the message the sequential-add scenario
+    hits on the second call when the server is in a degraded/shutdown state.
+
+    The contract (docstring, ca54533b): when ``base_url`` is given, the service manager
+    is *never* consulted — not on probe failure, not on a non-usable probe response.
+    """
+    from archon_search.cli import _helpers  # noqa: PLC0415
+
+    service = MagicMock()
+    service.status.return_value = MagicMock(running=True)
+
+    # Probe returns an HTTP 200 but with {"checks": null} — usable=False
+    probe_resp = MagicMock()
+    probe_resp.status_code = 200
+    probe_resp.json.return_value = {"checks": None}
+
+    with (
+        patch.object(_helpers.httpx, "get", return_value=probe_resp),
+        patch.object(_helpers, "_get_service", return_value=service),
+    ):
+        msg = _helpers._server_connect_fail_msg("http://127.0.0.1:8765")
+
+    assert msg == _helpers._SERVER_NOT_RUNNING_MSG, (
+        "Probe returned non-usable body with base_url given: "
+        "service manager must not be consulted (same contract as probe-failure). "
+        f"Got: {msg!r}"
+    )
+    service.status.assert_not_called()
+
+
+def test_sequential_add_second_does_not_report_starting_up_when_probe_non_usable() -> None:
+    """Second ``collection add`` must not say 'starting up' when probe returns non-usable body.
+
+    Scenario (C1-I-16 integration): user runs two sequential ``add`` commands. The first
+    succeeds. Between the calls the server enters a degraded state where ``POST /collections/``
+    raises ``ConnectError`` but ``GET /ready`` returns a body with no ``checks.models``
+    (``usable=False``). The managed service reports ``running=True``. Before the fix the
+    second add outputs ``_SERVER_STARTING_MSG``; after the fix it outputs
+    ``_SERVER_NOT_RUNNING_MSG``.
+    """
+    from archon_search.cli import _helpers  # noqa: PLC0415
+    from archon_search.cli.collection import collection  # noqa: PLC0415
+
+    runner = CliRunner()
+
+    first_resp = MagicMock()
+    first_resp.status_code = 202
+    first_resp.json.return_value = {"job_id": "job-seq-001", "collection": "col_a"}
+
+    service = MagicMock()
+    service.status.return_value = MagicMock(running=True)
+
+    probe_resp = MagicMock()
+    probe_resp.status_code = 200
+    probe_resp.json.return_value = {"checks": None}  # usable=False
+
+    # First add: server healthy, succeeds
+    with (
+        patch("archon_search.cli.collection.httpx.post", return_value=first_resp),
+        patch.object(_helpers, "_get_service", return_value=service),
+    ):
+        result1 = runner.invoke(collection, ["add", "/docs/A", "--api-key", "test-key"])
+
+    assert result1.exit_code == 0, f"First add must succeed; got exit {result1.exit_code}: {result1.output}"
+
+    # Second add: POST fails, probe returns non-usable body, managed service says running
+    with (
+        patch("archon_search.cli.collection.httpx.post", side_effect=httpx.ConnectError("refused")),
+        patch.object(_helpers.httpx, "get", return_value=probe_resp),
+        patch.object(_helpers, "_get_service", return_value=service),
+    ):
+        result2 = runner.invoke(collection, ["add", "/docs/B", "--api-key", "test-key"])
+
+    output2 = result2.output + (result2.stderr if hasattr(result2, "stderr") else "")
+    assert result2.exit_code == 1, f"Second add must fail; got exit {result2.exit_code}"
+    assert "starting up" not in output2.lower(), (
+        "Second add must not say 'starting up' when probe returns non-usable body "
+        f"with base_url given — service manager state must not leak. Got: {output2!r}"
+    )
+    assert "not running" in output2.lower() or "start it first" in output2.lower(), (
+        f"Second add must report the server as not running. Got: {output2!r}"
     )

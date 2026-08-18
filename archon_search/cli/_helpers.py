@@ -26,6 +26,8 @@ _CONTAINER_MSG = (
     "Service management is not available in container mode. "
     "Use 'archon-search serve' to run the server."
 )
+# Must match the click default in every CLI command (collection.py:_DEFAULT_API_URL, etc.).
+_LOCAL_DEFAULT_URL = "http://localhost:8765"
 
 
 def _server_connect_fail_msg(base_url: str | None = None) -> str:
@@ -47,38 +49,53 @@ def _server_connect_fail_msg(base_url: str | None = None) -> str:
     defaults it), so a body carrying only ``sync`` never occurs in practice, and
     widening the gate would just accept more malformed bodies as "usable".
 
-    Every other outcome when ``base_url`` is given — a connection failure (port
-    not bound), a non-JSON body, a non-dict body (``null``, an array, a bare
-    string), or a ``"checks": null`` payload — means the target is unreachable,
-    so ``_SERVER_NOT_RUNNING_MSG`` is returned immediately without consulting the
-    local service manager. The managed-service check (launchd / systemd / Windows)
-    is only reached when ``base_url`` is absent. A failure there
-    (``NotImplementedError`` on an unsupported platform, a missing ``launchctl``)
-    falls back to 'not running': the message is a hint, never a hard diagnosis.
+    When the probe *fails* (connection refused, timeout, non-JSON body):
+    - Custom ``--api-url`` target (not ``_LOCAL_DEFAULT_URL``): return
+      ``_SERVER_NOT_RUNNING_MSG`` immediately — never consult the local service
+      manager; it describes a different server (S530).
+    - Default local URL (``_LOCAL_DEFAULT_URL``): fall through to the managed-
+      service check — the port may be temporarily closed while the process is
+      alive and loading models (c7829cbd sequential-add window).
+
+    When the probe *succeeds* but the body is not usable (``checks=null``,
+    non-dict body, no ``models`` key): return ``_SERVER_NOT_RUNNING_MSG``
+    immediately for any ``base_url`` — the target IS reachable but is not a
+    healthy archon-search instance; the service manager is never consulted
+    here (C1-I-16).
+
+    The managed-service check (launchd / systemd / Windows) is only reached when
+    ``base_url`` is absent, or for the default local URL after a probe failure.
+    A failure there (``NotImplementedError`` on an unsupported platform, a
+    missing ``launchctl``) falls back to 'not running': the message is a hint,
+    never a hard diagnosis.
     """
     if base_url is not None:
+        _is_custom = base_url.rstrip("/") != _LOCAL_DEFAULT_URL
         try:
             resp = httpx.get(f"{base_url}/ready", timeout=2)
             body = resp.json()
             checks = body.get("checks") if isinstance(body, dict) else None
             usable = isinstance(checks, dict) and checks.get("models") is not None
         except (httpx.HTTPError, ValueError):
-            # httpx.HTTPError covers connection failures (ConnectError,
-            # ConnectTimeout are subclasses); ValueError covers a non-JSON
-            # response body from resp.json(). The target URL is unreachable —
-            # report not running for that target. Never consult the local
-            # service manager here: doing so would report the LOCAL instance's
-            # state when the operator asked about a different server (S530).
             logger.debug("_server_connect_fail_msg: /ready probe failed", exc_info=True)
-            return _SERVER_NOT_RUNNING_MSG
-        if usable:
+            if _is_custom:
+                # Custom --api-url: never consult local service manager (S530).
+                return _SERVER_NOT_RUNNING_MSG
+            # Default local URL: probe failed but server process may be alive and
+            # loading models. Fall through to managed-service check (c7829cbd).
+        else:
+            # Probe returned an HTTP response.
             if (
-                resp.status_code == 503
+                usable
+                and resp.status_code == 503
                 and checks.get("storage") == "ok"
                 and (checks.get("models") == "pending" or checks.get("sync") == "pending")
             ):
                 return _SERVER_STARTING_MSG
+            # Not usable or not in starting-up state. Never consult the service
+            # manager: the probe succeeded, so the target IS reachable (C1-I-16).
             return _SERVER_NOT_RUNNING_MSG
+    # Reached when base_url is None, or for the default local URL after probe failure.
     try:
         if _get_service().status().running:
             return _SERVER_STARTING_MSG
