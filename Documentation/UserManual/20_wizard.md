@@ -245,7 +245,7 @@ Eager embedder loading:
   Pre-loads the embedding model and reranker at server startup instead of on the first query.
   Eliminates first-query latency (~5-15s on first search without this).
   Default: disabled.
-Pre-load embedding models and reranker at startup (eliminates first-query latency)? [y/N]:
+Pre-load embedding models at startup (eliminates first-query latency)? [y/N]:
 ```
 
 **Default**: No.

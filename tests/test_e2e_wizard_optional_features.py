@@ -294,7 +294,7 @@ _DOCUMENTED_PROMPT_ORDER = [
     "Keep reranker enabled? [Y/n]: ",
     "Auto-watch directories and re-index on file changes? [y/N]: ",
     "Enable local query telemetry? [y/N]: ",
-    "Pre-load embedding models and reranker at startup (eliminates first-query latency)? [y/N]: ",
+    "Pre-load embedding models at startup (eliminates first-query latency)? [y/N]: ",
     "Routing strategy (centroid/hybrid) [centroid]: ",
     "Log format (text/json) [text]: ",
     "    anthropic  - Anthropic API (needs ANTHROPIC_API_KEY)",
@@ -333,6 +333,56 @@ def test_wizard_prompts_appear_in_documented_order(runner: CliRunner, tmp_path: 
         found = result.output.find(expected, position + 1)
         assert found != -1, f"Prompt not found after position {position}: {expected!r}\nOUT: {result.output}"
         position = found
+
+
+# The phrase the S03 acceptance scenario (and `10_installation.md`'s
+# `--eager-load` row) uses to locate the Step 5e prompt in wizard output.
+_STEP5E_EAGER_LOAD_PHRASE = "Pre-load embedding models at startup"
+
+
+@pytest.mark.integration
+def test_step5e_eager_load_prompt_wording(runner: CliRunner, tmp_path: Path) -> None:
+    """S03-step5e: the Step 5e prompt must contain the eager-load phrase.
+
+    Commit 32b783ca widened eager loading to warm the cross-encoder too and
+    reworded the prompt to "Pre-load embedding models **and reranker** at
+    startup ...", which no longer contains the contiguous phrase "Pre-load
+    embedding models at startup" that the S03 scenario greps for.  The
+    interjected words split the substring, so the scenario's assertion fails
+    even though the prompt is emitted in the documented position.
+    """
+    config_path = tmp_path / "archon-search.toml"
+
+    # 1 multilingual n / 2 profile "" (→ minimal) / 3 code n / 4 reranker n /
+    # 5 watch n / 6 telemetry n / 7 eager n / 8 routing "" / 9 log "" /
+    # 10 HyDE n / 11 graph enrichment n / 12 "Proceed?" y
+    stdin_responses = "\n".join(["n", "", "n", "n", "n", "n", "n", "", "", "n", "n", "y"]) + "\n"
+
+    with _no_anthropic_key():
+        with _patched_wizard():
+            result = runner.invoke(
+                main,
+                ["wizard", "--config", str(config_path), "--skip-preload"],
+                input=stdin_responses,
+            )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+
+    # Locate the Step 5e prompt itself, so a failure below is a wording defect
+    # and not a missing/relocated prompt.
+    step5e_lines = [
+        line for line in result.output.splitlines()
+        if "at startup (eliminates first-query latency)?" in line
+    ]
+    assert len(step5e_lines) == 1, (
+        f"Expected exactly one Step 5e eager-load prompt, got {step5e_lines!r}\n"
+        f"OUT: {result.output}"
+    )
+
+    assert _STEP5E_EAGER_LOAD_PHRASE in step5e_lines[0], (
+        f"Step 5e prompt must contain {_STEP5E_EAGER_LOAD_PHRASE!r}; "
+        f"emitted: {step5e_lines[0]!r}"
+    )
 
 
 @pytest.mark.integration

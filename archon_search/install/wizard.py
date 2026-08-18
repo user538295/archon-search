@@ -727,7 +727,7 @@ def _prompt_optional_features(
         _eager_load_val = False
     else:
         _eager_load_val = _ask_yn(
-            "Pre-load embedding models and reranker at startup (eliminates first-query latency)? [y/N]: "
+            "Pre-load embedding models at startup (eliminates first-query latency)? [y/N]: "
         )
 
     # --- routing_strategy ---
