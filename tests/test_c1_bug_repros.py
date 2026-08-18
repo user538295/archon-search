@@ -348,14 +348,15 @@ async def test_telemetry_drains_before_background_tasks_cancelled(
 # --------------------------------------------------------------------------- #
 # C1-I-3 — the base_url branch never reaches the service-manager check
 # --------------------------------------------------------------------------- #
-def test_connect_fail_msg_falls_back_to_service_manager_when_probe_fails() -> None:
-    """A failed ``/ready`` probe must still consult the managed service.
+def test_connect_fail_msg_with_base_url_does_not_consult_service_manager() -> None:
+    """A failed ``/ready`` probe with ``base_url`` must return NOT_RUNNING_MSG.
 
-    ``_server_connect_fail_msg(base_url)`` returns ``_SERVER_NOT_RUNNING_MSG`` on
-    any probe exception and never evaluates ``_get_service().status().running``.
-    A launchd/systemd-managed server whose port is not bound yet (still starting)
-    is therefore reported as "not running", telling the operator to start a
-    server that is already coming up.
+    When ``--api-url`` names a specific server and the connection is refused,
+    ``_server_connect_fail_msg(base_url)`` must return ``_SERVER_NOT_RUNNING_MSG``
+    immediately — never consulting the local service manager. Consulting the
+    manager would report the LOCAL instance's state when the operator asked about
+    a different server (S530). The documented contract: "there is no in-process
+    fallback" and connection refused always prints the not-running message.
     """
     from archon_search.cli import _helpers  # noqa: PLC0415
 
@@ -368,11 +369,12 @@ def test_connect_fail_msg_falls_back_to_service_manager_when_probe_fails() -> No
     ):
         msg = _helpers._server_connect_fail_msg("http://127.0.0.1:8765")
 
-    assert msg == _helpers._SERVER_STARTING_MSG, (
-        "the /ready probe failed (port not bound yet) but the service manager "
-        "reports the server as running — the CLI must say 'starting up'. "
+    assert msg == _helpers._SERVER_NOT_RUNNING_MSG, (
+        "connection refused to --api-url target must yield NOT_RUNNING_MSG — "
+        "local service manager state must not leak into the message (S530). "
         f"Got {msg!r}"
     )
+    service.status.assert_not_called()
 
 
 # --------------------------------------------------------------------------- #
@@ -1446,9 +1448,9 @@ def test_cli_sync_connect_failure_uses_patched_probe_only() -> None:
     ``ConnectError``, which issues a real ``httpx.get`` unless the test patches
     ``archon_search.cli._helpers.httpx.get``. Every such test must patch it — an
     unpatched one hits the developer's machine and its result flips with whether
-    a local server happens to be up. Here the probe *is* patched (ConnectError)
-    and the service manager reports the process as running, so the user must be
-    told the server is starting up.
+    a local server happens to be up. Here the probe *is* patched (ConnectError),
+    so connection refused to the target URL must produce the NOT_RUNNING message
+    regardless of local service manager state (S530: no in-process fallback).
     """
     from archon_search.cli import _helpers  # noqa: PLC0415
     from archon_search.cli.sync import sync as sync_cmd  # noqa: PLC0415
@@ -1474,9 +1476,9 @@ def test_cli_sync_connect_failure_uses_patched_probe_only() -> None:
         "archon_search.cli._helpers.httpx.get — a CLI connect-failure test that "
         f"does not patch it makes a live network call. Calls: {probe_calls!r}"
     )
-    assert "starting" in output.lower(), (
-        "the probe failed but the service manager reports the server as running, "
-        f"so the CLI must report 'starting up'. Got: {output!r}"
+    assert "not running" in output.lower(), (
+        "connection refused to the target URL must report not-running — "
+        f"local service manager state must not influence the message (S530). Got: {output!r}"
     )
 
 

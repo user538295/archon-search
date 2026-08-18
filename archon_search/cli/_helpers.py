@@ -47,11 +47,12 @@ def _server_connect_fail_msg(base_url: str | None = None) -> str:
     defaults it), so a body carrying only ``sync`` never occurs in practice, and
     widening the gate would just accept more malformed bodies as "usable".
 
-    Every other outcome — a connection failure (the port is not bound yet), a
-    non-JSON body, a non-dict body (``null``, an array, a bare string), or a
-    ``"checks": null`` payload — carries no usable signal, so it falls through to
-    the *managed* service check (launchd / systemd / Windows). That is also the
-    only path taken when ``base_url`` is absent. A failure there
+    Every other outcome when ``base_url`` is given — a connection failure (port
+    not bound), a non-JSON body, a non-dict body (``null``, an array, a bare
+    string), or a ``"checks": null`` payload — means the target is unreachable,
+    so ``_SERVER_NOT_RUNNING_MSG`` is returned immediately without consulting the
+    local service manager. The managed-service check (launchd / systemd / Windows)
+    is only reached when ``base_url`` is absent. A failure there
     (``NotImplementedError`` on an unsupported platform, a missing ``launchctl``)
     falls back to 'not running': the message is a hint, never a hard diagnosis.
     """
@@ -64,12 +65,12 @@ def _server_connect_fail_msg(base_url: str | None = None) -> str:
         except (httpx.HTTPError, ValueError):
             # httpx.HTTPError covers connection failures (ConnectError,
             # ConnectTimeout are subclasses); ValueError covers a non-JSON
-            # response body from resp.json(). Both mean the probe itself is
-            # unusable — fall through to the managed-service check. Anything
-            # else is an internal defect and must propagate, not be silently
-            # treated as "server down".
+            # response body from resp.json(). The target URL is unreachable —
+            # report not running for that target. Never consult the local
+            # service manager here: doing so would report the LOCAL instance's
+            # state when the operator asked about a different server (S530).
             logger.debug("_server_connect_fail_msg: /ready probe failed", exc_info=True)
-            usable = False
+            return _SERVER_NOT_RUNNING_MSG
         if usable:
             if (
                 resp.status_code == 503

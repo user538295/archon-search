@@ -254,6 +254,44 @@ def test_collection_migrate_dryrun_server_not_running_friendly_message() -> None
     assert any(p in result.output.lower() for p in _FRIENDLY_PHRASES), repr(result.output)
 
 
+def test_collection_migrate_unreachable_api_url_reports_target_not_running() -> None:
+    """S530: a refused ``--api-url`` reports the target's state, not the local service's.
+
+    The autouse fixture above forces the managed service to be unavailable; this test
+    overrides it with a *running* local service, which is the state the bug needs. The
+    ``--api-url`` port is refused, so the documented message
+    (`UserManual/100_jobs_and_async_operations.md:11`) is the only correct answer — the
+    local instance is a different server than the one the operator named.
+    """
+    from archon_search.cli import _helpers
+    from archon_search.cli.collection import collection
+    from archon_search.cli._helpers import _SERVER_NOT_RUNNING_MSG
+    from archon_search.platform.service import ServiceStatus
+
+    local_service = MagicMock()
+    local_service.status.return_value = ServiceStatus(running=True, pid=4242, uptime_seconds=3.0)
+
+    runner = CliRunner()
+    with (
+        patch.object(_helpers, "_get_service", return_value=local_service),
+        patch(
+            "archon_search.cli.collection.httpx.post",
+            side_effect=httpx.ConnectError("Connection refused"),
+        ),
+    ):
+        result = runner.invoke(
+            collection,
+            [
+                "migrate", "mycol", "--apply",
+                "--api-url", "http://127.0.0.1:19999",
+                "--api-key", "test-key",
+            ],
+        )
+
+    assert result.exit_code == 1
+    assert _SERVER_NOT_RUNNING_MSG in result.output, repr(result.output)
+
+
 # ---------------------------------------------------------------------------
 # Consistent message: all affected modules import _SERVER_NOT_RUNNING_MSG
 # ---------------------------------------------------------------------------
@@ -294,3 +332,34 @@ def test_message_consistent_across_modules() -> None:
             f"{mod.__name__}._server_connect_fail_msg must be the same object as "
             "_helpers._server_connect_fail_msg"
         )
+
+
+# ---------------------------------------------------------------------------
+# S530 regression: custom --api-url must not leak local service state
+# ---------------------------------------------------------------------------
+
+
+def test_server_connect_fail_msg_custom_url_local_service_running_returns_not_running() -> None:
+    """Connection refused to a custom --api-url must yield NOT_RUNNING_MSG.
+
+    Regression for S530: when --api-url names a port nothing is listening on and
+    a local service IS running on the default port, the "is starting up" message
+    must NOT appear. The message must describe the target the operator asked about,
+    not the local instance.
+    """
+    from archon_search.cli._helpers import _server_connect_fail_msg, _SERVER_NOT_RUNNING_MSG
+
+    mock_svc = MagicMock()
+    mock_svc.status.return_value = MagicMock(running=True)
+
+    with (
+        patch("archon_search.cli._helpers.httpx.get", side_effect=httpx.ConnectError("refused")),
+        patch("archon_search.cli._helpers._get_service", return_value=mock_svc),
+    ):
+        msg = _server_connect_fail_msg("http://127.0.0.1:19999")
+
+    assert msg == _SERVER_NOT_RUNNING_MSG, (
+        f"S530: local service state leaked into message for custom --api-url.\n"
+        f"Got:      {msg!r}\n"
+        f"Expected: {_SERVER_NOT_RUNNING_MSG!r}"
+    )

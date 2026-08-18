@@ -18,6 +18,9 @@ Covers:
   _get_service() raising (unsupported platform) → "not running" fallback, no traceback
 - test_connect_fail_msg_status_probe_failure_falls_back_to_not_running: with no base_url,
   status() raising (launchctl/systemctl unavailable) → "not running" fallback
+- test_connect_fail_msg_unreachable_api_url_ignores_local_service: with a base_url whose
+  /ready probe is refused, a live *local* managed service must not turn the message into
+  "starting up" — the message describes the server --api-url named
 """
 from __future__ import annotations
 
@@ -26,7 +29,11 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from archon_search.cli._helpers import _poll_job, _server_connect_fail_msg
+from archon_search.cli._helpers import (
+    _SERVER_NOT_RUNNING_MSG,
+    _poll_job,
+    _server_connect_fail_msg,
+)
 from archon_search.platform.service import ServiceStatus
 
 
@@ -395,6 +402,35 @@ def test_connect_fail_msg_service_alive_shows_starting_up() -> None:
 
     assert "starting" in msg.lower(), (
         f"Expected a 'starting up' hint when the managed service is alive, got: {msg!r}"
+    )
+
+
+def test_connect_fail_msg_unreachable_api_url_ignores_local_service() -> None:
+    """A refused base_url must report 'not running' even while the local service is alive.
+
+    Documented contract (`UserManual/100_jobs_and_async_operations.md:11`): the probe hits
+    ``{base_url}/ready``, and only a 503 with ``checks.models == "pending"`` yields the
+    "starting up" hint — "otherwise it prints ``_SERVER_NOT_RUNNING_MSG``". The
+    managed-service probe answers for the *default local* instance, so consulting it after a
+    caller-supplied ``--api-url`` was refused describes a different server than the one the
+    operator asked about (`UserManual/40_running_the_server.md:122`: the flags select the
+    target server, "there is no in-process fallback").
+    """
+    with (
+        patch(
+            "archon_search.cli._helpers.httpx.get",
+            side_effect=httpx.ConnectError("Connection refused"),
+        ),
+        patch(
+            "archon_search.cli._helpers._get_service",
+            return_value=_service_mock(running=True),
+        ),
+    ):
+        msg = _server_connect_fail_msg("http://127.0.0.1:19999")
+
+    assert msg == _SERVER_NOT_RUNNING_MSG, (
+        "An unreachable --api-url target must report the documented 'not running' message "
+        f"regardless of the local service state, got: {msg!r}"
     )
 
 
