@@ -1,6 +1,25 @@
 # Changelog
 
 
+## [26.8.1987] - 2026-08-18
+
+canary
+
+**CLI error messaging fix for `--api-url` + wizard prompt restoration**
+
+**Connection error diagnostics**
+
+`_server_connect_fail_msg` was consulting the local managed service (launchd/systemd) and returning `STARTING_MSG` even when the operator passed a custom `--api-url` pointing at an unreachable server. This created the false impression that waiting would help when the target server was genuinely not running. Now when `--api-url` is given and the `/ready` probe fails, the function returns `NOT_RUNNING_MSG` immediately without inspecting the local service state — the managed-service check applies only to the default local URL.
+
+**Wizard prompt wording**
+
+Restored Step 5e eager-load prompt to "Pre-load embedding models at startup (eliminates first-query latency)?" — a recent commit had inserted "and reranker" which broke the acceptance test locator. Added a regression guard (`test_step5e_eager_load_prompt_wording`) that verifies the prompt substring matches the documented transcript.
+
+**Documentation and testing housekeeping**
+
+Updated `UserManual/40_running_the_server.md`, `UserManual/50_ingestion_and_collections.md`, and `UserManual/100_jobs_and_async_operations.md` to document the two-message distinction (custom URL failure vs. startup window). Fixed stale docstrings and test comments in wizard fixtures that contradicted the actual behavior, and refactored duplicated test drivers in `test_e2e_wizard_optional_features.py` to surface what each test uniquely exercises. Extracted testing rules from `CLAUDE.md` to a new `tests/CLAUDE.md` so the test contract sits next to the test tree.
+
+
 ## [26.8.1980] - 2026-08-15
 
 **Startup & readiness overhaul: non-blocking warmup, bounded timeouts, uniform embedder errors**
