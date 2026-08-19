@@ -38,7 +38,9 @@ The authoritative contract is `GET /openapi.json` on the running server. Everyth
 
 ## A 60-second mental model
 
-The runtime is one process. It owns:
+The runtime is one process, plus a lazily-spawned, recycled docling parse-worker child process
+(`archon_search/parser.py::DocumentParser`) that PDF/image OCR runs in — see below. The main
+process owns:
 
 - A LanceDB store at `~/.archon-search/db/` with one table per collection plus an FTS index (`archon_search/store.py`).
 - An async `SearchPipeline` that orchestrates parse → chunk → embed → store → rerank (`archon_search/pipeline.py`).
@@ -46,6 +48,7 @@ The runtime is one process. It owns:
 - A REST-only FastAPI app built by `create_app` in `archon_search/server/app.py`, which `include_router`s the eight REST routers and adds its own `APIKeyMiddleware` instance.
 - A separate Starlette app built by `create_mcp_http_app` in `archon_search/server/mcp.py`, wrapping `FastMCP.streamable_http_app()` and adding its own `APIKeyMiddleware`. The MCP endpoint path is `/mcp`. The two apps share the `APIKeyMiddleware` class (`archon_search/server/middleware_auth.py`) and the same on-disk API key, but they are independent ASGI apps — `app.py` does not import `mcp.py` and does not mount it.
 - A small job store for ingest/reindex (`archon_search/jobs/store.py`) — REST submits to it, MCP bypasses it (`mcp.py` does not import `JobStore`).
+- `SearchPipeline`'s single `DocumentParser`, which owns the single-worker (`max_workers=1`) docling parse pool — PDF and image OCR for every concurrent ingest job, watcher sync, and bulk job funnels through that one child process, one file at a time (`[jobs] max_concurrent_bulk` does not parallelize it).
 
 When you call `POST /search`, the request flows: middleware → route handler (`routes_search.py`) → `SearchPipeline.search` → LanceDB hybrid search → reranker → ACL filter → Pydantic response. The MCP `search` tool follows the same pipeline but validates its return through `McpSearchResponse` (in `mcp_schemas.py`) before returning — it skips the REST handler's pre-flight `pipeline.get_collection_meta(...)` 404 check (`routes_search.py:68–74`): on MCP, a missing collection still surfaces as a pipeline error caught by the broad `except Exception` and returned as `{"error": ..., "code": "internal_error"}` rather than as a structured 404.
 

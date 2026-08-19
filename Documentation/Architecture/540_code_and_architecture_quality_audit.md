@@ -304,6 +304,8 @@ Make persistence explicitly asynchronous or isolate it in one serialized writer 
 
 First test simultaneous parser entry and confirm whether duplicate converter construction occurs. Then verify Docling's supported concurrency model before choosing serialization, eager initialization, one converter per worker, or a bounded pool. Do not assert output corruption without evidence.
 
+**Update 2026-08-19** — the evidence above predates brief `2026-08-19-010`; the symbols it cites no longer exist. `_converter` is gone: docling now runs in a lazily-created single-worker `ProcessPoolExecutor` (`spawn`, recycled every `[ingest].max_tasks_per_child` files) owned by `DocumentParser._docling_pool`, and the lazy init is guarded by a double-checked `threading.Lock` with a pool-identity check on the broken-pool path. The remediation question this item posed ("one converter per worker, or a bounded pool") is therefore answered: a bounded pool, one converter per worker process. See `Documentation/Architecture/530_technical_debt_refactoring_roadmap.md` CON-1 for the residual. The original finding text is left as written — this is a dated audit, not a live register.
+
 ### REL-04 — Collection APIs hide store failures as zero values
 
 **Evidence**

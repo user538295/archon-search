@@ -53,6 +53,14 @@ LOG_FILE_DISABLED_WARNING: Final[str] = (
 # ponytail: monitor for LanceDB fragmentation on large corpora
 _INGEST_CHUNK_BATCH_SIZE: Final[int] = 512
 
+# Files a docling parse worker handles before it is recycled (`[ingest].max_tasks_per_child`).
+# Shared by parser.DocumentParser and config.IngestConfig so the two never drift.
+# Worker exit is the only complete reclaim of the native OCR memory docling/onnxruntime retain
+# (2026-08-19 OOM incident). At the measured ~9 MB retained per image with OCR scale 1.0,
+# 25 files bounds a worker's excess at ~225 MB; the respawn costs ~9 s (docling re-import plus
+# the first conversion's model load), i.e. ~0.4 s per file amortised.
+DEFAULT_DOCLING_MAX_TASKS_PER_CHILD: Final[int] = 25
+
 _NAMESPACE_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}")
 
 

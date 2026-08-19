@@ -25,7 +25,7 @@ graph TD
     FS[On-disk corpora<br/>Markdown, PDF, source code]
     OP[Operator<br/>archon-search CLI]
 
-    AS[archon-search server<br/>FastAPI + FastMCP, single process]
+    AS[archon-search server<br/>FastAPI + FastMCP, single process<br/>+ recycled docling parse-worker child process]
 
     HOME[~/.archon-search/<br/>LanceDB, jobs file,<br/>.search.env, telemetry logs]
     MODELS[fastembed + reranker<br/>model cache<br/>HuggingFace cache dir]

@@ -34,6 +34,7 @@ See also: [100_system_architecture_overview.md](100_system_architecture_overview
   - `[telemetry].retention_days must be >= 1` (`config.py:207`)
   - `[telemetry].log_dir must be a non-empty string` (`config.py:221`)
   - `[ingest].max_file_mb must be >= 0, got {raw}` — negative values raise `ConfigError`; `0` (the default) is valid and disables the size guard entirely. **E0d**: `IngestConfig` (`config.py`)
+  - `[ingest].max_tasks_per_child must be >= 1, got {raw}` (`config.py`, `_apply_toml`, `[ingest].max_tasks_per_child` branch) — `0` is rejected too: it would mean "never recycle the docling parse worker", which is the unbounded-memory behaviour the key exists to prevent. Non-integers (and `bool`, rejected explicitly despite being an `int` subclass) raise `Expected integer for '[ingest].max_tasks_per_child', got {type}` (same branch) rather than being coerced.
 - Invalid `[namespaces]` shape (non-string key or value)
 
 `[telemetry].export_enabled = true` is **not** raised — `config.py:213–215` emits a warning and silently coerces to `false`. This is the documented v1 contract: external export is reserved and ignored, not rejected.

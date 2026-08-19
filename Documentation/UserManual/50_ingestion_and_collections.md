@@ -42,7 +42,7 @@
 
 ## Large files and the size guard
 
-There is no fixed size ceiling on ingestion. Large PDFs (research papers, 500-page manuals, ebooks) ingest successfully — docling materialises the document in memory, so RAM during conversion scales with document size. To protect memory-constrained hosts, set an explicit guard:
+There is no fixed size ceiling on ingestion. Large PDFs (research papers, 500-page manuals, ebooks) ingest successfully — docling materialises the document in memory, so RAM during conversion scales with document size. That conversion happens in a separate worker process (see [Parse memory](#parse-memory-pdfs-and-images) below), so it does not permanently inflate the server. To protect memory-constrained hosts, set an explicit guard:
 
 ```toml
 [ingest]
@@ -56,7 +56,18 @@ The guard fires **before** parsing at two levels (`archon_search/config.py`, `pi
 
 The CLI performs no local size check — it prints the server's 413 message and exits `1`.
 
-**Memory under load (D4).** For large files and large corpora the pipeline flushes embed+write batches incrementally (`_INGEST_CHUNK_BATCH_SIZE = 512` chunks per batch) instead of accumulating all chunks and vectors before the first write. This keeps single-file and directory ingests within a bounded footprint (~2 MB per batch) so they complete on 1 GB containers regardless of corpus size. Batch size is an internal constant, not a config knob. Parse-time memory (docling/markitdown internals) is out of D4's scope — use the size guard above to bound it.
+**Memory under load (D4).** For large files and large corpora the pipeline flushes embed+write batches incrementally (`_INGEST_CHUNK_BATCH_SIZE = 512` chunks per batch) instead of accumulating all chunks and vectors before the first write. This keeps single-file and directory ingests within a bounded footprint (~2 MB per batch) so they complete on 1 GB containers regardless of corpus size. Batch size is an internal constant, not a config knob. Parse-time memory (docling/markitdown internals) is out of D4's scope — for docling formats it is bounded by the worker recycle described next, and otherwise by the size guard above.
+
+### Parse memory (PDFs and images)
+
+PDFs and images are converted — and images OCR'd — in a **separate worker process**, not in the server. The OCR stack (docling → RapidOCR → onnxruntime) retains native memory on every conversion that nothing in-process gives back, so the worker exits after a fixed number of files and a fresh one takes over; process exit is what returns that memory to the OS.
+
+```toml
+[ingest]
+max_tasks_per_child = 25   # default; must be >= 1
+```
+
+Lower it to cap memory harder, raise it to pay the worker restart (~9 s) less often. Images (not PDFs — PDFs keep docling's own OCR resolution) are OCR'd at their native resolution rather than upscaled 3×, which cuts retained memory further; recognised text was unchanged on the text-bearing image tested, not a guarantee that resolution never affects OCR quality on arbitrary imagery. `max_file_mb` does **not** help here — it measures bytes on disk, and a 200 KB icon can cost hundreds of MB of RAM to OCR.
 
 ## CLI commands
 

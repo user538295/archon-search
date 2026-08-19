@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 import tomlkit
 
 from archon_search.constants import (
+    DEFAULT_DOCLING_MAX_TASKS_PER_CHILD,
     DEFAULT_FAST_MODEL,
     DEFAULT_ROUTING_DESCRIPTION_WEIGHT,
     LOG_FILE_DISABLED_WARNING,
@@ -119,6 +120,9 @@ class McpConfig:
 @dataclass
 class IngestConfig:
     max_file_mb: int = 0
+    max_tasks_per_child: int = DEFAULT_DOCLING_MAX_TASKS_PER_CHILD
+    """Files a docling parse worker handles before it is recycled. Must be >= 1 — worker exit
+    is what returns the native OCR memory to the OS."""
 
 
 _GRAPH_BACKEND_THRESHOLD_EDGES_DEFAULT: int = 10_000
@@ -879,6 +883,20 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
                 f"[ingest].max_file_mb must be >= 0, got {raw}"
             )
         ingest.max_file_mb = raw
+    if "max_tasks_per_child" in ingest_cfg:
+        raw_tasks = ingest_cfg["max_tasks_per_child"]
+        # Same strictness as max_file_mb above: no silent float/string coercion, and bool is
+        # rejected explicitly because it is an int subclass in Python.
+        if not isinstance(raw_tasks, int) or isinstance(raw_tasks, bool):
+            raise ConfigError(
+                f"Expected integer for '[ingest].max_tasks_per_child', "
+                f"got {type(raw_tasks).__name__}"
+            )
+        if raw_tasks < 1:
+            raise ConfigError(
+                f"[ingest].max_tasks_per_child must be >= 1, got {raw_tasks}"
+            )
+        ingest.max_tasks_per_child = raw_tasks
     config.ingest = ingest
 
     graph_cfg = doc.get("graph", {})

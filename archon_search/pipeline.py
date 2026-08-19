@@ -3572,7 +3572,7 @@ def create_pipeline(
     embedder = Embedder(_embedder_backend)
     chunker = DocumentChunker(cfg.chunk_size)
     ast_chunker = ASTChunker(cfg.chunk_size)
-    parser = DocumentParser()
+    parser = DocumentParser(max_tasks_per_child=cfg.ingest.max_tasks_per_child)
 
     language_detector: LanguageDetector | None = None
     if cfg.multilingual:

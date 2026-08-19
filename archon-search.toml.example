@@ -38,6 +38,12 @@ enabled = true
 # Negative values are invalid and raise a ConfigError at server start.
 # max_file_mb = 0  # 0 = no limit
 
+# PDFs and images are parsed (and OCR'd) in a separate worker process. The worker exits
+# after this many files and a fresh one replaces it — process exit is the only way the OCR
+# engine's native memory is returned to the OS. Lower it to cap memory harder, raise it to
+# pay the worker restart (~9 s) less often. Must be >= 1.
+# max_tasks_per_child = 25
+
 [server]
 # Bind address and port for the HTTP API.
 host = "127.0.0.1"

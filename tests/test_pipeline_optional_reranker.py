@@ -260,3 +260,53 @@ async def test_explain_multi_collection_rerank_false_no_reranker_does_not_raise(
     # Must not raise ExplainMultiCollectionNoRerankError
     result = await pipeline.explain(query="test", collections=["col1"], rerank=False)
     assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# Test 10: [ingest].max_tasks_per_child reaches the parse pool via both construction
+# sites (C1-B-2 / C1-I-5). Starts from a value DIFFERENT from the default 25 — an
+# override test starting at the default would pass vacuously (repo learnings).
+# ---------------------------------------------------------------------------
+
+_NON_DEFAULT_MAX_TASKS_PER_CHILD = 7
+
+
+def test_create_pipeline_wires_max_tasks_per_child_to_parser() -> None:
+    from archon_search.config import IngestConfig
+
+    assert _NON_DEFAULT_MAX_TASKS_PER_CHILD != IngestConfig().max_tasks_per_child, (
+        "the test's override value must differ from the default, or this test passes vacuously"
+    )
+    cfg = SearchConfig(ingest=IngestConfig(max_tasks_per_child=_NON_DEFAULT_MAX_TASKS_PER_CHILD))
+
+    with patch("archon_search.pipeline.SearchStore"), \
+         patch("archon_search.pipeline.ModelEmbedder"):
+        from archon_search.pipeline import create_pipeline
+        pipeline = create_pipeline(cfg)
+
+    assert pipeline._parser._max_tasks_per_child == _NON_DEFAULT_MAX_TASKS_PER_CHILD, (
+        f"create_pipeline did not wire [ingest].max_tasks_per_child into DocumentParser; "
+        f"got {pipeline._parser._max_tasks_per_child!r}"
+    )
+
+
+def test_create_app_wires_max_tasks_per_child_to_parser(tmp_path) -> None:
+    from archon_search.config import IngestConfig
+    from archon_search.jobs import JobStore
+    from archon_search.server.app import create_app
+
+    assert _NON_DEFAULT_MAX_TASKS_PER_CHILD != IngestConfig().max_tasks_per_child, (
+        "the test's override value must differ from the default, or this test passes vacuously"
+    )
+    cfg = SearchConfig(ingest=IngestConfig(max_tasks_per_child=_NON_DEFAULT_MAX_TASKS_PER_CHILD))
+    job_store = JobStore(path=tmp_path / "jobs.json")
+
+    with patch("archon_search.server.app.SearchStore"), \
+         patch("archon_search.server.app.IndexingStateStore"), \
+         patch("archon_search.server.app.ModelEmbedder"):
+        app = create_app(cfg, job_store)
+
+    assert app.state.pipeline._parser._max_tasks_per_child == _NON_DEFAULT_MAX_TASKS_PER_CHILD, (
+        f"create_app did not wire [ingest].max_tasks_per_child into DocumentParser; "
+        f"got {app.state.pipeline._parser._max_tasks_per_child!r}"
+    )

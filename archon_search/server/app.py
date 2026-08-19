@@ -918,7 +918,7 @@ def create_app(
         ),
         chunker=DocumentChunker(config.chunk_size),
         ast_chunker=ASTChunker(config.chunk_size),
-        parser=DocumentParser(),
+        parser=DocumentParser(max_tasks_per_child=config.ingest.max_tasks_per_child),
         top_k_retrieve=config.top_k_retrieve,
         top_k_return=config.top_k_return,
         max_fanout=config.max_fanout,

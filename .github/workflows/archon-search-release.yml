@@ -48,7 +48,7 @@ jobs:
         run: uv run python -c "import pytest_cov"
 
       - name: Run default suite with coverage (no fail-under)
-        run: uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append -n0 -m "not live and not eval and not benchmark and not integration and not live_eval"
+        run: uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append -n0 -m "not live and not eval and not benchmark and not integration and not live_eval and not docling"
 
       - name: Run eval slice with thresholds, coverage append, runxfail
         run: uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append --runxfail -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/
@@ -59,7 +59,7 @@ jobs:
         run: mkdir -p /var/tmp/archon-search-it
 
       - name: Run integration suite on disk-backed basetemp, coverage append
-        run: uv run pytest --basetemp=/var/tmp/archon-search-it -o addopts= --strict-markers --strict-config --cov=archon_search --cov-append -m "integration and not eval" tests/
+        run: uv run pytest --basetemp=/var/tmp/archon-search-it -o addopts= --strict-markers --strict-config --cov=archon_search --cov-append -m "integration and not eval and not docling" tests/
 
       - name: Enforce coverage fail-under=85
         run: uv run coverage report --fail-under=85

@@ -153,6 +153,7 @@ Full key lifecycle and rotation are in [`../SecurityGuide/02_authentication_and_
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `max_file_mb` | `0` | Per-file size guard. `0` = unlimited. Positive values reject any file whose size **strictly exceeds** the limit (a file exactly equal is accepted); directory ingest skips oversized files per-file and continues. Negative raises `ConfigError`. |
+| `max_tasks_per_child` | `25` | PDFs and images are parsed (and OCR'd) in a separate worker process; the worker exits after this many files and a fresh one takes over. Worker exit is what returns the OCR engine's native memory to the OS, so a lower value caps memory harder while paying the worker restart (~9 s) more often. Must be `>= 1`; anything else raises `ConfigError`. |
 
 ### `[hyde]` and `[rag_fusion]`
 

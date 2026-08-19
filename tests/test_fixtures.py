@@ -21,15 +21,17 @@ class TestThreePagePdfFixture:
 
     @pytest.mark.integration
     @pytest.mark.docling
+    @pytest.mark.xdist_group("docling")
     def test_three_page_pdf_contains_expected_text(self, three_page_pdf: Path) -> None:
         """Parse via DocumentParser._parse_with_docling; assert expected page content.
 
-        Skipped if docling is unavailable or non-functional in the test environment
-        (e.g., missing onnxruntime weights).
+        Fails — never skips — when docling is non-functional. `docling` is a hard runtime
+        dependency (pyproject.toml), so a broken install *is* the failure. The `docling` lane
+        is excluded from the default run and from both CI steps, so it executes only when a
+        developer deliberately types `-m docling`: a skip there would hide the answer from
+        exactly the person who asked the question.
         """
         import pytest
-
-        pytest.importorskip("docling")
 
         from archon_search.parser import DocumentParser, ParseError
 
@@ -37,7 +39,7 @@ class TestThreePagePdfFixture:
         try:
             result = parser._parse_with_docling(three_page_pdf)
         except ParseError as exc:
-            pytest.skip(f"docling not functional in this environment: {exc}")
+            pytest.fail(f"docling failed to parse the three-page fixture PDF: {exc}")
 
         assert "alpha content" in result, f"Expected 'alpha content' in parsed output, got: {result[:500]}"
         assert "beta content" in result, f"Expected 'beta content' in parsed output, got: {result[:500]}"

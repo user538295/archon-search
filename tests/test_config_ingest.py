@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from archon_search.config import ConfigError, IngestConfig, SearchConfig, load_config
+from archon_search.constants import DEFAULT_DOCLING_MAX_TASKS_PER_CHILD
 
 
 @pytest.fixture
@@ -123,3 +124,72 @@ def test_no_ingest_section_defaults_to_zero(_no_env: None, tmp_path: Path) -> No
     cfg_path.write_text(toml_content, encoding="utf-8")
     config = load_config(path=cfg_path)
     assert config.ingest.max_file_mb == 0
+
+
+# ---------------------------------------------------------------------------
+# max_tasks_per_child — docling parse-worker recycling
+# (Documentation/Backlog/2026-08-19-010-image-ocr-unbounded-memory-brief.md)
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_config_default_max_tasks_per_child(_no_env: None, tmp_path: Path) -> None:
+    """Default max_tasks_per_child is the shared constant, not a literal in config.py."""
+    config = load_config(path=tmp_path / "nonexistent.toml")
+    assert config.ingest.max_tasks_per_child == DEFAULT_DOCLING_MAX_TASKS_PER_CHILD
+    assert IngestConfig().max_tasks_per_child == DEFAULT_DOCLING_MAX_TASKS_PER_CHILD
+
+
+def test_default_docling_max_tasks_per_child_is_25() -> None:
+    """Pin the constant's value: it is quoted as fact in five shipped docs (UserManual,
+    OperatorGuide, Architecture 110/210, archon-search.toml.example), and
+    test_parser_ocr_memory.py's `< _CORPUS_SIZE` precondition depends on it staying below 40.
+    A silent change to either bound would desync the docs or break that precondition (C1-I-10).
+    """
+    assert DEFAULT_DOCLING_MAX_TASKS_PER_CHILD == 25
+
+
+@pytest.mark.parametrize("value", [10, 1], ids=["typical", "minimum-boundary"])
+def test_ingest_config_max_tasks_per_child_parsed_from_toml(
+    _no_env: None, tmp_path: Path, value: int
+) -> None:
+    """[ingest] max_tasks_per_child loads correctly, including at the documented minimum (1)."""
+    cfg_path = tmp_path / "archon-search.toml"
+    cfg_path.write_text(f"[ingest]\nmax_tasks_per_child = {value}\n", encoding="utf-8")
+    config = load_config(path=cfg_path)
+    assert config.ingest.max_tasks_per_child == value
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_fragment"),
+    [
+        ("0", "must be >= 1"),
+        ("-1", "must be >= 1"),
+        ("3.5", "Expected integer"),
+        ('"10"', "Expected integer"),
+        ("true", "Expected integer"),
+    ],
+    ids=["zero", "negative", "float", "string", "bool"],
+)
+def test_ingest_config_max_tasks_per_child_invalid_raises(
+    _no_env: None, tmp_path: Path, value: str, expected_fragment: str
+) -> None:
+    """Anything but a positive integer raises ConfigError with the matching one of the two
+    distinct messages (config.py: "Expected integer for..." for type errors, "...must be >= 1"
+    for range errors — Documentation/Architecture/140_error_handling_strategy.md:37).
+
+    Both messages contain the substring "max_tasks_per_child", so matching only that substring
+    would let a type-error case pass on a range-error message and vice versa; assert the
+    distinguishing fragment too.
+
+    0 is rejected rather than meaning "never recycle": an unbounded worker is exactly the
+    unbounded OCR memory growth this setting exists to cap, and ProcessPoolExecutor itself
+    requires max_tasks_per_child >= 1.
+    """
+    cfg_path = tmp_path / "archon-search.toml"
+    cfg_path.write_text(f"[ingest]\nmax_tasks_per_child = {value}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="max_tasks_per_child") as exc_info:
+        load_config(path=cfg_path)
+    assert expected_fragment in str(exc_info.value), (
+        f"expected the ConfigError message to contain {expected_fragment!r}, "
+        f"got {str(exc_info.value)!r}"
+    )

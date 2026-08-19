@@ -20,6 +20,7 @@
 
 - **One LanceDB writer.** Two `archon-search` processes against the same `db_path` will corrupt the database. Use a single supervised instance.
 - **One Uvicorn worker.** The server runs with the default worker count (1). Concurrency is asyncio inside one process.
+- **One parse worker (child process), serializing all docling parsing.** PDFs and images are converted by docling in a single-worker `ProcessPoolExecutor` (`spawn`) owned by `DocumentParser`, not in the server process. Because one `SearchPipeline` holds one `DocumentParser` holds one `max_workers=1` pool, every concurrent ingest job, watcher sync, and bulk job funnels all PDF/image parsing through that one worker, one file at a time — `[jobs] max_concurrent_bulk > 1` does not buy parallelism for docling formats. The worker is spawned lazily on the first PDF/image parse, recycles after `[ingest] max_tasks_per_child` *cumulative* files (default 25) — not on any idle-time trigger — and, once idle, stays resident (with its ~1 GB model stack) until enough further parses eventually recycle it; there is no idle shutdown. The `spawn` context also starts a long-lived `multiprocessing.resource_tracker` process alongside the worker, so budget for two extra child processes, not one.
 - **Background tasks are unbounded by count, bounded by work.** Ingest is spawned via `asyncio.create_task` and tracked in `app.state._background_tasks` for graceful shutdown; there is no global semaphore. `[jobs] max_concurrent_bulk` (default 1) bounds concurrent bulk jobs.
 - **Telemetry queue is bounded at 1024 entries.** Excess drops the oldest, never the newest, with a rate-limited warning.
 
@@ -60,7 +61,8 @@ Cost is one LLM round-trip per search (plus provider latency), gated by the rate
 
 Per document: parse → chunk → embed (batched) → upsert into LanceDB → incremental centroid update (B5) → incremental FTS optimize → update `.indexing-state.json`.
 
-- **Streaming / incremental chunking (D4, shipped).** Chunks are sliced into fixed 512-chunk batches (`_INGEST_CHUNK_BATCH_SIZE`, an internal constant — not a config key) and each batch is embedded and written before the next is produced. Directory ingest no longer accumulates every vector in memory. A large single file or a large corpus completes on a memory-constrained host (e.g. a 1 GB container) because peak RAM is bounded by one batch (~2 MB) plus parse-time memory. Parse-time RAM (docling for PDFs) is still owned by the parser and is not batched — bound pathological inputs with `[ingest] max_file_mb` (0 = unlimited; REST returns 413).
+- **Streaming / incremental chunking (D4, shipped).** Chunks are sliced into fixed 512-chunk batches (`_INGEST_CHUNK_BATCH_SIZE`, an internal constant — not a config key) and each batch is embedded and written before the next is produced. Directory ingest no longer accumulates every vector in memory. A large single file or a large corpus completes on a memory-constrained host (e.g. a 1 GB container) because peak RAM is bounded by one batch (~2 MB) plus parse-time memory. Parse-time RAM is still owned by the parser and is not batched — bound pathological inputs with `[ingest] max_file_mb` (0 = unlimited; REST returns 413).
+- **Docling parse memory is contained in a recycled child process.** PDF and image (OCR) conversion runs in the parse worker described above, not in the server. docling/RapidOCR/onnxruntime retain native memory per conversion that no in-process release returns to the OS, so the worker exits every `[ingest] max_tasks_per_child` files (default 25) and a fresh one takes over. That bounds the accumulation instead of letting it grow for the life of the server — measured over 40 mixed-size images: **1,304 MB retained before, 210 MB after**. `max_file_mb` cannot substitute for this: it is a disk-size guard, and a 200 KB icon costs hundreds of MB of RAM to OCR. Lower `max_tasks_per_child` to cap memory harder at the cost of paying the ~9 s worker restart more often; it must be `>= 1`.
 - **Centroid (B5).** Maintained incrementally per batch; only `reindex`, sync reconciliation, and the eval runner trigger a full-collection re-read.
 - **FTS (incremental).** `store.optimize_fts()` is O(delta); a single-file update into a 50,000-chunk collection completes in milliseconds. `delete_document` also calls `optimize_fts` after removal to prevent phantom hits.
 
@@ -125,6 +127,11 @@ All knobs live in `archon-search.toml`; `archon-search.toml.example` is the cano
 - `routing_shortlist_size` (8). Maximum collections the router considers.
 - `routing_confidence_threshold` (0.30). Below this, `MultiCollectionRouter.rank` returns `[]`; any "fallback to pinned collections" happens upstream in `routes_route.py`, not in the router.
 - `routing_strategy` (`centroid`; also `hybrid`) and `routing_description_weight` (0.3, used by the hybrid strategy).
+
+**Ingest (`[ingest]`)**
+
+- `max_file_mb` (0 = unlimited). Disk-size guard applied before parsing; REST returns 413 for a single oversized file, directory ingest skips and continues.
+- `max_tasks_per_child` (25). Files a docling parse worker handles before it is recycled. This is the memory knob for PDF/image OCR — lower it to cap the worker's growth harder, raise it to pay the ~9 s restart less often. Must be `>= 1`.
 
 **Providers & retention**
 

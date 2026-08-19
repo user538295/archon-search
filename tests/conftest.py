@@ -301,6 +301,23 @@ def substantial_three_page_pdf(tmp_path_factory: pytest.TempPathFactory) -> Path
     return pdf_path
 
 
+@pytest.fixture(scope="session")
+def scanned_pdf(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Session-scoped fixture returning the path to a one-page, image-only PDF.
+
+    Unlike three_page_pdf / substantial_three_page_pdf (real PDF text layers, extracted
+    directly — OCR contributes nothing), this PDF's page is a rendered bitmap with no text
+    layer at all, so recovering the words requires docling's OCR path specifically.
+    """
+    pytest.importorskip("reportlab")
+    pytest.importorskip("PIL")
+    from _pdf_fixture import generate_scanned_pdf  # noqa: PLC0415
+
+    pdf_path = tmp_path_factory.mktemp("pdfs") / "scanned.pdf"
+    generate_scanned_pdf(pdf_path)
+    return pdf_path
+
+
 # ---------------------------------------------------------------------------
 # MockGraphStore fixture for unit testing graph_inspector.py (E2b)
 # ---------------------------------------------------------------------------
