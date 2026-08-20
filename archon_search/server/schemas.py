@@ -242,6 +242,7 @@ class ModelValidationStatus(BaseModel):
     reranker_ok: bool | None = None
     llama_cpp_ok: bool | None = None
     provider_warnings: list[str] = Field(default_factory=list)
+    provider_notes: list[str] = Field(default_factory=list)
     validated_at: datetime | None = None
 
 

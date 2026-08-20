@@ -62,6 +62,9 @@ class ModelValidationResult:
     reranker_ok: bool | None = None
     llama_cpp_ok: bool | None = None
     provider_warnings: list[str] = field(default_factory=list)
+    # Informational, permanent, not operator-actionable — deliberately NOT
+    # graded by `routes_ready._models_check_status` (2026-08-19-030 C1-I-7).
+    provider_notes: list[str] = field(default_factory=list)
     validated_at: datetime | None = None
 
 
@@ -106,8 +109,38 @@ async def _probe_llama_cpp(config: SearchConfig) -> bool | None:
         return False
 
 
-def graph_ner_warnings(config: SearchConfig) -> list[str]:
-    """Report graph prose-NER limitations at startup (2026-08-19-030).
+async def failed_result(reason: str, config: SearchConfig) -> ModelValidationResult:
+    """Build the ``ModelValidationResult`` for a validation run that died.
+
+    Exists so callers outside :func:`validate_models_async` — notably the
+    lifespan's task-crash fallback in ``server/app.py`` — cannot construct a
+    result that silently drops the graph probe or ``llama_cpp_ok``. The choke
+    point inside ``validate_models_async`` only chokes what routes through it
+    (2026-08-19-030 C2-B-9).
+    """
+    try:
+        graph_warnings, graph_notes = await asyncio.to_thread(graph_ner_status, config)
+    except Exception:  # noqa: BLE001 — this fallback must never itself raise
+        graph_warnings, graph_notes = ["graph NER model presence could not be determined"], []
+    return ModelValidationResult(
+        embedder_ok=False,
+        reranker_ok=False,
+        provider_warnings=[*graph_warnings, reason],
+        provider_notes=graph_notes,
+        validated_at=datetime.now(UTC),
+    )
+
+
+def graph_ner_status(config: SearchConfig) -> tuple[list[str], list[str]]:
+    """Report graph prose-NER state at startup as ``(warnings, notes)`` (2026-08-19-030).
+
+    The split is load-bearing: ``routes_ready`` grades ``checks.models`` on
+    ``provider_warnings`` alone, so anything permanent and unactionable put
+    there pins the check to ``WARN`` forever, with no operator action that can
+    clear it — and ``OperatorGuide/20_monitoring_and_alerts.md`` tells
+    operators to alert on exactly that field. Actionable states (missing extra,
+    missing or incompatible model) are warnings; the English-only disclosure is
+    a permanent property of the chosen engine and is a *note* (C1-I-7).
 
     Returns ``[]`` when ``[graph]`` is disabled. Otherwise probes the spaCy model
     the same way the extractor resolves it (installed package, the
@@ -129,7 +162,7 @@ def graph_ner_warnings(config: SearchConfig) -> list[str]:
     reads as "cannot determine" rather than propagating.
     """
     if not config.graph.enabled:
-        return []
+        return [], []
     try:
         try:
             import spacy  # noqa: F401, PLC0415
@@ -138,24 +171,28 @@ def graph_ner_warnings(config: SearchConfig) -> list[str]:
                 SPACY_NOT_INSTALLED_MESSAGE,
             )
 
-            return [f"graph prose entity extraction is disabled: {SPACY_NOT_INSTALLED_MESSAGE}"]
+            return (
+                [f"graph prose entity extraction is disabled: {SPACY_NOT_INSTALLED_MESSAGE}"],
+                [],
+            )
 
         from archon_search.graph_extractor import (  # noqa: PLC0415
             ENGLISH_ONLY_DISCLOSURE,
+            SPACY_MODEL_NAME,
             resolve_spacy_model,
         )
 
         resolution = resolve_spacy_model()
     except Exception as exc:  # never raises — validate_models_async must not fail
         logger.warning("graph NER model probe failed: %s", exc)
-        return ["graph NER model presence could not be determined"]
+        return ["graph NER model presence could not be determined"], []
 
     warnings: list[str] = []
     if resolution.target is None:
         if resolution.incompatible_versions:
             warnings.append(
                 "graph prose entity extraction is disabled: spaCy model "
-                "'en_core_web_sm' is present under the data directory "
+                f"{SPACY_MODEL_NAME!r} is present under the data directory "
                 f"({', '.join(resolution.incompatible_versions)}) but incompatible "
                 "with the installed spaCy version — re-run `archon-search wizard` "
                 "to provision a compatible model"
@@ -163,16 +200,12 @@ def graph_ner_warnings(config: SearchConfig) -> list[str]:
         else:
             warnings.append(
                 "graph prose entity extraction is disabled: spaCy model "
-                "'en_core_web_sm' is neither installed nor provisioned under the "
+                f"{SPACY_MODEL_NAME!r} is neither installed nor provisioned under the "
                 "data directory — re-run `archon-search wizard` to provision it"
             )
-        if config.multilingual:
-            warnings.append(ENGLISH_ONLY_DISCLOSURE)
-        return warnings
+        return warnings, ([ENGLISH_ONLY_DISCLOSURE] if config.multilingual else [])
 
-    if config.multilingual:
-        return [ENGLISH_ONLY_DISCLOSURE]
-    return []
+    return [], ([ENGLISH_ONLY_DISCLOSURE] if config.multilingual else [])
 
 
 def _available_providers() -> list[str]:
@@ -282,7 +315,7 @@ async def validate_models_async(
     its outcome (``llama_cpp_ok``) is attached to every returned result, including
     the timeout/failure early-return paths below.
 
-    Likewise :func:`graph_ner_warnings` (2026-08-19-030) — dispatched to a thread
+    Likewise :func:`graph_ner_status` (2026-08-19-030) — dispatched to a thread
     since it does filesystem globbing and package-metadata scanning — runs before
     the probe and its output is PREPENDED to ``provider_warnings`` on every return
     path. Every ``ModelValidationResult`` this function returns is built by the
@@ -291,7 +324,7 @@ async def validate_models_async(
     site could forget.
     """
     llama_cpp_ok = await _probe_llama_cpp(config)
-    graph_warnings = await asyncio.to_thread(graph_ner_warnings, config)
+    graph_warnings, graph_notes = await asyncio.to_thread(graph_ner_status, config)
     embedding_model = "" if embedder_is_warm else config.embedding_model
     _start = time.monotonic()
 
@@ -307,6 +340,7 @@ async def validate_models_async(
             reranker_ok=reranker_ok,
             llama_cpp_ok=llama_cpp_ok,
             provider_warnings=graph_warnings + extra_warnings,
+            provider_notes=list(graph_notes),
             validated_at=datetime.now(UTC),
         )
 

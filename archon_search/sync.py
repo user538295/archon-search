@@ -712,6 +712,13 @@ class SearchCollectionSync:
             ))
 
             file_count = 0
+            # IngestResult.warnings is otherwise dropped on this path — the
+            # watcher/startup-sync path is exactly where the 2026-08-19-030
+            # incident ran, and a per-file degradation notice that reaches
+            # nobody is the same as no notice at all (C2-I-3). Aggregated to
+            # one line per collection rather than one per file.
+            degraded_files = 0
+            degrade_reasons: set[str] = set()
 
             try:
                 # Deletions
@@ -738,6 +745,9 @@ class SearchCollectionSync:
                 for file in changed_files:
                     ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by=ingested_by, collection_root=source_path, namespace=namespace)
                     resolved_str = str(file.resolve())
+                    if ingest_result.warnings:
+                        degraded_files += 1
+                        degrade_reasons.update(ingest_result.warnings)
                     if ingest_result.status == "ok":
                         try:
                             file_mtimes[resolved_str] = file.stat().st_mtime
@@ -764,6 +774,9 @@ class SearchCollectionSync:
                 # New files
                 for file in new_files:
                     ingest_result = await self._pipeline.ingest_file(file, name, rebuild_fts=False, embedder=embedder, ingested_by=ingested_by, collection_root=source_path, namespace=namespace)
+                    if ingest_result.warnings:
+                        degraded_files += 1
+                        degrade_reasons.update(ingest_result.warnings)
                     if ingest_result.status == "ok":
                         try:
                             file_mtimes[str(file.resolve())] = file.stat().st_mtime
@@ -783,6 +796,12 @@ class SearchCollectionSync:
                             indexed_embedding_model=_active_model,
                             indexed_chunk_size=self._chunk_size,
                         ))
+
+                if degraded_files:
+                    logger.warning(
+                        "Collection %r: %d file(s) indexed with warnings: %s",
+                        name, degraded_files, "; ".join(sorted(degrade_reasons)),
+                    )
 
                 # Optimize FTS once after all file operations
                 if self._pipeline.store.supports_incremental_fts_delete:

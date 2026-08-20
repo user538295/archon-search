@@ -734,6 +734,18 @@ class SearchPipeline:
                 acl_warnings.extend(_extraction_result.warnings)
             try:
                 await self._graph_store.ensure_graph_tables(collection, ns=namespace)
+                if _extraction_result.degraded:
+                    # Prose NER did not run, so this result carries code symbols
+                    # only. The mention delete below would otherwise strip the
+                    # document's prose mentions while its previous prose EDGES
+                    # survived (the write is skipped when there are no nodes or
+                    # edges to write) — edges asserting relations for a document
+                    # that now records mentioning nothing, which mention-based
+                    # orphan GC cannot clean because it bails on an empty
+                    # mentions table. Delete the doc's graph rows so the
+                    # contribution is consistently "code symbols only" rather
+                    # than half-removed (2026-08-19-030 C2-I-2).
+                    await self._graph_store.delete_graph_by_doc(collection, doc_id, ns=namespace)
                 if _extraction_result.nodes or _extraction_result.edges:
                     await self._graph_store.write_graph(
                         collection, _extraction_result.nodes, _extraction_result.edges, ns=namespace

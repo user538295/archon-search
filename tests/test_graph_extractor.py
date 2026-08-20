@@ -20,6 +20,7 @@ import asyncio
 import inspect
 import logging
 import sys
+import json
 import types
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -50,6 +51,7 @@ def _make_spacy_stub(
     spacy_version: str = "3.8.15",
     poison_cli: bool = False,
     download_raises: BaseException | None = None,
+    package_path: Path | None = None,
 ) -> dict[str, types.ModuleType]:
     """Return a sys.modules patch dict with a fake spaCy stack.
 
@@ -80,6 +82,11 @@ def _make_spacy_stub(
             behavioural guard (T11) proving the runtime never reaches for
             ``spacy.cli`` at all, pairing the weaker source-text scan in
             ``test_extractor_never_downloads_spacy_model_at_runtime``.
+        package_path: directory returned by ``spacy.util.get_package_path()``
+            for the installed model. Omit and the call raises, which the
+            resolver treats as "unreadable package, assume usable" — the
+            fail-open default. Give it a directory holding a ``meta.json`` to
+            exercise the installed-package compatibility check (C2-I-6).
         download_raises: if set, ``spacy.cli.download`` raises this instead of
             recording the call and returning. Used by the latch tests, which
             simulate the historical downloader that blew up with
@@ -112,8 +119,14 @@ def _make_spacy_stub(
             probe_calls.append(None)
         return list(installed_models)
 
+    def _get_package_path(name: str) -> Path:
+        if package_path is None:
+            raise OSError(f"no package path for {name!r} in this stub")
+        return package_path
+
     fake_util = types.ModuleType("spacy.util")
     fake_util.get_installed_models = _get_installed_models  # type: ignore[attr-defined]
+    fake_util.get_package_path = _get_package_path  # type: ignore[attr-defined]
 
     fake_cli: types.ModuleType
     if poison_cli:
@@ -1365,11 +1378,10 @@ def test_extractor_model_load_failure_does_not_reprobe_per_file(
         f"got {len(probe_calls)} calls across 3 documents"
     )
 
-    retry_logs = [r for r in caplog.records if "auto-downloading" in r.getMessage()]
-    assert len(retry_logs) <= 1, (
-        '"(first call only)" must be true: the line was logged '
-        f"{len(retry_logs)} times across 3 files"
-    )
+    # The old "auto-downloading" INFO no longer exists anywhere in
+    # `archon_search/`, so counting it is `0 <= 1` forever (C2-T-10). The live
+    # guarantee — one probe per process, not one per file — is the
+    # `probe_calls` assertion above.
 
 
 def test_extractor_model_load_survives_systemexit_from_load() -> None:
@@ -1783,3 +1795,186 @@ def test_extractor_cancelled_load_propagates_and_does_not_latch() -> None:
     assert extractor._nlp_unavailable_warning is None, (
         "A cancelled load must not arm a wire-facing 'model unavailable' notice"
     )
+
+
+# ---------------------------------------------------------------------------
+# Version/specifier primitives (C2-T-9) — only covered integration-shaped
+# before, so a fail-open → fail-closed regression would have gone unnoticed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("spec", "version", "expected"),
+    [
+        (">=3.8.0,<3.9.0", "3.8.15", True),
+        (">=3.8.0,<3.9.0", "3.9.0", False),
+        (">=3.8.0,<3.9.0", "3.7.9", False),
+        ("!=3.8.1", "3.8.1", False),
+        ("!=3.8.1", "3.8.2", True),
+        (">3.8.0", "3.8.0", False),
+        ("<=3.8.0", "3.8.0", True),
+        ("==3.8.0", "3.8.0", True),
+    ],
+)
+def test_specifier_satisfied_clause_matrix(spec: str, version: str, expected: bool) -> None:
+    from archon_search.graph_extractor import _specifier_satisfied
+
+    assert _specifier_satisfied(spec, version) is expected
+
+
+def test_specifier_satisfied_raises_on_unrecognized_clause() -> None:
+    """The raise is the mechanism `_model_dir_compatible` fails open on — if it
+    silently returned False instead, every model with an unusual clause form
+    would be reported incompatible."""
+    from archon_search.graph_extractor import _specifier_satisfied
+
+    with pytest.raises(ValueError, match="unrecognized version clause"):
+        _specifier_satisfied("~=3.8.0", "3.8.15")
+
+
+def test_version_key_orders_numerically_not_lexicographically() -> None:
+    from archon_search.graph_extractor import _version_key
+
+    assert _version_key("3.10.0") > _version_key("3.9.0")
+    assert _version_key("3.8.10") > _version_key("3.8.2")
+    assert _version_key("3.8") < _version_key("3.8.1")
+
+
+@pytest.mark.parametrize(
+    "meta_body",
+    [
+        "not json at all",
+        '{"version": "3.8.0"}',
+        '{"spacy_version": ""}',
+        '{"spacy_version": 3}',
+        '{"spacy_version": "~=3.8.0"}',
+    ],
+)
+def test_model_dir_compatible_fails_open_on_unusable_meta(
+    tmp_path: Path, meta_body: str
+) -> None:
+    """Unusable metadata must read as compatible. This check exists only to
+    stop a KNOWN-stale directory reporting healthy; `spacy.load()` is the real
+    authority, and failing closed here would hide working models."""
+    from archon_search.graph_extractor import _model_dir_compatible
+
+    model_dir = tmp_path / "en_core_web_sm-3.8.0"
+    model_dir.mkdir()
+    (model_dir / "meta.json").write_text(meta_body)
+
+    assert _model_dir_compatible(model_dir, "3.9.4") is True
+
+
+def test_model_dir_compatible_fails_open_when_meta_absent(tmp_path: Path) -> None:
+    from archon_search.graph_extractor import _model_dir_compatible
+
+    model_dir = tmp_path / "en_core_web_sm-3.8.0"
+    model_dir.mkdir()
+    assert _model_dir_compatible(model_dir, "3.9.4") is True
+
+
+# ---------------------------------------------------------------------------
+# C2-I-6: the installed package gets the same compatibility check as a
+# data-dir candidate, and does not shadow a good data-dir model.
+# ---------------------------------------------------------------------------
+
+
+def _write_package_model(root: Path, version: str, spec: str) -> Path:
+    pkg = root / "site-packages" / "en_core_web_sm"
+    (pkg).mkdir(parents=True)
+    (pkg / "meta.json").write_text(
+        json.dumps({"version": version, "spacy_version": spec})
+    )
+    return pkg
+
+
+def test_installed_package_incompatible_does_not_shadow_data_dir_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An old pinned `en_core_web_sm` left over from a previous spaCy used to
+    win resolution unconditionally and permanently — resolution returned at
+    step 1, so a correctly provisioned data-dir model was never reached, while
+    `/status` reported healthy."""
+    from archon_search.graph_extractor import resolve_spacy_model
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    pkg = _write_package_model(tmp_path, "3.7.0", ">=3.7.0,<3.8.0")
+    good = _place_data_dir_model(tmp_path, version="3.9.0", spacy_version_spec=">=3.9.0,<3.10.0")
+
+    stub = _make_spacy_stub(
+        installed_models=["en_core_web_sm"], spacy_version="3.9.4", package_path=pkg
+    )
+    with patch.dict(sys.modules, stub):
+        resolution = resolve_spacy_model()
+
+    assert resolution.target == str(good), (
+        "the stale installed package must not shadow a compatible data-dir "
+        f"model; got {resolution.target!r}"
+    )
+    assert any("installed package" in v for v in resolution.incompatible_versions)
+
+
+def test_installed_package_compatible_still_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from archon_search.graph_extractor import resolve_spacy_model
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    pkg = _write_package_model(tmp_path, "3.9.0", ">=3.9.0,<3.10.0")
+    _place_data_dir_model(tmp_path, version="3.9.0")
+
+    stub = _make_spacy_stub(
+        installed_models=["en_core_web_sm"], spacy_version="3.9.4", package_path=pkg
+    )
+    with patch.dict(sys.modules, stub):
+        resolution = resolve_spacy_model()
+
+    assert resolution.target == "en_core_web_sm"
+    assert resolution.incompatible_versions == []
+
+
+def test_unreadable_installed_package_fails_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`get_package_path` raising must not turn a present model into an absent
+    one — the check is a stale-model guard, not a gate."""
+    from archon_search.graph_extractor import resolve_spacy_model
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    with patch.dict(sys.modules, _make_spacy_stub(installed_models=["en_core_web_sm"])):
+        assert resolve_spacy_model().target == "en_core_web_sm"
+
+
+# ---------------------------------------------------------------------------
+# C2-T-4: the latched warning must still reach documents 2..N.
+# ---------------------------------------------------------------------------
+
+
+def test_extractor_model_load_failure_warns_in_every_document_result() -> None:
+    """The log fires once (that is the point of the latch) but the wire-facing
+    warning is per-document. Dropping `_nlp_unavailable_warning` on the latched
+    branch would leave documents 2..N silently degraded, and every one of the
+    protected regression tests would stay green — they count loads and log
+    records, not per-result warnings.
+    """
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import _MODEL_ABSENT_WARNING, GraphExtractor
+
+    extractor = GraphExtractor(GraphConfig())
+    extractor._load_nlp_sync = MagicMock(  # type: ignore[method-assign]
+        side_effect=RuntimeError("no model")
+    )
+    chunk = ChunkInput(chunk_id="c1", text="Alice met Bob.", symbol_type=None, symbol_subtype=None)
+
+    async def _run():
+        with patch.dict(sys.modules, {"spacy": types.ModuleType("spacy")}):
+            return [await extractor.extract([chunk], f"doc-{i}", "col") for i in range(3)]
+
+    results = asyncio.run(_run())
+
+    assert len(results) == 3
+    for index, result in enumerate(results):
+        assert result.warnings == [_MODEL_ABSENT_WARNING], (
+            f"document {index} lost its degradation warning; got {result.warnings!r}"
+        )
+        assert result.degraded is True

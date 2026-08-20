@@ -447,7 +447,9 @@ Proceed? [Y/n]:
 
 Press Enter or type `y` or `yes` to continue. Any other input (including EOF) aborts the installation. On abort, graph-enabled, multilingual, and query-expansion flags are reverted in the config file, but the config file itself was already written to disk before this prompt appeared.
 
-### Step 7 — Code enrichment package install (if requested)
+### Step 7 — Optional extras install (if requested)
+
+This step runs **after** the summary and the "Proceed?" confirmation, so aborting there skips it entirely.
 
 If you enabled code enrichment (Step 5a), the wizard installs the packages now:
 
@@ -457,6 +459,15 @@ Code enrichment packages installed.
 ```
 
 If the install fails, a warning is shown but the overall wizard continues — code enrichment is optional.
+
+If you enabled the **graph** (Step 5a), the `archon-search[graph]` extra is installed at this step too, and the `en_core_web_sm` NER model is provisioned immediately after it:
+
+```
+Downloading en_core_web_sm 3.8.0...
+spaCy model en_core_web_sm 3.8.0 provisioned at <data-dir>/models/spacy/en_core_web_sm-3.8.0
+```
+
+Already present and loadable, it says `spaCy model already provisioned at <path>` and does nothing. A failure here is **not** fatal — the wizard prints `Warning: spaCy model provisioning failed: ...` and continues, leaving graph ingest working for code symbols and degraded for prose. See Step 5a for what the model is and [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model) for placing it by hand.
 
 If you chose a **multilingual** profile, the wizard also installs the `archon-search[multilingual]` extra (`fasttext-wheel`, used for language detection) at this step — the server needs it to start when `multilingual = true`. If that install fails, the wizard reverts `multilingual = false` in the config so the server still starts (in English-only mode) instead of crashing on the next start. You can install it separately at any time with `pip install archon-search[multilingual]`.
 

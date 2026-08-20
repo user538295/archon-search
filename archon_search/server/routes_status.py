@@ -322,6 +322,7 @@ def _build_model_validation_status(request: Request) -> ModelValidationStatus | 
         reranker_ok=result.reranker_ok,
         llama_cpp_ok=result.llama_cpp_ok,
         provider_warnings=list(result.provider_warnings),
+        provider_notes=list(result.provider_notes),
         validated_at=result.validated_at,
     )
 

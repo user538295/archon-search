@@ -12,6 +12,20 @@ from pathlib import Path
 from typing import Any
 
 
+def _fsync_path(path: Path) -> None:
+    """fsync whatever *path* names — one expression of "how to sync an fd"."""
+    fd = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def fsync_dir(path: Path) -> None:
+    """fsync a directory entry, so a rename published into it survives a crash."""
+    _fsync_path(path)
+
+
 def atomic_write_json(path: Path, data: Any) -> None:
     """Atomically write `data` as JSON to `path` with durability.
 
@@ -36,11 +50,7 @@ def atomic_write_json(path: Path, data: Any) -> None:
     except OSError:
         tmp.unlink(missing_ok=True)
         raise
-    dir_fd = os.open(path.resolve().parent, os.O_RDONLY)
-    try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
+    fsync_dir(path.resolve().parent)
 
 
 def atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
@@ -69,20 +79,7 @@ def atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
             os.close(fd)
         tmp.unlink(missing_ok=True)
         raise
-    dir_fd = os.open(path.resolve().parent, os.O_RDONLY)
-    try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
-
-
-def fsync_dir(path: Path) -> None:
-    """fsync a directory entry, so a rename published into it survives a crash."""
-    fd = os.open(str(path), os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    fsync_dir(path.resolve().parent)
 
 
 def fsync_tree(root: Path) -> None:
@@ -106,11 +103,7 @@ def fsync_tree(root: Path) -> None:
         if path.is_dir():
             directories.append(path)
         elif path.is_file():
-            fd = os.open(str(path), os.O_RDONLY)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
+            _fsync_path(path)
     # Deepest-first: a child's entry must be durable before its parent is synced.
     for directory in sorted(directories, key=lambda p: len(p.parts), reverse=True):
         fsync_dir(directory)

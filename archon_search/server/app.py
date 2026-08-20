@@ -620,23 +620,12 @@ def create_app(
                 raise
             except BaseException as exc:  # noqa: BLE001 — never let the task escape
                 logger.warning("model validation task failed unexpectedly: %s", exc)
-                graph_warnings: list[str] = []
-                try:
-                    from archon_search.model_validation import (  # noqa: PLC0415
-                        graph_ner_warnings,
-                    )
+                from archon_search.model_validation import (  # noqa: PLC0415
+                    failed_result,
+                )
 
-                    # Threaded for the same reason validate_models_async does
-                    # it: the probe globs the data dir and scans installed
-                    # package metadata (2026-08-19-030 C2-I-12).
-                    graph_warnings = await asyncio.to_thread(graph_ner_warnings, config)
-                except Exception:  # noqa: BLE001 — this fallback must never itself raise
-                    graph_warnings = ["graph NER model presence could not be determined"]
-                app.state.model_validation = ModelValidationResult(
-                    embedder_ok=False,
-                    reranker_ok=False,
-                    provider_warnings=[*graph_warnings, "validation task failed unexpectedly"],
-                    validated_at=datetime.now(UTC),
+                app.state.model_validation = await failed_result(
+                    "validation task failed unexpectedly", config
                 )
 
         validation_task = asyncio.create_task(_run_model_validation())

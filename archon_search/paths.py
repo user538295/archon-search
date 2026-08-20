@@ -98,8 +98,7 @@ def get_spacy_models_dir() -> Path:
     for why) so ``install/extras.py`` — the wizard, which writes into it —
     does not need to import the graph layer. The only other direct consumer
     is ``graph_extractor.find_spacy_model()`` (runtime, reads it);
-    ``model_validation.graph_ner_warnings()`` does not import this accessor
-    at all — it resolves the model through ``find_spacy_model()`` instead.
+    ``model_validation.graph_ner_status()`` reaches it indirectly, through ``resolve_spacy_model()``.
     Resolved fresh on every call so ``ARCHON_SEARCH_DATA_DIR`` relocates it;
     not guaranteed to exist.
     """

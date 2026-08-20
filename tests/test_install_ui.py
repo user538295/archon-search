@@ -505,3 +505,50 @@ def test_render_summary_graph_english_omits_disclosure():
     )
     assert "Graph enrichment" in output
     assert "English-only" not in output
+
+
+def test_wizard_summary_and_extractor_share_the_english_only_phrase() -> None:
+    """C2-B-19/C2-T-16: the wizard summary carries its own wording (the install
+    package must not import the graph layer), so nothing structurally stops the
+    two from drifting apart. Pin the phrase and the model name that both must
+    contain, so a reword on one side fails here instead of silently shipping
+    two different answers to the same operator question.
+    """
+    from archon_search.graph_extractor import ENGLISH_ONLY_DISCLOSURE, SPACY_MODEL_NAME
+
+    output = _render_summary(
+        "minimal",
+        get_profile("minimal", multilingual=True),
+        multilingual=True,
+        providers=[],
+        features=WizardFeatures(install_graph_extra=True),
+    )
+
+    shared_phrase = "English-only"
+    assert shared_phrase in ENGLISH_ONLY_DISCLOSURE
+    assert shared_phrase in output, (
+        "the wizard summary must disclose the English-only limitation using the "
+        f"same phrase as the extractor's constant; got:\n{output}"
+    )
+    assert SPACY_MODEL_NAME in ENGLISH_ONLY_DISCLOSURE
+    assert SPACY_MODEL_NAME in output, (
+        "both surfaces must name the model an operator has to act on"
+    )
+
+
+def test_render_summary_multilingual_without_graph_omits_disclosure():
+    """C2-T-20: the disclosure is gated on the graph extra, not on multilingual.
+
+    A refactor hoisting the `if multilingual:` check out of the
+    `install_graph_extra` block would start telling users who never installed
+    graph about a spaCy model they do not have.
+    """
+    output = _render_summary(
+        "minimal",
+        get_profile("minimal", multilingual=True),
+        multilingual=True,
+        providers=[],
+        features=WizardFeatures(install_graph_extra=False, install_multilingual_extra=True),
+    )
+    assert "en_core_web_sm" not in output, output
+    assert "English-only" not in output, output

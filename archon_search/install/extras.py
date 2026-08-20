@@ -179,9 +179,9 @@ def _resolve_spacy_model_version(spacy_version: str) -> str:
     published alongside the model releases — the same one ``spacy download``
     consults. That table is keyed by MAJOR.MINOR (e.g. ``"3.8"``), not the
     full patch version, except for prereleases which are keyed by their full
-    version — this mirrors ``spacy.cli.download.get_compatibility()`` exactly
-    (``.venv/lib/python3.13/site-packages/spacy/cli/download.py:136-153``).
-    Newest listed release wins.
+    version — this mirrors ``spacy.cli.download.get_compatibility()`` exactly.
+    The first listed release wins — the same element
+    ``spacy.cli.download.get_version`` picks (``comp[model][0]``).
     """
     import spacy.util  # noqa: PLC0415
 
@@ -262,7 +262,10 @@ def _download_spacy_model(models_dir: Path) -> Path:
 
     click.echo(f"Downloading {SPACY_MODEL_NAME} {version}...")
     models_dir.mkdir(parents=True, exist_ok=True)
-    models_dir.chmod(0o700)  # mkdir's `mode=` is a no-op for parents/exist_ok
+    # `mkdir(mode=...)` is a no-op on an existing directory and is not applied
+    # to parents, so set it explicitly — and unconditionally, so a directory
+    # created by an earlier version is corrected too (2026-08-19-030 C2-B-23).
+    models_dir.chmod(0o700)
     url = SPACY_MODEL_WHEEL_URL.format(name=SPACY_MODEL_NAME, version=version)
 
     with tempfile.TemporaryDirectory(dir=models_dir) as staging_name:

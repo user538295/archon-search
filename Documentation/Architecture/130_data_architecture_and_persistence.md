@@ -47,14 +47,16 @@ Override paths:
 
 ## Durability contract
 
-Every durable JSON/bytes write of runtime state routes through a single helper module, `archon_search/_durable_io.py`, rather than calling `os.replace`/`write_text`/`write_bytes` directly. The helper exposes two functions:
+Every durable JSON/bytes write of runtime state routes through a single helper module, `archon_search/_durable_io.py`, rather than calling `os.replace`/`write_text`/`write_bytes` directly. The helper exposes four functions:
 
 - `atomic_write_json(path, data)` — write to `path.tmp`, `flush()`, `os.fsync(file_fd)`, `os.replace(tmp, path)`, then `os.fsync(parent_dir_fd)`.
 - `atomic_write_bytes(path, data, mode=0o600)` — same sequence, but the temp file is created with `os.open(..., O_WRONLY | O_CREAT | O_EXCL, mode)`, so the file permission is set at creation (no chmod-after window) and a pre-existing temp file is signalled as `FileExistsError` rather than silently overwritten.
+- `fsync_dir(path)` — fsync one directory entry. The primitive both writers above use for their parent-directory sync.
+- `fsync_tree(root)` — fsync every file under `root`, then every directory deepest-first, then `root`. For publishing a whole extracted directory with one same-filesystem rename: the rename is atomic, but only durable once its contents are. Nested directories matter — syncing only `root` can survive a crash as a valid-looking top-level file beside empty subdirectories (2026-08-19-030).
 
 The crucial property is that the helper fsyncs **both the file and the parent directory**: the parent-directory fsync is what makes the `os.replace` rename itself durable. fsync is never retried — on `EIO` the kernel may already have marked the page clean (POSIX "fsyncgate"), so a retry is unsafe. The helper is **not internally synchronized**; callers must serialize writes to the same path.
 
-The nine durable-write sites that use the helper are:
+The ten durable-write sites that use the helper are:
 
 | Site | Helper | File written |
 |------|--------|--------------|
@@ -67,8 +69,9 @@ The nine durable-write sites that use the helper are:
 | `key_manager.KeyStore._write` | `atomic_write_bytes` | `keys.json` (mode `0600`) |
 | `maintenance_loop._save_state` | `atomic_write_json` | `.maintenance-state.json` |
 | `backup_loop._save_state` | `atomic_write_json` | `.backup-state.json` |
+| `install/extras.py::_download_spacy_model` | `fsync_tree` + `fsync_dir` | `<data-dir>/models/spacy/en_core_web_sm-<ver>/` (published by rename) |
 
-A CI lint gate, `tests/test_no_raw_durable_writes.py`, scans `archon_search/**/*.py` (excluding the helper itself) for raw write patterns and fails the build on new ones; a handful of out-of-scope one-shot writes (TOML config writers, OS service-unit files) carry a `# noqa: durable-write` allow-list comment.
+A CI lint gate, `tests/test_no_raw_durable_writes.py`, scans `archon_search/**/*.py` (excluding the helper itself) for raw write patterns and fails the build on new ones; a handful of out-of-scope one-shot writes (TOML config writers, OS service-unit files) carry a `# noqa: durable-write` allow-list comment — as does the spaCy-model `shutil.move` above, which is a same-filesystem rename whose contents are fsynced before it and whose destination directory is fsynced after. The gate matches the marker string only; it does not validate the justification, so a stale one survives a green run — read the justification when reviewing a waiver.
 
 ### Telemetry durability (rotate-only fsync)
 

@@ -34,6 +34,7 @@ from archon_search.server.app import create_app
 def _make_app(tmp_path: Path, *, graph_enabled: bool = False) -> tuple:
     import sys
     import types
+    from contextlib import ExitStack
 
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
@@ -41,22 +42,18 @@ def _make_app(tmp_path: Path, *, graph_enabled: bool = False) -> tuple:
     job_store = JobStore(path=tmp_path / "jobs.json")
 
     # When graph is enabled but spaCy is not installed, create_app raises ConfigError.
-    # Stub spacy in sys.modules so the startup check passes.
-    original_spacy = sys.modules.get("spacy")
-    spacy_stub_injected = False
-    if graph_enabled and original_spacy is None:
-        spacy_stub = types.ModuleType("spacy")
-        sys.modules["spacy"] = spacy_stub  # type: ignore[assignment]
-        spacy_stub_injected = True
-
-    try:
+    # Stub spacy in sys.modules so the startup check passes. The previous
+    # hand-rolled save/restore had a dead branch (`spacy_stub_injected` is only
+    # True when `original_spacy is None`, so the `is not None` restore could
+    # never run) and conflated "absent" with "bound to None"
+    # (2026-08-19-030 C2-T-13).
+    with ExitStack() as stack:
+        if graph_enabled and "spacy" not in sys.modules:
+            stack.enter_context(
+                patch.dict(sys.modules, {"spacy": types.ModuleType("spacy")})
+            )
         with patch("archon_search.chunker.DocumentChunker.__init__", return_value=None):
             app = create_app(config, job_store)
-    finally:
-        if spacy_stub_injected:
-            sys.modules.pop("spacy", None)
-            if original_spacy is not None:
-                sys.modules["spacy"] = original_spacy
 
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
     client = TestClient(app, raise_server_exceptions=False, headers={"Authorization": f"Bearer {key}"})

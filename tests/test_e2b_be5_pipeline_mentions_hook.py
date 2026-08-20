@@ -250,39 +250,34 @@ async def test_ingest_writes_mentions_then_reingest_is_idempotent(
     doc_file.write_text("# Test\n\nAuthService is a service.\n")
 
     # Stub spaCy before creating app (required for graph_enabled=True in tests)
-    original_spacy = sys.modules.get("spacy")
-    sys.modules["spacy"] = types.ModuleType("spacy")
-    try:
-        # Create app with graph enabled
-        with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
-            # Ingest the file
-            ingest_file_via_path(client, col_name, str(doc_file), api_key=api_key)
+    # monkeypatch.setitem restores absent-vs-None correctly and on exceptions
+    # (2026-08-19-030 C2-T-13).
+    monkeypatch.setitem(sys.modules, "spacy", types.ModuleType("spacy"))
+    # Create app with graph enabled
+    with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
+        # Ingest the file
+        ingest_file_via_path(client, col_name, str(doc_file), api_key=api_key)
 
-            # Check mention count after first ingest
-            from archon_search.graph_store import GraphStore
+        # Check mention count after first ingest
+        from archon_search.graph_store import GraphStore
 
-            graph_store = GraphStore(cfg.db_path)
-            await graph_store.connect()
-            mentions_1 = await graph_store.get_all_mentions(col_name, ns="default")
-            initial_mention_count = len(mentions_1)
-            assert initial_mention_count >= 0  # Should have at least 0 mentions (may be 0 with stubs)
+        graph_store = GraphStore(cfg.db_path)
+        await graph_store.connect()
+        mentions_1 = await graph_store.get_all_mentions(col_name, ns="default")
+        initial_mention_count = len(mentions_1)
+        assert initial_mention_count >= 0  # Should have at least 0 mentions (may be 0 with stubs)
 
-            # Re-ingest the same file
-            ingest_file_via_path(client, col_name, str(doc_file), api_key=api_key)
+        # Re-ingest the same file
+        ingest_file_via_path(client, col_name, str(doc_file), api_key=api_key)
 
-            # Check mention count after re-ingest
-            mentions_2 = await graph_store.get_all_mentions(col_name, ns="default")
-            reingest_mention_count = len(mentions_2)
+        # Check mention count after re-ingest
+        mentions_2 = await graph_store.get_all_mentions(col_name, ns="default")
+        reingest_mention_count = len(mentions_2)
 
-            # Counts should be equal (idempotent — delete-then-add, not doubled)
-            assert reingest_mention_count == initial_mention_count, (
-                f"Mention count changed after re-ingest: "
-                f"{initial_mention_count} -> {reingest_mention_count}. "
-                "Delete-then-add should be idempotent."
-            )
-    finally:
-        # Restore spaCy
-        if original_spacy is None:
-            sys.modules.pop("spacy", None)
-        else:
-            sys.modules["spacy"] = original_spacy
+        # Counts should be equal (idempotent — delete-then-add, not doubled)
+        assert reingest_mention_count == initial_mention_count, (
+            f"Mention count changed after re-ingest: "
+            f"{initial_mention_count} -> {reingest_mention_count}. "
+            "Delete-then-add should be idempotent."
+        )
+

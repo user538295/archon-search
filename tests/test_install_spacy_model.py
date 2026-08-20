@@ -132,10 +132,15 @@ def test_resolve_spacy_model_version_matches_real_spacy_util() -> None:
     import spacy
     import spacy.util
 
-    assert spacy.__version__ == _SPACY_VERSION, (
-        "these tests assume the pinned spaCy version; update the constants "
-        f"above if .venv now has {spacy.__version__}"
+    # Deliberately NOT `spacy.__version__ == _SPACY_VERSION`: a routine
+    # `uv lock --upgrade` to 3.8.15 would red-fail the suite with something that
+    # looks like a spaCy regression but is fixture drift (C2-B-13). The claim
+    # this test actually makes — that the table key is major.minor — holds for
+    # any installed patch release, so assert THAT against the live library.
+    assert spacy.__version__.startswith("3.8."), (
+        f"these tests assume a spaCy 3.8.x line; .venv has {spacy.__version__}"
     )
+    assert spacy.util.get_minor_version(spacy.__version__) == "3.8"
     assert spacy.util.get_minor_version(_SPACY_VERSION) == _SPACY_MINOR
     assert spacy.util.is_prerelease_version(_SPACY_VERSION) is False
     assert spacy.util.is_prerelease_version("3.9.0a1") is True
@@ -412,3 +417,18 @@ def test_download_spacy_model_smoke_load_is_real(tmp_path: Path) -> None:
     assert target == models_dir / f"{SPACY_MODEL_NAME}-{version}"
     nlp = spacy.load(str(target))
     assert isinstance(nlp, Language)
+
+
+def test_en_core_web_sm_dev_dependency_is_installed() -> None:
+    """C2-T-11: `test_download_spacy_model_smoke_load_is_real` — the only test
+    that loads a genuine spaCy pipeline — opens with `importorskip`. If the
+    dev-group URL source ever stops resolving, that guarantee would vanish with
+    a green suite. Fail loudly here instead of disarming silently there.
+    """
+    import importlib.util
+
+    assert importlib.util.find_spec("en_core_web_sm") is not None, (
+        "the en_core_web_sm dev dependency is missing, which silently skips the "
+        "only real spaCy smoke-load in the suite; see pyproject.toml "
+        "[tool.uv.sources] and re-run `uv sync --dev`"
+    )

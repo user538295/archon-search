@@ -257,6 +257,12 @@ class GraphExtractionResult:
     """
     warnings: list[str] = field(default_factory=list)
     """Human-readable warning messages forwarded to ``IngestResult.warnings``."""
+    degraded: bool = False
+    """True when prose NER could not run (model unavailable/incompatible, or the
+    NER call itself raised) and this result therefore carries code-symbol output
+    only. The pipeline uses it to delete the document's previous prose graph
+    rows instead of leaving edges behind with no mentions to support them
+    (2026-08-19-030 C2-I-2)."""
     fatal_error: str | None = None
     """Non-None ONLY when spaCy itself is not importable -- i.e. the ``[graph]`` extra is
     missing, an operator misconfiguration. The pipeline sets ``IngestResult.status = "error"``

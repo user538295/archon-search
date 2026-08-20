@@ -138,6 +138,23 @@ The `archon-search[graph]` extra installs the spaCy library; the model is a sepa
 2. **Or place it by hand** (air-gapped / scripted installs): see [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model).
 3. **Re-ingest** afterwards. Documents indexed while degraded are not retroactively extracted.
 
+### The variant: `is present under the data directory but incompatible`
+
+A different wording means a different remedy. If the warning reads:
+
+```
+spaCy model 'en_core_web_sm' is present under the data directory but incompatible
+with the installed spaCy version; prose entity extraction is disabled for this
+ingest (code-symbol extraction is unaffected). Re-run `archon-search wizard` to
+provision a compatible model.
+```
+
+then the model is on disk but was built for a different spaCy minor version — the
+usual cause is upgrading `archon-search` (and with it spaCy) without re-running the
+wizard. `GET /status` names the stale directory. Re-run `archon-search wizard`: it
+pins the model to the installed spaCy and provisions the matching release. The old
+directory is left in place and simply ignored; delete it if you want the space back.
+
 `python -m spacy download en_core_web_sm` is not a fix on a `uv tool install` deployment — that venv has no package installer, so the command exits with "No package installer found". It does work where pip is available (Docker image, dev checkout).
 
 ## Symptom: HyDE or RAG Fusion not working — "expansion failed" in response

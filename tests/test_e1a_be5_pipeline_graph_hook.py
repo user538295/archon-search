@@ -200,7 +200,7 @@ async def test_ingest_threshold_warning_added_to_warnings(
 
 
 @pytest.mark.asyncio
-async def test_startup_config_error_when_extras_absent(tmp_path):
+async def test_startup_config_error_when_extras_absent(tmp_path, monkeypatch):
     """ConfigError is raised at create_app() time when graph.enabled=True but spacy is absent."""
     import sys
     from archon_search.config import SearchConfig, GraphConfig
@@ -213,19 +213,14 @@ async def test_startup_config_error_when_extras_absent(tmp_path):
 
     job_store = JobStore()
 
-    # Simulate spacy not installed by patching it out of sys.modules
-    original_spacy = sys.modules.get("spacy")
-    sys.modules["spacy"] = None  # type: ignore[assignment]
-    try:
-        with pytest.raises(ConfigError, match="archon-search\\[graph\\]"):
-            from archon_search.server.app import create_app
-            create_app(config, job_store)
-    finally:
-        # Restore spacy
-        if original_spacy is None:
-            sys.modules.pop("spacy", None)
-        else:
-            sys.modules["spacy"] = original_spacy
+    # `monkeypatch.setitem` rather than a hand-rolled save/restore: the manual
+    # form restored "absent" by popping, which DELETES a `None` sentinel a
+    # neighbouring test may have installed instead of putting it back
+    # (2026-08-19-030 C2-T-13). It also restores on exceptions.
+    monkeypatch.setitem(sys.modules, "spacy", None)
+    with pytest.raises(ConfigError, match="archon-search\\[graph\\]"):
+        from archon_search.server.app import create_app
+        create_app(config, job_store)
 
 
 @pytest.mark.asyncio

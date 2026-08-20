@@ -65,16 +65,24 @@ _logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Public: the single source of truth for the model name (2026-08-19-030) — other
-# layers (install/extras.py's wizard provisioning, model_validation.py's startup
-# probe) should import this rather than hardcoding a second "en_core_web_sm"
-# literal.
+# Public: the model name for every consumer that may import the graph layer —
+# model_validation.py's startup probe does. install/extras.py deliberately does
+# NOT: the install package must not depend on the graph layer, which is the same
+# reason get_spacy_models_dir() lives in paths.py rather than here. Its copy at
+# install/extras.py:SPACY_MODEL_NAME is intentional duplication, not an
+# unfulfilled TODO; tests/test_install_spacy_model.py closes the loop by
+# asserting the wizard's output is what the runtime resolver finds
+# (2026-08-19-030 C2-B-4/C2-A-11).
 SPACY_MODEL_NAME: str = "en_core_web_sm"
 
-# Public: the one place the English-only limitation of `en_core_web_sm` is
-# worded (2026-08-19-030 / 2026-08-19-035). model_validation.py's startup
-# disclosure reuses this string; the wizard summary (install/render.py) has its
-# own copy pending a follow-up to reuse it too.
+# Public: the English-only limitation of `en_core_web_sm` as worded for every
+# consumer that may import the graph layer — model_validation.py's startup
+# disclosure reuses this string verbatim (2026-08-19-030 / 2026-08-19-035).
+# install/render.py's wizard summary carries its own wording for the same
+# reason it carries its own SPACY_MODEL_NAME: the install package must not
+# depend on the graph layer. That is deliberate, not a pending follow-up —
+# tests/test_install_ui.py pins the shared phrase so the two cannot drift
+# apart silently (C2-B-19/C2-T-16).
 ENGLISH_ONLY_DISCLOSURE: str = (
     f"graph prose entity extraction is English-only ({SPACY_MODEL_NAME}) "
     "while multilingual = true; non-English documents contribute "
@@ -188,9 +196,16 @@ def _specifier_satisfied(specifier: str, version: str) -> bool:
         clause = clause.strip()
         if not clause:
             continue
-        for op_symbol in (">=", "<=", "==", "!=", ">", "<"):
+        for op_symbol in _SPECIFIER_OPS:  # declared longest-prefix-first
             if clause.startswith(op_symbol):
-                target = _version_key(clause[len(op_symbol):].strip())
+                operand = clause[len(op_symbol):].strip()
+                # A wildcard/pre-release operand (`3.8.*`, `3.9.0a1`) would
+                # truncate to a shorter tuple and compare wrongly — treat it as
+                # unrecognized so the caller fails OPEN rather than declaring a
+                # usable model incompatible (2026-08-19-030 C2-B-18).
+                if not re.fullmatch(r"\d+(?:\.\d+)*", operand):
+                    raise ValueError(f"unrecognized version operand: {operand!r}")
+                target = _version_key(operand)
                 if not _SPECIFIER_OPS[op_symbol](parsed, target):
                     return False
                 break
@@ -239,18 +254,44 @@ def resolve_spacy_model() -> SpacyModelResolution:
     except ImportError:
         return SpacyModelResolution(target=None, incompatible_versions=[])
 
-    if SPACY_MODEL_NAME in spacy.util.get_installed_models():
-        return SpacyModelResolution(target=SPACY_MODEL_NAME, incompatible_versions=[])
+    # `import spacy.util` above also binds the `spacy` package name itself.
+    installed_spacy_version = getattr(spacy, "__version__", "")
 
+    incompatible: list[str] = []
+    if SPACY_MODEL_NAME in spacy.util.get_installed_models():
+        # The installed package gets the same compatibility check as a data-dir
+        # candidate. Without it, an old pinned `en_core_web_sm` left over from a
+        # previous spaCy shadows a correctly provisioned data-dir model
+        # permanently — resolution returns here and never reaches the fallback
+        # — while reporting healthy on GET /status (2026-08-19-030 C2-I-6).
+        try:
+            package_path = Path(spacy.util.get_package_path(SPACY_MODEL_NAME))
+        except Exception:  # noqa: BLE001 — an unreadable package reads as usable
+            return SpacyModelResolution(target=SPACY_MODEL_NAME, incompatible_versions=[])
+        model_dirs = [package_path, *sorted(package_path.glob(f"{SPACY_MODEL_NAME}-*"))]
+        for model_dir in model_dirs:
+            if (model_dir / "meta.json").is_file():
+                if _model_dir_compatible(model_dir, installed_spacy_version):
+                    return SpacyModelResolution(
+                        target=SPACY_MODEL_NAME, incompatible_versions=[]
+                    )
+                incompatible.append(f"{SPACY_MODEL_NAME} (installed package)")
+                break
+        else:
+            # No meta.json anywhere in the package — fail open, as elsewhere.
+            return SpacyModelResolution(target=SPACY_MODEL_NAME, incompatible_versions=[])
+
+    # Strict `X.Y.Z` suffix: a bare glob also matches siblings like
+    # `en_core_web_sm-3.8.0.bak`, which `_model_version_key` parses to the same
+    # key as the real directory, making `max()` pick between them arbitrarily
+    # (2026-08-19-030 C2-I-21). Mirrors the wizard's own guard in extras.py.
     candidates = [
         path
         for path in get_spacy_models_dir().glob(f"{SPACY_MODEL_NAME}-*")
-        if (path / "config.cfg").is_file()
+        if re.fullmatch(rf"{re.escape(SPACY_MODEL_NAME)}-\d+\.\d+\.\d+", path.name)
+        and (path / "config.cfg").is_file()
     ]
-    # `import spacy.util` above also binds the `spacy` package name itself.
-    installed_spacy_version = getattr(spacy, "__version__", "")
     compatible: list[Path] = []
-    incompatible: list[str] = []
     for path in candidates:
         if _model_dir_compatible(path, installed_spacy_version):
             compatible.append(path)
@@ -529,6 +570,7 @@ class GraphExtractor:
         """
         warnings: list[str] = []
         llm_fallback_used = False
+        degraded = False
 
         # ------------------------------------------------------------------
         # LLM relationship-labeling AND-gate (LLCP BE-7). When closed, this is
@@ -608,6 +650,7 @@ class GraphExtractor:
                 # and the file still embeds and persists.
                 warnings.append(load_message)
                 text_chunks = []
+                degraded = True
 
         if text_chunks:
             # Run NER (CPU-bound) in a thread pool.
@@ -639,6 +682,7 @@ class GraphExtractor:
                 # job is keeping the ingest alive.
                 text_chunks = []
                 ner_per_chunk = []
+                degraded = True
 
             for text_chunk, raw_entities in zip(text_chunks, ner_per_chunk):
                 ids_this_chunk: list[str] = []
@@ -774,4 +818,5 @@ class GraphExtractor:
             mentions=mentions,
             llm_fallback_used=llm_fallback_used,
             warnings=warnings,
+            degraded=degraded,
         )

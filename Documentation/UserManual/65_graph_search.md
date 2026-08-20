@@ -48,9 +48,11 @@ for this ingest (code-symbol extraction is unaffected). Run `archon-search wizar
 to provision the model.
 ```
 
+A second wording — `is present under the data directory but incompatible with the installed spaCy version` — means the model is on disk but was built for a different spaCy minor, usually after upgrading `archon-search` without re-running the wizard. Same command fixes it (`archon-search wizard` re-pins the model to the installed spaCy); the wording differs so you can tell "never provisioned" from "provisioned, now stale".
+
 The server logs the matching WARNING once per process, not once per file, and `GET /status` reports the miss under `model_validation.provider_warnings`.
 
-**Prose entities are English only.** `en_core_web_sm` is an English model. With `multilingual = true`, non-English documents still chunk, embed, and search normally, but contribute only `code_symbol` entities to the graph.
+**Prose entities are English only.** `en_core_web_sm` is an English model. With `multilingual = true`, non-English documents still chunk, embed, and search normally, but contribute only `code_symbol` entities to the graph. `GET /status` states this under `model_validation.provider_notes` — a separate field from `provider_warnings` precisely because it is permanent and needs no action, so it does not raise `checks.models` on `GET /ready`.
 
 ## The four `graph_mode` values
 

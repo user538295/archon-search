@@ -211,3 +211,78 @@ async def test_ingest_file_degrade_skips_llm_gate_and_preserves_code_symbols(
     finally:
         await store.disconnect()
         await graph_store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_reingest_under_degradation_leaves_no_orphan_prose_edges(tmp_path: Path):
+    """C2-I-2: degrading must remove the doc's prose graph, not half of it.
+
+    Degrade-not-abort has a second-order cost the fix itself did not address.
+    On the degraded path `_extraction_result.nodes`/`.edges` are empty for a
+    prose-only document, so the `if nodes or edges:` guard skips `write_graph`
+    — but `delete_mentions_by_doc` still runs. The previous ingest's prose
+    edges therefore survived with zero mentions to support them, asserting
+    relations for a document that now records mentioning nothing. Worse,
+    mention-based orphan GC bails on an empty mentions table, so nothing ever
+    cleaned it up.
+    """
+    from archon_search.graph_extractor import GraphExtractor
+    from archon_search.store import SearchStore
+
+    db_path = str(tmp_path / "search")
+    store = SearchStore(db_path)
+    await store.connect()
+    graph_store = GraphStore(db_path)
+    await graph_store.connect()
+
+    graph_extractor = GraphExtractor(GraphConfig(enabled=True))
+    pipeline = _make_pipeline_with_graph(
+        store, graph_extractor, graph_store, GraphConfig(enabled=True)
+    )
+
+    md_file = tmp_path / "notes.md"
+    md_file.write_text("Alice from Acme Corp met Bob in London.\n")
+    collection = "test_bug030_reingest"
+    namespace = "default"
+
+    try:
+        # First pass: a WORKING model produces prose nodes, edges and mentions.
+        working_nlp = MagicMock()
+        graph_extractor._nlp = working_nlp
+        entities = [("Alice", "PERSON"), ("Acme Corp", "ORG"), ("London", "GPE")]
+        with patch.object(
+            GraphExtractor, "_run_ner_sync", return_value=[entities]
+        ), patch.dict(sys.modules, {"spacy": types.ModuleType("spacy")}):
+            first = await pipeline.ingest_file(
+                md_file, collection, embedder=_make_embedder()
+            )
+        assert first.status == "ok"
+
+        edges_before = await graph_store.edge_count(collection, ns=namespace)
+        assert edges_before > 0, "the working-model pass must produce prose edges to orphan"
+
+        # Second pass: same file, model now unavailable. The latch degrades.
+        graph_extractor._nlp = None
+        graph_extractor._nlp_unavailable = False
+        graph_extractor._load_nlp_sync = MagicMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("model gone")
+        )
+        md_file.write_text("Alice from Acme Corp met Bob in London. Revised.\n")
+        with patch.dict(sys.modules, {"spacy": types.ModuleType("spacy")}):
+            second = await pipeline.ingest_file(
+                md_file, collection, embedder=_make_embedder()
+            )
+
+        assert second.status == "ok"
+        assert any("en_core_web_sm" in w for w in second.warnings)
+
+        edges_after = await graph_store.edge_count(collection, ns=namespace)
+        assert edges_after == 0, (
+            "prose edges from the previous ingest survived a degraded re-ingest "
+            "with no mentions left to support them; the document's graph "
+            f"contribution must be consistently code-symbols-only. Got {edges_after} "
+            f"edge(s), was {edges_before}"
+        )
+    finally:
+        await store.disconnect()
+        await graph_store.disconnect()
