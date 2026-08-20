@@ -3574,11 +3574,12 @@
         "type": "object"
       },
       "StartupSyncResult": {
-        "description": "Startup collection-sync progress, mirrored onto ``app.state.sync_result``.\n\nSet by the lifespan's startup sync task: ``PENDING`` before/while the task\nruns, ``DONE`` on a clean completion, ``FAILED`` on a bounded timeout, a\nper-collection error (``SyncResult.errors`` non-empty), cancellation, or any\nother exception. ``None`` (not a member of this enum) means no startup sync\nwas ever run, i.e. no collections are configured. Named ``StartupSyncResult``\nrather than ``SyncResult`` to avoid colliding with\n``archon_search.sync.SyncResult``, which is a different, unrelated type.",
+        "description": "Startup collection-sync progress, mirrored onto ``app.state.sync_result``.\n\nSet by the lifespan's startup sync task: ``PENDING`` before/while the task\nruns, ``DONE`` on a clean completion, ``FAILED`` on a bounded timeout, a\nper-collection error (``SyncResult.errors`` non-empty), cancellation, or any\nother exception. ``SUPPRESSED`` is set instead of ``PENDING`` when the\ncrash-loop guard refused to start the task at all because the job store\nmarked an ingest-family job ``process_restart`` \u2014 collections are configured\nbut the corpus is potentially stale until an operator runs ``POST /sync``.\nDegraded-but-ready: no sync task exists, so ``/ready`` stays 200 \u2014 it\nreports the state as ``checks.sync = \"warn\"``, which does not gate ``ready``.\n``None`` (not a member of this enum) means no startup sync\nwas ever run, i.e. no collections are configured. Named ``StartupSyncResult``\nrather than ``SyncResult`` to avoid colliding with\n``archon_search.sync.SyncResult``, which is a different, unrelated type.\n\nThe single rule governing every rewrite after startup: **a clean\n``POST /sync`` clears any degraded startup state; boot history lives in the\nlogs.** Concretely (``routes_sync._clear_degraded_sync_state``), a\n``POST /sync`` that completes with no exception and no per-collection\nerrors moves ``SUPPRESSED`` *or* ``FAILED`` to ``DONE`` \u2014 and clears\n``app.state._startup_sync_failed`` in the same step, since ``GET /ready``\nreads that flag and ``GET /status`` reads this field; clearing one without\nthe other would make the two endpoints contradict each other. ``SUPPRESSED``\nis additionally backed by a durable sentinel file\n(``sync_suppression.py``) so it survives a process restart \u2014 the clean\nsync clears that too. A sync that raises, times out, or completes with\nnon-empty ``SyncResult.errors`` rewrites neither field.",
         "enum": [
           "pending",
           "done",
-          "failed"
+          "failed",
+          "suppressed"
         ],
         "title": "StartupSyncResult",
         "type": "string"
@@ -5964,6 +5965,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {

@@ -4,7 +4,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from archon_search.server.schemas import CheckStatus, ReadinessChecks, ReadinessResponse, WarmupResult
+from archon_search.server.schemas import (
+    CheckStatus,
+    ReadinessChecks,
+    ReadinessResponse,
+    StartupSyncResult,
+    WarmupResult,
+)
 
 router = APIRouter()
 
@@ -46,9 +52,13 @@ def _sync_check_status(request: Request, sync_pending: bool) -> CheckStatus:
     when the sync raises — the swallow-all ``except BaseException`` branch —
     or when it returns normally with a non-empty ``SyncResult.errors``, the
     common failure mode) — without this, a failed sync is indistinguishable
-    from one that completed cleanly. ``OK`` otherwise. The ``getattr`` guard
-    keeps the endpoint resilient to app factories that never set
-    ``_startup_sync_failed``.
+    from one that completed cleanly. ``WARN`` when the lifespan's crash-loop
+    guard suppressed the sync entirely (``sync_result == SUPPRESSED``): no task
+    ever ran, so neither ``PENDING`` nor ``_startup_sync_failed`` fires, and a
+    bare ``OK`` would report an all-clear over a potentially stale index.
+    ``OK`` otherwise. Priority mirrors ``_model_check_status``: FAIL > WARN > OK.
+    The ``getattr`` guards keep the endpoint resilient to app factories that
+    never set ``_startup_sync_failed`` / ``sync_result``.
 
     ``ready_flag`` must NOT gate on a ``FAIL`` here: the startup sync's failure
     is deliberately swallowed so a corrupted collection cannot wedge the pod's
@@ -58,6 +68,8 @@ def _sync_check_status(request: Request, sync_pending: bool) -> CheckStatus:
         return CheckStatus.PENDING
     if getattr(request.app.state, "_startup_sync_failed", False):
         return CheckStatus.FAIL
+    if getattr(request.app.state, "sync_result", None) == StartupSyncResult.SUPPRESSED:
+        return CheckStatus.WARN
     return CheckStatus.OK
 
 

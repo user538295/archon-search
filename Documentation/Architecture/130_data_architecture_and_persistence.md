@@ -31,6 +31,7 @@ In the table below, paths are relative to the data-directory root — `~/.archon
 | `search-logs/` | `telemetry/writer.py` | `YYYY-MM-DD.jsonl` per UTC day | only if `[telemetry].enabled = true` |
 | `logs/archon-search.log` | server | server logs | `[logging].log_file` |
 | `archon-search-jobs.json` | `jobs/store.py` | job state for long-running ingest/reindex | `get_jobs_file()` in `jobs/model.py` |
+| `archon-search-sync-suppressed.json` | `sync_suppression.py` | sticky sentinel for the startup-sync crash-loop guard: one `suppressed_at` ISO timestamp | `get_sync_suppressed_file()`, resolved fresh from `get_data_dir()` on every call, no per-path env override; written when the lifespan suppresses the startup sync, deleted by a clean `POST /sync` (`routes_sync._clear_degraded_sync_state`); presence persists suppression across a process restart |
 | `.indexing_state.json` | `progress.py` (`IndexingStateStore`) | per-collection indexing progress/status | atomic-rename writes; RMW serialized by an internal `RLock` (see "Indexing state") |
 | `.maintenance-state.json` | `jobs/maintenance_loop.py` (`MaintenanceLoop`) | last/next run timestamps, per-collection health, retry counts | atomic-rename write after each pass; absent/corrupt → fresh empty state (no error); see "Maintenance state" |
 | `models/` | `language_detector.py` | fasttext language detector (`lid.176.ftz`) | only if `multilingual=True`; resolved lazily via `get_fasttext_models_dir()` |
@@ -52,7 +53,7 @@ Every durable JSON/bytes write of runtime state routes through a single helper m
 
 The crucial property is that the helper fsyncs **both the file and the parent directory**: the parent-directory fsync is what makes the `os.replace` rename itself durable. fsync is never retried — on `EIO` the kernel may already have marked the page clean (POSIX "fsyncgate"), so a retry is unsafe. The helper is **not internally synchronized**; callers must serialize writes to the same path.
 
-The eight durable-write sites that use the helper are:
+The nine durable-write sites that use the helper are:
 
 | Site | Helper | File written |
 |------|--------|--------------|
@@ -60,6 +61,7 @@ The eight durable-write sites that use the helper are:
 | `sync._write_manifest` | `atomic_write_json` | sync manifest |
 | `sync.manifest_remove_entry` | `atomic_write_json` | sync manifest |
 | `jobs/store.py::JobStore._write_atomic` | `atomic_write_json` | `archon-search-jobs.json` |
+| `sync_suppression.write_sync_suppressed_sentinel` | `atomic_write_json` | `archon-search-sync-suppressed.json` |
 | `key_manager._generate_and_write` | `atomic_write_bytes` | `.search.env` (mode `0600`) |
 | `key_manager.KeyStore._write` | `atomic_write_bytes` | `keys.json` (mode `0600`) |
 | `maintenance_loop._save_state` | `atomic_write_json` | `.maintenance-state.json` |

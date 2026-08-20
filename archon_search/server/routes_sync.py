@@ -28,12 +28,15 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 if TYPE_CHECKING:
+    from starlette.datastructures import State
+
     from archon_search.jobs.store import JobStore
     from archon_search.sync import SearchCollectionSync
     from archon_search.types import SyncJob
 
 from archon_search.jobs.model import job_to_dict
-from archon_search.server.schemas import ErrorDetail, JobResponse
+from archon_search.server.schemas import ErrorDetail, JobResponse, StartupSyncResult
+from archon_search.sync_suppression import clear_sync_suppressed_sentinel
 from archon_search.types import JobStatus
 
 logger = logging.getLogger(__name__)
@@ -45,6 +48,48 @@ _SYNC_ERROR_RESPONSES = {
     409: {"model": ErrorDetail},
 }
 
+# Sanitized, wire-facing ``error`` value for a SyncJob that fails via _sync_task —
+# it is readable through GET /jobs, so no exception text goes in here (CLAUDE.md:
+# "Never put str(exc) in a wire-facing detail or job error field"). The
+# logger.exception() call at the raise site keeps the detail for operators.
+_SYNC_TASK_ERROR_FAILED = "sync failed"
+
+
+def _clear_degraded_sync_state(app_state: "State") -> None:
+    """Clear sticky startup-sync degradation after a clean manual sync.
+
+    A clean ``POST /sync`` (no exception, no per-collection errors) is the
+    sanctioned resume path for BOTH degraded states the startup sync can leave
+    behind: ``SUPPRESSED`` (the crash-loop guard fired) and ``FAILED`` (the
+    startup sync itself failed or timed out). Clearing is symmetric on
+    purpose — ``sync_result`` and ``_startup_sync_failed`` always move
+    together, never one without the other, because ``GET /ready`` reads
+    ``_startup_sync_failed`` and ``GET /status`` reads ``sync_result``: leaving
+    them out of sync would make the two endpoints contradict each other.
+
+    The sticky sentinel (``sync_suppression.py``) is the durable half of the
+    ``SUPPRESSED`` state, so it is cleared here too — unconditionally
+    (``unlink(missing_ok=True)`` internally), since a stale sentinel from a
+    ``FAILED``-only prior state is harmless to attempt-clear.
+
+    No-op when ``sync_result`` is anything else (``None``, ``PENDING``,
+    ``DONE``, or absent) — ``sync_result`` is the *startup* sync's record, and
+    only these two degraded states have a sanctioned resume.
+    """
+    if getattr(app_state, "sync_result", None) in (
+        StartupSyncResult.SUPPRESSED,
+        StartupSyncResult.FAILED,
+    ):
+        app_state.sync_result = StartupSyncResult.DONE
+        app_state._startup_sync_failed = False
+    # Outside the branch on purpose. The boot guard is gated on ``all_cols``
+    # (``app.py``), so a server with no collections configured never reaches
+    # SUPPRESSED — a sentinel left behind by an earlier configuration would
+    # otherwise be unclearable by the sanctioned resume path and would suppress
+    # the first boot after collections are added back. ``unlink(missing_ok=True)``
+    # makes this a no-op when there is nothing to clear.
+    clear_sync_suppressed_sentinel()
+
 
 async def _sync_task(
     job: "SyncJob",
@@ -52,17 +97,31 @@ async def _sync_task(
     collection_sync: "SearchCollectionSync",
     collections: list[str],
     lock: asyncio.Lock,
+    app_state: "State",
 ) -> None:
-    """Drive a SyncJob from RUNNING to DONE or FAILED.
+    """Drive a SyncJob from RUNNING to DONE, FAILED, or CANCELLED.
 
     The caller is responsible for transitioning the job to RUNNING before
     invoking this coroutine. The ``sync_lock`` is released in the ``finally``
-    block — regardless of whether sync() raises — so a second POST /sync
-    always finds the lock free after this task exits (S23).
+    block — regardless of how the task exits — so a second POST /sync always
+    finds the lock free after this task exits (S23).
+
+    ``asyncio.CancelledError`` is caught explicitly, before ``except
+    Exception`` (which does not catch it — it is a ``BaseException``): an
+    ordinary clean shutdown during a manual sync must record ``CANCELLED``,
+    not leave the job ``RUNNING`` forever. A ``RUNNING`` row left behind by a
+    plain shutdown would be rewritten to ``FAILED / "process_restart"`` on the
+    next boot — a false crash marker that arms the (sticky, since fix-brief-C
+    item 1) crash-loop guard for a shutdown that was never a crash.
+
+    See ``_clear_degraded_sync_state`` for the ``app_state`` write on a clean
+    sync.
     """
     job_id = job.job_id
     try:
         result = await collection_sync.sync(collections)
+        if not result.errors:
+            _clear_degraded_sync_state(app_state)
         job_store.update(
             job_id,
             status=JobStatus.DONE,
@@ -75,10 +134,18 @@ async def _sync_task(
                 "updated": result.updated,
             },
         )
-    except Exception as exc:
+    except asyncio.CancelledError:
+        try:
+            job_store.update(job_id, status=JobStatus.CANCELLED)
+        except (KeyError, OSError):
+            logger.error(
+                "_sync_task: could not persist CANCELLED status for job %s", job_id
+            )
+        raise
+    except Exception:
         logger.exception("_sync_task: job %s failed", job_id)
         try:
-            job_store.update(job_id, status=JobStatus.FAILED, error=str(exc))
+            job_store.update(job_id, status=JobStatus.FAILED, error=_SYNC_TASK_ERROR_FAILED)
         except (KeyError, OSError):
             logger.error(
                 "_sync_task: could not persist FAILED status for job %s", job_id
@@ -147,6 +214,7 @@ async def trigger_sync(request: Request) -> JSONResponse:
                 collection_sync=collection_sync,
                 collections=all_collections,
                 lock=lock,
+                app_state=request.app.state,
             )
         )
         request.app.state._background_tasks.add(task)

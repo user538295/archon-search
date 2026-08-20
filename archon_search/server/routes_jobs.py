@@ -22,7 +22,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
 from archon_search.server.schemas import ErrorDetail, JobListResponse, JobResponse
-from archon_search.types import DeleteJob, ExportJob, ImportJob, MigrationJob, ReindexJob
+from archon_search.types import DeleteJob, ExportJob, ImportJob, MigrationJob, ReindexJob, SyncJob
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,15 @@ router = APIRouter()
 _TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.FAILED, JobStatus.FAILED_EXPIRED, JobStatus.CANCELLED}
 # Active statuses — DELETE sets CANCELLING
 _ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.PENDING}
+
+# Sanitized, wire-facing ``detail`` for DELETE /jobs/{id} on the SyncJob that
+# backs the startup sync (CLAUDE.md hard invariant: no str(exc)/internals in a
+# wire-facing detail field). The startup sync must be non-cancellable: nothing
+# actually cancels the lifespan task that runs it, so transitioning the row to
+# CANCELLING would be silently ignored by the sync itself AND would arm the
+# (sticky, since fix-brief-C item 1) crash-loop guard on the next boot —
+# CANCELLING is one of jobs/store.py's _CRASH_STATUSES.
+_STARTUP_SYNC_JOB_NOT_CANCELLABLE_DETAIL = "the startup sync cannot be cancelled"
 
 
 # Inclusive valid range for chunk_ttl_seconds.
@@ -565,6 +574,7 @@ _KIND_TYPE_MAP: dict[str, type] = {
     "export": ExportJob,
     "import": ImportJob,
     "migration": MigrationJob,
+    "sync": SyncJob,
 }
 
 
@@ -705,6 +715,7 @@ async def resume_job(job_id: str, request: Request) -> JobResponse | JSONRespons
         202: {"model": JobResponse},
         401: {"model": ErrorDetail},
         404: {"model": ErrorDetail},
+        409: {"model": ErrorDetail},
     },
 )
 async def delete_job(job_id: str, request: Request, response: Response) -> JobResponse | JSONResponse:
@@ -717,6 +728,11 @@ async def delete_job(job_id: str, request: Request, response: Response) -> JobRe
     if job.status in _TERMINAL_STATUSES:
         return JobResponse(**job_to_dict(job))
     if job.status in _ACTIVE_STATUSES:
+        if job_id == getattr(request.app.state, "_startup_sync_job_id", None):
+            return JSONResponse(
+                {"detail": _STARTUP_SYNC_JOB_NOT_CANCELLABLE_DETAIL},
+                status_code=409,
+            )
         # Use transition() to avoid TOCTOU race: only updates if still active
         try:
             updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING)

@@ -3,8 +3,6 @@
 
 ## [26.8.1987] - 2026-08-18
 
-canary
-
 **CLI error messaging fix for `--api-url` + wizard prompt restoration**
 
 **Connection error diagnostics**
@@ -75,8 +73,6 @@ Updated `UserManual/40_running_the_server.md`, `UserManual/50_ingestion_and_coll
 
 ## [26.8.1956] - 2026-08-11
 
-canary
-
 **Embedder cache fixes: providers now honored on sync paths, cold models properly evicted, eager preload actually warms**
 
 **Embedder acceleration now reaches the sync path**
@@ -97,16 +93,12 @@ Reindex operations resolve an unpinned collection's active model to an empty str
 
 ## [26.8.1952] - 2026-08-11
 
-canary
-
 **JobStore write serialization**
 
 - Fixed a race condition in `JobStore._write_atomic()` where concurrent writes from the test thread and the scheduler's asyncio event loop could attempt to rename the same temporary file simultaneously, causing one to fail with `FileNotFoundError`. Added a `threading.Lock` to serialize all `JobStore` writes, ensuring atomic file operations complete without interference — this resolves intermittent test failures in `test_migration_job_resume_from_failed_state_reaches_done` on CI.
 
 
 ## [26.8.1950] - 2026-08-10
-
-canary
 
 **CLI configuration persistence + sync state tracking fixes**
 
@@ -244,8 +236,6 @@ OpenAPI snapshot updated to reflect FastAPI's 422 error description string (`"Un
 
 ## [26.8.1826] - 2026-08-03
 
-canary
-
 **macOS Arrow allocator pin + dependency upgrades + CI hardening**
 
 **Arrow allocator**
@@ -283,8 +273,6 @@ canary
 
 ## [26.8.1815] - 2026-08-03
 
-canary
-
 **CPU-only torch by default, CUDA-aware wizard, container reliability fixes**
 
 **Dependency optimization**
@@ -307,8 +295,6 @@ canary
 
 
 ## [26.8.1800] - 2026-08-02
-
-canary
 
 **Installation wizard + Docker improvements + metadata safety**
 
@@ -407,8 +393,6 @@ canary
 
 
 ## [26.7.1708] - 2026-07-27
-
-canary
 
 **All `collection` subcommands now proxy the server; Docker dev/test workflows; container-mode CLI guards; spaCy resilience**
 

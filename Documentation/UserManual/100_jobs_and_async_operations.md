@@ -7,7 +7,7 @@
 
 ## Principles
 
-1. **Write operations are asynchronous.** Every command that mutates the index submits a job to the running server and returns a job ID immediately — the CLI does not do the work itself (`archon_search/cli/`; the write commands are HTTP proxies).
+1. **Write operations are asynchronous.** Every CLI command that mutates the index submits a job to the running server and returns a job ID immediately — the CLI does not do the work itself (`archon_search/cli/`; the write commands are HTTP proxies). Not every job is client-submitted, though: the server's own lifespan starts a **server-initiated** `SyncJob` on any boot where the startup collection sync actually runs — see "The startup sync is a job too" below.
 2. **The server must be running.** Because write commands proxy to REST, they require `archon-search serve` (or `start`). On connection refused the message is chosen by `_server_connect_fail_msg(base_url)` (`cli/_helpers.py`), which first probes `GET /ready` on the target. If the probe returns a usable `503` — `checks.storage == "ok"` and either `checks.models == "pending"` (eager warm-up still running) or `checks.sync == "pending"` (lifespan startup sync still running) — it prints `archon-search is starting up. Please wait for it to finish loading models, then retry.` (`_SERVER_STARTING_MSG`). In all other probe-success cases it prints `archon-search serve is not running. Start it first with: archon-search serve` (`_SERVER_NOT_RUNNING_MSG`). When the probe itself **fails** (connection refused / timeout): for a **custom `--api-url`** the function returns `_SERVER_NOT_RUNNING_MSG` immediately without consulting the local OS service manager (S530 — the local service describes a different server); for the **default URL** (`http://localhost:8765`) it falls through to a managed-service check (`launchd`/`systemd`/Windows) and returns `_SERVER_STARTING_MSG` if the service process is alive, `_SERVER_NOT_RUNNING_MSG` otherwise. Because the probe hits the server directly, the "starting up" hint works for a foreground `archon-search serve` too, not just a managed service.
 3. **Poll for completion.** The server tracks each job through a lifecycle; you check progress with `archon-search jobs` or by polling `GET /jobs/{id}`. Commands that support `--wait` do this polling for you.
 4. **Jobs are namespaced.** `GET /jobs` and `GET /jobs/{id}` only ever return jobs in the caller's token namespace; a job in another namespace reads as `404` (`server/routes_jobs.py`).
@@ -32,6 +32,10 @@ Operations that run as jobs:
 | Scheduled backups | (automatic) | `POST /backup/trigger` |
 
 See [Ingestion and collections](50_ingestion_and_collections.md) and [Export / import](90_export_import.md) for the operation-specific flags.
+
+### The startup sync is a job too
+
+Unlike every other row in the table above, the startup collection sync is not submitted by a client — the server's own lifespan opens a `SyncJob` (namespace `default`, `source: "user"`) and drives it through the same `RUNNING` → `DONE`/`FAILED` lifecycle as a manual `POST /sync`. It appears in `GET /jobs` on **any boot where the startup sync actually runs** — not on a boot where it is suppressed by the crash-loop guard (`GET /status` reports `sync_result: "suppressed"` instead; see [Troubleshooting](160_troubleshooting.md)). `DELETE /jobs/{id}` on this specific job returns `409` — it is deliberately **not cancellable**, unlike every other job kind (see the REST surface table below).
 
 ## Job lifecycle
 
@@ -111,7 +115,7 @@ All routes require a `Bearer` token (`server/routes_jobs.py`). `GET /openapi.jso
 | `GET /jobs` | List jobs (namespace-filtered). Query params: `status` (repeatable), `kind`, `source`, `limit` (1..200, default 50), `cursor`. Response envelope below. |
 | `GET /jobs/{id}` | Fetch one job; `404` if missing or in another namespace. |
 | `POST /jobs/{id}/resume` | Transition a `FAILED` **export / import / migration** job back to `QUEUED` for retry. `409` if the job type is not resumable or is not `FAILED`; `422` if the backing file is gone. |
-| `DELETE /jobs/{id}` | Cancel an active job (sets `CANCELLING`, returns `202`); idempotent `200` on already-terminal jobs. |
+| `DELETE /jobs/{id}` | Cancel an active job (sets `CANCELLING`, returns `202`); idempotent `200` on already-terminal jobs; `409` for the startup-sync `SyncJob` specifically — it is not cancellable. |
 
 `GET /jobs` returns a cursor-paginated envelope object (never a bare array):
 

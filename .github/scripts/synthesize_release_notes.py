@@ -69,16 +69,43 @@ def _via_api(api_key: str) -> str:
 
 
 def _via_cli() -> str:
+    # --safe-mode disables every user-level customization (CLAUDE.md, hooks,
+    # output styles, plugins) so a maintainer's personal instructions cannot
+    # bleed into the release notes — a global "start every reply with X" rule
+    # prepended a stray line to eight published CHANGELOG.md sections before
+    # this was added. Admin-managed (policy) settings still apply (`claude
+    # --help`), so this is not a guarantee against org-wide policy contamination.
+    # Verified empirically (ANTHROPIC_API_KEY stripped, as below):
+    #   env -u ANTHROPIC_API_KEY claude --model claude-haiku-4-5-20251001 \
+    #       --safe-mode -p 'Reply with exactly: HELLO'   -> HELLO (exit 0)
+    #   env -u ANTHROPIC_API_KEY claude --model claude-haiku-4-5-20251001 \
+    #       -p 'Reply with exactly: HELLO'                -> canary\n\nHELLO (exit 0)
+    # No API key was set either time and both runs still authenticated, so
+    # --safe-mode does not break the OAuth fallback this path exists to serve —
+    # it only strips the maintainer's global CLAUDE.md "canary" line.
+    # Not --bare: that forces ANTHROPIC_API_KEY auth, and this path exists
+    # precisely for the OAuth fallback when no key is set.
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
     result = subprocess.run(
-        ["claude", "--model", "claude-haiku-4-5-20251001", "-p", PROMPT],
+        ["claude", "--model", "claude-haiku-4-5-20251001", "--safe-mode", "-p", PROMPT],
         capture_output=True,
         text=True,
         env=env,
         timeout=300,
         check=True,
     )
-    return result.stdout
+    stdout = result.stdout
+    # Belt-and-braces against any future prompt contamination this specific
+    # module can't anticipate (--safe-mode only covers the known cause above).
+    # PROMPT's first style rule is "First line is bold and summarizes the
+    # release theme" — reject (don't guess-and-strip) output that violates it.
+    first_line = next((line for line in stdout.splitlines() if line.strip()), "")
+    if not first_line.startswith("**"):
+        raise ValueError(
+            f"claude CLI output rejected: expected the first non-empty line to "
+            f"start with '**' per the release-notes style contract, got {first_line!r}"
+        )
+    return stdout
 
 
 api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -99,7 +126,7 @@ try:
 except subprocess.TimeoutExpired:
     print("claude CLI timed out", file=sys.stderr)
     sys.exit(1)
-except (subprocess.CalledProcessError, FileNotFoundError) as e:
+except (subprocess.CalledProcessError, FileNotFoundError, ValueError) as e:
     msg = e.stderr if isinstance(e, subprocess.CalledProcessError) else str(e)
     print(f"claude CLI error: {msg}", file=sys.stderr)
     sys.exit(1)

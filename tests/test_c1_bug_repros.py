@@ -33,6 +33,7 @@ import pytest
 from click.testing import CliRunner
 
 from archon_search.config import SearchConfig
+from archon_search.jobs.model import JobStatus
 from archon_search.jobs.store import JobStore
 
 pytestmark = pytest.mark.xdist_group("c1_bugs")
@@ -41,6 +42,25 @@ pytestmark = pytest.mark.xdist_group("c1_bugs")
 @pytest.fixture
 def job_store(tmp_path: Path) -> JobStore:
     return JobStore(path=tmp_path / "jobs.json")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_sync_suppression_sentinel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Give every test in this module its own ``ARCHON_SEARCH_DATA_DIR``.
+
+    Sticky suppression (fix-brief-C item 1) persists a sentinel file under
+    ``get_data_dir()``. Without this override, a test here that triggers
+    suppression would write it into the SESSION-scoped, per-xdist-worker
+    directory that ``tests/conftest.py``'s ``_archon_isolated_data_dir`` points
+    at by default — and this whole module is pinned to one worker via
+    ``xdist_group("c1_bugs")`` above, so a leftover sentinel would leak from
+    one test into the next one in declaration order and make suppression
+    state non-deterministic across the file. ``make_real_app``-based tests
+    already set this per-test (and set it to this same ``tmp_path``, so the
+    two overrides never disagree); this fixture extends the same isolation to
+    the direct ``create_app()`` boot tests, which do not.
+    """
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
 
 
 def _enter_store_patches(stack: ExitStack) -> None:
@@ -1906,4 +1926,1815 @@ def test_sequential_add_second_does_not_report_starting_up_when_probe_non_usable
     )
     assert "not running" in output2.lower() or "start it first" in output2.lower(), (
         f"Second add must report the server as not running. Got: {output2!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 2026-08-19-020 — the startup sync must not auto-re-enter the ingest that just
+# killed the process.
+#
+# `jobs/store.py` `_load()` already rewrites every RUNNING/CANCELLING job to
+# `status=FAILED, error="process_restart"` on boot (:331-335) — the process died
+# mid-ingest. `app.py`'s lifespan ignores that signal and creates
+# `_run_startup_sync(all_cols)` unconditionally whenever any collection is
+# configured (:706-756), so after an OOM/kill-9 death launchd restarts the
+# server and the startup sync immediately re-runs the exact same machine-killing
+# ingest, unattended. See
+# Documentation/Backlog/2026-08-19-020-startup-sync-crash-loop-brief.md.
+# --------------------------------------------------------------------------- #
+def _seed_crashed_ingest_jobs_file(path: Path) -> None:
+    """Write a jobs file whose ingest job is still RUNNING — an unclean death.
+
+    Built through the real ``JobStore`` rather than hand-rolled JSON so the
+    on-disk shape can never drift from the writer that produces it in
+    production.
+    """
+    seeder = JobStore(path=path)
+    job = seeder.create(path="/corpus/docs", collection="docs")
+    seeder.update(job.job_id, status=JobStatus.RUNNING)
+
+
+def _run_lifespan_and_capture_sync_task(app, sync_calls: list[list[str]]):
+    """Enter ``app``'s lifespan, let any startup-sync task run, return the task.
+
+    Returns a coroutine — the caller awaits it. ``sync_calls`` is polled only
+    when a task was actually created, so the suppressed (fixed) path costs
+    nothing.
+    """
+
+    async def _runner():
+        startup_done = asyncio.Event()
+        shutdown = asyncio.Event()
+
+        async def run_lifespan() -> None:
+            async with app.router.lifespan_context(app):
+                startup_done.set()
+                await shutdown.wait()
+
+        lifespan_task = asyncio.create_task(run_lifespan())
+        try:
+            await asyncio.wait_for(startup_done.wait(), timeout=30.0)
+            # The task is create_task'd, not awaited — give it a chance to
+            # actually enter sync() so the caller can report what it re-ingested.
+            sync_task = getattr(app.state, "_startup_sync_task", None)
+            if sync_task is not None:
+                # ~30s budget at a 10ms poll interval: the fast (already-entered)
+                # path still returns almost immediately, but a loaded machine
+                # under -n 8 xdist has enough scheduling slack that the previous
+                # ~0.5s budget (range(50)) was a latent flake.
+                for _ in range(3000):
+                    if sync_calls:
+                        break
+                    await asyncio.sleep(0.01)
+            return sync_task
+        finally:
+            shutdown.set()
+            await lifespan_task
+
+    return _runner()
+
+
+def _make_recording_sync():
+    """Build a ``SearchCollectionSync.sync`` stub that records the collections list.
+
+    Extracted (fix-brief-C item 6e-4): the exact ``recording_sync`` closure
+    below, plus the patch stack in ``_enter_startup_sync_lifespan_patches``,
+    was duplicated byte-for-byte three times in this test block before this
+    extraction — and the block is about to grow again with this brief's own
+    sticky-suppression tests, so the duplication would only compound.
+    """
+    from archon_search.sync import SyncResult  # noqa: PLC0415
+
+    sync_calls: list[list[str]] = []
+
+    async def recording_sync(self, collections: list[str], progress_cb=None) -> SyncResult:
+        sync_calls.append(list(collections))
+        return SyncResult()
+
+    return sync_calls, recording_sync
+
+
+def _enter_startup_sync_lifespan_patches(stack: ExitStack, sync_impl=None) -> None:
+    """Enter the standard patch stack for a real ``create_app()`` lifespan boot.
+
+    Extends ``_enter_store_patches`` with the ``SearchStore.disconnect``/``ping``
+    stubs every startup-sync boot test in this block needs, and (optionally) a
+    ``SearchCollectionSync.sync`` stub — pass the ``recording_sync`` from
+    ``_make_recording_sync()`` (or any other stub) via ``sync_impl``.
+    """
+    from archon_search.store import SearchStore  # noqa: PLC0415
+    from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+
+    _enter_store_patches(stack)
+    stack.enter_context(patch.object(SearchStore, "disconnect", new=AsyncMock()))
+    stack.enter_context(patch.object(SearchStore, "ping", new=AsyncMock(return_value=True)))
+    if sync_impl is not None:
+        stack.enter_context(patch.object(SearchCollectionSync, "sync", new=sync_impl))
+
+
+# --------------------------------------------------------------------------- #
+# fix-brief-C item 1 — the sentinel module itself (archon_search/sync_suppression.py):
+# minimal JSON body, and fail-open on write/clear failure — a sentinel write
+# failure must never fail startup, matching _start_startup_sync_job's posture.
+# --------------------------------------------------------------------------- #
+def test_write_sync_suppressed_sentinel_creates_minimal_json_body() -> None:
+    import json  # noqa: PLC0415
+
+    from archon_search.sync_suppression import (  # noqa: PLC0415
+        get_sync_suppressed_file,
+        write_sync_suppressed_sentinel,
+    )
+
+    write_sync_suppressed_sentinel()
+    path = get_sync_suppressed_file()
+    assert path.exists(), "write_sync_suppressed_sentinel did not create the sentinel file"
+    body = json.loads(path.read_text())
+    assert set(body.keys()) == {"suppressed_at"}, (
+        f"the sentinel body must have exactly one field, suppressed_at; got {body!r}"
+    )
+
+
+def test_write_sync_suppressed_sentinel_fails_open_on_write_error() -> None:
+    import archon_search.sync_suppression as ss_module  # noqa: PLC0415
+
+    def _raising_atomic_write(path, data):
+        raise OSError("disk full")
+
+    with patch.object(ss_module, "atomic_write_json", new=_raising_atomic_write):
+        ss_module.write_sync_suppressed_sentinel()  # must not raise
+    assert not ss_module.get_sync_suppressed_file().exists(), (
+        "test setup is wrong — the sentinel should not exist after a failed write"
+    )
+
+
+def test_clear_sync_suppressed_sentinel_fails_open_on_unlink_error() -> None:
+    import archon_search.sync_suppression as ss_module  # noqa: PLC0415
+
+    ss_module.write_sync_suppressed_sentinel()
+    assert ss_module.get_sync_suppressed_file().exists(), "test setup is wrong"
+
+    with patch.object(Path, "unlink", side_effect=OSError("permission denied")):
+        ss_module.clear_sync_suppressed_sentinel()  # must not raise
+
+
+def test_clear_sync_suppressed_sentinel_is_idempotent_when_absent() -> None:
+    from archon_search.sync_suppression import (  # noqa: PLC0415
+        clear_sync_suppressed_sentinel,
+        get_sync_suppressed_file,
+    )
+
+    assert not get_sync_suppressed_file().exists(), "test setup is wrong"
+    clear_sync_suppressed_sentinel()  # must not raise
+
+
+def test_clean_sync_clears_stale_sentinel_even_when_sync_result_is_not_degraded() -> None:
+    """A stale sentinel must be clearable on a server with no collections configured.
+
+    The boot guard in ``app.py`` is gated on ``all_cols``, so a server with no
+    ``[collections]`` never reaches ``SUPPRESSED`` — ``sync_result`` stays
+    ``None``. If ``_clear_degraded_sync_state`` only cleared the sentinel inside
+    its degraded-state branch, a sentinel left behind by an earlier
+    configuration could never be removed by the sanctioned resume path, and
+    would silently suppress the first boot after collections were added back.
+    """
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from archon_search.server.routes_sync import _clear_degraded_sync_state  # noqa: PLC0415
+    from archon_search.sync_suppression import (  # noqa: PLC0415
+        get_sync_suppressed_file,
+        write_sync_suppressed_sentinel,
+    )
+
+    write_sync_suppressed_sentinel()
+    assert get_sync_suppressed_file().exists(), "test setup is wrong"
+
+    # The no-collections case: nothing ever set sync_result.
+    app_state = SimpleNamespace(sync_result=None, _startup_sync_failed=False)
+    _clear_degraded_sync_state(app_state)
+
+    assert not get_sync_suppressed_file().exists(), (
+        "a clean manual sync left a stale sentinel on disk when sync_result was not "
+        "SUPPRESSED/FAILED — the next boot after collections are configured would be "
+        "suppressed with no way to clear it short of deleting the file by hand"
+    )
+    assert app_state.sync_result is None, (
+        "clearing the sentinel must not invent a sync_result transition"
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_sync_suppressed_after_process_restart_marker(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A ``process_restart`` marker must suppress the automatic startup sync.
+
+    Sequence reproduced here is the production one from the OOM incident:
+    a jobs file left with a RUNNING ingest job (the process was killed mid-run),
+    then a fresh boot. ``JobStore.__init__`` -> ``_load()`` rewrites that job to
+    ``FAILED / "process_restart"`` — the server therefore *knows* the previous
+    run died mid-ingest — and the lifespan then spawns the startup sync anyway,
+    re-entering the same workload with no operator action.
+
+    Oracle: ``app.state._startup_sync_task`` must not exist (or be ``None``) and
+    ``SearchCollectionSync.sync`` must never be called, with a WARNING pointing
+    the operator at the manual resume path.
+    """
+    import logging  # noqa: PLC0415
+
+    from archon_search.server.app import create_app  # noqa: PLC0415
+
+    jobs_path = tmp_path / "jobs.json"
+    _seed_crashed_ingest_jobs_file(jobs_path)
+
+    # The post-crash boot: a second JobStore over the same file.
+    job_store = JobStore(path=jobs_path)
+    assert [j.error for j in job_store.list()] == ["process_restart"], (
+        "test setup is wrong — the seeded RUNNING job was not marked "
+        f"process_restart on load; got {[j.error for j in job_store.list()]!r}"
+    )
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = ["docs"]  # non-empty => the lifespan takes the startup-sync branch
+
+    sync_calls, recording_sync = _make_recording_sync()
+
+    with ExitStack() as stack:
+        _enter_startup_sync_lifespan_patches(stack, recording_sync)
+
+        app = create_app(cfg, job_store)
+        with caplog.at_level(logging.WARNING, logger="archon_search.server.app"):
+            sync_task = await _run_lifespan_and_capture_sync_task(app, sync_calls)
+
+    assert sync_task is None, (
+        "the lifespan created a startup-sync task even though the job store had "
+        "just marked an ingest job FAILED / 'process_restart' — after an OOM or "
+        "kill -9 death mid-ingest the server re-enters the same machine-killing "
+        "workload unattended on every restart"
+    )
+    assert sync_calls == [], (
+        f"the suppressed startup sync still called collection_sync.sync({sync_calls!r})"
+    )
+
+    warnings = [
+        r.getMessage().lower()
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and r.name.startswith("archon_search.server.app")
+    ]
+    assert any("sync" in m and "suppress" in m for m in warnings), (
+        "suppressing the startup sync must log a prominent WARNING telling the "
+        "operator to resume manually (POST /sync or `archon-search sync`); got "
+        f"{warnings!r}"
+    )
+    # The resume-path half is operationally load-bearing (BREAKING.md and
+    # OperatorGuide/90_incident_runbook.md both promise it) but was not
+    # separately pinned above — the prior assertion passes even if this exact
+    # phrase were deleted from the WARNING, as long as SOME "suppress" message
+    # fired. Separate assertion per learnings.md's vacuity-trap guidance
+    # (an `or` lets either half rot silently) — this one is new, the four
+    # assertions above are untouched.
+    assert any("resume manually with post /sync" in m for m in warnings), (
+        "the suppression WARNING must name the resume path (POST /sync or "
+        f"`archon-search sync`) so an operator knows how to recover; got {warnings!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_sync_runs_when_no_process_restart_marker(tmp_path: Path) -> None:
+    """A clean jobs file must leave the existing startup-sync behavior intact.
+
+    Counterpart to the suppression test above: the crash-loop guard must key on
+    the ``process_restart`` marker only, never disable the startup sync outright.
+    """
+    from archon_search.server.app import create_app  # noqa: PLC0415
+
+    # No jobs file at all — the ordinary clean-shutdown boot.
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    assert job_store.list() == [], "test setup is wrong — jobs file must be clean"
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = ["docs"]
+
+    sync_calls, recording_sync = _make_recording_sync()
+
+    with ExitStack() as stack:
+        _enter_startup_sync_lifespan_patches(stack, recording_sync)
+
+        app = create_app(cfg, job_store)
+        sync_task = await _run_lifespan_and_capture_sync_task(app, sync_calls)
+
+    assert sync_task is not None, (
+        "the crash-loop guard suppressed the startup sync on a clean jobs file — "
+        "it must key on the process_restart marker only"
+    )
+    assert sync_calls == [["docs"]], (
+        f"a clean boot must still sync every configured collection; got {sync_calls!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_crashed_export_job_does_not_suppress_startup_sync(tmp_path: Path) -> None:
+    """The guard must key on the ingest family only, not on any crashed job.
+
+    An export that died mid-run says nothing about the ingest workload, so
+    suppressing the startup sync for it would strand the index on a stale
+    corpus for an unrelated reason.
+    """
+    from archon_search.server.app import create_app  # noqa: PLC0415
+
+    jobs_path = tmp_path / "jobs.json"
+    seeder = JobStore(path=jobs_path)
+    export = seeder.create_export(
+        collection="docs", output_path=str(tmp_path / "out.tar"), tmp_path=str(tmp_path)
+    )
+    seeder.update(export.job_id, status=JobStatus.RUNNING)
+
+    job_store = JobStore(path=jobs_path)
+    assert [j.error for j in job_store.list()] == ["process_restart"], (
+        "test setup is wrong — the seeded RUNNING export was not marked process_restart"
+    )
+    assert job_store.crashed_ingest_on_load is False, (
+        "a crashed export is not an ingest-family job and must not raise the "
+        "crash-loop flag"
+    )
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = ["docs"]
+
+    sync_calls, recording_sync = _make_recording_sync()
+
+    with ExitStack() as stack:
+        _enter_startup_sync_lifespan_patches(stack, recording_sync)
+
+        app = create_app(cfg, job_store)
+        sync_task = await _run_lifespan_and_capture_sync_task(app, sync_calls)
+
+    assert sync_task is not None, (
+        "a crashed export job suppressed the startup sync — the guard is too wide"
+    )
+    assert sync_calls == [["docs"]], (
+        f"the startup sync must still run after a crashed export; got {sync_calls!r}"
+    )
+
+
+def test_status_surfaces_suppressed_sync_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A suppressed startup sync must be visible on ``GET /status``, and ``/ready`` stay 200.
+
+    End-to-end counterpart to the suppression test above: a real app booted over
+    a jobs file left with a RUNNING ingest job must report
+    ``sync_result == "suppressed"`` — the degraded-but-ready flag an operator
+    reads to learn the index is stale and needs a manual ``POST /sync``.
+    """
+    from tests.integration.conftest import make_real_app  # noqa: PLC0415
+
+    _seed_crashed_ingest_jobs_file(tmp_path / "jobs.json")
+
+    with make_real_app(
+        tmp_path,
+        monkeypatch,
+        toml_content='[collections]\ncollections = ["docs"]\n',
+    ) as (client, _cfg, api_key):
+        headers = {"Authorization": f"Bearer {api_key}"}
+        resp = client.get("/status", headers=headers)
+        ready = client.get("/ready")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["sync_result"] == "suppressed", (
+        "GET /status does not surface the suppressed startup sync. Got: "
+        f"{resp.json().get('sync_result')!r}"
+    )
+    assert ready.status_code == 200, (
+        f"a suppressed startup sync must stay ready, not 503; got {ready.status_code}"
+    )
+
+
+def test_ready_warns_but_stays_200_when_startup_sync_suppressed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``GET /ready`` must report ``checks.sync == "warn"`` and still answer 200.
+
+    A bare ``"ok"`` would be an all-clear over a potentially stale index — the
+    suppressed sync never ran, so neither ``"pending"`` (no task) nor ``"fail"``
+    (``_startup_sync_failed`` was never set) fires. ``"warn"`` is informational
+    only: it must not gate ``ready``, exactly like ``checks.models: "warn"``.
+    """
+    from tests.integration.conftest import make_real_app  # noqa: PLC0415
+
+    _seed_crashed_ingest_jobs_file(tmp_path / "jobs.json")
+
+    with make_real_app(
+        tmp_path,
+        monkeypatch,
+        toml_content='[collections]\ncollections = ["docs"]\n',
+    ) as (client, _cfg, _api_key):
+        resp = client.get("/ready")
+
+    body = resp.json()
+    assert body["checks"]["sync"] == "warn", (
+        "a suppressed startup sync must report checks.sync='warn', not a bare "
+        f"all-clear; got {body['checks'].get('sync')!r}"
+    )
+    assert resp.status_code == 200, (
+        f"checks.sync='warn' must not gate readiness; got {resp.status_code} {resp.text}"
+    )
+    assert body["ready"] is True, (
+        f"a suppressed startup sync must report ready=true; got {body['ready']!r}"
+    )
+
+
+def test_successful_manual_sync_clears_suppressed_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A clean ``POST /sync`` must clear the suppressed flag on ``/status`` and ``/ready``.
+
+    The crash-loop guard's WARNING tells the operator to resume with
+    ``POST /sync``; if the degraded flag survived that resume it would be stuck
+    for the process lifetime and stop meaning anything.
+    """
+    import time  # noqa: PLC0415
+
+    from tests.integration.conftest import make_real_app  # noqa: PLC0415
+
+    _seed_crashed_ingest_jobs_file(tmp_path / "jobs.json")
+
+    with make_real_app(
+        tmp_path,
+        monkeypatch,
+        toml_content='[collections]\ncollections = ["docs"]\n',
+    ) as (client, _cfg, api_key):
+        headers = {"Authorization": f"Bearer {api_key}"}
+        assert client.get("/status", headers=headers).json()["sync_result"] == "suppressed", (
+            "test setup is wrong — the app did not boot into the suppressed state"
+        )
+
+        client.app.state.collection_sync.sync = AsyncMock(
+            return_value=MagicMock(
+                added=[], removed=[], unchanged=[], errors=[], skipped=[], updated=[]
+            )
+        )
+        resp = client.post("/sync", headers=headers)
+        assert resp.status_code == 202, resp.text
+        job_id = resp.json()["job_id"]
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            job = client.get(f"/jobs/{job_id}", headers=headers).json()
+            if job["status"] in {"DONE", "FAILED", "CANCELLED"}:
+                break
+            time.sleep(0.05)
+        assert job["status"] == "DONE", f"the manual sync did not succeed: {job!r}"
+
+        status = client.get("/status", headers=headers).json()
+        ready = client.get("/ready").json()
+
+    assert status["sync_result"] == "done", (
+        "a successful POST /sync must clear the suppressed flag; GET /status still "
+        f"reports {status['sync_result']!r}"
+    )
+    assert ready["checks"]["sync"] == "ok", (
+        "checks.sync must return to 'ok' once the operator has resumed; got "
+        f"{ready['checks'].get('sync')!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# fix-brief-C item 1 — suppression must be STICKY: it must survive a process
+# restart, not last exactly one boot. Today _load() rewrites RUNNING -> FAILED
+# and __init__ persists it, so the next boot sees a terminal row and syncs
+# again — under any supervisor that restarts more than once this halves the
+# crash loop instead of breaking it. Mechanism: a sentinel file under
+# get_data_dir() (archon_search/sync_suppression.py), written when the guard
+# suppresses and cleared only by a clean manual POST /sync.
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_sync_suppression_persists_across_second_reboot(tmp_path: Path) -> None:
+    """Suppression must survive a process restart.
+
+    Boot 1 mirrors ``test_startup_sync_suppressed_after_process_restart_marker``:
+    a RUNNING ingest job is rewritten to FAILED/"process_restart" on load, and
+    the guard suppresses. By boot 2 that row is already terminal (FAILED), so
+    a FRESH ``JobStore`` load's ``crashed_ingest_on_load`` is False — under the
+    old (one-boot) behavior the guard would fire the startup sync again here,
+    re-entering the same workload that killed the process. The sticky
+    sentinel written during boot 1 must keep it suppressed on boot 2.
+    """
+    import json  # noqa: PLC0415
+
+    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.sync_suppression import get_sync_suppressed_file  # noqa: PLC0415
+
+    jobs_path = tmp_path / "jobs.json"
+    _seed_crashed_ingest_jobs_file(jobs_path)
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = ["docs"]
+
+    # --- Boot 1: a fresh crash, detected via job_store.crashed_ingest_on_load ---
+    boot1_store = JobStore(path=jobs_path)
+    assert boot1_store.crashed_ingest_on_load is True, "test setup is wrong"
+
+    sync_calls_1, recording_sync_1 = _make_recording_sync()
+    with ExitStack() as stack:
+        _enter_startup_sync_lifespan_patches(stack, recording_sync_1)
+        app1 = create_app(cfg, boot1_store)
+        sync_task_1 = await _run_lifespan_and_capture_sync_task(app1, sync_calls_1)
+
+    assert sync_task_1 is None, "boot 1 setup is wrong — suppression did not fire"
+    assert sync_calls_1 == [], "boot 1 setup is wrong — sync ran despite suppression"
+
+    sentinel = get_sync_suppressed_file()
+    assert sentinel.exists(), (
+        "the guard suppressed on boot 1 but did not write the sticky sentinel file"
+    )
+    body = json.loads(sentinel.read_text())
+    assert set(body.keys()) == {"suppressed_at"}, (
+        f"the sentinel body must have exactly one field, suppressed_at; got {body!r}"
+    )
+
+    # --- Boot 2: the crashed row is already terminal (FAILED); a fresh load's
+    # crashed_ingest_on_load is False, so only the sentinel can still suppress.
+    boot2_store = JobStore(path=jobs_path)
+    assert boot2_store.crashed_ingest_on_load is False, (
+        "test setup is wrong — the row must already be terminal by boot 2"
+    )
+
+    sync_calls_2, recording_sync_2 = _make_recording_sync()
+    with ExitStack() as stack:
+        _enter_startup_sync_lifespan_patches(stack, recording_sync_2)
+        app2 = create_app(cfg, boot2_store)
+        sync_task_2 = await _run_lifespan_and_capture_sync_task(app2, sync_calls_2)
+
+    assert sync_task_2 is None, (
+        "suppression did not survive a second boot — the crashed job row is "
+        "already terminal by boot 2, so only the sticky sentinel could still be "
+        "suppressing; without it this is crash / skip / crash / skip under any "
+        "supervisor that restarts more than once, not a broken loop"
+    )
+    assert sync_calls_2 == [], (
+        f"boot 2's suppressed startup sync still called collection_sync.sync({sync_calls_2!r})"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# fix-brief-C item 2 — guard the WATCHER. _watch_callback re-entered ingest on
+# file events while suppressed; the brief's own repro specifies watch=true, so
+# the guard was bypassed in its documented configuration. Must key on the SAME
+# live state a manual POST /sync clears (app.state.sync_result), not
+# job_store.crashed_ingest_on_load (boot-time only) — otherwise a successful
+# manual sync would clear GET /status while the watcher stayed blocked forever.
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_watcher_guard_skips_while_suppressed_and_resumes_after_clean_sync(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A file-change callback must be skipped while suppressed, and must
+    resume once a clean manual sync has cleared the SAME live state.
+
+    Both halves are mutation-checkable independently: reverting the watcher
+    guard makes Part 1 fail (sync_collection gets called while suppressed);
+    keying the guard on ``job_store.crashed_ingest_on_load`` instead of
+    ``app.state.sync_result`` makes Part 2 fail (the watcher stays blocked
+    forever even after a clean manual sync, since ``crashed_ingest_on_load``
+    is a boot-time snapshot that a manual sync cannot touch).
+    """
+    import logging  # noqa: PLC0415
+
+    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.server.routes_sync import _sync_task  # noqa: PLC0415
+    from archon_search.server.schemas import StartupSyncResult  # noqa: PLC0415
+    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+
+    jobs_path = tmp_path / "jobs.json"
+    _seed_crashed_ingest_jobs_file(jobs_path)
+    job_store = JobStore(path=jobs_path)
+
+    source_dir = tmp_path / "docs"
+    source_dir.mkdir()
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(source_dir)]
+    cfg.watch = True
+
+    sync_collection_calls: list[str] = []
+
+    async def recording_sync_collection(self, collection_name, source_path) -> None:
+        sync_collection_calls.append(collection_name)
+
+    with ExitStack() as stack:
+        _enter_startup_sync_lifespan_patches(stack)
+        stack.enter_context(
+            patch.object(SearchCollectionSync, "sync_collection", new=recording_sync_collection)
+        )
+
+        app = create_app(cfg, job_store)
+        startup_done = asyncio.Event()
+        shutdown = asyncio.Event()
+
+        async def run_lifespan() -> None:
+            async with app.router.lifespan_context(app):
+                startup_done.set()
+                await shutdown.wait()
+
+        lifespan_task = asyncio.create_task(run_lifespan())
+        col_name = ""
+        try:
+            await asyncio.wait_for(startup_done.wait(), timeout=30.0)
+            assert app.state.sync_result == StartupSyncResult.SUPPRESSED, (
+                "test setup is wrong — the boot did not suppress"
+            )
+            wm = app.state.watcher_manager
+            assert wm is not None, "watcher was not started; test setup is wrong"
+            col_name = next(iter(wm._watchers))
+
+            # --- Part 1: a suppressed boot must skip the watcher-triggered ingest ---
+            with caplog.at_level(logging.WARNING, logger="archon_search.server.app"):
+                await wm._wrapped_callback(col_name)
+            assert sync_collection_calls == [], (
+                "the watcher called sync_collection while the startup sync was "
+                f"suppressed: {sync_collection_calls!r}"
+            )
+            warnings = [
+                r.getMessage().lower()
+                for r in caplog.records
+                if r.levelno >= logging.WARNING and r.name.startswith("archon_search.server.app")
+            ]
+            assert any("skip" in m for m in warnings), (
+                f"skipping a watcher-triggered ingest must log a WARNING; got {warnings!r}"
+            )
+            assert any(col_name.lower() in m for m in warnings), (
+                f"the WARNING must name the skipped collection {col_name!r}; got {warnings!r}"
+            )
+
+            # --- Part 2: a clean manual sync must clear the SAME state the
+            # watcher reads, and the watcher must then resume ---
+            class _CleanSync:
+                async def sync(self, collections: list[str], progress_cb=None) -> SyncResult:
+                    return SyncResult()
+
+            manual_job = job_store.create_sync(namespace="default")
+            running = job_store.transition(
+                manual_job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING
+            )
+            await app.state.sync_lock.acquire()
+            await _sync_task(
+                job=running,
+                job_store=job_store,
+                collection_sync=_CleanSync(),
+                collections=[str(source_dir)],
+                lock=app.state.sync_lock,
+                app_state=app.state,
+            )
+            assert app.state.sync_result == StartupSyncResult.DONE, (
+                "test setup is wrong — the manual clean sync did not clear sync_result"
+            )
+
+            await wm._wrapped_callback(col_name)
+        finally:
+            shutdown.set()
+            await lifespan_task
+
+    assert sync_collection_calls == [col_name], (
+        "the watcher did not resume calling sync_collection after a clean manual "
+        f"sync cleared the suppressed state; sync_collection_calls={sync_collection_calls!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_crash_during_startup_sync_arms_the_guard_on_the_next_boot(
+    tmp_path: Path,
+) -> None:
+    """The guard must arm itself: a crash *during the startup sync* must suppress the next boot.
+
+    ``collection_sync.sync()`` writes no job row of its own, so before this fix a
+    process killed during the unattended startup sync left nothing on disk —
+    the next boot re-ran the same sync and crashed again, which is precisely the
+    loop the incident recorded ("RapidOCR engines loading ... with no
+    user-initiated job"). The guard only broke the first hop, from a job-backed
+    ingest. Backing the startup sync with a SyncJob closes the loop.
+
+    The kill -9 is simulated by snapshotting the jobs file *while the sync is
+    still in flight* — that byte-for-byte is what a SIGKILLed process leaves
+    behind — and booting a second app over the snapshot.
+    """
+    import json  # noqa: PLC0415
+
+    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.store import SearchStore  # noqa: PLC0415
+    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+
+    jobs_path = tmp_path / "jobs.json"
+    job_store = JobStore(path=jobs_path)
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = ["docs"]
+
+    sync_calls: list[list[str]] = []
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking_sync(
+        self: SearchCollectionSync, collections: list[str], progress_cb=None
+    ) -> SyncResult:
+        sync_calls.append(list(collections))
+        entered.set()
+        await release.wait()
+        return SyncResult()
+
+    with ExitStack() as stack:
+        _enter_store_patches(stack)
+        stack.enter_context(patch.object(SearchStore, "disconnect", new=AsyncMock()))
+        stack.enter_context(patch.object(SearchStore, "ping", new=AsyncMock(return_value=True)))
+        stack.enter_context(patch.object(SearchCollectionSync, "sync", new=blocking_sync))
+
+        app = create_app(cfg, job_store)
+        startup_done = asyncio.Event()
+        shutdown = asyncio.Event()
+
+        async def run_lifespan() -> None:
+            async with app.router.lifespan_context(app):
+                startup_done.set()
+                await shutdown.wait()
+
+        lifespan_task = asyncio.create_task(run_lifespan())
+        crashed_jobs = tmp_path / "crashed-jobs.json"
+        try:
+            await asyncio.wait_for(startup_done.wait(), timeout=30.0)
+            await asyncio.wait_for(entered.wait(), timeout=30.0)
+            # The disk exactly as a SIGKILL mid-sync would leave it. The jobs file
+            # is absent entirely when nothing records the sync — that is the bug,
+            # so snapshot it as an empty store rather than raising here.
+            crashed_jobs.write_text(jobs_path.read_text() if jobs_path.exists() else "[]")
+        finally:
+            release.set()
+            shutdown.set()
+            await lifespan_task
+
+        on_disk = json.loads(crashed_jobs.read_text())
+        assert [j["status"] for j in on_disk] == ["RUNNING"], (
+            "the startup sync left no RUNNING job on disk, so a kill -9 mid-sync is "
+            f"invisible to the next boot; jobs file held {on_disk!r}"
+        )
+
+        # The post-crash boot.
+        reboot_store = JobStore(path=crashed_jobs)
+        assert [j.error for j in reboot_store.list()] == ["process_restart"], (
+            "the crashed startup-sync job was not marked process_restart on reload; got "
+            f"{[j.error for j in reboot_store.list()]!r}"
+        )
+        assert reboot_store.crashed_ingest_on_load is True, (
+            "a crashed startup sync must raise the crash-loop flag — a SyncJob is "
+            "ingest-family"
+        )
+
+        reboot_app = create_app(cfg, reboot_store)
+        reboot_task = await _run_lifespan_and_capture_sync_task(reboot_app, sync_calls)
+
+    assert reboot_task is None, (
+        "the boot after a crash *during the startup sync* still spawned a startup "
+        "sync — the crash-loop guard does not arm itself and the loop is unbroken"
+    )
+    assert sync_calls == [["docs"]], (
+        f"the post-crash boot re-entered the sync; calls were {sync_calls!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 2026-08-20 — fix-brief-A item 3: JobStore._load()'s corrupt-file except block
+# must reset _crashed_ingest_on_load alongside self._jobs, or a file that
+# parses far enough to hit a RUNNING ingest row before a later row throws
+# leaves the crash-loop guard permanently armed (the corrupt file is never
+# rewritten, since `modified` stays False, so every future boot reproduces the
+# identical state).
+# --------------------------------------------------------------------------- #
+def test_load_corrupt_tail_after_running_ingest_row_does_not_leak_crashed_flag(
+    tmp_path: Path,
+) -> None:
+    """A jobs file whose first row is RUNNING (ingest-family) and whose second
+    row is malformed must not leave the crash-loop guard latched True.
+
+    The first row sets ``self._crashed_ingest_on_load = True`` while the loop
+    is still running; the second row's invalid ``status`` value raises
+    ``ValueError`` inside the same ``try:`` block. The except clause resets
+    ``self._jobs = {}`` — it must reset the flag too, or the guard stays armed
+    forever with no jobs on record to ever un-arm it.
+    """
+    import json  # noqa: PLC0415
+
+    jobs_path = tmp_path / "jobs.json"
+    raw = [
+        {
+            "job_id": "job-1",
+            "status": "RUNNING",
+            "created_at": "2026-08-01T00:00:00+00:00",
+            "updated_at": "2026-08-01T00:00:00+00:00",
+            "namespace": "default",
+            "source": "user",
+            "source_path": "/corpus/docs",
+            "collection": "docs",
+            "retry_count": 0,
+            "progress": None,
+            "result": None,
+            "error": None,
+        },
+        {
+            "job_id": "job-2",
+            "status": "not-a-real-status",
+            "created_at": "2026-08-01T00:00:00+00:00",
+            "updated_at": "2026-08-01T00:00:00+00:00",
+            "namespace": "default",
+        },
+    ]
+    jobs_path.write_text(json.dumps(raw))
+
+    store = JobStore(path=jobs_path)
+
+    assert store.crashed_ingest_on_load is False, (
+        "a corrupt jobs file (first row RUNNING/ingest, second row malformed) "
+        f"left the crash-loop guard latched True; got {store.crashed_ingest_on_load!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 2026-08-20 — fix-brief-A item 4: `_evict_old()` (store.py:358) must stay
+# after the crash-marker loop (store.py:349-355). The rewrite to FAILED makes
+# an old crash row eligible for eviction on the same boot; the guard survives
+# only because the flag is latched before eviction runs. This pins that
+# ordering as an explicit regression guard.
+# --------------------------------------------------------------------------- #
+def test_stale_running_ingest_job_arms_guard_before_being_evicted(
+    tmp_path: Path,
+) -> None:
+    """A RUNNING ingest job older than ``_EVICTION_DAYS`` must still arm the
+    crash-loop guard even though it is evicted (as FAILED, a terminal status)
+    on the very same load.
+
+    ``JobStore.__init__`` calls ``self._write_atomic()`` whenever ``_load()``
+    reports ``modified`` (true here — the crash rewrite sets it) — and
+    ``_write_atomic()`` runs its own, separately-ordered eviction pass before
+    serializing. That second pass would mask a reordering bug inside
+    ``_load()`` itself, so ``_write_atomic`` is patched to a no-op here: this
+    test isolates ``_load()``'s own in-memory result, which is the ordering
+    fix-brief-A item 4 actually pins.
+    """
+    import json  # noqa: PLC0415
+    from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+
+    jobs_path = tmp_path / "jobs.json"
+    stale = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    raw = [
+        {
+            "job_id": "job-stale",
+            "status": "RUNNING",
+            "created_at": stale,
+            "updated_at": stale,
+            "namespace": "default",
+            "source": "user",
+            "source_path": "/corpus/docs",
+            "collection": "docs",
+            "retry_count": 0,
+            "progress": None,
+            "result": None,
+            "error": None,
+        },
+    ]
+    jobs_path.write_text(json.dumps(raw))
+
+    with patch.object(JobStore, "_write_atomic", new=lambda self: None):
+        store = JobStore(path=jobs_path)
+
+    assert store.crashed_ingest_on_load is True, (
+        "a RUNNING ingest job older than _EVICTION_DAYS must still arm the "
+        "crash-loop guard before it becomes eligible for eviction"
+    )
+    assert store.list() == [], (
+        f"the stale, now-FAILED crash row must be evicted; got {store.list()!r}"
+    )
+
+
+def test_eviction_only_load_leaves_crashed_flag_false(tmp_path: Path) -> None:
+    """The negative direction of the property above: a load that evicts an old
+    *terminal* job with no crash rewrite anywhere must leave
+    ``crashed_ingest_on_load`` False — it is narrower than the ``modified``
+    flag ``_load()`` returns, which also covers plain age-eviction.
+    """
+    import json  # noqa: PLC0415
+    from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+
+    jobs_path = tmp_path / "jobs.json"
+    stale = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    raw = [
+        {
+            "job_id": "job-done-stale",
+            "status": "DONE",
+            "created_at": stale,
+            "updated_at": stale,
+            "namespace": "default",
+            "source": "user",
+            "source_path": "/corpus/docs",
+            "collection": "docs",
+            "retry_count": 0,
+            "progress": None,
+            "result": None,
+            "error": None,
+        },
+    ]
+    jobs_path.write_text(json.dumps(raw))
+
+    store = JobStore(path=jobs_path)
+
+    assert store.crashed_ingest_on_load is False, (
+        "a load that only aged out a terminal DONE job (no crash rewrite) "
+        f"must not arm the crash-loop guard; got {store.crashed_ingest_on_load!r}"
+    )
+    assert store.list() == [], f"the stale DONE row must be evicted; got {store.list()!r}"
+
+
+# --------------------------------------------------------------------------- #
+# 2026-08-20 — fix-brief-A item 7: each sanitized ``_STARTUP_SYNC_ERROR_*``
+# constant must actually reach the SyncJob's wire-facing ``error`` field, for
+# every exit path of ``_run_startup_sync`` (app.py). These boot the real
+# lifespan and read the resulting job back out of the job store — the same
+# object ``GET /jobs`` serializes via ``job_to_dict``.
+# --------------------------------------------------------------------------- #
+async def _boot_and_get_sole_startup_sync_job(
+    tmp_path: Path,
+    job_store: JobStore,
+    sync_impl,
+    *,
+    dial_down_timeouts: bool = False,
+    monkeypatch: pytest.MonkeyPatch | None = None,
+    wait_for=None,
+):
+    """Boot the real lifespan with a patched ``SearchCollectionSync.sync``,
+    wait for ``wait_for`` (an ``asyncio.Event``) if given, then shut down and
+    return the single job the startup sync created.
+    """
+    from archon_search.server import app as app_module  # noqa: PLC0415
+    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.store import SearchStore  # noqa: PLC0415
+    from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+
+    if dial_down_timeouts:
+        assert monkeypatch is not None
+        for name in dir(app_module):
+            if "TIMEOUT" in name.upper() and isinstance(getattr(app_module, name), (int, float)):
+                monkeypatch.setattr(app_module, name, 0.1)
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = ["docs"]
+
+    with ExitStack() as stack:
+        _enter_store_patches(stack)
+        stack.enter_context(patch.object(SearchStore, "disconnect", new=AsyncMock()))
+        stack.enter_context(patch.object(SearchStore, "ping", new=AsyncMock(return_value=True)))
+        stack.enter_context(patch.object(SearchCollectionSync, "sync", new=sync_impl))
+
+        app = create_app(cfg, job_store)
+        startup_done = asyncio.Event()
+        shutdown = asyncio.Event()
+
+        async def run_lifespan() -> None:
+            async with app.router.lifespan_context(app):
+                startup_done.set()
+                await shutdown.wait()
+
+        lifespan_task = asyncio.create_task(run_lifespan())
+        try:
+            await asyncio.wait_for(startup_done.wait(), timeout=30.0)
+            if wait_for is not None:
+                await asyncio.wait_for(wait_for.wait(), timeout=30.0)
+            sync_task = app.state._startup_sync_task
+            if sync_task is not None:
+                for _ in range(3000):
+                    if sync_task.done():
+                        break
+                    await asyncio.sleep(0.01)
+        finally:
+            shutdown.set()
+            await lifespan_task
+
+    jobs = job_store.list()
+    assert len(jobs) == 1, f"expected exactly one startup-sync job; got {jobs!r}"
+    return jobs[0]
+
+
+@pytest.mark.asyncio
+async def test_startup_sync_partial_errors_records_sanitized_job_error(
+    tmp_path: Path, job_store: JobStore
+) -> None:
+    from archon_search.server.app import _STARTUP_SYNC_ERROR_PARTIAL  # noqa: PLC0415
+    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+
+    async def failing_sync(self: SearchCollectionSync, collections: list[str], progress_cb=None) -> SyncResult:
+        return SyncResult(errors=["collection 'docs': path does not exist"])
+
+    job = await _boot_and_get_sole_startup_sync_job(tmp_path, job_store, failing_sync)
+    assert job.error == _STARTUP_SYNC_ERROR_PARTIAL, (
+        f"expected job.error == {_STARTUP_SYNC_ERROR_PARTIAL!r}; got {job.error!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_sync_timeout_records_sanitized_job_error(
+    tmp_path: Path, job_store: JobStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from archon_search.server.app import _STARTUP_SYNC_ERROR_TIMEOUT  # noqa: PLC0415
+    from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+
+    sync_entered = asyncio.Event()
+
+    async def parked_sync(self: SearchCollectionSync, collections: list[str], progress_cb=None):
+        sync_entered.set()
+        await asyncio.Event().wait()  # never resolves; asyncio.timeout() cuts it off
+
+    job = await _boot_and_get_sole_startup_sync_job(
+        tmp_path,
+        job_store,
+        parked_sync,
+        dial_down_timeouts=True,
+        monkeypatch=monkeypatch,
+        wait_for=sync_entered,
+    )
+    assert job.error == _STARTUP_SYNC_ERROR_TIMEOUT, (
+        f"expected job.error == {_STARTUP_SYNC_ERROR_TIMEOUT!r}; got {job.error!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_sync_cancelled_during_shutdown_records_cancelled_not_failed(
+    tmp_path: Path, job_store: JobStore
+) -> None:
+    """A clean shutdown mid-startup-sync must record ``CANCELLED``, not ``FAILED``.
+
+    The job row is the ledger operators read during an incident, and ``status`` is
+    what ``GET /jobs`` filtering and monitoring key on — a sanitized ``error``
+    string reading "cancelled" would not undo a ``FAILED`` status. This mirrors
+    ``routes_sync._sync_task``, which records the same event the same way.
+
+    Not a behavioural guard: ``CANCELLED`` is terminal, so neither value arms the
+    crash-loop guard. This pins correctness of the record.
+    """
+    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+
+    sync_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def parked_sync(self: SearchCollectionSync, collections: list[str], progress_cb=None) -> SyncResult:
+        sync_entered.set()
+        await release.wait()  # kept alive until shutdown cancels it
+        return SyncResult()
+
+    job = await _boot_and_get_sole_startup_sync_job(
+        tmp_path, job_store, parked_sync, wait_for=sync_entered
+    )
+    assert job.status == JobStatus.CANCELLED, (
+        "a clean shutdown mid-startup-sync must leave the job CANCELLED, not FAILED — "
+        f"GET /jobs filtering and monitoring key on status; got {job.status!r}"
+    )
+    assert job.error is None, (
+        "a cancelled-by-shutdown job is not an error and must carry no error text; "
+        f"got {job.error!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_sync_generic_exception_records_sanitized_error_not_raw_message(
+    tmp_path: Path, job_store: JobStore
+) -> None:
+    """Pins the CLAUDE.md invariant directly: an exception message carrying a
+    recognizable token must not reach the wire-facing job ``error`` field —
+    only the sanitized ``_STARTUP_SYNC_ERROR_FAILED`` constant may appear.
+    """
+    from archon_search.server.app import _STARTUP_SYNC_ERROR_FAILED  # noqa: PLC0415
+    from archon_search.sync import SearchCollectionSync  # noqa: PLC0415
+
+    _SECRET_TOKEN = "sk-live-do-not-leak-4f8a9c21"
+
+    async def exploding_sync(self: SearchCollectionSync, collections: list[str], progress_cb=None):
+        raise RuntimeError(f"internal failure, token={_SECRET_TOKEN}")
+
+    job = await _boot_and_get_sole_startup_sync_job(tmp_path, job_store, exploding_sync)
+    assert job.error == _STARTUP_SYNC_ERROR_FAILED, (
+        f"expected job.error == {_STARTUP_SYNC_ERROR_FAILED!r}; got {job.error!r}"
+    )
+    assert _SECRET_TOKEN not in (job.error or ""), (
+        f"the raw exception message leaked into the wire-facing job error: {job.error!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_startup_sync_job_store_failure_still_runs_the_sync(
+    tmp_path: Path, job_store: JobStore
+) -> None:
+    """``_start_startup_sync_job`` returning None (job store write failed) must
+    not abort the startup sync — the corpus sync still runs unmarked. This is
+    the docstring promise fix-brief-A item 1 restores.
+
+    Raises a plain ``RuntimeError`` — NOT ``OSError`` — from ``create_sync``:
+    the pre-fix code only caught ``OSError`` in ``_start_startup_sync_job``, so
+    this specifically pins the broadened ``except Exception``.
+    """
+    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+
+    sync_calls: list[list[str]] = []
+
+    async def recording_sync(self: SearchCollectionSync, collections: list[str], progress_cb=None) -> SyncResult:
+        sync_calls.append(list(collections))
+        return SyncResult()
+
+    def _raising_create_sync(*args, **kwargs):
+        raise RuntimeError("job store backend unavailable")
+
+    # Not using _boot_and_get_sole_startup_sync_job: it asserts exactly one job
+    # exists, which does not hold here — create_sync always raises, so no job
+    # is ever written. Drive the boot directly instead.
+    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.store import SearchStore  # noqa: PLC0415
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = ["docs"]
+
+    with ExitStack() as stack:
+        _enter_store_patches(stack)
+        stack.enter_context(patch.object(SearchStore, "disconnect", new=AsyncMock()))
+        stack.enter_context(patch.object(SearchStore, "ping", new=AsyncMock(return_value=True)))
+        stack.enter_context(patch.object(SearchCollectionSync, "sync", new=recording_sync))
+        stack.enter_context(patch.object(JobStore, "create_sync", new=_raising_create_sync))
+
+        app = create_app(cfg, job_store)
+        startup_done = asyncio.Event()
+        shutdown = asyncio.Event()
+
+        async def run_lifespan() -> None:
+            async with app.router.lifespan_context(app):
+                startup_done.set()
+                await shutdown.wait()
+
+        lifespan_task = asyncio.create_task(run_lifespan())
+        try:
+            await asyncio.wait_for(startup_done.wait(), timeout=30.0)
+            sync_task = app.state._startup_sync_task
+            assert sync_task is not None, "startup sync task was never spawned"
+            for _ in range(3000):
+                if sync_calls:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            shutdown.set()
+            await lifespan_task
+
+    assert sync_calls == [["docs"]], (
+        "a job-store write failure in _start_startup_sync_job must not prevent "
+        f"the corpus sync from running; sync_calls={sync_calls!r}"
+    )
+    assert job_store.list() == [], (
+        "no job should have been persisted when create_sync always raises; got "
+        f"{job_store.list()!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_startup_sync_job_base_exception_does_not_escape_the_task(
+    tmp_path: Path, job_store: JobStore
+) -> None:
+    """A non-``Exception`` ``BaseException`` out of ``_start_startup_sync_job``
+    must be caught by ``_run_startup_sync``'s final ``except BaseException``
+    handler, not escape the task entirely.
+
+    Belt-and-braces half of fix-brief-A item 1: ``job_id`` is initialized to
+    ``None`` before the ``try:`` and the call moved inside it. Without that,
+    the assignment statement sits outside the ``try:`` and a raised
+    ``BaseException`` propagates straight out of ``_run_startup_sync`` —
+    exactly the escape the module docstring's "never let the task escape"
+    comment (app.py) exists to prevent.
+    """
+    from archon_search.server import app as app_module  # noqa: PLC0415
+    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.server.schemas import StartupSyncResult  # noqa: PLC0415
+    from archon_search.store import SearchStore  # noqa: PLC0415
+    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+
+    class _ExoticBaseException(BaseException):
+        """Simulates a non-Exception BaseException (not KeyboardInterrupt/
+        SystemExit, which asyncio's task machinery re-raises specially)."""
+
+    def _raising_start_job(store):
+        raise _ExoticBaseException("simulated non-Exception failure")
+
+    async def unreached_sync(self: SearchCollectionSync, collections: list[str], progress_cb=None) -> SyncResult:
+        return SyncResult()
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = ["docs"]
+
+    with ExitStack() as stack:
+        _enter_store_patches(stack)
+        stack.enter_context(patch.object(SearchStore, "disconnect", new=AsyncMock()))
+        stack.enter_context(patch.object(SearchStore, "ping", new=AsyncMock(return_value=True)))
+        stack.enter_context(patch.object(SearchCollectionSync, "sync", new=unreached_sync))
+        stack.enter_context(patch.object(app_module, "_start_startup_sync_job", new=_raising_start_job))
+
+        app = create_app(cfg, job_store)
+        startup_done = asyncio.Event()
+        shutdown = asyncio.Event()
+
+        async def run_lifespan() -> None:
+            async with app.router.lifespan_context(app):
+                startup_done.set()
+                await shutdown.wait()
+
+        lifespan_task = asyncio.create_task(run_lifespan())
+        try:
+            await asyncio.wait_for(startup_done.wait(), timeout=30.0)
+            sync_task = app.state._startup_sync_task
+            assert sync_task is not None, "startup sync task was never spawned"
+            for _ in range(3000):
+                if sync_task.done():
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            shutdown.set()
+            await lifespan_task
+
+    assert sync_task.done(), "the startup sync task never finished"
+    assert sync_task.exception() is None, (
+        "a non-Exception BaseException out of _start_startup_sync_job escaped "
+        f"the task instead of being caught: {sync_task.exception()!r}"
+    )
+    assert app.state._startup_sync_failed is True
+    assert app.state.sync_result == StartupSyncResult.FAILED
+
+
+# --------------------------------------------------------------------------- #
+# fix-brief-C item 4 — when create_sync succeeds but the QUEUED -> RUNNING
+# transition is rejected (job-store race), _start_startup_sync_job used to
+# return None and leave the QUEUED row behind forever: QUEUED is non-terminal,
+# so JobStore._evict_old never reclaims it, and every such boot leaks another
+# row.
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_start_startup_sync_job_transition_failure_does_not_orphan_queued_row(
+    tmp_path: Path, job_store: JobStore
+) -> None:
+    """A rejected QUEUED -> RUNNING transition must not leave the job QUEUED
+    forever. It must be moved to a terminal status (so eviction can reclaim
+    it), and the corpus sync must still run unmarked — mirroring the
+    job-store-write-failure case above.
+    """
+    from archon_search.server.app import _STARTUP_SYNC_ERROR_NEVER_STARTED  # noqa: PLC0415
+    from archon_search.server.app import create_app  # noqa: PLC0415
+    from archon_search.store import SearchStore  # noqa: PLC0415
+    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+
+    sync_calls: list[list[str]] = []
+
+    async def recording_sync(self: SearchCollectionSync, collections: list[str], progress_cb=None) -> SyncResult:
+        sync_calls.append(list(collections))
+        return SyncResult()
+
+    def _rejecting_transition(self, job_id, from_statuses, to_status):
+        return None
+
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = ["docs"]
+
+    with ExitStack() as stack:
+        _enter_startup_sync_lifespan_patches(stack, recording_sync)
+        stack.enter_context(patch.object(JobStore, "transition", new=_rejecting_transition))
+
+        app = create_app(cfg, job_store)
+        startup_done = asyncio.Event()
+        shutdown = asyncio.Event()
+
+        async def run_lifespan() -> None:
+            async with app.router.lifespan_context(app):
+                startup_done.set()
+                await shutdown.wait()
+
+        lifespan_task = asyncio.create_task(run_lifespan())
+        try:
+            await asyncio.wait_for(startup_done.wait(), timeout=30.0)
+            for _ in range(3000):
+                if sync_calls:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            shutdown.set()
+            await lifespan_task
+
+    assert sync_calls == [["docs"]], (
+        "a rejected QUEUED -> RUNNING transition must not prevent the corpus "
+        f"sync from running unmarked; sync_calls={sync_calls!r}"
+    )
+    jobs = job_store.list()
+    assert len(jobs) == 1, f"expected exactly one job to be created; got {jobs!r}"
+    assert jobs[0].status != JobStatus.QUEUED, (
+        "the startup-sync job was left QUEUED after its RUNNING transition was "
+        "rejected — QUEUED is non-terminal, so JobStore._evict_old never "
+        f"reclaims it and every such boot leaks another row. Got {jobs[0]!r}"
+    )
+    assert jobs[0].status == JobStatus.FAILED, (
+        f"expected the orphaned job to be marked FAILED; got {jobs[0].status!r}"
+    )
+    assert jobs[0].error == _STARTUP_SYNC_ERROR_NEVER_STARTED, (
+        f"expected the sanitized orphan error; got {jobs[0].error!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# fix-brief-C item 5 — _run_startup_sync must be a module-level function, not
+# a closure captured inside create_app's lifespan. The closure directly caused
+# the app.py boundary bug (a shutdown mid-sync misclassified), and hoisting
+# shrinks the diff's own risk surface by making every dependency an explicit
+# parameter instead of a hidden capture.
+# --------------------------------------------------------------------------- #
+def test_run_startup_sync_hoisted_to_module_level() -> None:
+    import inspect  # noqa: PLC0415
+
+    from archon_search.server import app as app_module  # noqa: PLC0415
+
+    fn = getattr(app_module, "_run_startup_sync", None)
+    assert fn is not None, (
+        "_run_startup_sync is not a module-level attribute of archon_search.server.app "
+        "— it must be hoisted out of create_app's lifespan closure"
+    )
+    sig = inspect.signature(fn)
+    assert list(sig.parameters) == ["job_store", "app_state", "cols"], (
+        "_run_startup_sync must take (job_store, app_state, cols) as explicit "
+        f"parameters rather than capturing them via closure; got signature {sig}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 2026-08-20 — fix-brief-A item 5 & item 7 (bullet 4): routes_sync._sync_task
+# must not leak str(exc) into the wire-facing SyncJob ``error`` field
+# (CLAUDE.md hard invariant), and the SUPPRESSED->DONE ``sync_result``
+# transition must be single-direction — a clean sync clears it, but nothing
+# else rewrites ``sync_result``. Direct unit tests against ``_sync_task``,
+# no lifespan needed.
+# --------------------------------------------------------------------------- #
+def _make_running_sync_job(job_store: JobStore):
+    job = job_store.create_sync(namespace="default")
+    running = job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+    assert running is not None, "test setup is wrong — QUEUED -> RUNNING transition failed"
+    return running
+
+
+@pytest.mark.asyncio
+async def test_sync_task_generic_exception_records_sanitized_error_not_raw_message(
+    job_store: JobStore,
+) -> None:
+    """Pins the CLAUDE.md invariant directly for the manual-sync path: an
+    exception message carrying a recognizable token must not reach the
+    wire-facing job ``error`` field.
+    """
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from archon_search.server.routes_sync import _SYNC_TASK_ERROR_FAILED, _sync_task  # noqa: PLC0415
+
+    _SECRET_TOKEN = "sk-live-do-not-leak-4f8a9c21"
+    running_job = _make_running_sync_job(job_store)
+    lock = asyncio.Lock()
+    await lock.acquire()
+
+    class _ExplodingSync:
+        async def sync(self, collections: list[str], progress_cb=None):
+            raise RuntimeError(f"internal failure, token={_SECRET_TOKEN}")
+
+    await _sync_task(
+        job=running_job,
+        job_store=job_store,
+        collection_sync=_ExplodingSync(),
+        collections=["docs"],
+        lock=lock,
+        app_state=SimpleNamespace(sync_result=None),
+    )
+
+    job = job_store.get(running_job.job_id)
+    assert job.status == JobStatus.FAILED
+    assert job.error == _SYNC_TASK_ERROR_FAILED, (
+        f"expected job.error == {_SYNC_TASK_ERROR_FAILED!r}; got {job.error!r}"
+    )
+    assert _SECRET_TOKEN not in (job.error or ""), (
+        f"the raw exception message leaked into the wire-facing job error: {job.error!r}"
+    )
+    assert not lock.locked(), "_sync_task must release the lock in its finally block"
+
+
+# --------------------------------------------------------------------------- #
+# fix-brief-C item 3 — _sync_task must not swallow asyncio.CancelledError (a
+# BaseException, not caught by "except Exception") into a false crash marker.
+# A clean shutdown during a manual POST /sync used to leave the job RUNNING,
+# which JobStore._load() rewrites to FAILED/"process_restart" on the next
+# boot — a false arm of the crash-loop guard for a shutdown that was never a
+# crash. Under sticky suppression (item 1) that false arm now persists until a
+# manual sync instead of clearing on the next boot, so this is Critical.
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_sync_task_cancelled_records_cancelled_not_running(
+    job_store: JobStore,
+) -> None:
+    """Cancelling ``_sync_task`` mid-sync must record ``CANCELLED``, release the
+    lock, and must NOT arm the crash-loop guard on a fresh load of the same
+    jobs file (that would happen if the job were left ``RUNNING``).
+    """
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from archon_search.server.routes_sync import _sync_task  # noqa: PLC0415
+
+    running_job = _make_running_sync_job(job_store)
+    lock = asyncio.Lock()
+    await lock.acquire()
+
+    entered = asyncio.Event()
+
+    class _ParkedSync:
+        async def sync(self, collections: list[str], progress_cb=None):
+            entered.set()
+            await asyncio.Event().wait()  # never resolves; cancelled from outside
+
+    task = asyncio.create_task(
+        _sync_task(
+            job=running_job,
+            job_store=job_store,
+            collection_sync=_ParkedSync(),
+            collections=["docs"],
+            lock=lock,
+            app_state=SimpleNamespace(sync_result=None),
+        )
+    )
+    await asyncio.wait_for(entered.wait(), timeout=5.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    job = job_store.get(running_job.job_id)
+    assert job.status == JobStatus.CANCELLED, (
+        f"a cancelled _sync_task must record CANCELLED, not leave the job "
+        f"{job.status.value!r} — a RUNNING row would be rewritten to "
+        "FAILED/'process_restart' on the next boot, falsely arming the "
+        "crash-loop guard for an ordinary shutdown"
+    )
+    assert not lock.locked(), "_sync_task must release the lock even when cancelled"
+
+    # The job store's own persisted view: reload it fresh, exactly as the next
+    # boot would, and confirm the crash-loop guard does NOT arm.
+    reloaded = JobStore(path=job_store._path)
+    assert reloaded.crashed_ingest_on_load is False, (
+        "a cancelled manual sync left a marker that arms the crash-loop guard "
+        "on the next boot — an ordinary clean shutdown must not look like a crash"
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_task_clean_sync_does_not_rewrite_non_suppressed_sync_result(
+    job_store: JobStore,
+) -> None:
+    """Negative half of the (now generalized) single-transition rule: a clean
+    manual sync must rewrite ``sync_result`` ONLY when it started at
+    ``SUPPRESSED`` or ``FAILED``. ``None`` (never run), ``PENDING``, and
+    ``DONE`` must all be left untouched — ``sync_result`` is the *startup*
+    sync's record.
+
+    ``FAILED`` is deliberately NOT in this negative list (fix-brief-C item 6 /
+    C1-B-4 generalized the rule from "SUPPRESSED -> DONE only" to "SUPPRESSED
+    or FAILED -> DONE"); its positive coverage lives in
+    ``test_sync_task_clean_sync_clears_symmetric_degraded_state`` below.
+    """
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from archon_search.server.routes_sync import _sync_task  # noqa: PLC0415
+    from archon_search.server.schemas import StartupSyncResult  # noqa: PLC0415
+    from archon_search.sync import SyncResult  # noqa: PLC0415
+
+    class _CleanSync:
+        async def sync(self, collections: list[str], progress_cb=None) -> SyncResult:
+            return SyncResult()
+
+    for starting_state in (
+        None,
+        StartupSyncResult.PENDING,
+        StartupSyncResult.DONE,
+    ):
+        running_job = _make_running_sync_job(job_store)
+        lock = asyncio.Lock()
+        await lock.acquire()
+        app_state = SimpleNamespace(sync_result=starting_state)
+
+        await _sync_task(
+            job=running_job,
+            job_store=job_store,
+            collection_sync=_CleanSync(),
+            collections=["docs"],
+            lock=lock,
+            app_state=app_state,
+        )
+
+        assert app_state.sync_result == starting_state, (
+            "a clean manual sync rewrote sync_result even though it started at "
+            f"{starting_state!r} (only SUPPRESSED/FAILED -> DONE is sanctioned); got "
+            f"{app_state.sync_result!r}"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "starting_state",
+    ["SUPPRESSED", "FAILED"],
+)
+async def test_sync_task_clean_sync_clears_symmetric_degraded_state(
+    job_store: JobStore, starting_state: str
+) -> None:
+    """Positive half of the generalized rule (fix-brief-C item 6 / C1-B-4): a
+    clean manual sync must move ``sync_result`` to ``DONE`` from EITHER
+    ``SUPPRESSED`` or ``FAILED`` — and must clear ``app_state._startup_sync_failed``
+    in the same step. The two fields must move together: ``GET /ready`` reads
+    ``_startup_sync_failed`` and ``GET /status`` reads ``sync_result``, so
+    clearing one without the other would make the two endpoints contradict
+    each other.
+
+    Also covers the sticky sentinel (fix-brief-C item 1): a clean sync must
+    unlink it, or the NEXT boot would still see it on disk and re-suppress
+    despite the operator having just resumed.
+    """
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from archon_search.server.routes_sync import _sync_task  # noqa: PLC0415
+    from archon_search.server.schemas import StartupSyncResult  # noqa: PLC0415
+    from archon_search.sync import SyncResult  # noqa: PLC0415
+    from archon_search.sync_suppression import (  # noqa: PLC0415
+        get_sync_suppressed_file,
+        write_sync_suppressed_sentinel,
+    )
+
+    class _CleanSync:
+        async def sync(self, collections: list[str], progress_cb=None) -> SyncResult:
+            return SyncResult()
+
+    write_sync_suppressed_sentinel()
+    assert get_sync_suppressed_file().exists(), "test setup is wrong — sentinel was not written"
+
+    running_job = _make_running_sync_job(job_store)
+    lock = asyncio.Lock()
+    await lock.acquire()
+    app_state = SimpleNamespace(
+        sync_result=StartupSyncResult[starting_state],
+        _startup_sync_failed=True,
+    )
+
+    await _sync_task(
+        job=running_job,
+        job_store=job_store,
+        collection_sync=_CleanSync(),
+        collections=["docs"],
+        lock=lock,
+        app_state=app_state,
+    )
+
+    assert app_state.sync_result == StartupSyncResult.DONE, (
+        f"a clean manual sync starting at {starting_state} must move sync_result "
+        f"to DONE; got {app_state.sync_result!r}"
+    )
+    assert app_state._startup_sync_failed is False, (
+        "a clean manual sync moved sync_result to DONE but left "
+        "_startup_sync_failed True — /ready and /status now contradict each other"
+    )
+    assert not get_sync_suppressed_file().exists(), (
+        "a clean manual sync did not clear the sticky sentinel file — the next "
+        "boot would still see it on disk and re-suppress"
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_task_with_errors_does_not_clear_suppressed(job_store: JobStore) -> None:
+    """The other negative half: a manual sync that completes with non-empty
+    ``result.errors`` (no exception) must NOT clear a ``SUPPRESSED``
+    ``sync_result`` — only a clean sync (no errors) is the sanctioned resume path.
+    """
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from archon_search.server.routes_sync import _sync_task  # noqa: PLC0415
+    from archon_search.server.schemas import StartupSyncResult  # noqa: PLC0415
+    from archon_search.sync import SyncResult  # noqa: PLC0415
+
+    running_job = _make_running_sync_job(job_store)
+    lock = asyncio.Lock()
+    await lock.acquire()
+
+    class _PartialSync:
+        async def sync(self, collections: list[str], progress_cb=None) -> SyncResult:
+            return SyncResult(errors=["collection 'docs': path does not exist"])
+
+    app_state = SimpleNamespace(sync_result=StartupSyncResult.SUPPRESSED)
+    await _sync_task(
+        job=running_job,
+        job_store=job_store,
+        collection_sync=_PartialSync(),
+        collections=["docs"],
+        lock=lock,
+        app_state=app_state,
+    )
+    assert app_state.sync_result == StartupSyncResult.SUPPRESSED, (
+        "a manual sync that completed with per-collection errors must not "
+        f"clear SUPPRESSED; got {app_state.sync_result!r}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "starting_state",
+    ["SUPPRESSED", "FAILED"],
+)
+async def test_sync_task_with_errors_clears_neither_field_under_new_rule(
+    job_store: JobStore, starting_state: str
+) -> None:
+    """Negative half of the generalized rule (fix-brief-C item 6e-2), written
+    against the NEW rule from C1-B-4 — not the old SUPPRESSED-only docstring.
+
+    A manual sync that completes with non-empty ``result.errors`` (no
+    exception) must clear NEITHER ``sync_result`` NOR
+    ``app_state._startup_sync_failed`` — starting from either degraded state
+    (``SUPPRESSED`` or, newly, ``FAILED``). Only a clean sync (no errors) is
+    the sanctioned resume path; the sibling test above already covers
+    SUPPRESSED without ``_startup_sync_failed`` — this one additionally covers
+    FAILED and pins that the symmetric flag stays put too.
+    """
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from archon_search.server.routes_sync import _sync_task  # noqa: PLC0415
+    from archon_search.server.schemas import StartupSyncResult  # noqa: PLC0415
+    from archon_search.sync import SyncResult  # noqa: PLC0415
+
+    running_job = _make_running_sync_job(job_store)
+    lock = asyncio.Lock()
+    await lock.acquire()
+
+    class _PartialSync:
+        async def sync(self, collections: list[str], progress_cb=None) -> SyncResult:
+            return SyncResult(errors=["collection 'docs': path does not exist"])
+
+    starting = StartupSyncResult[starting_state]
+    app_state = SimpleNamespace(sync_result=starting, _startup_sync_failed=True)
+    await _sync_task(
+        job=running_job,
+        job_store=job_store,
+        collection_sync=_PartialSync(),
+        collections=["docs"],
+        lock=lock,
+        app_state=app_state,
+    )
+    assert app_state.sync_result == starting, (
+        f"a manual sync that completed with per-collection errors must not clear "
+        f"{starting_state}; got {app_state.sync_result!r}"
+    )
+    assert app_state._startup_sync_failed is True, (
+        "a manual sync that completed with per-collection errors must not clear "
+        f"_startup_sync_failed; got {app_state._startup_sync_failed!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 2026-08-20 — fix-brief-A item 6: ``_KIND_TYPE_MAP`` (routes_jobs.py) was
+# missing "sync", so ``kind_types`` ended up empty for a ``?kind=sync``
+# filter and every job was silently dropped.
+# --------------------------------------------------------------------------- #
+def test_get_jobs_kind_sync_filter_returns_sync_jobs(
+    tmp_path: Path, job_store: JobStore, auth_headers: dict[str, str]
+) -> None:
+    from fastapi.testclient import TestClient  # noqa: PLC0415
+
+    from archon_search.server.app import create_app  # noqa: PLC0415
+
+    sync_job = job_store.create_sync(namespace="default")
+    ingest_job = job_store.create(collection="docs")
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    app = create_app(config, job_store)
+    client = TestClient(app, headers=auth_headers)
+
+    response = client.get("/jobs", params={"kind": "sync"})
+    assert response.status_code == 200
+    body = response.json()
+    job_ids = [item["job_id"] for item in body["items"]]
+    assert sync_job.job_id in job_ids, (
+        f"GET /jobs?kind=sync did not return the sync job; got job_ids={job_ids!r}"
+    )
+    assert ingest_job.job_id not in job_ids, (
+        f"GET /jobs?kind=sync must not return non-sync jobs; got job_ids={job_ids!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 2026-08-20 — fix-brief-A item 2: ``_finish_startup_sync_job``'s docstring
+# says "Never raises into the task." but the catch set was only
+# ``(KeyError, OSError)``.
+# --------------------------------------------------------------------------- #
+def test_finish_startup_sync_job_never_raises_into_task() -> None:
+    from archon_search.server.app import _finish_startup_sync_job  # noqa: PLC0415
+
+    class _ExplodingStore:
+        def update(self, job_id, **fields):
+            raise RuntimeError("unexpected store failure — not KeyError or OSError")
+
+    # Must not raise — the docstring's promise, now backed by except Exception.
+    _finish_startup_sync_job(_ExplodingStore(), "job-1", status=JobStatus.DONE)
+
+
+# --------------------------------------------------------------------------- #
+# fix-brief-C item 6b — DELETE /jobs/{id} on the startup-sync job must return
+# 409, not transition it to CANCELLING. Nothing actually cancels the lifespan
+# task that runs it, so the sync runs on and _finish_startup_sync_job
+# overwrites the status — the operator's cancel would be silently ignored.
+# Worse, CANCELLING is a crash status (jobs/store.py _CRASH_STATUSES), so
+# leaving the row there would arm the (sticky, since item 1) crash-loop guard
+# on the next boot for an operator action that was never a crash.
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_delete_startup_sync_job_returns_409(job_store: JobStore) -> None:
+    import json  # noqa: PLC0415
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from fastapi import Response  # noqa: PLC0415
+    from fastapi.responses import JSONResponse  # noqa: PLC0415
+
+    from archon_search.server.routes_jobs import (  # noqa: PLC0415
+        _STARTUP_SYNC_JOB_NOT_CANCELLABLE_DETAIL,
+        delete_job,
+    )
+
+    job = job_store.create_sync(namespace="default")
+    running = job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+    assert running is not None, "test setup is wrong"
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(job_store=job_store, _startup_sync_job_id=job.job_id)
+        ),
+        state=SimpleNamespace(namespace="default"),
+    )
+
+    result = await delete_job(job.job_id, request, Response())
+
+    assert isinstance(result, JSONResponse), f"expected a JSONResponse; got {result!r}"
+    assert result.status_code == 409, (
+        f"DELETE on the startup-sync job must return 409; got {result.status_code}"
+    )
+    body = json.loads(result.body)
+    assert body["detail"] == _STARTUP_SYNC_JOB_NOT_CANCELLABLE_DETAIL, (
+        f"expected the sanitized detail constant; got {body!r}"
+    )
+
+    reloaded = job_store.get(job.job_id)
+    assert reloaded.status == JobStatus.RUNNING, (
+        "DELETE on the startup-sync job must not transition it — a CANCELLING "
+        f"row would arm the crash-loop guard on the next boot; got {reloaded.status!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_non_startup_sync_job_still_cancels_normally(job_store: JobStore) -> None:
+    """Pins that the startup-sync guard clause does not over-match: a manual
+    ``SyncJob`` — same job TYPE, different job_id — must still cancel normally.
+    """
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from fastapi import Response  # noqa: PLC0415
+
+    from archon_search.server.routes_jobs import delete_job  # noqa: PLC0415
+
+    startup_job = job_store.create_sync(namespace="default")
+    job_store.transition(startup_job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+
+    manual_job = job_store.create_sync(namespace="default")
+    running_manual = job_store.transition(manual_job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+    assert running_manual is not None, "test setup is wrong"
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(job_store=job_store, _startup_sync_job_id=startup_job.job_id)
+        ),
+        state=SimpleNamespace(namespace="default"),
+    )
+
+    response_obj = Response()
+    await delete_job(manual_job.job_id, request, response_obj)
+
+    assert response_obj.status_code == 202, (
+        f"a non-startup-sync job must still cancel normally; got {response_obj.status_code}"
+    )
+    reloaded = job_store.get(manual_job.job_id)
+    assert reloaded.status == JobStatus.CANCELLING, (
+        f"a non-startup-sync job DELETE must transition to CANCELLING; got {reloaded.status!r}"
     )

@@ -32,6 +32,23 @@ logger = logging.getLogger(__name__)
 _CRASH_STATUSES = {JobStatus.RUNNING, JobStatus.CANCELLING}
 # QUEUED is intentionally excluded from crash statuses: QUEUED bulk jobs survive
 # a server restart and will be re-dispatched by the scheduler on next tick.
+_INGEST_JOB_TYPE = "ingest"
+# Job types whose crash marker means the corpus-scan-and-ingest workload the
+# startup sync itself performs is what killed the process: a plain ingest (the
+# original incident's shape — a client POST /ingest that OOM'd) or a sync (the
+# startup sync's own prior invocation, or a manual POST /sync, crashing). This
+# is narrower than "every job type that can ever cause a re-ingest" —
+# export/import/reindex/delete/migration/community_rebuild jobs run different
+# code paths, so a crash there does not by itself mean the ingest workload is
+# dangerous. It does NOT mean a startup sync can never touch a collection
+# originally populated by one of those job types: sync.py force-reindexes a
+# collection whose indexed_chunk_size is unknown (populated outside
+# SearchCollectionSync, e.g. via POST /ingest or POST /import) when
+# auto_reindex_on_chunk_size_change is set. But if THAT reindex crashes, it
+# crashes as a SyncJob (kind="sync"), which IS in this set — so the guard
+# still arms on the next boot regardless of how the collection was
+# originally populated.
+_INGEST_FAMILY_JOB_TYPES = {_INGEST_JOB_TYPE, JobKind.sync.value}
 _EVICTION_DAYS = 7
 # Only terminal jobs are eligible for eviction; non-terminal jobs (PENDING, QUEUED,
 # RUNNING, CANCELLING) are retained regardless of age.
@@ -49,6 +66,7 @@ class JobStore:
         self._path = path if path is not None else get_jobs_file()
         self._lock = threading.Lock()
         self._jobs: dict[str, IngestJob] = {}
+        self._crashed_ingest_on_load = False
         changed = self._load()
         if changed:
             self._write_atomic()
@@ -56,6 +74,18 @@ class JobStore:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    @property
+    def crashed_ingest_on_load(self) -> bool:
+        """True when loading this store rewrote an ingest-family job to ``process_restart``.
+
+        The previous process died mid-ingest (OOM, ``kill -9``, machine reset).
+        Narrower than the ``modified`` flag ``_load()`` returns, which also
+        covers age-eviction. The lifespan's crash-loop guard reads this to
+        decide whether re-running the startup sync would re-enter the workload
+        that killed the process.
+        """
+        return self._crashed_ingest_on_load
 
     def create(
         self,
@@ -306,7 +336,7 @@ class JobStore:
                 item.setdefault("source_path", "")
                 item.setdefault("collection", "")
                 item.setdefault("retry_count", 0)
-                job_type = item.pop("job_type", "ingest")
+                job_type = item.pop("job_type", _INGEST_JOB_TYPE)
                 if job_type == "export":
                     job: IngestJob = ExportJob(**item)
                 elif job_type == "import":
@@ -333,8 +363,16 @@ class JobStore:
                         job, status=JobStatus.FAILED, error="process_restart"
                     )
                     modified = True
+                    if job_type in _INGEST_FAMILY_JOB_TYPES:
+                        self._crashed_ingest_on_load = True
                 self._jobs[job.job_id] = job
             count_before = len(self._jobs)
+            # Ordering is load-bearing: the rewrite above sets status=FAILED, which
+            # IS in _TERMINAL_STATUSES, so an old crash row is itself eligible for
+            # eviction below. The crash-loop guard survives only because
+            # _crashed_ingest_on_load is latched at line 355, before eviction runs
+            # here — evicting first would silently disable the guard for any row
+            # older than _EVICTION_DAYS. Do not reorder.
             self._evict_old()
             if len(self._jobs) < count_before:
                 modified = True
@@ -342,6 +380,7 @@ class JobStore:
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             logger.error("JobStore: corrupt jobs file %s — resetting (%s)", self._path, exc)
             self._jobs = {}
+            self._crashed_ingest_on_load = False
             return False
 
     def _write_atomic(self) -> None:
@@ -369,7 +408,7 @@ class JobStore:
                 elif isinstance(job, MetadataReindexJob):
                     item["job_type"] = JobKind.metadata_reindex.value
                 else:
-                    item["job_type"] = "ingest"
+                    item["job_type"] = _INGEST_JOB_TYPE
                 data.append(item)
             atomic_write_json(self._path, data)
 

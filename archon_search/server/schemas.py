@@ -59,15 +59,35 @@ class StartupSyncResult(str, Enum):
     Set by the lifespan's startup sync task: ``PENDING`` before/while the task
     runs, ``DONE`` on a clean completion, ``FAILED`` on a bounded timeout, a
     per-collection error (``SyncResult.errors`` non-empty), cancellation, or any
-    other exception. ``None`` (not a member of this enum) means no startup sync
+    other exception. ``SUPPRESSED`` is set instead of ``PENDING`` when the
+    crash-loop guard refused to start the task at all because the job store
+    marked an ingest-family job ``process_restart`` — collections are configured
+    but the corpus is potentially stale until an operator runs ``POST /sync``.
+    Degraded-but-ready: no sync task exists, so ``/ready`` stays 200 — it
+    reports the state as ``checks.sync = "warn"``, which does not gate ``ready``.
+    ``None`` (not a member of this enum) means no startup sync
     was ever run, i.e. no collections are configured. Named ``StartupSyncResult``
     rather than ``SyncResult`` to avoid colliding with
     ``archon_search.sync.SyncResult``, which is a different, unrelated type.
+
+    The single rule governing every rewrite after startup: **a clean
+    ``POST /sync`` clears any degraded startup state; boot history lives in the
+    logs.** Concretely (``routes_sync._clear_degraded_sync_state``), a
+    ``POST /sync`` that completes with no exception and no per-collection
+    errors moves ``SUPPRESSED`` *or* ``FAILED`` to ``DONE`` — and clears
+    ``app.state._startup_sync_failed`` in the same step, since ``GET /ready``
+    reads that flag and ``GET /status`` reads this field; clearing one without
+    the other would make the two endpoints contradict each other. ``SUPPRESSED``
+    is additionally backed by a durable sentinel file
+    (``sync_suppression.py``) so it survives a process restart — the clean
+    sync clears that too. A sync that raises, times out, or completes with
+    non-empty ``SyncResult.errors`` rewrites neither field.
     """
 
     PENDING = "pending"
     DONE = "done"
     FAILED = "failed"
+    SUPPRESSED = "suppressed"
 
 
 class ReadinessChecks(BaseModel):

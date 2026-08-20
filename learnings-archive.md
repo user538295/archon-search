@@ -5,3 +5,6 @@
 
 ## Evicted from learnings.md 2026-08-19 (lowest N, OCR-memory task)
 - **[2026-08-18] (×1) instruction-file bloat**: before adding to `CLAUDE.md`, grep `Documentation/` and `pyproject.toml` for the fact — its Architecture section was 57% of the file and fully duplicated. Keep only what is not greppable.
+
+## Evicted from learnings.md 2026-08-20 (lowest N, startup-sync crash-loop task)
+- **[2026-08-19] (×1) assert the WIRING**: an unasserted ctor kwarg silently disconnects its feature and the suite stays green — `initializer=` (orphan watchdog), `max_tasks_per_child=` (operator knob). Assert the kwarg reaches the ctor, from a NON-default value.

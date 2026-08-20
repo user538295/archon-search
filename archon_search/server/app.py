@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 if TYPE_CHECKING:
+    from starlette.datastructures import State
+
     from archon_search.query_expansion_protocol import QueryExpansionProvider
 
 import uvicorn
@@ -36,6 +38,7 @@ from archon_search.embedder_cache import (
     EmbedderCache,
     EmbedderNotReadyError,
 )
+from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.backup_loop import BackupLoop
 from archon_search.jobs.maintenance_loop import MaintenanceLoop
 from archon_search.jobs.scheduler import JobScheduler
@@ -53,6 +56,11 @@ from archon_search.server.middleware_context import RequestContextMiddleware
 from archon_search.server.schemas import StartupSyncResult, WarmupResult
 from archon_search.graph_store import check_and_warn_legacy_graph_tables
 from archon_search.store import SearchStore
+from archon_search.sync_suppression import (
+    get_sync_suppressed_file,
+    write_sync_suppressed_sentinel,
+)
+from archon_search.types import JobStatus
 
 try:
     from importlib.metadata import version as _pkg_version, PackageNotFoundError
@@ -99,6 +107,184 @@ _EAGER_WARMUP_TIMEOUT_SECONDS: float = 600.0
 # the container reports healthy and the operator still sees the failure on
 # /ready and in the log.
 _STARTUP_SYNC_TIMEOUT_SECONDS: float = 1800.0
+
+# Sanitized, wire-facing ``error`` values for the SyncJob that backs the startup
+# sync — it is readable through GET /jobs, so no exception text goes in here.
+_STARTUP_SYNC_ERROR_PARTIAL = "startup sync completed with per-collection errors"
+_STARTUP_SYNC_ERROR_TIMEOUT = "startup sync exceeded its time limit"
+_STARTUP_SYNC_ERROR_FAILED = "startup sync failed"
+# The job was created but never reached RUNNING (the QUEUED -> RUNNING
+# transition itself failed) — see the orphan-prevention fix in
+# _start_startup_sync_job below.
+_STARTUP_SYNC_ERROR_NEVER_STARTED = "startup sync job could not be marked running"
+
+
+def _start_startup_sync_job(job_store: JobStore) -> str | None:
+    """Create the RUNNING SyncJob that backs the startup sync; return its id.
+
+    This is what makes the crash-loop guard self-arming. ``collection_sync.sync()``
+    writes no job row of its own, so a process killed *during the startup sync*
+    used to leave nothing behind and the next boot re-entered the same workload —
+    the exact loop the guard exists to break. A RUNNING SyncJob on disk is
+    rewritten to ``FAILED / "process_restart"`` by ``JobStore._load()`` on the
+    next boot, which is the marker ``crashed_ingest_on_load`` keys on.
+
+    Returns ``None`` when the job store could not be written: the sync then runs
+    unmarked (exactly the previous behavior) rather than failing startup.
+
+    When ``create_sync`` succeeds but the QUEUED -> RUNNING transition is
+    rejected (job store race), the job would otherwise be left QUEUED forever —
+    ``QUEUED`` is non-terminal, so ``JobStore._evict_old`` never reclaims it and
+    every such boot leaks another row. Mark it ``FAILED`` instead so it is
+    evictable; the mark itself is best-effort and never raises.
+    """
+    try:
+        job = job_store.create_sync(namespace=DEFAULT_NAMESPACE)
+        running = job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+    except Exception:
+        logger.warning(
+            "startup sync: could not record a job; running unmarked (a crash during "
+            "this sync will not be detected on the next boot)",
+            exc_info=True,
+        )
+        return None
+    if running is None:
+        logger.warning(
+            "startup sync: job %s could not be moved to RUNNING; running unmarked",
+            job.job_id,
+        )
+        try:
+            job_store.update(
+                job.job_id,
+                status=JobStatus.FAILED,
+                error=_STARTUP_SYNC_ERROR_NEVER_STARTED,
+            )
+        except Exception:
+            logger.warning(
+                "startup sync: could not mark orphaned job %s FAILED; it will "
+                "remain QUEUED forever",
+                job.job_id,
+                exc_info=True,
+            )
+        return None
+    return job.job_id
+
+
+def _finish_startup_sync_job(job_store: JobStore, job_id: str | None, **fields: Any) -> None:
+    """Drive the startup-sync job to a terminal status. Never raises into the task."""
+    if job_id is None:
+        return
+    try:
+        job_store.update(job_id, **fields)
+    except Exception:
+        logger.warning(
+            "startup sync: could not persist the terminal status for job %s", job_id
+        )
+
+
+async def _run_startup_sync(
+    job_store: JobStore,
+    app_state: "State",
+    cols: list[str],
+) -> None:
+    """Run the lifespan's startup collection sync, job-backed and lock-held.
+
+    Hoisted to module level (fix-brief-C item 5): this used to be a closure
+    over ``job_store``/``app``/``all_cols`` inside ``create_app``'s lifespan,
+    which directly caused the app.py boundary bug where a shutdown mid-sync
+    was misclassified — a closure hides its captured state from anything
+    outside the enclosing function, including tests and reviewers. Every
+    dependency is now an explicit parameter instead of a capture.
+
+    Job-backed so the crash-loop guard arms itself — see
+    ``_start_startup_sync_job``. The job row is written here, not in the
+    lifespan body: startup must not do file I/O before it yields, or the port
+    stays closed while it happens.
+
+    ``job_id`` starts ``None`` and is assigned inside the ``try:`` — belt-and-
+    braces so a non-``Exception`` ``BaseException`` out of
+    ``_start_startup_sync_job`` still leaves ``job_id`` defined for the
+    ``except`` handlers below (they would otherwise hit ``UnboundLocalError``
+    instead of failing loudly and coherently).
+    """
+    job_id: str | None = None
+    try:
+        job_id = _start_startup_sync_job(job_store)
+        app_state._startup_sync_job_id = job_id
+        # A wedged/oversized sync must not leave /ready gated at 503 for the
+        # process lifetime — see _STARTUP_SYNC_TIMEOUT_SECONDS.
+        async with asyncio.timeout(_STARTUP_SYNC_TIMEOUT_SECONDS):
+            # Held for the whole sync so a POST /sync arriving during startup
+            # gets a 409 instead of starting a second, concurrent sync over
+            # the same collections.
+            async with app_state.sync_lock:
+                result = await app_state.collection_sync.sync(cols)
+            if result.errors:
+                # sync() does not raise on a per-collection failure — it
+                # accumulates messages in SyncResult.errors and returns
+                # normally, so this is the common failure mode (missing path,
+                # ingest error, chunk-size reindex failure).
+                app_state._startup_sync_failed = True
+                app_state.sync_result = StartupSyncResult.FAILED
+                logger.warning(
+                    "startup sync completed with %d error(s): %s",
+                    len(result.errors),
+                    result.errors,
+                )
+                _finish_startup_sync_job(
+                    job_store,
+                    job_id,
+                    status=JobStatus.FAILED,
+                    error=_STARTUP_SYNC_ERROR_PARTIAL,
+                )
+            else:
+                logger.info("startup sync complete (%d collection(s))", len(cols))
+                app_state.sync_result = StartupSyncResult.DONE
+                _finish_startup_sync_job(
+                    job_store,
+                    job_id,
+                    status=JobStatus.DONE,
+                    result={
+                        "added": result.added,
+                        "removed": result.removed,
+                        "unchanged": result.unchanged,
+                        "errors": result.errors,
+                        "skipped": result.skipped,
+                        "updated": result.updated,
+                    },
+                )
+    except asyncio.CancelledError:
+        logger.info("startup sync cancelled during shutdown")
+        app_state.sync_result = StartupSyncResult.FAILED
+        # CANCELLED, not FAILED: an ordinary clean shutdown is not a failure, and
+        # the job row is the ledger operators read during an incident. Mirrors
+        # routes_sync._sync_task, which records the same event the same way.
+        _finish_startup_sync_job(job_store, job_id, status=JobStatus.CANCELLED)
+        raise
+    except TimeoutError:
+        logger.warning(
+            "startup sync timed out after %.0fs; marking sync failed so /ready "
+            "can recover instead of gating forever",
+            _STARTUP_SYNC_TIMEOUT_SECONDS,
+        )
+        app_state._startup_sync_failed = True
+        app_state.sync_result = StartupSyncResult.FAILED
+        _finish_startup_sync_job(
+            job_store,
+            job_id,
+            status=JobStatus.FAILED,
+            error=_STARTUP_SYNC_ERROR_TIMEOUT,
+        )
+    except BaseException as exc:  # noqa: BLE001 — never let the task escape
+        logger.warning("startup sync failed: %s", exc, exc_info=True)
+        app_state._startup_sync_failed = True
+        app_state.sync_result = StartupSyncResult.FAILED
+        _finish_startup_sync_job(
+            job_store,
+            job_id,
+            status=JobStatus.FAILED,
+            error=_STARTUP_SYNC_ERROR_FAILED,
+        )
 
 
 def _multilingual_model_path() -> Path:
@@ -676,6 +862,24 @@ def create_app(
                                         col_name,
                                     )
                                     return
+                                # Crash-loop guard, watcher half: while the startup
+                                # sync is suppressed the corpus may be stale for a
+                                # reason an operator has not yet addressed — letting
+                                # the watcher re-enter ingest here would defeat the
+                                # guard through a side door. Keys on the SAME live
+                                # state a manual POST /sync clears (app.state.sync_result),
+                                # not job_store.crashed_ingest_on_load (boot-time only) —
+                                # otherwise a successful manual sync would clear
+                                # GET /status while the watcher stayed blocked forever.
+                                if app.state.sync_result == StartupSyncResult.SUPPRESSED:
+                                    logger.warning(
+                                        "watcher: ingest for collection %r SKIPPED — the "
+                                        "startup sync is suppressed (the previous run died "
+                                        "mid-ingest). Resume manually with POST /sync or "
+                                        "`archon-search sync` once the cause is addressed.",
+                                        col_name,
+                                    )
+                                    return
                                 await app.state.collection_sync.sync_collection(
                                     col_name, Path(path_str)
                                 )
@@ -703,54 +907,40 @@ def create_app(
                 # lifespan startup returns, so a full corpus sync would keep the port
                 # closed — clients would get ConnectError instead of a 503.
                 all_cols = list(config.pinned_collections) + list(config.collections)
-                if all_cols:
-
-                    async def _run_startup_sync(cols: list[str]) -> None:
-                        try:
-                            # A wedged/oversized sync must not leave /ready gated at 503
-                            # for the process lifetime — see _STARTUP_SYNC_TIMEOUT_SECONDS.
-                            async with asyncio.timeout(_STARTUP_SYNC_TIMEOUT_SECONDS):
-                                # Held for the whole sync so a POST /sync arriving during
-                                # startup gets a 409 instead of starting a second,
-                                # concurrent sync over the same collections.
-                                async with app.state.sync_lock:
-                                    result = await app.state.collection_sync.sync(cols)
-                                if result.errors:
-                                    # sync() does not raise on a per-collection failure — it
-                                    # accumulates messages in SyncResult.errors and returns
-                                    # normally, so this is the common failure mode (missing
-                                    # path, ingest error, chunk-size reindex failure).
-                                    app.state._startup_sync_failed = True
-                                    app.state.sync_result = StartupSyncResult.FAILED
-                                    logger.warning(
-                                        "startup sync completed with %d error(s): %s",
-                                        len(result.errors),
-                                        result.errors,
-                                    )
-                                else:
-                                    logger.info(
-                                        "startup sync complete (%d collection(s))", len(cols)
-                                    )
-                                    app.state.sync_result = StartupSyncResult.DONE
-                        except asyncio.CancelledError:
-                            logger.info("startup sync cancelled during shutdown")
-                            app.state.sync_result = StartupSyncResult.FAILED
-                            raise
-                        except TimeoutError:
-                            logger.warning(
-                                "startup sync timed out after %.0fs; marking sync failed so "
-                                "/ready can recover instead of gating forever",
-                                _STARTUP_SYNC_TIMEOUT_SECONDS,
-                            )
-                            app.state._startup_sync_failed = True
-                            app.state.sync_result = StartupSyncResult.FAILED
-                        except BaseException as exc:  # noqa: BLE001 — never let the task escape
-                            logger.warning("startup sync failed: %s", exc, exc_info=True)
-                            app.state._startup_sync_failed = True
-                            app.state.sync_result = StartupSyncResult.FAILED
-
+                # Sticky suppression (fix-brief-C item 1): suppress when EITHER
+                # loading the job store just rewrote an ingest-family job to
+                # FAILED/"process_restart" (a fresh crash detected THIS boot) OR
+                # a previous boot already suppressed and the operator has not
+                # yet run a clean POST /sync (the sentinel file from that boot
+                # still exists). Without the second half, suppression lasted
+                # exactly one boot: by the boot after the crash the job row is
+                # already terminal (FAILED, not RUNNING), so
+                # crashed_ingest_on_load alone would silently re-arm the loop
+                # under any supervisor that restarts more than once. Read only
+                # — .exists() is not slow work, so this stays safe before yield.
+                sync_suppressed = all_cols and (
+                    job_store.crashed_ingest_on_load
+                    or get_sync_suppressed_file().exists()
+                )
+                if sync_suppressed:
+                    # No task is created, so /ready stays 200 — the state is
+                    # degraded-but-ready, surfaced on GET /status.
+                    logger.warning(
+                        "startup sync SUPPRESSED for %d collection(s): the previous run "
+                        "died mid-ingest (job marked 'process_restart'). The index may be "
+                        "stale — resume manually with POST /sync or `archon-search sync` "
+                        "once the cause is addressed.",
+                        len(all_cols),
+                    )
+                    # Fail-open: a write failure must not fail startup — see
+                    # write_sync_suppressed_sentinel's own docstring.
+                    write_sync_suppressed_sentinel()
+                    app.state.sync_result = StartupSyncResult.SUPPRESSED
+                elif all_cols:
                     app.state.sync_result = StartupSyncResult.PENDING
-                    sync_task = asyncio.create_task(_run_startup_sync(all_cols))
+                    sync_task = asyncio.create_task(
+                        _run_startup_sync(job_store, app.state, all_cols)
+                    )
                     app.state._startup_sync_task = sync_task
                     app.state._background_tasks.add(sync_task)
                     sync_task.add_done_callback(app.state._background_tasks.discard)
@@ -853,6 +1043,15 @@ def create_app(
     # Set to a Task by the lifespan only when at least one collection is configured;
     # the None default keeps the attribute readable on every path.
     app.state._startup_sync_task = None
+    # job_id of the SyncJob that backs the startup sync (set inside
+    # _run_startup_sync, right after _start_startup_sync_job succeeds); used by
+    # DELETE /jobs/{id} to refuse to cancel it (routes_jobs.py) — cancelling
+    # would only move the row to CANCELLING, which is a crash status
+    # (jobs/store.py _CRASH_STATUSES), so an operator's cancel would silently
+    # arm the crash-loop guard on the next boot instead of actually stopping
+    # anything. None means either no startup sync ran or the job store write
+    # failed (running unmarked).
+    app.state._startup_sync_job_id = None
     # Set to True by _run_startup_sync when the sync crashed (except branch) or
     # completed with per-collection errors (result.errors non-empty); the False
     # default keeps the attribute readable on every path.
