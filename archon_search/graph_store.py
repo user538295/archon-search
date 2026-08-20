@@ -2073,8 +2073,14 @@ class GraphStore:
             # No mentions table → cannot determine orphans safely; skip GC.
             return GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
 
-        mentions_arrow = await mentions_table.query().select(["entity_id"]).to_arrow()
-        mentioned_entity_ids: set[str] = set(mentions_arrow["entity_id"].to_pylist())
+        mentions_arrow = await mentions_table.query().select(["entity_id", "chunk_id"]).to_arrow()
+        _mention_entity_ids: list[str] = mentions_arrow["entity_id"].to_pylist()
+        mentioned_entity_ids: set[str] = set(_mention_entity_ids)
+        # entity -> the chunks it is mentioned in. One O(M) pass, reused by the
+        # unsupported-relationship sweep in Step 3b (2026-08-20-010).
+        entity_chunks: dict[str, set[str]] = {}
+        for _eid, _cid in zip(_mention_entity_ids, mentions_arrow["chunk_id"].to_pylist()):
+            entity_chunks.setdefault(_eid, set()).add(_cid)
 
         # Fix C1-I-1: empty mentions table is indistinguishable from "mentions never
         # populated" — cannot safely determine orphan status; skip GC.
@@ -2112,8 +2118,9 @@ class GraphStore:
             if nid not in mentioned_entity_ids and nid not in module_pseudo_node_ids
         ]
 
-        if not orphan_node_ids_pre_exempt:
-            return GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
+        # NOTE: no early return when nothing is orphaned. The Step 3b sweep below
+        # must still run — its whole case is "every entity still mentioned, but a
+        # relationship between two of them no longer holds" (2026-08-20-010).
 
         # --- Step 2b: collect def/ref exemptions (BE-3) — nodes/edges whose
         # extraction_method is in _GC_EXEMPT_EXTRACTION_METHODS are file-derived,
@@ -2159,9 +2166,6 @@ class GraphStore:
             nid for nid in orphan_node_ids_pre_exempt if nid not in exempt_node_ids
         ]
 
-        if not orphan_node_ids:
-            return GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
-
         # --- Step 3: find orphan edges (any endpoint is an orphan node, and the
         # edge itself is not exempted per Step 2b) ---
         orphan_node_ids_set = set(orphan_node_ids)
@@ -2178,6 +2182,46 @@ class GraphStore:
                 if eid not in exempt_edge_ids
                 and (src_id in orphan_node_ids_set or tgt_id in orphan_node_ids_set)
             ]
+
+        # --- Step 3b: sweep relationships that no chunk supports any more
+        # (2026-08-20-010) ---
+        # Edge IDs carry no doc_id (`make_stable_edge_id` hashes
+        # source:target:relationship only), so two documents asserting the same
+        # pair share ONE row and `source_doc_id` is a last-writer stamp. Edge
+        # lifetime is therefore collection-scoped, not document-scoped, and a
+        # write-side "delete this doc's edges before re-writing" would erase
+        # relationships other documents still support. The mentions table is the
+        # accurate collection-wide ledger — it is replaced per-doc on every
+        # ingest and pruned for dead chunks — so ask it instead.
+        #
+        # Scoped to `related_to`, which the NER co-occurrence loop
+        # (`graph_extractor.py`) is the only producer of. Def/ref edges are
+        # file-derived and synonym/alias edges are dictionary-derived; neither is
+        # mention-backed, so neither may be judged by co-mention. `_edge_is_defref`
+        # covers both the extraction-method tags and the def/ref relationship types.
+        unsupported_edge_ids: list[str] = []
+        if edges_arrow is not None:
+            _orphaned = set(orphan_edge_ids)
+            for eid, src_id, tgt_id, rel_type, method in zip(
+                edges_arrow["id"].to_pylist(),
+                edges_arrow["source_node_id"].to_pylist(),
+                edges_arrow["target_node_id"].to_pylist(),
+                edges_arrow["relationship_type"].to_pylist(),
+                edges_arrow["extraction_method"].to_pylist(),
+            ):
+                if rel_type != RelationshipType.related_to.value:
+                    continue
+                if eid in exempt_edge_ids or eid in _orphaned:
+                    continue
+                if _edge_is_defref(method, rel_type):
+                    continue
+                # `set & set` iterates the smaller side, so each edge costs
+                # min(|chunks(src)|, |chunks(tgt)|) — a hub entity mentioned in
+                # every chunk cannot make this quadratic.
+                if not (entity_chunks.get(src_id, frozenset()) & entity_chunks.get(tgt_id, frozenset())):
+                    unsupported_edge_ids.append(eid)
+
+        orphan_edge_ids = orphan_edge_ids + unsupported_edge_ids
 
         # --- Step 4: delete orphan edges first, then orphan nodes ---
         if orphan_edge_ids and edges_table is not None:

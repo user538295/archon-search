@@ -190,7 +190,14 @@ There is also a browser graph viewer at `GET /graph/{collection}/view` (HTML, au
 
 Deleting documents leaves behind stale graph state. The `MaintenanceLoop` reclaims it when `[maintenance] graph_gc = true` (default) and `interval_hours > 0`.
 
-GC finds **orphan nodes** (entity IDs with no remaining mention row) and removes them plus every edge touching them (`delete_orphan_nodes_and_edges`, `graph_store.py`). Endpoint/code-symbol nodes that are not mention-derived are exempted so they survive the sweep. If the mentions table is absent or empty, GC skips rather than risk deleting live nodes. When GC removes nodes and `gc_rebuild_communities = true` (default), it triggers a community rebuild at CPU priority `gc_rebuild_cpu_priority` (`low`/`normal`/`high`; per-thread nice is Linux-only).
+GC does two sweeps in one pass (`delete_orphan_nodes_and_edges`, `graph_store.py`):
+
+- **Orphan nodes** — entity IDs with no remaining mention row — are removed, plus every edge touching them. Endpoint/code-symbol nodes that are not mention-derived are exempted so they survive.
+- **Unsupported relationships** (2026-08-20-010) — `related_to` edges whose two entities no longer appear together in any chunk. These are the co-occurrence edges spaCy produces at ingest; `write_graph` upserts by stable edge ID and never removes, so editing a document so two entities stop co-occurring left the edge asserting a relationship nothing supports. Both endpoints usually remain mentioned elsewhere, so the orphan-node sweep never reached these. Def/ref edges (`calls`/`imports`/`defines`/`inherits`) and synonym edges are file- and dictionary-derived rather than mention-derived, and are not judged by co-mention.
+
+If the mentions table is absent or empty, GC skips both sweeps rather than risk deleting live rows. When GC removes **either** nodes or edges and `gc_rebuild_communities = true` (default), it triggers a community rebuild at CPU priority `gc_rebuild_cpu_priority` (`low`/`normal`/`high`; per-thread nice is Linux-only) — Leiden partitions over the edge list, so a deleted relationship makes the stored groupings stale even when every member node survives.
+
+**Timing:** a stale relationship disappears at the next maintenance GC pass, not at re-ingest. Ingest never deletes edges, deliberately — edge rows are shared between every document that asserts the same pair, so a document-scoped delete would erase relationships other documents still support.
 
 ### Monitoring GC
 

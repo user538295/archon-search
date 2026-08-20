@@ -28,13 +28,23 @@ class GcPassResult:
     orphan_edges_removed: int
     """Number of graph edges deleted because at least one endpoint was an orphan node."""
     communities_invalidated: bool = field(init=False)
-    """``True`` when ``orphan_nodes_removed > 0``; computed by ``__post_init__``.
+    """``True`` when either count is non-zero; computed by ``__post_init__``.
+
+    Edges count as well as nodes (2026-08-20-010): Leiden partitions over the
+    edge list, so deleting a relationship makes the stored communities stale
+    even when every member node still exists. Before the unsupported-edge sweep
+    existed, ``orphan_edges_removed > 0`` always implied
+    ``orphan_nodes_removed > 0`` — edges were only ever collected alongside an
+    orphaned endpoint — so this broadening changes no pre-existing path.
+
     When ``True`` the caller should trigger a ``build-communities`` pass to
     rebuild community data for the collection.
     """
 
     def __post_init__(self) -> None:
-        self.communities_invalidated = self.orphan_nodes_removed > 0
+        self.communities_invalidated = (
+            self.orphan_nodes_removed > 0 or self.orphan_edges_removed > 0
+        )
 
 
 class EntityType(str, Enum):

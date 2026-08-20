@@ -127,10 +127,21 @@ def test_gc_pass_result_communities_invalidated_when_nodes_removed() -> None:
     assert result.communities_invalidated is True
 
 
-def test_gc_pass_result_communities_invalidated_false_when_no_nodes_removed() -> None:
-    """communities_invalidated is False when orphan_nodes_removed == 0."""
+def test_gc_pass_result_communities_invalidated_when_only_edges_removed() -> None:
+    """Edges alone invalidate communities (2026-08-20-010).
+
+    This test previously pinned the opposite — `nodes=0, edges=5` → False. That
+    combination was unreachable in production at the time (edges were only ever
+    collected alongside an orphaned endpoint), so it asserted a hypothetical.
+    The unsupported-relationship sweep makes it reachable, and Leiden partitions
+    over the edge list, so the stored communities are stale once a relationship
+    is deleted even though every member node still exists.
+    """
     result = GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=5)
-    assert result.communities_invalidated is False
+    assert result.communities_invalidated is True
+
+    # Both zero is still the only False case.
+    assert GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0).communities_invalidated is False
 
 
 def test_gc_pass_result_communities_invalidated_computed_correctly() -> None:
@@ -1051,8 +1062,21 @@ def test_delete_orphan_nodes_aborts_on_corrupt_edges_read() -> None:
     mock_nodes_table.delete.assert_not_called()
 
 
-def test_delete_orphan_nodes_skipsEdgesTableWhenAllNodesMentioned() -> None:
-    """Healthy graph (zero orphan candidates) must not open the edges table (C1-B-2)."""
+def test_delete_orphan_nodes_reads_edges_even_when_all_nodes_mentioned() -> None:
+    """A healthy node set no longer short-circuits the edges read (2026-08-20-010).
+
+    This test previously pinned the opposite — C1-B-2 added an early return so a
+    graph with zero orphan candidates never opened the edges table. That
+    optimisation is precisely what made this bug unreachable: the common shape of
+    a stale co-occurrence edge is "every entity still mentioned, but two of them
+    no longer share a chunk", which the early return skipped every time.
+
+    Rejected alternative: keep the early return and expose the sweep as a separate
+    `GraphStore` method the maintenance loop calls second. That preserves the
+    optimisation but adds a public method, a second full edges scan, and a second
+    caller branch — more moved surface than the read it saves, on a loop that
+    already runs off the request path.
+    """
     node_a = _node("EntityA")
     node_b = _node("EntityB")
     mention_a = _mention(node_a.id, "chunk-1")
@@ -1088,7 +1112,10 @@ def test_delete_orphan_nodes_skipsEdgesTableWhenAllNodesMentioned() -> None:
     result = asyncio.run(store.delete_orphan_nodes_and_edges(_COL, _NS))
 
     assert result == GcPassResult(orphan_nodes_removed=0, orphan_edges_removed=0)
-    assert not any("edges" in name for name in open_calls)
+    assert any("edges" in name for name in open_calls), (
+        "the edges table must be read even when no node is orphaned — otherwise "
+        "the unsupported-relationship sweep can never run"
+    )
 
 
 def test_delete_orphan_nodes_exemptsInferredDefRefEdges() -> None:
@@ -1340,5 +1367,153 @@ def test_delete_graph_by_doc_preservesSharedEntityNode(tmp_path: Path) -> None:
 
         assert {n.id for n in nodes} == {shared_id}
         assert {e.id for e in edges} == {edge_from_b.id}
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-20-010: co-occurrence edges whose entity pair is no longer
+# co-mentioned anywhere must be swept, even when no node is orphaned.
+# ---------------------------------------------------------------------------
+
+
+def test_gc_removes_related_to_edge_whose_pair_is_no_longer_co_mentioned(
+    tmp_path: Path,
+) -> None:
+    """A `related_to` edge asserts "these two entities appeared in the same chunk".
+
+    Edit a document so they no longer do, re-ingest, and the edge survives:
+    `write_graph` upserts by stable edge ID and never removes, and orphan GC
+    only asks "does this ENTITY still have a mention?" — never "does this
+    RELATIONSHIP still hold?". Both endpoints stay mentioned by other text, so
+    nothing ever collects the edge.
+
+    This is the common shape of the bug and the one the previous early-return
+    structure could not reach: **no node is orphaned at all**.
+    """
+
+    async def _run() -> None:
+        store = GraphStore(tmp_path)
+        await store.connect()
+
+        alice = _node("Alice", EntityType.person)
+        acme = _node("Acme Corp", EntityType.system)
+        london = _node("London", EntityType.system)
+
+        # `related_to` explicitly: `_edge` builds `uses`, which the sweep does not
+        # touch. Co-occurrence edges are what this bug is about.
+        def _related(src: GraphNode, tgt: GraphNode) -> GraphEdge:
+            return GraphEdge(
+                id=make_stable_edge_id(src.id, tgt.id, RelationshipType.related_to.value),
+                source_node_id=src.id,
+                target_node_id=tgt.id,
+                relationship_type=RelationshipType.related_to,
+                source_doc_id="doc-1",
+            )
+
+        # Before the edit: Alice+Acme co-occur in chunk-1, Alice+London in chunk-2.
+        supported = _related(alice, london)   # still co-mentioned → must survive
+        unsupported = _related(alice, acme)   # pair no longer co-mentioned → must go
+
+        await store.ensure_graph_tables(_COL, ns=_NS)
+        await store.write_graph(_COL, [alice, acme, london], [supported, unsupported], ns=_NS)
+
+        # After the edit: every entity is still mentioned somewhere (so nothing is
+        # orphaned), but Alice and Acme no longer share a chunk.
+        await store.write_mentions(
+            _COL,
+            [
+                GraphMention(entity_id=alice.id, chunk_id="chunk-2", doc_id="doc-1"),
+                GraphMention(entity_id=london.id, chunk_id="chunk-2", doc_id="doc-1"),
+                GraphMention(entity_id=acme.id, chunk_id="chunk-3", doc_id="doc-1"),
+            ],
+            ns=_NS,
+        )
+
+        result = await store.delete_orphan_nodes_and_edges(_COL, _NS)
+
+        remaining = {e.id for e in await store.get_all_edges(_COL, ns=_NS)}
+        assert unsupported.id not in remaining, (
+            "a related_to edge whose entity pair is no longer co-mentioned in any "
+            "chunk asserts a relationship that no document supports; it must be swept"
+        )
+        assert supported.id in remaining, (
+            "an edge whose pair still shares a chunk must survive — the sweep must "
+            "not become a blanket delete"
+        )
+        assert result.orphan_nodes_removed == 0, (
+            "no entity lost its last mention, so no node should be removed; "
+            f"got {result.orphan_nodes_removed}"
+        )
+        assert result.orphan_edges_removed == 1, (
+            f"expected the one unsupported edge to be counted; got {result.orphan_edges_removed}"
+        )
+        assert result.communities_invalidated is True, (
+            "Leiden partitions over the edge list, so deleting a relationship makes "
+            "the stored communities stale even though every member node still exists"
+        )
+
+        await store.disconnect()
+
+    asyncio.run(_run())
+
+
+def test_gc_sweep_spares_defref_and_synonym_edges(tmp_path: Path) -> None:
+    """The sweep is scoped to `related_to`, which the NER co-occurrence path is the
+    only producer of. Def/ref edges (`calls`/`imports`/`defines`/`inherits`) are
+    file-derived and synonym edges are dictionary-derived — neither is
+    mention-backed, so neither may be judged by co-mention."""
+
+    async def _run() -> None:
+        store = GraphStore(tmp_path)
+        await store.connect()
+
+        caller = _node("parse_config", EntityType.code_symbol)
+        callee = _node("read_toml", EntityType.code_symbol)
+        term = _node("k8s", EntityType.concept)
+        alias = _node("kubernetes", EntityType.concept)
+
+        defref = GraphEdge(
+            id=make_stable_edge_id(caller.id, callee.id, RelationshipType.calls.value),
+            source_node_id=caller.id,
+            target_node_id=callee.id,
+            relationship_type=RelationshipType.calls,
+            source_doc_id="doc-code",
+            extraction_method="extracted",
+        )
+        synonym = GraphEdge(
+            id=make_stable_edge_id(term.id, alias.id, RelationshipType.synonym_of.value),
+            source_node_id=term.id,
+            target_node_id=alias.id,
+            relationship_type=RelationshipType.synonym_of,
+            source_doc_id="alias-loader",
+            extraction_method="manual",
+        )
+
+        await store.ensure_graph_tables(_COL, ns=_NS)
+        await store.write_graph(
+            _COL, [caller, callee, term, alias], [defref, synonym], ns=_NS
+        )
+        # Every node mentioned, but no PAIR shares a chunk — under an unscoped
+        # sweep both edges would be deleted.
+        await store.write_mentions(
+            _COL,
+            [
+                GraphMention(entity_id=caller.id, chunk_id="c1", doc_id="doc-code"),
+                GraphMention(entity_id=callee.id, chunk_id="c2", doc_id="doc-code"),
+                GraphMention(entity_id=term.id, chunk_id="c3", doc_id="doc-1"),
+                GraphMention(entity_id=alias.id, chunk_id="c4", doc_id="doc-1"),
+            ],
+            ns=_NS,
+        )
+
+        result = await store.delete_orphan_nodes_and_edges(_COL, _NS)
+
+        remaining = {e.id for e in await store.get_all_edges(_COL, ns=_NS)}
+        assert defref.id in remaining, "def/ref edges are file-derived, not mention-derived"
+        assert synonym.id in remaining, "synonym edges are dictionary-derived, not mention-derived"
+        assert result.orphan_edges_removed == 0
+
+        await store.disconnect()
 
     asyncio.run(_run())
