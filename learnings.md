@@ -6,7 +6,7 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 - **[2026-08-20] (×54) pytest OOM/parallelism**: rules now live in `tests/CLAUDE.md`. Residual: a DIFFERENT timing test failing per full run = contention, not regression. Raise a failure-path-only budget 5s→30s — free on green, kills the flake.
 - **[2026-08-20] (×4) OOM/memory RCA**: native leaks need a guarded repro (RSS cap+alarm); log-census rebuilds the timeline. Global `app.state.embedder` duplicates the cache's default-model copy — count both. Job-marker guards miss the lifespan sync.
 - **[2026-08-20] (×1) mutation checks lie**: a passing revert-test isn't proof. `JobStore.__init__`'s `_write_atomic()` re-runs a good `_evict_old()` and masked a reordered `_load()`. No-op the repair path to isolate; confirm the INTENDED oracle failed.
-- **[2026-08-20] (×1) sticky guard state**: durable suppression gets its OWN data-dir file — `.exists()` is parse-free, so corruption can't latch it. Clear it UNCONDITIONALLY: gating the clear on what gates the guard strands the marker.
+- **[2026-08-20] (×2) latch/guard state**: durable suppression gets its OWN data-dir file; clear it UNCONDITIONALLY. A broad catch around `await to_thread(...)` swallows `CancelledError` — re-raise FIRST or shutdown latches a degraded flag.
 
 ## What Has Worked
 - **[2026-08-20] (×64) bug briefs**: failing repro FIRST; probe config permutations; diff green tests against the DOC contract; fix at the guard layer, not a call-site proxy. Briefs undercount blast radius (sync.py mirrors pipeline's FTS/meta passes).
