@@ -1,7 +1,7 @@
 **Purpose**: Install `archon-search` on a workstation or server.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-08-20 / **Next review**: 2027-07-29
 
 # Installation
 
@@ -65,7 +65,9 @@ Some features ship as optional dependency groups (`[project.optional-dependencie
 | `openai-provider` | openai SDK | OpenAI provider for HyDE / RAG-Fusion. |
 | *(none for llama.cpp)* | `httpx` (core dep) | Local llama-server provider for HyDE / RAG-Fusion / graph enrichment — no extra install. Set `provider = "llama_cpp"` in the relevant config sections. |
 
-`graph.enabled = true` with spaCy absent raises a `ConfigError` at startup; missing `code` parsers only log a warning and skip code files, so prose graphing still works.
+`graph.enabled = true` with the spaCy *library* absent raises a `ConfigError` at startup; missing `code` parsers only log a warning and skip code files, so prose graphing still works.
+
+The `graph` extra installs spaCy but **not** its `en_core_web_sm` NER model — that model is not on PyPI, so `archon-search wizard` fetches and places it under `<data-dir>/models/spacy/` and the server never downloads it. A missing model is not a startup failure and not an ingest failure: prose entity extraction is skipped, code-symbol graphing keeps working, and `GET /status` reports the miss. Remedies: [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model).
 
 ## ONNX Runtime providers (GPU acceleration)
 
@@ -215,6 +217,7 @@ rm -rf ~/.archon-search/
 | `~/.archon-search/logs/archon-search.log` | Server log. |
 | `~/.archon-search/search-logs/` | Telemetry JSONL (only when telemetry is enabled). |
 | `~/.archon-search/models/lid.176.ftz` | **C2** — fasttext language identification model (only when installed with `--multilingual`). |
+| `~/.archon-search/models/spacy/en_core_web_sm-<ver>/` | spaCy NER model for graph prose extraction (only when the wizard provisioned the graph extra). The server never writes or downloads this — see [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model). |
 
 > The entire runtime tree relocates with a single env var: set `ARCHON_SEARCH_DATA_DIR` to move DB, models, keys, and logs off `~/.archon-search/`.
 

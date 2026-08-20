@@ -115,6 +115,15 @@ def _render_summary(
             feature_bullets.append("• Code enrichment (tree-sitter)")
         if features.install_graph_extra:
             feature_bullets.append("• Graph enrichment (code graphing)")
+            if multilingual:
+                # Honest disclosure (2026-08-19-030): en_core_web_sm is
+                # English-only while the deployment is multilingual.
+                feature_bullets.append(
+                    "  Note: prose entity extraction is English-only (en_core_web_sm);"
+                )
+                feature_bullets.append(
+                    "  non-English documents contribute code-symbol entities only."
+                )
         if features.install_multilingual_extra:
             feature_bullets.append("• Language detection (fasttext)")
         if features.enable_hyde:

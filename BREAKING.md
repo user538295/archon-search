@@ -8,6 +8,20 @@
 
 ## Changelog
 
+### [next release] — graph NER model unavailability no longer fails ingest; `provider_warnings` gains a graph-NER category (2026-08-19)
+
+**Surface**: `POST /ingest` (and directory/MCP ingest); `GET /status` → `model_validation.provider_warnings`; `GET /ready` → `checks.models`.
+
+**Behaviour change** (previously-failing ingests now succeed — non-breaking for well-behaved clients; no schema change):
+- With `[graph].enabled = true` and the `en_core_web_sm` spaCy model missing, `POST /ingest` (and directory/MCP ingest) previously returned `IngestResult.status = "error"` for every file that produced at least one plain-text chunk, with zero chunks persisted. It now returns `status = "ok"`: chunks embed and persist, code-symbol graph entities are unaffected, and prose entity extraction is skipped with a warning in `IngestResult.warnings`. Automation that branched on that `status == "error"` case for this specific cause must be aware the same input now succeeds.
+- `provider_warnings` (`GET /status` → `model_validation`) can newly carry graph-NER entries when `[graph].enabled = true`: a missing or version-incompatible model, and — independently, whenever `[database].multilingual = true` — an English-only disclosure. The two are not alternatives: a deployment that is both multilingual and missing the model receives both entries. On upgrade, any existing `[graph].enabled = true` deployment that lacks the model gains one of these entries and can flip `checks.models` (`GET /ready`) from `"ok"` to `"warn"` fleet-wide, purely from the upgrade — no config change on the operator's part. `provider_warnings` was already `list[str]` and `CheckStatus.WARN` already existed for `checks.models`, so this is not a schema break, but `Documentation/OperatorGuide/20_monitoring_and_alerts.md` documents alerting on exactly this field — operators with that alert wired up should expect new, non-search-affecting `"warn"` entries after upgrading and triage them separately from a GPU/provider misconfiguration (see that doc for the distinction).
+
+**Breaking for library embedders**: `archon_search.pipeline.create_pipeline()` — public API, also re-exported at `archon_search.install.create_pipeline` — now raises `ConfigError` at construction time when `[graph].enabled = true` and spaCy is not importable, before it builds the store, embedder or reranker. It previously constructed successfully and failed per-ingest. The server was already guarded this way (`create_app` → `_check_graph_deps`); this closes the same hole for direct callers. **Migration for this case**: install the extra (`pip install 'archon-search[graph]'`) or set `[graph].enabled = false`.
+
+**Migration** (REST/MCP consumers): no action required — no field was added, removed, or retyped, and no HTTP status code changed. Operators alerting on non-empty `provider_warnings` or `checks.models != "ok"` should update their runbook to distinguish the new graph-NER cause (fix: `archon-search wizard`, or a manual model placement) from a GPU/provider probe failure; see `Documentation/OperatorGuide/60_graph_operations.md` and `20_monitoring_and_alerts.md`.
+
+---
+
 ### [next release] — the startup collection sync is suppressed after an unclean, mid-ingest death; `StartupSyncResult` gains `"suppressed"` and `/ready` `checks.sync` gains `"warn"` (2026-08-19)
 
 **What changed:** The lifespan previously created its background startup sync unconditionally whenever any collection was configured. It now consults the job store first: when loading `~/.archon-search/archon-search-jobs.json` rewrote an **ingest-family** job (`job_type` `ingest` or `sync`) to `FAILED` with `error="process_restart"` — i.e. the previous process died mid-ingest — no sync task is created. The lifespan logs `"startup sync SUPPRESSED for N collection(s): …"` at WARNING with the manual resume path, leaves `app.state._startup_sync_task` at `None`, and sets `app.state.sync_result` to the new `StartupSyncResult` member `"suppressed"`, which `GET /status` surfaces in `sync_result`. One marker is enough — there is no two-strike rule — and there is no config opt-out.

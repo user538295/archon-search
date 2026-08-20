@@ -42,10 +42,21 @@ def _register_collection(client, col_path: str, api_key: str) -> None:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _inject_spacy_stub() -> None:
-    """Inject a minimal spaCy stub so graph-enabled apps can start without the real package."""
-    if "spacy" not in sys.modules:
-        sys.modules["spacy"] = types.ModuleType("spacy")
+def _inject_spacy_stub():
+    """Inject a spaCy stub so graph-enabled apps can start without the real package.
+
+    Restores ``sys.modules`` on teardown (2026-08-19-030): a bare stub left
+    installed shadows the REAL spaCy for every later test in the same xdist
+    worker, silently breaking anything that depends on real ``spacy.util``.
+    """
+    if "spacy" in sys.modules:
+        yield
+        return
+    sys.modules["spacy"] = types.ModuleType("spacy")
+    try:
+        yield
+    finally:
+        sys.modules.pop("spacy", None)
 
 
 # ---------------------------------------------------------------------------

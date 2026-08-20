@@ -30,6 +30,14 @@ logger = logging.getLogger(__name__)
 # embedder/reranker probe, since this is an unrelated side check.
 _LLAMA_CPP_PROBE_TIMEOUT_SECONDS: float = 3.0
 
+# Sanitized wire-facing messages (CLAUDE.md: never put `str(exc)` in a
+# wire-facing field) for validate_models_async's two `except BaseException`
+# branches — the raw exception is logged with a traceback instead.
+_VALIDATION_FAILED_MESSAGE: str = "model validation failed unexpectedly; see server logs for details"
+_RERANKER_SPLIT_VALIDATION_FAILED_MESSAGE: str = (
+    "reranker split-provider validation failed unexpectedly; see server logs for details"
+)
+
 
 class ModelValidationError(ValueError):
     """Raised when the embedding model dimension cannot be determined."""
@@ -96,6 +104,75 @@ async def _probe_llama_cpp(config: SearchConfig) -> bool | None:
     except Exception as exc:  # never raises — any failure reads as unreachable
         logger.warning("llama-server unreachable at %s: %s", base_url, exc)
         return False
+
+
+def graph_ner_warnings(config: SearchConfig) -> list[str]:
+    """Report graph prose-NER limitations at startup (2026-08-19-030).
+
+    Returns ``[]`` when ``[graph]`` is disabled. Otherwise probes the spaCy model
+    the same way the extractor resolves it (installed package, the
+    wizard-provisioned data-dir path, or "present but incompatible with the
+    installed spaCy" — C1-I-3) so a missing or unusable model surfaces on
+    ``GET /status`` instead of only in per-file ingest logs. A missing spaCy
+    *package* (the ``[graph]`` extra itself not installed) is reported
+    distinctly from a missing *model* — reusing
+    ``graph_extractor.SPACY_NOT_INSTALLED_MESSAGE`` so the two surfaces agree
+    (T6) — rather than blaming the model for spaCy's own absence. Also
+    discloses that ``en_core_web_sm`` is English-only when the deployment is
+    multilingual, even alongside a missing/incompatible model (T16 — both
+    notes are independently true and both are actionable) —
+    ``[[2026-08-19-035-multilingual-graph-ner-brief.md]]`` tracks the
+    successor engine.
+
+    Never raises (T7): every branch below is inside the ``try``; a broken data
+    dir, an import failure other than ``ImportError``, or any other surprise
+    reads as "cannot determine" rather than propagating.
+    """
+    if not config.graph.enabled:
+        return []
+    try:
+        try:
+            import spacy  # noqa: F401, PLC0415
+        except ImportError:
+            from archon_search.graph_extractor import (  # noqa: PLC0415
+                SPACY_NOT_INSTALLED_MESSAGE,
+            )
+
+            return [f"graph prose entity extraction is disabled: {SPACY_NOT_INSTALLED_MESSAGE}"]
+
+        from archon_search.graph_extractor import (  # noqa: PLC0415
+            ENGLISH_ONLY_DISCLOSURE,
+            resolve_spacy_model,
+        )
+
+        resolution = resolve_spacy_model()
+    except Exception as exc:  # never raises — validate_models_async must not fail
+        logger.warning("graph NER model probe failed: %s", exc)
+        return ["graph NER model presence could not be determined"]
+
+    warnings: list[str] = []
+    if resolution.target is None:
+        if resolution.incompatible_versions:
+            warnings.append(
+                "graph prose entity extraction is disabled: spaCy model "
+                "'en_core_web_sm' is present under the data directory "
+                f"({', '.join(resolution.incompatible_versions)}) but incompatible "
+                "with the installed spaCy version — re-run `archon-search wizard` "
+                "to provision a compatible model"
+            )
+        else:
+            warnings.append(
+                "graph prose entity extraction is disabled: spaCy model "
+                "'en_core_web_sm' is neither installed nor provisioned under the "
+                "data directory — re-run `archon-search wizard` to provision it"
+            )
+        if config.multilingual:
+            warnings.append(ENGLISH_ONLY_DISCLOSURE)
+        return warnings
+
+    if config.multilingual:
+        return [ENGLISH_ONLY_DISCLOSURE]
+    return []
 
 
 def _available_providers() -> list[str]:
@@ -204,10 +281,35 @@ async def validate_models_async(
     :func:`_probe_llama_cpp`. This is an independent, short-timeout side check;
     its outcome (``llama_cpp_ok``) is attached to every returned result, including
     the timeout/failure early-return paths below.
+
+    Likewise :func:`graph_ner_warnings` (2026-08-19-030) — dispatched to a thread
+    since it does filesystem globbing and package-metadata scanning — runs before
+    the probe and its output is PREPENDED to ``provider_warnings`` on every return
+    path. Every ``ModelValidationResult`` this function returns is built by the
+    local ``_result`` closure below, which always does that prepend — so the
+    guarantee is structural (2026-08-19-030 C1-B-8), not a convention each return
+    site could forget.
     """
     llama_cpp_ok = await _probe_llama_cpp(config)
+    graph_warnings = await asyncio.to_thread(graph_ner_warnings, config)
     embedding_model = "" if embedder_is_warm else config.embedding_model
     _start = time.monotonic()
+
+    def _result(
+        embedder_ok: bool | None,
+        reranker_ok: bool | None,
+        extra_warnings: list[str],
+    ) -> ModelValidationResult:
+        """Build a result with ``graph_warnings`` PREPENDED — the single choke
+        point every return path in this function goes through."""
+        return ModelValidationResult(
+            embedder_ok=embedder_ok,
+            reranker_ok=reranker_ok,
+            llama_cpp_ok=llama_cpp_ok,
+            provider_warnings=graph_warnings + extra_warnings,
+            validated_at=datetime.now(UTC),
+        )
+
     try:
         embedder_ok, reranker_ok, warnings = await asyncio.wait_for(
             asyncio.to_thread(
@@ -219,22 +321,10 @@ async def validate_models_async(
             timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:
-        return ModelValidationResult(
-            embedder_ok=False,
-            reranker_ok=False,
-            llama_cpp_ok=llama_cpp_ok,
-            provider_warnings=[f"validation timed out after {timeout_seconds}s"],
-            validated_at=datetime.now(UTC),
-        )
+        return _result(False, False, [f"validation timed out after {timeout_seconds}s"])
     except BaseException as exc:  # includes CancelledError — never re-raise
-        logger.warning("model validation failed unexpectedly: %s", exc)
-        return ModelValidationResult(
-            embedder_ok=False,
-            reranker_ok=False,
-            llama_cpp_ok=llama_cpp_ok,
-            provider_warnings=[f"validation failed unexpectedly: {exc}"],
-            validated_at=datetime.now(UTC),
-        )
+        logger.warning("model validation failed unexpectedly: %s", exc, exc_info=True)
+        return _result(False, False, [_VALIDATION_FAILED_MESSAGE])
 
     # If split config, re-validate reranker under its actual providers.
     # Use remaining budget so total wall time stays within timeout_seconds.
@@ -260,22 +350,14 @@ async def validate_models_async(
                 reranker_ok = False
                 warnings = warnings + [f"reranker split-provider validation timed out after {_remaining:.1f}s"]
             except BaseException as exc:  # includes CancelledError — never re-raise
-                logger.warning("reranker split-provider validation failed: %s", exc)
-                return ModelValidationResult(
-                    embedder_ok=embedder_ok,
-                    reranker_ok=False,
-                    llama_cpp_ok=llama_cpp_ok,
-                    provider_warnings=warnings + [f"reranker split-provider validation failed unexpectedly: {exc}"],
-                    validated_at=datetime.now(UTC),
+                logger.warning(
+                    "reranker split-provider validation failed: %s", exc, exc_info=True
+                )
+                return _result(
+                    embedder_ok, False, warnings + [_RERANKER_SPLIT_VALIDATION_FAILED_MESSAGE]
                 )
 
-    result = ModelValidationResult(
-        embedder_ok=embedder_ok,
-        reranker_ok=reranker_ok,
-        llama_cpp_ok=llama_cpp_ok,
-        provider_warnings=warnings,
-        validated_at=datetime.now(UTC),
-    )
+    result = _result(embedder_ok, reranker_ok, warnings)
 
     # Stale-config advisory: CoreML set, no split written, reranker enabled, AND
     # CoreML actually failed for the reranker (distinguishes stale from both-pass)

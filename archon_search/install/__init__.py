@@ -45,6 +45,10 @@ from .errors import InstallError as InstallError
 from .errors import InstallLockError as InstallLockError
 from .errors import NeedsForceDeleteError as NeedsForceDeleteError
 from .extras import _PROVIDER_EXTRA as _PROVIDER_EXTRA
+from .extras import SPACY_COMPATIBILITY_URL as SPACY_COMPATIBILITY_URL
+from .extras import SPACY_MODEL_NAME as SPACY_MODEL_NAME
+from .extras import SPACY_MODEL_WHEEL_URL as SPACY_MODEL_WHEEL_URL
+from .extras import _download_spacy_model as _download_spacy_model
 from .extras import _install_code_extra as _install_code_extra
 from .extras import _install_cuda_torch as _install_cuda_torch
 from .extras import _install_extra as _install_extra

@@ -1,4 +1,5 @@
-"""Durable (fsync-backed) atomic file writes.
+"""Durable (fsync-backed) atomic file writes, plus the directory/tree fsync
+primitives that make a rename-based publish durable.
 
 Callers must serialize writes to the same path. The helper is not internally
 synchronized.
@@ -73,3 +74,44 @@ def atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
         os.fsync(dir_fd)
     finally:
         os.close(dir_fd)
+
+
+def fsync_dir(path: Path) -> None:
+    """fsync a directory entry, so a rename published into it survives a crash."""
+    fd = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def fsync_tree(root: Path) -> None:
+    """fsync every regular file under *root*, then every directory deepest-first.
+
+    Complements the single-file ``atomic_write_*`` helpers above for the case
+    where a whole extracted directory tree is published with one
+    same-filesystem rename: the rename is atomic, but only durable if its
+    contents were already on disk.
+
+    Nested directories must be fsynced too, not just *root*: fsyncing a file
+    makes its *data* durable, but its *directory entry* only becomes durable
+    when the containing directory is fsynced. An ``en_core_web_sm`` model tree
+    nests its weights under ``ner/``, ``tok2vec/`` and friends, so syncing only
+    *root* can survive a crash as a valid-looking ``config.cfg`` beside empty
+    subdirectories — exactly the "on disk but unloadable" state the caller
+    relies on this to prevent (2026-08-19-030 C2-I-4).
+    """
+    directories: list[Path] = []
+    for path in root.rglob("*"):
+        if path.is_dir():
+            directories.append(path)
+        elif path.is_file():
+            fd = os.open(str(path), os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+    # Deepest-first: a child's entry must be durable before its parent is synced.
+    for directory in sorted(directories, key=lambda p: len(p.parts), reverse=True):
+        fsync_dir(directory)
+    fsync_dir(root)

@@ -1,7 +1,7 @@
 **Purpose**: Document where `archon-search` keeps state on disk, the LanceDB schemas it writes, and how ingest mutates that state.
 **Audience**: Maintainers and operators of an `archon-search` install.
 **Status**: Draft
-**Last reviewed**: 2026-05-24
+**Last reviewed**: 2026-08-20
 **Next review**: 2026-08-20
 
 # Data Architecture and Persistence
@@ -35,10 +35,11 @@ In the table below, paths are relative to the data-directory root — `~/.archon
 | `.indexing_state.json` | `progress.py` (`IndexingStateStore`) | per-collection indexing progress/status | atomic-rename writes; RMW serialized by an internal `RLock` (see "Indexing state") |
 | `.maintenance-state.json` | `jobs/maintenance_loop.py` (`MaintenanceLoop`) | last/next run timestamps, per-collection health, retry counts | atomic-rename write after each pass; absent/corrupt → fresh empty state (no error); see "Maintenance state" |
 | `models/` | `language_detector.py` | fasttext language detector (`lid.176.ftz`) | only if `multilingual=True`; resolved lazily via `get_fasttext_models_dir()` |
+| `models/spacy/en_core_web_sm-<ver>/` | written by `install/extras.py`, read by `graph_extractor.py` | spaCy NER model directory, unpacked from the pinned spacy-models wheel | only when the wizard provisioned it; resolved lazily via `paths.get_spacy_models_dir()`. `model_validation.py` never touches this accessor — it resolves the model through `graph_extractor.find_spacy_model()`. The runtime never writes here — a missing model degrades prose NER instead of failing ingest (2026-08-19-030) |
 | `history/sessions/` | `cli/ingest.py` | default `--sessions-dir` for the `ingest` subcommand | resolved lazily via `get_data_dir()` |
 
 Override paths:
-- `ARCHON_SEARCH_DATA_DIR` (C9) — relocates the entire layout above (except `archon-search.toml` — see `ARCHON_SEARCH_CONFIG`). The Docker image sets `ARCHON_SEARCH_DATA_DIR=/data`. Read lazily on every call by `paths.get_data_dir()`, `key_manager.get_key_file()`, `jobs.get_jobs_file()`, `language_detector.get_fasttext_models_dir()`, `cli/ingest.py`, and `config.load_config()`.
+- `ARCHON_SEARCH_DATA_DIR` (C9) — relocates the entire layout above (except `archon-search.toml` — see `ARCHON_SEARCH_CONFIG`). The Docker image sets `ARCHON_SEARCH_DATA_DIR=/data`. Read lazily on every call by `paths.get_data_dir()`, `key_manager.get_key_file()`, `jobs.get_jobs_file()`, `language_detector.get_fasttext_models_dir()`, `paths.get_spacy_models_dir()`, `cli/ingest.py`, and `config.load_config()`.
 - `ARCHON_SEARCH_KEY_FILE` overrides `.search.env` location (takes precedence over `ARCHON_SEARCH_DATA_DIR` for the key file).
 - `ARCHON_SEARCH_API_KEY` (env var) overrides reading any key file entirely.
 - `ARCHON_SEARCH_CONFIG` overrides `archon-search.toml` location.

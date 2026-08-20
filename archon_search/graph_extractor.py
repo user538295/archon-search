@@ -33,8 +33,11 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 import logging
+import operator
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -50,6 +53,7 @@ from archon_search.graph_types import (
     make_stable_edge_id,
     make_stable_entity_id,
 )
+from archon_search.paths import get_spacy_models_dir
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig
@@ -61,7 +65,57 @@ _logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_SPACY_MODEL: str = "en_core_web_sm"
+# Public: the single source of truth for the model name (2026-08-19-030) — other
+# layers (install/extras.py's wizard provisioning, model_validation.py's startup
+# probe) should import this rather than hardcoding a second "en_core_web_sm"
+# literal.
+SPACY_MODEL_NAME: str = "en_core_web_sm"
+
+# Public: the one place the English-only limitation of `en_core_web_sm` is
+# worded (2026-08-19-030 / 2026-08-19-035). model_validation.py's startup
+# disclosure reuses this string; the wizard summary (install/render.py) has its
+# own copy pending a follow-up to reuse it too.
+ENGLISH_ONLY_DISCLOSURE: str = (
+    f"graph prose entity extraction is English-only ({SPACY_MODEL_NAME}) "
+    "while multilingual = true; non-English documents contribute "
+    "code-symbol entities only"
+)
+
+# Public: shared with model_validation.py so the "[graph] extra missing"
+# message reads identically whether it is surfaced from a failed ingest or
+# from GET /status (2026-08-19-030 T6).
+SPACY_NOT_INSTALLED_MESSAGE: str = (
+    "spaCy is not installed. Install the graph extras: pip install 'archon-search[graph]'"
+)
+
+# Wire-facing degradation notices. Deliberately free of exception text: they
+# land in `GraphExtractionResult.warnings` → `IngestResult.warnings` (CLAUDE.md:
+# never put `str(exc)` in a wire-facing field). The underlying exception is
+# logged with a traceback instead. Two variants distinguish "never provisioned"
+# from "provisioned but incompatible with the installed spaCy" (C1-I-3) — the
+# operator fix differs (provision vs. re-provision).
+_MODEL_ABSENT_WARNING: str = (
+    f"spaCy model {SPACY_MODEL_NAME!r} is unavailable; prose entity extraction is "
+    "disabled for this ingest (code-symbol extraction is unaffected). "
+    "Run `archon-search wizard` to provision the model."
+)
+_MODEL_INCOMPATIBLE_WARNING: str = (
+    f"spaCy model {SPACY_MODEL_NAME!r} is present under the data directory but "
+    "incompatible with the installed spaCy version; prose entity extraction is "
+    "disabled for this ingest (code-symbol extraction is unaffected). "
+    "Re-run `archon-search wizard` to provision a compatible model."
+)
+
+# Comma-separated ">="/"<"-style clause operators, checked longest-prefix-first
+# so ">=" is not mistaken for ">" (used by _specifier_satisfied below).
+_SPECIFIER_OPS = {
+    ">=": operator.ge,
+    "<=": operator.le,
+    "==": operator.eq,
+    "!=": operator.ne,
+    ">": operator.gt,
+    "<": operator.lt,
+}
 
 # Mapping from spaCy NER labels to EntityType.
 # Numeric / temporal categories (DATE, TIME, MONEY, PERCENT, QUANTITY,
@@ -82,6 +136,166 @@ _LABEL_TO_ENTITY_TYPE: dict[str, EntityType] = {
 
 
 _NAME_SPLIT_PATTERN = re.compile(r"\s*(?:/|,| and )\s*")
+
+
+@dataclass(frozen=True)
+class SpacyModelResolution:
+    """Outcome of :func:`resolve_spacy_model` (2026-08-19-030 C1-I-3).
+
+    ``target`` is the installed package name or the data-dir path once
+    resolution succeeds, else ``None``. ``incompatible_versions`` names
+    data-dir candidates that exist but whose ``meta.json`` ``spacy_version``
+    range excludes the installed spaCy — "present but not usable", which the
+    operator-facing message must distinguish from "absent entirely".
+    """
+
+    target: str | None
+    incompatible_versions: list[str]
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    """Parse a dotted version string into a comparable tuple of ints.
+
+    Stops at the first non-digit run (adequate for spaCy's plain ``X.Y.Z``
+    releases). No dependency on ``packaging`` — it is only a transitive
+    dependency here, not a declared one (2026-08-19-030 C1-I-2).
+    """
+    parts: list[int] = []
+    for piece in version.split("."):
+        digits = "".join(itertools.takewhile(str.isdigit, piece))
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
+def _model_version_key(path: Path) -> tuple[int, ...]:
+    """Version-aware sort key for a ``en_core_web_sm-<version>`` directory name."""
+    _, _, version = path.name.partition(f"{SPACY_MODEL_NAME}-")
+    return _version_key(version)
+
+
+def _specifier_satisfied(specifier: str, version: str) -> bool:
+    """Check *version* against a comma-separated ``>=``/``<``-style specifier.
+
+    Covers the clause forms spaCy's ``meta.json`` publishes for its
+    ``spacy_version`` field (e.g. ``">=3.8.0,<3.9.0"``). Raises ``ValueError``
+    on an unrecognized clause so the caller can fail open rather than
+    mis-evaluate.
+    """
+    parsed = _version_key(version)
+    for clause in specifier.split(","):
+        clause = clause.strip()
+        if not clause:
+            continue
+        for op_symbol in (">=", "<=", "==", "!=", ">", "<"):
+            if clause.startswith(op_symbol):
+                target = _version_key(clause[len(op_symbol):].strip())
+                if not _SPECIFIER_OPS[op_symbol](parsed, target):
+                    return False
+                break
+        else:
+            raise ValueError(f"unrecognized version clause: {clause!r}")
+    return True
+
+
+def _model_dir_compatible(model_dir: Path, installed_spacy_version: str) -> bool:
+    """Return ``False`` only when ``meta.json`` unambiguously rules out
+    *installed_spacy_version* (2026-08-19-030 C1-I-3).
+
+    Missing/unreadable ``meta.json``, an absent or unparseable
+    ``spacy_version`` field, or an unrecognized clause all read as
+    compatible (fail open) — this check exists only to stop a KNOWN-stale
+    model directory from reporting healthy on ``GET /status``;
+    ``spacy.load()`` at ingest time remains the final authority.
+    """
+    try:
+        meta = json.loads((model_dir / "meta.json").read_text())
+    except (OSError, ValueError):
+        return True
+    spec = meta.get("spacy_version")
+    if not isinstance(spec, str) or not spec.strip() or not installed_spacy_version:
+        return True
+    try:
+        return _specifier_satisfied(spec, installed_spacy_version)
+    except ValueError:
+        return True
+
+
+def resolve_spacy_model() -> SpacyModelResolution:
+    """Resolve a loadable ``en_core_web_sm`` and classify what was found.
+
+    Resolution order (2026-08-19-030): the installed package first — for pip
+    installs that already carry it — then the wizard-provisioned directory
+    under ``get_spacy_models_dir()``, version-sorted (not lexicographic — a
+    directory-name compare would rank ``3.9.0`` before ``3.10.0``) and
+    filtered to versions compatible with the installed spaCy (C1-I-3).
+    Nothing here installs or downloads: a ``uv tool`` venv has no package
+    installer, so a runtime download can only ever fail. Both fields read
+    empty/``None`` when spaCy itself is not importable.
+    """
+    try:
+        import spacy.util  # noqa: PLC0415
+    except ImportError:
+        return SpacyModelResolution(target=None, incompatible_versions=[])
+
+    if SPACY_MODEL_NAME in spacy.util.get_installed_models():
+        return SpacyModelResolution(target=SPACY_MODEL_NAME, incompatible_versions=[])
+
+    candidates = [
+        path
+        for path in get_spacy_models_dir().glob(f"{SPACY_MODEL_NAME}-*")
+        if (path / "config.cfg").is_file()
+    ]
+    # `import spacy.util` above also binds the `spacy` package name itself.
+    installed_spacy_version = getattr(spacy, "__version__", "")
+    compatible: list[Path] = []
+    incompatible: list[str] = []
+    for path in candidates:
+        if _model_dir_compatible(path, installed_spacy_version):
+            compatible.append(path)
+        else:
+            incompatible.append(path.name)
+
+    if not compatible:
+        return SpacyModelResolution(target=None, incompatible_versions=sorted(incompatible))
+
+    newest = max(compatible, key=_model_version_key)
+    return SpacyModelResolution(target=str(newest), incompatible_versions=sorted(incompatible))
+
+
+def ensure_spacy_importable(config: "GraphConfig") -> None:
+    """Raise ``ConfigError`` when graph is enabled but spaCy is not importable.
+
+    The single implementation behind both construction-time guards
+    (``server/app.py``'s ``_check_graph_deps`` and ``pipeline.create_pipeline``),
+    so the two cannot drift. A missing ``[graph]`` extra is an operator
+    misconfiguration: failing at construction beats failing every ingest
+    pre-persist (2026-08-19-030). No-ops when graph is disabled.
+    """
+    if not config.enabled:
+        return
+    from archon_search.config import ConfigError  # noqa: PLC0415
+
+    try:
+        # `sys.modules["spacy"] = None` (how the tests stub absence) makes the
+        # import statement itself raise ModuleNotFoundError — an ImportError
+        # subclass — so the name is never bound and no `is None` check can run.
+        import spacy  # type: ignore[import-untyped]  # noqa: PLC0415, F401
+    except ImportError as exc:
+        raise ConfigError(
+            "graph.enabled=true but spacy is not installed; "
+            "run: pip install archon-search[graph]"
+        ) from exc
+
+
+def find_spacy_model() -> str | None:
+    """Return a loadable ``en_core_web_sm`` reference, or ``None`` if absent.
+
+    Thin wrapper around :func:`resolve_spacy_model` for callers that only
+    need the resolved target, not the incompatible-versions detail.
+    """
+    return resolve_spacy_model().target
 
 
 def _resolve_labeled_pair(
@@ -117,6 +331,19 @@ def _resolve_labeled_pair(
     return None, None
 
 
+class _SpacyModelUnavailable(RuntimeError):
+    """Raised by :meth:`GraphExtractor._load_nlp_sync` when no loadable model
+    was resolved. Carries the absent/incompatible classification directly so
+    the caller does not need a second :func:`resolve_spacy_model` filesystem
+    probe just to pick the right wire-facing message (2026-08-19-030 T1) —
+    ``resolve_spacy_model()`` already ran once, inside ``_load_nlp_sync``.
+    """
+
+    def __init__(self, message: str, *, incompatible: bool) -> None:
+        super().__init__(message)
+        self.incompatible = incompatible
+
+
 # ---------------------------------------------------------------------------
 # GraphExtractor
 # ---------------------------------------------------------------------------
@@ -140,7 +367,17 @@ class GraphExtractor:
         self._config = config
         self._enrichment_client = enrichment_client
         self._nlp: object = None  # spaCy NLP model; loaded lazily on first call
+        # Latches: each probe/failure runs at most once per process instead of
+        # once per file (2026-08-19-030: 734 retries in 27 minutes in
+        # production; C1-B-4: the "[graph] extra missing" probe had the same
+        # unlatched-reprobe shape and is fixed the same way).
+        self._spacy_not_importable: bool = False
+        self._nlp_unavailable: bool = False
+        self._nlp_unavailable_warning: str | None = None
         self._load_lock: asyncio.Lock = asyncio.Lock()
+        # Latches the spaCy-NER-call-failure traceback to one log per process
+        # (C1-I-4) — the per-document `warnings` entry still fires every time.
+        self._ner_failure_logged: bool = False
 
     # ------------------------------------------------------------------
     # Internal helpers (synchronous — called inside asyncio.to_thread)
@@ -149,32 +386,29 @@ class GraphExtractor:
     def _load_nlp_sync(self) -> object:
         """Load the spaCy NLP model synchronously.
 
-        If ``en_core_web_sm`` is not in the list of installed models, it is
-        auto-downloaded and an INFO log is emitted (same transparency pattern
-        as fastembed auto-download).  Must be called inside
+        Resolves the model via :func:`resolve_spacy_model` and raises when it
+        is neither installed nor provisioned (or provisioned but incompatible
+        with the installed spaCy — C1-I-3) — runtime never downloads (the
+        wizard does that; see 2026-08-19-030).  Must be called inside
         ``asyncio.to_thread()`` — do not call directly from async code.
         """
         import spacy  # noqa: PLC0415
-        import spacy.cli  # noqa: PLC0415
-        import spacy.util  # noqa: PLC0415
 
-        if _SPACY_MODEL not in spacy.util.get_installed_models():
-            _logger.info(
-                "spaCy model %r not found; auto-downloading (first call only).",
-                _SPACY_MODEL,
+        resolution = resolve_spacy_model()
+        if resolution.target is None:
+            if resolution.incompatible_versions:
+                raise _SpacyModelUnavailable(
+                    f"spaCy model {SPACY_MODEL_NAME!r} found under "
+                    f"{get_spacy_models_dir()} ({', '.join(resolution.incompatible_versions)}) "
+                    "but incompatible with the installed spaCy version",
+                    incompatible=True,
+                )
+            raise _SpacyModelUnavailable(
+                f"spaCy model {SPACY_MODEL_NAME!r} is neither installed nor present in "
+                f"{get_spacy_models_dir()}",
+                incompatible=False,
             )
-            try:
-                spacy.cli.download(_SPACY_MODEL)
-            except SystemExit as exc:
-                # spaCy calls sys.exit(1) when no package installer (pip/uv) is found.
-                # SystemExit is BaseException, not Exception, so it escapes the caller's
-                # `except Exception` and crashes the server. Convert to RuntimeError here.
-                raise RuntimeError(
-                    f"spaCy model download failed (no package installer found; exit code {exc.code}). "
-                    f"Download the model manually: python -m spacy download {_SPACY_MODEL}"
-                ) from exc
-
-        return spacy.load(_SPACY_MODEL)
+        return spacy.load(resolution.target)
 
     def _run_ner_sync(
         self,
@@ -214,6 +448,65 @@ class GraphExtractor:
     # Public API
     # ------------------------------------------------------------------
 
+    async def _ensure_nlp(self) -> tuple[bool, str | None]:
+        """Load the spaCy model at most once per process.
+
+        Returns ``(is_fatal, message)`` — self-describing, so the caller never
+        has to separately re-read instance state to learn the outcome
+        (2026-08-19-030 C1-I-5). ``is_fatal=True`` ONLY when spaCy itself is
+        not importable (the ``[graph]`` extra is missing) — a misconfiguration
+        the operator must fix, with ``message`` as the ``fatal_error`` to
+        return. ``is_fatal=False`` covers both "ready to use"
+        (``message is None``) and "degraded" (``message`` names the auxiliary
+        failure the caller should append to ``warnings`` and skip prose NER
+        for). Both outcomes latch (``_spacy_not_importable`` /
+        ``_nlp_unavailable``) so the probe/load runs at most once per process,
+        not once per file — including the ImportError probe (C1-B-4).
+        """
+        async with self._load_lock:
+            if self._spacy_not_importable:
+                return True, SPACY_NOT_INSTALLED_MESSAGE
+            if self._nlp is not None or self._nlp_unavailable:
+                return False, self._nlp_unavailable_warning
+
+            try:
+                import spacy as _spacy_probe  # noqa: F401, PLC0415
+            except ImportError:
+                self._spacy_not_importable = True
+                return True, SPACY_NOT_INSTALLED_MESSAGE
+
+            # Load model (CPU-bound) in the default thread-pool executor.
+            # `BaseException`, not `Exception`: the model-load path historically
+            # raised `SystemExit` (spaCy's downloader called `sys.exit()` on
+            # failure) — a narrower catch here would let that escape uncaught
+            # and crash the process, defeating the whole point of degrading
+            # instead of aborting (2026-08-19-030; mirrors the same
+            # `except BaseException` pattern in model_validation.py).
+            try:
+                self._nlp = await asyncio.to_thread(self._load_nlp_sync)
+            except asyncio.CancelledError:
+                # Cancellation says nothing about the model. Swallowing it would
+                # both break structured concurrency and latch `_nlp_unavailable`
+                # for the process lifetime over a shutdown or job-cancel that
+                # happened to land in the load window — disabling prose NER for a
+                # model that is present and healthy (2026-08-19-030 C2-I-1).
+                raise
+            except BaseException as exc:
+                # `_load_nlp_sync` already ran `resolve_spacy_model()` once and
+                # encodes the classification on `_SpacyModelUnavailable` — no
+                # second filesystem probe here (2026-08-19-030 T1: the probe
+                # must run at most once per process, not twice per latch).
+                incompatible = (
+                    isinstance(exc, _SpacyModelUnavailable) and exc.incompatible
+                )
+                message = (
+                    _MODEL_INCOMPATIBLE_WARNING if incompatible else _MODEL_ABSENT_WARNING
+                )
+                self._nlp_unavailable = True
+                self._nlp_unavailable_warning = message
+                _logger.warning("GraphExtractor: %s", message, exc_info=True)
+        return False, self._nlp_unavailable_warning
+
     async def extract(
         self,
         chunks: list[ChunkInput],
@@ -227,9 +520,12 @@ class GraphExtractor:
 
         All CPU-bound spaCy calls are wrapped in ``asyncio.to_thread()``.
 
-        Returns a ``GraphExtractionResult``.  When ``fatal_error`` is non-None
-        on the result, extraction failed completely; the pipeline should set
-        ``IngestResult.status = "error"``.
+        Returns a ``GraphExtractionResult``.  ``fatal_error`` is non-None ONLY
+        when spaCy itself is not importable (the ``[graph]`` extra is missing);
+        the pipeline sets ``IngestResult.status = "error"`` for that case alone.
+        Every other spaCy failure — an unavailable model above all — degrades:
+        ``fatal_error`` stays None, prose NER is skipped, code-symbol output is
+        unaffected, and a warning is appended to ``warnings`` (2026-08-19-030).
         """
         warnings: list[str] = []
         llm_fallback_used = False
@@ -297,59 +593,52 @@ class GraphExtractor:
         if text_chunks:
             # Gate: check spaCy is importable.  Fires when the [graph] extras
             # are not installed (spaCy absent on the import path).
-            async with self._load_lock:
-                if self._nlp is None:
-                    try:
-                        import spacy as _spacy_probe  # noqa: F401, PLC0415
-                    except ImportError:
-                        error_msg = (
-                            "spaCy is not installed. "
-                            "Install the graph extras: pip install 'archon-search[graph]'"
-                        )
-                        return GraphExtractionResult(
-                            nodes=list(nodes.values()),
-                            edges=[],
-                            mentions=[],
-                            fatal_error=error_msg,
-                            warnings=[error_msg],
-                        )
+            is_fatal, load_message = await self._ensure_nlp()
+            if is_fatal:
+                return GraphExtractionResult(
+                    nodes=list(nodes.values()),
+                    edges=[],
+                    mentions=[],
+                    fatal_error=load_message,
+                    warnings=[load_message] if load_message else [],
+                )
+            if load_message is not None:
+                # Degraded: no prose NER this run.  Code-symbol nodes, mentions
+                # and edges collected above still flow through to the caller,
+                # and the file still embeds and persists.
+                warnings.append(load_message)
+                text_chunks = []
 
-                    # Load model (CPU-bound) in the default thread-pool executor.
-                    try:
-                        self._nlp = await asyncio.to_thread(self._load_nlp_sync)
-                    except Exception as exc:
-                        error_msg = (
-                            f"Failed to load spaCy model {_SPACY_MODEL!r}: {exc}. "
-                            f"On air-gapped installs, download the model manually: "
-                            f"python -m spacy download {_SPACY_MODEL}"
-                        )
-                        return GraphExtractionResult(
-                            nodes=list(nodes.values()),
-                            edges=[],
-                            mentions=[],
-                            fatal_error=error_msg,
-                            warnings=[error_msg],
-                        )
-
+        if text_chunks:
             # Run NER (CPU-bound) in a thread pool.
             texts = [c.text for c in text_chunks]
             try:
                 ner_per_chunk = await asyncio.to_thread(
                     self._run_ner_sync, self._nlp, texts
                 )
-            except Exception as exc:
-                error_msg = (
-                    f"spaCy NER failed: {exc}. "
-                    f"On air-gapped installs, download the model manually: "
-                    f"python -m spacy download {_SPACY_MODEL}"
+            except Exception:
+                # Auxiliary failure: warn and drop prose NER for this document
+                # rather than failing the ingest (2026-08-19-030). The
+                # traceback is logged once per process, not once per
+                # document, matching the model-load latch (C1-I-4) — the
+                # per-document `warnings` entry below still fires every time.
+                if not self._ner_failure_logged:
+                    self._ner_failure_logged = True
+                    _logger.warning("GraphExtractor: spaCy NER failed", exc_info=True)
+                else:
+                    _logger.debug(
+                        "GraphExtractor: spaCy NER failed again", exc_info=True
+                    )
+                warnings.append(
+                    "spaCy NER failed; prose entity extraction was skipped for "
+                    "this document (code-symbol extraction is unaffected)."
                 )
-                return GraphExtractionResult(
-                    nodes=list(nodes.values()),
-                    edges=[],
-                    mentions=[],
-                    fatal_error=error_msg,
-                    warnings=[error_msg],
-                )
+                # Set both explicitly rather than relying on zip()'s silent
+                # truncate-to-shortest: a future `zip(..., strict=True)` in
+                # the loop below must not raise inside the very handler whose
+                # job is keeping the ingest alive.
+                text_chunks = []
+                ner_per_chunk = []
 
             for text_chunk, raw_entities in zip(text_chunks, ner_per_chunk):
                 ids_this_chunk: list[str] = []

@@ -1,7 +1,7 @@
 **Purpose**: Enable and use the GraphRAG subsystem — entity graph, the four `graph_mode` search paths, synonym resolution, and the browser graph viewer.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-08-20 / **Next review**: 2027-07-29
 
 # Graph search (GraphRAG)
 
@@ -19,20 +19,38 @@ Graph support ships as an optional extra and is **off by default**.
    pip install 'archon-search[graph]'
    ```
 
-2. Turn it on in `~/.archon-search/archon-search.toml`:
+2. Provision the `en_core_web_sm` NER model — the extra installs the spaCy library, not its weights:
+
+   ```bash
+   archon-search wizard
+   ```
+
+3. Turn it on in `~/.archon-search/archon-search.toml`:
 
    ```toml
    [graph]
    enabled = true
    ```
 
-3. Restart the server.
+4. Restart the server.
 
-**spaCy is a hard startup requirement.** With `[graph] enabled = true` but `spacy` not installed, the server refuses to boot with a `ConfigError` (`_check_graph_deps` in `archon_search/server/app.py`). Leiden clustering deps (`leidenalg`/`igraph`) are checked lazily — a missing install surfaces only when a community rebuild runs, not at boot. All the `[graph]` knobs live in the `[graph]` config section; see [30_configuration.md](30_configuration.md).
+**The spaCy library is a hard startup requirement; its model is not.** With `[graph] enabled = true` but `spacy` not installed, the server refuses to boot with a `ConfigError` (`_check_graph_deps` in `archon_search/server/app.py`). A missing `en_core_web_sm` model is a softer failure: the server boots, ingest keeps working, and only prose entity extraction is skipped — see [What happens at ingest](#what-happens-at-ingest) and the two remedies in [../OperatorGuide/60_graph_operations.md](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model). Leiden clustering deps (`leidenalg`/`igraph`) are checked lazily — a missing install surfaces only when a community rebuild runs, not at boot. All the `[graph]` knobs live in the `[graph]` config section; see [30_configuration.md](30_configuration.md).
 
 ### What happens at ingest
 
-Once the graph is enabled, every ingest runs an extra post-persist step: spaCy NER pulls entities (typed `person`, `concept`, `system`, `event`, and — for code files — `code_symbol`) out of each chunk and writes them, plus their co-occurrence edges, to the collection's graph tables. This is best-effort: a graph-write failure logs a WARNING and never fails the ingest. Existing collections do **not** retroactively gain a graph — re-ingest is the only way to backfill entities into a collection that was indexed before you enabled the graph.
+Once the graph is enabled, every ingest runs an extra step: spaCy NER pulls entities (typed `person`, `concept`, `system`, `event`, and — for code files — `code_symbol`) out of each chunk, and the resulting nodes and co-occurrence edges are written to the collection's graph tables after the chunks themselves are persisted. **A missing NER model degrades, it does not fail the ingest**: chunks still embed and persist, code-symbol entities are unaffected, prose NER is skipped, and a WARNING lands in `IngestResult.warnings` (see below). A graph-write failure (after persist) is likewise never fatal — it logs a WARNING and lets the already-persisted chunks stand. The one remaining hard failure is `[graph].enabled = true` with the spaCy *library* itself missing (not just the model) — that is a startup `ConfigError` on the supported server and wizard entry points, so it should never be reached at ingest time; if it is, it still aborts the ingest before persist. Existing collections do **not** retroactively gain a graph — re-ingest is the only way to backfill entities into a collection that was indexed before you enabled the graph.
+
+**Without the `en_core_web_sm` model**, ingest degrades rather than failing: chunks embed and persist normally, `code_symbol` entities are still extracted from code files, prose NER is skipped for every document, and each affected response carries a warning in `IngestResult.warnings`:
+
+```
+spaCy model 'en_core_web_sm' is unavailable; prose entity extraction is disabled
+for this ingest (code-symbol extraction is unaffected). Run `archon-search wizard`
+to provision the model.
+```
+
+The server logs the matching WARNING once per process, not once per file, and `GET /status` reports the miss under `model_validation.provider_warnings`.
+
+**Prose entities are English only.** `en_core_web_sm` is an English model. With `multilingual = true`, non-English documents still chunk, embed, and search normally, but contribute only `code_symbol` entities to the graph.
 
 ## The four `graph_mode` values
 

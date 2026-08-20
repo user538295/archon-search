@@ -1,7 +1,7 @@
 **Purpose**: Define what to probe, what each `archon-search` endpoint actually tells you, and which alert rules are worth wiring up on a single host.
 **Audience**: SREs and sysadmins operating `archon-search` in production.
 **Status**: Draft
-**Last reviewed**: 2026-07-29
+**Last reviewed**: 2026-08-20
 **Next review**: 2027-07-29
 
 # Monitoring and Alerts
@@ -75,7 +75,9 @@ A background task validates the configured embedder and reranker (and their ONNX
 - **`GET /ready`** — the informational `checks.models` field: `pending` while validation runs, `ok` when both models load cleanly, `warn` when a provider fallback occurred (e.g. CoreML unavailable → CPU), `fail` when a model could not load (`routes_ready.py`, `_model_check_status`). `fail` also covers a **terminally failed eager warm-up** (`eager_load_embedders = true`, `warmup_result == "failed"` — the warm-up task raised or exceeded `_EAGER_WARMUP_TIMEOUT_SECONDS` = 600s) — checked before the `model_validation` result, so it reports `fail` even when `model_validation` itself is clean. Either cause is informational only and never changes the `200`/`503` status code — a failed/wedged warm-up degrades gracefully to lazy loading on the first real query.
 - **`GET /status`** — the `model_validation` sub-object: `{embedder_ok, reranker_ok, provider_warnings: [...], validated_at}` (`routes_status.py:308-323`). While validation is pending, the `*_ok` flags and `validated_at` are `null` (unknown is distinct from failed). `provider_warnings` carries the actionable messages (e.g. `"configured ONNX providers not available: CoreMLExecutionProvider"`).
 
-Alert on `model_validation.reranker_ok == false` or a non-empty `provider_warnings` to catch a GPU/provider misconfiguration before it fails a user query. HyDE / RAG-Fusion LLM provider reachability is reported separately under the `hyde` / `rag_fusion` sub-objects (`key_available`, `provider`).
+`provider_warnings` also carries **graph NER model state** when `[graph].enabled = true` (`_graph_ner_warnings`, `model_validation.py`), prepended ahead of the probe warnings: a missing `en_core_web_sm` model, or — when it is present and `multilingual = true` — the English-only disclosure. This one is **not** search-affecting: it means prose entity extraction is degraded, not that a query will fail. Fix it with `archon-search wizard` (or a manual placement — [`60_graph_operations.md`](60_graph_operations.md#provisioning-the-spacy-ner-model)); triage it separately from a GPU/provider warning even though both raise `checks.models` to `warn`.
+
+Alert on `model_validation.reranker_ok == false` or a non-empty `provider_warnings` to catch a GPU/provider misconfiguration before it fails a user query. HyDE / RAG-Fusion LLM provider reachability is reported separately under the `hyde` / `rag_fusion` sub-objects (`key_available`, `provider`) — it never appears in `provider_warnings`.
 
 ## Stage-level latency and request-correlation IDs
 
@@ -110,7 +112,7 @@ Starting thresholds for a single-host deployment. Tune to local noise; none corr
 | Warning | `GET /ready` (any status) with `checks.sync == "fail"` | Any | The startup collection sync either raised or completed with per-collection errors in `SyncResult.errors`. **Not Critical**, same reasoning as the row above: it does not gate `ready`. Check the log for `"startup sync failed"` / `"startup sync completed with"` and re-run `POST /sync` (or `archon-search sync`) once the underlying cause is fixed. |
 | Warning | `GET /ready` (any status) with `checks.sync == "warn"`, i.e. `/status` `sync_result == "suppressed"` | Any | The previous process died mid-ingest (job marked `FAILED / "process_restart"`), so the crash-loop guard skipped the automatic startup sync — and **keeps skipping it on every subsequent restart**, via a sticky sentinel file that survives reboots, until an operator resumes — the index is whatever the crash left behind. **Not Critical**: `/ready` answers `200` and search is served, which is exactly why this needs an alert rather than a probe. Check the log for `"startup sync SUPPRESSED"`, fix the cause (OOM, `kill -9`), then resume with `POST /sync` (or `archon-search sync`) — a clean run moves `sync_result` to `"done"` and `checks.sync` back to `"ok"`. |
 | Critical | `GET /status` 5xx | 3 consecutive failures | Auth or storage broken; user search broken too. |
-| Warning | `/status` `model_validation.reranker_ok == false` or non-empty `provider_warnings` | Any | Provider/model misconfiguration; first search will fail or fall back. |
+| Warning | `/status` `model_validation.reranker_ok == false` or non-empty `provider_warnings` | Any | Provider/model misconfiguration; first search will fail or fall back. **Exception**: a `provider_warnings` entry naming `en_core_web_sm` / "graph prose entity extraction" affects graph prose extraction only, never search — see the graph NER paragraph above. |
 | Warning | `error_count` increases on any collection in `/status` | Δ ≥ 1 per 10 minutes | Ingest path is repeatedly failing for that source. |
 | Warning | `status == "in_progress"` with `processed_files` unchanged | Stuck > 30 min | Likely a hung ingest job; see [`90_incident_runbook.md`](90_incident_runbook.md). |
 | Warning | `/status` `readiness.jobs.pending` climbing without draining | Sustained growth | Queue backing up; check job workers via [`50_maintenance_and_jobs.md`](50_maintenance_and_jobs.md). |

@@ -456,18 +456,11 @@ def _check_graph_deps(config: SearchConfig) -> None:
 
     No-ops when ``config.graph.enabled`` is ``False``.
     """
-    if not config.graph.enabled:
-        return
+    # 2026-08-19-030: delegates to the single implementation shared with
+    # `pipeline.create_pipeline`, so the two construction-time guards cannot drift.
+    from archon_search.graph_extractor import ensure_spacy_importable  # noqa: PLC0415
 
-    try:
-        import spacy  # type: ignore[import-untyped]  # noqa: PLC0415
-        if spacy is None:
-            raise ImportError("spacy is None")
-    except (ImportError, TypeError):
-        raise ConfigError(
-            "graph.enabled=true but spacy is not installed; "
-            "run: pip install archon-search[graph]"
-        )
+    ensure_spacy_importable(config.graph)
 
 
 def _configure_openapi(app: FastAPI) -> None:
@@ -627,10 +620,22 @@ def create_app(
                 raise
             except BaseException as exc:  # noqa: BLE001 — never let the task escape
                 logger.warning("model validation task failed unexpectedly: %s", exc)
+                graph_warnings: list[str] = []
+                try:
+                    from archon_search.model_validation import (  # noqa: PLC0415
+                        graph_ner_warnings,
+                    )
+
+                    # Threaded for the same reason validate_models_async does
+                    # it: the probe globs the data dir and scans installed
+                    # package metadata (2026-08-19-030 C2-I-12).
+                    graph_warnings = await asyncio.to_thread(graph_ner_warnings, config)
+                except Exception:  # noqa: BLE001 — this fallback must never itself raise
+                    graph_warnings = ["graph NER model presence could not be determined"]
                 app.state.model_validation = ModelValidationResult(
                     embedder_ok=False,
                     reranker_ok=False,
-                    provider_warnings=["validation task failed unexpectedly"],
+                    provider_warnings=[*graph_warnings, "validation task failed unexpectedly"],
                     validated_at=datetime.now(UTC),
                 )
 

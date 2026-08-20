@@ -3,9 +3,9 @@
 Purpose: operate the graph subsystem in production — enable it, rebuild communities, inspect the graph, and keep it healthy.
 Audience: operators running `archon-search serve`.
 Status: current.
-Last reviewed: 2026-07-29.
+Last reviewed: 2026-08-20.
 
-The graph subsystem builds an entity/relationship graph from ingested content and powers the graph search modes (`naive`, `local`, `global`, `ppr`). This guide covers the operational surface: enabling it, the extras it needs, rebuilding Leiden communities, inspecting the graph, garbage collection, and optional LLM enrichment. For how end users query the graph, see [`../UserManual/65_graph_search.md`](../UserManual/65_graph_search.md) and [`../UserManual/70_code_graph_and_impact.md`](../UserManual/70_code_graph_and_impact.md).
+The graph subsystem builds an entity/relationship graph from ingested content and powers the graph search modes (`naive`, `local`, `global`, `ppr`). This guide covers the operational surface: enabling it, the extras and NER model it needs, rebuilding Leiden communities, inspecting the graph, garbage collection, and optional LLM enrichment. For how end users query the graph, see [`../UserManual/65_graph_search.md`](../UserManual/65_graph_search.md) and [`../UserManual/70_code_graph_and_impact.md`](../UserManual/70_code_graph_and_impact.md).
 
 ---
 
@@ -23,6 +23,7 @@ Enabling requires the optional extras — the base install does not pull them in
 | Extra | Provides | Required for | Missing-install behavior |
 |---|---|---|---|
 | `archon-search[graph]` | spaCy NER (prose entity extraction) | `graph.enabled = true` | **Startup fails** with `ConfigError` (`_check_graph_deps`, `server/app.py`): `graph.enabled=true but spacy is not installed; run: pip install archon-search[graph]`. |
+| `en_core_web_sm` model | the actual NER weights spaCy runs | prose entity extraction | **Degrades** — server starts and ingest still succeeds; prose NER is skipped, code-symbol nodes are unaffected, one WARNING is logged per process, and the warning rides on `IngestResult.warnings`. See [Provisioning the spaCy NER model](#provisioning-the-spacy-ner-model). |
 | `archon-search[code]` | tree-sitter code parsers (def/ref edges, impact) | Code graphs / `GET /graph/{col}/impact/{symbol}` | Server still starts; logs a WARNING once per unsupported extension and surfaces a per-file warning in `IngestResult.warnings`. Prose graphing still works. |
 | `leidenalg` + `igraph` | Leiden community detection | `local` / `global` search modes | **Lazy** — imported only inside `_run_leiden_partition_sync` (`community_builder.py`). A missing install does **not** block startup; it fails the rebuild *job* (`FAILED`) with an actionable message. |
 
@@ -30,10 +31,72 @@ Install everything for a full graph deployment:
 
 ```bash
 pip install 'archon-search[graph,code]'
-python -m spacy download en_core_web_sm   # spaCy model, if not already present
+archon-search wizard   # provisions the en_core_web_sm NER model
 ```
 
 Because `leidenalg`/`igraph` are lazy, a graph-enabled server boots fine without them — you only discover the gap when a community rebuild runs. Install them proactively if you use `local`/`global` search.
+
+---
+
+## Provisioning the spaCy NER model
+
+The `archon-search[graph]` extra installs the spaCy *library*; the `en_core_web_sm` *model* is a separate artifact. PyPI rejects the direct-URL dependency that would ship it, so the published wheel has no package channel for the model at all — it is provisioned out of band.
+
+**The runtime never downloads or installs it.** `GraphExtractor` resolves the model on first use and nothing more (`find_spacy_model`, `graph_extractor.py`):
+
+1. the installed `en_core_web_sm` package, if a pip-style install already carries it;
+2. `<data-dir>/models/spacy/en_core_web_sm-<version>/` — `spacy.load()` accepts a filesystem path;
+3. neither present → degrade.
+
+`<data-dir>` is `~/.archon-search` unless `ARCHON_SEARCH_DATA_DIR` relocates it (`paths.get_spacy_models_dir()`).
+
+**Degraded behavior is not an ingest failure.** Chunks still embed and persist, code-symbol graph nodes and edges are still written, prose NER is skipped for every document, one WARNING is logged once per process (not once per file), and each affected `IngestResult.warnings` carries the notice. Only a missing spaCy *library* is fatal, and that is caught at startup by `_check_graph_deps`.
+
+### Remedy: re-run the wizard
+
+```bash
+archon-search wizard
+```
+
+The wizard's graph step pins the model version against the installed spaCy (via the published `compatibility.json`), fetches that release's wheel, places the model under `<data-dir>/models/spacy/`, and smoke-loads it before reporting success. A failed fetch is non-fatal — the wizard warns and continues, leaving graph ingest in the degraded state above.
+
+### Remedy: place the model by hand
+
+For air-gapped or scripted installs, do what the wizard does. Pick the `en_core_web_sm` version listed for your installed spaCy in [`compatibility.json`](https://github.com/explosion/spacy-models/blob/master/compatibility.json), then:
+
+```bash
+VER=3.8.0                                   # must match your spaCy minor (3.8.x -> 3.8.x)
+DEST=~/.archon-search/models/spacy          # or $ARCHON_SEARCH_DATA_DIR/models/spacy
+curl -fL -o /tmp/en_core_web_sm.whl \
+  "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-$VER/en_core_web_sm-$VER-py3-none-any.whl"
+unzip -q /tmp/en_core_web_sm.whl -d /tmp/en_core_web_sm-whl
+mkdir -p "$DEST"
+mv "/tmp/en_core_web_sm-whl/en_core_web_sm/en_core_web_sm-$VER" "$DEST/"
+```
+
+The wheel is a zip whose inner `en_core_web_sm/en_core_web_sm-<version>/` directory **is** the model — it is the directory holding `config.cfg`, and that is what must land at `<data-dir>/models/spacy/en_core_web_sm-<version>/`. The resolver ignores any candidate directory without a `config.cfg` at its top level, filters out versions incompatible with the installed spaCy (per each candidate's `meta.json` `spacy_version` specifier), and picks the newest **version-sorted** (not lexicographic — `3.9.0` would otherwise rank above `3.10.0`) compatible candidate when several are present. The compatibility filter is deliberately permissive: it rejects a candidate only when `meta.json` *unambiguously* rules the installed spaCy out. A missing, unreadable, or unparseable `meta.json`, or one with no `spacy_version` field, reads as compatible — so a hand-placed directory that omits it will be resolved and only fail later, at load time, degrading that ingest. Keep the wheel's own `meta.json` alongside `config.cfg` rather than copying out `config.cfg` alone. Verify before restarting:
+
+```bash
+python -c "import spacy; spacy.load('$DEST/en_core_web_sm-$VER')"
+```
+
+Run that with the same interpreter the server uses (the one that has the `[graph]` extra installed) — for a `uv tool install`, that is the tool's managed venv, not your system `python`. A clean exit means the server will resolve it too.
+
+`python -m spacy download en_core_web_sm` is **not** a supported remedy for a `uv tool install` deployment: that venv has no package installer, so the download exits with "No package installer found". It still works in environments that do have pip (the Docker image, a dev checkout), and a model installed that way is picked up by resolution step 1.
+
+### Checking from the outside
+
+When `[graph].enabled = true`, startup validation probes the model the same way the extractor does and reports a miss in `GET /status` → `model_validation.provider_warnings`, so this never hides in per-file ingest logs:
+
+```
+graph prose entity extraction is disabled: spaCy model 'en_core_web_sm' is
+neither installed nor provisioned under the data directory — re-run
+`archon-search wizard` to provision it
+```
+
+`checks.models` reaches `"warn"` only when the embedder and reranker probes both already passed and `provider_warnings` is non-empty — `"fail"` (a probe failed) and `"pending"` (validation still running) outrank it. When those probes are clean, a missing NER model does flip `checks.models` to `"warn"` on `GET /ready` (still HTTP 200 — it never gates readiness).
+
+**English only.** `en_core_web_sm` reads English prose. When the graph is enabled with `multilingual = true`, the wizard summary discloses this, and `provider_warnings` carries it too. The two notes are independent: a missing or incompatible model reports the miss, and `multilingual = true` adds the English-only disclosure *alongside* it — so both can appear together. Non-English documents contribute code-symbol entities only. A multilingual successor engine is tracked separately.
 
 ---
 

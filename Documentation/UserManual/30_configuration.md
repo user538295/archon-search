@@ -1,7 +1,7 @@
 **Purpose**: Configure `archon-search` via `archon-search.toml` and environment variables.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-08-20 / **Next review**: 2027-07-29
 
 # Configuration
 
@@ -207,9 +207,11 @@ Backup and restore procedures live in [`../OperatorGuide/40_backup_restore_disas
 
 GraphRAG entity extraction, communities, synonyms, and PageRank. **Disabled by default**; requires the `archon-search[graph]` extra. Enabling and **re-ingesting** is required to populate graph tables — existing chunks are not auto-extracted.
 
+Prose entity extraction additionally needs the `en_core_web_sm` spaCy model, which is a separate artifact from the extra and is **provisioned by `archon-search wizard`**, not by the server — the runtime resolves it (installed package, then `<data-dir>/models/spacy/en_core_web_sm-<version>/`) but never downloads or installs it. A missing model does not fail ingest: chunks still embed and persist, code-symbol graph nodes are unaffected, prose NER is skipped, and the miss is reported in `GET /status` → `model_validation.provider_warnings`. Re-run the wizard, or place the model by hand — both remedies are in [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model). The model reads English only; with `multilingual = true`, non-English documents contribute code-symbol entities only.
+
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `false` | Master switch for the graph subsystem (entity extraction, PPR, communities, community/graph routes). `true` with `spacy` absent raises `ConfigError` at startup. LLM-backed enrichment (below) additionally needs `provider` set — both gates must be open (`enabled=true` AND `provider` set) for community summaries/typed relationship labels to be produced. |
+| `enabled` | `false` | Master switch for the graph subsystem (entity extraction, PPR, communities, community/graph routes). `true` with the `spacy` *library* absent raises `ConfigError` at startup; a missing `en_core_web_sm` *model* is not fatal (see above). LLM-backed enrichment (below) additionally needs `provider` set — both gates must be open (`enabled=true` AND `provider` set) for community summaries/typed relationship labels to be produced. |
 | `provider` | `null` | Enrichment provider for community summaries and typed relationship labels: one of `anthropic`, `openai`, `ollama`, `llama_cpp`. `null` (default) disables enrichment entirely — no LLM call, preserving the air-gap guarantee; unlike `[hyde]`/`[rag_fusion]`, this field IS the enrichment enable gate (there is no separate `[graph].enrichment_enabled`). `claude_cli` is a valid provider name elsewhere but has no v1 enrichment client (deferred; the factory logs a WARNING and skips enrichment). |
 | `extraction_model` | `null` | Bare model name for the configured `provider` (e.g. `"claude-haiku-4-5-20251001"`, an Ollama tag, or a llama.cpp model name — the wizard writes the name shown by `llama cli -cl`, or, when that command is unavailable, a `.gguf` path relative to the cache directory it was scanned from) — never a `"provider:model"` string. Logs a WARNING once at build time if `provider` is set but this is empty. |
 | `llama_cpp_base_url` | `http://localhost:8080` | llama-server URL for graph enrichment; used only when `provider = "llama_cpp"`. |

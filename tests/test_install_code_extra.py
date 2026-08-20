@@ -181,57 +181,68 @@ class TestInstallExtra:
 
 
 class TestInstallGraphExtra:
-    """Unit tests for _install_graph_extra() — spaCy download logic."""
+    """Unit tests for _install_graph_extra() — spaCy model provisioning.
 
-    def test_install_graph_extra_spacy_download_called(self):
-        """On success: the spaCy model installs via ``uv pip install en-core-web-sm``.
+    2026-08-19-030: the model is neither on PyPI nor installable in a pip-less
+    ``uv tool`` venv, so the wizard fetches the pinned wheel and places it under
+    the data dir, where the runtime resolves it by path.
+    """
 
-        The old ``python -m spacy download`` route assumed a virtual environment
-        and failed in a uv-tool install context — assert we no longer use it.
-        """
+    def test_install_graph_extra_provisions_model_into_data_dir(self):
+        """On success: the model is provisioned into the data-dir spaCy directory."""
+        from archon_search.paths import get_spacy_models_dir
+
         with patch("archon_search.install.extras._install_extra"), \
+             patch("archon_search.install.extras._download_spacy_model") as mock_download, \
              patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
             _install_graph_extra(dry_run=False)
-            mock_run.assert_called_once()
-            cmd = mock_run.call_args[0][0]
-            assert cmd == ["uv", "pip", "install", "--python", sys.executable, "en-core-web-sm"]
-            # Must NOT use the venv-dependent `python -m spacy download` route.
-            assert "download" not in cmd
-            assert "en_core_web_sm" not in cmd
-            assert mock_run.call_args[1].get("check") is True
-            assert mock_run.call_args[1].get("capture_output") is True
+
+        mock_download.assert_called_once_with(get_spacy_models_dir())
+        # No package-manager route: `en-core-web-sm` is not on PyPI, and a
+        # `uv tool` venv has no installer to run it with.
+        mock_run.assert_not_called()
 
     def test_install_graph_extra_spacy_download_failure_is_nonfatal(self, capsys):
-        """CalledProcessError from spaCy subprocess must not raise; a warning is printed to stderr."""
-        spacy_error = subprocess.CalledProcessError(1, "spacy", stderr=b"model not found")
+        """A failed model fetch must not raise; a warning is printed to stderr."""
         with patch("archon_search.install.extras._install_extra"), \
-             patch("subprocess.run", side_effect=spacy_error):
+             patch(
+                 "archon_search.install.extras._download_spacy_model",
+                 side_effect=InstallError("no route to host"),
+             ):
             _install_graph_extra(dry_run=False)  # must not raise
         captured = capsys.readouterr()
-        assert "warning" in captured.err.lower() or "spacy" in captured.err.lower()
+        assert "Warning" in captured.err
+        assert "spaCy" in captured.err
 
-    def test_install_graph_extra_dry_run_no_subprocess(self):
-        """dry_run=True must not call subprocess.run at all."""
+    def test_install_graph_extra_dry_run_no_download(self):
+        """dry_run=True must not fetch anything."""
         with patch("archon_search.install.extras._install_extra"), \
+             patch("archon_search.install.extras._download_spacy_model") as mock_download, \
              patch("subprocess.run") as mock_run:
             _install_graph_extra(dry_run=True)
+            mock_download.assert_not_called()
             mock_run.assert_not_called()
 
     def test_install_graph_extra_dry_run_prints_message(self, capsys):
         """dry_run=True should print a message indicating what would be run."""
         with patch("archon_search.install.extras._install_extra"), \
-             patch("subprocess.run"):
+             patch("archon_search.install.extras._download_spacy_model"):
             _install_graph_extra(dry_run=True)
         captured = capsys.readouterr()
-        assert "spacy" in captured.out.lower() or "dry" in captured.out.lower()
+        assert "[dry-run]" in captured.out
+        assert "en_core_web_sm" in captured.out
 
     def test_install_graph_extra_partial_failure_extras_succeed_spacy_fails(self):
-        """When _install_extra succeeds but spaCy download fails, InstallError is NOT raised."""
-        spacy_error = subprocess.CalledProcessError(1, "spacy", stderr=b"download failed")
+        """When _install_extra succeeds but the model fetch fails, InstallError is NOT raised.
+
+        The caller reverts ``graph.enabled`` on InstallError — a missing prose
+        model must not trigger that: code-symbol graphing still works.
+        """
         with patch("archon_search.install.extras._install_extra"), \
-             patch("subprocess.run", side_effect=spacy_error):
-            # Must not raise InstallError — caller's except InstallError block must NOT trigger
+             patch(
+                 "archon_search.install.extras._download_spacy_model",
+                 side_effect=InstallError("download failed"),
+             ):
             try:
                 _install_graph_extra(dry_run=False)
             except InstallError:

@@ -37,11 +37,20 @@ BAD_KEY = "z" * 64
 
 @pytest.fixture(scope="module", autouse=True)
 def _inject_spacy_stub():
-    """Inject a spaCy stub to allow graph-enabled app creation in tests."""
-    if "spacy" not in sys.modules:
-        stub = types.ModuleType("spacy")
-        sys.modules["spacy"] = stub
-    yield
+    """Inject a spaCy stub so graph-enabled apps can start without the real package.
+
+    Restores ``sys.modules`` on teardown (2026-08-19-030): a bare stub left
+    installed shadows the REAL spaCy for every later test in the same xdist
+    worker, silently breaking anything that depends on real ``spacy.util``.
+    """
+    if "spacy" in sys.modules:
+        yield
+        return
+    sys.modules["spacy"] = types.ModuleType("spacy")
+    try:
+        yield
+    finally:
+        sys.modules.pop("spacy", None)
 
 
 def _make_stub_app(

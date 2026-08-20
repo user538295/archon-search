@@ -258,9 +258,14 @@ class GraphExtractionResult:
     warnings: list[str] = field(default_factory=list)
     """Human-readable warning messages forwarded to ``IngestResult.warnings``."""
     fatal_error: str | None = None
-    """When non-None, extraction completely failed (e.g. spaCy absent or model load failed).
-    The pipeline should set ``IngestResult.status = "error"`` when this field is non-None.
-    The value is an actionable human-readable error message.
+    """Non-None ONLY when spaCy itself is not importable -- i.e. the ``[graph]`` extra is
+    missing, an operator misconfiguration. The pipeline sets ``IngestResult.status = "error"``
+    for that case alone. Every other spaCy failure (2026-08-19-030), an unavailable
+    ``en_core_web_sm`` model above all, leaves this None and degrades instead: prose NER is
+    skipped, code-symbol output is unaffected, and the notice goes to ``warnings``. Extraction
+    runs *before* persist, so a fatal return aborts the ingest -- which is why model
+    unavailability must never take this path (CLAUDE.md: auxiliary writes never fail their
+    primary operation). The value is an actionable human-readable error message.
     """
 
 

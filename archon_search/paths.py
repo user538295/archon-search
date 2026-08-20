@@ -14,18 +14,22 @@ The returned path is NOT guaranteed to exist — callers must create it (or
 the parent of any file they intend to write) as needed.
 
 Downstream consumers that derive paths from ``get_data_dir()`` live in their
-domain modules, not here, so each subsystem keeps its own naming. See the
-"Path derivations" table in ``Documentation/Backlog/C9-container-support-plan.md``
+domain modules, not here — see ``config.py`` (db / log / telemetry),
+``key_manager.get_key_file()``, ``jobs.model.get_jobs_file()``, and
+``language_detector.get_fasttext_models_dir()`` for the pattern. See the
+data-directory table in
+``Documentation/Architecture/130_data_architecture_and_persistence.md``
 for the canonical list.
 
-TODO(C9): once C9 Phase 2 (tasks 2.2–2.6) is complete, replace the call-site
-roadmap below with a verified list of actual consumers. The plan file linked
-above remains the source of truth; this note may rot if tasks are renamed,
-reordered, or dropped — grep for ``TODO(C9)`` to find this on cleanup.
-Planned call sites: ``config.py`` (db / log / telemetry),
-``key_manager.get_key_file``, ``jobs.get_jobs_file``,
-``language_detector.get_fasttext_models_dir``, and ``cli/ingest.py`` for
-history sessions.
+``get_spacy_models_dir()`` below is the one exception, and there is no
+general rule that predicts when the next derived path belongs here instead
+of in its domain module: the structurally identical fasttext case was
+solved the other way (``install/installer.py``'s ``download_fasttext_model()``
+computes ``get_data_dir() / "models"`` itself rather than importing
+``language_detector.get_fasttext_models_dir()``). ``get_spacy_models_dir()``
+lives here because the `2026-08-19-030` brief specified a ``paths.py``
+accessor, not because of a principle that would decide a future case the
+same way.
 
 Raises ``ValueError`` (not ``ConfigError``) so it can be safely imported by
 ``archon_search.config`` without a circular import; ``load_config()`` wraps
@@ -85,3 +89,18 @@ def get_data_dir() -> Path:
             "directory can be determined"
         ) from exc
     return home / ".archon-search"
+
+
+def get_spacy_models_dir() -> Path:
+    """Return the directory holding wizard-provisioned spaCy NER models.
+
+    Defined here rather than in ``graph_extractor`` (see the module docstring
+    for why) so ``install/extras.py`` — the wizard, which writes into it —
+    does not need to import the graph layer. The only other direct consumer
+    is ``graph_extractor.find_spacy_model()`` (runtime, reads it);
+    ``model_validation.graph_ner_warnings()`` does not import this accessor
+    at all — it resolves the model through ``find_spacy_model()`` instead.
+    Resolved fresh on every call so ``ARCHON_SEARCH_DATA_DIR`` relocates it;
+    not guaranteed to exist.
+    """
+    return get_data_dir() / "models" / "spacy"

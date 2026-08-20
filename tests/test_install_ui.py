@@ -476,3 +476,32 @@ def test_next_steps_not_printed_in_dry_run(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "Next steps:" not in out, "Next steps must NOT appear in dry-run output"
+
+
+def test_render_summary_graph_multilingual_discloses_english_only():
+    """2026-08-19-030: graph + multilingual → the summary says prose NER is English-only."""
+    profile = get_profile("minimal", multilingual=True)
+    output = _render_summary(
+        "minimal",
+        profile,
+        multilingual=True,
+        providers=[],
+        features=WizardFeatures(install_graph_extra=True),
+    )
+    assert "Graph enrichment" in output
+    assert "English-only" in output
+    assert "en_core_web_sm" in output
+
+
+def test_render_summary_graph_english_omits_disclosure():
+    """An English deployment has nothing to disclose — no noise in the summary."""
+    profile = get_profile("minimal", multilingual=False)
+    output = _render_summary(
+        "minimal",
+        profile,
+        multilingual=False,
+        providers=[],
+        features=WizardFeatures(install_graph_extra=True),
+    )
+    assert "Graph enrichment" in output
+    assert "English-only" not in output

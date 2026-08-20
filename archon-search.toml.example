@@ -419,14 +419,18 @@ num_queries = 2
 # or:
 #   pip install 'archon-search[graph]'
 #
-# NOTE (E1a/BE-1): The [graph] section is parsed at startup but the extraction
-# runtime (GraphExtractor, GraphStore, pipeline hooks) ships in later BE tasks.
-# Setting enabled = true before those tasks are deployed is a safe no-op:
-# the flag is read, but no extraction occurs and no error is raised.
+# The extras install the spaCy library but NOT its en_core_web_sm NER model —
+# that model is not on PyPI. Provision it with `archon-search wizard`, which
+# places it under <data-dir>/models/spacy/. The server never downloads it.
+# Without it, ingest still succeeds: chunks embed and persist, code-symbol
+# graph nodes are still written, prose entity extraction is skipped, and
+# GET /status reports the miss under model_validation.provider_warnings.
+# Manual placement (air-gapped installs):
+#   Documentation/OperatorGuide/60_graph_operations.md
 #
-# When the full E1a slice is deployed: enabling and re-ingesting causes each
-# ingested document's chunks to be entity-extracted into
-# per-collection _archon_graph_{ns}__{col}_nodes / _archon_graph_{ns}__{col}_edges LanceDB tables.
+# Enabling and re-ingesting causes each ingested document's chunks to be
+# entity-extracted into per-collection _archon_graph_{ns}__{col}_nodes /
+# _archon_graph_{ns}__{col}_edges LanceDB tables.
 # Adding graph_mode=naive to POST /search or the MCP search tool expands queries
 # with first-degree graph-neighbour entity names before the normal hybrid search pipeline runs.
 #

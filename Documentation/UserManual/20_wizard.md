@@ -1,7 +1,7 @@
 **Purpose**: Comprehensive guide to the `archon-search wizard` command — what it does, every prompt it asks, all CLI flags, what it configures, and what it does not.
 **Audience**: End users and operators setting up archon-search for the first time or reconfiguring an existing install.
 **Status**: Stable
-**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-08-20 / **Next review**: 2027-07-29
 
 # The archon-search Wizard
 
@@ -190,7 +190,25 @@ Index code files (installs tree-sitter + graph enrichment, enables graph)? [y/N]
 
 **Default**: No.
 
-If you answer `y`, the wizard installs the `archon-search[code]` extra packages (tree-sitter grammars for Python, TypeScript, JavaScript, Go, Rust, Java, and Bash) *and* the `archon-search[graph]` extra plus the `en-core-web-sm` spaCy model, then writes `[graph].enabled = true`. Code enrichment and code graphing are always set up as a bundle so code graphing works out of the box. Once installed, ingesting code files automatically extracts symbol-level metadata (`_symbol_type`, `_containing_function`, `_containing_class`, etc.) from each chunk. This makes code search significantly more precise.
+If you answer `y`, the wizard writes `[graph].enabled = true` to the generated config first, then installs the `archon-search[code]` extra packages (tree-sitter grammars for Python, TypeScript, JavaScript, Go, Rust, Java, and Bash) *and* the `archon-search[graph]` extra, and provisions the `en_core_web_sm` spaCy NER model. Write-first is load-bearing: if installing the `archon-search[graph]` package itself fails, the wizard rolls back the already-written `graph.enabled = true` flag rather than leaving a half-configured install (a failed *model* fetch is handled differently — see below). Code enrichment and code graphing are always set up as a bundle so code graphing works out of the box. Once installed, ingesting code files automatically extracts symbol-level metadata (`_symbol_type`, `_containing_function`, `_containing_class`, etc.) from each chunk. This makes code search significantly more precise.
+
+**The wizard is the automated way to provision the NER model.** It is not on PyPI under any name, so the wizard pins its version against the installed spaCy, fetches that release's wheel from the spacy-models GitHub release, unpacks the model into `<data-dir>/models/spacy/en_core_web_sm-<version>/`, and smoke-loads it before reporting success — the same pattern the fasttext `lid.176.ftz` model uses. The server never downloads it at runtime. Air-gapped or scripted installs can place the model by hand instead — see [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model). **A failed fetch is non-fatal**: the wizard prints a warning, leaves `[graph].enabled = true`, and the install completes:
+
+```
+Warning: spaCy model provisioning failed: <reason>. Graph ingest will extract
+code symbols only until the wizard is re-run.
+```
+
+In that state, graph ingest still works for code symbols and skips prose entity extraction; re-running the wizard (or placing the model by hand) fixes it — see [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model).
+
+If you also chose multilingual models (which writes `[database].multilingual = true`), the pre-install summary discloses the NER model's language limit right under the graph bullet:
+
+```
+  Optional features:
+    • Graph enrichment (code graphing)
+      Note: prose entity extraction is English-only (en_core_web_sm);
+      non-English documents contribute code-symbol entities only.
+```
 
 You can install this separately at any time with `pip install archon-search[code]`. Code enrichment also feeds the code graph — see [`70_code_graph_and_impact.md`](./70_code_graph_and_impact.md) for def/ref extraction and impact analysis.
 

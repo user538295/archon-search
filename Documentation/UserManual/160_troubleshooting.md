@@ -1,7 +1,7 @@
 **Purpose**: Diagnose common runtime failures.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-08-20 / **Next review**: 2027-07-29
 
 # Troubleshooting
 
@@ -120,7 +120,25 @@ graph.enabled=true but spacy is not installed; run: pip install archon-search[gr
 1. **Install the extra**: `pip install archon-search[graph]`, or
 2. **Disable graphing**: set `[graph].enabled = false`.
 
-Note: `leidenalg`/`igraph` (community clustering) and code-parser extras (`archon-search[code]`) are **not** checked at startup — a missing Leiden install fails only a `build-communities` job; missing code parsers log a WARNING and surface a per-file warning in `IngestResult.warnings`, but the server still starts and prose graphing still works.
+Note: the `en_core_web_sm` NER *model*, `leidenalg`/`igraph` (community clustering), and code-parser extras (`archon-search[code]`) are **not** checked at startup — a missing NER model degrades prose extraction (next symptom); a missing Leiden install fails only a `build-communities` job; missing code parsers log a WARNING and surface a per-file warning in `IngestResult.warnings`, but the server still starts and prose graphing still works.
+
+## Symptom: graph has no prose entities — `spaCy model 'en_core_web_sm' is unavailable`
+
+The graph fills with `code_symbol` entities from code files but no `person` / `concept` / `system` / `event` entities from prose, and ingests succeed carrying this warning in `IngestResult.warnings`:
+
+```
+spaCy model 'en_core_web_sm' is unavailable; prose entity extraction is disabled
+for this ingest (code-symbol extraction is unaffected). Run `archon-search wizard`
+to provision the model.
+```
+
+The `archon-search[graph]` extra installs the spaCy library; the model is a separate artifact that `archon-search wizard` provisions automatically (air-gapped or scripted installs can place it by hand instead — see below). **This is not an ingest failure** — chunks embed and persist, search works, and only prose entity extraction is skipped. The server logs one matching WARNING per process (not per file), and `GET /status` reports it under `model_validation.provider_warnings`.
+
+1. **Re-run the wizard**: `archon-search wizard` — it fetches the model, places it under `<data-dir>/models/spacy/`, and smoke-loads it.
+2. **Or place it by hand** (air-gapped / scripted installs): see [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model).
+3. **Re-ingest** afterwards. Documents indexed while degraded are not retroactively extracted.
+
+`python -m spacy download en_core_web_sm` is not a fix on a `uv tool install` deployment — that venv has no package installer, so the command exits with "No package installer found". It does work where pip is available (Docker image, dev checkout).
 
 ## Symptom: HyDE or RAG Fusion not working — "expansion failed" in response
 

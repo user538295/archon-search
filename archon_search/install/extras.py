@@ -2,14 +2,22 @@
 from __future__ import annotations
 
 import importlib.metadata
+import json
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import urllib.error
+import urllib.request
+import zipfile
 from pathlib import Path
 
 import click
 import tomlkit
 
-from archon_search._durable_io import atomic_write_bytes
+from archon_search._durable_io import atomic_write_bytes, fsync_dir, fsync_tree
+from archon_search.paths import get_spacy_models_dir
 
 from .config_writer import WizardFeatures
 from .errors import InstallError
@@ -151,34 +159,186 @@ def _install_code_extra(dry_run: bool = False) -> None:
     _install_extra("archon-search[code]", "code enrichment", dry_run)
 
 
+SPACY_MODEL_NAME = "en_core_web_sm"
+SPACY_COMPATIBILITY_URL = (
+    "https://raw.githubusercontent.com/explosion/spacy-models/master/compatibility.json"
+)
+SPACY_MODEL_WHEEL_URL = (
+    "https://github.com/explosion/spacy-models/releases/download/"
+    "{name}-{version}/{name}-{version}-py3-none-any.whl"
+)
+_SPACY_COMPATIBILITY_TIMEOUT_SECONDS = 60
+_SPACY_WHEEL_TIMEOUT_SECONDS = 300
+
+
+def _resolve_spacy_model_version(spacy_version: str) -> str:
+    """Return the ``en_core_web_sm`` release pinned to *spacy_version*.
+
+    spaCy models are version-locked to the library (spaCy 3.8.x loads only
+    3.8.x models), and the authoritative mapping is the compatibility table
+    published alongside the model releases — the same one ``spacy download``
+    consults. That table is keyed by MAJOR.MINOR (e.g. ``"3.8"``), not the
+    full patch version, except for prereleases which are keyed by their full
+    version — this mirrors ``spacy.cli.download.get_compatibility()`` exactly
+    (``.venv/lib/python3.13/site-packages/spacy/cli/download.py:136-153``).
+    Newest listed release wins.
+    """
+    import spacy.util  # noqa: PLC0415
+
+    key = (
+        spacy_version
+        if spacy.util.is_prerelease_version(spacy_version)
+        else spacy.util.get_minor_version(spacy_version)
+    )
+    try:
+        with urllib.request.urlopen(
+            SPACY_COMPATIBILITY_URL, timeout=_SPACY_COMPATIBILITY_TIMEOUT_SECONDS
+        ) as response:
+            table = json.load(response)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise InstallError(
+            f"could not read the spaCy compatibility table: {exc}"
+        ) from exc
+
+    versions = table.get("spacy", {}).get(key, {}).get(SPACY_MODEL_NAME, [])
+    if not versions:
+        raise InstallError(
+            f"no {SPACY_MODEL_NAME} release is listed for spaCy {key!r} "
+            f"(resolved from installed spaCy {spacy_version})"
+        )
+    version = str(versions[0])
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        # The version drives both a download URL and a filesystem path below;
+        # a malformed value from the (remote, TLS'd) compatibility table must
+        # never reach either.
+        raise InstallError(
+            f"{SPACY_MODEL_NAME} version {version!r} from the compatibility "
+            "table is not a well-formed dotted version"
+        )
+    return version
+
+
+def _download_spacy_model(models_dir: Path) -> Path:
+    """Provision ``en_core_web_sm`` into *models_dir* and return its directory.
+
+    The runtime never downloads or installs the model (2026-08-19-030): a
+    ``uv tool install`` venv has no package installer, and PyPI rejects the URL
+    dependency that would otherwise ship it, so the wizard is the only channel.
+    The model wheel is a zip whose inner ``en_core_web_sm-<ver>/`` directory is
+    the model itself — ``spacy.load()`` accepts that path directly.
+
+    - No-op if the pinned version is already present.
+    - Smoke-loads the placed model before reporting success; a model that is on
+      disk but unloadable is worse than none, because the runtime would resolve
+      it and then degrade on every ingest.
+    - Raises ``InstallError`` for a failed fetch, a bad wheel or a model that
+      will not load. Filesystem operations outside that path (``mkdir``,
+      ``chmod``, the staging rename) can still raise ``OSError`` — the caller
+      catches both, so a read-only or full data dir warns and continues rather
+      than aborting the wizard (2026-08-19-030 C2-B-3).
+    """
+    importlib.invalidate_caches()  # [graph] may have been installed moments ago
+    try:
+        import spacy  # noqa: PLC0415
+    except ImportError as exc:
+        raise InstallError(f"spaCy is not importable: {exc}") from exc
+
+    version = _resolve_spacy_model_version(spacy.__version__)
+    target = models_dir / f"{SPACY_MODEL_NAME}-{version}"
+    if (target / "config.cfg").is_file():
+        # Presence is not usability. A truncated or corrupted tree still has a
+        # `config.cfg`, which the runtime resolver accepts and then fails to
+        # load — latching into permanent degradation whose notice tells the
+        # operator to re-run this wizard, which a bare presence check would
+        # turn into a no-op. That is an unrecoverable loop, so verify before
+        # claiming success and re-provision otherwise (2026-08-19-030 C2-I-5).
+        try:
+            spacy.load(str(target))
+        except Exception:  # noqa: BLE001 — any load failure means re-provision
+            shutil.rmtree(target, ignore_errors=True)
+        else:
+            click.echo(f"spaCy model already provisioned at {target}")
+            return target
+
+    click.echo(f"Downloading {SPACY_MODEL_NAME} {version}...")
+    models_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.chmod(0o700)  # mkdir's `mode=` is a no-op for parents/exist_ok
+    url = SPACY_MODEL_WHEEL_URL.format(name=SPACY_MODEL_NAME, version=version)
+
+    with tempfile.TemporaryDirectory(dir=models_dir) as staging_name:
+        staging = Path(staging_name)
+        wheel = staging / "model.whl"
+        try:
+            with urllib.request.urlopen(url, timeout=_SPACY_WHEEL_TIMEOUT_SECONDS) as response:
+                with wheel.open("wb") as out_file:
+                    shutil.copyfileobj(response, out_file)
+            with zipfile.ZipFile(wheel) as archive:
+                archive.extractall(staging)
+        except (urllib.error.URLError, OSError, zipfile.BadZipFile) as exc:
+            raise InstallError(
+                f"failed to fetch {SPACY_MODEL_NAME} {version}: {exc}. "
+                "Check your network connection and re-run the wizard."
+            ) from exc
+
+        inner = staging / SPACY_MODEL_NAME / f"{SPACY_MODEL_NAME}-{version}"
+        if not (inner / "config.cfg").is_file():
+            raise InstallError(
+                f"{SPACY_MODEL_NAME} {version} wheel has an unexpected layout "
+                f"(no model directory at {inner.name})"
+            )
+        # fsync the extracted files before they become reachable at `target`:
+        # otherwise a crash between extraction and page-cache flush can leave
+        # `target` with a valid config.cfg but truncated weight files, which
+        # `find_spacy_model()` resolves happily and which then latches into
+        # permanent silent degradation (2026-08-19-030) — the failure mode
+        # this whole change set exists to prevent.
+        fsync_tree(inner)
+        if target.exists():
+            # Rubble from a prior interrupted provisioning run (the
+            # `config.cfg` guard above only catches a *complete* target).
+            shutil.rmtree(target)
+        # Staging sits inside models_dir, so this is a same-filesystem rename:
+        # a half-extracted model is never visible at `target`, its contents are
+        # already fsynced above, and the fsync_dir below makes the rename
+        # itself survive a crash.
+        shutil.move(str(inner), str(target))  # noqa: durable-write — fsynced before and after; same-filesystem rename
+        fsync_dir(models_dir)
+
+    try:
+        spacy.load(str(target))
+    except Exception as exc:
+        # `ignore_errors`: a cleanup failure must not replace the real
+        # diagnostic with an OSError from the handler (2026-08-19-030 C2-I-14).
+        shutil.rmtree(target, ignore_errors=True)
+        raise InstallError(
+            f"provisioned {SPACY_MODEL_NAME} {version} failed to load: {exc}"
+        ) from exc
+
+    click.echo(f"spaCy model {SPACY_MODEL_NAME} {version} provisioned at {target}")
+    return target
+
+
 def _install_graph_extra(dry_run: bool = False) -> None:
-    """Install ``archon-search[graph]`` and the spaCy model.
+    """Install ``archon-search[graph]`` and provision the spaCy NER model.
 
     PyPI prohibits direct URL dependencies, so ``en_core_web_sm`` cannot be
-    declared in the package extras. It is installed separately as the
-    ``en-core-web-sm`` PyPI wheel via ``uv pip install`` — the same route
-    :func:`_install_extra` uses for every other package, avoiding the
-    virtual-environment-detection assumption that ``python -m spacy download``
-    makes (which fails in a uv-tool install context).
+    declared in the package extras and is not on PyPI under any name. The
+    wizard therefore fetches the pinned model wheel from the spacy-models
+    GitHub release and places it under the data dir, where the runtime resolves
+    it by path (2026-08-19-030). A failed fetch is non-fatal: graph ingest keeps
+    working for code symbols and degrades for prose.
     """
     _install_extra("archon-search[graph]", "graph enrichment", dry_run)
+    models_dir = get_spacy_models_dir()
     if dry_run:
-        click.echo("[dry-run] Would run: uv pip install en-core-web-sm")
+        click.echo(f"[dry-run] Would provision spaCy model {SPACY_MODEL_NAME} into {models_dir}")
         return
-    click.echo("Downloading spaCy model en_core_web_sm...")
     try:
-        subprocess.run(
-            ["uv", "pip", "install", "--python", sys.executable, "en-core-web-sm"],
-            check=True,
-            capture_output=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-        detail = ""
-        if isinstance(exc, subprocess.CalledProcessError):
-            detail = ": " + (exc.stderr or b"").decode(errors="replace").strip()
+        _download_spacy_model(models_dir)
+    except (InstallError, OSError) as exc:
         print(
-            f"Warning: spaCy model download failed{detail}. "
-            "The model will be downloaded automatically on first graph ingest.",
+            f"Warning: spaCy model provisioning failed: {exc}. "
+            "Graph ingest will extract code symbols only until the wizard is re-run.",
             file=sys.stderr,
         )
 

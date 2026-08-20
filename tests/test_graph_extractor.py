@@ -8,7 +8,7 @@ Tests cover:
   spaCy-only fallback with llm_fallback_used=True + WARNING
 - spaCy absent → fatal_error result with actionable message
 - stable entity IDs match make_stable_entity_id formula
-- spaCy model auto-download: when model not in installed list, download is triggered + INFO logged
+- spaCy model resolution: installed package → data-dir path → latched degrade; runtime never downloads
 - asyncio.to_thread wrapping: _run_ner_sync called inside asyncio.to_thread
 - Integration: stub spaCy returns fixed entities → nodes/edges populated correctly
 - Co-occurrence edge count: 3 entities in one chunk → exactly 3 edges (N*(N-1)/2)
@@ -17,6 +17,8 @@ Tests cover:
 from __future__ import annotations
 
 import asyncio
+import inspect
+import logging
 import sys
 import types
 from pathlib import Path
@@ -43,8 +45,19 @@ def _make_spacy_stub(
     entities_by_text: dict[str, list[tuple[str, str]]] | None = None,
     installed_models: list[str] | None = None,
     download_calls: list[str] | None = None,
+    *,
+    probe_calls: list[None] | None = None,
+    spacy_version: str = "3.8.15",
+    poison_cli: bool = False,
+    download_raises: BaseException | None = None,
 ) -> dict[str, types.ModuleType]:
     """Return a sys.modules patch dict with a fake spaCy stack.
+
+    The single shared spaCy stub factory for this module and
+    ``tests/test_graph_ner_model_visibility.py`` (2026-08-19-030 review:
+    three independently hand-rolled spaCy stubs across this change set was
+    the exact mechanism that produced a fabricated-fixture Critical
+    elsewhere — consolidated here instead).
 
     Args:
         entities_by_text: map from text → list of (entity_text, label) pairs
@@ -52,7 +65,25 @@ def _make_spacy_stub(
         installed_models: list returned by ``spacy.util.get_installed_models()``.
             Defaults to ``["en_core_web_sm"]`` (model already installed).
         download_calls: optional mutable list that records ``spacy.cli.download()``
-            call arguments for assertion.
+            call arguments for assertion. The runtime never calls this
+            (2026-08-19-030: the downloader is gone from ``graph_extractor``),
+            so in every real code path this list stays empty — it exists only
+            as a historical regression guard. Ignored when ``poison_cli=True``.
+        probe_calls: optional mutable list that ``get_installed_models()``
+            appends a sentinel to on every call, so a test can assert the
+            resolver probes installed-package metadata at most once per
+            process (2026-08-19-030 T1).
+        spacy_version: value exposed as ``spacy.__version__``, for model
+            compatibility tests (C1-I-3).
+        poison_cli: when ``True``, ``spacy.cli`` raises ``AssertionError`` on
+            ANY attribute access instead of merely recording calls — a
+            behavioural guard (T11) proving the runtime never reaches for
+            ``spacy.cli`` at all, pairing the weaker source-text scan in
+            ``test_extractor_never_downloads_spacy_model_at_runtime``.
+        download_raises: if set, ``spacy.cli.download`` raises this instead of
+            recording the call and returning. Used by the latch tests, which
+            simulate the historical downloader that blew up with
+            ``SystemExit(1)``. Ignored when ``poison_cli=True``.
     """
     entities_by_text = entities_by_text or {}
     if installed_models is None:
@@ -76,15 +107,51 @@ def _make_spacy_stub(
 
     nlp_instance = _FakeNLP()
 
+    def _get_installed_models() -> list[str]:
+        if probe_calls is not None:
+            probe_calls.append(None)
+        return list(installed_models)
+
     fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: list(installed_models)  # type: ignore[attr-defined]
+    fake_util.get_installed_models = _get_installed_models  # type: ignore[attr-defined]
 
-    _captured_downloads = download_calls
+    fake_cli: types.ModuleType
+    if poison_cli:
 
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: _captured_downloads.append(model)  # type: ignore[attr-defined]
+        class _PoisonedCli(types.ModuleType):
+            """Records the access before raising.
+
+            The raise alone is not a guard: `_ensure_nlp` catches
+            `BaseException`, so an AssertionError from here degrades exactly
+            like a missing model and leaves no trace in the result. The
+            `accesses` list is what a test can actually assert on
+            (2026-08-19-030 C2-T-1).
+            """
+
+            accesses: list[str] = []
+
+            def __getattr__(self, name: str) -> object:
+                _PoisonedCli.accesses.append(name)
+                raise AssertionError(
+                    f"spacy.cli.{name} must never be accessed at runtime "
+                    "(2026-08-19-030: the downloader is gone)"
+                )
+
+        _PoisonedCli.accesses = []
+        fake_cli = _PoisonedCli("spacy.cli")
+    else:
+        _captured_downloads = download_calls
+
+        def _download(model: str) -> None:
+            _captured_downloads.append(model)
+            if download_raises is not None:
+                raise download_raises
+
+        fake_cli = types.ModuleType("spacy.cli")
+        fake_cli.download = _download  # type: ignore[attr-defined]
 
     fake_spacy = types.ModuleType("spacy")
+    fake_spacy.__version__ = spacy_version  # type: ignore[attr-defined]
     fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
     fake_spacy.util = fake_util  # type: ignore[attr-defined]
     fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
@@ -430,14 +497,25 @@ def test_extractor_stable_ids_match_formula() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. spaCy model auto-download + INFO log
+# 6. Runtime never downloads the spaCy model (2026-08-19-030)
 # ---------------------------------------------------------------------------
 
 
-def test_extractor_spacy_model_download_logs_info() -> None:
-    """When en_core_web_sm not in installed models, download is triggered and INFO logged."""
+def test_extractor_never_downloads_spacy_model_at_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing model degrades with a WARNING — the runtime never invokes the downloader.
+
+    `spacy.cli.download` can never work in a pip-less `uv tool install` venv; the
+    wizard provisions the model into the data dir instead.
+    """
     from archon_search.config import GraphConfig
     from archon_search.graph_extractor import GraphExtractor
+
+    # T10: pin an empty data dir — the shared per-worker fixture data dir could
+    # otherwise carry a leftover model dir from an unrelated test, turning this
+    # into a cross-module flake under `-n 8 --dist=loadgroup`.
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
 
     config = GraphConfig()
     extractor = GraphExtractor(config)
@@ -446,7 +524,7 @@ def test_extractor_spacy_model_download_logs_info() -> None:
     download_calls: list[str] = []
     stub = _make_spacy_stub(
         entities_by_text={},
-        installed_models=[],  # model NOT installed → download triggered
+        installed_models=[],  # model NOT installed → old code downloaded here
         download_calls=download_calls,
     )
 
@@ -455,20 +533,67 @@ def test_extractor_spacy_model_download_logs_info() -> None:
     async def _run():
         with patch.dict(sys.modules, stub):
             with patch("archon_search.graph_extractor._logger") as mock_logger:
-                await extractor.extract([chunk], "doc-1", "col")
-        return mock_logger
+                result = await extractor.extract([chunk], "doc-1", "col")
+        return result, mock_logger
 
-    mock_logger = asyncio.run(_run())
+    result, mock_logger = asyncio.run(_run())
 
-    # spacy.cli.download("en_core_web_sm") must have been called
-    assert "en_core_web_sm" in download_calls, (
-        f"Expected en_core_web_sm download, got: {download_calls}"
+    assert download_calls == [], (
+        f"Runtime must never call spacy.cli.download; got: {download_calls}"
+    )
+    assert "spacy.cli" not in inspect.getsource(sys.modules[GraphExtractor.__module__]), (
+        "the runtime downloader must be gone from graph_extractor, not merely unused"
+    )
+    assert result.fatal_error is None, "A missing model degrades; it is not fatal"
+    warn_msgs = [str(call_args) for call_args in mock_logger.warning.call_args_list]
+    assert any("en_core_web_sm" in m for m in warn_msgs), (
+        f"Expected a WARNING naming the unavailable model; got calls: {warn_msgs}"
     )
 
-    # An INFO log about the download must have been emitted
-    info_msgs = [str(call_args) for call_args in mock_logger.info.call_args_list]
-    assert any("en_core_web_sm" in m for m in info_msgs), (
-        f"Expected INFO log mentioning en_core_web_sm; got calls: {info_msgs}"
+
+def test_extractor_never_touches_spacy_cli_even_if_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Behavioural pair (T11) for the source-scan assertion above.
+
+    `"spacy.cli" not in inspect.getsource(...)` is defeated by anything that
+    references `spacy.cli` without matching that literal substring (e.g.
+    `from spacy import cli`) and false-fails on an unrelated comment mention.
+    Here `spacy.cli` raises `AssertionError` on ANY attribute access — proving
+    the runtime never reaches for it at all, regardless of how the source
+    happens to read.
+    """
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))  # T10
+
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    from archon_search.graph_extractor import _MODEL_ABSENT_WARNING
+
+    extractor = GraphExtractor(GraphConfig())
+    stub = _make_spacy_stub(installed_models=[], poison_cli=True)
+
+    chunk = ChunkInput(chunk_id="c1", text="No entities here.", symbol_type=None, symbol_subtype=None)
+
+    async def _run():
+        with patch.dict(sys.modules, stub):
+            return await extractor.extract([chunk], "doc-1", "col")
+
+    result = asyncio.run(_run())
+
+    # The AssertionError from _PoisonedCli would be swallowed by _ensure_nlp's
+    # `except BaseException` and degrade exactly like a missing model, so
+    # asserting on the result alone cannot detect a reintroduced downloader
+    # (2026-08-19-030 C2-T-1). Assert on the recorded accesses instead — that
+    # list survives the swallow.
+    assert stub["spacy"].cli.accesses == [], (
+        "the runtime reached for spacy.cli at "
+        f"{stub['spacy'].cli.accesses!r} — the downloader must be gone"
+    )
+    assert result.fatal_error is None, "A missing model degrades; it is not fatal"
+    assert result.warnings == [_MODEL_ABSENT_WARNING], (
+        "a swallowed spacy.cli AssertionError would masquerade as a missing "
+        f"model; got warnings={result.warnings!r}"
     )
 
 
@@ -1010,19 +1135,23 @@ def test_sameNameDifferentFiles_produceDistinctNodes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Regression: spacy.cli.download raises SystemExit when no package installer
+# Regression: a pip-less venv must degrade, never raise SystemExit
 # ---------------------------------------------------------------------------
 
 
-def test_extractor_download_systemexit_returns_fatal_error_not_crash() -> None:
-    """When spacy.cli.download raises SystemExit (no pip/uv found), extract() must
-    return a fatal_error result instead of propagating SystemExit and crashing the server.
+def test_extractor_missing_model_degrades_without_systemexit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pip-less venv (`uv tool install`) must degrade, not kill the server.
 
-    Regression for the production incident where `uv tool install archon-search` placed
-    the server in an environment where spaCy could not find pip or uv, causing
-    SystemExit(1) to escape the `except Exception` handler and kill the uvicorn process.
+    Originally a regression for `spacy.cli.download` raising SystemExit(1) — which
+    is BaseException, so it escaped `except Exception` and killed uvicorn. The
+    downloader is gone from the runtime (2026-08-19-030), so the failure class is
+    now "the model is simply not there": degrade with a warning, never fatal.
     """
     import types
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))  # T10
 
     from archon_search.config import GraphConfig
     from archon_search.graph_extractor import GraphExtractor
@@ -1031,7 +1160,7 @@ def test_extractor_download_systemexit_returns_fatal_error_not_crash() -> None:
     extractor = GraphExtractor(config)
     extractor._nlp = None  # force lazy load path
 
-    # Simulate: model not installed → download attempted → no package installer → SystemExit
+    # A downloader that would blow up if the runtime ever reached for it.
     fake_util = types.ModuleType("spacy.util")
     fake_util.get_installed_models = lambda: []  # type: ignore[attr-defined]
 
@@ -1041,7 +1170,7 @@ def test_extractor_download_systemexit_returns_fatal_error_not_crash() -> None:
     fake_spacy = types.ModuleType("spacy")
     fake_spacy.util = fake_util  # type: ignore[attr-defined]
     fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-    # spacy.load should never be reached in this test
+    # spacy.load should never be reached: no model is installed or provisioned.
     fake_spacy.load = lambda model: (_ for _ in ()).throw(AssertionError("spacy.load must not be called"))  # type: ignore[attr-defined]
 
     stub = {"spacy": fake_spacy, "spacy.util": fake_util, "spacy.cli": fake_cli}
@@ -1054,10 +1183,603 @@ def test_extractor_download_systemexit_returns_fatal_error_not_crash() -> None:
 
     result = asyncio.run(_run())
 
-    assert result.fatal_error is not None, "Expected fatal_error when download raises SystemExit"
-    assert "download" in result.fatal_error.lower() or "installer" in result.fatal_error.lower(), (
-        f"fatal_error message should mention download/installer, got: {result.fatal_error!r}"
+    assert result.fatal_error is None, (
+        f"A missing model is auxiliary — degrade, never abort; got {result.fatal_error!r}"
+    )
+    assert any("en_core_web_sm" in w for w in result.warnings), (
+        f"Expected a warning naming the model; got {result.warnings!r}"
     )
     # Server must survive — no SystemExit propagated
     assert result.nodes == []
     assert result.edges == []
+
+
+# ---------------------------------------------------------------------------
+# Regression: 2026-08-19-030 — spaCy model-load failure must latch and degrade
+# ---------------------------------------------------------------------------
+#
+# Two coupled defects reproduced below:
+#   1. No failure latch — `_load_nlp_sync` is re-run (probe + download) on every
+#      extract() call because `self._nlp` stays None.  Production log shows the
+#      "(first call only)" INFO 734 times in 27 minutes.
+#   2. Auxiliary failure kills the primary operation — the load failure becomes
+#      `fatal_error`, which aborts ingest before persist (see the companion
+#      integration test in tests/integration/test_bug030_graph_spacy_latch_ingest.py).
+
+
+def test_extractor_model_load_failure_latches_no_second_load_attempt() -> None:
+    """Defect 1: after a failing model load, the next extract() must not retry the load."""
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    extractor = GraphExtractor(GraphConfig())
+    load_mock = MagicMock(
+        side_effect=RuntimeError(
+            "spaCy model download failed (no package installer found; exit code 1)."
+        )
+    )
+    extractor._load_nlp_sync = load_mock  # type: ignore[method-assign]
+
+    chunk = ChunkInput(chunk_id="c1", text="Alice met Bob.", symbol_type=None, symbol_subtype=None)
+
+    async def _run() -> None:
+        # spaCy itself is importable; only the model load fails.
+        with patch.dict(sys.modules, {"spacy": types.ModuleType("spacy")}):
+            await extractor.extract([chunk], "doc-1", "col")
+            await extractor.extract([chunk], "doc-2", "col")
+
+    asyncio.run(_run())
+
+    assert load_mock.call_count == 1, (
+        "Model-load failure must latch: the second extract() re-ran the probe + download "
+        f"(_load_nlp_sync called {load_mock.call_count} times, expected 1)"
+    )
+
+
+def test_extractor_model_load_failure_degrades_instead_of_fatal() -> None:
+    """Defect 2: a missing model is an auxiliary failure — degrade, never fatal_error."""
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    extractor = GraphExtractor(GraphConfig())
+    extractor._load_nlp_sync = MagicMock(  # type: ignore[method-assign]
+        side_effect=RuntimeError(
+            "spaCy model download failed (no package installer found; exit code 1)."
+        )
+    )
+
+    chunks = [
+        ChunkInput(
+            chunk_id="c1",
+            text="def parse_config(): ...",
+            symbol_type="function",
+            symbol_subtype="python-function",
+            containing_function="parse_config",
+            source_path="conf.py",
+        ),
+        ChunkInput(chunk_id="c2", text="Alice met Bob.", symbol_type=None, symbol_subtype=None),
+    ]
+
+    async def _run():
+        with patch.dict(sys.modules, {"spacy": types.ModuleType("spacy")}):
+            return await extractor.extract(chunks, "doc-1", "col")
+
+    result = asyncio.run(_run())
+
+    assert result.fatal_error is None, (
+        "A missing spaCy model must degrade, not abort the ingest; got fatal_error: "
+        f"{result.fatal_error!r}"
+    )
+    assert any("en_core_web_sm" in w for w in result.warnings), (
+        f"Expected a warning naming the model; got warnings: {result.warnings!r}"
+    )
+    assert "parse_config" in {n.entity_name for n in result.nodes}, (
+        "Code-symbol extraction works without spaCy and must survive the degraded path; "
+        f"got nodes: {[n.entity_name for n in result.nodes]}"
+    )
+
+
+def test_extractor_model_load_failure_warns_exactly_once_across_files(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defect 1: the model-unavailable WARNING must fire once, not once per file."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))  # T10
+
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    extractor = GraphExtractor(GraphConfig())
+    download_calls: list[str] = []
+    # Pip-less venv: model absent everywhere, and (historically) the downloader
+    # exits with SystemExit(1) — dead machinery today (2026-08-19-030: the
+    # runtime never calls spacy.cli.download), kept only so a regression that
+    # re-introduces the call would still surface as a recorded attempt.
+    stub = _make_spacy_stub(installed_models=[], download_calls=download_calls, download_raises=SystemExit(1))
+
+    chunk = ChunkInput(chunk_id="c1", text="Alice met Bob.", symbol_type=None, symbol_subtype=None)
+
+    async def _run() -> None:
+        with patch.dict(sys.modules, stub):
+            for i in range(3):
+                await extractor.extract([chunk], f"doc-{i}", "col")
+
+    with caplog.at_level(logging.INFO, logger="archon_search.graph_extractor"):
+        asyncio.run(_run())
+
+    warnings = [
+        r for r in caplog.records
+        if r.levelno >= logging.WARNING and "en_core_web_sm" in r.getMessage()
+    ]
+    assert len(warnings) == 1, (
+        "Expected exactly one WARNING about the unavailable model across 3 files; got "
+        f"{len(warnings)}: {[r.getMessage() for r in warnings]}"
+    )
+
+
+def test_extractor_model_load_failure_does_not_reprobe_per_file(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defect 1 (production evidence): 734 INFO lines / 734 download attempts in 27 min.
+
+    T1: strengthened past the post-fix code's dead counters (`spacy.cli` is
+    gone entirely, so `download_calls` could never increment even with the
+    latch removed) — `probe_calls` tracks the ACTIVE resolution path
+    (`get_installed_models()`, called by `resolve_spacy_model()`), which the
+    latch genuinely governs, and asserts it fires exactly once across 3
+    documents rather than merely `<= 1`.
+    """
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))  # T10
+
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    extractor = GraphExtractor(GraphConfig())
+    download_calls: list[str] = []
+    probe_calls: list[None] = []
+    stub = _make_spacy_stub(
+        installed_models=[],
+        download_calls=download_calls,
+        probe_calls=probe_calls,
+        download_raises=SystemExit(1),
+    )
+
+    chunk = ChunkInput(chunk_id="c1", text="Alice met Bob.", symbol_type=None, symbol_subtype=None)
+
+    async def _run() -> None:
+        with patch.dict(sys.modules, stub):
+            for i in range(3):
+                await extractor.extract([chunk], f"doc-{i}", "col")
+
+    with caplog.at_level(logging.INFO, logger="archon_search.graph_extractor"):
+        asyncio.run(_run())
+
+    assert download_calls == [], (
+        f"The download must never be invoked (dead code, 2026-08-19-030); got {download_calls}"
+    )
+    assert len(probe_calls) == 1, (
+        "The installed-models probe must run at most once per process — "
+        f"got {len(probe_calls)} calls across 3 documents"
+    )
+
+    retry_logs = [r for r in caplog.records if "auto-downloading" in r.getMessage()]
+    assert len(retry_logs) <= 1, (
+        '"(first call only)" must be true: the line was logged '
+        f"{len(retry_logs)} times across 3 files"
+    )
+
+
+def test_extractor_model_load_survives_systemexit_from_load() -> None:
+    """Relocated regression guard (T12): `_ensure_nlp` catches `BaseException`,
+    not `Exception`, around the load call specifically so a `SystemExit`
+    raised inside it — the historical shape of this bug, when
+    `spacy.cli.download` called `sys.exit(1)` on failure — degrades instead
+    of escaping uncaught and killing the process. The downloader itself is
+    gone from the runtime now, so this pins the general guarantee directly
+    against `_load_nlp_sync`, independent of what happens to raise it.
+    """
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    extractor = GraphExtractor(GraphConfig())
+    extractor._load_nlp_sync = MagicMock(  # type: ignore[method-assign]
+        side_effect=SystemExit(1)
+    )
+
+    chunk = ChunkInput(chunk_id="c1", text="Alice met Bob.", symbol_type=None, symbol_subtype=None)
+
+    async def _run():
+        with patch.dict(sys.modules, {"spacy": types.ModuleType("spacy")}):
+            return await extractor.extract([chunk], "doc-1", "col")
+
+    result = asyncio.run(_run())
+
+    assert result.fatal_error is None, (
+        "A SystemExit from the load path must degrade, not propagate and crash "
+        f"the process; got fatal_error={result.fatal_error!r}"
+    )
+    assert any("en_core_web_sm" in w for w in result.warnings)
+
+
+# ---------------------------------------------------------------------------
+# C1-B-4: the "[graph] extra missing" (ImportError) probe must also latch —
+# same unlatched-reprobe shape as the model-load failure, triggered by a
+# missing spaCy PACKAGE rather than a missing model.
+# ---------------------------------------------------------------------------
+
+
+def test_extractor_spacy_not_importable_latches_no_second_probe() -> None:
+    """The ImportError probe runs at most once per process, not once per file.
+
+    Before the fix, `_ensure_nlp` returned the fatal message without setting
+    any latch, so the `import spacy` probe (and the ``ConfigError``-shaped
+    per-file abort) re-ran on every `extract()` call — the identical defect
+    shape the model-load latch exists to fix, just triggered by a missing
+    `[graph]` extra instead of a missing model.
+    """
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    extractor = GraphExtractor(GraphConfig())
+    chunk = ChunkInput(chunk_id="c1", text="Alice met Bob.", symbol_type=None, symbol_subtype=None)
+
+    async def _run() -> list[bool]:
+        results = []
+        with patch.dict(sys.modules, {"spacy": None}):  # type: ignore[dict-item]
+            for i in range(3):
+                result = await extractor.extract([chunk], f"doc-{i}", "col")
+                results.append(result.fatal_error is not None)
+        return results
+
+    fatal_flags = asyncio.run(_run())
+
+    assert fatal_flags == [True, True, True], (
+        "every call must still report the fatal ImportError condition"
+    )
+    assert extractor._spacy_not_importable is True, (
+        "the ImportError probe must latch so it is not re-run per file"
+    )
+
+
+# ---------------------------------------------------------------------------
+# C1-I-4 / T2: the spaCy NER-CALL failure (as opposed to the model-LOAD
+# failure above) must degrade too, and its traceback log must latch the same
+# way — this path had zero coverage before.
+# ---------------------------------------------------------------------------
+
+
+def test_extractor_ner_call_failure_degrades_and_preserves_code_symbols() -> None:
+    """T2: a raising NER call degrades — fatal_error stays None, the warning
+    names the failure, code-symbol nodes/mentions survive, and no co-occurrence
+    edges are fabricated from a partial/absent NER result."""
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    extractor = GraphExtractor(GraphConfig())
+
+    def _raising_nlp(text: str) -> None:
+        raise RuntimeError("boom: NER call failed")
+
+    extractor._nlp = _raising_nlp
+
+    chunks = [
+        ChunkInput(
+            chunk_id="c1",
+            text="def parse_config(): ...",
+            symbol_type="function",
+            symbol_subtype="python-function",
+            containing_function="parse_config",
+            source_path="conf.py",
+        ),
+        ChunkInput(chunk_id="c2", text="Alice met Bob.", symbol_type=None, symbol_subtype=None),
+    ]
+
+    async def _run():
+        return await extractor.extract(chunks, "doc-1", "col")
+
+    result = asyncio.run(_run())
+
+    assert result.fatal_error is None
+    assert any("spaCy NER failed" in w for w in result.warnings), (
+        f"expected the NER-failure warning; got {result.warnings!r}"
+    )
+    assert "parse_config" in {n.entity_name for n in result.nodes}, (
+        "code-symbol extraction must survive an NER-call failure"
+    )
+    assert result.mentions and all(
+        m.entity_id in {n.id for n in result.nodes} for m in result.mentions
+    ), "the code-symbol mention must still be recorded"
+    assert result.edges == [], (
+        "no co-occurrence edges may be fabricated from a failed NER call"
+    )
+
+
+def test_extractor_ner_call_failure_log_latches_across_documents(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """T2: the NER-call-failure traceback logs once per process (C1-I-4), but
+    the per-document `warnings` entry fires every time."""
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    extractor = GraphExtractor(GraphConfig())
+
+    def _raising_nlp(text: str) -> None:
+        raise RuntimeError("boom: NER call failed")
+
+    extractor._nlp = _raising_nlp
+
+    chunk = ChunkInput(chunk_id="c1", text="Alice met Bob.", symbol_type=None, symbol_subtype=None)
+
+    async def _run() -> list[list[str]]:
+        return [
+            (await extractor.extract([chunk], f"doc-{i}", "col")).warnings for i in range(3)
+        ]
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.graph_extractor"):
+        per_doc_warnings = asyncio.run(_run())
+
+    assert all(
+        any("spaCy NER failed" in w for w in doc_warnings) for doc_warnings in per_doc_warnings
+    ), "every document must still get the warning in its own result"
+
+    warning_logs = [r for r in caplog.records if "spaCy NER failed" in r.getMessage()]
+    assert len(warning_logs) == 1, (
+        f"expected exactly one WARNING-level NER-failure log across 3 documents; got "
+        f"{len(warning_logs)}: {[r.getMessage() for r in warning_logs]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-19-030: model resolution order — package → data-dir path → degrade
+# ---------------------------------------------------------------------------
+
+
+def _place_data_dir_model(
+    data_dir: Path, version: str = "3.8.0", spacy_version_spec: str | None = None
+) -> Path:
+    """Create a wizard-provisioned model directory under *data_dir* and return it.
+
+    ``spacy_version_spec``, when given, writes a ``meta.json`` with that
+    ``spacy_version`` compatibility range (e.g. ``">=3.9.0,<3.10.0"``) — the
+    field :func:`resolve_spacy_model` checks (C1-I-3). Omitted by default:
+    most tests don't care about compatibility and a missing ``meta.json``
+    reads as compatible (fail open).
+    """
+    import json as _json
+
+    model_dir = data_dir / "models" / "spacy" / f"en_core_web_sm-{version}"
+    model_dir.mkdir(parents=True)
+    (model_dir / "config.cfg").write_text("[nlp]\nlang = 'en'\n")
+    if spacy_version_spec is not None:
+        (model_dir / "meta.json").write_text(
+            _json.dumps({"version": version, "spacy_version": spacy_version_spec})
+        )
+    return model_dir
+
+
+def test_find_spacy_model_prefers_installed_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An installed package wins over a data-dir copy — back-compat for pip installs."""
+    from archon_search.graph_extractor import find_spacy_model
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    _place_data_dir_model(tmp_path)
+
+    with patch.dict(sys.modules, _make_spacy_stub(installed_models=["en_core_web_sm"])):
+        assert find_spacy_model() == "en_core_web_sm"
+
+
+def test_find_spacy_model_falls_back_to_data_dir_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no installed package, the wizard-provisioned directory is used."""
+    from archon_search.graph_extractor import find_spacy_model
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    model_dir = _place_data_dir_model(tmp_path)
+
+    with patch.dict(sys.modules, _make_spacy_stub(installed_models=[])):
+        assert find_spacy_model() == str(model_dir)
+
+
+def test_find_spacy_model_picks_newest_data_dir_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Several provisioned versions → the newest one loads, by VERSION not lexicographic order.
+
+    2026-08-19-030 C1-I-2: ``3.9.0`` vs ``3.10.0`` is a genuine discriminator —
+    lexicographic string comparison ranks ``"3.10.0" < "3.9.0"`` (`'1' < '9'`),
+    so a test using e.g. 3.7.0/3.8.0 would pass under BOTH orderings and
+    certify nothing about the fix.
+    """
+    from archon_search.graph_extractor import find_spacy_model
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    _place_data_dir_model(tmp_path, version="3.9.0")
+    newest = _place_data_dir_model(tmp_path, version="3.10.0")
+
+    with patch.dict(sys.modules, _make_spacy_stub(installed_models=[])):
+        assert find_spacy_model() == str(newest)
+
+
+def test_find_spacy_model_rejects_lexicographic_near_miss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The near-term reachable case from C1-I-2: 3.8.2 vs 3.8.10 — lexicographic
+    string sort ranks '3.8.10' < '3.8.2' (`'1' < '2'`), so a buggy resolver would
+    pick 3.8.2 as "newest". The version-aware key must pick 3.8.10.
+    """
+    from archon_search.graph_extractor import find_spacy_model
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    _place_data_dir_model(tmp_path, version="3.8.2")
+    newest = _place_data_dir_model(tmp_path, version="3.8.10")
+
+    with patch.dict(sys.modules, _make_spacy_stub(installed_models=[])):
+        assert find_spacy_model() == str(newest)
+
+
+def test_resolve_spacy_model_rejects_incompatible_data_dir_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C1-I-3: a stale model dir whose meta.json spacy_version excludes the
+    installed spaCy must not resolve — GET /status must not report it healthy.
+    """
+    from archon_search.graph_extractor import resolve_spacy_model
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    _place_data_dir_model(tmp_path, version="3.7.0", spacy_version_spec=">=3.7.0,<3.8.0")
+
+    with patch.dict(
+        sys.modules, _make_spacy_stub(installed_models=[], spacy_version="3.9.4")
+    ):
+        resolution = resolve_spacy_model()
+
+    assert resolution.target is None
+    assert resolution.incompatible_versions == ["en_core_web_sm-3.7.0"]
+
+
+def test_resolve_spacy_model_skips_incompatible_and_uses_compatible_sibling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A compatible version alongside an incompatible one still resolves —
+    incompatible candidates are excluded, not merely deprioritized."""
+    from archon_search.graph_extractor import resolve_spacy_model
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    _place_data_dir_model(tmp_path, version="3.7.0", spacy_version_spec=">=3.7.0,<3.8.0")
+    compatible = _place_data_dir_model(
+        tmp_path, version="3.9.0", spacy_version_spec=">=3.9.0,<3.10.0"
+    )
+
+    with patch.dict(
+        sys.modules, _make_spacy_stub(installed_models=[], spacy_version="3.9.4")
+    ):
+        resolution = resolve_spacy_model()
+
+    assert resolution.target == str(compatible)
+    assert resolution.incompatible_versions == ["en_core_web_sm-3.7.0"]
+
+
+def test_extractor_incompatible_model_warns_distinctly_from_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C1-I-3: the operator-facing warning distinguishes "present but
+    incompatible" from "absent entirely" — the fix (re-provision vs provision)
+    differs."""
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    _place_data_dir_model(tmp_path, version="3.7.0", spacy_version_spec=">=3.7.0,<3.8.0")
+
+    extractor = GraphExtractor(GraphConfig())
+    stub = _make_spacy_stub(installed_models=[], spacy_version="3.9.4")
+    chunk = ChunkInput(chunk_id="c1", text="Alice met Bob.", symbol_type=None, symbol_subtype=None)
+
+    async def _run():
+        with patch.dict(sys.modules, stub):
+            return await extractor.extract([chunk], "doc-1", "col")
+
+    result = asyncio.run(_run())
+
+    assert result.fatal_error is None
+    assert any("incompatible" in w for w in result.warnings), (
+        f"Expected an incompatible-version warning distinct from 'absent'; got {result.warnings!r}"
+    )
+
+
+def test_find_spacy_model_returns_none_when_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Neither installed nor provisioned → None, so the caller degrades."""
+    from archon_search.graph_extractor import find_spacy_model
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+
+    with patch.dict(sys.modules, _make_spacy_stub(installed_models=[])):
+        assert find_spacy_model() is None
+
+
+def test_extractor_loads_model_from_data_dir_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: extract() runs NER off the data-dir model with nothing installed."""
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    model_dir = _place_data_dir_model(tmp_path)
+
+    load_args: list[str] = []
+    stub = _make_spacy_stub(
+        entities_by_text={"Alice works at Acme.": [("Alice", "PERSON")]},
+        installed_models=[],
+    )
+    _inner_load = stub["spacy"].load
+
+    def _recording_load(name: str):
+        load_args.append(name)
+        return _inner_load(name)
+
+    stub["spacy"].load = _recording_load  # type: ignore[attr-defined]
+
+    extractor = GraphExtractor(GraphConfig())
+    chunk = ChunkInput(
+        chunk_id="c1", text="Alice works at Acme.", symbol_type=None, symbol_subtype=None
+    )
+
+    async def _run():
+        with patch.dict(sys.modules, stub):
+            return await extractor.extract([chunk], "doc-1", "col")
+
+    result = asyncio.run(_run())
+
+    assert load_args == [str(model_dir)], (
+        f"spacy.load must be called with the data-dir path; got {load_args}"
+    )
+    assert result.fatal_error is None
+    assert {n.entity_name for n in result.nodes} == {"Alice"}
+
+
+def test_extractor_cancelled_load_propagates_and_does_not_latch() -> None:
+    """C2-I-1: `_ensure_nlp` catches `BaseException` around the load so a
+    `SystemExit` degrades (see the test above) — but `asyncio.CancelledError`
+    is a `BaseException` too, and swallowing it would be wrong twice over.
+
+    Cancellation says nothing about the model. If it were caught, (a) the
+    cancelled task would return normally instead of unwinding, breaking
+    structured concurrency, and (b) `_nlp_unavailable` would latch for the
+    whole process, disabling prose NER for a model that is present and
+    healthy — because a shutdown or job-cancel happened to land in the load
+    window, which is the slowest part of the whole ingest path.
+    """
+    from archon_search.config import GraphConfig
+    from archon_search.graph_extractor import GraphExtractor
+
+    extractor = GraphExtractor(GraphConfig())
+    extractor._load_nlp_sync = MagicMock(  # type: ignore[method-assign]
+        side_effect=asyncio.CancelledError()
+    )
+
+    chunk = ChunkInput(chunk_id="c1", text="Alice met Bob.", symbol_type=None, symbol_subtype=None)
+
+    async def _run():
+        with patch.dict(sys.modules, {"spacy": types.ModuleType("spacy")}):
+            return await extractor.extract([chunk], "doc-1", "col")
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(_run())
+
+    assert extractor._nlp_unavailable is False, (
+        "A cancelled load must not latch the extractor as degraded — the model "
+        "was never determined to be unavailable"
+    )
+    assert extractor._nlp_unavailable_warning is None, (
+        "A cancelled load must not arm a wire-facing 'model unavailable' notice"
+    )

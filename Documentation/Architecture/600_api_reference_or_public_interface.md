@@ -1,7 +1,7 @@
 **Purpose**: Authoritative human-readable reference for every public surface (REST, MCP, CLI) exposed by `archon-search`.
 **Audience**: Medior engineers integrating with or operating `archon-search`.
 **Status**: Draft
-**Last reviewed**: 2026-08-07 / **Next review**: 2026-11-07
+**Last reviewed**: 2026-08-20 / **Next review**: 2026-11-07
 
 # API Reference and Public Interface
 
@@ -63,7 +63,7 @@ The `model_validation` field added to `GET /status` (D6):
 | --- | --- | --- |
 | `embedder_ok` | `bool \| null` | `true` if the embedder probe passed; `false` if it failed; `null` if not yet run. |
 | `reranker_ok` | `bool \| null` | `true` if the reranker probe passed (or `reranker_model = ""`, disabled); `false` if it failed; `null` if not yet run. |
-| `provider_warnings` | `list[str]` | Human-readable warnings (missing ONNX provider, probe failure, `"validation timed out after {N}s"`). Empty list when clean. |
+| `provider_warnings` | `list[str]` | Human-readable warnings (missing ONNX provider, probe failure, `"validation timed out after {N}s"`). Empty list when clean. **2026-08-19-030** — also carries graph NER model state when `[graph].enabled = true`, prepended ahead of the probe warnings on every return path: a missing `en_core_web_sm` (neither installed nor provisioned under the data dir), or — when the model is present and `[database].multilingual = true` — the English-only disclosure. Not a schema change; no new field. |
 | `validated_at` | `str (ISO 8601) \| null` | UTC timestamp when validation finished; `null` while pending. |
 
 The `warmup_result` field added to `GET /status`:
@@ -163,7 +163,7 @@ Implemented in `archon_search/server/routes_status.py` (`_build_code_parsers_sta
 | --- | --- |
 | `pending` | Eager warm-up is still running (`eager_load_embedders = true` and `warmup_result == "pending"`) — outranks everything below; **or** (once warm-up is not pending) background validation has not produced a result yet (`app.state.model_validation` is `None`, or a probe flag is still unset). |
 | `fail` | Eager warm-up finished **terminally failed** (`warmup_result == "failed"` — the task raised, or ran past `_EAGER_WARMUP_TIMEOUT_SECONDS`) — checked before `model_validation` and reported even if the latter is clean; **or** either `embedder_ok` or `reranker_ok` is `false` (a model could not load). |
-| `warn` | Both `model_validation` probes passed but `provider_warnings` is non-empty (provider fallback occurred). |
+| `warn` | Both `model_validation` probes passed but `provider_warnings` is non-empty — an ONNX provider fell back, **or** (2026-08-19-030) `[graph].enabled = true` with the `en_core_web_sm` NER model missing or English-only-with-multilingual. The graph cause is not search-affecting: it degrades prose entity extraction only. |
 | `ok` | Both `model_validation` probes passed with no warnings. |
 
 `CheckStatus` is an enum with values `ok`, `fail`, `pending`, `warn` (the latter two added in D6 — see `BREAKING.md`).

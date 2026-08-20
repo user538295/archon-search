@@ -238,3 +238,75 @@ class TestAtomicWriteBytes:
         #     to be among the closed fds.
         dir_fd = opened_fds[-1]
         assert dir_fd in closed_fds
+
+
+class TestFsyncTree:
+    def test_fsyncs_nested_directories_not_only_root(self, tmp_path):
+        """C2-I-4: fsyncing a file makes its *data* durable; its *directory
+        entry* only becomes durable when the containing directory is fsynced.
+
+        A spaCy model tree nests its weights under `ner/`, `tok2vec/` and
+        friends, so syncing only `root` can survive a crash as a valid-looking
+        `config.cfg` beside empty subdirectories — which the resolver accepts
+        and `spacy.load()` then fails on, latching permanent degradation.
+        """
+        from archon_search._durable_io import fsync_tree
+
+        root = tmp_path / "model"
+        (root / "ner").mkdir(parents=True)
+        (root / "vocab" / "lookups").mkdir(parents=True)
+        (root / "config.cfg").write_text("[nlp]\n")
+        (root / "ner" / "model").write_bytes(b"weights")
+        (root / "vocab" / "lookups" / "table.bin").write_bytes(b"lookup")
+
+        synced: set[int] = set()
+        real_fsync = os.fsync
+
+        def _recording_fsync(fd):
+            synced.add(os.fstat(fd).st_ino)
+            return real_fsync(fd)
+
+        with mock.patch("archon_search._durable_io.os.fsync", _recording_fsync):
+            fsync_tree(root)
+
+        expected = {
+            (root / "config.cfg").stat().st_ino,
+            (root / "ner" / "model").stat().st_ino,
+            (root / "vocab" / "lookups" / "table.bin").stat().st_ino,
+            (root / "ner").stat().st_ino,
+            (root / "vocab").stat().st_ino,
+            (root / "vocab" / "lookups").stat().st_ino,
+            root.stat().st_ino,
+        }
+        missing = expected - synced
+        assert not missing, (
+            "every file AND every directory in the tree must be fsynced; "
+            f"{len(missing)} inode(s) were never synced"
+        )
+
+    def test_fsyncs_directories_deepest_first(self, tmp_path):
+        """A child's directory entry must be durable before its parent is
+        synced, so the ordering is not incidental."""
+        from archon_search._durable_io import fsync_tree
+
+        root = tmp_path / "model"
+        (root / "vocab" / "lookups").mkdir(parents=True)
+        (root / "vocab" / "lookups" / "table.bin").write_bytes(b"lookup")
+
+        order: list[int] = []
+        real_fsync = os.fsync
+
+        def _recording_fsync(fd):
+            order.append(os.fstat(fd).st_ino)
+            return real_fsync(fd)
+
+        with mock.patch("archon_search._durable_io.os.fsync", _recording_fsync):
+            fsync_tree(root)
+
+        deep = order.index((root / "vocab" / "lookups").stat().st_ino)
+        mid = order.index((root / "vocab").stat().st_ino)
+        top = order.index(root.stat().st_ino)
+        assert deep < mid < top, (
+            "directories must be fsynced deepest-first so a child entry is "
+            f"durable before its parent; got order {order}"
+        )
