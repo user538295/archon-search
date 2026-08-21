@@ -9,7 +9,7 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 - **[2026-08-20] (×2) latch/guard state**: durable suppression gets its OWN data-dir file; clear it UNCONDITIONALLY. A broad catch around `await to_thread(...)` swallows `CancelledError` — re-raise FIRST or shutdown latches a degraded flag.
 
 ## What Has Worked
-- **[2026-08-20] (×64) bug briefs**: failing repro FIRST; probe config permutations; diff green tests against the DOC contract; fix at the guard layer, not a call-site proxy. Briefs undercount blast radius (sync.py mirrors pipeline's FTS/meta passes).
+- **[2026-08-21] (×65) bug briefs**: failing repro FIRST; fix at the guard layer, not a call-site proxy. Verify a brief's CANDIDATE FIX, not just its symptom — mine would have caused a worse bug. Briefs undercount blast radius (sync.py mirrors pipeline).
 - **[2026-08-20] (×55) brief triage**: a re-filed brief whose name is already in `Completed/` = regression or 2nd failure mode; close it as `<name>-reopened.md`. A doc-only fix is never behavioral — read the code after closing a DOC report.
 - **[2026-08-20] (×28) new field/pin**: dataclass + `_apply_toml` + coerce + snapshot tests; regenerate the OpenAPI snapshot on 3.12. `path_home_allowlist.txt` pins (file,lineno,sha) with `_EXPECTED_CONFIG_LINE_NO` — any edit ABOVE it breaks BOTH.
 - **[2026-08-14] (×17) xdist/asyncio**: `async def`→`AsyncMock`; `asyncio.run()` not `get_event_loop()`; MCP tests need `xdist_group("mcp")`. Rebind `*TIMEOUT*` constants to 0.1 rather than shrinking an outer `wait_for` — the outer budget wins.
