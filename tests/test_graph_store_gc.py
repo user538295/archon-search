@@ -1517,3 +1517,84 @@ def test_gc_sweep_spares_defref_and_synonym_edges(tmp_path: Path) -> None:
         await store.disconnect()
 
     asyncio.run(_run())
+
+
+def test_gc_sweep_survives_pre_e2f_edges_table_without_extraction_method() -> None:
+    """Pre-E2f edge tables have no `extraction_method` column, so it is never
+    selected. The sweep must read the schema-guarded list Step 2b already built,
+    not re-index the arrow table — the latter raises KeyError and takes the whole
+    maintenance pass down."""
+    node_a = _node("EntityA")
+    node_b = _node("EntityB")
+
+    # Both mentioned, in DIFFERENT chunks → the pair is unsupported, so the sweep
+    # genuinely runs rather than skipping past the risky line.
+    mentions_q = AsyncMock()
+    mentions_q.to_arrow = AsyncMock(
+        return_value=_mentions_arrow(
+            [_mention(node_a.id, "chunk-1"), _mention(node_b.id, "chunk-2")]
+        )
+    )
+    mentions_q.select = MagicMock(return_value=mentions_q)
+    mock_mentions_table = MagicMock()
+    mock_mentions_table.query.return_value = mentions_q
+
+    nodes_q = AsyncMock()
+    nodes_q.to_arrow = AsyncMock(return_value=_nodes_arrow([node_a, node_b]))
+    nodes_q.select = MagicMock(return_value=nodes_q)
+    mock_nodes_table = MagicMock()
+    mock_nodes_table.query.return_value = nodes_q
+    mock_nodes_table.delete = AsyncMock(return_value=None)
+
+    legacy_edge = GraphEdge(
+        id=make_stable_edge_id(node_a.id, node_b.id, RelationshipType.related_to.value),
+        source_node_id=node_a.id,
+        target_node_id=node_b.id,
+        relationship_type=RelationshipType.related_to,
+        source_doc_id="doc-abc",
+    )
+    # Arrow table WITHOUT the extraction_method column — the pre-E2f shape.
+    legacy_arrow = pa.table(
+        {
+            "id": [legacy_edge.id],
+            "source_node_id": [legacy_edge.source_node_id],
+            "target_node_id": [legacy_edge.target_node_id],
+            "relationship_type": [legacy_edge.relationship_type.value],
+        }
+    )
+    legacy_schema = pa.schema(
+        [
+            pa.field("id", pa.utf8()),
+            pa.field("source_node_id", pa.utf8()),
+            pa.field("target_node_id", pa.utf8()),
+            pa.field("relationship_type", pa.utf8()),
+        ]
+    )
+    edges_q = AsyncMock()
+    edges_q.to_arrow = AsyncMock(return_value=legacy_arrow)
+    edges_q.select = MagicMock(return_value=edges_q)
+    mock_edges_table = MagicMock()
+    mock_edges_table.query.return_value = edges_q
+    mock_edges_table.schema = AsyncMock(return_value=legacy_schema)
+    mock_edges_table.delete = AsyncMock(return_value=None)
+
+    store = GraphStore.__new__(GraphStore)
+
+    async def _open(name: str):
+        if "mentions" in name:
+            return mock_mentions_table
+        if "nodes" in name:
+            return mock_nodes_table
+        return mock_edges_table
+
+    mock_db = AsyncMock()
+    mock_db.open_table.side_effect = _open
+    store._db = mock_db
+
+    result = asyncio.run(store.delete_orphan_nodes_and_edges(_COL, _NS))
+
+    assert result.orphan_edges_removed == 1, (
+        "a legacy table's NULL extraction_method must read as 'not def/ref' and the "
+        f"unsupported edge must still be swept; got {result.orphan_edges_removed}"
+    )
+    assert result.orphan_nodes_removed == 0

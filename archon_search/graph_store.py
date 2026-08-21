@@ -2135,6 +2135,11 @@ class GraphStore:
         exempt_edge_ids: set[str] = set()
         exempt_node_ids: set[str] = set(module_pseudo_node_ids)
         edges_arrow = None
+        # Hoisted so Step 3b can reuse them: on a pre-E2f table the column is not
+        # selected at all, so indexing `edges_arrow["extraction_method"]` there
+        # would raise KeyError.
+        rel_types: list[str] = []
+        methods: list[str | None] = []
         if edges_table is not None:
             # Guard: pre-E2f edge tables lack extraction_method (same guard used
             # by _arrow_to_edges / ensure_graph_tables' migration check).
@@ -2206,8 +2211,8 @@ class GraphStore:
                 edges_arrow["id"].to_pylist(),
                 edges_arrow["source_node_id"].to_pylist(),
                 edges_arrow["target_node_id"].to_pylist(),
-                edges_arrow["relationship_type"].to_pylist(),
-                edges_arrow["extraction_method"].to_pylist(),
+                rel_types,
+                methods,
             ):
                 if rel_type != RelationshipType.related_to.value:
                     continue
