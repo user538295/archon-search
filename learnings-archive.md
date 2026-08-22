@@ -8,3 +8,5 @@
 
 ## Evicted from learnings.md 2026-08-20 (lowest N, startup-sync crash-loop task)
 - **[2026-08-19] (×1) assert the WIRING**: an unasserted ctor kwarg silently disconnects its feature and the suite stays green — `initializer=` (orphan watchdog), `max_tasks_per_child=` (operator knob). Assert the kwarg reaches the ctor, from a NON-default value.
+
+- **[2026-08-21] brief triage (compacted into `briefs`)** — a doc-only fix is never behavioral: read the code after closing a DOC report, since the report may describe a real defect the doc merely mis-stated.
