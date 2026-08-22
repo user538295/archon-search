@@ -8,6 +8,20 @@
 // and hosted by us, driven through `gliner>=0.2.26`. There is no second model and no
 // per-checkpoint fan-out anywhere in this seam.
 //
+// Lives in its own module, `archon_search/prose_extraction_backend.py`, separate from
+// `graph_extractor.py` — C4's installer-import constraint (the installer must not import
+// `archon_search.graph_extractor`) applies to the latter, not this module; the installer
+// imports this module directly for the provisioner's smoke-load and capability assert.
+//
+// The module does NOT import `gliner`, `torch` or `transformers` at module level (K12) — those
+// live inside `load()`'s body. Merely importing this module must stay cheap, for two different
+// reasons at two different call sites: `GraphExtractor`'s module-level reference to
+// `ProseExtractionBackend` is paid during `create_app`'s synchronous construction (`app.py:507`,
+// before lifespan); the installer's reference to the same module, for the provisioner, is paid
+// on every wizard run instead — `create_app` never imports the installer package. The cold
+// multi-second import cost either site would otherwise pay is deferred entirely into `load()`'s
+// body, off the event loop.
+//
 // Logical only: no signatures, no ONNX session options, no tokenizer detail.
 
 namespace ProseExtractionEngine;
@@ -107,8 +121,10 @@ model BatchExtraction {
   truncated: boolean;
 }
 
-/// What the engine reports about itself once loaded — consumed by the background model
-/// validation probe (Q9) and by the wizard's post-provision capability assert.
+/// What the engine reports about itself once loaded — read by the provisioner's smoke-load
+/// and capability assert (C4), and by the memory/concurrency guards that read `loadCount`
+/// below (S26, S48). The background probe (Q9) never holds one of these: it reads
+/// `capability_status.json` instead.
 model EngineCapability {
   relationsSupported: boolean;
 
@@ -121,6 +137,14 @@ model EngineCapability {
   /// list is `[graph].providers` (Q7); a step-down to CPU at load time must be visible here
   /// rather than inferred.
   activeProviders: string[];
+
+  /// Monotonic count of how many times `load()` has actually executed a real model load in
+  /// this process — NOT the number of callers that reached the load lock (K10). This is
+  /// backend surface, declared here so S26/S48's "exactly one load occurred across N
+  /// concurrent callers" assertion has something to read: `activeProviders` alone is
+  /// computable from `[graph].providers` with no model ever loaded, so it cannot discriminate
+  /// "loaded once" from "never loaded."
+  loadCount: int32;
 }
 
 /// The seam two roles agree on. One call per batch of prose texts; never per text.
@@ -128,18 +152,24 @@ model EngineCapability {
 interface ProseExtractionBackend {
   /// Load the pinned artifact from `get_graph_models_dir()` (Q6). Runs at most once per
   /// process, behind a lock, off the event loop, and never inside lifespan startup's awaited
-  /// path. Session options are built from `[graph].providers`; cancellation during load is
-  /// re-raised and never latched.
+  /// path. Session options are built from `[graph].providers` for the shared instance, or from
+  /// the explicit list for a `ProvisioningBackendFactory`-built instance; cancellation during
+  /// load is re-raised and never latched. **`SessionOptions`' intra-op and inter-op thread counts are
+  /// pinned explicitly, never left to ONNX Runtime's defaults** (K10, S28) — CPU-provider
+  /// reductions vary with thread count, so leaving it unpinned would make cross-process
+  /// determinism (S28) undecidable: a difference could be the model or the thread count, and
+  /// two runs sharing a process cannot even see the confound at all.
   load(): EngineCapability;
 
-  /// Report capability without running a forward pass over corpus text.
-  capability(): EngineCapability;
-
-  /// One forward pass over the whole batch.
+  /// One forward pass over the whole batch. The caller (`GraphExtractor`) hands in the whole
+  /// per-document batch of texts; sub-batching against `GRAPH_NER_SUB_BATCH_SIZE` happens
+  /// INSIDE this call, against a pinned module constant — NOT a parameter here and NOT a
+  /// `[graph]` config key (S53), so a caller cannot inadvertently bypass the throughput
+  /// guardrail by passing an oversized batch straight through to one forward pass.
   ///
-  /// Two decoding parameters are deliberately NOT arguments here and NOT config knobs:
-  /// flat single-label spans (pinned), and the relation adjacency threshold, which is a
-  /// pinned constant at the model card's midpoint (Q29) because its effect is indirect and
+  /// Two decoding parameters are likewise deliberately NOT arguments here and NOT config
+  /// knobs: flat single-label spans (pinned), and the relation adjacency threshold, which is
+  /// a pinned constant at the model card's midpoint (Q29) because its effect is indirect and
   /// unmeasurable without span-level scoring the eval harness does not have.
   inference(
     texts: string[],
@@ -147,6 +177,15 @@ interface ProseExtractionBackend {
     relationLabels: LabelPrompt[],
     entityThreshold: float32,
     relationThreshold: float32,
-    batchSize: int32,
   ): BatchExtraction;
+}
+
+/// A second construction path (C1, C4), used ONLY by the artifact provisioner's smoke-load
+/// and capability assert — never by `GraphExtractor`. It builds a backend instance against an
+/// explicit candidate provider list, bypassing the process-wide shared instance, its load
+/// lock and its once-per-process latch entirely. This is what lets the provisioner validate a
+/// not-yet-configured backend — before the wizard has written `[graph].providers` — without
+/// disturbing the shared instance the rest of the process will load later.
+interface ProvisioningBackendFactory {
+  forProviders(providers: string[]): ProseExtractionBackend;
 }

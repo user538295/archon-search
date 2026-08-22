@@ -13,9 +13,12 @@ using Http;
 //     field is dead surface, so it is removed rather than kept empty.
 //   - `provider_warnings` survives unchanged in shape. Its grading semantics are load-bearing
 //     and unchanged: `GET /ready` -> `checks.models` is graded on this field alone, so only
-//     actionable strings may go here. A failed relation-extraction capability assert IS
-//     actionable (re-run the wizard) and belongs here; a permanent, unactionable property
-//     does not, and after this change there is no longer a channel for one.
+//     actionable strings may go here. A failed relation-extraction capability assert
+//     (`relations_not_supported`) or a `smoke_load_failed` sentinel IS actionable (re-run the
+//     wizard, which re-runs the capability assert on every call that reaches the
+//     post-placement steps — C4) and belongs here; so is a detected `conflicting_onnx_runtimes`
+//     environment fault (fix the runtime install). A permanent, unactionable property does
+//     not, and after this change there is no channel for one.
 //   - No replacement channel is introduced (Q10). The absence is deliberate and is recorded
 //     as such in ADR 12, so a future reader does not "restore" the field as an oversight.
 //
@@ -42,9 +45,11 @@ model ModelValidationStatus {
   llama_cpp_ok: boolean | null;
 
   // Actionable operator-facing strings only. Graded into `GET /ready` -> `checks.models`.
-  // Newly carries the graph engine categories: artifact missing, artifact unusable,
-  // relation-extraction capability not confirmed, and graph execution-provider step-down.
-  // All four are produced by the background validation probe, never by a blocking check.
+  // Newly carries the graph engine categories: artifact missing, artifact unusable (also
+  // covers a recorded `smoke_load_failed` sentinel, named in the message so it does not read
+  // as a capability failure), the recorded `relations_not_supported` capability result, a
+  // recorded `conflicting_onnx_runtimes` result, and graph execution-provider step-down.
+  // All five are produced by the background validation probe, never by a blocking check.
   provider_warnings: string[];
 
   // `provider_notes: string[]` was here. Removed by this feature.

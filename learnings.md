@@ -9,7 +9,7 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 - **[2026-08-20] (×2) latch/guard state**: durable suppression gets its OWN data-dir file; clear it UNCONDITIONALLY. A broad catch around `await to_thread(...)` swallows `CancelledError` — re-raise FIRST or shutdown latches a degraded flag.
 
 ## What Has Worked
-- **[2026-08-21] (×121) briefs**: failing repro FIRST; fix at the guard layer. Verify a brief's CANDIDATE FIX, not just its symptom. Briefs undercount blast radius (sync.py mirrors pipeline). Re-filed name already in `Completed/` → `<name>-reopened.md`.
+- **[2026-08-22] (×122) briefs**: failing repro FIRST; fix at the guard layer. Verify a brief's CANDIDATE FIX, not just its symptom. Briefs undercount blast radius (sync.py mirrors pipeline). Re-filed name already in `Completed/` → `<name>-reopened.md`.
 - **[2026-08-21] (×2) brief refinement**: grep every "reuse X from brief Y" claim — 030 shipped a spaCy-WHEEL downloader, no checksum. Deleting a feature strands wire fields added only for it (`provider_notes`); a sibling method may keep its protocol.
 - **[2026-08-20] (×28) new field/pin**: dataclass + `_apply_toml` + coerce + snapshot tests; regenerate the OpenAPI snapshot on 3.12. `path_home_allowlist.txt` pins (file,lineno,sha) with `_EXPECTED_CONFIG_LINE_NO` — any edit ABOVE it breaks BOTH.
 - **[2026-08-14] (×17) xdist/asyncio**: `async def`→`AsyncMock`; `asyncio.run()` not `get_event_loop()`; MCP tests need `xdist_group("mcp")`. Rebind `*TIMEOUT*` constants to 0.1 rather than shrinking an outer `wait_for` — the outer budget wins.
@@ -23,7 +23,8 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 - **[2026-08-21] (×4) 3rd-party wiring**: verify lib params per INPUT FORMAT (docling `OcrOptions.scale`) AND per CHECKPOINT — GLiNER `relations` no-ops off-RelEx; assert it at load. Leaks: `ProcessPoolExecutor(1, spawn, max_tasks_per_child)`.
 
 ## Plan-Making & Agent Process
-- **[2026-08-21] (×159) verify claims/state**: grep-verify every cite; prove repros vs unmodified HEAD (`git worktree add --detach`/`git stash push`). Diffing WIP vs HEAD reads your own uncommitted work as "pre-existing drift" — 4 such errors this run.
-- **[2026-08-21] (×42) subagents**: demand a scratchpad drop as the PRIMARY channel — final text is DISCARDED. A grandchild's completion routes to the GRANDPARENT, not its spawner — relay it, or the loop owner never sees its own reviewers' findings.
-- **[2026-08-21] (×33) doc close-out**: grep the WHOLE tree (incl. `README.md`, `*.toml.example`) for the old invariant string — per-file scope orphans siblings. Never put a `>` block between table rows. Order: api-ref→catalog→CLAUDE.md→manual.
+- **[2026-08-22] (×160) verify claims/state**: grep-verify every cite; prove repros vs unmodified HEAD (`git worktree add --detach`). Diffing WIP vs HEAD reads your own work as drift. NEVER trust a fix agent's "done" — 2 of 3 false once.
+- **[2026-08-22] (×43) subagents**: demand a scratchpad drop as the PRIMARY channel — final text is DISCARDED, and an agent dying mid-run (API error, session limit) leaves NOTHING else. A grandchild's completion routes to the GRANDPARENT — relay it.
+- **[2026-08-22] (×34) doc close-out**: grep the WHOLE tree (incl. `README.md`, `*.toml.example`) for the old invariant string — per-file scope orphans siblings. Never put a `>` block between table rows. Order: api-ref→catalog→CLAUDE.md→manual.
+- **[2026-08-22] (×1) iterative plan review**: a fix landing in the body but not the Decisions table / mermaid / doc-checklist is the top recurring defect — sweep all 8 surfaces + the `.tsp`, and your OWN pass. Enumerations go stale; use a derivation rule.
 - **[2026-08-04] (×9) smoke/subprocess + TypeSpec**: `-o addopts=` not `-p no:xdist`; session fixtures use `tmp_path_factory`; pair `ARCHON_SEARCH_CONFIG` with `DATA_DIR`; seed real text. TypeSpec: `field?: T | null`; `namespace`/`model`/`op` reserved.

@@ -80,8 +80,12 @@ model GraphExtractionResult {
   /// Operator-facing, sanitized strings only — never an exception message.
   warnings: string[];
 
-  /// True when the prose half could not run. The caller deletes the document's existing
+  /// True when the prose half could not run AT ALL. The caller deletes the document's existing
   /// graph rows so a code-symbols-only result never leaves unsupported prose edges behind.
+  /// Does NOT cover a loadable, relations-incapable artifact (S59, M9): when the recorded
+  /// capability assert is `relations_not_supported`, the engine still loads and still returns
+  /// entities — `extract` calls `inference()` normally and persists whatever entities and
+  /// (empty) relations come back, with `degraded` staying `false`.
   degraded: boolean;
 
   /// Non-null ONLY when the extraction package itself is not importable. The caller aborts

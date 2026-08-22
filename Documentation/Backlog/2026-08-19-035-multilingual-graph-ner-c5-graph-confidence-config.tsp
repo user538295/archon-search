@@ -1,10 +1,14 @@
 // C5 — `[graph]` engine settings: two confidence knobs plus an execution-provider list
 // (internal logical seam / config contract).
 //
-// Layer edge: Frameworks & Drivers (TOML parsing + validation) -> Interface Adapters
-// (the extraction engine that reads them). The two confidence knobs are NOT wizard-prompted:
-// graph tuning knobs never are. `[graph].providers` IS wizard-owned (Q7). All three are
-// documented in the example config beside the existing community-tuning knobs.
+// Layer edge: Frameworks & Drivers (TOML parsing + validation) -> three readers across three
+// layers: `GraphExtractor` (Interface Adapters) reads `ner_confidence` / `relation_confidence`
+// and passes them to `inference()` (C1, S21); `ProseExtractionBackend` (Frameworks & Drivers)
+// reads `providers` for its own session options; the wizard (Presentation) owns `[graph].providers`
+// itself — the `ProviderProbeStage` / `ProviderOffer` decision below (Q7) is what writes it.
+// The two confidence knobs are NOT wizard-prompted: graph tuning knobs never are.
+// `[graph].providers` IS wizard-owned (Q7). All three fields are documented in the example
+// config beside the existing community-tuning knobs.
 //
 // The two confidence knobs interact and the interaction is not obvious: relations reference
 // extracted spans, so raising the entity threshold starves the relation threshold of
@@ -29,9 +33,12 @@ model GraphEngineSettings {
   /// hardcoded CPU pin. This FOLLOWS the split-providers ADR (per-model-role provider
   /// configuration, probed at install time) instead of departing from it.
   ///
-  /// Written by the wizard through the same `configure_providers()` pattern the embedder and
-  /// reranker settings use; `--graph-providers` is the non-interactive CLI flag. Null means
-  /// the field was never written, which the engine reads as CPU.
+  /// Written by the wizard through a GENERALISED `configure_providers()` — real installer
+  /// work, not reuse of an existing pattern: today it is hardcoded to the `[database]`
+  /// section, takes only a `GpuType`, and no-ops for `GpuType.NONE` (`installer.py:1111-1142`);
+  /// this feature adds a section parameter, a provider-list parameter and an explicit
+  /// CPU-write branch. `--graph-providers` is the non-interactive CLI flag. Null means the
+  /// field was never written, which the engine reads as CPU.
   providers: string[] | null;
 }
 
@@ -82,6 +89,10 @@ model RetainedEnrichmentKnobs {
 
 interface GraphConfigParsing {
   /// Rejects a boolean, coerces to float, then range-checks; raises a config error with a
-  /// sanitized message naming the offending key.
-  parseConfidence(key: string, raw: string): float32;
+  /// sanitized message naming the offending key. `raw` is the value as `tomllib` parsed it —
+  /// e.g. `graph_cfg[key]` in `config.py` — NOT a string (M12): a `string`-typed parameter can
+  /// never carry a TOML boolean, so "rejects a boolean before coercion" would be unsatisfiable
+  /// against the signature this contract used to declare, and S47's boolean-input case
+  /// (`true`) could not be expressed by a caller typed against it.
+  parseConfidence(key: string, raw: unknown): float32;
 }
