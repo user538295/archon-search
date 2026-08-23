@@ -34,7 +34,17 @@ Single-role tasks in execution order, grouped into **vertical slices**.
 ```mermaid
 flowchart LR
   K1([K1 · ratify C1–C6])
-  K2([K2 · Spike gate])
+  subgraph P0S["Phase 0 · Spike (the K2 gate)"]
+    K2a["K2a finding 0 · resolver"]
+    K2b["K2b finding 1 · ONNX export"]
+    K2c["K2c finding 2 · RelEx capability"]
+    K2d["K2d gliner return shape"]
+    K2e["K2e token window"]
+    K2f["K2f peak memory + batch size"]
+    K2g["K2g confidence + edge density"]
+    K2h["K2h finding 3 · per-language spans"]
+  end
+  K2([K2 · Spike gate go/no-go])
   subgraph P1["Phase 1 · Tell typed prose edges apart"]
     BE1["BE-1 inspector tie-break"]
     FE1["FE-1 viewer colour + arrows"]
@@ -82,7 +92,11 @@ flowchart LR
   end
   T14([T-14 · close-out & acceptance])
 
-  K1 --> K2
+  K1 --> K2a
+  K2a --> K2b & K2d
+  K2b --> K2c & K2e & K2f
+  K2c --> K2g & K2h
+  K2a & K2b & K2c & K2d & K2e & K2f & K2g & K2h --> K2
   K1 --> BE1 & FE1 & BE2 & BE10 & T2 & T3
   BE1 & FE1 --> T1
   BE2 --> BE3
@@ -116,15 +130,72 @@ flowchart LR
   T4 & T5 & T6 & T7 & T9 & T10 & T11 & T12 & T13 --> T14
 ```
 
-### Phase 0 · Kickoff *(prerequisites; the two cross-cutting steps)*
+### Phase 0 · Kickoff *(prerequisites; contract ratification, then the gating spike)*
 
 - [x] **K1** — Ratify contracts C1–C6 with the team and recompile each `.tsp` with `tsp compile <file> --no-emit` (C6 also re-emits its `openapi.yaml`) #team
     - — · 3.0h
     - completes C1, C2, C3, C4, C5, C6
     - Tests
-- [ ] **K2** — Run the Spike gate and record its go/no-go plus the five provisional figures #team
-    - — · 24.0h
+- [ ] **K2a** — Finding 0 · resolver compatibility: resolve and import `gliner>=0.2.26` against the resolved `transformers`, and record the `onnxruntime` dependency edge #backend-role
+    - — · 3.0h
     - needs K1
+    - Tests
+    - Notes
+        - `transformers` resolves to 5.8.1 darwin / 5.14.1 elsewhere — a major-version boundary Q25's `>=4.51.3` floor says nothing about. **Neither finding 1 nor finding 2 can be attempted until this passes.**
+        - Record whether `gliner` hard-depends on `onnxruntime`: Q26, S33 and S55 all rest on that edge existing, and it is unverifiable in this repository today (`gliner` has zero occurrences in `uv.lock`; `pyproject.toml` never names `transformers`).
+        - **Remedy before declaring failure (K12).** If `gliner` breaks against 5.8.1/5.14.1 *specifically* rather than against the whole `>=4.51.3` range, narrow the `transformers` upper bound to a version `gliner` supports and re-run. Finding 0 is fatal only once no version inside `gliner>=0.2.26`'s own floor works.
+        - Deliverable: the **`transformers` constraint strategy** — cross-platform vs marker-scoped.
+        - **Permanent failure → Phase 3 does not land**; Phases 1 and 2 stand on their own.
+- [ ] **K2b** — Finding 1 · export `knowledgator/gliner-relex-multi-v1.0` to ONNX at the pinned revision and confirm artifact availability #backend-role
+    - — · 4.0h
+    - needs K2a
+    - Tests
+    - Notes
+        - **Fails → Phase 3 does not land** (Spike gate, finding 1). Phases 1 and 2 are unaffected.
+- [ ] **K2c** — Finding 2 · RelEx capability: drive the real ONNX export with the label-description prompt and confirm it returns relations, not just entities (Q3) #backend-role
+    - — · 3.0h
+    - needs K2b
+    - Tests
+    - Notes
+        - **Fails → Phase 3 lands entities-only.** `label_relationships` and the four adapters' relationship methods are retained (BE-17 drops C3 and ADR 12), the relation-capability assert leaves BE-13's ordered sequence, and the two rules in **Spike gate** govern what else drops (S3, S26/S28's typed-edge clauses, S59's Given). This is a capability finding about the checkpoint, not a defect to fix here.
+- [ ] **K2d** — Record `gliner`'s own return shape **verbatim** from the installed package (Q33) #backend-role
+    - — · 1.0h
+    - needs K2a
+    - Tests
+    - Notes
+        - BE-16's deep test fake is built against this recorded shape rather than an invented one. Copy it verbatim — do not paraphrase or normalise it.
+- [ ] **K2e** — Measure the real tokenizer window on worst-case chunks, net of both label prompts' token cost #backend-role
+    - — · 2.0h
+    - needs K2b
+    - Tests
+    - Notes
+        - Pinned as a module constant once measured. S20's **spike-measured half** consumes this; S20's unit half stubs the window and is provable without it.
+        - This is a *token-window* question about a single text — **not** the batch-size question K2f answers (K12).
+- [ ] **K2f** — Size `GRAPH_NER_SUB_BATCH_SIZE` from its own peak-memory-per-batch-size measurement, and record the model's resident footprint and the memory-budget figure #backend-role
+    - — · 4.0h
+    - needs K2b
+    - Tests
+    - Notes
+        - **A batch-size question, not a token-window question (K12).** Vary batch size against worst-case (longest) chunks and observe **peak**, not steady-state, memory — `GRAPH_NER_SUB_BATCH_SIZE` bounds how many *texts* one forward-pass call can hold without a transient spike. Do not reuse K2e's figure.
+        - Also record the resident model footprint and the memory-budget figure (Q16) — no sourced size exists yet. The spike produces the number; the tester encodes it.
+        - Known gap this does not close: S26 samples RSS after warm-up and can mask a peak spike inside one sub-batch (Known limitations, K12).
+- [ ] **K2g** — Confirm `relation_confidence` (Q2) and the pinned `adjacency_threshold` (Q29), and measure the real density increase typed edges cause #backend-role
+    - — · 2.0h
+    - needs K2c
+    - Tests
+    - Notes
+        - Both figures are **provisional pending this measurement**, marked as such in the plan's Decisions table.
+- [ ] **K2h** — Finding 3 · per-language span quality: Hungarian manually, French against [fr-docs/](../../tests/eval/corpus/fr-docs/), against current output #backend-role
+    - — · 4.0h
+    - needs K2c
+    - Tests
+    - Notes
+        - Pass condition: non-trivial, non-garbled entity **and** relation spans — not systematically empty or nonsense output — for prose that actually contains extractable entities in that language. `fr-docs/` is 5 files, 257 lines (verified present).
+        - Deliverable: **the exact French spans and character offsets S1 asserts on**, chosen from the real engine's output. The spans quoted at S1 and in the Tester section are illustrative-pending-spike, the same status as Q2, Q16 and Q29.
+        - **Fails for a language → nothing blocks (K10).** Record the gap as a named per-language limitation in Known limitations rather than reopening Q1's engine choice.
+- [ ] **K2** — Record the Spike gate's go/no-go and pin the five provisional figures from K2a–K2h #team
+    - — · 1.0h
+    - needs K2a, K2b, K2c, K2d, K2e, K2f, K2g, K2h
     - Tests
     - Notes
         - Findings in order: **(0)** `gliner>=0.2.26` resolves and runs against the resolved `transformers` (5.8.1 darwin / 5.14.1 elsewhere — verified: `pyproject.toml` never names `transformers` and `gliner` has zero occurrences in `uv.lock`), and whether `gliner` hard-depends on `onnxruntime`; **(1)** ONNX-exportability of `knowledgator/gliner-relex-multi-v1.0` at the pinned revision; **(2)** RelEx capability against the label-description prompt; **(3)** per-language span quality (Hungarian manual, French against [fr-docs/](../../tests/eval/corpus/fr-docs/) — 5 files, 257 lines, verified present).
