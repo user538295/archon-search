@@ -136,7 +136,7 @@ flowchart LR
     - — · 3.0h
     - completes C1, C2, C3, C4, C5, C6
     - Tests
-- [ ] **K2a** — Finding 0 · resolver compatibility: resolve and import `gliner>=0.2.26` against the resolved `transformers`, and record the `onnxruntime` dependency edge #backend-role
+- [x] **K2a** — Finding 0 · resolver compatibility: resolve and import `gliner>=0.2.26` against the resolved `transformers`, and record the `onnxruntime` dependency edge #backend-role
     - — · 3.0h
     - needs K1
     - Tests
@@ -146,6 +146,13 @@ flowchart LR
         - **Remedy before declaring failure (K12).** If `gliner` breaks against 5.8.1/5.14.1 *specifically* rather than against the whole `>=4.51.3` range, narrow the `transformers` upper bound to a version `gliner` supports and re-run. Finding 0 is fatal only once no version inside `gliner>=0.2.26`'s own floor works.
         - Deliverable: the **`transformers` constraint strategy** — cross-platform vs marker-scoped.
         - **Permanent failure → Phase 3 does not land**; Phases 1 and 2 stand on their own.
+        - **Findings (K2a spike, run 2026-08-23, throwaway `uv venv --python 3.13` in scratchpad, matching this repo's real `.venv` interpreter — never added to `pyproject.toml`/`uv.lock`). Verdict: finding 0 PASSES, via the K12 remedy — K2b–K2h are unblocked.**
+            - `gliner>=0.2.26` (resolves to `gliner==0.2.28`) **resolves and imports** cleanly against `transformers==5.8.1` — this repo's real darwin-locked version (`uv.lock:987`) — verified with a real `uv pip install` followed by `from gliner import GLiNER` and `import onnxruntime` inside an isolated venv. **PASS.**
+            - The same install **fails to resolve** against `transformers==5.14.1` — this repo's real non-darwin-locked version (`uv.lock:988`) — with a real `uv` solver error: every `gliner>=0.2.26` release caps `transformers` below `5.14.0` (`gliner==0.2.26`→`<5.2.0`; `0.2.27`→`<5.7.0`; `0.2.28`→`<5.14.0`, read from `gliner`'s own `importlib.metadata.requires()`). **FAIL on non-darwin as currently locked.**
+            - `gliner` **hard-depends on `onnxruntime`** — confirmed via `importlib.metadata.requires('gliner')` (`onnxruntime` is listed unconditionally; only `onnxruntime-gpu` is extra-gated behind `extra == "gpu"`) and by every install above pulling `onnxruntime==1.29.0` transitively, unrequested. Confirms Q26's dependency-edge claim.
+            - **K12 remedy applied, and it works.** Narrowing the ceiling to `transformers>=4.51.3,<5.14.0` (gliner's own floor plus its latest release's own ceiling) resolves (`transformers==5.13.1`) and **imports cleanly** — reverified with a real install. Finding 0 is not a permanent failure; the remedy clears it.
+            - **Constraint strategy: cross-platform, not marker-scoped.** `transformers` ships one `py3-none-any` universal wheel per version (`uv.lock:4491`, `:4522`) — the incompatibility is a pure version-range conflict, not a platform-gated wheel. This also inverts Q25's premise: darwin's already-resolved `5.8.1` was never the problem; non-darwin's `5.14.1` is. Q25's marker-scoped alternative (`sys_platform == "darwin"`) would leave non-darwin broken — the wrong platform. A single cross-platform `constraint-dependencies` ceiling (e.g. `transformers>=4.51.3,<5.14.0`) fixes both platforms at once and matches Q25's stated preference ("one version everywhere, latest allowed"). Whether the full project lock converges to exactly one shared version once re-locked (vs. still splitting per-platform below the new ceiling) is unverified here — that re-lock is BE-6's job, not this spike's.
+            - Not verified here (out of this task's scope): `gliner` against this project's *other* pinned dependencies (docling's own transformers floor, torch pins, etc.) — this spike used an isolated throwaway venv with only `gliner`+`transformers` installed, not the project's full `.venv`.
 - [ ] **K2b** — Finding 1 · export `knowledgator/gliner-relex-multi-v1.0` to ONNX at the pinned revision and confirm artifact availability #backend-role
     - — · 4.0h
     - needs K2a
