@@ -138,10 +138,14 @@ flowchart LR
 
 ### Phase 0 · Kickoff *(prerequisites; contract ratification, then the gating spike)*
 
-- [x] **K1** — Ratify contracts C1–C6 with the team and recompile each `.tsp` with `tsp compile <file> --no-emit` (C6 also re-emits its `openapi.yaml`) #team
+- [ ] **K1** — Ratify contracts C1–C6 with the team and recompile each `.tsp` with `tsp compile <file> --no-emit` (C6 also re-emits its `openapi.yaml`) #team
     - — · 3.0h
     - completes C1, C2, C3, C4, C5, C6
     - Tests
+    - Notes
+        - **REOPENED 2026-08-24 — the earlier check-off overstated what happened.** What was actually done: all six `.tsp` files compiled with `tsp compile --no-emit`, C6's `openapi.yaml` re-emitted and byte-diffed identical, and each contract's load-bearing fields cross-read against the plan's "Contracts / seams" section. What was **not** done: any human ratification. No team member reviewed or agreed to these contracts — the mechanical half was mistaken for the whole task.
+        - **Also now stale.** C5 changed after that check-off: `adjacencyThreshold` and its `PinnedNonConfigurable` model were deleted once the K2g spike proved the parameter inert (commit `9ecb1f18`). "C1–C6 ratified" described a contract set that no longer exists.
+        - **This is no longer the same question the first pass answered.** The Spike gate's finding 2 failed, so the plan takes its **entities-only** branch — which per the plan's own disposition drops **C3** entirely and removes the relation-capability assert from **C4**'s ordered sequence. Ratifying C1–C6 as a set now means ratifying a different set.
 - [x] **K2a** — Finding 0 · resolver compatibility: resolve and import `gliner>=0.2.26` against the resolved `transformers`, and record the `onnxruntime` dependency edge #backend-role
     - — · 3.0h
     - needs K1
