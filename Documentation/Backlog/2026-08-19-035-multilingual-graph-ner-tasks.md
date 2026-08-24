@@ -122,7 +122,7 @@ flowchart LR
   BE13 & FE4 --> T4
   FE2 & FE3 --> T5
   FE4 & FE5 & BE15 --> T6
-  BE6 & BE11 & BE13 --> T8
+  BE6 & BE11 --> T8
   T2 & T8 --> T9
   T8 --> T10 & T11
   BE15 --> T13
@@ -662,12 +662,12 @@ flowchart LR
     - needs BE-15, FE-4, FE-5 · completes S31, S32, S33, S49, S51
     - Tests
         - #e2e_test — `test_e2e_rendered_transcript_names_no_removed_engine` — a check the static source scan cannot make
-        - #e2e_test — `test_e2e_relations_not_supported_and_digest_mismatch_render_differently` — distinct remedy tokens
+        - #e2e_test — `test_e2e_two_fasttext_failure_categories_render_differently` — distinct remedy tokens; the two categories are `lid.176.ftz`'s own `digest_mismatch` and `size_mismatch`. **Retargeted 2026-08-24:** the original paired `relations_not_supported` against `digest_mismatch`, but `relations_not_supported` lost its only producer when the graph model moved to the fastembed fetch pattern — it is now a retained-but-unreachable category, so an e2e asserting on its rendering could never pass.
         - #e2e_test — `test_e2e_conflicting_runtimes_reaches_the_operator` — the wizard actually renders the probe's category
         - #e2e_test — `test_e2e_accelerator_offered_only_after_both_stages` — and no prompt on either failure
 - [ ] **T-8** — Build the `graph_real_artifact` lane — registered marker, `-m` exclusions in both workflows, its own `xdist_group`, its own CI step with artifact cache, prefetch and a `--junitxml` did-it-actually-run assertion mirroring `live_benchmark` — and land the memory guard inside it as two separate test functions #tester-role
     - — · 12.0h
-    - needs BE-6, BE-11, BE-13 · completes S26
+    - needs BE-6, BE-11 · completes S26
     - Tests
         - #e2e_test — `test_graph_ner_lane_non_vacuity` — unmarked and blocking from day one: `degraded is False`, entity count > 0, at least one typed edge, and `loadCount == 1`; never `importorskip` a missing artifact
         - #e2e_test — `test_graph_ner_memory_budget` — `@pytest.mark.xfail(strict=False)` around the numeric comparison alone, own-process RSS after warm-up over ≥1,000 chunks, with a host-safety ceiling and wall-clock cap, CPU configuration only
