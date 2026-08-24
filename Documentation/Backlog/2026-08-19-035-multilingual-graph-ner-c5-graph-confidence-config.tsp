@@ -29,9 +29,14 @@ model GraphEngineSettings {
   /// Default 0.75 (Q2) — deliberately stricter than the entity knob.
   relationConfidence: float32;
 
-  /// ONNX execution providers for the graph engine, as its OWN setting (Q7) rather than a
-  /// hardcoded CPU pin. This FOLLOWS the split-providers ADR (per-model-role provider
-  /// configuration, probed at install time) instead of departing from it.
+  /// Torch device placement for the graph engine (`cpu` / `cuda` / `mps`), as its OWN setting
+  /// (Q7) rather than a hardcoded CPU pin. This FOLLOWS the split-providers ADR (per-model-role
+  /// provider configuration, probed at install time) instead of departing from it.
+  ///
+  /// The field name and its `string[]` shape are unchanged from the superseded ONNX reading;
+  /// only the meaning of the strings moved, from ONNX Runtime execution providers to torch
+  /// devices (Spike gate — RESOLVED 2026-08-24). C1's and C4's `activeProviders` — the
+  /// RESOLVED counterpart to this CONFIGURED list — carry the same wording.
   ///
   /// Written by the wizard through a GENERALISED `configure_providers()` — real installer
   /// work, not reuse of an existing pattern: today it is hardcoded to the `[database]`
@@ -51,8 +56,15 @@ enum ProviderProbeStage {
 
   /// (2) AFTER download: the MANDATORY smoke-load and capability assert, pointed at the
   /// accelerator instead of at CPU — real validation against the real artifact, in the shape
-  /// of the existing post-download re-probe. Two importable ONNX runtimes is a FAILURE here,
-  /// never a swallowed exception (Q26).
+  /// of the existing post-download re-probe. A failure here is never a swallowed exception
+  /// (Q26).
+  ///
+  /// Q26's original example of such a failure — two importable ONNX runtimes — no longer
+  /// applies to the graph engine: it loads through torch and never creates an
+  /// `onnxruntime.InferenceSession`, so there is no resolved session for a second runtime to
+  /// make unpredictable. C4 retains `conflicting_onnx_runtimes` in the frozen enum but
+  /// declares it unreachable here (`c4.tsp:178-192`), and C6 must not render it. The stage
+  /// itself is unchanged and still mandatory — what it can fail ON is what narrowed.
   post_download_validation,
 }
 
