@@ -59,6 +59,7 @@ flowchart LR
     BE3["BE-3 descriptors + frozen enum"]
     BE4["BE-4 byte-derived guard/timeouts/display"]
     BE5["BE-5 one license rule"]
+    BE26["BE-26 cache_dir retrofit"]
     T2["T-2 pre-change baseline"]
     T3["T-3 doc-contradiction pass"]
   end
@@ -70,29 +71,25 @@ flowchart LR
     BE10["BE-10 config knobs"]
     BE11["BE-11 extractor rewiring"]
     BE12["BE-12 degradation"]
-    BE25["BE-25 build + host artifact"]
-    BE13["BE-13 provisioner"]
-    BE14["BE-14 provider probe"]
+    BE13["BE-13 fasttext provisioner"]
+    BE14["BE-14 device probe"]
     BE15["BE-15 spaCy deletion"]
     BE16["BE-16 stub consolidation"]
     BE17["BE-17 protocol narrowing + ADR 12"]
     BE18["BE-18 provider_notes removal"]
-    BE19["BE-19 background probe"]
     BE20["BE-20 edge sweep widening"]
     BE21["BE-21 structural meta-guards"]
     FE2["FE-2 two disclosed costs"]
     FE3["FE-3 confidence-knob pointer"]
-    FE4["FE-4 failure categories + revert"]
+    FE4["FE-4 fasttext failure categories"]
     FE5["FE-5 accelerator offer"]
-    T4["T-4 e2e provisioning"]
+    T4["T-4 e2e fasttext provisioning"]
     T5["T-5 e2e disclosure + summary"]
     T6["T-6 e2e transcript + categories"]
-    T7["T-7 e2e startup probe + status"]
     T8["T-8 real-artifact lane + memory"]
     T9["T-9 throughput"]
     T10["T-10 determinism + French"]
     T11["T-11 manual Hungarian"]
-    T12["T-12 manual license shipping"]
     T13["T-13 container smoke"]
   end
   T14([T-14 · close-out & acceptance])
@@ -105,7 +102,7 @@ flowchart LR
   K1 --> BE1 & FE1 & BE2 & BE10 & T2 & T3
   BE1 & FE1 --> T1
   BE22 --> K3 --> BE23
-  BE2 --> BE3
+  BE2 --> BE3 & BE26
   BE3 --> BE4 & BE5
   K2 --> BE6
   K2 & BE2 --> BE7
@@ -113,29 +110,25 @@ flowchart LR
   BE8 --> BE9
   BE9 & BE10 --> BE11
   BE11 --> BE12 & BE15 & BE17 & BE20
-  K2 & BE3 & BE7 --> BE25
-  BE3 & BE7 & BE8 & BE25 --> BE13
-  BE13 --> BE14
+  BE3 --> BE13
+  BE8 --> BE14
   BE11 & BE15 --> BE16
   BE15 --> BE18
-  BE18 & BE14 --> BE19
-  BE13 & BE15 & BE16 --> BE21
-  BE4 & BE13 --> FE2
+  BE15 & BE16 --> BE21
+  BE3 & BE4 --> FE2
   BE10 & BE15 --> FE3
-  BE13 & BE14 --> FE4
+  BE13 --> FE4
   BE14 --> FE5
   BE13 & FE4 --> T4
   FE2 & FE3 --> T5
   FE4 & FE5 & BE15 --> T6
-  BE18 & BE19 --> T7
   BE6 & BE11 & BE13 --> T8
   T2 & T8 --> T9
   T8 --> T10 & T11
-  BE13 --> T12
   BE15 --> T13
-  T1 & T3 & BE4 & BE5 & BE12 & BE17 & BE20 & BE21 --> T14
+  T1 & T3 & BE4 & BE5 & BE12 & BE17 & BE20 & BE21 & BE26 --> T14
   BE23 & BE24 --> T14
-  T4 & T5 & T6 & T7 & T9 & T10 & T11 & T12 & T13 --> T14
+  T4 & T5 & T6 & T9 & T10 & T11 & T13 --> T14
 ```
 
 ### Phase 0 · Kickoff *(prerequisites; contract ratification, then the gating spike)*
@@ -406,14 +399,17 @@ flowchart LR
         - #integration_test — `test_language_detector_loads_from_relocated_data_dir` — the detector still finds `lid.176.ftz` after redirection
     - Notes
         - Both `MARKER_ALLOWLIST` pins in [tests/test_no_hardcoded_path_home.py](../../tests/test_no_hardcoded_path_home.py) (`:44`, `:45`) move with this change. [tests/path_home_allowlist.txt](../../tests/path_home_allowlist.txt) is **not** touched — verified: it holds no `language_detector.py` entry, and `paths.py` is whole-file exempt via that module's `FILE_ALLOWLIST`.
-- [ ] **BE-3** — Add the two descriptor shapes (provisioned-artifact vs size-estimate), pin `lid.176.ftz`'s digest and byte count at [licenses.py](../../archon_search/install/licenses.py)`:90-134`, keep the tree-sitter bundle on the estimate shape ([extras.py](../../archon_search/install/extras.py)`:154-159`), and freeze C4's eight failure categories plus the probe's `candidateProviders`/`activeProviders` fields as sanitized constants #backend-role
-    - Frameworks & Drivers · 8.0h
+- [ ] **BE-3** — Add the two descriptor shapes (provisioned-artifact vs size-estimate), pin `lid.176.ftz`'s digest and byte count at [licenses.py](../../archon_search/install/licenses.py)`:90-134`, keep the tree-sitter bundle **and the graph model** on the estimate shape ([extras.py](../../archon_search/install/extras.py)`:154-159`), and freeze C4's failure categories plus BE-14's device-probe fields as sanitized constants #backend-role
+    - Frameworks & Drivers · 7.5h
     - needs BE-2 · completes C4
     - Tests
-        - #unit_test — `test_provisioned_descriptor_carries_digest_and_exact_bytes` — the graph-model shape declares both; the estimate shape declares neither
-        - #unit_test — `test_failure_category_enum_has_exactly_eight_members` — the frozen set matches C4 so Frontend can code against it
+        - #unit_test — `test_provisioned_descriptor_carries_digest_and_exact_bytes` — `lid.176.ftz`'s shape declares both; the estimate shape declares neither
+        - #unit_test — `test_graph_model_uses_the_estimate_shape_not_provisioned` — new: the graph model is no longer a provisioned-artifact descriptor (no `url`/`revision`/digest fields) — it reverts to the same declared-MB estimate fidelity as the tree-sitter bundle (FE-2)
+        - #unit_test — `test_failure_category_enum_has_exactly_eight_members` — the frozen set matches C4 so Frontend can code against it, even though only ~5 members are reachable post-Provisioning-decision (BE-13's four fasttext categories plus BE-14's one device-probe category)
         - #unit_test — `test_fasttext_digest_mismatch_triggers_redownload` — a pre-existing mismatching file is deleted and re-fetched, non-fatal
         - #integration_test — `test_existing_matching_fasttext_file_is_not_redownloaded` — a digest-matching file is left alone
+    - Notes
+        - **Rescoped 2026-08-24 (Provisioning decision, team plan `:111-130`): 8.0h → 7.5h (-0.5h).** The provisioned-artifact descriptor shape now has exactly one user — `lid.176.ftz` — not two; the graph model moves to the estimate shape instead (FE-2). `candidateProviders`/`activeProviders` are still frozen here (BE-14's rebuilt device probe still produces both), so that half of the title is unchanged; only the *count* of artifacts on the provisioned shape shrinks, which is why the net change is small rather than a large cut.
 - [ ] **BE-4** — Derive the disk guard, the two service-ready timeouts and the displayed figure from the summed byte total: replace [prewarm.py](../../archon_search/install/prewarm.py)`:36`'s `download_mb`-based formula with `total_bytes * 2`, move `_compute_svc_timeout` ([installer.py](../../archon_search/install/installer.py)`:89`, used at `:877`/`:947`) and `_render_summary` ([render.py](../../archon_search/install/render.py)`:74`) onto the same total, and re-baseline the existing disk-space and summary tests #backend-role
     - Frameworks & Drivers · 6.0h
     - needs BE-3 · completes S38
@@ -422,6 +418,8 @@ flowchart LR
         - #unit_test — `test_required_free_bytes_is_twice_the_total` — no `ceil()` on an integer sum
         - #unit_test — `test_prewarm_timeout_still_reads_the_profile_figure` — `_prewarm_timeout` (`:48-50`) is deliberately **not** moved
         - #integration_test — `test_disk_guard_timeouts_and_display_all_derive_from_one_total` — a synthetic multi-artifact selection drives all three consistently
+    - Notes
+        - **No hour change from the Provisioning decision (team plan `:111-130`).** The graph model still contributes to `total_bytes` — it just moves buckets, from the provisioned-artifact byte field to the size-estimate's declared-MB field (BE-3, FE-2), the same bucket the tree-sitter bundle already uses. The derivation logic (`required_free_bytes = total_bytes * 2`, the two timeouts, the display) is unchanged either way, so this task's scope and estimate hold.
 - [ ] **BE-5** — Add the one license rule to [licenses.py](../../archon_search/install/licenses.py) — restrictive-on-use prompts, everything else is disclosure-only — leaving `_prompt_jina_license` (`:26`) and `_prompt_fasttext_license` (`:60`) untouched #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-3 · completes S39
@@ -429,6 +427,18 @@ flowchart LR
         - #unit_test — `test_permissive_descriptor_discloses_without_prompting` — an Apache-2.0 descriptor gates nothing
         - #unit_test — `test_restrictive_descriptor_prompts_for_acceptance` — the restrictive branch prompts
         - #integration_test — `test_one_rule_disciplines_both_synthetic_descriptors` — both run through the single rule, no per-model branch
+- [ ] **BE-26** — Pass an explicit `cache_dir` derived from `get_models_dir()` to fastembed's `TextEmbedding`/`TextCrossEncoder` constructors, in both the runtime lazy-load call sites ([embedder.py](../../archon_search/embedder.py)`:37-41`'s `ModelEmbedder.encode`, [reranker.py](../../archon_search/reranker.py)`:35-40`'s `ModelReranker.predict`) and the install-time pre-warm call sites ([prewarm.py](../../archon_search/install/prewarm.py)`:83`/`:94`'s `_prewarm_models`), closing a pre-existing `ARCHON_SEARCH_DATA_DIR` violation #backend-role
+    - Frameworks & Drivers · 5.0h
+    - needs BE-2 · completes (closes the pre-existing `ARCHON_SEARCH_DATA_DIR` gap recorded in Scope → Provisioning, team plan `:111-130`)
+    - Tests
+        - #unit_test — `test_embedder_passes_cache_dir_derived_from_get_models_dir` — `TextEmbedding` is constructed with `cache_dir` under `get_models_dir()`, not left to default elsewhere
+        - #unit_test — `test_reranker_passes_cache_dir_derived_from_get_models_dir` — same for `TextCrossEncoder`
+        - #unit_test — `test_prewarm_and_runtime_call_sites_use_the_same_cache_dir` — `_prewarm_models`' direct `TextEmbedding`/`TextCrossEncoder` constructions in [prewarm.py](../../archon_search/install/prewarm.py) must not disagree with `ModelEmbedder`/`ModelReranker`'s own lazy-load call sites, or pre-warming writes to a location the runtime first-use path never reads, defeating the pre-warm
+        - #integration_test — `test_archon_search_data_dir_relocates_embedder_and_reranker_caches` — redirecting the env var moves both model classes' on-disk cache, matching the guarantee `get_graph_models_dir()` already gives the graph model (BE-8)
+    - Notes
+        - **New task, added 2026-08-24 (Provisioning decision, team plan `:111-130`).** Today neither `embedder.py` nor `reranker.py` passes `cache_dir`, so their models land wherever `huggingface_hub`/fastembed default to — outside `get_data_dir()`, silently violating this project's own hard invariant that one env var relocates the whole runtime tree (`CLAUDE.md`). The graph model does not need retrofitting here — it is new code (BE-8) that is built to honour the invariant from day one via `get_graph_models_dir()`, itself derived from `get_models_dir()`. This task closes the gap for the two **pre-existing** model classes.
+        - **Consequence, not a code change of its own:** [prewarm.py](../../archon_search/install/prewarm.py)'s `_check_disk_space` (`:26-41`) already measures `get_data_dir()`'s filesystem for free space, but that check is only *accurate* once the models it is guarding actually land under that tree — today they don't, so the check can pass or fail against the wrong device. No edit is needed to `_check_disk_space` itself; `test_archon_search_data_dir_relocates_embedder_and_reranker_caches` is what proves the check's target and the models' real write path now agree.
+        - **Independent of the Spike gate** — neither `embedder.py` nor `reranker.py` depends on anything the K2 spike measured — placed in Phase 2 (needs only `BE-2`'s `get_models_dir()`) rather than Phase 3, and can land whether or not Phase 3 ever does.
 - [ ] **T-2** — Capture the pre-change ingest wall-time baseline for [tests/eval/corpus/docs/](../../tests/eval/corpus/docs/) on a real CI runner via a temporary one-off step, record figure/corpus/machine/provider/date into a new standalone `tests/eval/_graph_ner_throughput_baseline.py`, then remove the temporary step #tester-role
     - — · 4.0h
     - needs K1
@@ -459,16 +469,21 @@ flowchart LR
         - #unit_test — `test_graph_models_dir_follows_data_dir_env` — redirection moves the artifact path
         - #unit_test — `test_graph_models_dir_segment_derives_from_the_pinned_constant` — the path segment has one owner
         - #unit_test — `test_get_spacy_models_dir_is_gone` — the outgoing accessor no longer exists
-- [ ] **BE-8** — Add `ProseExtractionBackend` in a new `archon_search/prose_extraction_backend.py`: one shared instance loaded once per process behind a lock, off the event loop, `[graph].providers` mapped onto torch device placement (`cpu`/`cuda`/`mps`) with `torch.set_num_threads`/`torch.set_num_interop_threads` pinning intra/inter-op thread counts, `load()` calling `GLiNER.from_pretrained(local_dir, local_files_only=True)` (no `load_onnx_model`/`onnx_model_file` kwargs), plus the provisioner-only construction path that takes an explicit provider list; `gliner`/`torch`/`transformers` imports live inside `load()`, never at module level #backend-role
-    - Frameworks & Drivers · 21.0h
+    - Notes
+        - **Re-scoped 2026-08-24 (Provisioning decision, team plan `:111-130`), no hour change.** `get_graph_models_dir()` and its pinned model+revision constant are unchanged code — same function, same layout, same tests — but the directory's **consumer story changes**: it is no longer a durable-publish target a provisioner writes to and a backend reads from (two writers-and-readers to keep in sync); it is now the `cache_dir` BE-8's `GLiNER.from_pretrained(model_name, revision=..., cache_dir=...)` passes, mirroring how `get_models_dir()` (BE-2) will do the same for `embedder.py`/`reranker.py` (BE-26). One caller, not two, so the old "single-owner between provisioner and backend" framing is retired along with the provisioner it described.
+- [ ] **BE-8** — Add `ProseExtractionBackend` in a new `archon_search/prose_extraction_backend.py`: one shared instance loaded once per process behind a lock, off the event loop, `[graph].providers` mapped onto torch device placement (`cpu`/`cuda`/`mps`) with `torch.set_num_threads`/`torch.set_num_interop_threads` pinning intra/inter-op thread counts, `load()` calling `GLiNER.from_pretrained(model_name, revision=..., cache_dir=get_graph_models_dir())` — the house fastembed pattern, mirroring [embedder.py](../../archon_search/embedder.py)`:37-45`'s lazy-load-behind-a-lock — plus an OPTIONAL, non-fatal pre-warm entry in [prewarm.py](../../archon_search/install/prewarm.py) mirroring the reranker's branch (`:96-106`); `gliner`/`torch`/`transformers` imports live inside `load()`, never at module level #backend-role
+    - Frameworks & Drivers · 15.0h
     - needs BE-6, BE-7 · completes C1, S15, S18, S29, S48
     - Tests
         - #unit_test — `test_providers_come_from_graph_section_only` — never the embedder's or reranker's list; unset means CPU
         - #unit_test — `test_unloadable_artifact_latches_once_per_process` — the second call does not retry the load
         - #unit_test — `test_cancellation_during_load_reraises_without_latching` — cancellation is re-raised first
+        - #unit_test — `test_load_passes_cache_dir_from_get_graph_models_dir` — the from_pretrained call is never left to fastembed's/huggingface_hub's default cache location
+        - #unit_test — `test_prewarm_entry_is_non_fatal_and_logs_first_use_will_download` — the reranker's `:96-106` branch shape, reused rather than reinvented
         - #integration_test — `test_concurrent_extractions_load_the_model_once` — N concurrent calls yield `loadCount == 1`, dispatched through `asyncio.to_thread`
     - Notes
-        - **Rework for the PyTorch-checkpoint decision (Spike gate — RESOLVED 2026-08-24, team plan `:50-61`), +5h added to the estimate (16.0h → 21.0h, within the plan's stated +4-6h range).** `onnxruntime.SessionOptions` intra/inter-op thread pinning becomes `torch.set_num_threads()`/`torch.set_num_interop_threads()`; `[graph].providers` maps to torch device placement (`cpu`/`cuda`/`mps`) instead of ONNX execution providers; `load()` becomes `GLiNER.from_pretrained(local_dir, local_files_only=True)` — no `load_onnx_model`/`onnx_model_file` kwargs.
+        - **Reworked 2026-08-24 for the Provisioning decision (team plan `:111-130`, superseding the earlier PyTorch-checkpoint-only rework): 21.0h → 15.0h (-6.0h).** Dropped: the provisioner-only construction path that took an explicit provider list (~-5h — there is no more provisioner for this artifact) and the `local_files_only=True`/staged-directory/no-run-time-network-access invariant (~-2h — first use is now allowed to hit the network, exactly like the embedder and reranker). `load()` collapses to one `GLiNER.from_pretrained(model_name, revision=..., cache_dir=...)` call, letting `huggingface_hub` own staging/caching, same as the fastembed backends. Added back: the optional pre-warm entry (+1h) — **decided here, not as its own task**: BE-8 already owns the model name/revision/`cache_dir` triple and the lazy-load-behind-a-lock shape pre-warm needs to mirror, so a separate task would only duplicate that context; the reranker's non-fatal branch (`prewarm.py:96-106`) is the template. Torch device/thread pinning (`torch.set_num_threads`/`torch.set_num_interop_threads`, `[graph].providers` → device placement) is unchanged from the prior PyTorch-checkpoint rework and stays.
+        - **`cache_dir` must be threaded through BOTH the runtime lazy-load in this module AND the pre-warm call in [prewarm.py](../../archon_search/install/prewarm.py) with the same value** — otherwise pre-warm downloads to one location and the first real search re-downloads to another, defeating the pre-warm.
 - [ ] **BE-9** — Sub-batch inference against the pinned `GRAPH_NER_SUB_BATCH_SIZE` module constant, prompt with label→description dicts plus the `"other"` decoy (discarded), apply both thresholds, **deduplicate identical relation triples**, and truncate over-window chunks with a once-per-process log that never carries chunk text #backend-role
     - Frameworks & Drivers · 12.5h
     - needs BE-8 · completes S7, S20, S30, S53
@@ -508,36 +523,32 @@ flowchart LR
         - #unit_test — `test_wait_timeout_degrades_and_leaves_loader_bookkeeping_untouched` — the waiter mutates nothing
         - #integration_test — `test_missing_artifact_still_persists_chunks_and_code_symbols` — ingest succeeds degraded
         - #integration_test — `test_mid_batch_raise_returns_the_pinned_sanitized_constant` — asserted **equal to** the `DETAIL`/`CODE` pair, not merely absent of exception text
-- [ ] **BE-25** — Build and host the graph model artifact: package the 7-file PyTorch snapshot of `knowledgator/gliner-relex-multi-v1.0` at its pinned revision into a tarball, compute its sha256 digest and exact byte count, and publish it to durable hosting; record the resulting URL, digest and byte count as the pinned provisioned-artifact descriptor BE-13's provisioner verifies against #backend-role
-    - Frameworks & Drivers · 5.0h
-    - needs K2, BE-3, BE-7 · completes (closes the K2b-flagged provisioning gap)
-    - Tests
-        - #unit_test — `test_hosted_descriptor_matches_be3s_provisioned_artifact_shape` — URL, revision, digest and exact byte count all present, no estimate-shape fields
-        - #integration_test — `test_published_tarball_sha256_matches_the_pinned_descriptor` — a real download-and-hash round trip against the hosted artifact
-    - Notes
-        - **New task, added post-resolution (Spike gate — RESOLVED 2026-08-24, team plan `:40-63`).** K2b already named this exact gap: "No task in this breakdown currently owns performing/re-running that one-off export-and-host step" (K2b, this file `:176`) — written when the shipped artifact was still assumed to be the ONNX export; under the PyTorch-checkpoint decision the artifact instead is the 7-file PyTorch snapshot, not a single `model.onnx` file. Pinned revision: `e990d9ba6f471b846f7d78bf7e4b4dab11761ada` (K2b). Uses `get_graph_models_dir()`'s pinned model+revision constant (BE-7) as the single source for the revision string, per BE-21's single-owner path/URL assertions. Ops/build step, not runtime code — no `[graph]` code path depends on it directly; BE-13's provisioner is the sole consumer of its output (URL, sha256, exact byte count).
-- [ ] **BE-13** — Add the generic `ArtifactProvisioner` to the installer package: disclose → check space → stage inside the target filesystem → verify digest **and** byte count → extract → fsync → atomic rename under `get_graph_models_dir()` → fsync parent → smoke-load → relation-capability assert, writing `capability_status.json` beside the artifact on every call that reaches the post-placement steps; `importlib.invalidate_caches()` runs between the subprocess `pip install` and the first in-process `import gliner` #backend-role
-    - Frameworks & Drivers · 19.0h
-    - needs BE-3, BE-7, BE-8, BE-25 · completes C4, S8, S10, S11, S12, S37, S58
+- [ ] **BE-13** — Rewrite `_download_fasttext_model` ([licenses.py](../../archon_search/install/licenses.py)`:93-134`) into a durable, verified single-file download: disclose → check space → stage inside the target filesystem → verify digest **and** byte count → fsync → atomic rename → fsync parent, for `lid.176.ftz` only #backend-role
+    - Frameworks & Drivers · 8.0h
+    - needs BE-3 · completes C4, S11, S37
     - Tests
         - #unit_test — `test_digest_mismatch_places_nothing_and_reports_its_own_category` — distinct from a byte-count mismatch
         - #unit_test — `test_short_download_fails_the_byte_count_assert_before_placement` — its own category
-        - #unit_test — `test_capability_status_records_failure_kind_and_active_providers` — the sentinel's declared schema
-        - #integration_test — `test_already_present_artifact_is_reverified_and_sentinel_rewritten` — no re-download, but the assert re-runs so a recorded failure can clear
-        - #integration_test — `test_smoke_load_failure_leaves_the_placed_tree_in_place` — records `smoke_load_failed`, never reports success
+        - #integration_test — `test_already_present_matching_file_is_not_redownloaded` — folds in the old `BE-3` fixture, exercised end to end here
         - #integration_test — `test_provisioner_satisfies_the_durable_write_lint_gate` — [tests/test_no_raw_durable_writes.py](../../tests/test_no_raw_durable_writes.py) still passes
     - Notes
-        - The installer may import `prose_extraction_backend.py` directly but must never import `graph_extractor.py`. **Q34, decided:** `_install_graph_extra` ([extras.py](../../archon_search/install/extras.py)`:324`) is **kept and its second half replaced** — `_install_extra("archon-search[graph]")` stays, `_download_spacy_model` becomes an `ArtifactProvisioner` call, and `importlib.invalidate_caches()` sits between them (this function already owns that ordering). The failure **kind** is returned to the call site ([installer.py](../../archon_search/install/installer.py)`:799-806`) rather than swallowed, so the revert can fire for five categories and not three (S45); the switch-off policy stays at the call site beside its two siblings.
-        - **+3h added to the estimate (16.0h → 19.0h) for the PyTorch-checkpoint decision (Spike gate — RESOLVED, team plan).** The ordered sequence (disclose → check space → stage → verify digest and byte count → extract → fsync → atomic rename → fsync parent → smoke-load → relation-capability assert) is unchanged and already fits: its `extract` step, unused by a single `model.onnx` file, is exactly what BE-25's hosted tarball of the 7-file PyTorch snapshot needs. **The relation-capability assert now PASSES and stays in the ordered sequence** — it reverts to its originally designed meaning, a genuine correctness check for a bad revision or corrupted download, not a permanent universal failure. `needs BE-25` — this task consumes BE-25's tarball, digest and byte count.
-- [ ] **BE-14** — Implement the two-stage provider probe: a free pre-download availability check, then real validation riding the mandatory smoke-load, reporting the resolved `activeProviders`; the stage-2 check is a torch device-availability check (`cpu`/`cuda`/`mps`) for the graph artifact, replacing the two-importable-ONNX-runtimes check, its own sanitized category, never a swallowed exception #backend-role
-    - Frameworks & Drivers · 11.5h
-    - needs BE-13 · completes S33
+        - **Rescoped and shrunk 2026-08-24 (Provisioning decision, team plan `:111-130`): 19.0h → 8.0h (-11.0h).** *The graph model no longer uses this provisioner at all* — it is fetched the way the embedder fetches its own model (BE-8), lazily, on first use, via `huggingface_hub`. This task's old title ("generic `ArtifactProvisioner`... relation-capability assert... `capability_status.json`") described a two-artifact, provisioner-shaped design built when the shipped artifact was an ONNX export **we** produced and hosted (BE-25, now deleted). It no longer exists to build; only `lid.176.ftz` — a pinned-URL, fixed-byte-count, third-party-hosted file — remains.
+        - **Dropped, and why:** `extract` (the file ships flat, nothing to unpack — the earlier design's `extract` step existed for the graph model's tarball, BE-25's now-deleted output); `smoke-load` and the `relation-capability assert` (a fasttext language-ID model has no relation-capability concept — that assert existed solely to validate the graph checkpoint); `capability_status.json` (its only producer was the smoke-load+assert sequence just dropped — nothing in this plan writes that sentinel any more, for either artifact); the `BE-25` dependency (deleted); the `BE-7`/`BE-8` dependencies (this task never touches `get_graph_models_dir()` or `ProseExtractionBackend` — it never did the graph model's placement even under the old design's early drafts, and now it never will). `completes` narrows from `C4, S8, S10, S11, S12, S37, S58` to `C4, S11, S37` — `S8`/`S10`/`S12`/`S58` are all smoke-load/capability-assert-shaped and describe the graph checkpoint specifically; `S11` (digest mismatch) and `S37` (byte-count mismatch) are the two generic pre-placement scenarios this task's narrowed sequence still genuinely satisfies, now for `lid.176.ftz`.
+        - **Kept:** disclose → check space → stage → verify digest+bytes → fsync → atomic rename → fsync parent, applied to `lid.176.ftz` — a genuine, real fix. Today's `_download_fasttext_model` does **less** than `huggingface_hub` already does for the embedder/reranker (`licenses.py:93-134`: raw `urllib.request.urlopen` straight into `open("wb")`, no temp file, no atomic rename, checks only non-zero size) — this closes that pre-existing gap, unrelated to the graph model.
+        - **Revert wiring is pre-existing and untouched by this task.** [installer.py](../../archon_search/install/installer.py)`:531-545` already catches `InstallError` from the fasttext download and degrades to English-only (`is_multilingual = False` before config write) — this task's only obligation there is to stop that call site interpolating `str(exc)` into its warning (`:541`, a wire-facing message today) and pass a sanitized category instead (FE-4). No new revert logic is built here.
+        - **Phase-placement observation, not acted on:** with `BE-25`/`BE-7`/`BE-8` gone from its `needs`, this task no longer transitively depends on `K2` at all — it could run whether or not the Spike gate passes. It stays filed under Phase 3 here because moving it would mean re-deriving the vertical-slicer's phase boundaries, out of this edit's scope; flagged for whoever next revisits phase sequencing.
+- [ ] **BE-14** — Implement a two-stage device probe for the graph model: a free pre-download availability check, then real validation riding the **optional** pre-warm entry (BE-8) rather than a mandatory smoke-load, reporting the resolved torch device (`cpu`/`cuda`/`mps`) if pre-warm ran; if pre-warm did not run or was skipped, report "not yet validated" and offer nothing (FE-5) #backend-role
+    - Frameworks & Drivers · 9.0h
+    - needs BE-8 · completes S33
     - Tests
         - #unit_test — `test_unavailable_torch_device_reports_its_own_category` — a configured device (`cuda`/`mps`) torch cannot actually use is never silently downgraded
-        - #unit_test — `test_step_down_to_cpu_is_reported_not_inferred` — `activeProviders` carries the real answer
-        - #integration_test — `test_stage_two_validates_against_the_real_placed_artifact` — not against host availability alone
+        - #unit_test — `test_step_down_to_cpu_is_reported_not_inferred` — the resolved device carries the real answer
+        - #unit_test — `test_prewarm_not_run_reports_not_yet_validated_not_a_failure` — distinct from an unavailable-device failure
+        - #integration_test — `test_stage_two_validates_against_a_real_pre_warmed_load` — not against host availability alone
     - Notes
-        - **+3.5h added to the estimate (8.0h → 11.5h) for the PyTorch-checkpoint decision (Spike gate — RESOLVED, team plan).** The "two importable ONNX runtimes" stage-2 check is replaced by a torch device-availability check for the graph artifact — the ambiguity ONNX Runtime's CPU/GPU package split created has no torch equivalent; the new check is whether the configured device (`cpu`/`cuda`/`mps`) is actually usable.
+        - **Rebuilt 2026-08-24 for the Provisioning decision (team plan `:111-130`): 11.5h → 9.0h (-2.5h).** The mandatory smoke-load this stage rode is gone — BE-13 no longer touches the graph model at all. **Decided: ride the optional pre-warm (BE-8) instead of dropping this task outright.** Rejected alternative — drop entirely, matching the embedder/reranker, which carry no device probe: rejected because `[graph].providers` is still wizard-owned config (Scope → Config) and the accelerator-offer principle this probe exists to protect (Scope → In Scope, the CoreML-partitioning lesson: never offer an accelerator without a real post-download validation) still applies whenever pre-warm *does* run. Net effect: the "real validation riding a guaranteed step" complexity this task priced (~-4h) is removed, but a new branch — pre-warm may not have run at all, and that is not itself a failure — is added (~+1.5h).
+        - **Known limitation, stated rather than hidden:** because pre-warm is optional and best-effort, this probe cannot *guarantee* a validated answer before FE-5's offer, unlike the old design's mandatory smoke-load. A wizard run where pre-warm was skipped or declined reaches the offer step with nothing to report; FE-5 must treat that identically to a failed stage 2 (no prompt, silent CPU). The exact wizard-step ordering — pre-warm must run **before** the offer step for a validated answer to exist at all — is a real sequencing dependency this task does not itself resolve; flagged for whoever implements it.
+        - **This is the ~5th of ~8 `ProvisionFailureKind`/category members still reachable (BE-3):** the four fasttext categories from BE-13, plus this stage's own device-unavailable category (the slot the old "two importable ONNX runtimes" check occupied, already repurposed once for torch under the earlier PyTorch-checkpoint rework).
 - [ ] **BE-15** — Delete spaCy from the source tree, the entrypoint and the container files: the resolver chain, `_LABEL_TO_ENTITY_TYPE`, `ENGLISH_ONLY_DISCLOSURE` (`:86`), `_NAME_SPLIT_PATTERN` (`:146`), `_resolve_labeled_pair` (`:342`), `get_spacy_models_dir`, the four re-exports at [install/\_\_init\_\_.py](../../archon_search/install/__init__.py)`:48-51`, the whole `case`/`esac` block at [scripts/docker-entrypoint.sh](../../scripts/docker-entrypoint.sh)`:34-47` with its spaCy-naming header comments, and the matching lines in [docker-compose.override.yml](../../docker-compose.override.yml) (`:51`, `:56`, `:82`) and [Dockerfile.test](../../Dockerfile.test)`:15`; re-guard `_check_graph_deps` on `gliner` via the `try`-wrapped `find_spec` form #backend-role
     - Frameworks & Drivers · 10.0h
     - needs BE-11 · completes S16
@@ -580,16 +591,6 @@ flowchart LR
         - #integration_test — `test_both_openapi_snapshots_match` — [tests/server/openapi_snapshot.json](../../tests/server/openapi_snapshot.json) and [tests/contract/openapi_snapshot.json](../../tests/contract/openapi_snapshot.json), the latter already stale before this change
     - Notes
         - Two existing tests pin the field and are updated here: [tests/test_graph_ner_model_visibility.py](../../tests/test_graph_ner_model_visibility.py)`:367` and [tests/server/test_schemas.py](../../tests/server/test_schemas.py)`:256` (both verified present). `llm_fallback_used` gets no `BREAKING.md` entry — the type is unexported.
-- [ ] **BE-19** — Make the background validation probe read `capability_status.json` and surface one actionable `provider_warnings` entry per recorded `failureKind`, plus the execution-provider step-down category from the directional `activeProviders` comparison — a layout/metadata check only, never a forward pass, never blocking the socket bind, never raising #backend-role
-    - Use Cases · 8.0h
-    - needs BE-14, BE-18 · completes S13
-    - Tests
-        - #unit_test — `test_each_failure_kind_renders_a_distinct_category` — `relations_not_supported`, `smoke_load_failed` and `conflicting_onnx_runtimes` share no remedy token
-        - #unit_test — `test_step_down_fires_only_when_recorded_is_below_configured` — the operator-declined case fires nothing
-        - #unit_test — `test_probe_never_raises_on_a_malformed_sentinel` — it degrades to a warning
-        - #integration_test — `test_probe_is_dispatched_via_create_task_into_background_tasks` — the socket-bind guarantee, asserted structurally
-    - Notes
-        - No wording change from the PyTorch-checkpoint decision (Spike gate — RESOLVED, team plan): this task's scope (`capability_status.json`, `provider_warnings`, the `activeProviders` step-down comparison) is already stated in terms neutral to ONNX vs. torch — it reads what BE-13/BE-14 wrote, it does not itself name ONNX Runtime or torch specifics.
 - [ ] **BE-20** — Widen the unsupported-edge sweep's allowlist in [graph_store.py](../../archon_search/graph_store.py) (`:2217`) from `related_to` alone to `related_to` + `uses` + `implements` + `depends_on`, keeping `relationship_type` as the discriminator and the def/ref exemption intact #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-11 · completes S22, S40
@@ -597,23 +598,24 @@ flowchart LR
         - #unit_test — `test_typed_edge_swept_when_endpoints_stop_co_occurring` — the same support test as `related_to`
         - #unit_test — `test_typed_edge_kept_while_endpoints_still_co_occur` — the accepted weaker guarantee
         - #integration_test — `test_defref_edges_remain_exempt_after_widening` — the AST half is untouched
-- [ ] **BE-21** — Add the structural meta-guards: S42's four properties (engine-name absence over `git ls-files` minus a pinned literal allowlist; the `graph_real_artifact` CI exclusions located via `_STEP_FILTER_MARKERS`; no docling parse-pool import on the engine call path; the pinned torch thread-count APIs), the single-owner path/URL assertions, and the `BREAKING.md`-to-index parity guard with its 65-heading allowlist #backend-role
-    - Frameworks & Drivers · 9.0h
-    - needs BE-13, BE-15, BE-16 · completes S42, S52, S54
+- [ ] **BE-21** — Add the structural meta-guards: S42's four properties (engine-name absence over `git ls-files` minus a pinned literal allowlist; the `graph_real_artifact` CI exclusions located via `_STEP_FILTER_MARKERS`; no docling parse-pool import on the engine call path; the pinned torch thread-count APIs) and the `BREAKING.md`-to-index parity guard with its 65-heading allowlist #backend-role
+    - Frameworks & Drivers · 7.0h
+    - needs BE-15, BE-16 · completes S42, S52
     - Tests
         - #unit_test — `test_no_untracked_reference_to_the_removed_engine_remains` — `git ls-files`-scoped, not a filesystem walk (a plain walk hits 1,161 files via `.venv/`)
         - #unit_test — `test_both_workflows_exclude_the_new_marker_on_the_same_filter_line` — located by the existing `_STEP_FILTER_MARKERS` anchor, not by extending that tuple
-        - #unit_test — `test_provisioner_and_backend_both_call_get_graph_models_dir` — neither builds a `models/graph/...` literal
-        - #unit_test — `test_descriptor_url_contains_the_pinned_revision_string` — a revision bump cannot silently keep the old artifact
     - Notes
-        - **+1h added to the estimate (8.0h → 9.0h) for the PyTorch-checkpoint decision (Spike gate — RESOLVED, team plan).** Wording only: "the pinned `SessionOptions` thread counts" becomes the pinned torch thread-count APIs (`torch.set_num_threads`/`torch.set_num_interop_threads`, BE-8) — the property asserted is unchanged, only which API it pins.
-- [ ] **FE-2** — Keep the wizard's **one** bundled optional-feature question ([wizard.py](../../archon_search/install/wizard.py)`:650-671`) but split the disclosure into two stated download costs, the graph half quoting the artifact's real size and Apache-2.0 license before any bytes move and naming no engine #frontend-role
-    - Presentation · 6.0h
-    - needs BE-4, BE-13 · completes S9, S36
+        - **Rescoped 2026-08-24 (Provisioning decision, team plan `:111-130`): 9.0h → 7.0h (-2.0h).** Two of the four original structural guards lose their subject and are dropped, not rewritten: `test_provisioner_and_backend_both_call_get_graph_models_dir` — there is no more provisioner call site for the graph model (BE-13 never touches it now), so "single owner between two callers" collapses to "one caller" (BE-8), which is true by construction, not something a cross-file guard needs to police; `test_descriptor_url_contains_the_pinned_revision_string` — the graph model no longer has a provisioned-artifact descriptor with a `url`/`revision` field at all (FE-2), only the size-estimate shape (declared MB, no URL), so there is nothing left to assert a revision string against. `S54` (the single-owner/URL contract this pair enforced) is correspondingly dropped from `completes`. Loses no hours it didn't already spend on these two: `test_no_untracked_reference_to_the_removed_engine_remains`, the CI-marker-exclusion guard, and the `BREAKING.md`-index parity guard (`S52`) are all unaffected by the Provisioning decision and unchanged.
+        - Wording carried over from the earlier PyTorch-checkpoint rework, still applies: "the pinned `SessionOptions` thread counts" is the pinned torch thread-count APIs (`torch.set_num_threads`/`torch.set_num_interop_threads`, BE-8).
+- [ ] **FE-2** — Keep the wizard's **one** bundled optional-feature question ([wizard.py](../../archon_search/install/wizard.py)`:650-671`) but split the disclosure into two stated download costs, the graph half quoting a declared MB **estimate** (not a verified size) and Apache-2.0 license before any bytes move and naming no engine #frontend-role
+    - Presentation · 4.5h
+    - needs BE-3, BE-4 · completes S9, S36
     - Tests
         - #unit_test — `test_one_question_still_installs_code_and_graph_together` — the switch↔package guarantee holds
         - #unit_test — `test_two_separate_costs_are_stated_before_the_question` — one per feature
-        - #unit_test — `test_graph_prompt_names_no_engine_and_quotes_the_real_size` — sourced from the descriptor
+        - #unit_test — `test_graph_prompt_names_no_engine_and_quotes_the_declared_estimate` — sourced from the size-estimate descriptor, not a verified byte count
+    - Notes
+        - **Rescoped 2026-08-24 (Provisioning decision, team plan `:111-130`): 6.0h → 4.5h (-1.5h).** The graph model is no longer a provisioned artifact with a real, verified size to quote — it moves to the size-estimate shape (BE-3), the same declared-MB-only fidelity the tree-sitter bundle (and, transitively, the embedder/reranker) already gets. `needs BE-13` is dropped — the graph half's number now comes from BE-3's descriptor, not BE-13's (fasttext-only) provisioner.
 - [ ] **FE-3** — Replace the English-only disclosure in [render.py](../../archon_search/install/render.py) with an actionable pointer naming both `ner_confidence` and `relation_confidence`, shown whenever the graph extra is installed and no longer nested under `multilingual` #frontend-role
     - Presentation · 4.0h
     - needs BE-10, BE-15 · completes S57
@@ -621,29 +623,33 @@ flowchart LR
         - #unit_test — `test_pointer_shown_for_graph_extra_regardless_of_multilingual` — both configurations
         - #unit_test — `test_pointer_absent_without_the_graph_extra` — the third configuration
         - #unit_test — `test_pointer_names_both_confidence_knobs` — actionable, not decorative
-- [ ] **FE-4** — Render every provisioning failure as its own sanitized, remedy-bearing category from C4's eight frozen members, and revert `[graph].enabled` only for the five pre-placement categories — with the failure copy stating that a revert disables the code-symbol/def-ref graph too #frontend-role
-    - Presentation · 8.0h
-    - needs BE-13, BE-14 · completes S11, S12, S19, S37, S45, S51, S58
+- [ ] **FE-4** — Render fasttext's provisioning failures as sanitized, remedy-bearing categories at [installer.py](../../archon_search/install/installer.py)`:531-545` instead of interpolating `str(exc)`, reusing the existing `is_multilingual = False` degrade-to-English-only path rather than building a new revert #frontend-role
+    - Presentation · 3.5h
+    - needs BE-13 · completes S11, S37, S51
     - Tests
-        - #unit_test — `test_every_frozen_category_renders_its_own_remedy_token` — no two rendered strings are equal
-        - #unit_test — `test_revert_fires_for_the_five_pre_placement_categories_only` — not for `smoke_load_failed`, `relations_not_supported` or `conflicting_onnx_runtimes`
-        - #unit_test — `test_failure_copy_states_the_code_graph_is_disabled_too` — the coupling is disclosed
-        - #unit_test — `test_no_rendered_failure_contains_exception_text` — sanitized constants only
-- [ ] **FE-5** — Offer the accelerator only after both probe stages pass, with the accelerator as the default; either stage failing shows no prompt at all and writes CPU silently through the generalised `configure_providers()` ([installer.py](../../archon_search/install/installer.py)`:1111-1142` — today hardcoded to `[database]`, `GpuType`-only, with no CPU-write branch), with `--graph-providers` for non-interactive installs #frontend-role
-    - Presentation · 5.0h
+        - #unit_test — `test_every_reachable_category_renders_its_own_remedy_token` — no two rendered strings are equal
+        - #unit_test — `test_no_rendered_failure_contains_exception_text` — sanitized constants only, closing the pre-existing `str(exc)` interpolation at `:541`
+    - Notes
+        - **Rescoped 2026-08-24 (Provisioning decision, team plan `:111-130`): 8.0h → 3.5h (-4.5h).** The graph model no longer goes through this category system at all — it fails non-fatally at pre-warm (BE-8) or degrades at ingest time (BE-12), neither of which is a wizard-blocking "provisioning failure" with a revert policy. What is left is fasttext's own ~4 reachable categories (BE-3), rendered where `installer.py`'s existing fasttext call site today embeds `str(exc)` directly in a wire-facing warning — a real pre-existing defect this closes as a side effect.
+        - **Dropped, and why:** the 5-pre-placement-vs-3-post-placement revert split — every one of fasttext's reachable categories is pre-placement (verified before the atomic rename, same as before), so there is no post-placement category left to carve out an exception for; `test_failure_copy_states_the_code_graph_is_disabled_too` — fasttext failures never touch `[graph].enabled`, only the pre-existing `is_multilingual` flag ([installer.py](../../archon_search/install/installer.py)`:531-545`, already wired, untouched by this task); the "eight frozen members" framing — this task renders whichever of BE-3's ~5 reachable members fasttext can actually raise, not all eight.
+- [ ] **FE-5** — Offer the accelerator only after the device probe validates via the optional pre-warm (BE-14), with the accelerator as the default when it does; pre-warm not having run, or either stage failing, shows no prompt at all and writes CPU silently through the generalised `configure_providers()` ([installer.py](../../archon_search/install/installer.py)`:1111-1142` — today hardcoded to `[database]`, `GpuType`-only, with no CPU-write branch), with `--graph-providers` for non-interactive installs #frontend-role
+    - Presentation · 4.5h
     - needs BE-14 · completes S31, S32
     - Tests
-        - #unit_test — `test_offer_appears_only_after_both_stages_pass` — and defaults to the accelerator
-        - #unit_test — `test_either_stage_failing_shows_no_prompt_and_writes_cpu` — silently, never as an exception message
+        - #unit_test — `test_offer_appears_only_after_pre_warm_validates_both_stages` — and defaults to the accelerator
+        - #unit_test — `test_pre_warm_not_run_or_either_stage_failing_shows_no_prompt_and_writes_cpu` — silently, never as an exception message
         - #unit_test — `test_configure_providers_writes_the_named_section` — the section and provider-list parameters are real, not reused
-- [ ] **T-4** — e2e: drive the wizard through the CLI test runner over the provisioning paths — happy path, re-run, digest mismatch, byte-count mismatch, capability failure, smoke-load failure, disk guard and the revert policy #tester-role
-    - — · 12.0h
-    - needs BE-13, FE-4 · completes S8, S10, S11, S12, S19, S37, S45, S58
+    - Notes
+        - **Tied to BE-14's fate (Provisioning decision, team plan `:111-130`): 5.0h → 4.5h (-0.5h).** BE-14 no longer rides a mandatory, guaranteed-to-run smoke-load — it rides the optional pre-warm — so this task gains one more "no answer yet" case (pre-warm never ran) alongside its existing "a stage failed" case, both of which already resolve to the same silent-CPU behaviour. `configure_providers()`'s generalisation (named section + CPU-write branch) is unaffected — it is still real, still-needed installer work regardless of what gates the offer.
+- [ ] **T-4** — e2e: drive the wizard through the CLI test runner over `lid.176.ftz`'s provisioning paths — happy path, re-run, digest mismatch, byte-count mismatch, disk guard #tester-role
+    - — · 7.0h
+    - needs BE-13, FE-4 · completes S11, S37
     - Tests
-        - #e2e_test — `test_e2e_wizard_provisions_verifies_and_publishes` — synthetic artifact with a known digest and byte count, URL opener mocked, smoke-load injected to return `relationsSupported: true`
-        - #e2e_test — `test_e2e_wizard_rerun_reports_already_provisioned` — re-verifies and rewrites the sentinel without re-downloading
-        - #e2e_test — `test_e2e_digest_and_size_mismatches_place_nothing_and_revert` — two distinct categories, `[graph].enabled` reverted
-        - #e2e_test — `test_e2e_capability_and_smoke_load_failures_do_not_revert` — injected to fail; the placed tree stays
+        - #e2e_test — `test_e2e_wizard_provisions_verifies_and_publishes` — real shape, mocked URL opener, a known digest and byte count for `lid.176.ftz`
+        - #e2e_test — `test_e2e_wizard_rerun_reports_already_provisioned` — re-verifies without re-downloading a matching file
+        - #e2e_test — `test_e2e_digest_and_size_mismatches_place_nothing_and_degrade_to_english_only` — two distinct categories, the existing `is_multilingual` degrade fires
+    - Notes
+        - **Rescoped 2026-08-24 (Provisioning decision, team plan `:111-130`): 12.0h → 7.0h (-5.0h).** Drops the capability-failure and smoke-load-failure e2e legs entirely — BE-13 no longer performs either step for any artifact, so there is nothing left to inject a canned `EngineCapability` against. The remaining three legs exercise `lid.176.ftz` for real (mocked transport, real digest/byte-count/atomic-rename logic) rather than a synthetic graph artifact, and the harness is simpler without the old capability-assert stubbing machinery `S8`/`S10`/`S12`'s legs needed.
 - [ ] **T-5** — e2e: the pre-download disclosure, the one bundled question with both stated costs, and the rendered summary in all three configurations #tester-role
     - — · 5.0h
     - needs FE-2, FE-3 · completes S9, S36, S57
@@ -659,13 +665,6 @@ flowchart LR
         - #e2e_test — `test_e2e_relations_not_supported_and_digest_mismatch_render_differently` — distinct remedy tokens
         - #e2e_test — `test_e2e_conflicting_runtimes_reaches_the_operator` — the wizard actually renders the probe's category
         - #e2e_test — `test_e2e_accelerator_offered_only_after_both_stages` — and no prompt on either failure
-- [ ] **T-7** — e2e: start a real app against each sentinel state and assert the probe's warnings, plus the status payload without `provider_notes` #tester-role
-    - — · 6.0h
-    - needs BE-18, BE-19 · completes S13, S23
-    - Tests
-        - #e2e_test — `test_e2e_each_failure_kind_surfaces_a_distinct_warning` — three sentinels, no forward pass re-run
-        - #e2e_test — `test_e2e_provider_step_down_fires_and_matching_providers_do_not` — the fourth and fifth sentinels
-        - #e2e_test — `test_e2e_status_carries_no_provider_notes` — through `GET /status` on a real app
 - [ ] **T-8** — Build the `graph_real_artifact` lane — registered marker, `-m` exclusions in both workflows, its own `xdist_group`, its own CI step with artifact cache, prefetch and a `--junitxml` did-it-actually-run assertion mirroring `live_benchmark` — and land the memory guard inside it as two separate test functions #tester-role
     - — · 12.0h
     - needs BE-6, BE-11, BE-13 · completes S26
@@ -694,11 +693,6 @@ flowchart LR
     - needs T-8 · completes S1
     - Tests
         - #manual_test — Hungarian span review — non-trivial, non-garbled spans where the outgoing engine produced almost none (non-automatable: no Hungarian corpus exists in the repository and span quality is a human judgement; a per-language failure records a limitation rather than blocking)
-- [ ] **T-12** — Manual: confirm a placed permissive artifact really ships its LICENSE and attribution #tester-role
-    - — · 2.0h
-    - needs BE-13 · completes S39
-    - Tests
-        - #manual_test — Placed-artifact license check — inspect the published tree for its LICENSE and attribution files (non-automatable: no test in the repository performs a real model download — every download test mocks the URL opener, so no automated run ever produces a genuinely placed artifact)
 - [ ] **T-13** — Container smoke: the entrypoint reaches `exec "$@"` and the server serves `/ready` with `ARCHON_EXTRAS` defaulting to `graph` and no spaCy anywhere in the image #tester-role
     - — · 5.0h
     - needs BE-15 · completes S56
@@ -720,7 +714,7 @@ flowchart LR
         - Validate each of the plan's Acceptance criteria one-by-one with a fact check — no assumptions; confirm every one is genuinely done.
         - Confirm the docling lane (`-m docling`) now runs as a step in both CI workflows, and that the four open questions below were reconciled with the plan rather than left open.
 
-**Critical path:** K1 → K2 → BE-6 → BE-7 → BE-8 → BE-9 → BE-11 → BE-13 → BE-14 → FE-4 → T-4 → T-14. Phase 1 and Phase 2 run alongside K2 (neither depends on the Spike gate); the lane chain T-8 → T-9/T-10 runs in parallel with the wizard chain once BE-13 lands.
+**Critical path — recomputed 2026-08-24 (Provisioning decision, team plan `:111-130`):** the old chain through `BE-13 → BE-14 → FE-4 → T-4` no longer holds — `BE-13` now only needs `BE-3` (Phase 2), `BE-14` now needs `BE-8` instead of `BE-13`, and `FE-4`/`T-4` no longer gate on `BE-14` at all, so that whole branch runs mostly in parallel rather than in series. The longest remaining chain runs through `BE-16` (18.5h, the single largest task): K1 → K2 → BE-6 → BE-7 → BE-8 → BE-9 → BE-11 → BE-15 → BE-16 → BE-21 → T-14. Phase 1 and Phase 2 run alongside K2 (neither depends on the Spike gate); the wizard-provisioning branch (`BE-13`/`BE-14`/`FE-2`/`FE-4`/`FE-5`/`T-4`) and the lane chain `T-8 → T-9/T-10` both run in parallel with this chain, gated only by `BE-11` (and, for `T-8`, `BE-13` — see BE-13's Notes on the phase mismatch this now creates, left as-is per this file's own "Untouched" scoping).
 
 ---
 
