@@ -350,17 +350,21 @@ flowchart LR
         - #unit_test — tests follow K3's chosen branch; written once K3 has reported
     - Notes
         - **Deliberately unspecified until K3 reports** — writing the tests now would presume the outcome. The two branches are mutually exclusive: support (budget derived from pair count) or refuse (detect and fail loudly at config validation).
-- [ ] **BE-24** — Strip markdown code fences before parsing an enrichment reply as JSON, in all three clients ([ollama.py](../../archon_search/enrichment/ollama.py)`:137`, [llama_cpp.py](../../archon_search/enrichment/llama_cpp.py)`:188`, [openai.py](../../archon_search/enrichment/openai.py)`:139`) #backend-role
+- [ ] **BE-24** — Strip markdown code fences before parsing an enrichment reply as JSON, via **one shared helper** called by all **four** clients ([ollama.py](../../archon_search/enrichment/ollama.py)`:137`, [llama_cpp.py](../../archon_search/enrichment/llama_cpp.py)`:188`, [openai.py](../../archon_search/enrichment/openai.py)`:139`, [anthropic.py](../../archon_search/enrichment/anthropic.py)`:205`) #backend-role
     - Adapters · 2.0h
     - needs —
     - Tests
         - #unit_test — `test_fenced_json_parses` — a reply wrapped in ```-fences parses to the same result as the bare payload
         - #unit_test — `test_language_tagged_fence_parses` — a ```json-tagged fence parses
         - #unit_test — `test_bare_json_still_parses` — the unfenced path is unchanged
+        - #unit_test — `test_malformed_reply_still_raises` — prose with no fence and no valid JSON still fails loudly; the strip must not become a salvage path
+        - #unit_test — `test_all_four_clients_use_the_shared_helper` — a structural guard that no client regrows its own inline `json.loads` of the raw text
         - #integration_test — `test_fenced_reply_produces_typed_edges` — a fenced reply yields typed edges rather than falling back to co-occurrence-only
     - Notes
         - **Found by the K2g follow-up investigation.** `llama3.1:8b` frequently wraps its JSON in markdown fences; none of the three clients strip them before `json.loads`, so the parse raises `JSONDecodeError`, is caught by [graph_extractor.py](../../archon_search/graph_extractor.py)`:766`'s `except Exception`, and the chunk falls back to co-occurrence-only edges. Unlike BE-22's defect this one fails **loudly** — it is logged — but it still silently costs typed edges.
         - Measured cost: **8 of 17 real corpus documents** produced zero typed edges purely from this, deflating the measured density increase (+83 edges / +24.85%) into a lower bound rather than a true figure.
+        - **Decided — one shared helper, not four copies.** All four clients parse identically (`parsed = json.loads(raw_text)`, each inside its own `label_relationships`); four copies of the same three lines drift apart the first time one is tweaked. `anthropic.py` was missed by the original investigation, which checked only three clients — it has the same unguarded parse.
+        - **Decided — strict stripping only.** Remove well-formed ``` fences (tagged or bare) and nothing else. A forgiving "grab everything between the first `[` and the last `]`" scan would mask genuinely malformed replies, and losing those errors costs more than the extra cases it would catch. Loosen only if a real failure demands it.
 
 ### Phase 2 · See and verify every byte an install will download *(closes a pre-existing integrity gap; kept as-is even if the Spike gate fails)*
 
