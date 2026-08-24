@@ -67,15 +67,16 @@ enum ProviderOffer {
   accelerator_offered_default_on,
 }
 
-/// Deliberately NOT config (Q29), recorded so it is not "promoted" later by accident.
-/// The relation adjacency threshold is a PINNED CONSTANT at the model card's midpoint
-/// (~0.6), with its reason next to it in code. Its effect on output is indirect and cannot
-/// be measured without span-level scoring the retrieval-scoped eval harness does not have,
-/// so a knob would be an unfalsifiable dial. The spike confirms the value; promotion to a
-/// setting requires evidence.
-model PinnedNonConfigurable {
-  adjacencyThreshold: float32;
-}
+/// REMOVED by the K2g spike (Q29 closed). `adjacency_threshold` was to be a pinned
+/// constant at ~0.6. The spike proved it has NO EFFECT on
+/// `knowledgator/gliner-relex-multi-v1.0`, three independent ways: the checkpoint's model
+/// class lacks `relations_rep_layer`, so `forward` takes the `build_all_entity_pairs`
+/// branch that never receives the parameter; and sweeping it over its full range produced
+/// byte-identical output on both the ONNX and PyTorch paths. It is moot a second time over
+/// under the Spike gate's entities-only outcome, where no relation pairing runs locally at
+/// all. A contract field for an inert dial costs a reader a day of tuning for no effect,
+/// so it is deleted rather than documented in place. Reinstating it requires a checkpoint
+/// whose model class actually honours it.
 
 /// Fields explicitly retained on the same config block, so the deletion's boundary is
 /// unambiguous: they now gate community summarisation only, not relationship labelling.
