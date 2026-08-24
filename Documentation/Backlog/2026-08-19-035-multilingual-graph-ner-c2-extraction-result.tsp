@@ -51,6 +51,14 @@ model GraphNode {
 model GraphEdge {
   /// Stable id = hash(sourceNodeId + targetNodeId + relationshipType). Direction matters,
   /// so a distinct relationship type yields a distinct id and merges additively.
+  ///
+  /// **Idempotent under duplicate input, stated rather than left to accident.** Two identical
+  /// `(source, target, type)` triples produce the same id and collapse to one edge on upsert —
+  /// they can never inflate an edge count. This is now a guaranteed property, not a convenient
+  /// side effect: gliner's PyTorch path really does emit exact-duplicate relation triples
+  /// (K2d), so C1's adapter deduplicates before returning and this id rule is the second,
+  /// independent guard. Anything deriving a count from raw relation objects rather than from
+  /// persisted edges is outside both guards and would inflate — do not add such a counter.
   id: string;
   sourceNodeId: string;
   targetNodeId: string;

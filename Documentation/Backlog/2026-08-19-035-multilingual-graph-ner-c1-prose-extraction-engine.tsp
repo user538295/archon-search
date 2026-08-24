@@ -114,6 +114,17 @@ model ExtractedRelation {
 
 /// The batch result. Both collections are already threshold-filtered by the engine, and
 /// spans decoded under the `other` decoy label are already dropped.
+///
+/// **`relations` is deduplicated by the adapter before it is returned (measured, not
+/// hypothetical).** K2d recorded gliner's real PyTorch return shape verbatim and found the raw
+/// relation list carries EXACT-duplicate `(head, tail, relation)` triples — the same triple 2x
+/// to 4x, with byte-identical scores. That is the engine's own behaviour, not a defect to fix
+/// upstream, so the adapter collapses identical triples and this collection never presents the
+/// same `(head, tail, label)` twice. Deduplication happens here, at the seam, rather than being
+/// left to each consumer: C2's edge-id hash would incidentally absorb duplicates on upsert, but
+/// relying on that would make correctness depend on an accident nobody asserted, and any
+/// consumer counting raw relation objects instead of persisted edges would silently inflate by
+/// gliner's variable duplication factor.
 /// `relationsSupported` is the structural answer to the silent-degradation hazard: a
 /// checkpoint without relation-extraction heads accepts the relation labels and simply
 /// omits relations, which is indistinguishable from "found none" without this flag.

@@ -464,13 +464,16 @@ flowchart LR
         - #integration_test — `test_concurrent_extractions_load_the_model_once` — N concurrent calls yield `loadCount == 1`, dispatched through `asyncio.to_thread`
     - Notes
         - **Rework for the PyTorch-checkpoint decision (Spike gate — RESOLVED 2026-08-24, team plan `:50-61`), +5h added to the estimate (16.0h → 21.0h, within the plan's stated +4-6h range).** `onnxruntime.SessionOptions` intra/inter-op thread pinning becomes `torch.set_num_threads()`/`torch.set_num_interop_threads()`; `[graph].providers` maps to torch device placement (`cpu`/`cuda`/`mps`) instead of ONNX execution providers; `load()` becomes `GLiNER.from_pretrained(local_dir, local_files_only=True)` — no `load_onnx_model`/`onnx_model_file` kwargs.
-- [ ] **BE-9** — Sub-batch inference against the pinned `GRAPH_NER_SUB_BATCH_SIZE` module constant, prompt with label→description dicts plus the `"other"` decoy (discarded), apply both thresholds, and truncate over-window chunks with a once-per-process log that never carries chunk text #backend-role
-    - Frameworks & Drivers · 11.5h
+- [ ] **BE-9** — Sub-batch inference against the pinned `GRAPH_NER_SUB_BATCH_SIZE` module constant, prompt with label→description dicts plus the `"other"` decoy (discarded), apply both thresholds, **deduplicate identical relation triples**, and truncate over-window chunks with a once-per-process log that never carries chunk text #backend-role
+    - Frameworks & Drivers · 12.5h
     - needs BE-8 · completes S7, S20, S30, S53
     - Tests
         - #unit_test — `test_document_yields_ceil_n_over_sub_batch_calls` — counted at the `gliner` boundary, never once per chunk
         - #unit_test — `test_no_single_call_exceeds_the_sub_batch_constant` — and the constant is not a `[graph]` config key
         - #unit_test — `test_other_labelled_spans_are_discarded` — the decoy never reaches the graph
+        - #unit_test — `test_duplicate_relation_triples_are_deduplicated` — a fake returning the same `(head, tail, relation)` triple 3x with byte-identical scores yields ONE `ExtractedRelation`; this is gliner's real measured behaviour (K2d), not a hypothetical
+        - #unit_test — `test_distinct_triples_over_the_same_pair_both_survive` — dedupe keys on `(head, tail, label)`, so a `uses` and a `depends_on` edge over the same node pair are NOT collapsed
+        - #integration_test — `test_duplicate_triples_do_not_inflate_edge_count` — a real extraction over a chunk whose engine output contains duplicates persists the same edge count as the deduplicated equivalent, exercising C2's edge-id idempotence as the second guard
         - #integration_test — `test_truncation_logs_once_and_never_interpolates_chunk_text` — the emitted record equals the pinned sanitized constant
     - Notes
         - **+1.5h added to the estimate (10.0h → 11.5h) for the PyTorch-checkpoint decision (Spike gate — RESOLVED, team plan).** The call shape is unchanged — `model.inference(texts, labels, relations=..., batch_size=N)` works identically against the PyTorch checkpoint. `GRAPH_NER_SUB_BATCH_SIZE = 8`'s justification re-points at the PyTorch batch curve (K2's resolved figures: peak RSS @ batch 8 3737.0 MiB, peak @ batch 16 5557.5 MiB — more headroom than the ONNX curve K2f originally measured, not less), not K2f's ONNX-only measurement. The stub boundary this task's tests exercise narrows to `gliner` alone — no `onnxruntime.InferenceSession` exists to intercept.
