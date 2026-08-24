@@ -4,10 +4,20 @@
 // Replaces the private per-text spaCy seam `GraphExtractor._run_ner_sync(nlp, texts)`, which
 // returns one `(entity_text, spacy_label)` list per text and loops one model call per text.
 //
-// ONE checkpoint, decided (Q1): `knowledgator/gliner-relex-multi-v1.0`, hosted by us as a
-// tarball of its 7-file PyTorch snapshot at the pinned revision (C4), driven through
-// `gliner>=0.2.26` and loaded with `GLiNER.from_pretrained(local_dir, local_files_only=True)`.
-// There is no second model and no per-checkpoint fan-out anywhere in this seam.
+// ONE checkpoint, decided (Q1): `knowledgator/gliner-relex-multi-v1.0`, driven through
+// `gliner>=0.2.26` and loaded with `GLiNER.from_pretrained(model_name, revision=...)` — fetched
+// from HuggingFace at the pinned revision on first use, the literal mirror of
+// `embedder.py:37-45`'s lazy-load-behind-a-lock. There is no second model and no
+// per-checkpoint fan-out anywhere in this seam.
+//
+// SUPERSEDED (2026-08-24, team plan Scope -> Provisioning): an earlier resolution of the Spike
+// gate had us hosting this checkpoint ourselves as a tarball of its 7-file PyTorch snapshot,
+// verified and published by C4's `ArtifactProvisioner`, loaded with
+// `GLiNER.from_pretrained(local_dir, local_files_only=True)`. That design was superseded the
+// same day, before any of it shipped: there is nothing for us to build, host or hand-verify —
+// the checkpoint's files already sit on HuggingFace at a pinned revision — so the graph model
+// now uses the house fastembed pattern instead, never `ArtifactProvisioner`. See `load()`,
+// below, for the corrected load path.
 //
 // NOT an ONNX export, and this is a resolved decision, not an open one (Spike gate — RESOLVED
 // 2026-08-24, team plan). Trace-based ONNX export cannot carry this model's relations at all:
@@ -16,8 +26,10 @@
 //
 // Lives in its own module, `archon_search/prose_extraction_backend.py`, separate from
 // `graph_extractor.py` — C4's installer-import constraint (the installer must not import
-// `archon_search.graph_extractor`) applies to the latter, not this module; the installer
-// imports this module directly for the provisioner's smoke-load and capability assert.
+// `archon_search.graph_extractor`) applies to the latter, not this module. The installer no
+// longer imports this module for a provisioner's smoke-load or capability assert — neither
+// exists for the graph model any more (C4) — but it MAY still import it for the graph engine's
+// own provider-validation probe (C5), via `ProvisioningBackendFactory`, below.
 //
 // The module does NOT import `gliner`, `torch` or `transformers` at module level (K12) — those
 // live inside `load()`'s body. Merely importing this module must stay cheap, for two different
@@ -170,10 +182,21 @@ model EngineCapability {
 /// The seam two roles agree on. One call per batch of prose texts; never per text.
 /// Code-symbol chunks never reach this interface.
 interface ProseExtractionBackend {
-  /// Load the pinned artifact from `get_graph_models_dir()` (Q6). Runs at most once per
-  /// process, behind a lock, off the event loop, and never inside lifespan startup's awaited
-  /// path. Device placement is built from `[graph].providers` for the shared instance, or from
-  /// the explicit list for a `ProvisioningBackendFactory`-built instance; cancellation during
+  /// Load the pinned artifact via `GLiNER.from_pretrained(model_name, revision=...)` —
+  /// `huggingface_hub` fetches it from HuggingFace on first use, mirroring
+  /// `embedder.py:37-45`'s lazy-load-behind-a-lock (Scope -> Provisioning, team plan,
+  /// 2026-08-24) — SUPERSEDING an earlier resolution of the Spike gate that had this load a
+  /// pre-verified, self-hosted tree from `paths.get_graph_models_dir()` (Q6) via
+  /// `ArtifactProvisioner` (C4). That accessor is NOT gone: it is now passed as the explicit
+  /// `cache_dir` argument to `GLiNER.from_pretrained`, so `ARCHON_SEARCH_DATA_DIR` still
+  /// relocates the graph model — only its role changed, from a pre-verified publish target C4
+  /// wrote to, to a plain `huggingface_hub` cache directory this call manages itself. Runs at
+  /// most once per process, behind a lock, off the event loop, and never inside lifespan
+  /// startup's awaited path. Device placement is built from `[graph].providers` for the shared
+  /// instance, or from the explicit list for a `ProvisioningBackendFactory`-built instance —
+  /// that factory's caller changed too (see `ProvisioningBackendFactory`, below): no longer
+  /// `ArtifactProvisioner`'s smoke-load, which no longer exists for this artifact, but the
+  /// graph engine's own provider-validation probe (C5). Cancellation during
   /// load is re-raised and never latched. **The intra-op and inter-op thread counts are pinned
   /// explicitly via `torch.set_num_threads` / `torch.set_num_interop_threads`, never left to
   /// torch's defaults** (K10, S28) — CPU reductions vary with thread count, so leaving it
@@ -204,12 +227,19 @@ interface ProseExtractionBackend {
   ): BatchExtraction;
 }
 
-/// A second construction path (C1, C4), used ONLY by the artifact provisioner's smoke-load
-/// and capability assert — never by `GraphExtractor`. It builds a backend instance against an
-/// explicit candidate provider list, bypassing the process-wide shared instance, its load
-/// lock and its once-per-process latch entirely. This is what lets the provisioner validate a
-/// not-yet-configured backend — before the wizard has written `[graph].providers` — without
-/// disturbing the shared instance the rest of the process will load later.
+/// A second construction path (C1, C5), used ONLY by the graph engine's own
+/// provider-validation probe — never by `GraphExtractor`. RECHARACTERISED 2026-08-24 (Scope ->
+/// Provisioning, team plan): this factory originally existed for `ArtifactProvisioner`'s (C4)
+/// mandatory post-download smoke-load, which no longer exists for the graph model — that
+/// design was superseded before it shipped. The construction need it serves did not go away
+/// with it: something must still build a backend instance against an explicit candidate
+/// provider list, bypassing the process-wide shared instance, its load lock and its
+/// once-per-process latch, so an accelerator can be validated against the real artifact before
+/// the wizard offers it (Q7) without disturbing the shared instance the rest of the process
+/// will load later. That caller is now the graph provider-validation probe (C5) — a
+/// `model_validation.py`-resident check mirroring the shape of the embedder/reranker's own
+/// post-download reprobe (`installer.py:247-261`, `_fe1_reprobe`) rather than riding a
+/// smoke-load `ArtifactProvisioner` no longer performs.
 interface ProvisioningBackendFactory {
   forProviders(providers: string[]): ProseExtractionBackend;
 }

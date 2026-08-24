@@ -54,17 +54,35 @@ enum ProviderProbeStage {
   /// No accelerator on the host means no offer, CPU written silently, zero cost.
   availability_precheck,
 
-  /// (2) AFTER download: the MANDATORY smoke-load and capability assert, pointed at the
-  /// accelerator instead of at CPU — real validation against the real artifact, in the shape
-  /// of the existing post-download re-probe. A failure here is never a swallowed exception
-  /// (Q26).
+  /// (2) AFTER download: real validation against the real artifact — the wizard's dedicated
+  /// reprobe, pointed at the accelerator instead of at CPU. A failure here is never a
+  /// swallowed exception (Q26).
   ///
-  /// Q26's original example of such a failure — two importable ONNX runtimes — no longer
+  /// MECHANISM CHANGED, 2026-08-24 (Scope -> Provisioning, team plan): this stage originally
+  /// "rode work that is mandatory anyway" (header, above) — BE-13's mandatory post-placement
+  /// smoke-load inside `ArtifactProvisioner.provision()` (C4). That smoke-load no longer
+  /// exists for the graph model; the checkpoint is now fetched lazily via
+  /// `GLiNER.from_pretrained` (C1), and install time gets only an OPTIONAL, non-fatal
+  /// pre-warm (Scope -> Provisioning, team plan) — too weak on its own to ground a claim of
+  /// "mandatory validation," since a skipped or failed pre-warm must not silently make a
+  /// probed accelerator look untested. Stage 2 is therefore no longer PIGGYBACKED on any other
+  /// step: it is its OWN dedicated, always-attempted reprobe call, mirroring the shape the
+  /// embedder/reranker already use for the identical problem — `validate_providers_shared`
+  /// (`model_validation.py:229-294`), constructing the model directly under the candidate
+  /// provider and running one cheap inference call, invoked a second time after download via
+  /// `installer.py:247-261`'s `_fe1_reprobe` — rather than a step folded inside a provisioner.
+  /// The graph engine's analogous reprobe constructs a `ProvisioningBackendFactory`-built
+  /// backend (C1) under the candidate device and exercises `inference()` once. It stays
+  /// MANDATORY in the sense that matters here: the wizard always performs it before offering
+  /// an accelerator, deterministically, independent of whether the optional pre-warm ran —
+  /// only its home moved, from a step inside `provision()` to a standalone reprobe call.
+  ///
+  /// Q26's original example of a stage-2 failure — two importable ONNX runtimes — no longer
   /// applies to the graph engine: it loads through torch and never creates an
   /// `onnxruntime.InferenceSession`, so there is no resolved session for a second runtime to
   /// make unpredictable. C4 retains `conflicting_onnx_runtimes` in the frozen enum but
-  /// declares it unreachable here (`c4.tsp:178-192`), and C6 must not render it. The stage
-  /// itself is unchanged and still mandatory — what it can fail ON is what narrowed.
+  /// declares it unreachable there (`c4.tsp:222-251`, doubly so as of this same change), and
+  /// C6 must not render it.
   post_download_validation,
 }
 
