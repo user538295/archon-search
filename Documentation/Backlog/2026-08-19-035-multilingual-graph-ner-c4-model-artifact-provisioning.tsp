@@ -366,9 +366,11 @@ interface ArtifactProvisioner {
   /// Idempotent. Re-verifies an already-present artifact rather than trusting presence: for
   /// the graph model, both the smoke-load and the capability assert re-run, and
   /// `capability_status.json` is rewritten, on every call that reaches the post-placement
-  /// steps — `already_present` included — so a recorded `relations_not_supported` or
-  /// `conflicting_onnx_runtimes` outcome is not permanent by construction; re-running the
-  /// wizard is a real remedy. For `lid.176.ftz`, only the smoke-load re-runs — the capability
+  /// steps — `already_present` included — so a recorded `relations_not_supported` outcome is
+  /// not permanent by construction; re-running the wizard is a real remedy.
+  /// (`conflicting_onnx_runtimes` is not named here: it is retained-but-unreachable for both
+  /// of this seam's targets, above, so it can never be the recorded outcome in the first
+  /// place.) For `lid.176.ftz`, only the smoke-load re-runs — the capability
   /// assert is a no-op for it (see the provisioning-seam doc, above). Re-provisions
   /// (re-downloads) only when the present tree fails its smoke-load.
   /// `candidateProviders` is the accelerator candidate list stage 2 of the provider probe
