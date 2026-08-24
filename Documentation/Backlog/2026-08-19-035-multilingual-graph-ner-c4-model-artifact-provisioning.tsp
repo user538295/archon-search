@@ -73,8 +73,10 @@ model ArtifactSpec {
   licenseDisposition: LicenseDisposition;
 
   /// Attribution text we are obliged to ship next to the artifact because we REDISTRIBUTE it
-  /// (we self-export the ONNX and host the bytes). The LICENSE file and this attribution
-  /// travel with the placed artifact, not just with the source tree.
+  /// (we host the pinned PyTorch checkpoint's bytes ourselves, as a tarball of its 7-file
+  /// snapshot, rather than pointing at the upstream repo — Spike gate — RESOLVED 2026-08-24,
+  /// team plan). The LICENSE file and this attribution travel with the placed artifact, not
+  /// just with the source tree.
   attribution: string;
 }
 
@@ -152,6 +154,18 @@ enum ProvisionFailureKind {
   /// (see `CapabilityStatusRecord`, below).
   smoke_load_failed,
 
+  /// The placed artifact's forward pass accepted the relation labels and returned none —
+  /// S12's checkpoint state. Reverted by the spike gate to its originally designed meaning
+  /// (Spike gate — RESOLVED 2026-08-24, team plan): the checkpoint's PyTorch weights ARE
+  /// relation-capable — measured `archon-search --uses--> LanceDB` @ 0.9822 and
+  /// `reranker --depends_on--> fastembed library` @ 0.9591 — only the ONNX conversion lost
+  /// that capability, and the resolution is to ship the PyTorch checkpoint instead, never the
+  /// ONNX export (see the provisioning-seam doc, below). This category is therefore a genuine
+  /// correctness check catching a bad revision or a corrupted download for THIS installation,
+  /// not the permanent universal-steady-state failure the entities-only branch evaluated in
+  /// the team plan's Spike gate section would have made it — that branch was not taken. Same
+  /// post-placement disposition as `smoke_load_failed` above: occurs AFTER atomic rename, so
+  /// does NOT revert `[graph].enabled`.
   relations_not_supported,
 
   /// Two ONNX runtimes are importable at once (`onnxruntime` and `onnxruntime-gpu`). This is
@@ -160,6 +174,21 @@ enum ProvisionFailureKind {
   /// it at the source is explicitly out of scope for this feature (Q26). Occurs AFTER
   /// placement, during the same combined smoke-load/capability-assert step as
   /// `smoke_load_failed` — the capability assert never ran for this category either.
+  ///
+  /// Scope disposition post-spike-gate (Spike gate — RESOLVED 2026-08-24, team plan): this
+  /// category is UNREACHABLE for both artifacts this seam provisions, mirroring how
+  /// `license_declined` above stays a retained-but-unreachable member rather than a removed
+  /// one. The graph model's smoke-load/capability-assert step loads through torch, not ONNX
+  /// Runtime, and never creates an `onnxruntime.InferenceSession` — so there is no "resolved
+  /// session" for two importable runtimes to make unpredictable, which is the only failure
+  /// mechanism this category describes. `lid.176.ftz` never had an ONNX dimension either (see
+  /// the provisioning-seam doc, below). `onnxruntime` itself is NOT dropped from the
+  /// dependency set — `gliner` hard-depends on it, and `fastembed`'s own embedder still uses
+  /// it — so a real two-runtime conflict remains a live environment state; it is simply not
+  /// one either of THIS seam's two `provision()` targets can any longer surface, since neither
+  /// creates the ONNX session this check exists to protect. Retained in the frozen enum for
+  /// interface stability, not removed — widening or narrowing it still requires the S45 revert
+  /// disposition and Frontend Done-when rendering obligation described above.
   conflicting_onnx_runtimes,
 }
 
@@ -179,17 +208,21 @@ model ProvisionResult {
 
   /// Whether the placed artifact's forward pass returned relations. False is a failure,
   /// not a warning — a checkpoint that silently ignores relation labels must never be
-  /// accepted as provisioned. Null, not false, when the capability assert never ran — a
-  /// WIDER null set than `capabilityStatusPath`'s below: that field is non-null for
-  /// `smoke_load_failed` and `conflicting_onnx_runtimes` because the sentinel still gets
-  /// written for both; this field is null for them, because the assert that would populate
-  /// it never ran. Non-null only whenever the assert actually executed and returned an answer —
-  /// which requires BOTH that the outcome reached the assert step (`provisioned`,
-  /// `already_present`, or a `failed` outcome whose `failureKind` is `relations_not_supported`)
-  /// AND that the artifact has an ONNX execution-provider dimension for the assert to run
-  /// against (the graph model). Null for the five pre-placement failures, for
-  /// `smoke_load_failed` / `conflicting_onnx_runtimes` alike, and for `lid.176.ftz` regardless
-  /// of outcome — the assert is a no-op for that shape (see the provisioning-seam doc, above).
+  /// accepted as provisioned. Post-spike-gate (Spike gate — RESOLVED 2026-08-24, team plan),
+  /// `true` is the expected steady-state result for this checkpoint — the assert reverts to
+  /// its originally designed meaning, a correctness check catching a bad revision or a
+  /// corrupted download, not a permanent universal failure (see `relations_not_supported`,
+  /// above). Null, not false, when the capability assert never ran — a WIDER null set than
+  /// `capabilityStatusPath`'s below: that field is non-null for `smoke_load_failed` and
+  /// `conflicting_onnx_runtimes` because the sentinel still gets written for both; this field
+  /// is null for them, because the assert that would populate it never ran. Non-null only
+  /// whenever the assert actually executed and returned an answer — which requires BOTH that
+  /// the outcome reached the assert step (`provisioned`, `already_present`, or a `failed`
+  /// outcome whose `failureKind` is `relations_not_supported`) AND that the artifact has a
+  /// device-placement dimension for the assert to run against (the graph model, loaded
+  /// through torch — see the provisioning-seam doc, above). Null for the five pre-placement
+  /// failures, for `smoke_load_failed` / `conflicting_onnx_runtimes` alike, and for
+  /// `lid.176.ftz` regardless of outcome — the assert is a no-op for that shape.
   /// See `CapabilityStatusRecord` below for the sentinel's own copy of this question, which
   /// stays non-nullable and `false`-by-convention for those same two never-asserted categories
   /// — a different field, on disk, with a different tradeoff.
@@ -202,25 +235,29 @@ model ProvisionResult {
   /// (`download_failed`, `digest_mismatch`, `size_mismatch`, `insufficient_disk`,
   /// `extract_failed`) — no artifact directory exists yet to write it beside — and null for
   /// `lid.176.ftz` regardless of outcome, since the assert is a no-op for an artifact with no
-  /// ONNX execution-provider dimension (see the provisioning-seam doc, above) and there is
+  /// device-placement dimension (see the provisioning-seam doc, above) and there is
   /// nothing to record. Non-null for the graph model's `smoke_load_failed` and
   /// `conflicting_onnx_runtimes` too, even though the capability assert never ran for either,
   /// and non-null for `already_present` — re-verification re-runs the assert and rewrites this
   /// file exactly as `provisioned` does — see `CapabilityStatusRecord`.
   capabilityStatusPath: string | null;
 
-  /// The ONNX execution providers the stage-2 smoke-load actually resolved to (Q7) — a
-  /// step-down to CPU must be visible here rather than inferred, mirroring
-  /// `EngineCapability.activeProviders` (C1). The wizard reads this to decide whether to
-  /// offer the accelerator (`ProviderOffer.accelerator_offered_default_on`, C5) and what to
-  /// write into `[graph].providers`. Null, not empty, when no session resolved: the five
-  /// pre-placement failures plus `smoke_load_failed` / `conflicting_onnx_runtimes`, where no
-  /// load completed — the same seven categories `relationsSupported` above is null for.
-  /// Non-null (a real resolved-provider list) for the graph model's `provisioned`,
-  /// `already_present` and `relations_not_supported` outcomes. Empty (`[]`), not a fabricated
-  /// provider name, for `lid.176.ftz` at any of those same three outcomes — it has no ONNX
-  /// session to resolve providers for (see the provisioning-seam doc, above), and
-  /// `candidateProviders` (below) is likewise always `[]` for it.
+  /// The torch device (and, for CPU, thread configuration) the stage-2 smoke-load actually
+  /// resolved to (Q7) — shape unchanged (`string[]`), but its source shifted post-spike-gate
+  /// (Spike gate — RESOLVED 2026-08-24, team plan): ONNX Runtime execution providers gave way
+  /// to torch device selection (`cpu` / `cuda` / `mps`) once the graph model shipped as a
+  /// PyTorch checkpoint rather than an ONNX export. A step-down to CPU must still be visible
+  /// here rather than inferred, mirroring `EngineCapability.activeProviders` (C1). The wizard
+  /// reads this to decide whether to offer the accelerator
+  /// (`ProviderOffer.accelerator_offered_default_on`, C5) and what to write into
+  /// `[graph].providers`. Null, not empty, when no session resolved: the five pre-placement
+  /// failures plus `smoke_load_failed` / `conflicting_onnx_runtimes`, where no load completed
+  /// — the same seven categories `relationsSupported` above is null for. Non-null (a real
+  /// resolved-device list) for the graph model's `provisioned`, `already_present` and
+  /// `relations_not_supported` outcomes. Empty (`[]`), not a fabricated device name, for
+  /// `lid.176.ftz` at any of those same three outcomes — it has no device-placement dimension
+  /// to resolve against (see the provisioning-seam doc, above), and `candidateProviders`
+  /// (below) is likewise always `[]` for it.
   activeProviders: string[] | null;
 }
 
@@ -240,16 +277,21 @@ model CapabilityStatusRecord {
   /// a boolean has no honest value to write for either).
   failureKind: ProvisionFailureKind | null;
 
-  /// True only when the capability assert actually executed and returned relations. When
-  /// `failureKind` is `smoke_load_failed` or `conflicting_onnx_runtimes`, the assert never
-  /// ran at all and this field is written `false` by convention, NOT as an authoritative
-  /// "checkpoint has no relation heads" result — the background probe MUST render the
-  /// recorded `failureKind` for those two categories, never infer from this boolean alone.
+  /// True only when the capability assert actually executed and returned relations — expected
+  /// `true` for this checkpoint post-spike-gate (Spike gate — RESOLVED 2026-08-24, team plan;
+  /// see `ProvisionResult.relationsSupported` and `relations_not_supported`, above, for the
+  /// full disposition). When `failureKind` is `smoke_load_failed` or
+  /// `conflicting_onnx_runtimes`, the assert never ran at all and this field is written
+  /// `false` by convention, NOT as an authoritative "checkpoint has no relation heads" result
+  /// — the background probe MUST render the recorded `failureKind` for those two categories,
+  /// never infer from this boolean alone.
   relationsSupported: boolean;
 
-  /// Mirrors `ProvisionResult.activeProviders` for the same call, null set included — read by
-  /// the background probe (S13), which renders an execution-provider step-down entry in
-  /// `provider_warnings` (C6) only when this recorded set is a step *down* from configured
+  /// Mirrors `ProvisionResult.activeProviders` for the same call, null set included, and the
+  /// same post-spike-gate semantic shift to torch device selection (`cpu` / `cuda` / `mps`)
+  /// in place of ONNX execution providers — see that field's doc, above, for the full
+  /// disposition. Read by the background probe (S13), which renders a device step-down entry
+  /// in `provider_warnings` (C6) only when this recorded set is a step *down* from configured
   /// `[graph].providers` — a configured accelerator absent from the recorded set — never on
   /// the inverse, so an operator who declined the accelerator (configured CPU, recorded CPU)
   /// does not trip it: the one `provider_warnings` category with no other producer, since the
@@ -277,12 +319,29 @@ model CapabilityStatusRecord {
 /// download to a staging directory inside the target filesystem, verify the digest AND the
 /// byte count, extract, fsync the tree, atomically publish by rename under the artifact's own
 /// directory, fsync the parent directory, smoke-load (the per-artifact layout assert runs
-/// INSIDE the smoke-load, not as a separate step). The relation-extraction capability assert,
-/// and the `capability_status.json` sentinel it writes, apply only to an artifact with an ONNX
-/// execution-provider dimension — the graph model. `lid.176.ftz` has none, so both are no-ops
-/// for it: `provision()` returns `relationsSupported: null`, `activeProviders: []` and
-/// `capabilityStatusPath: null` for it regardless of outcome; smoke-load alone (already
-/// existing behaviour) re-verifies its presence.
+/// INSIDE the smoke-load, not as a separate step).
+///
+/// Spike gate — RESOLVED 2026-08-24 (team plan, same heading): the graph model is hosted and
+/// downloaded as a TARBALL of the checkpoint's 7-file PyTorch snapshot, not a single
+/// `model.onnx` — the checkpoint's PyTorch weights are relation-capable (measured
+/// `archon-search --uses--> LanceDB` @ 0.9822, `reranker --depends_on--> fastembed library` @
+/// 0.9591); only the ONNX conversion lost that capability, and the resolution is to ship the
+/// checkpoint that has it. The `extract` step above already existed for exactly this shape —
+/// a single `model.onnx` never used it — so nothing here widens the seam. `sha256` and
+/// `sizeBytes` (`ArtifactSpec`, above) keep single-hosted-archive semantics unchanged: one
+/// digest and one byte count over the whole tarball, NOT a per-file or multi-artifact shape —
+/// the archive is what is hashed, sized and published; its 7-file contents are what `extract`
+/// unpacks, not a schema concern. Do not widen `ArtifactSpec` to a multi-file shape for this.
+///
+/// The relation-extraction capability assert — reverted by the spike gate to its originally
+/// designed meaning: a genuine correctness check catching a bad revision or a corrupted
+/// download, not a permanent universal failure (see `relations_not_supported`, above) — and
+/// the `capability_status.json` sentinel it writes, apply only to an artifact with a
+/// device-placement dimension to assert against — the graph model, loaded through torch,
+/// never ONNX Runtime. `lid.176.ftz` has none, so both are no-ops for it: `provision()`
+/// returns `relationsSupported: null`, `activeProviders: []` and `capabilityStatusPath: null`
+/// for it regardless of outcome; smoke-load alone (already existing behaviour) re-verifies
+/// its presence.
 ///
 /// For the graph model, placement root is `paths.get_graph_models_dir()` (Q6) — a ROLE-named
 /// accessor in `paths.py`, not a vendor-named one — laid out as
@@ -315,6 +374,6 @@ interface ArtifactProvisioner {
   /// `candidateProviders` is the accelerator candidate list stage 2 of the provider probe
   /// (Q7) validates against — the same smoke-load this call already performs; the result's
   /// `activeProviders` reports what actually resolved. Empty (`[]`) for `lid.176.ftz`, which
-  /// has no ONNX session to validate a provider candidate against.
+  /// has no device session to validate a provider candidate against.
   provision(spec: ArtifactSpec, candidateProviders: string[]): ProvisionResult;
 }
