@@ -49,6 +49,10 @@ flowchart LR
     BE1["BE-1 inspector tie-break"]
     FE1["FE-1 viewer colour + arrows"]
     T1["T-1 e2e viewer"]
+    BE22["BE-22 warn on empty reply"]
+    BE24["BE-24 strip json fences"]
+    K3(["K3 · reasoning-model spike"])
+    BE23["BE-23 act on K3"]
   end
   subgraph P2["Phase 2 · See and verify every byte an install downloads"]
     BE2["BE-2 paths split"]
@@ -99,6 +103,7 @@ flowchart LR
   K2a & K2b & K2c & K2d & K2e & K2f & K2g & K2h --> K2
   K1 --> BE1 & FE1 & BE2 & BE10 & T2 & T3
   BE1 & FE1 --> T1
+  BE22 --> K3 --> BE23
   BE2 --> BE3
   BE3 --> BE4 & BE5
   K2 --> BE6
@@ -127,6 +132,7 @@ flowchart LR
   BE13 --> T12
   BE15 --> T13
   T1 & T3 & BE4 & BE5 & BE12 & BE17 & BE20 & BE21 --> T14
+  BE23 & BE24 --> T14
   T4 & T5 & T6 & T7 & T9 & T10 & T11 & T12 & T13 --> T14
 ```
 
@@ -317,6 +323,44 @@ flowchart LR
     - needs BE-1, FE-1 · completes S34, S35
     - Tests
         - #e2e_test — `test_e2e_viewer_differentiates_typed_and_untyped_edges` — HTML-content assertions on the served page: distinct colours, arrowhead on the typed edge only (there is no browser harness — the viewer is asserted as text)
+
+- [ ] **BE-22** — Warn instead of silently returning nothing when an enrichment reply carries no usable content, in all three clients ([ollama.py](../../archon_search/enrichment/ollama.py) `_extract_content` `:211-224`, [llama_cpp.py](../../archon_search/enrichment/llama_cpp.py), [openai.py](../../archon_search/enrichment/openai.py)) #backend-role
+    - Adapters · 2.0h
+    - needs —
+    - Tests
+        - #unit_test — `test_empty_content_logs_warning` — a well-formed reply whose content is empty logs a WARNING rather than returning `[]` quietly
+        - #unit_test — `test_empty_content_still_returns_empty_list` — the auxiliary-write invariant holds: the warning must not raise or fail the ingest
+        - #unit_test — `test_genuine_empty_relation_list_does_not_warn` — a valid `[]` payload is not confused with an unusable reply
+    - Notes
+        - **Found by the K2g follow-up investigation, not by the spike itself.** A reasoning model returns its chain-of-thought in a separate field and leaves `content` empty; `label_relationships` then returns `[]` and [graph_extractor.py](../../archon_search/graph_extractor.py)`:738-765` loops zero times, sets no fallback flag and logs nothing — indistinguishable from "the model found no relationships". Any reasoning model configured as `[graph].provider` therefore produces **zero typed edges, silently**.
+        - This is the visibility half only. Whether such models are supportable at all is **K3**; the actual support decision is **BE-23**.
+        - Load-bearing under the Spike gate's entities-only outcome: with locally-produced relations gone, the LLM enrichment path is the *only* remaining source of typed edges, so a silent zeroing of it is a direct feature-level regression.
+- [ ] **K3** — Spike: establish what reasoning models actually need from the enrichment clients, and whether they are supportable #backend-role
+    - — · 4.0h
+    - needs BE-22
+    - Tests
+    - Notes
+        - Evidence already in hand, do not re-derive: at `max_tokens=512` the model hit `finish_reason="length"` with `content` empty; at `max_tokens=3000` the **same** model returned correct, valid JSON in 79.93s. The shipped default is **1024** ([config.py](../../archon_search/config.py)`:154`). So the primary suspect is an insufficient token budget, **not** an unparseable reply — the reply was fine once the model was allowed to finish.
+        - Determine: the token budget a reasoning model actually needs as a function of candidate-pair count; whether the timeout default is viable at that budget (10- and 15-pair prompts hit the 180s ceiling on a 27B reasoner at ~8.6 tok/s); whether the separate reasoning field ever needs reading at all, or whether budget alone suffices; and whether `llama_cpp` and `openai` share the same shape.
+        - A "not economically supportable — document and refuse" outcome is a valid, complete result. `llama3.1:8b` (non-reasoning) completes the full 17-file corpus in 120.74s, so a working alternative already exists.
+- [ ] **BE-23** — Act on K3's outcome: either raise/derive the token budget for reasoning models, or detect and refuse them with a clear message #backend-role
+    - Adapters · 3.0h
+    - needs K3
+    - Tests
+        - #unit_test — tests follow K3's chosen branch; written once K3 has reported
+    - Notes
+        - **Deliberately unspecified until K3 reports** — writing the tests now would presume the outcome. The two branches are mutually exclusive: support (budget derived from pair count) or refuse (detect and fail loudly at config validation).
+- [ ] **BE-24** — Strip markdown code fences before parsing an enrichment reply as JSON, in all three clients ([ollama.py](../../archon_search/enrichment/ollama.py)`:137`, [llama_cpp.py](../../archon_search/enrichment/llama_cpp.py)`:188`, [openai.py](../../archon_search/enrichment/openai.py)`:139`) #backend-role
+    - Adapters · 2.0h
+    - needs —
+    - Tests
+        - #unit_test — `test_fenced_json_parses` — a reply wrapped in ```-fences parses to the same result as the bare payload
+        - #unit_test — `test_language_tagged_fence_parses` — a ```json-tagged fence parses
+        - #unit_test — `test_bare_json_still_parses` — the unfenced path is unchanged
+        - #integration_test — `test_fenced_reply_produces_typed_edges` — a fenced reply yields typed edges rather than falling back to co-occurrence-only
+    - Notes
+        - **Found by the K2g follow-up investigation.** `llama3.1:8b` frequently wraps its JSON in markdown fences; none of the three clients strip them before `json.loads`, so the parse raises `JSONDecodeError`, is caught by [graph_extractor.py](../../archon_search/graph_extractor.py)`:766`'s `except Exception`, and the chunk falls back to co-occurrence-only edges. Unlike BE-22's defect this one fails **loudly** — it is logged — but it still silently costs typed edges.
+        - Measured cost: **8 of 17 real corpus documents** produced zero typed edges purely from this, deflating the measured density increase (+83 edges / +24.85%) into a lower bound rather than a true figure.
 
 ### Phase 2 · See and verify every byte an install will download *(closes a pre-existing integrity gap; kept as-is even if the Spike gate fails)*
 
