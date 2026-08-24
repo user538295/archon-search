@@ -1,12 +1,18 @@
 // C1 — Prose extraction engine seam (internal logical seam).
 //
-// Layer edge: Interface Adapters (GraphExtractor) -> Frameworks & Drivers (ONNX engine backend).
+// Layer edge: Interface Adapters (GraphExtractor) -> Frameworks & Drivers (PyTorch engine backend).
 // Replaces the private per-text spaCy seam `GraphExtractor._run_ner_sync(nlp, texts)`, which
 // returns one `(entity_text, spacy_label)` list per text and loops one model call per text.
 //
-// ONE checkpoint, decided (Q1): `knowledgator/gliner-relex-multi-v1.0`, self-exported to ONNX
-// and hosted by us, driven through `gliner>=0.2.26`. There is no second model and no
-// per-checkpoint fan-out anywhere in this seam.
+// ONE checkpoint, decided (Q1): `knowledgator/gliner-relex-multi-v1.0`, hosted by us as a
+// tarball of its 7-file PyTorch snapshot at the pinned revision (C4), driven through
+// `gliner>=0.2.26` and loaded with `GLiNER.from_pretrained(local_dir, local_files_only=True)`.
+// There is no second model and no per-checkpoint fan-out anywhere in this seam.
+//
+// NOT an ONNX export, and this is a resolved decision, not an open one (Spike gate — RESOLVED
+// 2026-08-24, team plan). Trace-based ONNX export cannot carry this model's relations at all:
+// it freezes gliner's data-dependent pair-building to whatever the export-time dummy input
+// happened to produce. The PyTorch path also measured LOWER resident and peak memory.
 //
 // Lives in its own module, `archon_search/prose_extraction_backend.py`, separate from
 // `graph_extractor.py` — C4's installer-import constraint (the installer must not import
@@ -22,7 +28,7 @@
 // multi-second import cost either site would otherwise pay is deferred entirely into `load()`'s
 // body, off the event loop.
 //
-// Logical only: no signatures, no ONNX session options, no tokenizer detail.
+// Logical only: no signatures, no engine thread/device configuration, no tokenizer detail.
 
 namespace ProseExtractionEngine;
 
@@ -133,9 +139,12 @@ model EngineCapability {
   artifactName: string;
   artifactRevision: string;
 
-  /// The ONNX execution providers the loaded session actually resolved to. The configured
-  /// list is `[graph].providers` (Q7); a step-down to CPU at load time must be visible here
-  /// rather than inferred.
+  /// The torch devices the loaded model actually resolved to (`cpu` / `cuda` / `mps`). The
+  /// configured list is `[graph].providers` (Q7); a step-down to CPU at load time must be
+  /// visible here rather than inferred. Shape is unchanged from the superseded ONNX reading —
+  /// only the meaning of the strings moved from ONNX Runtime execution providers to torch
+  /// device placement (Spike gate — RESOLVED 2026-08-24). C4's twin field carries the same
+  /// wording (`86d088d5`).
   activeProviders: string[];
 
   /// Monotonic count of how many times `load()` has actually executed a real model load in
@@ -152,13 +161,17 @@ model EngineCapability {
 interface ProseExtractionBackend {
   /// Load the pinned artifact from `get_graph_models_dir()` (Q6). Runs at most once per
   /// process, behind a lock, off the event loop, and never inside lifespan startup's awaited
-  /// path. Session options are built from `[graph].providers` for the shared instance, or from
+  /// path. Device placement is built from `[graph].providers` for the shared instance, or from
   /// the explicit list for a `ProvisioningBackendFactory`-built instance; cancellation during
-  /// load is re-raised and never latched. **`SessionOptions`' intra-op and inter-op thread counts are
-  /// pinned explicitly, never left to ONNX Runtime's defaults** (K10, S28) — CPU-provider
-  /// reductions vary with thread count, so leaving it unpinned would make cross-process
-  /// determinism (S28) undecidable: a difference could be the model or the thread count, and
-  /// two runs sharing a process cannot even see the confound at all.
+  /// load is re-raised and never latched. **The intra-op and inter-op thread counts are pinned
+  /// explicitly via `torch.set_num_threads` / `torch.set_num_interop_threads`, never left to
+  /// torch's defaults** (K10, S28) — CPU reductions vary with thread count, so leaving it
+  /// unpinned would make cross-process determinism (S28) undecidable: a difference could be the
+  /// model or the thread count, and two runs sharing a process cannot even see the confound at
+  /// all. The pin itself is unchanged in intent; only the API moved off `onnxruntime`'s
+  /// `SessionOptions`, which does not exist on this path (Spike gate — RESOLVED 2026-08-24).
+  /// **S42 clause 4 cites these lines as its source of truth — it must assert on the torch
+  /// thread-count calls, not on a constructed `SessionOptions` object.**
   load(): EngineCapability;
 
   /// One forward pass over the whole batch. The caller (`GraphExtractor`) hands in the whole
