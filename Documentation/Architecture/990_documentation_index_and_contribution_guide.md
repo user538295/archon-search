@@ -153,6 +153,7 @@ Security-focused documentation for security engineers, IT admins, and reviewers 
 | [`Backlog/e0c-api-surface-fixes-brief.md`](../Backlog/e0c-api-surface-fixes-brief.md) | E0c: list_documents pagination, max_fanout config, top_k operator cap. |
 | [`Backlog/e0d-pdf-large-file-support-brief.md`](../Backlog/e0d-pdf-large-file-support-brief.md) | E0d: PDF streaming ingest + configurable size guard. |
 | [`Backlog/e0e-multi-collection-filters-brief.md`](../Backlog/e0e-multi-collection-filters-brief.md) | E0e: lift multi-collection filter v1 restriction. |
+| [`Backlog/store_cleanup_plan.md`](../Backlog/store_cleanup_plan.md) | `store.py` clean-code remediation: work slices with a proposed dependency order and a per-slice doc checklist. Unowned, unscheduled. |
 
 ## Completed
 
