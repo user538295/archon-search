@@ -87,6 +87,10 @@ _META_TABLE = "_archon_collection_meta"
 
 _RRF_K = 60
 
+_REINDEX_PROGRESS_INTERVAL = 200
+_LIST_DOCUMENTS_MAX_LIMIT = 1000
+_DOCS_PREFETCH_MULTIPLIER = 50
+
 # Mapping from ISO 639-1 codes (as produced by fasttext / stored in the language column)
 # to the capitalized full English names accepted by LanceDB's FTS(language=...) parameter.
 # LanceDB uses non-standard internal keys for a few languages (e.g. "du" for Dutch instead
@@ -197,6 +201,23 @@ def _batch_vectors_valid(vectors: list[list[float]]) -> bool:
     Empty vectors list returns True (vacuously all-finite).
     """
     return all(math.isfinite(v) for vec in vectors for v in vec)
+
+
+def _has_missing_acl_provenance(chunks: list[ChunkRecord], has_acl_provenance_cols: bool) -> bool:
+    """True if *chunks* carry ACL provenance data the schema has no column for.
+
+    All-or-nothing: the schema is expected to have all 3 provenance columns or
+    none — a partial-migration state that would silently drop data.
+    """
+    return not has_acl_provenance_cols and any(
+        c.acl_source is not None or c.acl_sidecar_path is not None or c.acl_warning
+        for c in chunks
+    )
+
+
+def _has_date_filter(filters: "SearchFilters | None") -> bool:
+    """True if *filters* restricts results by ``indexed_after``/``indexed_before``."""
+    return bool(filters and (filters.indexed_after or filters.indexed_before))
 
 
 def elementwise_sum(vectors: list[list[float]]) -> list[float]:
@@ -1899,10 +1920,7 @@ class SearchStore:
             and "acl_sidecar_path" in _schema_names
             and "acl_warning" in _schema_names
         )
-        if not has_acl_provenance_cols and any(
-            c.acl_source is not None or c.acl_sidecar_path is not None or c.acl_warning
-            for c in chunks
-        ):
+        if _has_missing_acl_provenance(chunks, has_acl_provenance_cols):
             logger.warning(
                 "_do_ingest: collection %r has not been migrated to G15 schema (missing acl_source/acl_sidecar_path/acl_warning columns); "
                 "ACL provenance data will be silently dropped.",
@@ -2135,7 +2153,7 @@ class SearchStore:
                     },
                 ))
 
-                if progress_cb is not None and result.processed % 200 == 0:
+                if progress_cb is not None and result.processed % _REINDEX_PROGRESS_INTERVAL == 0:
                     progress_cb(result.processed, len(rows))
 
             if not dry_run:
@@ -2273,7 +2291,7 @@ class SearchStore:
                 )
             )
 
-        if filters and (filters.indexed_after or filters.indexed_before):
+        if _has_date_filter(filters):
             legacy_count = sum(
                 1 for r in results
                 if not _FIXED_WIDTH_PATTERN.match(r.indexed_at or "")
@@ -2462,7 +2480,7 @@ class SearchStore:
             trade-off; see the project's known-limitations documentation.
         """
         self._validate_collection(collection)
-        limit = max(0, min(limit, 1000))  # clamp: non-negative, at most 1000
+        limit = max(0, min(limit, _LIST_DOCUMENTS_MAX_LIMIT))  # clamp: non-negative, at most the cap
         db = self._require_connected()
         try:
             table = await db.open_table(collection)
@@ -2484,7 +2502,7 @@ class SearchStore:
         rows = (
             await table.query()
             .select(select_cols)
-            .limit(limit * 50)
+            .limit(limit * _DOCS_PREFETCH_MULTIPLIER)
             .to_list()
         )
 
