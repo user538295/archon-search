@@ -2015,8 +2015,9 @@ def test_ingest_directory_no_all_vectors_accumulator() -> None:
 
 @pytest.mark.asyncio
 async def test_description_reads_from_store_not_accumulator(tmp_path) -> None:
-    """When _should_regenerate returns True, description uses store.sample_chunk_texts(n=100),
-    not any chunk accumulator. store.list_chunks_raw must NOT be called."""
+    """When _should_regenerate returns True, description uses
+    store.sample_chunk_texts(sample_size=100), not any chunk accumulator.
+    store.list_chunks_raw must NOT be called."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from archon_search.chunker import DocumentChunker
@@ -2054,10 +2055,12 @@ async def test_description_reads_from_store_not_accumulator(tmp_path) -> None:
             tmp_path, "test-col", embedder=pipeline._global_embedder, rebuild_fts=False
         )
 
-    # sample_chunk_texts must be called with n=100
+    # sample_chunk_texts must be called with sample_size=100
     store.sample_chunk_texts.assert_awaited_once()
     call_kwargs = store.sample_chunk_texts.call_args
-    assert call_kwargs.kwargs.get("n") == 100 or (len(call_kwargs.args) >= 3 and call_kwargs.args[2] == 100)
+    assert call_kwargs.kwargs.get("sample_size") == 100 or (
+        len(call_kwargs.args) >= 3 and call_kwargs.args[2] == 100
+    )
 
     # generate_description receives the sample texts
     mock_gen.assert_awaited_once()

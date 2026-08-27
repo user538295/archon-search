@@ -85,7 +85,7 @@ _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 _ARCHON_PREFIX = "_archon_"
 _META_TABLE = "_archon_collection_meta"
 
-_RRF_K = 60  # RRF constant
+_RRF_K = 60
 
 # Mapping from ISO 639-1 codes (as produced by fasttext / stored in the language column)
 # to the capitalized full English names accepted by LanceDB's FTS(language=...) parameter.
@@ -305,6 +305,12 @@ class SearchStore:
     # ------------------------------------------------------------------
 
     async def connect(self) -> None:
+        """Open the LanceDB connection, creating the data directory if missing.
+
+        Safe to call multiple times; each call replaces ``self._db`` and clears
+        the ping cache. Not thread- or task-safe against concurrent calls.
+        """
+
         def _import_lancedb_and_mkdir() -> Any:
             import lancedb  # noqa: PLC0415
 
@@ -318,6 +324,10 @@ class SearchStore:
         self._db = await lancedb.connect_async(str(self._db_path))
 
     async def disconnect(self) -> None:
+        """Close the LanceDB connection and clear the ping cache.
+
+        Safe to call when already disconnected — it is then a no-op.
+        """
         self._ping_cache = None
         db = self._db
         self._db = None
@@ -431,6 +441,15 @@ class SearchStore:
     # ------------------------------------------------------------------
 
     async def ensure_collection(self, collection: str, embedding_dim: int) -> None:
+        """Create the LanceDB table for *collection* if it does not already exist.
+
+        Idempotent: a pre-existing table with the same name is left untouched
+        (``exist_ok=True``), even if its embedding dimension differs.
+
+        Raises:
+            RuntimeError: if the store is not connected.
+            ValueError: if *collection* is not a valid collection name.
+        """
         self._validate_collection(collection)
         db = self._require_connected()
         await db.create_table(
@@ -501,6 +520,15 @@ class SearchStore:
                 ) from exc
 
     async def list_collections(self) -> list[CollectionInfo]:
+        """Return summary info for every user-facing collection.
+
+        Skips internal (``_ARCHON_PREFIX``-prefixed) tables. A collection that
+        raises while being inspected is logged and omitted from the result
+        rather than failing the whole call.
+
+        Raises:
+            RuntimeError: if the store is not connected.
+        """
         db = self._require_connected()
         all_names: list[str] = (await db.list_tables()).tables
         names = [n for n in all_names if not n.startswith(_ARCHON_PREFIX)]
@@ -607,6 +635,15 @@ class SearchStore:
         )
 
     async def get_collection_meta(self, name: str, namespace: str = DEFAULT_NAMESPACE) -> "CollectionMeta | None":
+        """Return the metadata row for (*name*, *namespace*), or None if absent.
+
+        Also returns None if the shared metadata table has never been created
+        (e.g. a fresh store with no collections yet).
+
+        Raises:
+            RuntimeError: if the store is not connected.
+            ValueError: if *name* or *namespace* is invalid.
+        """
         self._validate_collection(name)
         _validate_namespace(namespace)
         db = self._require_connected()
@@ -625,6 +662,15 @@ class SearchStore:
         return self._row_to_meta(matching[0])
 
     async def delete_collection_meta(self, name: str, namespace: str) -> None:
+        """Delete the metadata row for (*name*, *namespace*), if any.
+
+        A no-op if the shared metadata table does not exist yet, or if no row
+        matches — this method never raises for "nothing to delete".
+
+        Raises:
+            RuntimeError: if the store is not connected.
+            ValueError: if *name* or *namespace* is invalid.
+        """
         self._validate_collection(name)
         _validate_namespace(namespace)
         db = self._require_connected()
@@ -636,6 +682,14 @@ class SearchStore:
         await table.delete(_where_eq("name", name) + " AND " + _where_eq("namespace", namespace))
 
     async def get_all_collections_meta(self) -> "list[CollectionMeta]":
+        """Return every collection's metadata row across all namespaces.
+
+        Returns an empty list if the shared metadata table has never been
+        created (e.g. a fresh store with no collections yet).
+
+        Raises:
+            RuntimeError: if the store is not connected.
+        """
         db = self._require_connected()
         all_names: list[str] = (await db.list_tables()).tables
         if _META_TABLE not in all_names:
@@ -747,7 +801,6 @@ class SearchStore:
 
         if not has_active:
             # State (a): copy embedding_model values into active_embedding_model
-            # Step 1: add the column with empty default
             try:
                 await table.add_columns({"active_embedding_model": "''"})
             except RuntimeError as exc:
@@ -756,7 +809,6 @@ class SearchStore:
                 else:
                     raise
 
-            # Step 2: read all rows and re-insert with the correct active_embedding_model value
             rows = await table.query().to_list()
             for row in rows:
                 original_model = row.get("embedding_model", "")
@@ -772,7 +824,6 @@ class SearchStore:
                 new_row["active_embedding_model"] = original_model
                 await table.add([new_row])
 
-            # Step 3: attempt to drop the old embedding_model column
             if has_old:
                 try:
                     await table.drop_columns(["embedding_model"])
@@ -1241,6 +1292,19 @@ class SearchStore:
         return processed
 
     async def update_collection_meta(self, meta: "CollectionMeta") -> None:
+        """Upsert *meta* into the shared metadata table, by ``meta.name``.
+
+        Creates the metadata table on first use. A collection name already
+        registered under a different namespace is refused rather than
+        silently reassigned.
+
+        Raises:
+            RuntimeError: if the store is not connected.
+            ValueError: if *meta.name*/``namespace`` is invalid, or *meta.name*
+                is already registered under a different namespace.
+            StoreBusyError: if the per-collection lock cannot be acquired
+                within ``INGEST_LOCK_TIMEOUT_S``.
+        """
         _validate_namespace(meta.namespace)
         self._validate_collection(meta.name)
         lock = self.lock_for(meta.name)
@@ -1273,7 +1337,6 @@ class SearchStore:
                             f"cannot reassign to {meta.namespace!r}"
                         )
 
-            centroid_json = json.dumps(meta.centroid) if meta.centroid is not None else ""
             description_embedding_json = (
                 json.dumps(meta.description_embedding) if meta.description_embedding is not None else ""
             )
@@ -1290,7 +1353,7 @@ class SearchStore:
                         {
                             "name": meta.name,
                             "description": meta.description or "",
-                            "centroid_json": centroid_json,
+                            "centroid_json": json.dumps(meta.centroid) if meta.centroid is not None else "",
                             "description_embedding_json": description_embedding_json,
                             "doc_count": meta.doc_count,
                             "chunk_count": meta.chunk_count,
@@ -1441,7 +1504,6 @@ class SearchStore:
         else:
             table = await db.open_table(_META_TABLE)
 
-        centroid_json = json.dumps(meta.centroid) if meta.centroid is not None else ""
         description_embedding_json = (
             json.dumps(meta.description_embedding) if meta.description_embedding is not None else ""
         )
@@ -1458,7 +1520,7 @@ class SearchStore:
                     {
                         "name": meta.name,
                         "description": meta.description or "",
-                        "centroid_json": centroid_json,
+                        "centroid_json": json.dumps(meta.centroid) if meta.centroid is not None else "",
                         "description_embedding_json": description_embedding_json,
                         "doc_count": meta.doc_count,
                         "chunk_count": meta.chunk_count,
@@ -1931,9 +1993,9 @@ class SearchStore:
         self,
         collection: str,
         namespace: str = DEFAULT_NAMESPACE,
-        n: int = 100,
+        sample_size: int = 100,
     ) -> list[str]:
-        """Return up to *n* chunk text strings from *collection*, in shuffled order.
+        """Return up to *sample_size* chunk text strings from *collection*, in shuffled order.
 
         Returns ``[]`` if the collection table does not exist or any error
         occurs.  Namespace is accepted for API symmetry but not filtered on —
@@ -1942,7 +2004,7 @@ class SearchStore:
         try:
             db = self._require_connected()
             table = await db.open_table(collection)
-            rows = await table.query().select(["text"]).limit(n).to_list()
+            rows = await table.query().select(["text"]).limit(sample_size).to_list()
             texts = [row["text"] for row in rows]
             # LanceDB returns rows in insertion order; shuffle the fetched rows so
             # the caller receives them in a non-deterministic order within the
@@ -1992,7 +2054,6 @@ class SearchStore:
         try:
             table = await db.open_table(collection)
             rows = await table.query().to_list()
-            total = len(rows)
             updates: list[tuple[str, dict[str, str]]] = []
             # source_path -> os.stat_result or the OSError it raised. Every chunk of
             # a document repeats the same path, so this collapses N rows to one stat.
@@ -2075,7 +2136,7 @@ class SearchStore:
                 ))
 
                 if progress_cb is not None and result.processed % 200 == 0:
-                    progress_cb(result.processed, total)
+                    progress_cb(result.processed, len(rows))
 
             if not dry_run:
                 for chunk_id, vals in updates:
@@ -2088,7 +2149,7 @@ class SearchStore:
             # indexed_at are written — the text column (the sole FTS-indexed column)
             # is never modified by reindex_metadata, so the FTS index is unaffected.
             if progress_cb is not None:
-                progress_cb(result.processed, total)
+                progress_cb(result.processed, len(rows))
         finally:
             lock.release()
         return result
@@ -2105,6 +2166,17 @@ class SearchStore:
         top_k: int,
         filters: "SearchFilters | None" = None,
     ) -> list[SearchResult]:
+        """Run vector + full-text hybrid search over *collection*, RRF-fused.
+
+        Returns an empty list if *collection* does not exist. Does not
+        support ``filters.scope_filter`` — callers needing scope filtering
+        (production code) use ``hybrid_search_with_trace`` instead, which
+        threads ``scope_filter`` through ``build_where``.
+
+        Raises:
+            RuntimeError: if the store is not connected.
+            ValueError: if *collection* is not a valid collection name.
+        """
         self._validate_collection(collection)
         db = self._require_connected()
         try:
@@ -2118,7 +2190,6 @@ class SearchStore:
         # hybrid_search_with_trace which threads scope_filter through build_where (BE-9).
         pred = build_where(filters) if filters else ""
 
-        # Vector search
         with record_stage("vector"):
             vec_q = table.vector_search(query_vector)
             if pred:
@@ -2146,7 +2217,6 @@ class SearchStore:
             else:
                 raise
 
-        # Build combined row lookup and RRF scoring
         with record_stage("fuse"):
             all_rows: dict[str, dict[str, Any]] = {r["chunk_id"]: r for r in vec_rows}
             for r in fts_rows:
@@ -2679,6 +2749,16 @@ class SearchStore:
         center_idx: int,
         window: int,
     ) -> list[ChunkRecord]:
+        """Return the chunks within *window* of ``center_idx`` for *doc_id*, excluding it.
+
+        Chunk indices are addressed by the ``{doc_id}-{i:06d}`` naming scheme
+        set at ingest time. Returns an empty list if *collection* does not
+        exist, or if the window (after clamping the lower bound to 0) is empty.
+
+        Raises:
+            RuntimeError: if the store is not connected.
+            ValueError: if *collection* or *doc_id* is invalid.
+        """
         self._validate_collection(collection)
         db = self._require_connected()
         if not _DOC_ID_RE.match(doc_id):
@@ -3030,7 +3110,6 @@ async def _hybrid_search_with_trace(
 
     pred = build_where(filters, scope_filter)
 
-    # --- Vector search ---
     with record_stage("vector"):
         vec_q = table.vector_search(query_vector)
         if pred:
@@ -3073,7 +3152,6 @@ async def _hybrid_search_with_trace(
         else:
             raise
 
-    # --- Merge candidates and build ScoredSearchCandidate list ---
     with record_stage("fuse"):
         all_rows: dict[str, dict[str, Any]] = {r["chunk_id"]: r for r in vec_rows}
         for r in fts_rows:

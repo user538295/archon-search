@@ -140,14 +140,14 @@ async def test_sample_chunk_texts_returns_limit_n(tmp_path: Path, monkeypatch):
     )
 
     # n=50
-    result_50 = await store.sample_chunk_texts("testcol", n=50)
+    result_50 = await store.sample_chunk_texts("testcol", sample_size=50)
     assert isinstance(result_50, list)
     assert len(result_50) == 50
     for item in result_50:
         assert isinstance(item, str)
 
     # n=200 — must return exactly 200 since total_chunks >= 200
-    result_large = await store.sample_chunk_texts("testcol", n=200)
+    result_large = await store.sample_chunk_texts("testcol", sample_size=200)
     assert len(result_large) == 200
 
     # Empty collection

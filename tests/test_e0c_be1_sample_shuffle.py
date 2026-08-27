@@ -45,13 +45,13 @@ def test_max_sample_chunks_constant_equals_100() -> None:
 
 @pytest.mark.asyncio
 async def test_sample_chunk_texts_returns_at_most_n(connected_store, col_name) -> None:
-    """sample_chunk_texts(n=5) returns at most 5 texts even when more are stored."""
+    """sample_chunk_texts(sample_size=5) returns at most 5 texts even when more are stored."""
     await connected_store.ensure_collection(col_name, _DIM)
     doc_id = _doc_id()
     chunks = [_chunk(doc_id, i, f"text chunk {i}") for i in range(20)]
     await connected_store.ingest_chunks(col_name, chunks)
 
-    result = await connected_store.sample_chunk_texts(col_name, n=5)
+    result = await connected_store.sample_chunk_texts(col_name, sample_size=5)
     assert len(result) == 5
 
 
@@ -74,7 +74,7 @@ async def test_sample_chunk_texts_n_larger_than_collection_returns_all(
     chunks = [_chunk(doc_id, i, f"text chunk {i}") for i in range(5)]
     await connected_store.ingest_chunks(col_name, chunks)
 
-    result = await connected_store.sample_chunk_texts(col_name, n=1000)
+    result = await connected_store.sample_chunk_texts(col_name, sample_size=1000)
     assert len(result) == 5
 
 
@@ -103,8 +103,8 @@ async def test_sample_chunk_texts_order_is_not_deterministic(
 
     found_different = False
     for _ in range(5):
-        result_a = await connected_store.sample_chunk_texts(col_name, n=n)
-        result_b = await connected_store.sample_chunk_texts(col_name, n=n)
+        result_a = await connected_store.sample_chunk_texts(col_name, sample_size=n)
+        result_b = await connected_store.sample_chunk_texts(col_name, sample_size=n)
         if result_a != result_b:
             assert sorted(result_a) == sorted(result_b), (
                 "sample_chunk_texts returned different contents across calls; "
@@ -125,8 +125,9 @@ async def test_description_generator_samples_from_larger_pool(
 ) -> None:
     """S16 — pipeline.generate_description on a 500-chunk collection uses 100-chunk pool.
 
-    We mock the store's sample_chunk_texts to verify it is called with n=100
-    (not n=20 which would indicate MAX_SAMPLE_CHUNKS was still 20).
+    We mock the store's sample_chunk_texts to verify it is called with
+    sample_size=100 (not sample_size=20 which would indicate MAX_SAMPLE_CHUNKS
+    was still 20).
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -189,11 +190,12 @@ async def test_description_generator_samples_from_larger_pool(
             tmp_path, "test-col", embedder=pipeline._global_embedder, rebuild_fts=False
         )
 
-    # Must be called with n=100 (not n=20)
+    # Must be called with sample_size=100 (not sample_size=20)
     store.sample_chunk_texts.assert_awaited_once()
     call_kwargs = store.sample_chunk_texts.call_args
-    assert call_kwargs.kwargs.get("n") == 100, (
-        f"sample_chunk_texts must be called with n=100, got n={call_kwargs.kwargs.get('n')!r}. "
+    assert call_kwargs.kwargs.get("sample_size") == 100, (
+        f"sample_chunk_texts must be called with sample_size=100, "
+        f"got sample_size={call_kwargs.kwargs.get('sample_size')!r}. "
         "MAX_SAMPLE_CHUNKS may still be 20."
     )
 

@@ -990,7 +990,7 @@ class SearchPipeline:
             batch_chunk_count = existing_meta.chunk_count if existing_meta else 0
 
             if force_regenerate_description or _should_regenerate(batch_doc_count, batch_chunk_count, described_at):
-                sample_texts = await self.store.sample_chunk_texts(collection, namespace, n=MAX_SAMPLE_CHUNKS)
+                sample_texts = await self.store.sample_chunk_texts(collection, namespace, sample_size=MAX_SAMPLE_CHUNKS)
                 new_desc = await generate_description(sample_texts, collection)
                 if new_desc is not None:
                     description = new_desc
