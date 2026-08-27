@@ -4692,8 +4692,6 @@ async def test_migrate_description_embedding_noop_when_column_present(
 
     import pyarrow as pa
 
-    from archon_search.store import migrate_description_embedding
-
     store = SearchStore(tmp_path / "db_emb_noop")
     await store.connect()
     try:
@@ -4701,7 +4699,7 @@ async def test_migrate_description_embedding_noop_when_column_present(
         # Create meta table with the column already present (current schema).
         await db.create_table("_archon_collection_meta", schema=SearchStore._meta_schema())
         with caplog.at_level(logging.WARNING, logger="archon_search.store"):
-            await migrate_description_embedding(store)
+            await store.migrate_description_embedding()
         # Must not emit any WARNING about the migration.
         assert not any(
             "description_embedding" in r.message
@@ -4725,8 +4723,6 @@ async def test_migrate_description_embedding_concurrent_calls(tmp_path: Path) ->
 
     import pyarrow as pa
 
-    from archon_search.store import migrate_description_embedding
-
     store = SearchStore(tmp_path / "db_emb_concurrent")
     await store.connect()
     try:
@@ -4747,8 +4743,8 @@ async def test_migrate_description_embedding_concurrent_calls(tmp_path: Path) ->
         ):
             # Both calls must complete without raising.
             await asyncio.gather(
-                migrate_description_embedding(store),
-                migrate_description_embedding(store),
+                store.migrate_description_embedding(),
+                store.migrate_description_embedding(),
             )
     finally:
         await store.disconnect()
@@ -4758,8 +4754,6 @@ async def test_migrate_description_embedding_concurrent_calls(tmp_path: Path) ->
 async def test_migrate_description_embedding_idempotent(tmp_path: Path) -> None:
     """migrate_description_embedding() first call adds the column, second call is a no-op."""
     import pyarrow as pa
-
-    from archon_search.store import migrate_description_embedding
 
     store = SearchStore(tmp_path / "db_emb_migrate")
     await store.connect()
@@ -4771,11 +4765,11 @@ async def test_migrate_description_embedding_idempotent(tmp_path: Path) -> None:
         )
         await db.create_table("_archon_collection_meta", schema=old_schema)
         # First call must add the column.
-        await migrate_description_embedding(store)
+        await store.migrate_description_embedding()
         tbl = await db.open_table("_archon_collection_meta")
         assert "description_embedding_json" in (await tbl.schema()).names
         # Second call must be a no-op (column already present).
-        await migrate_description_embedding(store)
+        await store.migrate_description_embedding()
     finally:
         await store.disconnect()
 
@@ -4785,7 +4779,6 @@ async def test_migrate_description_embedding_idempotent(tmp_path: Path) -> None:
 async def test_description_embedding_round_trips(tmp_path: Path) -> None:
     """Write CollectionMeta with description_embedding, read back, values match."""
     from archon_search.collection_meta import CollectionMeta
-    from archon_search.store import migrate_description_embedding
 
     store = SearchStore(tmp_path / "db_emb_rt")
     await store.connect()

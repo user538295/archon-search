@@ -3048,11 +3048,6 @@ class SearchStore:
         return (acl_protected_count, acl_open_count)
 
 
-async def migrate_description_embedding(store: SearchStore) -> None:
-    """Module-level delegate for :meth:`SearchStore.migrate_description_embedding`."""
-    await store.migrate_description_embedding()
-
-
 # ---------------------------------------------------------------------------
 # Private eval / diagnostic trace helper
 #
