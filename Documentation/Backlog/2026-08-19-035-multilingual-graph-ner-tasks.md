@@ -321,7 +321,7 @@ flowchart LR
 
 ### Phase 1 · Tell typed prose edges apart in the graph *(ships today — typed edges already exist via the LLM path; kept regardless of the Spike gate)*
 
-- [ ] **BE-1** — Break equal-weight edge ties toward typed edges instead of by `edge_id` hash in [graph_inspector.py](../../archon_search/graph_inspector.py) (the sort key at `:213`) #backend-role
+- [x] **BE-1** — Break equal-weight edge ties toward typed edges instead of by `edge_id` hash in [graph_inspector.py](../../archon_search/graph_inspector.py) (the sort key at `:213`) #backend-role
     - Use Cases · 2.0h
     - needs K1 · completes S35
     - Tests

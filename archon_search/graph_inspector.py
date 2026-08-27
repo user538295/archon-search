@@ -84,8 +84,9 @@ class CollectionGraphView:
     """Truncated node list; sorted by salience desc (or chunk_count desc in frequency mode),
     then entity_id asc as tiebreaker; capped at max_nodes."""
     edges: list[GraphEdgeInspection]
-    """Truncated edge list where both endpoints survive node truncation;
-    sorted by (weight desc, edge_id asc) then capped."""
+    """Truncated edge list where both endpoints survive node truncation; non-synonym edges
+    are sorted by (weight desc, typed-before-untyped, edge_id asc) then capped, and synonym
+    edges are appended after, exempt from the cap."""
     node_count: int
     """Total number of nodes in the graph (before truncation)."""
     edge_count: int
@@ -106,7 +107,9 @@ class CrossCollectionGraphView:
     nodes: list[GraphNodeInspection]
     """Merged nodes (deduplicated by entity_id, chunk counts summed)."""
     edges: list[GraphEdgeInspection]
-    """Merged edges (deduplicated by edge id, weights summed)."""
+    """Merged edges (deduplicated by edge id, weights summed); non-synonym edges are
+    sorted by (weight desc, typed-before-untyped, edge_id asc) then capped, and synonym
+    edges are appended after, exempt from the cap."""
     node_count: int
     """Total merged node count (before edge survival filter and truncation)."""
     edge_count: int
@@ -133,6 +136,11 @@ def _node_sort_key(
     return (-n.chunk_count, n.entity_id)
 
 
+def _edge_sort_key(e: "GraphEdgeInspection") -> tuple[int, bool, str]:
+    """Return the sort key for an edge: weight desc, typed-before-untyped, edge_id asc."""
+    return (-e.weight, e.relationship_type == RelationshipType.related_to.value, e.edge_id)
+
+
 def _truncate_graph(
     nodes: list[GraphNodeInspection],
     edges: list[GraphEdgeInspection],
@@ -155,7 +163,7 @@ def _truncate_graph(
        - frequency: sort by (-chunk_count, entity_id)
        - tfidf:     sort by (-salience, entity_id)
     2. Collect synonym edge endpoint IDs; add them to surviving set unconditionally.
-    3. Filter non-synonym edges to survivors; sort and cap at max_edges.
+    3. Filter non-synonym edges to survivors; sort (weight desc, typed-before-untyped, edge_id asc) and cap at max_edges.
     4. Filter synonym edges to survivors; append after the cap (uncapped).
     5. Return (nodes_out, edges_out, truncated) where truncated=True if the node cap fired
        OR the non-synonym edge cap fired (synonym edges are never counted toward the edge cap).
@@ -210,7 +218,7 @@ def _truncate_graph(
         if e.source_entity_id in surviving_entity_ids
         and e.target_entity_id in surviving_entity_ids
     ]
-    sorted_non_synonym = sorted(surviving_non_synonym, key=lambda e: (-e.weight, e.edge_id))
+    sorted_non_synonym = sorted(surviving_non_synonym, key=_edge_sort_key)
     capped_non_synonym = sorted_non_synonym[:max_edges]
     edge_truncated = len(sorted_non_synonym) > max_edges
 

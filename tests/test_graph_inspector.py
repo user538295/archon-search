@@ -109,6 +109,77 @@ def test_truncate_graph_edge_sort_order():
     assert out_edges[2].edge_id == "edge-2"  # weight=2
 
 
+def test_equal_weight_tie_prefers_typed_edge():
+    """A typed edge (e.g. 'uses') outranks its untyped 'related_to' twin at identical weight — S35/BE-1."""
+    nodes = [
+        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0, entity_type="concept"),
+        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8, entity_type="concept"),
+        GraphNodeInspection("id-c", "C", chunk_count=6, salience=0.6, entity_type="concept"),
+    ]
+    edges = [
+        # edge_id sorts AFTER the untyped edge's id, so the old (-weight, edge_id) key
+        # would have kept the untyped edge under the cap instead.
+        GraphEdgeInspection("z-typed", "id-a", "id-b", weight=3, source_chunk_ids=[], relationship_type="uses"),
+        GraphEdgeInspection("a-untyped", "id-a", "id-c", weight=3, source_chunk_ids=[]),  # relationship_type defaults to related_to
+    ]
+
+    _, out_edges, _ = _truncate_graph(nodes, edges, max_nodes=3, max_edges=1)
+
+    assert len(out_edges) == 1
+    assert out_edges[0].edge_id == "z-typed"
+    assert out_edges[0].relationship_type == "uses"
+
+
+def test_equal_weight_tie_independent_of_edge_id_order():
+    """The typed edge wins the equal-weight tie regardless of how edge_ids happen to be ordered — S35/BE-1.
+
+    Case 1 gives the typed edge an edge_id that sorts AFTER the untyped edge's edge_id;
+    case 2 gives the typed edge an edge_id that sorts BEFORE it. Under the old
+    (-weight, edge_id) key, case 1 would flip to the untyped edge winning while case 2
+    would still show the typed edge winning "by accident" — covering both orderings is
+    what actually proves the outcome is independent of edge_id order.
+    """
+    nodes = [
+        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0, entity_type="concept"),
+        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8, entity_type="concept"),
+        GraphNodeInspection("id-c", "C", chunk_count=6, salience=0.6, entity_type="concept"),
+    ]
+    # Case 1: typed edge_id ("z-typed") sorts after the untyped edge_id ("a-untyped").
+    edges_case_1 = [
+        GraphEdgeInspection("z-typed", "id-a", "id-b", weight=3, source_chunk_ids=[], relationship_type="uses"),
+        GraphEdgeInspection("a-untyped", "id-a", "id-c", weight=3, source_chunk_ids=[]),
+    ]
+    # Case 2: typed edge_id ("a-typed") sorts BEFORE the untyped edge_id ("z-untyped").
+    edges_case_2 = [
+        GraphEdgeInspection("a-typed", "id-a", "id-b", weight=3, source_chunk_ids=[], relationship_type="uses"),
+        GraphEdgeInspection("z-untyped", "id-a", "id-c", weight=3, source_chunk_ids=[]),
+    ]
+
+    _, out_case_1, _ = _truncate_graph(nodes, edges_case_1, max_nodes=3, max_edges=1000)
+    _, out_case_2, _ = _truncate_graph(nodes, edges_case_2, max_nodes=3, max_edges=1000)
+
+    assert out_case_1[0].relationship_type == "uses"
+    assert out_case_2[0].relationship_type == "uses"
+
+
+def test_unequal_weight_still_sorts_by_weight():
+    """Weight ordering is unchanged: a higher-weight untyped edge still beats a lower-weight typed edge — S35/BE-1."""
+    nodes = [
+        GraphNodeInspection("id-a", "A", chunk_count=10, salience=1.0, entity_type="concept"),
+        GraphNodeInspection("id-b", "B", chunk_count=8, salience=0.8, entity_type="concept"),
+        GraphNodeInspection("id-c", "C", chunk_count=6, salience=0.6, entity_type="concept"),
+    ]
+    edges = [
+        GraphEdgeInspection("typed-low-weight", "id-a", "id-b", weight=1, source_chunk_ids=[], relationship_type="uses"),
+        GraphEdgeInspection("untyped-high-weight", "id-a", "id-c", weight=5, source_chunk_ids=[]),
+    ]
+
+    _, out_edges, _ = _truncate_graph(nodes, edges, max_nodes=3, max_edges=1000)
+
+    assert out_edges[0].edge_id == "untyped-high-weight"
+    assert out_edges[1].edge_id == "typed-low-weight"
+
+
 def test_truncate_graph_edge_cap_fires():
     """When edge count exceeds max_edges, truncated=True."""
     nodes = [
@@ -2527,3 +2598,76 @@ async def test_graph_inspector_relationship_type_passthrough_in_inspect_collecti
 
     assert len(view.edges) == 1
     assert view.edges[0].relationship_type == "synonym_of"
+
+
+@pytest.mark.asyncio
+async def test_inspector_caps_keep_typed_edge_over_untyped(tmp_path):
+    """Integration test: a real capped inspection retains the typed edge — S35/BE-1.
+
+    Writes two equal-weight edges (one typed, one untyped 'related_to') with a real
+    GraphStore/LanceDB backend, caps max_edges=1, and verifies the typed edge survives.
+    """
+    from archon_search.graph_store import GraphStore
+
+    db_path = str(tmp_path / "test.db")
+    graph_store = GraphStore(db_path)
+
+    collection = "typed-edge-cap"
+
+    nodes = [
+        GraphNode(id="entity-a", entity_name="A", entity_type=EntityType.concept, source_doc_id="doc-1", collection_name=collection),
+        GraphNode(id="entity-b", entity_name="B", entity_type=EntityType.concept, source_doc_id="doc-1", collection_name=collection),
+        GraphNode(id="entity-c", entity_name="C", entity_type=EntityType.concept, source_doc_id="doc-1", collection_name=collection),
+    ]
+
+    edges = [
+        # "zz-typed" sorts AFTER "aa-untyped" lexicographically, so the pre-fix
+        # (-weight, edge_id) ordering would have kept the untyped edge under the cap.
+        GraphEdge(
+            id="zz-typed",
+            source_node_id="entity-a",
+            target_node_id="entity-b",
+            relationship_type=RelationshipType.uses,
+            source_doc_id="doc-1",
+        ),
+        GraphEdge(
+            id="aa-untyped",
+            source_node_id="entity-a",
+            target_node_id="entity-c",
+            relationship_type=RelationshipType.related_to,
+            source_doc_id="doc-1",
+        ),
+    ]
+
+    # Both entity-b and entity-c co-occur with entity-a in the same 2 chunks,
+    # so both edges land at weight=2 — an equal-weight tie.
+    mentions = [
+        GraphMention(entity_id="entity-a", chunk_id="chunk-1", doc_id="doc-1"),
+        GraphMention(entity_id="entity-a", chunk_id="chunk-2", doc_id="doc-1"),
+        GraphMention(entity_id="entity-b", chunk_id="chunk-1", doc_id="doc-1"),
+        GraphMention(entity_id="entity-b", chunk_id="chunk-2", doc_id="doc-1"),
+        GraphMention(entity_id="entity-c", chunk_id="chunk-1", doc_id="doc-1"),
+        GraphMention(entity_id="entity-c", chunk_id="chunk-2", doc_id="doc-1"),
+    ]
+
+    try:
+        await graph_store.connect()
+        await graph_store.ensure_graph_tables(collection, ns="default")
+        await graph_store.write_graph(collection, nodes, edges, ns="default")
+        await graph_store.write_mentions(collection, mentions, ns="default")
+
+        view = await inspect_collection(
+            graph_store,
+            collection,
+            total_chunk_count=2,
+            max_nodes=1000,
+            max_edges=1,
+            ns="default",
+        )
+
+        assert len(view.edges) == 1
+        assert view.edges[0].edge_id == "zz-typed"
+        assert view.edges[0].relationship_type == "uses"
+        assert view.truncated is True
+    finally:
+        await graph_store.disconnect()

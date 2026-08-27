@@ -287,6 +287,115 @@ def test_mcp_get_graph_returns_summary_after_ingest(
             assert "weight" in edge
 
 
+async def _seed_equal_weight_typed_and_untyped_edges(
+    db_path: str,
+    collection: str,
+    ns: str = "default",
+) -> None:
+    """Write two equal-weight edges (one typed, one untyped 'related_to') — S35/BE-1.
+
+    Mirrors tests/test_graph_inspector.py::test_inspector_caps_keep_typed_edge_over_untyped:
+    entity-a co-occurs with both entity-b and entity-c across the same 2 chunks, so both
+    edges land at weight=2. The typed edge's id ("zz-typed") sorts AFTER the untyped edge's
+    id ("aa-untyped") lexicographically, so this distinguishes the typed-before-untyped
+    tie-break from the old (-weight, edge_id) ordering.
+    """
+    from archon_search.graph_store import GraphStore
+    from archon_search.graph_types import (
+        EntityType,
+        GraphEdge,
+        GraphMention,
+        GraphNode,
+        RelationshipType,
+    )
+
+    gs = GraphStore(db_path)
+    await gs.connect()
+    try:
+        await gs.ensure_graph_tables(collection, ns=ns)
+        nodes = [
+            GraphNode(id="entity-a", entity_name="A", entity_type=EntityType.concept, source_doc_id="doc-1", collection_name=collection),
+            GraphNode(id="entity-b", entity_name="B", entity_type=EntityType.concept, source_doc_id="doc-1", collection_name=collection),
+            GraphNode(id="entity-c", entity_name="C", entity_type=EntityType.concept, source_doc_id="doc-1", collection_name=collection),
+        ]
+        edges = [
+            GraphEdge(
+                id="zz-typed",
+                source_node_id="entity-a",
+                target_node_id="entity-b",
+                relationship_type=RelationshipType.uses,
+                source_doc_id="doc-1",
+            ),
+            GraphEdge(
+                id="aa-untyped",
+                source_node_id="entity-a",
+                target_node_id="entity-c",
+                relationship_type=RelationshipType.related_to,
+                source_doc_id="doc-1",
+            ),
+        ]
+        await gs.write_graph(collection, nodes, edges, ns=ns)
+        mentions = [
+            GraphMention(entity_id="entity-a", chunk_id="chunk-1", doc_id="doc-1"),
+            GraphMention(entity_id="entity-a", chunk_id="chunk-2", doc_id="doc-1"),
+            GraphMention(entity_id="entity-b", chunk_id="chunk-1", doc_id="doc-1"),
+            GraphMention(entity_id="entity-b", chunk_id="chunk-2", doc_id="doc-1"),
+            GraphMention(entity_id="entity-c", chunk_id="chunk-1", doc_id="doc-1"),
+            GraphMention(entity_id="entity-c", chunk_id="chunk-2", doc_id="doc-1"),
+        ]
+        await gs.write_mentions(collection, mentions, ns=ns)
+    finally:
+        await gs.disconnect()
+
+
+def test_mcp_get_graph_prefers_typed_edge_over_untyped_at_equal_weight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MCP get_graph's top_edges ranks a typed edge ahead of an untyped twin at equal weight.
+
+    Covers S35/BE-1: the shared ``_edge_sort_key`` tie-break (typed-before-untyped) must
+    apply at the MCP ``get_graph`` tool boundary, not just in ``inspect_collection`` unit
+    tests. No tight edge cap is exposed at the MCP layer, so this asserts ordering in
+    ``top_edges`` rather than survival under a cap.
+    """
+    _install_spacy_stub_no_entities(monkeypatch)
+    col = "s35-mcp-tie-break"
+
+    with make_real_app(
+        tmp_path,
+        monkeypatch,
+        graph_enabled=True,
+        mcp_enabled=True,
+    ) as (client, cfg, api_key):
+        # Ingest a document so the collection has meta/chunk_count (spaCy stub yields no
+        # entities, so this doesn't interfere with the graph data seeded directly below).
+        doc_file = tmp_path / "test.txt"
+        doc_file.write_text("Alice works in Seattle.", encoding="utf-8")
+        ingest_file_via_path(client, col, str(doc_file), api_key=api_key)
+
+        asyncio.run(_seed_equal_weight_typed_and_untyped_edges(cfg.db_path, col))
+
+        session_id = _mcp_initialize(client, api_key)
+        result = _mcp_tool_call(
+            client,
+            api_key,
+            session_id,
+            "get_graph",
+            {"collection": col},
+        )
+
+        top_edges = result["top_edges"]
+        edge_ids = [e["edge_id"] for e in top_edges]
+        assert "zz-typed" in edge_ids and "aa-untyped" in edge_ids, (
+            f"Expected both seeded edges in top_edges, got: {edge_ids}"
+        )
+        assert edge_ids.index("zz-typed") < edge_ids.index("aa-untyped"), (
+            f"Expected typed edge 'zz-typed' to rank before untyped edge 'aa-untyped' "
+            f"at equal weight, got order: {edge_ids}"
+        )
+
+
 def test_mcp_get_graph_cross_collection_returns_merged_summary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

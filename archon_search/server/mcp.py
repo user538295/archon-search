@@ -1856,7 +1856,7 @@ def create_app(
     # Graph inspection tools (E2b) — always registered; guard at runtime.
     # -----------------------------------------------------------------------
 
-    from archon_search.graph_inspector import inspect_collection, inspect_cross_collection  # noqa: PLC0415
+    from archon_search.graph_inspector import _edge_sort_key, inspect_collection, inspect_cross_collection  # noqa: PLC0415
     from archon_search.graph_types import DEFAULT_IMPACT_DEPTH, ImpactDirection  # noqa: PLC0415
 
     async def _resolve_salience_context(
@@ -1961,7 +1961,7 @@ def create_app(
             top_nodes = _build_top_nodes(view)
 
             # Top edges: sorted by weight desc, take first 20
-            top_edges_list = sorted(view.edges, key=lambda e: (-e.weight, e.edge_id))[:20]
+            top_edges_list = sorted(view.edges, key=_edge_sort_key)[:20]
             top_edges = [
                 {
                     "edge_id": e.edge_id,
@@ -2067,7 +2067,7 @@ def create_app(
             top_nodes = _build_top_nodes(view)
 
             # Top edges: sorted by weight desc, take first 20
-            top_edges_list = sorted(view.edges, key=lambda e: (-e.weight, e.edge_id))[:20]
+            top_edges_list = sorted(view.edges, key=_edge_sort_key)[:20]
             top_edges = [
                 {
                     "edge_id": e.edge_id,
