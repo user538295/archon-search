@@ -5,9 +5,8 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 ## What Has Failed
 - **[2026-08-20] (×58) pytest OOM/memory RCA**: rules: `tests/CLAUDE.md`. A DIFFERENT timing test failing per run = contention; raise a failure-path-only budget 5s→30s. Native leaks need a guarded repro (RSS cap+alarm); count BOTH embedder copies.
 - **[2026-08-27] (×1) CI regex guards**: scan width = its kwarg list — positional `.where(f"` alone shipped `where=f"…"`. 7 patterns: +`filter=`/`updates_sql=`/`.add_columns(` (RAW SQL, unlike `updates=`) +`rf`/`F`. Guard only files with callsites.
-- **[2026-08-20] (×2) latch/guard state**: durable suppression gets its OWN data-dir file; clear it UNCONDITIONALLY. A broad catch around `await to_thread(...)` swallows `CancelledError` — re-raise FIRST or shutdown latches a degraded flag.
-
 ## What Has Worked
+- **[2026-08-27] (×1) TOCTOU lock fixes**: `asyncio.Lock` is non-reentrant — wrapping a method's body in its own lock deadlocks any caller that already holds it. Add `_locked_by_caller` (matches `ingest_chunks`), don't just wrap.
 - **[2026-08-22] (×122) briefs**: failing repro FIRST; fix at the guard layer. Verify a brief's CANDIDATE FIX, not its symptom. Briefs undercount blast radius (sync.py mirrors pipeline). Re-filed name in `Completed/` → `<name>-reopened.md`.
 - **[2026-08-21] (×2) brief refinement**: grep every "reuse X from brief Y" claim — 030 shipped a spaCy-WHEEL downloader, no checksum. Deleting a feature strands wire fields added only for it (`provider_notes`); a sibling method may keep its protocol.
 - **[2026-08-20] (×28) new field/pin**: dataclass + `_apply_toml` + coerce + snapshot tests; regenerate the OpenAPI snapshot on 3.12. `path_home_allowlist.txt` pins (file,lineno,sha) with `_EXPECTED_CONFIG_LINE_NO` — any edit ABOVE it breaks BOTH.

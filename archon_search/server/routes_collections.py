@@ -412,7 +412,9 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
         # Drop LanceDB table and meta row
         if search_store is not None:
             try:
-                await search_store.drop_collection(name)
+                # lock_for(name) is already held above (search_store is not None
+                # ⇒ acquire_collection_lock_or_503 returned the acquired lock).
+                await search_store.drop_collection(name, _locked_by_caller=True)
             except (KeyError, RuntimeError):
                 pass  # table doesn't exist — that's fine
             await search_store.delete_collection_meta(name, ns)

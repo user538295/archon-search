@@ -182,6 +182,51 @@ async def test_drop_collection_removes_lock_entry(
 
 
 # ---------------------------------------------------------------------------
+# Check-then-act: drop/rename must hold the per-collection lock
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutator, call",
+    [
+        ("drop_table", lambda store: store.drop_collection("old-name")),
+        ("rename_table", lambda store: store.rename_collection("old-name", "new-name")),
+    ],
+)
+async def test_collection_mutation_holds_lock(
+    tmp_path: Path, mutator: str, call
+) -> None:
+    """drop/rename check `list_tables` then mutate — the pair must run under the lock.
+
+    Without the lock the existence/conflict check is stale by the time the
+    mutation executes: a concurrent drop/rename/ingest on the same name can
+    interleave at the ``await``. Asserting the lock is held at mutation time is
+    deterministic — no real scheduler race needed.
+    """
+    store = SearchStore(tmp_path / "db")
+    observed: list[bool] = []
+
+    mock_db = MagicMock()
+    list_tables_resp = MagicMock()
+    list_tables_resp.tables = ["old-name"]
+    mock_db.list_tables = AsyncMock(return_value=list_tables_resp)
+
+    async def record_lock_state(*_args, **_kwargs) -> None:
+        observed.append(store.lock_for("old-name").locked())
+
+    setattr(mock_db, mutator, AsyncMock(side_effect=record_lock_state))
+    store._db = mock_db
+
+    await call(store)
+
+    assert observed == [True], (
+        f"{mutator} ran without holding lock_for('old-name') — the list_tables "
+        "check is stale by the time the mutation executes"
+    )
+
+
+# ---------------------------------------------------------------------------
 # REST 503 contract
 # ---------------------------------------------------------------------------
 

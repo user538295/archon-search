@@ -412,7 +412,7 @@ def test_remove_collection_deletes_config_and_data(
     assert str(src) not in updated_config.collections
 
     # LanceDB drop was called
-    mock_search_store.drop_collection.assert_called_once_with(name)
+    mock_search_store.drop_collection.assert_called_once_with(name, _locked_by_caller=True)
 
 
 def test_remove_unknown_collection_returns_404(client: TestClient) -> None:
@@ -1283,7 +1283,7 @@ def test_remove_collection_success_drops_table_and_meta(
     response = c.delete(f"/collections/{name}")
 
     assert response.status_code == 200
-    mock_store.drop_collection.assert_called_once_with(name)
+    mock_store.drop_collection.assert_called_once_with(name, _locked_by_caller=True)
     mock_store.delete_collection_meta.assert_called_once_with(name, caller_ns)
     assert deleted["done"] is True
 
@@ -1390,7 +1390,7 @@ def test_delete_acquires_lock_before_drop(
     mock_store = MagicMock()
     mock_store.get_collection_meta = AsyncMock(return_value=meta)
 
-    async def _mock_drop(n: str) -> None:
+    async def _mock_drop(n: str, **_kwargs) -> None:
         call_order.append("drop")
 
     mock_store.drop_collection = AsyncMock(side_effect=_mock_drop)

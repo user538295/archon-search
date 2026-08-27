@@ -433,19 +433,35 @@ class SearchStore:
             exist_ok=True,
         )
 
-    async def drop_collection(self, name: str) -> None:
+    async def drop_collection(self, name: str, *, _locked_by_caller: bool = False) -> None:
         """Drop a LanceDB table by name.
+
+        Parameters
+        ----------
+        _locked_by_caller:
+            When True, assumes ``lock_for(name)`` is already held by the caller
+            and skips acquiring it internally (the lock is not reentrant).
 
         Raises:
             RuntimeError: if the store is not connected.
             KeyError: if *name* does not exist in LanceDB.
         """
         db = self._require_connected()
-        names: list[str] = (await db.list_tables()).tables
-        if name not in names:
-            raise KeyError(name)
-        await db.drop_table(name)
-        # Avoid leaking lock entries for dropped collections.
+        # The existence check and the drop must be atomic: without the lock a
+        # concurrent drop/rename/ingest can interleave at the awaits.
+        lock = None if _locked_by_caller else self.lock_for(name)
+        if lock is not None:
+            await lock.acquire()
+        try:
+            names: list[str] = (await db.list_tables()).tables
+            if name not in names:
+                raise KeyError(name)
+            await db.drop_table(name)
+        finally:
+            if lock is not None:
+                lock.release()
+        # Avoid leaking lock entries for dropped collections. Must happen after
+        # the lock is released — never pop a lock that is still held.
         self._collection_locks.pop(name, None)
 
     async def rename_collection(self, old: str, new: str) -> None:
@@ -463,17 +479,20 @@ class SearchStore:
         """
         self._validate_collection(new)
         db = self._require_connected()
-        names: list[str] = (await db.list_tables()).tables
-        if old not in names:
-            raise KeyError(old)
-        if new in names:
-            raise ValueError(f"Target collection already exists: {new!r}")
-        try:
-            await db.rename_table(old, new)
-        except (AttributeError, NotImplementedError) as exc:
-            raise NotImplementedError(
-                "rename_table not available; use copy-ingest + drop"
-            ) from exc
+        # The existence/conflict check and the rename must be atomic: without the
+        # lock a concurrent drop/rename/ingest can interleave at the awaits.
+        async with self.lock_for(old):
+            names: list[str] = (await db.list_tables()).tables
+            if old not in names:
+                raise KeyError(old)
+            if new in names:
+                raise ValueError(f"Target collection already exists: {new!r}")
+            try:
+                await db.rename_table(old, new)
+            except (AttributeError, NotImplementedError) as exc:
+                raise NotImplementedError(
+                    "rename_table not available; use copy-ingest + drop"
+                ) from exc
 
     async def list_collections(self) -> list[CollectionInfo]:
         db = self._require_connected()
