@@ -305,10 +305,16 @@ class SearchStore:
     # ------------------------------------------------------------------
 
     async def connect(self) -> None:
-        import lancedb  # noqa: PLC0415
+        def _import_lancedb_and_mkdir() -> Any:
+            import lancedb  # noqa: PLC0415
+
+            self._db_path.mkdir(parents=True, exist_ok=True)
+            return lancedb
 
         self._ping_cache = None
-        self._db_path.mkdir(parents=True, exist_ok=True)
+        # Offloaded: the first `import lancedb` drags in pyarrow + a Rust extension
+        # (100s of ms) and mkdir is a blocking syscall — neither may run on the loop.
+        lancedb = await asyncio.to_thread(_import_lancedb_and_mkdir)
         self._db = await lancedb.connect_async(str(self._db_path))
 
     async def disconnect(self) -> None:
@@ -1971,7 +1977,9 @@ class SearchStore:
         (Task 6.2 requirement), so legacy values are visible and rewriteable.
 
         Holds the per-collection lock for the full duration (no timeout — the
-        reindex is the holder).
+        reindex is the holder). The row loop awaits once per unique
+        ``source_path`` (the offloaded ``stat``), so a ``CancelledError`` there
+        discards the accumulated ``updates`` batch.
         """
         from archon_search.constants import LEGACY_INGESTED_BY  # noqa: PLC0415
 
@@ -1986,6 +1994,9 @@ class SearchStore:
             rows = await table.query().to_list()
             total = len(rows)
             updates: list[tuple[str, dict[str, str]]] = []
+            # source_path -> os.stat_result or the OSError it raised. Every chunk of
+            # a document repeats the same path, so this collapses N rows to one stat.
+            stat_cache: dict[str, Any] = {}
 
             for row in rows:
                 result.processed += 1
@@ -2000,16 +2011,24 @@ class SearchStore:
 
                 new_updated_at = stored_updated_at
                 if source_path:
-                    try:
-                        mtime = Path(source_path).stat().st_mtime
-                        mtime_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
+                    if source_path not in stat_cache:
+                        try:
+                            # Offloaded: stat is a blocking syscall; one hop per file.
+                            stat_cache[source_path] = await asyncio.to_thread(
+                                Path(source_path).stat
+                            )
+                        except OSError as exc:
+                            stat_cache[source_path] = exc
+                    cached = stat_cache[source_path]
+                    if isinstance(cached, OSError):
+                        result.warnings.append(f"missing-source: {source_path}")
+                    else:
+                        mtime_dt = datetime.fromtimestamp(cached.st_mtime, tz=timezone.utc)
                         new_updated_at = (
                             normalize_iso_utc(mtime_dt)
                             if normalize_timestamps
                             else mtime_dt.isoformat()
                         )
-                    except OSError:
-                        result.warnings.append(f"missing-source: {source_path}")
 
                 if stored_ingested_by == LEGACY_INGESTED_BY:
                     new_ingested_by = "reindex"
@@ -2336,7 +2355,9 @@ class SearchStore:
         ``True`` from batch callers (e.g. sync.py delete loop) to suppress
         per-file FTS maintenance in favour of a single batch-end call.
         """
-        doc_id = hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
+        # Offloaded: resolve() walks the path with blocking readlink/stat syscalls.
+        resolved = await asyncio.to_thread(Path(source_path).resolve)
+        doc_id = hashlib.sha256(str(resolved).encode()).hexdigest()
         return await self.delete_document(
             collection, doc_id, namespace=namespace, skip_fts_optimize=skip_fts_optimize
         )
