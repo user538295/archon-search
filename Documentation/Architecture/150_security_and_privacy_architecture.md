@@ -1,8 +1,8 @@
 **Purpose**: Document the threat model, authentication, ACL semantics, and privacy guarantees of `archon-search`.
 **Audience**: Operators and security reviewers of a local `archon-search` deployment.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
-**Next review**: 2026-08-20
+**Last reviewed**: 2026-08-27
+**Next review**: 2026-11-27
 
 # Security and Privacy Architecture
 
@@ -159,7 +159,26 @@ What is **not** validated (accepted trade-offs, deferred to a future `allowed_di
 
 ## SQL boundary defense-in-depth (A5b)
 
-`store.py` builds LanceDB (DataFusion) `where` / `delete` / `count_rows` predicates from identifiers (`name`, `namespace`, `doc_id`, constructed `chunk_id`). The **primary** security boundary remains the upstream regex gates — `_COLLECTION_RE` (name), `_validate_namespace` / `_NAMESPACE_RE` (namespace), `_DOC_ID_RE` (doc_id) — which make injection unreachable today. As defense-in-depth, every predicate is now composed via `_where_eq` / `_where_in` (`store.py`), which quote values through `_sql_quote_str` (`store_filters.py`, single-quote doubling) rather than f-string interpolation. A CI guard (`tests/test_no_fstring_sql.py`) fails the build if any f-string-wrapped `.where(` / `.delete(` / `.count_rows(` reappears in `store.py`, so relaxing a regex gate in the future cannot silently re-enable SQL injection.
+Two modules build LanceDB (DataFusion) `where` / `delete` / `count_rows` predicates: `store.py` (from `name`, `namespace`, `doc_id`, constructed `chunk_id`) and `graph_store.py` (from `collection`, `namespace`, `doc_id`, `entity_id`, `entity_name`). The **primary** security boundary remains the upstream regex gates, which make injection unreachable today: `_COLLECTION_RE` (name), `_DOC_ID_RE` (doc_id) and `_CHUNK_ID_RE` (`^[a-f0-9]{64}-\d{6}$`, enforced per chunk at the top of `ingest_chunks`) live in `store.py`; `_validate_namespace` / `_NAMESPACE_RE` (namespace) live in `constants.py`, shared with every other module that validates a namespace.
+
+As defense-in-depth, the rule is that **every value interpolated into a predicate passes through `_sql_quote_str`** (`store_filters.py`) — never through bare f-string interpolation. Two composition styles satisfy that rule and both are in use in both modules:
+
+1. The `_where_eq` / `_where_in` helpers, which call `_sql_quote_str` internally. `store.py` and `graph_store.py` each define their own copy of this pair (`graph_store.py`'s is a near-duplicate of `store.py`'s, differing only in the `_where_in` parameter type and the docstrings) — deliberate, to keep `graph_store.py` from importing store internals, but it means a change to the quoting contract has to be made in both places.
+2. Direct `+` concatenation of already-quoted `_sql_quote_str(...)` fragments, where a predicate needs an operator or a compound shape the helpers do not express. In `store.py`: the TTL / keyset-pagination predicates in `query_expiring_chunks`, `prune_expired_chunks`, `count_expired_chunks`, and the empty-language predicate in `count_untagged_language_chunks`. In `graph_store.py`: the `source_node_id IN (…) OR target_node_id IN (…)` edge predicates in `get_neighbours` and `get_edges_for_nodes` (both concatenating two `_where_in` results), and the `lower(entity_name) IN (…)` predicate in `find_nodes_by_name` (concatenating a `", ".join(_sql_quote_str(…))` item list).
+
+An f-string is also still used to wrap an *already-composed, already-quoted* fragment in `store.py`'s `migrate_per_collection_model` (`f"({ns_predicate} OR namespace IS NULL)"`) — the f-string interpolates a safe fragment, not a caller-supplied value.
+
+The rule reaches beyond `where` / `delete` / `count_rows`: `table.add_columns({"col": …})` dict values are **raw SQL expressions evaluated per row**, unlike `table.update(updates=…)`, which binds literals. `migrate_namespace` therefore passes its backfill value through `_sql_quote_str` (`add_columns({"namespace": _sql_quote_str(DEFAULT_NAMESPACE)})`), and the CI guard below has a dedicated `add_columns` pattern for it.
+
+Be precise about the strength of that quoting. `_sql_quote_str` wraps the value in single quotes and **doubles internal single quotes only** (`O'Reilly` → `'O''Reilly'`); it escapes no backslash, no NUL, nothing else. That is correct — and sufficient — for the DataFusion SQL dialect LanceDB parses, where doubling *is* the whole of string-literal escaping and there is no C-style backslash escape to neutralise (verified empirically against LanceDB 0.36.0: a trailing backslash inside a quoted literal parses as a literal backslash, matching zero rows rather than escaping the closing quote). It is therefore dialect-specific, not a general-purpose SQL escaper: do not lift it into a backend with `E'…'`-style escapes. LIKE operands are a separate problem handled by a separate helper (`escape_like`, same module, which escapes `%` / `_` / `\` and requires the query to pair it with `ESCAPE '\'`).
+
+A CI guard (`tests/test_no_fstring_sql.py`) scans `store.py` and `graph_store.py` as text and fails the build on a direct f-string predicate. Its seven patterns cover the positional form (`.where(f"…"` / `.delete(f"…"` / `.count_rows(f"…"`), the keyword forms (`where=f"…"` as passed to `table.update()`, and `filter=f"…"` — LanceDB's spelling of the `count_rows` predicate kwarg), the two raw-SQL dict forms (`updates_sql={"col": f"…"}` and `.add_columns({"col": f"…"})`), and every f-string prefix spelling Python accepts (`f` / `F` / `rf` / `fr` / `RF` / …).
+
+`store_filters.py` is deliberately **not** guarded and must not be re-added to the list: it is a pure builder with no LanceDB call site, so every pattern is structurally unable to fire on it and listing it would claim coverage that does not exist, and its one predicate f-string (`_where_list_has_or_null`) is a `return f"…"` factory textually indistinguishable from the sanctioned `_where_eq` / `_where_in` factories. It is covered instead by unit tests of `_sql_quote_str` / `build_where`.
+
+The guard is a **regex text scan, not a taint analysis**. Its accepted blind spots are: an f-string bound to a local and passed indirectly (`pred = f"…"` … `.where(pred)`); predicates assembled with `+` / `%` / `.format()`; and implicit string concatenation (`.where("a = 1 " f"AND b='{y}'")`, where the plain literal sits between the paren and the f-string). It therefore raises the cost of re-introducing SQL injection when a regex gate is relaxed; it does not make it impossible. The guard's module docstring is the authoritative statement of its guarded-file list, pattern count, and blind spots — keep the two in sync.
+
+The two-style enumeration above is a maintained contract: any change that adds, renames, or relocates a predicate call site in either module must update it (see `Documentation/Backlog/store_cleanup_plan.md` → Documentation checklist).
 
 ## Ingest concurrency — synchronous store-busy signalling (A5c)
 

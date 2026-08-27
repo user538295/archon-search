@@ -10,3 +10,5 @@
 - **[2026-08-19] (×1) assert the WIRING**: an unasserted ctor kwarg silently disconnects its feature and the suite stays green — `initializer=` (orphan watchdog), `max_tasks_per_child=` (operator knob). Assert the kwarg reaches the ctor, from a NON-default value.
 
 - **[2026-08-21] brief triage (compacted into `briefs`)** — a doc-only fix is never behavioral: read the code after closing a DOC report, since the report may describe a real defect the doc merely mis-stated.
+
+- **[2026-08-24] (×1) spike execution (merged into the `plan/task authoring` entry dated 2026-08-24)**: its `#team`-gate half survives in the live entry (learnings.md, "Plan-Making & Agent Process"), which absorbed the count as ×3. Long-form detail dropped in the merge: re-verify a subagent's stated BLOCKER CAUSE — testing 2 spike blockers exposed 2 false claims + 2 shipped defects. Also dropped from that same live entry: write derivation rules, not enumerations, in task bodies.

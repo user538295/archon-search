@@ -4,7 +4,6 @@ Implements Task 6.2 of Documentation/Backlog/A1-metadata-schema-v1-plan.md.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import uuid
@@ -14,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from archon_search._types import ChunkRecord
-from archon_search.store import ReindexResult, SearchStore, StoreBusyError
+from archon_search.store import ReindexResult, SearchStore, StoreBusyError, _where_eq
 
 _DIM = 4
 
@@ -42,7 +41,7 @@ async def _force_legacy_row(store: SearchStore, col: str, chunk_id: str) -> None
     db = store._require_connected()
     table = await db.open_table(col)
     await table.update(
-        where=f"chunk_id = '{chunk_id}'",
+        where=_where_eq("chunk_id", chunk_id),
         updates={
             "ingested_by": "archon-search-cli",
             "file_type": "",
@@ -54,7 +53,7 @@ async def _force_legacy_row(store: SearchStore, col: str, chunk_id: str) -> None
 async def _read_raw(store: SearchStore, col: str, chunk_id: str) -> dict:
     db = store._require_connected()
     table = await db.open_table(col)
-    rows = await table.query().where(f"chunk_id = '{chunk_id}'").to_list()
+    rows = await table.query().where(_where_eq("chunk_id", chunk_id)).to_list()
     assert len(rows) == 1
     return rows[0]
 
@@ -63,6 +62,54 @@ def test_reindex_result_dataclass_shape() -> None:
     r = ReindexResult(processed=10, updated=3, skipped=7, warnings=["x"])
     assert r.processed == 10 and r.updated == 3 and r.skipped == 7
     assert r.warnings == ["x"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reindex_updates_row_whose_chunk_id_contains_a_quote(
+    connected_store: SearchStore, tmp_path: Path,
+) -> None:
+    """``reindex_metadata`` must survive a ``'`` in a chunk_id and update only that row.
+
+    ``ingest_chunks`` (store.py:1764) is the only path that mints or validates a
+    chunk_id against ``_CHUNK_ID_RE``; the migration re-add and the reindex read
+    copy it verbatim. So the row is planted straight into the chunk table to
+    reach the predicate. With a raw f-string predicate the SQL becomes
+    ``chunk_id = 'a'b''`` — a syntax error — so this test fails on a revert of
+    the ``_where_eq`` call in ``reindex_metadata``.
+    """
+    col = f"test-{uuid.uuid4().hex[:8]}"
+    await connected_store.ensure_collection(col, _DIM)
+    src = tmp_path / "quote_chunk.md"
+    src.write_text("seed file for the quote-bearing chunk_id test")
+
+    control = _chunk(source_path=str(src), file_type="md", ingested_by="http")
+    await connected_store.ingest_chunks(col, [control])
+
+    db = connected_store._require_connected()
+    table = await db.open_table(col)
+    planted = dict(await _read_raw(connected_store, col, control.chunk_id))
+    quoted_chunk_id = f"{planted['doc_id']}-000001'x"
+    planted.update(
+        chunk_id=quoted_chunk_id,
+        ingested_by="archon-search-cli",  # LEGACY_INGESTED_BY -> becomes "reindex"
+        file_type="",
+        updated_at="",
+    )
+    await table.add([planted])
+
+    result = await connected_store.reindex_metadata(col)
+
+    # Both rows are rewritten (the control row's updated_at is normalized from
+    # mtime); what matters is that each got ITS OWN values.
+    assert result.updated == 2
+    # Re-open: a Table handle pins the version it last wrote, and reindex_metadata
+    # wrote through its own handle.
+    rows = {r["chunk_id"]: r for r in await (await db.open_table(col)).query().to_list()}
+    assert rows[quoted_chunk_id]["ingested_by"] == "reindex"
+    assert rows[quoted_chunk_id]["file_type"] == "md"
+    # The control row must be untouched: only the quoted row differed.
+    assert rows[control.chunk_id]["ingested_by"] == "http"
 
 
 @pytest.mark.integration

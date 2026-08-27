@@ -630,7 +630,7 @@ class SearchStore:
         if "namespace" in schema_names:
             return
         try:
-            await table.add_columns({"namespace": f"'{DEFAULT_NAMESPACE}'"})
+            await table.add_columns({"namespace": _sql_quote_str(DEFAULT_NAMESPACE)})
             logger.info("namespace migration: added namespace column to %s", _META_TABLE)
         except Exception as exc:
             if "already exists" in str(exc).lower():
@@ -2042,7 +2042,7 @@ class SearchStore:
             if not dry_run:
                 for chunk_id, vals in updates:
                     await table.update(
-                        where=f"chunk_id = '{chunk_id}'",
+                        where=_where_eq("chunk_id", chunk_id),
                         updates=vals,
                     )
                     result.updated += 1

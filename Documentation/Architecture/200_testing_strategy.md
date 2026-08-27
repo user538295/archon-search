@@ -1,8 +1,8 @@
 **Purpose**: Define the test pyramid for `archon-search`, the markers that gate each layer, the coverage discipline, and the role of the evaluation harness as the regression gate for retrieval quality.
 **Audience**: Contributors writing tests, reviewers gating PRs, and CI maintainers.
 **Status**: Draft
-**Last reviewed**: 2026-06-10
-**Next review**: 2026-09-10
+**Last reviewed**: 2026-08-27
+**Next review**: 2026-11-27
 
 # Testing Strategy
 
@@ -186,7 +186,7 @@ The **`archon_unset_data_dir` marker** is registered in `[tool.pytest.ini_option
 
 3. **`test_archon_unset_data_dir_marker_scope`** — AST-walks `tests/` and asserts that `@pytest.mark.archon_unset_data_dir` appears on exactly the tests named in `MARKER_ALLOWLIST`. Paired with `test_meta_ast_finds_pytest_mark_decorator`, which validates the AST walker itself.
 
-Grandfathered callsites (the two legacy launchd/systemd service-path `Path.home()` calls in `archon_search/install/service_ops.py:37-38`; `archon_search/config.py`; `archon_search/platform/linux.py` and `archon_search/platform/macos.py`) are pinned in `tests/path_home_allowlist.txt`, which is keyed by `(file, line, content-hash)` — so an entry must be re-pinned whenever the callsite moves (as the two `install.py` service-path pins were during the `install.py` → `install/` package split). Earlier `install.py` callsites were migrated to `get_data_dir()` in C17 and removed from the allowlist. The sibling ratchet for SQL f-string injection is `tests/test_no_fstring_sql.py` + `store.py` guard (see `Architecture/130_data_architecture_and_persistence.md`).
+Grandfathered callsites (the two legacy launchd/systemd service-path `Path.home()` calls in `archon_search/install/service_ops.py:37-38`; `archon_search/config.py`; `archon_search/platform/linux.py` and `archon_search/platform/macos.py`) are pinned in `tests/path_home_allowlist.txt`, which is keyed by `(file, line, content-hash)` — so an entry must be re-pinned whenever the callsite moves (as the two `install.py` service-path pins were during the `install.py` → `install/` package split). Earlier `install.py` callsites were migrated to `get_data_dir()` in C17 and removed from the allowlist. The sibling ratchet for SQL f-string injection is `tests/test_no_fstring_sql.py`, which scans `store.py` and `graph_store.py` (see `Architecture/150_security_and_privacy_architecture.md`; the guard's module docstring is authoritative for the file list).
 
 ## See also
 
