@@ -57,47 +57,31 @@ def test_atomic_write(tmp_path: Path) -> None:
     mock_write.assert_called_once_with(jobs_path, expected)
 
 
-def test_crash_recovery_running_to_failed(tmp_path: Path) -> None:
-    jobs_path = tmp_path / "jobs.json"
-    # Pre-populate a RUNNING job
-    now = datetime.now(timezone.utc).isoformat()
-    data = [
-        {
-            "job_id": str(uuid.uuid4()),
-            "status": "RUNNING",
-            "created_at": now,
-            "updated_at": now,
-            "result": None,
-            "error": None,
-        }
-    ]
-    jobs_path.write_text(json.dumps(data))
-    store = JobStore(path=jobs_path)
-    jobs = store.list()
-    assert len(jobs) == 1
-    assert jobs[0].status == JobStatus.FAILED
-    assert jobs[0].error == "process_restart"
-
-
-def test_crash_recovery_cancelling_to_failed(tmp_path: Path) -> None:
-    jobs_path = tmp_path / "jobs.json"
-    now = datetime.now(timezone.utc).isoformat()
-    data = [
-        {
-            "job_id": str(uuid.uuid4()),
-            "status": "CANCELLING",
-            "created_at": now,
-            "updated_at": now,
-            "result": None,
-            "error": None,
-        }
-    ]
-    jobs_path.write_text(json.dumps(data))
-    store = JobStore(path=jobs_path)
-    jobs = store.list()
-    assert len(jobs) == 1
-    assert jobs[0].status == JobStatus.FAILED
-    assert jobs[0].error == "process_restart"
+def _seed_job_file(
+    jobs_path: Path,
+    *,
+    status: str,
+    created_at: str,
+    updated_at: str,
+    job_id: str | None = None,
+) -> str:
+    """Write a one-job jobs file and return that job's id."""
+    job_id = job_id or str(uuid.uuid4())
+    jobs_path.write_text(
+        json.dumps(
+            [
+                {
+                    "job_id": job_id,
+                    "status": status,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "result": None,
+                    "error": None,
+                }
+            ]
+        )
+    )
+    return job_id
 
 
 def test_corrupt_file_resets(tmp_path: Path) -> None:
@@ -469,3 +453,77 @@ def test_count_by_status_excludes_evicted_jobs(tmp_path: Path) -> None:
     counts = store.count_by_status()
     for status in JobStatus:
         assert counts[status] == 0, f"Expected 0 for {status} after eviction, got {counts[status]}"
+
+
+@pytest.mark.parametrize("crash_status", ["RUNNING", "CANCELLING"])
+def test_crash_recovery_stamps_updated_at(tmp_path: Path, crash_status: str) -> None:
+    """Crash-recovery marking must refresh updated_at, keeping created_at intact.
+
+    The load-time rewrite to FAILED/"process_restart" is a status transition like
+    any other, but it bypasses ``JobStore.update`` and so never stamps
+    ``updated_at``. A recovered job therefore keeps its pre-crash timestamp — and
+    ``_evict_old`` (7-day cutoff on ``updated_at``) silently deletes the record on
+    the very next load once that stale timestamp ages out.
+    """
+    jobs_path = tmp_path / "jobs.json"
+    created_at = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    stale_updated_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    job_id = _seed_job_file(
+        jobs_path, status=crash_status, created_at=created_at, updated_at=stale_updated_at
+    )
+
+    load_start_time = datetime.now(timezone.utc)
+    store = JobStore(path=jobs_path)
+
+    job = store.get(job_id)
+    assert job is not None
+    assert job.status == JobStatus.FAILED
+    assert job.error == "process_restart"
+    assert job.created_at == created_at, "created_at must survive crash recovery unchanged"
+    assert datetime.fromisoformat(job.updated_at) >= load_start_time, (
+        "crash recovery must stamp updated_at with the recovery time; got "
+        f"{job.updated_at!r} (seeded pre-crash value was {stale_updated_at!r}), "
+        f"which predates the load at {load_start_time.isoformat()!r}"
+    )
+    persisted = json.loads(jobs_path.read_text())
+    assert persisted[0]["updated_at"] == job.updated_at, (
+        "the refreshed updated_at must be persisted to disk, not only held in memory"
+    )
+
+
+@pytest.mark.parametrize("crash_status", ["RUNNING", "CANCELLING"])
+def test_crash_recovery_survives_eviction_cutoff(tmp_path: Path, crash_status: str) -> None:
+    """A crash job whose pre-crash updated_at predates the 7-day cutoff must survive load.
+
+    Recovery rewrites the status to FAILED, which is a terminal status and therefore
+    eligible for _evict_old. Without the refreshed updated_at the row would be deleted
+    on the very same load that recovered it.
+    """
+    jobs_path = tmp_path / "jobs.json"
+    ancient = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    job_id = _seed_job_file(jobs_path, status=crash_status, created_at=ancient, updated_at=ancient)
+
+    job = JobStore(path=jobs_path).get(job_id)
+
+    assert job is not None, "crash-recovered job was evicted despite the updated_at refresh"
+    assert job.status == JobStatus.FAILED
+    assert job.error == "process_restart"
+
+
+@pytest.mark.parametrize("terminal_status", ["DONE", "FAILED", "CANCELLED"])
+def test_load_leaves_non_crash_jobs_untouched(tmp_path: Path, terminal_status: str) -> None:
+    """Only crash statuses are rewritten — a terminal job keeps its status and timestamps."""
+    jobs_path = tmp_path / "jobs.json"
+    created_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    updated_at = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    job_id = _seed_job_file(
+        jobs_path, status=terminal_status, created_at=created_at, updated_at=updated_at
+    )
+
+    job = JobStore(path=jobs_path).get(job_id)
+
+    assert job is not None
+    assert job.status == JobStatus(terminal_status)
+    assert job.error is None
+    assert job.created_at == created_at
+    assert job.updated_at == updated_at, "non-crash jobs must not have updated_at rewritten on load"

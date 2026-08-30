@@ -111,7 +111,7 @@ on disk never lies about the plan.
 | [[2026-08-19-050-fts-rebuild-on-empty-collection-brief.md]] | P1 | FTS optimize/rebuild fires for ok-but-zero-chunk results → `Table not found` kills the job |
 | [[2026-08-19-060-ingest-job-level-lock-dropped-brief.md]] | P1 | Job-level collection exclusivity silently dropped; 3 disjoint lock domains; parser init race |
 | [[2026-08-19-070-fasttext-numpy2-language-detection-brief.md]] | P2 | fasttext 0.9.2 × NumPy 2: language detection fails for every file |
-| [[2026-08-19-080-process-restart-stale-updated-at-brief.md]] | P2 | Crash-recovery FAILED marking keeps the pre-crash `updated_at` — corrupts forensics |
+| [[2026-08-19-080-process-restart-stale-updated-at-brief.md]] | P1 | Crash-recovery FAILED marking keeps the pre-crash `updated_at` — corrupts forensics and lets `_evict_old` silently drop the job — **Done 2026-08-30** |
 | [[2026-08-19-035-multilingual-graph-ner-brief.md]] | Enhancement | Committed successor for multilingual prose NER (GLiNER-class ONNX, eval-gated) — filed during the fix-decision review of 030 |
 
 ## Operational state & warning

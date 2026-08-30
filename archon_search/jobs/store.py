@@ -360,7 +360,10 @@ class JobStore:
                     job = IngestJob(**item)
                 if job.status in _CRASH_STATUSES:
                     job = dataclasses.replace(
-                        job, status=JobStatus.FAILED, error="process_restart"
+                        job,
+                        status=JobStatus.FAILED,
+                        error="process_restart",
+                        updated_at=_now_iso(),
                     )
                     modified = True
                     if job_type in _INGEST_FAMILY_JOB_TYPES:
@@ -370,7 +373,7 @@ class JobStore:
             # Ordering is load-bearing: the rewrite above sets status=FAILED, which
             # IS in _TERMINAL_STATUSES, so an old crash row is itself eligible for
             # eviction below. The crash-loop guard survives only because
-            # _crashed_ingest_on_load is latched at line 355, before eviction runs
+            # _crashed_ingest_on_load is latched in the recovery branch above, before eviction runs
             # here — evicting first would silently disable the guard for any row
             # older than _EVICTION_DAYS. Do not reorder.
             self._evict_old()
