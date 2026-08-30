@@ -118,6 +118,24 @@ const TYPE_COLORS = {
 };
 const DEFAULT_COLOR = "#CCCCCC";
 
+// ── Relationship-type colour map (edges) ─────────────────────────────────────
+// related_to and synonym_of are undirected (no arrowhead): related_to is untyped
+// co-occurrence and falls back to DEFAULT_EDGE_COLOR; synonym_of is symmetric
+// (source=min(id), target=max(id) — an ID-sort artifact, not a real direction)
+// but still gets its own colour below, like any other relationship type.
+const RELATIONSHIP_COLORS = {
+  uses:        "#2E86AB",
+  implements:  "#06A77D",
+  depends_on:  "#D62839",
+  synonym_of:  "#8338EC",
+  calls:       "#FF6B35",
+  imports:     "#118AB2",
+  defines:     "#EF476F",
+  inherits:    "#073B4C",
+};
+const DEFAULT_EDGE_COLOR = "#999999";
+const UNDIRECTED_RELATIONSHIP_TYPES = ["related_to", "synonym_of"];
+
 // ── mulberry32 PRNG (fixed-seed layout) ──────────────────────────────────────
 function mulberry32(seed) {
   return function () {
@@ -210,13 +228,22 @@ function buildVisNode(n) {
 }
 
 function buildVisEdge(e) {
-  return {
+  // Missing/null relationship_type behaves like related_to: no arrowhead, default colour.
+  var isDirectional = !!e.relationship_type &&
+    UNDIRECTED_RELATIONSHIP_TYPES.indexOf(e.relationship_type) === -1;
+  var hasColor = Object.prototype.hasOwnProperty.call(RELATIONSHIP_COLORS, e.relationship_type);
+  var edge = {
     id:    e.edge_id,
     from:  e.source_entity_id,
     to:    e.target_entity_id,
     width: 1 + Math.min(e.weight, 10),
     title: e.relationship_type,  // edge hover tooltip
+    color: hasColor ? RELATIONSHIP_COLORS[e.relationship_type] : DEFAULT_EDGE_COLOR,
   };
+  if (isDirectional) {
+    edge.arrows = "to";
+  }
+  return edge;
 }
 
 function renderGraph(nodes, edges) {

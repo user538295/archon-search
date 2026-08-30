@@ -45,6 +45,54 @@ def _extract_vendor_js(html: str) -> str:
     return m.group(1)
 
 
+def _extract_function_body(html: str, func_name: str) -> str:
+    """Return the true body of ``function func_name(...) { ... }`` via brace-depth counting.
+
+    Locating the closing brace with a fixed substring like ``"\\n}"`` silently
+    truncates (or over-extends) whenever the real closing brace isn't at column
+    0 or a nested block closes at column 0 first. Counting brace depth from the
+    function's opening ``{`` finds the true matching close.
+    """
+    start = html.index("function " + func_name)
+    open_brace = html.index("{", start)
+    depth = 0
+    for i in range(open_brace, len(html)):
+        if html[i] == "{":
+            depth += 1
+        elif html[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return html[start : i + 1]
+    raise AssertionError(f"Unbalanced braces while extracting function {func_name!r}")
+
+
+def _extract_json_like_block(html: str, const_decl: str) -> str:
+    """Return the ``{ ... }`` object-literal body following ``const_decl`` (e.g. ``"const FOO"``),
+    via brace-depth counting (robust to nested braces, unlike a fixed ``"};"`` search)."""
+    start = html.index(const_decl)
+    open_brace = html.index("{", start)
+    depth = 0
+    for i in range(open_brace, len(html)):
+        if html[i] == "{":
+            depth += 1
+        elif html[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return html[open_brace : i + 1]
+    raise AssertionError(f"Unbalanced braces while extracting block for {const_decl!r}")
+
+
+def _assert_no_external_urls(html: str) -> None:
+    """Shared assertion body for the no-external-URL guard (used by two tests)."""
+    app_html = _strip_vendor_block(html)
+
+    assert '<script src="https://' not in app_html, "External <script src> found"
+    assert '<link href="https://' not in app_html, "External <link href> found"
+    assert 'fetch("https://' not in app_html, "External fetch() with https:// found"
+    assert "fetch('https://" not in app_html, "External fetch() with https:// (single-quote) found"
+    assert "new XMLHttpRequest" not in app_html, "XMLHttpRequest found — use fetch instead"
+
+
 # ---------------------------------------------------------------------------
 # Test 1: file is loadable as a package resource
 # ---------------------------------------------------------------------------
@@ -98,15 +146,13 @@ def test_viewer_html_contains_canvas_and_placeholders() -> None:
 # ---------------------------------------------------------------------------
 
 def test_viewer_html_no_external_urls() -> None:
-    """App code (outside vendor block) makes no external requests or CDN loads."""
-    html = _html_text()
-    app_html = _strip_vendor_block(html)
+    """App code (outside vendor block) makes no external requests or CDN loads.
 
-    assert '<script src="https://' not in app_html, "External <script src> found"
-    assert '<link href="https://' not in app_html, "External <link href> found"
-    assert 'fetch("https://' not in app_html, "External fetch() with https:// found"
-    assert "fetch('https://" not in app_html, "External fetch() with https:// (single-quote) found"
-    assert "new XMLHttpRequest" not in app_html, "XMLHttpRequest found — use fetch instead"
+    Also serves as FE-1's required no-external-URL regression guard for any
+    subsequent app-code edits (e.g. the buildVisEdge rewrite) — no separate
+    "still has no external urls" test is needed.
+    """
+    _assert_no_external_urls(_html_text())
 
 
 # ---------------------------------------------------------------------------
@@ -147,4 +193,158 @@ def test_viewer_html_overrides_math_random() -> None:
     network_init_pos = html.index("new vis.Network(")
     assert override_pos < network_init_pos, (
         "Math.random override must appear before 'new vis.Network(' for fixed-seed layout"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 6: relationship-type colour map (S34/FE-1)
+# ---------------------------------------------------------------------------
+
+def test_viewer_defines_relationship_colour_map() -> None:
+    """buildVisEdge is backed by a relationship-keyed colour map distinct from TYPE_COLORS,
+    and it is exhaustive over the real RelationshipType enum (except related_to)."""
+    from archon_search.graph_types import RelationshipType
+
+    html = _html_text()
+
+    assert "RELATIONSHIP_COLORS" in html, "Expected a RELATIONSHIP_COLORS map for edge colouring"
+
+    type_colors_block = _extract_json_like_block(html, "const TYPE_COLORS")
+    relationship_colors_block = _extract_json_like_block(html, "const RELATIONSHIP_COLORS")
+    assert type_colors_block != relationship_colors_block, (
+        "RELATIONSHIP_COLORS must have different contents than TYPE_COLORS "
+        "(a real distinctness check, not a string-position comparison)"
+    )
+
+    # Every real RelationshipType value except related_to must key the map — derived from
+    # the enum itself so the test can't drift from the wire schema, and related_to must be
+    # absent so it falls back to DEFAULT_EDGE_COLOR.
+    all_types = {m.value for m in RelationshipType}
+    assert "related_to" in all_types  # sanity: the enum still defines it
+    expected_keyed = all_types - {"related_to"}
+    for rtype in expected_keyed:
+        assert re.search(rf"\b{rtype}\s*:", relationship_colors_block), (
+            f"Expected {rtype!r} to appear as a real key (not just a substring, e.g. in a "
+            f"comment) in RELATIONSHIP_COLORS"
+        )
+    assert not re.search(r"\brelated_to\s*:", relationship_colors_block), (
+        "related_to must NOT be a key in RELATIONSHIP_COLORS — it must fall back to "
+        "DEFAULT_EDGE_COLOR"
+    )
+
+    # Reverse check: no stray/stale key exists in RELATIONSHIP_COLORS beyond the
+    # enum-derived expected set (catches drift when RelationshipType shrinks or renames).
+    actual_keys = set(re.findall(r"^\s*(\w+)\s*:", relationship_colors_block, re.MULTILINE))
+    assert actual_keys == expected_keyed, (
+        f"RELATIONSHIP_COLORS keys {actual_keys!r} do not match the expected "
+        f"enum-derived set {expected_keyed!r} — drift or a stale key present"
+    )
+
+    # buildVisEdge must actually consult the map when building an edge's colour.
+    build_vis_edge_body = _extract_function_body(html, "buildVisEdge")
+    assert "RELATIONSHIP_COLORS" in build_vis_edge_body, (
+        "buildVisEdge must use RELATIONSHIP_COLORS to colour edges"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 7: arrows only on directional relationship types
+# ---------------------------------------------------------------------------
+
+def test_viewer_sets_arrows_only_for_directional_types() -> None:
+    """related_to and synonym_of (undirected/symmetric relations) get no arrowhead;
+    directional types do — verified structurally, not just by substring presence."""
+    html = _html_text()
+    build_vis_edge_body = _extract_function_body(html, "buildVisEdge")
+
+    # UNDIRECTED_RELATIONSHIP_TYPES must name exactly the two undirected relation types —
+    # not merely contain them, so a stray extra entry (silently de-arrowing another type)
+    # is caught.
+    undirected_decl_pos = html.index("const UNDIRECTED_RELATIONSHIP_TYPES")
+    undirected_line = html[undirected_decl_pos : html.index("\n", undirected_decl_pos)]
+    undirected_values = set(re.findall(r'"([^"]+)"', undirected_line))
+    assert undirected_values == {"related_to", "synonym_of"}, (
+        f"Expected UNDIRECTED_RELATIONSHIP_TYPES to be exactly "
+        f"{{'related_to', 'synonym_of'}}, got {undirected_values!r}"
+    )
+
+    # The 'arrows' key assignment must appear guarded by an if/ternary tied to a directional
+    # check, not unconditionally on the edge object literal returned by the function.
+    edge_literal_match = re.search(r"var\s+edge\s*=\s*\{(.*?)\n\s*\};", build_vis_edge_body, re.DOTALL)
+    assert edge_literal_match is not None, "Expected a 'var edge = {...};' object literal"
+    assert "arrows" not in edge_literal_match.group(1), (
+        "'arrows' must NOT be set unconditionally inside the edge object literal — "
+        "it must be assigned only inside a directional guard"
+    )
+
+    # After the literal, there must be a conditional (if/ternary) block that sets
+    # edge.arrows, keyed off a directional/undirected check.
+    tail = build_vis_edge_body[edge_literal_match.end() :]
+    guarded_arrows = re.search(
+        r'if\s*\(\s*isDirectional\s*\)\s*\{[^}]*\.arrows\s*=\s*"to"', tail,
+    )
+    assert guarded_arrows is not None, (
+        "Expected 'edge.arrows = \"to\"' to be set inside an 'if (isDirectional) { ... }' guard, "
+        "after the edge object literal — not unconditionally, and not reversed to \"from\""
+    )
+
+    # isDirectional itself must be derived from membership in UNDIRECTED_RELATIONSHIP_TYPES,
+    # and must be false (not true) for a listed/undirected type — i.e. the check is the
+    # right way round (=== -1 meaning "not found" => directional), not inverted.
+    is_directional_decl = re.search(
+        r"isDirectional\s*=\s*.*UNDIRECTED_RELATIONSHIP_TYPES\.indexOf\([^)]*\)\s*===\s*-1",
+        build_vis_edge_body,
+        re.DOTALL,
+    )
+    assert is_directional_decl is not None, (
+        "Expected 'isDirectional' to be computed as "
+        "'UNDIRECTED_RELATIONSHIP_TYPES.indexOf(...) === -1' (not '!== -1', which would invert "
+        "the condition and arrow every edge including related_to/synonym_of)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 8: edge hover label (title: e.relationship_type) survives the rewrite
+# ---------------------------------------------------------------------------
+
+def test_edge_hover_label_survives_the_rewrite() -> None:
+    """Colour is not the only cue for relationship type — the hover tooltip must remain (Q32)."""
+    html = _html_text()
+
+    assert "title: e.relationship_type" in html, (
+        "Expected 'title: e.relationship_type' hover tooltip to remain set in buildVisEdge"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 9: no-external-URL guard still passes after the edit
+# ---------------------------------------------------------------------------
+
+def test_build_vis_edge_hardens_against_missing_or_hostile_relationship_type() -> None:
+    """Missing relationship_type must not fall into the directional/arrowed branch, and the
+    colour lookup must not be a bare object-literal index (prototype-pollution shaped)."""
+    html = _html_text()
+    build_vis_edge_body = _extract_function_body(html, "buildVisEdge")
+
+    # isDirectional must short-circuit falsy relationship_type before consulting the list.
+    assert re.search(
+        r"isDirectional\s*=\s*!!\s*e\.relationship_type\s*&&", build_vis_edge_body,
+    ), "Expected isDirectional to require a truthy relationship_type before the list check"
+
+    # A missing/null relationship_type must also fall back to DEFAULT_EDGE_COLOR, not just
+    # skip the arrowhead — hasOwnProperty on RELATIONSHIP_COLORS is false for undefined/null
+    # keys, so the ternary's false branch (DEFAULT_EDGE_COLOR) must be reachable.
+    assert re.search(
+        r"hasColor\s*\?\s*RELATIONSHIP_COLORS\[[^\]]*\]\s*:\s*DEFAULT_EDGE_COLOR",
+        build_vis_edge_body,
+    ), "Expected the colour lookup to fall back to DEFAULT_EDGE_COLOR when hasColor is false"
+
+    # Colour lookup must use hasOwnProperty (or equivalent) rather than a bare `map[key]`.
+    assert "hasOwnProperty" in build_vis_edge_body, (
+        "Expected a hasOwnProperty guard around the RELATIONSHIP_COLORS lookup to avoid "
+        "resolving prototype members like 'constructor' or '__proto__'"
+    )
+    assert "RELATIONSHIP_COLORS[e.relationship_type] ||" not in build_vis_edge_body, (
+        "Bare 'RELATIONSHIP_COLORS[e.relationship_type] || DEFAULT_EDGE_COLOR' lookup is "
+        "prototype-pollution shaped — use a hasOwnProperty-guarded lookup instead"
     )

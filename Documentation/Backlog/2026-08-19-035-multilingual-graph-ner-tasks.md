@@ -329,7 +329,7 @@ flowchart LR
         - #unit_test — `test_equal_weight_tie_is_deterministic_across_runs` — the winner does not vary with edge-id ordering
         - #unit_test — `test_unequal_weight_still_sorts_by_weight` — the weight ordering is unchanged
         - #integration_test — `test_inspector_caps_keep_typed_edge_over_untyped` — a real capped inspection retains the typed edge
-- [ ] **FE-1** — Colour and arrowhead typed edges in [graph_viewer.html](../../archon_search/server/graph_viewer.html)'s `buildVisEdge` — a second `relationship_type`-keyed map beside the existing entity-keyed `TYPE_COLORS` (`:112-119`), plus conditional `arrows` on directional types only #frontend-role
+- [x] **FE-1** — Colour and arrowhead typed edges in [graph_viewer.html](../../archon_search/server/graph_viewer.html)'s `buildVisEdge` — a second `relationship_type`-keyed map beside the existing entity-keyed `TYPE_COLORS` (`:112-119`), plus conditional `arrows` on directional types only #frontend-role
     - Presentation · 4.0h
     - needs K1 · completes S34
     - Tests
