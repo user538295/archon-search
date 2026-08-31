@@ -345,13 +345,13 @@ flowchart LR
     - Tests
         - #e2e_test — `test_e2e_viewer_differentiates_typed_and_untyped_edges` — HTML-content assertions on the served page: distinct colours, arrowhead on the typed edge only (there is no browser harness — the viewer is asserted as text)
 
-- [ ] **BE-22** — Warn instead of silently returning nothing when an enrichment reply carries no usable content, in all three clients ([ollama.py](../../archon_search/enrichment/ollama.py) `_extract_content` `:211-224`, [llama_cpp.py](../../archon_search/enrichment/llama_cpp.py), [openai.py](../../archon_search/enrichment/openai.py)) #backend-role
+- [x] **BE-22** — Warn instead of silently returning nothing when an enrichment reply carries no usable content, in all three clients ([ollama.py](../../archon_search/enrichment/ollama.py) `_extract_content` `:211-224`, [llama_cpp.py](../../archon_search/enrichment/llama_cpp.py), [openai.py](../../archon_search/enrichment/openai.py)) #backend-role
     - Adapters · 2.0h
     - needs —
     - Tests
-        - #unit_test — `test_empty_content_logs_warning` — a well-formed reply whose content is empty logs a WARNING rather than returning `[]` quietly
-        - #unit_test — `test_empty_content_still_returns_empty_list` — the auxiliary-write invariant holds: the warning must not raise or fail the ingest
-        - #unit_test — `test_genuine_empty_relation_list_does_not_warn` — a valid `[]` payload is not confused with an unusable reply
+        - [x] #unit_test — `test_empty_content_logs_warning` — a well-formed reply whose content is empty logs a WARNING rather than returning `[]` quietly
+        - [x] #unit_test — `test_empty_content_still_returns_empty_list` — the auxiliary-write invariant holds: the warning must not raise or fail the ingest
+        - [x] #unit_test — `test_genuine_empty_relation_list_does_not_warn` — a valid `[]` payload is not confused with an unusable reply
     - Notes
         - **Found by the K2g follow-up investigation, not by the spike itself.** A reasoning model returns its chain-of-thought in a separate field and leaves `content` empty; `label_relationships` then returns `[]` and [graph_extractor.py](../../archon_search/graph_extractor.py)`:738-765` loops zero times, sets no fallback flag and logs nothing — indistinguishable from "the model found no relationships". Any reasoning model configured as `[graph].provider` therefore produces **zero typed edges, silently**.
         - This is the visibility half only. Whether such models are supportable at all is **K3**; the actual support decision is **BE-23**.

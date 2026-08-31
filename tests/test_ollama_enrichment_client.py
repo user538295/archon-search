@@ -203,3 +203,84 @@ async def test_ollama_enrichment_label_relationships_partial_parse(caplog) -> No
 
     assert result == [LabeledRelationship(source_entity="A", target_entity="B", relationship_type="uses")]
     assert len(caplog.records) == 1
+
+
+@pytest.mark.asyncio
+async def test_ollama_enrichment_empty_content_logs_warning(caplog) -> None:
+    response = _make_response(_choices_body(""))
+    mock_cls = _make_async_client_cls(response=response)
+
+    client = _make_client()
+    with (
+        patch("archon_search.enrichment.ollama.httpx.AsyncClient", mock_cls),
+        caplog.at_level("WARNING"),
+    ):
+        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
+
+    assert result == []
+    assert len(caplog.records) == 1
+    assert "no usable content" in caplog.records[0].message
+
+
+@pytest.mark.asyncio
+async def test_ollama_enrichment_whitespace_content_logs_warning(caplog) -> None:
+    response = _make_response(_choices_body("   \n\t  "))
+    mock_cls = _make_async_client_cls(response=response)
+
+    client = _make_client()
+    with (
+        patch("archon_search.enrichment.ollama.httpx.AsyncClient", mock_cls),
+        caplog.at_level("WARNING"),
+    ):
+        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
+
+    assert result == []
+    assert len(caplog.records) == 1
+    assert "no usable content" in caplog.records[0].message
+
+
+@pytest.mark.asyncio
+async def test_ollama_enrichment_empty_content_does_not_raise() -> None:
+    """Auxiliary-write invariant: an empty-content reply must not propagate as an exception
+    up through the public label_relationships API — only [] with a warning."""
+    response = _make_response(_choices_body(""))
+    mock_cls = _make_async_client_cls(response=response)
+
+    client = _make_client()
+    with patch("archon_search.enrichment.ollama.httpx.AsyncClient", mock_cls):
+        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_ollama_enrichment_summarize_empty_content_logs_warning(caplog) -> None:
+    response = _make_response(_choices_body(""))
+    mock_cls = _make_async_client_cls(response=response)
+
+    client = _make_client()
+    with (
+        patch("archon_search.enrichment.ollama.httpx.AsyncClient", mock_cls),
+        caplog.at_level("WARNING"),
+    ):
+        result = await client.summarize_community(chunk_texts=["chunk"], entity_names=["Entity A"])
+
+    assert result is None
+    assert len(caplog.records) == 1
+    assert "no usable content" in caplog.records[0].message
+
+
+@pytest.mark.asyncio
+async def test_ollama_enrichment_genuine_empty_relation_list_does_not_warn(caplog) -> None:
+    response = _make_response(_choices_body("[]"))
+    mock_cls = _make_async_client_cls(response=response)
+
+    client = _make_client()
+    with (
+        patch("archon_search.enrichment.ollama.httpx.AsyncClient", mock_cls),
+        caplog.at_level("WARNING"),
+    ):
+        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
+
+    assert result == []
+    assert len(caplog.records) == 0

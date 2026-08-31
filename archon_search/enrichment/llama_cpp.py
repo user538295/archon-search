@@ -144,8 +144,9 @@ class LlamaCppEnrichmentClient:
         if text is None:
             return None
 
-        text = text.strip()
-        return text if text else None
+        # _extract_content already filters empty/whitespace content and returns
+        # None for it, so `text` here is always non-empty after strip().
+        return text.strip()
 
     async def label_relationships(
         self,
@@ -247,19 +248,37 @@ class LlamaCppEnrichmentClient:
     def _extract_content(data: dict[str, Any]) -> str | None:
         """Normalize ``data["choices"][0]["message"]["content"]``.
 
-        Returns None on a missing/malformed shape or non-str content —
-        this is treated the same as an empty response (C2: "returns
-        null/[] on an entirely empty/missing response"), not a transport
-        failure.
+        Returns None on a missing/malformed shape, non-str content, or
+        empty/whitespace-only content — this is treated the same as an
+        empty response (C2: "returns null/[] on an entirely empty/missing
+        response"), not a transport failure; a WARNING is logged in every
+        case.
         """
         try:
-            content = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
         except (KeyError, IndexError, TypeError):
             _logger.warning("LlamaCppEnrichmentClient: malformed response body")
             return None
 
         if not isinstance(content, str):
             _logger.warning("LlamaCppEnrichmentClient: unexpected non-str content in response")
+            return None
+
+        if not content.strip():
+            finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+            if finish_reason:
+                _logger.warning(
+                    "LlamaCppEnrichmentClient: reply had no usable content "
+                    "(finish_reason=%r); treating as an unusable reply, not a "
+                    "genuine empty result",
+                    finish_reason,
+                )
+            else:
+                _logger.warning(
+                    "LlamaCppEnrichmentClient: reply had no usable content; treating "
+                    "as an unusable reply, not a genuine empty result"
+                )
             return None
 
         return content

@@ -285,6 +285,87 @@ async def test_llama_cpp_extract_content_non_str_returns_none() -> None:
 
 
 @pytest.mark.asyncio
+async def test_llama_cpp_enrichment_empty_content_logs_warning(caplog) -> None:
+    response = _make_response(_choices_body(""))
+    mock_cls = _make_async_client_cls(response)
+
+    client = _make_client()
+    with (
+        patch("archon_search.enrichment.llama_cpp.httpx.AsyncClient", mock_cls),
+        caplog.at_level("WARNING"),
+    ):
+        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
+
+    assert result == []
+    assert len(caplog.records) == 1
+    assert "no usable content" in caplog.records[0].message
+
+
+@pytest.mark.asyncio
+async def test_llama_cpp_enrichment_whitespace_content_logs_warning(caplog) -> None:
+    response = _make_response(_choices_body("   \n\t  "))
+    mock_cls = _make_async_client_cls(response)
+
+    client = _make_client()
+    with (
+        patch("archon_search.enrichment.llama_cpp.httpx.AsyncClient", mock_cls),
+        caplog.at_level("WARNING"),
+    ):
+        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
+
+    assert result == []
+    assert len(caplog.records) == 1
+    assert "no usable content" in caplog.records[0].message
+
+
+@pytest.mark.asyncio
+async def test_llama_cpp_enrichment_empty_content_does_not_raise() -> None:
+    """Auxiliary-write invariant: an empty-content reply must not propagate as an exception
+    up through the public label_relationships API — only [] with a warning."""
+    response = _make_response(_choices_body(""))
+    mock_cls = _make_async_client_cls(response)
+
+    client = _make_client()
+    with patch("archon_search.enrichment.llama_cpp.httpx.AsyncClient", mock_cls):
+        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_llama_cpp_enrichment_summarize_empty_content_logs_warning(caplog) -> None:
+    response = _make_response(_choices_body(""))
+    mock_cls = _make_async_client_cls(response)
+
+    client = _make_client()
+    with (
+        patch("archon_search.enrichment.llama_cpp.httpx.AsyncClient", mock_cls),
+        caplog.at_level("WARNING"),
+    ):
+        result = await client.summarize_community(chunk_texts=["chunk"], entity_names=["Entity A"])
+
+    assert result is None
+    assert len(caplog.records) == 1
+    assert "no usable content" in caplog.records[0].message
+
+
+@pytest.mark.asyncio
+async def test_llama_cpp_enrichment_genuine_empty_relation_list_does_not_warn(caplog) -> None:
+    response = _make_response(_choices_body("[]"))
+    mock_cls = _make_async_client_cls(response)
+
+    client = _make_client()
+    with (
+        patch("archon_search.enrichment.llama_cpp.httpx.AsyncClient", mock_cls),
+        caplog.at_level("WARNING"),
+    ):
+        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
+
+    assert result == []
+    assert len(caplog.records) == 0
+
+
+@pytest.mark.asyncio
 async def test_llama_cpp_label_relationships_whole_body_parse_failure_raises() -> None:
     response = _make_response(_choices_body("not json at all"))
     mock_cls = _make_async_client_cls(response)
