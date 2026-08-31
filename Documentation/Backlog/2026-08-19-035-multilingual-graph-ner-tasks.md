@@ -339,7 +339,7 @@ flowchart LR
         - #unit_test — `test_viewer_still_has_no_external_urls` — the existing no-external-URL guard still passes after the edit
     - Notes
         - **Do not regenerate [graph_viewer.html.sha256](../../archon_search/server/graph_viewer.html.sha256) (Q31).** It hashes only the extracted `<script id="vendor-vis-network">` block, so an app-code edit cannot invalidate it. The plan's three regeneration statements were corrected.
-- [ ] **T-1** — e2e: the served viewer page distinguishes a typed edge from its `related_to` twin over the same node pair #tester-role
+- [x] **T-1** — e2e: the served viewer page distinguishes a typed edge from its `related_to` twin over the same node pair #tester-role
     - — · 3.0h
     - needs BE-1, FE-1 · completes S34, S35
     - Tests

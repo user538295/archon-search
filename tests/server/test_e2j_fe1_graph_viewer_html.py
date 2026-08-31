@@ -82,6 +82,19 @@ def _extract_json_like_block(html: str, const_decl: str) -> str:
     raise AssertionError(f"Unbalanced braces while extracting block for {const_decl!r}")
 
 
+def _extract_undirected_relationship_types(html: str) -> set[str]:
+    """Return the string values inside ``const UNDIRECTED_RELATIONSHIP_TYPES = [ ... ]``.
+
+    Spans newlines (unlike a single-line slice) so reformatting the array onto
+    multiple lines can't silently yield an empty/wrong set.
+    """
+    m = re.search(
+        r"const UNDIRECTED_RELATIONSHIP_TYPES\s*=\s*\[(.*?)\]", html, re.DOTALL
+    )
+    assert m is not None, "Expected 'const UNDIRECTED_RELATIONSHIP_TYPES = [...]' in HTML"
+    return set(re.findall(r'"([^"]+)"', m.group(1)))
+
+
 def _assert_no_external_urls(html: str) -> None:
     """Shared assertion body for the no-external-URL guard (used by two tests)."""
     app_html = _strip_vendor_block(html)
@@ -260,9 +273,7 @@ def test_viewer_sets_arrows_only_for_directional_types() -> None:
     # UNDIRECTED_RELATIONSHIP_TYPES must name exactly the two undirected relation types —
     # not merely contain them, so a stray extra entry (silently de-arrowing another type)
     # is caught.
-    undirected_decl_pos = html.index("const UNDIRECTED_RELATIONSHIP_TYPES")
-    undirected_line = html[undirected_decl_pos : html.index("\n", undirected_decl_pos)]
-    undirected_values = set(re.findall(r'"([^"]+)"', undirected_line))
+    undirected_values = _extract_undirected_relationship_types(html)
     assert undirected_values == {"related_to", "synonym_of"}, (
         f"Expected UNDIRECTED_RELATIONSHIP_TYPES to be exactly "
         f"{{'related_to', 'synonym_of'}}, got {undirected_values!r}"
