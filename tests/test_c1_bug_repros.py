@@ -2763,17 +2763,23 @@ def test_load_corrupt_tail_after_running_ingest_row_does_not_leak_crashed_flag(
 
 # --------------------------------------------------------------------------- #
 # 2026-08-20 — fix-brief-A item 4: `_evict_old()` (store.py:358) must stay
-# after the crash-marker loop (store.py:349-355). The rewrite to FAILED makes
-# an old crash row eligible for eviction on the same boot; the guard survives
-# only because the flag is latched before eviction runs. This pins that
-# ordering as an explicit regression guard.
+# after the crash-marker loop (store.py:349-355), so the crash-loop guard
+# latches before eviction runs.
+#
+# 2026-08-30 — superseded by fix-brief 2026-08-19-080: the crash-marker
+# rewrite now also stamps `updated_at=_now_iso()` (store.py:361-367), so a
+# stale RUNNING row recovered here is no longer immediately eviction-eligible
+# — it survives this load with a refreshed timestamp instead of being
+# silently dropped (the P1 data-loss bug that fix closed). This test now
+# pins the guard-arms-and-the-row-survives shape rather than
+# guard-arms-then-row-is-evicted.
 # --------------------------------------------------------------------------- #
-def test_stale_running_ingest_job_arms_guard_before_being_evicted(
+def test_stale_running_ingest_job_arms_guard_and_survives_recovery(
     tmp_path: Path,
 ) -> None:
-    """A RUNNING ingest job older than ``_EVICTION_DAYS`` must still arm the
-    crash-loop guard even though it is evicted (as FAILED, a terminal status)
-    on the very same load.
+    """A RUNNING ingest job older than ``_EVICTION_DAYS`` arms the crash-loop
+    guard, and — since the crash rewrite refreshes ``updated_at`` — survives
+    the very same load as a FAILED row rather than being evicted by it.
 
     ``JobStore.__init__`` calls ``self._write_atomic()`` whenever ``_load()``
     reports ``modified`` (true here — the crash rewrite sets it) — and
@@ -2806,15 +2812,24 @@ def test_stale_running_ingest_job_arms_guard_before_being_evicted(
     ]
     jobs_path.write_text(json.dumps(raw))
 
+    load_start = datetime.now(timezone.utc)
     with patch.object(JobStore, "_write_atomic", new=lambda self: None):
         store = JobStore(path=jobs_path)
 
     assert store.crashed_ingest_on_load is True, (
         "a RUNNING ingest job older than _EVICTION_DAYS must still arm the "
-        "crash-loop guard before it becomes eligible for eviction"
+        "crash-loop guard on recovery"
     )
-    assert store.list() == [], (
-        f"the stale, now-FAILED crash row must be evicted; got {store.list()!r}"
+    jobs = store.list()
+    assert [job.job_id for job in jobs] == ["job-stale"], (
+        f"the stale crash row must survive recovery, not be evicted; got {jobs!r}"
+    )
+    job = jobs[0]
+    assert job.status == JobStatus.FAILED
+    assert job.error == "process_restart"
+    assert datetime.fromisoformat(job.updated_at) >= load_start, (
+        "updated_at must be refreshed to the recovery time, which is what keeps "
+        "the row from being immediately re-eligible for eviction"
     )
 
 
