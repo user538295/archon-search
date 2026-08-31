@@ -55,6 +55,48 @@ def _prompt_jina_license(non_interactive: bool, accept_jina_license: bool = Fals
 
 
 # ---------------------------------------------------------------------------
+# The one license rule (S39) — dispatches on ArtifactSpec.license_disposition;
+# no per-model or per-name branching.
+# ---------------------------------------------------------------------------
+
+
+def apply_license_rule(
+    spec: ArtifactSpec, non_interactive: bool, accept_license: bool = False
+) -> None:
+    """Disclose or gate on *spec*'s license per its ``license_disposition``.
+
+    ``disclose_only`` prints the license and returns — no prompt, no SystemExit.
+    ``prompt_for_acceptance`` gates on user / flag acceptance, raising SystemExit(1) if
+    declined or non-interactive without an accept flag. Pattern mirrors
+    _prompt_jina_license / _prompt_fasttext_license.
+    """
+    if spec.license_disposition == LicenseDisposition.disclose_only:
+        print(f"{spec.name} is licensed {spec.license}.")
+        return
+
+    if spec.license_disposition != LicenseDisposition.prompt_for_acceptance:
+        raise ValueError(f"Unrecognized license_disposition: {spec.license_disposition!r}")
+
+    print(
+        f"WARNING: {spec.name} is licensed {spec.license}, which restricts use.\n"
+        "You will be required to confirm license acceptance before this artifact is downloaded."
+    )
+
+    if accept_license:
+        return
+
+    if non_interactive:
+        print(f"Non-interactive mode: {spec.name} license automatically declined.")
+        raise SystemExit(1)
+
+    response = input("Type 'accept' to confirm license acceptance and continue, or anything else to abort: ")
+    if response.strip().lower() == "accept":
+        return
+    print("License not accepted. Aborting.")
+    raise SystemExit(1)
+
+
+# ---------------------------------------------------------------------------
 # fasttext license gate (Task 4.1)
 # ---------------------------------------------------------------------------
 

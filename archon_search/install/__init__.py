@@ -70,6 +70,7 @@ from .licenses import _download_fasttext_model as _download_fasttext_model
 from .licenses import _prompt_fasttext_license as _prompt_fasttext_license
 from .licenses import _prompt_jina_license as _prompt_jina_license
 from .licenses import _requires_jina_license as _requires_jina_license
+from .licenses import apply_license_rule as apply_license_rule
 from .lock import _acquire_install_lock as _acquire_install_lock
 from .lock import _install_lock_path as _install_lock_path
 from .lock import _pid_is_alive as _pid_is_alive

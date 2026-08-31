@@ -428,7 +428,7 @@ flowchart LR
         - #integration_test — `test_disk_guard_timeouts_and_display_all_derive_from_one_total` — a synthetic multi-artifact selection drives all three consistently
     - Notes
         - **No hour change from the Provisioning decision (team plan `:111-130`).** The graph model still contributes to `total_bytes` — it just moves buckets, from the provisioned-artifact byte field to the size-estimate's declared-MB field (BE-3, FE-2), the same bucket the tree-sitter bundle already uses. The derivation logic (`required_free_bytes = total_bytes * 2`, the two timeouts, the display) is unchanged either way, so this task's scope and estimate hold.
-- [ ] **BE-5** — Add the one license rule to [licenses.py](../../archon_search/install/licenses.py) — restrictive-on-use prompts, everything else is disclosure-only — leaving `_prompt_jina_license` (`:26`) and `_prompt_fasttext_license` (`:60`) untouched #backend-role
+- [x] **BE-5** — Add the one license rule to [licenses.py](../../archon_search/install/licenses.py) — restrictive-on-use prompts, everything else is disclosure-only — leaving `_prompt_jina_license` (`:26`) and `_prompt_fasttext_license` (`:60`) untouched #backend-role
     - Frameworks & Drivers · 4.0h
     - needs BE-3 · completes S39
     - Tests
