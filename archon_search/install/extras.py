@@ -21,6 +21,7 @@ from archon_search.paths import get_spacy_models_dir
 
 from .config_writer import WizardFeatures
 from .errors import InstallError
+from .provisioning import SizeEstimateSpec
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +150,18 @@ def _install_cuda_torch(dry_run: bool = False) -> None:
         return
 
     click.echo("CUDA torch/torchvision installed.")
+
+
+# Ten pip/uv-resolved wheels with no pinned URL and no stable byte count across platforms, so
+# this is a declared estimate rather than a measured total: 16.8 MB installed on macOS/arm64
+# (2026-08-31), rounded up for platform variance.
+CODE_EXTRA_SIZE_ESTIMATE = SizeEstimateSpec(name="archon-search[code]", declared_mb=18)
+
+# The graph NER checkpoint is fetched lazily by ``GLiNER.from_pretrained``, never through the
+# digest-pinned provisioning seam, so it declares an estimate too. 1218 MB is the 1,276,776,490
+# byte ONNX export measured during the graph-NER spike — a ballpark for the display and the disk
+# guard, not a verified download size.
+GRAPH_MODEL_SIZE_ESTIMATE = SizeEstimateSpec(name="gliner-relex-multi-v1.0", declared_mb=1218)
 
 
 def _install_code_extra(dry_run: bool = False) -> None:

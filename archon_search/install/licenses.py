@@ -1,6 +1,7 @@
 """License gates (Jina, fasttext) plus the fasttext model download."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 import urllib.error
@@ -10,6 +11,7 @@ from pathlib import Path
 from archon_search.profiles import JINA_RERANKER_MODEL, InstallProfile
 
 from .errors import InstallError
+from .provisioning import ArtifactSpec, LicenseDisposition
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +91,29 @@ def _prompt_fasttext_license(non_interactive: bool, accept_fasttext_license: boo
 
 FASTTEXT_MODEL_URL = "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.ftz"
 
+# Digest and byte count generated from the bytes served at FASTTEXT_MODEL_URL (2026-08-31),
+# never read off a model card. ``revision`` and ``attribution`` are unpopulated: the URL is a
+# single fixed asset with no upstream revision concept, and we redistribute nothing — the file
+# is fetched from its own URL and placed as-is. ``license_disposition`` is likewise inert here;
+# the operator gate stays on the legacy ``_prompt_fasttext_license`` above.
+FASTTEXT_ARTIFACT = ArtifactSpec(
+    name="lid.176.ftz",
+    url=FASTTEXT_MODEL_URL,
+    revision="",
+    sha256="8f3472cfe8738a7b6099e8e999c3cbfae0dcd15696aac7d7738a8039db603e83",
+    size_bytes=938013,
+    license="CC-BY-SA-3.0",
+    license_disposition=LicenseDisposition.disclose_only,
+    attribution="",
+)
+
 
 def _download_fasttext_model(models_dir: Path) -> None:
     """Download the fasttext language identification model to *models_dir*.
 
     - Creates *models_dir* (mode 0o700) if absent.
-    - No-op if ``lid.176.ftz`` already exists in *models_dir*.
+    - No-op if ``lid.176.ftz`` already exists and matches ``FASTTEXT_ARTIFACT.sha256``;
+      a mismatching file is deleted and re-downloaded (non-fatal, one time per install).
     - Uses ``urllib.request.urlopen`` with an explicit 120-second socket timeout
       instead of ``urlretrieve`` (which has no timeout).
     - Raises ``InstallError`` on network failure or if the downloaded file is empty/corrupt.
@@ -102,8 +121,14 @@ def _download_fasttext_model(models_dir: Path) -> None:
     target = models_dir / "lid.176.ftz"
 
     if target.exists():
-        logger.debug("fasttext model already present at %s — skipping download", target)
-        return
+        # The file is under 1 MB, so one read beats a chunked hasher.
+        if hashlib.sha256(target.read_bytes()).hexdigest() == FASTTEXT_ARTIFACT.sha256:
+            logger.debug("fasttext model already present at %s — skipping download", target)
+            return
+        logger.warning(
+            "fasttext model at %s does not match the pinned digest — re-downloading", target
+        )
+        target.unlink()
 
     models_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
 

@@ -407,7 +407,7 @@ flowchart LR
         - #integration_test — `test_language_detector_loads_from_relocated_data_dir` — the detector still finds `lid.176.ftz` after redirection
     - Notes
         - Both `MARKER_ALLOWLIST` pins in [tests/test_no_hardcoded_path_home.py](../../tests/test_no_hardcoded_path_home.py) (`:44`, `:45`) move with this change. [tests/path_home_allowlist.txt](../../tests/path_home_allowlist.txt) is **not** touched — verified: it holds no `language_detector.py` entry, and `paths.py` is whole-file exempt via that module's `FILE_ALLOWLIST`.
-- [ ] **BE-3** — Add the two descriptor shapes (provisioned-artifact vs size-estimate), pin `lid.176.ftz`'s digest and byte count at [licenses.py](../../archon_search/install/licenses.py)`:90-134`, keep the tree-sitter bundle **and the graph model** on the estimate shape ([extras.py](../../archon_search/install/extras.py)`:154-159`), and freeze C4's failure categories plus BE-14's device-probe fields as sanitized constants #backend-role
+- [x] **BE-3** — Add the two descriptor shapes (provisioned-artifact vs size-estimate), pin `lid.176.ftz`'s digest and byte count at [licenses.py](../../archon_search/install/licenses.py)`:90-134`, keep the tree-sitter bundle **and the graph model** on the estimate shape ([extras.py](../../archon_search/install/extras.py)`:154-159`), and freeze C4's failure categories plus BE-14's device-probe fields as sanitized constants #backend-role
     - Frameworks & Drivers · 7.5h
     - needs BE-2 · completes C4
     - Tests
