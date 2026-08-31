@@ -21,7 +21,7 @@ import logging
 import time
 from typing import Any
 
-from archon_search.enrichment import _VALID_RELATIONSHIP_TYPES
+from archon_search.enrichment import _VALID_RELATIONSHIP_TYPES, strip_json_code_fences
 from archon_search.graph_enrichment_protocol import LabeledRelationship
 
 _logger = logging.getLogger(__name__)
@@ -213,7 +213,7 @@ class AnthropicEnrichmentClient:
         raw_text = response.content[0].text.strip()
 
         # Parse JSON — raises ValueError (a subclass of Exception) on bad JSON
-        parsed = json.loads(raw_text)
+        parsed = json.loads(strip_json_code_fences(raw_text))
 
         if not isinstance(parsed, list):
             raise ValueError(f"Expected JSON array from LLM, got {type(parsed).__name__}")

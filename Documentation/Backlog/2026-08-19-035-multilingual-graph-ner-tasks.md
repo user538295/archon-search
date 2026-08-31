@@ -379,7 +379,7 @@ flowchart LR
         - #unit_test — tests follow K3's chosen branch; written once K3 has reported
     - Notes
         - **Deliberately unspecified until K3 reports** — writing the tests now would presume the outcome. The two branches are mutually exclusive: support (budget derived from pair count) or refuse (detect and fail loudly at config validation).
-- [ ] **BE-24** — Strip markdown code fences before parsing an enrichment reply as JSON, via **one shared helper** called by all **four** clients ([ollama.py](../../archon_search/enrichment/ollama.py)`:137`, [llama_cpp.py](../../archon_search/enrichment/llama_cpp.py)`:188`, [openai.py](../../archon_search/enrichment/openai.py)`:139`, [anthropic.py](../../archon_search/enrichment/anthropic.py)`:205`) #backend-role
+- [x] **BE-24** — Strip markdown code fences before parsing an enrichment reply as JSON, via **one shared helper** called by all **four** clients ([ollama.py](../../archon_search/enrichment/ollama.py)`:137`, [llama_cpp.py](../../archon_search/enrichment/llama_cpp.py)`:188`, [openai.py](../../archon_search/enrichment/openai.py)`:139`, [anthropic.py](../../archon_search/enrichment/anthropic.py)`:205`) #backend-role
     - Adapters · 2.0h
     - needs —
     - Tests
