@@ -101,6 +101,13 @@ def test_app_state_has_enrichment_client_for_three_sites(
     from archon_search.enrichment.llama_cpp import LlamaCppEnrichmentClient
 
     _install_spacy_stub(monkeypatch)
+    # BE-23's startup probe would otherwise fire a real inference POST toward
+    # `llama_cpp_base_url` (default http://localhost:8080) if a llama-server happens to be
+    # running on the machine running this test — this test is only about client injection.
+    monkeypatch.setattr(
+        "archon_search.model_validation._probe_extraction_model",
+        AsyncMock(return_value=[]),
+    )
     toml_content = (
         "[graph]\n"
         "enabled = true\n"

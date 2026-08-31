@@ -372,7 +372,7 @@ flowchart LR
         - **Negative-test scenario BE-23's suite must cover.** A non-reasoning model producing `finish_reason="length"` with empty content on a genuinely oversized prompt (many candidate pairs) must **not** be misdetected as "needs refusal" — that case should still just warn per BE-22's existing behaviour, not trigger a refusal path.
         - **Methodology limitation.** All measurements above (and the pre-existing K2 baselines they are compared against) are n=1 per configuration with no temperature pinned — single-sample, not statistically robust. Not re-run here (time-boxed spike); noted as a limitation rather than blocking the outcome below.
         - A "not economically supportable — document and refuse" outcome is a valid, complete result. `llama3.1:8b` (non-reasoning) completes the full 17-file corpus in 120.74s, so a working alternative already exists.
-- [ ] **BE-23** — Act on K3's outcome: either raise/derive the token budget for reasoning models, or detect and refuse them with a clear message #backend-role
+- [x] **BE-23** — Act on K3's outcome: either raise/derive the token budget for reasoning models, or detect and refuse them with a clear message #backend-role
     - Adapters · 3.0h
     - needs K3
     - Tests

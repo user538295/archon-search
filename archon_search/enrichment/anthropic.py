@@ -107,6 +107,17 @@ class AnthropicEnrichmentClient:
         self._rpm_capacity: int = config.extraction_rate_limit_rpm
         self._rpm_refill_at: float = time.monotonic() + 60.0
 
+    async def aclose(self) -> None:
+        """Close the underlying ``AsyncAnthropic`` client's HTTP connection pool.
+
+        A no-op when the ``anthropic`` package was unavailable at construction time
+        (``self._client`` is ``None``). ``AsyncAnthropic`` exposes an async ``close()``
+        method (not ``aclose``) — this wraps it under the name callers probe for via
+        ``hasattr(client, "aclose")`` (model_validation.py's startup probe).
+        """
+        if self._client is not None:
+            await self._client.close()  # type: ignore[attr-defined]
+
     async def _check_rate_limit(self) -> None:
         """Enforce the per-minute rate limit via a fixed-window counter.
 

@@ -552,3 +552,37 @@ def test_anthropic_client_constructible_from_real_graphconfig() -> None:
     )
     client = AnthropicEnrichmentClient(model="claude-haiku-4-5", config=cfg)
     assert client is not None
+
+
+# ---------------------------------------------------------------------------
+# 22. aclose() — BE-23 cycle-3 fix: the resource-leak regression gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_the_underlying_anthropic_client() -> None:
+    """aclose() must call the real AsyncAnthropic SDK client's own close() — this is the
+    regression gate for the cycle-1 leak: model_validation.py's probe calls aclose() on
+    whatever client EnrichmentClientFactory.build() returns, and previously
+    AnthropicEnrichmentClient defined no such method, so the persistent AsyncAnthropic
+    connection pool it holds (self._client) was never released."""
+    client = _make_client()
+    mock_sdk_client = MagicMock()
+    mock_sdk_client.close = AsyncMock()
+    client._client = mock_sdk_client
+    client._anthropic_available = True
+
+    await client.aclose()
+
+    mock_sdk_client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_aclose_is_a_noop_when_anthropic_unavailable() -> None:
+    """When the anthropic package was unavailable at construction, self._client is None —
+    aclose() must not raise trying to close a client that was never built."""
+    client = _make_client()
+    client._client = None
+    client._anthropic_available = False
+
+    await client.aclose()  # must not raise
