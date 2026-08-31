@@ -15,21 +15,14 @@ the parent of any file they intend to write) as needed.
 
 Downstream consumers that derive paths from ``get_data_dir()`` live in their
 domain modules, not here — see ``config.py`` (db / log / telemetry),
-``key_manager.get_key_file()``, ``jobs.model.get_jobs_file()``, and
-``language_detector.get_fasttext_models_dir()`` for the pattern. See the
-data-directory table in
+``key_manager.get_key_file()``, and ``jobs.model.get_jobs_file()`` for the
+pattern. See the data-directory table in
 ``Documentation/Architecture/130_data_architecture_and_persistence.md``
 for the canonical list.
 
-``get_spacy_models_dir()`` below is the one exception, and there is no
-general rule that predicts when the next derived path belongs here instead
-of in its domain module: the structurally identical fasttext case was
-solved the other way (``install/installer.py``'s ``download_fasttext_model()``
-computes ``get_data_dir() / "models"`` itself rather than importing
-``language_detector.get_fasttext_models_dir()``). ``get_spacy_models_dir()``
-lives here because the `2026-08-19-030` brief specified a ``paths.py``
-accessor, not because of a principle that would decide a future case the
-same way.
+Every model-artifact directory accessor lives in ``paths.py`` — see
+``get_models_dir()`` (the shared models root) and ``get_fasttext_models_dir()``
+/ ``get_spacy_models_dir()`` (derived from it) below.
 
 Raises ``ValueError`` (not ``ConfigError``) so it can be safely imported by
 ``archon_search.config`` without a circular import; ``load_config()`` wraps
@@ -91,6 +84,26 @@ def get_data_dir() -> Path:
     return home / ".archon-search"
 
 
+def get_models_dir() -> Path:
+    """Return the shared models root, resolved fresh on every call.
+
+    Base directory for all model-artifact caches (fasttext, spaCy, ...). Not
+    guaranteed to exist.
+    """
+    return get_data_dir() / "models"
+
+
+def get_fasttext_models_dir() -> Path:
+    """Return the fasttext models directory, resolved fresh on every call.
+
+    Deliberately identical to ``get_models_dir()`` — no ``fasttext/``
+    subdirectory is appended. Changing that would orphan every existing
+    install's on-disk ``lid.176.ftz``. There is no per-path env var override
+    (deliberately scoped to ``ARCHON_SEARCH_DATA_DIR`` only).
+    """
+    return get_models_dir()
+
+
 def get_spacy_models_dir() -> Path:
     """Return the directory holding wizard-provisioned spaCy NER models.
 
@@ -102,4 +115,4 @@ def get_spacy_models_dir() -> Path:
     Resolved fresh on every call so ``ARCHON_SEARCH_DATA_DIR`` relocates it;
     not guaranteed to exist.
     """
-    return get_data_dir() / "models" / "spacy"
+    return get_models_dir() / "spacy"

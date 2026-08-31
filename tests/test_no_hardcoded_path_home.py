@@ -44,6 +44,7 @@ MARKER_ALLOWLIST: frozenset[str] = frozenset({
     "tests/test_language_detector.py::test_module_constants",
     "tests/test_language_detector_paths.py::test_get_fasttext_models_dir_default",
     "tests/test_paths.py::test_default_returns_home_archon",
+    "tests/test_paths.py::test_get_models_dir_default_is_home_archon_models",
     "tests/test_paths.py::test_home_unset_raises_valueerror",
 })
 TESTS_ROOT = Path(__file__).resolve().parent

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.paths import get_data_dir
+from archon_search.paths import get_data_dir, get_fasttext_models_dir, get_models_dir
 
 
 @pytest.mark.archon_unset_data_dir
@@ -119,6 +119,29 @@ def test_home_unset_raises_valueerror(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Path, "home", classmethod(_raise_runtime_error))
     with pytest.raises(ValueError, match="HOME is not set"):
         get_data_dir()
+
+
+def test_get_models_dir_is_data_dir_slash_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``get_models_dir()`` is the shared models root, ``<data>/models``."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+    assert get_models_dir() == Path("/data/models")
+
+
+@pytest.mark.archon_unset_data_dir
+def test_get_models_dir_default_is_home_archon_models() -> None:
+    """No env var set → ``get_models_dir()`` falls back to ``~/.archon-search/models``."""
+    assert get_models_dir() == Path.home() / ".archon-search" / "models"
+    assert get_fasttext_models_dir() == Path.home() / ".archon-search" / "models"
+
+
+def test_get_fasttext_models_dir_equals_get_models_dir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``get_fasttext_models_dir()`` returns ``<data>/models`` UNCHANGED — no
+    ``fasttext/`` subdirectory. Appending one would orphan every existing
+    install's on-disk ``lid.176.ftz``."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+    assert get_fasttext_models_dir() == get_models_dir() == Path("/data/models")
 
 
 def test_does_not_create_directory(

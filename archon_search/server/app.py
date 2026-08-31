@@ -30,7 +30,6 @@ from archon_search.config import (
     resolve_reranker_providers,
     warn_gc_cpu_priority,
 )
-from archon_search.language_detector import FASTTEXT_MODEL_FILENAME, get_fasttext_models_dir
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.embedder_cache import (
     EMBEDDER_NOT_READY_CODE,
@@ -44,7 +43,7 @@ from archon_search.jobs.maintenance_loop import MaintenanceLoop
 from archon_search.jobs.scheduler import JobScheduler
 from archon_search.jobs.store import JobStore
 from archon_search.key_manager import KeyRecord, KeyStore, load_or_generate_key
-from archon_search.paths import get_data_dir
+from archon_search.paths import get_data_dir, get_fasttext_models_dir
 from archon_search.logging_setup import build_uvicorn_log_config, configure_logging
 from archon_search.model_validation import ModelValidationResult, validate_models_async
 from archon_search.parser import DocumentParser
@@ -291,8 +290,12 @@ def _multilingual_model_path() -> Path:
     """Return the lid.176.ftz model path, resolved lazily on every call.
 
     Derived from ``get_fasttext_models_dir()`` so ``ARCHON_SEARCH_DATA_DIR``
-    redirects the model lookup at call time, not at import time.
+    redirects the model lookup at call time, not at import time. Imports
+    ``FASTTEXT_MODEL_FILENAME`` lazily to avoid an eager ``language_detector``
+    import at module load.
     """
+    from archon_search.language_detector import FASTTEXT_MODEL_FILENAME  # noqa: PLC0415
+
     return get_fasttext_models_dir() / FASTTEXT_MODEL_FILENAME
 
 

@@ -27,7 +27,7 @@ import tomlkit
 from archon_search._durable_io import atomic_write_bytes
 from archon_search.config import SearchConfig, get_default_config_path, load_config
 from archon_search.key_manager import get_key_file, load_or_generate_key
-from archon_search.paths import get_data_dir
+from archon_search.paths import get_data_dir, get_fasttext_models_dir
 from archon_search.pipeline import create_pipeline
 from archon_search.platform.runtime import get_runtime, get_search_service
 from archon_search.platform.types import GpuType
@@ -1206,7 +1206,7 @@ class RealInstaller(BaseInstaller):
         (get_data_dir() / "logs").mkdir(parents=True, exist_ok=True)
 
     def download_fasttext_model(self) -> None:
-        _download_fasttext_model(get_data_dir() / "models")
+        _download_fasttext_model(get_fasttext_models_dir())
 
     def prepare_db_path(self, expanded: Path) -> bool:
         try:

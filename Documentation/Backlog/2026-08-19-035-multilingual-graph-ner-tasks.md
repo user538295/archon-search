@@ -397,7 +397,7 @@ flowchart LR
 
 ### Phase 2 · See and verify every byte an install will download *(closes a pre-existing integrity gap; kept as-is even if the Spike gate fails)*
 
-- [ ] **BE-2** — Split `get_fasttext_models_dir()` out of [language_detector.py](../../archon_search/language_detector.py) (`:22-29`) into [paths.py](../../archon_search/paths.py) as a new `get_models_dir()` root plus a derived accessor returning `<data>/models/` unchanged; move both names off [app.py](../../archon_search/server/app.py)`:33`, stop [installer.py](../../archon_search/install/installer.py)`:1209` recomputing the path by hand, and replace the module docstring's "no principle" note with the rule #backend-role
+- [x] **BE-2** — Split `get_fasttext_models_dir()` out of [language_detector.py](../../archon_search/language_detector.py) (`:22-29`) into [paths.py](../../archon_search/paths.py) as a new `get_models_dir()` root plus a derived accessor returning `<data>/models/` unchanged; move both names off [app.py](../../archon_search/server/app.py)`:33`, stop [installer.py](../../archon_search/install/installer.py)`:1209` recomputing the path by hand, and replace the module docstring's "no principle" note with the rule #backend-role
     - Frameworks & Drivers · 4.0h
     - needs K1 · completes S41
     - Tests

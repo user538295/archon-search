@@ -3565,8 +3565,8 @@ def create_pipeline(
     from archon_search.language_detector import (  # noqa: PLC0415
         LanguageDetector,
         FASTTEXT_MODEL_FILENAME,
-        get_fasttext_models_dir,
     )
+    from archon_search.paths import get_fasttext_models_dir  # noqa: PLC0415
 
     # 2026-08-19-030: same construction-time guard `create_app` applies. Without
     # it, non-server callers (e.g. `install/installer.py`) built a pipeline whose
