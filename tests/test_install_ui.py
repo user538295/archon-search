@@ -318,14 +318,14 @@ def test_summary_contains_server_url():
 
 
 def test_summary_contains_download_size():
-    """_render_summary with download_mb shows the size in output."""
+    """_render_summary with total_bytes shows the size in MB in output."""
     profile = get_profile("balanced", multilingual=False)
     output = _render_summary(
         "balanced",
         profile,
         multilingual=False,
         providers=[],
-        download_mb=300,
+        total_bytes=300_000_000,
     )
     assert "300 MB" in output
     assert "Download:" in output

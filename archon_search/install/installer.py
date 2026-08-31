@@ -63,8 +63,10 @@ from .prewarm import (
     _check_disk_space,
     _check_reinstall_guard,
     _execute_force_reinstall,
+    _planned_total_bytes,
     _prewarm_models,
 )
+from .provisioning import BYTES_PER_MB
 from .render import _print_next_steps, _render_summary
 from .service_ops import _create_secrets_env, _legacy_service_path, _remove_legacy_service
 from .wizard import (
@@ -86,18 +88,18 @@ _WAIT_FOR_SERVICE_TIMEOUT = 60
 _STARTUP_CRASH_MARKERS = ("ModuleNotFoundError", "ImportError")
 
 
-def _compute_svc_timeout(eager_load: bool, download_mb: int) -> int:
+def _compute_svc_timeout(eager_load: bool, total_bytes: int) -> int:
     """Return the service-ready wait timeout in seconds.
 
     With eager_load_embedders=True the server runs ONNX reconstruction before
     accepting requests; that can take several minutes for large models.  Scale
-    to ~100ms per MB, capped at 10 minutes.  Without eager load the default
-    60 s is sufficient.
+    to ~100ms per MB of the planned-download total, capped at 10 minutes.
+    Without eager load the default 60 s is sufficient.
     # ponytail: linear scale is fine; a smarter heuristic adds no value here
     """
     if not eager_load:
         return _WAIT_FOR_SERVICE_TIMEOUT
-    return min(600, max(_WAIT_FOR_SERVICE_TIMEOUT, download_mb * 100 // 1000))
+    return min(600, max(_WAIT_FOR_SERVICE_TIMEOUT, total_bytes // (10 * BYTES_PER_MB)))
 
 
 # ---------------------------------------------------------------------------
@@ -745,7 +747,7 @@ class BaseInstaller(ABC):
 
             # Step 11: disk space check
             try:
-                _check_disk_space(prof)
+                _check_disk_space(prof, features=features)
             except InstallError as exc:
                 print(str(exc))
                 if features.install_graph_extra:
@@ -766,7 +768,7 @@ class BaseInstaller(ABC):
                 host=features.host if features.host is not None else cfg.host,
                 port=features.port if features.port is not None else cfg.port,
                 api_key_file=str(_key_manager.get_key_file()),
-                download_mb=prof.download_mb,
+                total_bytes=_planned_total_bytes(prof, features),
             ))
 
             # Step 13: confirmation
@@ -873,7 +875,9 @@ class BaseInstaller(ABC):
 
             # Step 16: wait for readiness
             if not self.dry_run:
-                _svc_timeout = _compute_svc_timeout(features.eager_load_embedders, prof.download_mb)
+                _svc_timeout = _compute_svc_timeout(
+                    features.eager_load_embedders, _planned_total_bytes(prof, features)
+                )
                 ready = self._wait_for_service(timeout=_svc_timeout, log_offset=_log_offset)
                 if not ready:
                     print(f"Warning: Search service did not become ready within {_svc_timeout} seconds.")
@@ -943,7 +947,9 @@ class BaseInstaller(ABC):
         if not self.dry_run:
             _start_cfg = load_config(config_path)
             _start_prof = get_profile(_start_cfg.profile or "minimal", _start_cfg.multilingual)
-            _svc_timeout = _compute_svc_timeout(_start_cfg.eager_load_embedders, _start_prof.download_mb)
+            _svc_timeout = _compute_svc_timeout(
+                _start_cfg.eager_load_embedders, _planned_total_bytes(_start_prof)
+            )
             ready = self._wait_for_service(timeout=_svc_timeout, log_offset=_log_offset)
             if not ready:
                 click.echo(

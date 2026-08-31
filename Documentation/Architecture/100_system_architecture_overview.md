@@ -181,7 +181,7 @@ The install flow (`archon_search/install/`, orchestrated by `installer.py`):
 3. **C2**: When `multilingual=True`, prompts for CC-BY-SA 3.0 fasttext license acceptance (or checks `--accept-fasttext-license`) and downloads `lid.176.ftz` to `~/.archon-search/models/`.
 4. Detects reinstall with a mismatched profile; raises `NeedsForceDeleteError` when embedder or chunk_size differs; the caller requires `--force --delete-db` to proceed.
 5. Writes profile config (`[database].profile`, `embedding_model`, `reranker_model`, `multilingual`, `chunk_size`) to `archon-search.toml`.
-6. Checks available disk space against the profile's `download_mb` estimate.
+6. Checks available disk space against the planned-download byte total (the profile plus every selected extra), requiring twice that total free.
 7. Pre-warms model weights (before service registration).
 8. Registers and starts the OS service.
 

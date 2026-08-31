@@ -15,6 +15,9 @@ from archon_search.profiles import InstallProfile
 
 from .config_writer import WizardFeatures, _write_profile_config
 from .errors import InstallError, NeedsForceDeleteError
+from .extras import CODE_EXTRA_SIZE_ESTIMATE, GRAPH_MODEL_SIZE_ESTIMATE
+from .licenses import FASTTEXT_ARTIFACT
+from .provisioning import BYTES_PER_MB
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +26,31 @@ logger = logging.getLogger(__name__)
 # Disk space guard (Task C0-2.2)
 # ---------------------------------------------------------------------------
 
-def _check_disk_space(profile: InstallProfile, base_path: Path | None = None) -> None:
-    """Raise InstallError if the filesystem has insufficient free space for *profile*."""
+def _planned_total_bytes(profile: InstallProfile, features: WizardFeatures | None = None) -> int:
+    """Return the planned-download byte total for *profile* plus every selected extra.
+
+    Provisioned artifacts contribute their pinned ``size_bytes``; pip/uv-resolved or lazily
+    fetched ones contribute their declared MB estimate. The disk guard, the service-ready
+    timeouts and the wizard's displayed figure are all derived from this one total.
+    """
+    total = profile.download_mb * BYTES_PER_MB
+    if features is None:
+        return total
+    if features.install_code_extra:
+        total += CODE_EXTRA_SIZE_ESTIMATE.declared_mb * BYTES_PER_MB
+    if features.install_graph_extra:
+        total += GRAPH_MODEL_SIZE_ESTIMATE.declared_mb * BYTES_PER_MB
+    if features.install_multilingual_extra:
+        total += FASTTEXT_ARTIFACT.size_bytes
+    return total
+
+
+def _check_disk_space(
+    profile: InstallProfile,
+    base_path: Path | None = None,
+    features: WizardFeatures | None = None,
+) -> None:
+    """Raise InstallError if the filesystem has insufficient free space for the selection."""
     if base_path is None:
         base_path = get_data_dir()
 
@@ -33,11 +59,13 @@ def _check_disk_space(profile: InstallProfile, base_path: Path | None = None) ->
         check_path = check_path.parent
 
     usage = shutil.disk_usage(check_path)
-    required_bytes = profile.download_mb * 1024 * 1024 * 2
-    if usage.free < required_bytes:
+    # No ceil(): the summed byte total is already an integer.
+    required_free_bytes = _planned_total_bytes(profile, features) * 2
+    if usage.free < required_free_bytes:
         raise InstallError(
-            f"Insufficient disk space. This profile requires ~{profile.download_mb * 2} MB free;"
-            f" only {usage.free // 1_000_000} MB available."
+            f"Insufficient disk space. This install requires"
+            f" ~{required_free_bytes // BYTES_PER_MB} MB free;"
+            f" only {usage.free // BYTES_PER_MB} MB available."
         )
 
 

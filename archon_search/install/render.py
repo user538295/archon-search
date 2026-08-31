@@ -7,6 +7,7 @@ from archon_search.config import get_default_config_path
 from archon_search.profiles import InstallProfile, get_profile
 
 from .config_writer import WizardFeatures
+from .provisioning import BYTES_PER_MB
 
 _PROFILE_ORDER = ("minimal", "balanced", "max")
 _PROFILE_CAPS = {"minimal": "Minimal", "balanced": "Balanced", "max": "Max"}
@@ -82,7 +83,7 @@ def _render_summary(
     host: str = "127.0.0.1",
     port: int = 8765,
     api_key_file: str = "",
-    download_mb: int = 0,
+    total_bytes: int = 0,
 ) -> str:
     """Return an install summary block string. Does NOT print."""
     cap = _PROFILE_CAPS.get(profile_name, profile_name.capitalize())
@@ -102,8 +103,8 @@ def _render_summary(
     # API key display: mask first-8...last-4; show path for reference
     api_key_display = _mask_api_key(api_key_file)
     lines.append(f"  API key:    {api_key_display}  (full key: {api_key_file or _KEY_FILE_PLACEHOLDER})")
-    if download_mb:
-        lines.append(f"  Download:   ~{download_mb} MB")
+    if total_bytes:
+        lines.append(f"  Download:   ~{total_bytes // BYTES_PER_MB} MB")
     lines += [
         "",
         "  Note: Model files are downloaded now. ONNX session initialization happens in the",

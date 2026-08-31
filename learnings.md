@@ -17,11 +17,11 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 - **[2026-08-18] (×16) CLI HTTP-proxy**: custom `--api-url` probe fail → NOT_RUNNING (S530). Default URL probe fail + service running → STARTING_MSG (c7829cbd). Probe OK but non-usable → NOT_RUNNING (C1-I-16). Distinguish via `_LOCAL_DEFAULT_URL`.
 - **[2026-08-20] (×12) job-spawning route**: guard→404→create→`transition({QUEUED},RUNNING)` BEFORE `create_task`→track + `add_done_callback`. 409 via persisted `meta.<job>_job_id`, cleared BEFORE `job_store.update(DONE/FAILED)`.
 - **[2026-08-03] (×9) LanceDB quirks**: `.limit()` is a scan limit, not sort-then-limit. `merge_insert(["c1","c2"])` for composite keys; `when_matched_update_all()` replaces the whole row. Missing table → `ValueError`. `db.close()` is sync.
-- **[2026-08-18] (×23) install/wizard**: doc advertising an option the code never prints → fix the CODE. A prompt pinned by a locator AND a phrase admits ONE wording; on a reflip rewrite the GUARD DOCSTRINGS — a stale one argues for flip #4.
+- **[2026-08-31] (×24) install/wizard**: doc advertising an option the code never prints → fix the CODE. A prompt pinned by a locator AND a phrase admits ONE wording; on a reflip rewrite the GUARD DOCSTRINGS — a stale one argues for flip #4.
 - **[2026-08-21] (×4) 3rd-party wiring**: verify lib params per INPUT FORMAT (docling `OcrOptions.scale`) AND per CHECKPOINT — GLiNER `relations` no-ops off-RelEx; assert it at load. Leaks: `ProcessPoolExecutor(1, spawn, max_tasks_per_child)`.
 
 ## Plan-Making & Agent Process
-- **[2026-08-31] (×162) verify claims/state**: grep-verify every cite; prove repros vs unmodified HEAD (`git worktree add --detach`). Diffing WIP vs HEAD reads your own work as drift. NEVER trust a fix agent's "done" — 2 of 3 false once.
+- **[2026-08-31] (×163) verify claims/state**: grep-verify every cite; prove repros vs unmodified HEAD (`git worktree add --detach`). Diffing WIP vs HEAD reads your own work as drift. NEVER trust a fix agent's "done" — 2 of 3 false once.
 - **[2026-08-23] (×44) subagents**: PRIMARY channel is a scratchpad drop — final text is DISCARDED and a mid-run death (API error) leaves NOTHING. `mkdir -p` that dir BEFORE spawning. A grandchild's completion routes to the GRANDPARENT — relay it.
 - **[2026-08-27] (×35) doc close-out**: grep the WHOLE tree (incl. `README.md`, `*.toml.example`) for the old invariant string — per-file scope orphans siblings. Never put a `>` block between table rows. Order: api-ref→catalog→CLAUDE.md→manual.
 - **[2026-08-24] (×3) plan/task authoring**: a fix in the body but not the Decisions table / mermaid / doc-checklist is the top defect — sweep all 8 surfaces + the `.tsp`. `#team` gate → agent-runnable findings; never flip the box.

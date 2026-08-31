@@ -35,6 +35,10 @@ class ProvisionFailureKind(StrEnum):
     conflicting_onnx_runtimes = "conflicting_onnx_runtimes"
 
 
+# One MB as the size-estimate descriptors and the wizard's displayed figure both mean it
+# (decimal, not MiB), so `declared_mb * BYTES_PER_MB // BYTES_PER_MB` round-trips exactly.
+BYTES_PER_MB = 1_000_000
+
 # The torch device a pre-warm probe may resolve to, plus the status it reports when the
 # optional pre-warm did not run. Frozen here so the probe and its renderer share one symbol.
 TORCH_DEVICE_CPU = "cpu"
