@@ -582,3 +582,18 @@ def test_reranker_is_warm_propagates_backend_exception() -> None:
     reranker = Reranker(_BrokenBackend())  # type: ignore[arg-type]
     with pytest.raises(RuntimeError, match="backend broken"):
         _ = reranker.is_warm
+
+
+def test_reranker_caches_models_under_the_archon_data_dir() -> None:
+    """predict() must construct TextCrossEncoder with cache_dir=str(get_models_dir())."""
+    from unittest.mock import MagicMock, patch
+
+    from archon_search.paths import get_models_dir
+
+    fake_model = MagicMock()
+    fake_model.rerank.return_value = [0.9]
+    mr = ModelReranker("some-model")
+    with patch("fastembed.rerank.cross_encoder.TextCrossEncoder", return_value=fake_model) as mock_tce:
+        mr.predict([("query", "doc")])
+
+    assert mock_tce.call_args.kwargs["cache_dir"] == str(get_models_dir())

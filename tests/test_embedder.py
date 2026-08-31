@@ -381,3 +381,22 @@ def test_model_embedder_is_warm_true_after_encode() -> None:
         me.encode(["hello"])
 
     assert me.is_warm is True
+
+
+def test_embedder_caches_models_under_the_archon_data_dir() -> None:
+    """encode() must construct TextEmbedding with cache_dir=str(get_models_dir())."""
+    from unittest.mock import MagicMock, patch
+
+    from archon_search.embedder import ModelEmbedder
+    from archon_search.paths import get_models_dir
+
+    fake_embedding = MagicMock()
+    fake_embedding.tolist.return_value = [0.1, 0.2]
+    fake_model = MagicMock()
+    fake_model.embed.return_value = [fake_embedding]
+
+    me = ModelEmbedder("some-model")
+    with patch("fastembed.TextEmbedding", return_value=fake_model) as mock_te:
+        me.encode(["hello"])
+
+    assert mock_te.call_args.kwargs["cache_dir"] == str(get_models_dir())

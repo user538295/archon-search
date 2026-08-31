@@ -52,7 +52,8 @@ def test_prewarm_calls_text_embedding_lazy():
     fe_mod = _make_fastembed_mock(mock_te, mock_tce)
     with patch.dict(sys.modules, {"fastembed": fe_mod}):
         _prewarm_models(profile, timeout=300)
-    mock_te.assert_called_once_with(profile.embedder, lazy_load=True)
+    from archon_search.paths import get_models_dir
+    mock_te.assert_called_once_with(profile.embedder, lazy_load=True, cache_dir=str(get_models_dir()))
 
 
 def test_prewarm_calls_cross_encoder_when_reranker_set():
@@ -64,7 +65,8 @@ def test_prewarm_calls_cross_encoder_when_reranker_set():
     fe_mod = _make_fastembed_mock(mock_te, mock_tce)
     with patch.dict(sys.modules, {"fastembed": fe_mod}):
         _prewarm_models(profile, timeout=300)
-    mock_tce.assert_called_once_with(profile.reranker, lazy_load=True)
+    from archon_search.paths import get_models_dir
+    mock_tce.assert_called_once_with(profile.reranker, lazy_load=True, cache_dir=str(get_models_dir()))
 
 
 def test_prewarm_skips_cross_encoder_when_reranker_none():
@@ -223,3 +225,16 @@ def test_prewarm_cancels_timer_on_success():
         _prewarm_models(profile, timeout=300)
 
     mock_timer_instance.cancel.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _prewarm_models — cache_dir matches runtime ModelEmbedder/ModelReranker (BE-26)
+# ---------------------------------------------------------------------------
+
+def test_archon_search_data_dir_relocates_embedder_and_reranker_caches(tmp_path, monkeypatch):
+    """Redirecting ARCHON_SEARCH_DATA_DIR relocates get_models_dir() (and thus every cache_dir
+    derived from it — see test_embedder.py / test_reranker.py / the prewarm tests above)."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    from archon_search.paths import get_models_dir
+
+    assert str(get_models_dir()) == str(tmp_path / "models")

@@ -9,6 +9,7 @@ from typing import Any, Protocol, runtime_checkable
 from archon_search._diagnostics import ScoredSearchCandidate
 from archon_search._types import SearchResult
 from archon_search.observability import record_stage
+from archon_search.paths import get_models_dir
 
 # Trivial (query, document) pair used only to force a cold backend to load.
 _WARMUP_PAIR = ("warmup", "warmup")
@@ -40,7 +41,11 @@ class ModelReranker:
                 if self._model is None:
                     from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: PLC0415
 
-                    self._model = TextCrossEncoder(self._model_name, providers=self._providers)
+                    self._model = TextCrossEncoder(
+                        self._model_name,
+                        providers=self._providers,
+                        cache_dir=str(get_models_dir()),
+                    )
         # TextCrossEncoder.rerank(query, documents) → Iterable[float]
         # All pairs share the same query (pairs[0][0])
         query = pairs[0][0]

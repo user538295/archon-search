@@ -9,7 +9,7 @@ import warnings
 from pathlib import Path
 
 from archon_search.config import SearchConfig
-from archon_search.paths import get_data_dir
+from archon_search.paths import get_data_dir, get_models_dir
 from archon_search.platform.runtime import get_search_service
 from archon_search.profiles import InstallProfile
 
@@ -108,7 +108,7 @@ def _prewarm_models(profile: InstallProfile, timeout: int | None = None) -> None
                 warnings.filterwarnings(
                     "ignore", category=UserWarning, message=".*mean pooling.*"
                 )
-                TextEmbedding(profile.embedder, lazy_load=True)
+                TextEmbedding(profile.embedder, lazy_load=True, cache_dir=str(get_models_dir()))
         except Exception as exc:
             raise InstallError(f"Failed to pre-warm embedder model {profile.embedder!r}: {exc}") from exc
 
@@ -123,7 +123,7 @@ def _prewarm_models(profile: InstallProfile, timeout: int | None = None) -> None
 
         if profile.reranker is not None:
             try:
-                TextCrossEncoder(profile.reranker, lazy_load=True)
+                TextCrossEncoder(profile.reranker, lazy_load=True, cache_dir=str(get_models_dir()))
             except Exception as exc:
                 # Non-fatal: a CoreML ONNX error or transient download hiccup must
                 # not abort the wizard.  The reranker will download on first search.

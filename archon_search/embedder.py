@@ -6,6 +6,7 @@ import threading
 from typing import Any, Protocol, runtime_checkable
 
 from archon_search.observability import record_stage
+from archon_search.paths import get_models_dir
 
 _WARMUP_TEXT = "warmup"
 _WARMUP_TIMEOUT_SECONDS = 300.0
@@ -40,7 +41,11 @@ class ModelEmbedder:
                 if self._model is None:
                     from fastembed import TextEmbedding  # noqa: PLC0415
 
-                    self._model = TextEmbedding(self.model_name, providers=self._providers)
+                    self._model = TextEmbedding(
+                        self.model_name,
+                        providers=self._providers,
+                        cache_dir=str(get_models_dir()),
+                    )
         # TextEmbedding.embed() returns a generator of 1-D numpy arrays
         return [e.tolist() for e in self._model.embed(texts)]
 

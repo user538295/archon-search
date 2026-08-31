@@ -435,7 +435,7 @@ flowchart LR
         - #unit_test — `test_permissive_descriptor_discloses_without_prompting` — an Apache-2.0 descriptor gates nothing
         - #unit_test — `test_restrictive_descriptor_prompts_for_acceptance` — the restrictive branch prompts
         - #integration_test — `test_one_rule_disciplines_both_synthetic_descriptors` — both run through the single rule, no per-model branch
-- [ ] **BE-26** — Pass an explicit `cache_dir` derived from `get_models_dir()` to fastembed's `TextEmbedding`/`TextCrossEncoder` constructors, in both the runtime lazy-load call sites ([embedder.py](../../archon_search/embedder.py)`:37-41`'s `ModelEmbedder.encode`, [reranker.py](../../archon_search/reranker.py)`:35-40`'s `ModelReranker.predict`) and the install-time pre-warm call sites ([prewarm.py](../../archon_search/install/prewarm.py)`:83`/`:94`'s `_prewarm_models`), closing a pre-existing `ARCHON_SEARCH_DATA_DIR` violation #backend-role
+- [x] **BE-26** — Pass an explicit `cache_dir` derived from `get_models_dir()` to fastembed's `TextEmbedding`/`TextCrossEncoder` constructors, in both the runtime lazy-load call sites ([embedder.py](../../archon_search/embedder.py)`:37-41`'s `ModelEmbedder.encode`, [reranker.py](../../archon_search/reranker.py)`:35-40`'s `ModelReranker.predict`) and the install-time pre-warm call sites ([prewarm.py](../../archon_search/install/prewarm.py)`:83`/`:94`'s `_prewarm_models`), closing a pre-existing `ARCHON_SEARCH_DATA_DIR` violation #backend-role
     - Frameworks & Drivers · 5.0h
     - needs BE-2 · completes (closes the pre-existing `ARCHON_SEARCH_DATA_DIR` gap recorded in Scope → Provisioning, team plan `:111-130`)
     - Tests
