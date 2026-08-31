@@ -52,6 +52,46 @@ def test_strip_json_code_fences_leading_trailing_whitespace() -> None:
     assert strip_json_code_fences(fenced) == _REL_PAYLOAD
 
 
+def test_strip_json_code_fences_fence_preceded_by_prose() -> None:
+    fenced = f"Here is the JSON:\n```json\n{_REL_PAYLOAD}\n```\nHope that helps!"
+    assert strip_json_code_fences(fenced) == _REL_PAYLOAD
+
+
+def test_strip_json_code_fences_single_line_fence() -> None:
+    assert strip_json_code_fences(f"```json {_REL_PAYLOAD}```") == _REL_PAYLOAD
+
+
+def test_strip_json_code_fences_first_block_only_when_several() -> None:
+    fenced = f"```json\n{_REL_PAYLOAD}\n```\nand also\n```json\n[]\n```"
+    assert strip_json_code_fences(fenced) == _REL_PAYLOAD
+
+
+def test_unfenced_garbage_is_unchanged_and_still_fails_json_parsing() -> None:
+    """A malformed fence-less reply must survive untouched and still break json.loads."""
+    garbage = "I'm sorry, I can't answer that. ``backticks`` and { braces } notwithstanding."
+    assert strip_json_code_fences(garbage) == garbage
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(strip_json_code_fences(garbage))
+
+
+def test_all_four_clients_use_the_shared_helper() -> None:
+    """Every client must route raw LLM text through strip_json_code_fences before json.loads.
+
+    Guards against a client re-growing its own private fence-stripping logic.
+    """
+    import importlib
+    import inspect
+
+    for module_name in ("ollama", "llama_cpp", "openai", "anthropic"):
+        module = importlib.import_module(f"archon_search.enrichment.{module_name}")
+        source = inspect.getsource(module)
+        guarded = source.count("json.loads(strip_json_code_fences(")
+        assert guarded >= 1, f"{module_name} does not call strip_json_code_fences before json.loads"
+        assert source.count("json.loads(") == guarded, (
+            f"{module_name} has a json.loads call that bypasses strip_json_code_fences"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Ollama / llama.cpp / OpenAI — same OpenAI-compatible chat-completions shape
 # ---------------------------------------------------------------------------

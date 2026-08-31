@@ -20,14 +20,14 @@ import pytest
 @pytest.mark.archon_unset_data_dir
 def test_get_fasttext_models_dir_default() -> None:
     """No env vars set → fall back to ``~/.archon-search/models``."""
-    from archon_search.language_detector import get_fasttext_models_dir
+    from archon_search.paths import get_fasttext_models_dir
 
     assert get_fasttext_models_dir() == Path.home() / ".archon-search" / "models"
 
 
 def test_get_fasttext_models_dir_data_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     """``ARCHON_SEARCH_DATA_DIR="/data"`` → ``/data/models``."""
-    from archon_search.language_detector import get_fasttext_models_dir
+    from archon_search.paths import get_fasttext_models_dir
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
     assert get_fasttext_models_dir() == Path("/data/models")
@@ -39,7 +39,7 @@ def test_no_module_level_fasttext_models_dir(
     """Setting ``ARCHON_SEARCH_DATA_DIR`` AFTER import must still redirect the
     models directory — pins the "resolved fresh on every call" contract for
     ``get_fasttext_models_dir()``."""
-    from archon_search.language_detector import get_fasttext_models_dir
+    from archon_search.paths import get_fasttext_models_dir
 
     data_dir = tmp_path / "guard-test"
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
@@ -52,10 +52,8 @@ def test_no_module_level_multilingual_model_path(
     """The full multilingual model path must also be resolved lazily —
     callers should compose ``get_fasttext_models_dir() / FASTTEXT_MODEL_FILENAME``
     at call time, not capture a module-level path constant."""
-    from archon_search.language_detector import (
-        FASTTEXT_MODEL_FILENAME,
-        get_fasttext_models_dir,
-    )
+    from archon_search.language_detector import FASTTEXT_MODEL_FILENAME
+    from archon_search.paths import get_fasttext_models_dir
 
     data_dir = tmp_path / "guard-test"
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
@@ -69,7 +67,7 @@ def test_get_fasttext_models_dir_reflects_env_change_between_calls(
     """Two sequential calls return different paths when ``ARCHON_SEARCH_DATA_DIR``
     changes between them — parity with Task 2.4 ``get_jobs_file`` laziness
     contract."""
-    from archon_search.language_detector import get_fasttext_models_dir
+    from archon_search.paths import get_fasttext_models_dir
 
     first_dir = tmp_path / "first"
     second_dir = tmp_path / "second"
@@ -90,7 +88,7 @@ def test_get_fasttext_models_dir_propagates_invalid_env_error(
     """An invalid ``ARCHON_SEARCH_DATA_DIR`` (e.g. relative path) propagates as
     ``ValueError`` from ``get_data_dir()`` — parity with Task 2.4
     ``get_jobs_file`` error-propagation contract."""
-    from archon_search.language_detector import get_fasttext_models_dir
+    from archon_search.paths import get_fasttext_models_dir
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "relative/not/absolute")
     with pytest.raises(ValueError, match="must be an absolute path"):

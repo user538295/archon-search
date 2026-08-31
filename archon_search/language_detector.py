@@ -1,7 +1,8 @@
 """Language detection module — wraps fasttext lid.176.ftz with async support.
 
-Path resolution (C9 Task 2.5): the fasttext models directory location is
-resolved lazily via ``get_fasttext_models_dir()`` on every call so
+Path resolution (C9 Task 2.5): this module takes ``model_path`` from its caller.
+Callers resolve the directory lazily via ``archon_search.paths.get_fasttext_models_dir()``
+on every call so
 ``ARCHON_SEARCH_DATA_DIR`` (the container-friendly base data dir) redirects
 the model cache. No module-level capture of the env var: a stale binding
 would break tests that flip the env after import and the container bootstrap
@@ -12,8 +13,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Any
-
-from archon_search.paths import get_fasttext_models_dir as get_fasttext_models_dir
 
 # Module-level constants
 FASTTEXT_MODEL_FILENAME = "lid.176.ftz"

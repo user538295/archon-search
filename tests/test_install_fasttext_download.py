@@ -123,13 +123,13 @@ def test_download_fasttext_model_creates_dir(tmp_path: Path):
     fake_response.__enter__ = lambda s: s
     fake_response.__exit__ = MagicMock(return_value=False)
 
-    with patch("urllib.request.urlopen", return_value=fake_response), \
-         patch("shutil.copyfileobj"):
-        # Write dummy bytes to make file non-zero size
-        def create_file_side_effect(src, dst, **kwargs):
-            (models_dir / "lid.176.ftz").write_bytes(b"x" * 100)
-        with patch("shutil.copyfileobj", side_effect=create_file_side_effect):
-            _download_fasttext_model(models_dir)
+    def create_file_side_effect(src, dst, **kwargs):
+        (models_dir / "lid.176.ftz").write_bytes(b"x" * 100)
+
+    with _pin_digest_of(b"x" * 100), \
+         patch("urllib.request.urlopen", return_value=fake_response), \
+         patch("shutil.copyfileobj", side_effect=create_file_side_effect):
+        _download_fasttext_model(models_dir)
 
     assert models_dir.exists()
 
@@ -146,7 +146,8 @@ def test_download_fasttext_model_creates_dir_with_mode_700(tmp_path: Path):
     def create_file_side_effect(src, dst, **kwargs):
         (models_dir / "lid.176.ftz").write_bytes(b"x" * 100)
 
-    with patch("urllib.request.urlopen", return_value=fake_response), \
+    with _pin_digest_of(b"x" * 100), \
+         patch("urllib.request.urlopen", return_value=fake_response), \
          patch("shutil.copyfileobj", side_effect=create_file_side_effect):
         _download_fasttext_model(models_dir)
 
@@ -223,7 +224,8 @@ def test_download_fasttext_model_uses_urlopen_not_urlretrieve(tmp_path: Path):
     def create_file_side_effect(src, dst, **kwargs):
         (tmp_path / "lid.176.ftz").write_bytes(b"x" * 100)
 
-    with patch("urllib.request.urlopen", return_value=fake_response) as mock_urlopen, \
+    with _pin_digest_of(b"x" * 100), \
+         patch("urllib.request.urlopen", return_value=fake_response) as mock_urlopen, \
          patch("urllib.request.urlretrieve") as mock_retrieve, \
          patch("shutil.copyfileobj", side_effect=create_file_side_effect):
         _download_fasttext_model(tmp_path)
@@ -241,7 +243,8 @@ def test_download_fasttext_model_urlopen_called_with_timeout(tmp_path: Path):
     def create_file_side_effect(src, dst, **kwargs):
         (tmp_path / "lid.176.ftz").write_bytes(b"x" * 100)
 
-    with patch("urllib.request.urlopen", return_value=fake_response) as mock_urlopen, \
+    with _pin_digest_of(b"x" * 100), \
+         patch("urllib.request.urlopen", return_value=fake_response) as mock_urlopen, \
          patch("shutil.copyfileobj", side_effect=create_file_side_effect):
         _download_fasttext_model(tmp_path)
 
@@ -306,7 +309,8 @@ def test_download_fasttext_model_target_filename(tmp_path: Path):
     def create_file_side_effect(src, dst, **kwargs):
         target.write_bytes(b"x" * 100)
 
-    with patch("urllib.request.urlopen", return_value=fake_response), \
+    with _pin_digest_of(b"x" * 100), \
+         patch("urllib.request.urlopen", return_value=fake_response), \
          patch("shutil.copyfileobj", side_effect=create_file_side_effect):
         _download_fasttext_model(tmp_path)
 
@@ -327,7 +331,8 @@ def test_download_fasttext_model_prints_step_label(tmp_path: Path, capsys):
     def create_file_side_effect(src, dst, **kwargs):
         (tmp_path / "lid.176.ftz").write_bytes(b"x" * 100)
 
-    with patch("urllib.request.urlopen", return_value=fake_response), \
+    with _pin_digest_of(b"x" * 100), \
+         patch("urllib.request.urlopen", return_value=fake_response), \
          patch("shutil.copyfileobj", side_effect=create_file_side_effect):
         _download_fasttext_model(tmp_path)
 
@@ -344,7 +349,8 @@ def test_download_fasttext_model_prints_fasttext_language_model(tmp_path: Path, 
     def create_file_side_effect(src, dst, **kwargs):
         (tmp_path / "lid.176.ftz").write_bytes(b"x" * 100)
 
-    with patch("urllib.request.urlopen", return_value=fake_response), \
+    with _pin_digest_of(b"x" * 100), \
+         patch("urllib.request.urlopen", return_value=fake_response), \
          patch("shutil.copyfileobj", side_effect=create_file_side_effect):
         _download_fasttext_model(tmp_path)
 
@@ -370,9 +376,31 @@ def test_download_fasttext_model_successful_download(tmp_path: Path):
     def create_file_side_effect(src, dst, **kwargs):
         target.write_bytes(fake_content)
 
-    with patch("urllib.request.urlopen", return_value=fake_response), \
+    with _pin_digest_of(fake_content), \
+         patch("urllib.request.urlopen", return_value=fake_response), \
          patch("shutil.copyfileobj", side_effect=create_file_side_effect):
         _download_fasttext_model(tmp_path)
 
     assert target.exists()
-    assert target.stat().st_size > 0
+    assert target.read_bytes() == fake_content
+
+
+def test_fresh_download_with_mismatching_digest_raises_install_error(tmp_path: Path):
+    """Freshly downloaded bytes that do not match the pinned digest must be rejected."""
+    fake_response = MagicMock()
+    fake_response.__enter__ = lambda s: s
+    fake_response.__exit__ = MagicMock(return_value=False)
+
+    target = tmp_path / "lid.176.ftz"
+
+    def write_tampered(src, dst, **kwargs):
+        target.write_bytes(b"tampered bytes that do not match the pin")
+
+    with _pin_digest_of(b"the bytes we actually expect"), \
+         patch("urllib.request.urlopen", return_value=fake_response), \
+         patch("shutil.copyfileobj", side_effect=write_tampered):
+        with pytest.raises(InstallError) as exc_info:
+            _download_fasttext_model(tmp_path)
+
+    assert "digest" in str(exc_info.value).lower()
+    assert not target.exists(), "Digest-mismatched download must be deleted"

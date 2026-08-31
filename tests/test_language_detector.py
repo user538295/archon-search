@@ -314,10 +314,8 @@ def test_normalize_lang_code_mak_is_not_macedonian() -> None:
 @pytest.mark.archon_unset_data_dir
 def test_module_constants() -> None:
     """FASTTEXT_MODEL_FILENAME is defined and get_fasttext_models_dir() resolves to the default."""
-    from archon_search.language_detector import (
-        FASTTEXT_MODEL_FILENAME,
-        get_fasttext_models_dir,
-    )
+    from archon_search.language_detector import FASTTEXT_MODEL_FILENAME
+    from archon_search.paths import get_fasttext_models_dir
 
     assert FASTTEXT_MODEL_FILENAME == "lid.176.ftz"
     assert get_fasttext_models_dir() == Path.home() / ".archon-search" / "models"

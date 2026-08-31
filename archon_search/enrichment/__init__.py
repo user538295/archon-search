@@ -21,13 +21,14 @@ import re
 
 _VALID_RELATIONSHIP_TYPES: frozenset[str] = frozenset({"uses", "implements", "depends_on"})
 
-_CODE_FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*\n(.*)\n```\s*$", re.DOTALL)
+_CODE_FENCE_RE = re.compile(r"```[a-zA-Z]*[ \t]*\n?(.*?)```", re.DOTALL)
 
 
 def strip_json_code_fences(text: str) -> str:
-    """Strip a wrapping markdown code fence (```json ... ``` or ``` ... ```) from text.
+    """Extract the first markdown code fence (```json ... ``` or ``` ... ```) from text.
 
-    Text with no fence is returned unchanged.
+    The fence may be preceded or followed by prose. Text with no complete fence is
+    returned unchanged. A reply with several fenced blocks yields only the first.
     """
-    match = _CODE_FENCE_RE.match(text.strip())
-    return match.group(1) if match else text
+    match = _CODE_FENCE_RE.search(text)
+    return match.group(1).strip() if match else text

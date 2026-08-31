@@ -116,7 +116,8 @@ def _download_fasttext_model(models_dir: Path) -> None:
       a mismatching file is deleted and re-downloaded (non-fatal, one time per install).
     - Uses ``urllib.request.urlopen`` with an explicit 120-second socket timeout
       instead of ``urlretrieve`` (which has no timeout).
-    - Raises ``InstallError`` on network failure or if the downloaded file is empty/corrupt.
+    - Raises ``InstallError`` on network failure, or if the downloaded file is empty or
+      does not match ``FASTTEXT_ARTIFACT.sha256``.
     """
     target = models_dir / "lid.176.ftz"
 
@@ -156,4 +157,11 @@ def _download_fasttext_model(models_dir: Path) -> None:
         target.unlink(missing_ok=True)
         raise InstallError(
             "fasttext model download appears corrupt (empty file); re-run install."
+        )
+
+    if hashlib.sha256(target.read_bytes()).hexdigest() != FASTTEXT_ARTIFACT.sha256:
+        target.unlink(missing_ok=True)
+        raise InstallError(
+            "fasttext model digest verification failed after download "
+            "(the fetched bytes do not match the pinned sha256); re-run install."
         )
