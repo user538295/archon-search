@@ -433,7 +433,10 @@ class BaseInstaller(ABC):
     def write_server_key(self, server_key: str) -> None: ...
 
     @abstractmethod
-    def preload_models(self, prof: object, gpu_provider: str | None, split_coreml: bool) -> None: ...
+    def preload_models(
+        self, prof: object, gpu_provider: str | None, split_coreml: bool,
+        install_graph_extra: bool = False,
+    ) -> None: ...
 
     @abstractmethod
     def register_and_start(self) -> int: ...
@@ -850,7 +853,10 @@ class BaseInstaller(ABC):
             # Step 14: pre-warm
             if not skip_preload:
                 try:
-                    self.preload_models(prof, gpu_provider, split_coreml)
+                    self.preload_models(
+                        prof, gpu_provider, split_coreml,
+                        install_graph_extra=features.install_graph_extra,
+                    )
                 except InstallError as exc:
                     # Real-only: dry never raises, so this rollback runs only when
                     # a real download fails.
@@ -1071,8 +1077,13 @@ class DryRunInstaller(BaseInstaller):
     def write_server_key(self, server_key: str) -> None:
         print(f"[dry-run] Would write server key to {get_key_file()}.")
 
-    def preload_models(self, prof: object, gpu_provider: str | None, split_coreml: bool) -> None:
+    def preload_models(
+        self, prof: object, gpu_provider: str | None, split_coreml: bool,
+        install_graph_extra: bool = False,
+    ) -> None:
         print(f"[DRY RUN] Would download models (~{prof.download_mb} MB).")
+        if install_graph_extra:
+            print("[DRY RUN] Would pre-warm graph NER model.")
 
     def register_and_start(self) -> int:
         print("[DRY RUN] Would register and start the search service.")
@@ -1271,9 +1282,12 @@ class RealInstaller(BaseInstaller):
             )
         print("Server key updated. Restart the service to apply: archon-search restart.")
 
-    def preload_models(self, prof: object, gpu_provider: str | None, split_coreml: bool) -> None:
+    def preload_models(
+        self, prof: object, gpu_provider: str | None, split_coreml: bool,
+        install_graph_extra: bool = False,
+    ) -> None:
         print("[4/5] Downloading models...")
-        _prewarm_models(prof)
+        _prewarm_models(prof, install_graph_extra=install_graph_extra)
         self._fe1_reprobe(gpu_provider, prof, split_coreml)
 
     def register_and_start(self) -> int:

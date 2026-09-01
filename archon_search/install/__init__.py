@@ -78,6 +78,7 @@ from .prewarm import _check_disk_space as _check_disk_space
 from .prewarm import _check_reinstall_guard as _check_reinstall_guard
 from .prewarm import _execute_force_reinstall as _execute_force_reinstall
 from .prewarm import _planned_total_bytes as _planned_total_bytes
+from .prewarm import _prewarm_graph_model as _prewarm_graph_model
 from .prewarm import _prewarm_models as _prewarm_models
 from .prewarm import _prewarm_timeout as _prewarm_timeout
 from .render import _KEY_FILE_PLACEHOLDER as _KEY_FILE_PLACEHOLDER

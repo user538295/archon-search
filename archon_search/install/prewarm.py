@@ -9,7 +9,13 @@ import warnings
 from pathlib import Path
 
 from archon_search.config import SearchConfig
-from archon_search.paths import get_data_dir, get_models_dir
+from archon_search.paths import (
+    GRAPH_NER_MODEL_NAME,
+    GRAPH_NER_MODEL_REVISION,
+    get_data_dir,
+    get_graph_models_dir,
+    get_models_dir,
+)
 from archon_search.platform.runtime import get_search_service
 from archon_search.profiles import InstallProfile
 
@@ -78,11 +84,16 @@ def _prewarm_timeout(profile: InstallProfile) -> int:
     return min(1800, max(300, estimated_bytes // 100_000))
 
 
-def _prewarm_models(profile: InstallProfile, timeout: int | None = None) -> None:
-    """Download embedder (and optionally reranker) model files to the fastembed cache.
+def _prewarm_models(
+    profile: InstallProfile, timeout: int | None = None, install_graph_extra: bool = False
+) -> None:
+    """Download embedder (and optionally reranker, and optionally graph NER) model
+    files to the fastembed / graph-model cache.
 
     Uses a threading.Timer for cross-platform timeout (signal.alarm is POSIX-only).
-    fastembed/HF progress is printed to stderr — not suppressed.
+    fastembed/HF progress is printed to stderr — not suppressed. When
+    ``install_graph_extra`` is set, the graph NER model (Task BE-8) is pre-warmed
+    inside the same timeout window as the embedder/reranker, non-fatally.
     """
     import fastembed  # noqa: PLC0415 — lazy; not installed at import time
     TextEmbedding = fastembed.TextEmbedding  # noqa: N806
@@ -133,10 +144,51 @@ def _prewarm_models(profile: InstallProfile, timeout: int | None = None) -> None
                     profile.reranker, exc,
                 )
 
+        if install_graph_extra:
+            if cancelled.is_set():
+                logger.warning(
+                    "Model pre-warm timed out after %ss — skipping graph NER model "
+                    "pre-warm. It will be downloaded on first use.",
+                    timeout,
+                )
+            else:
+                _prewarm_graph_model()
+
         timer.cancel()
     except InstallError:
         timer.cancel()
         raise
+
+
+# ---------------------------------------------------------------------------
+# Graph NER model pre-warm (Task BE-8 — optional, non-fatal)
+# ---------------------------------------------------------------------------
+
+def _prewarm_graph_model() -> None:
+    """Pre-warm the graph NER/RelEx model (gliner.GLiNER).
+
+    Mirrors the reranker's non-fatal branch above (:124-134): a failure here
+    must never abort the wizard — the model downloads on first use instead,
+    same as the embedder and reranker. Uses the same cache_dir as the runtime
+    lazy-load in ProseExtractionBackend.load() (get_graph_models_dir()), so
+    pre-warm and first use share one on-disk cache rather than two.
+    """
+    try:
+        from gliner import GLiNER  # noqa: PLC0415 — lazy; not installed at import time
+
+        GLiNER.from_pretrained(
+            GRAPH_NER_MODEL_NAME,
+            revision=GRAPH_NER_MODEL_REVISION,
+            cache_dir=str(get_graph_models_dir()),
+        )
+    except Exception as exc:
+        # Non-fatal: the [graph] extra may not be installed, or this may be a
+        # transient download hiccup — either must not abort the wizard.
+        logger.warning(
+            "Failed to pre-warm graph NER model %r: %s — "
+            "the model will be downloaded on first use.",
+            GRAPH_NER_MODEL_NAME, exc,
+        )
 
 
 # ---------------------------------------------------------------------------

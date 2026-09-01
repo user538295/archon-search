@@ -10,7 +10,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon_search.install import InstallError, _prewarm_models, _prewarm_timeout
+from archon_search.install import (
+    InstallError,
+    _prewarm_graph_model,
+    _prewarm_models,
+    _prewarm_timeout,
+)
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES
 
 
@@ -238,3 +243,122 @@ def test_archon_search_data_dir_relocates_embedder_and_reranker_caches(tmp_path,
     from archon_search.paths import get_models_dir
 
     assert str(get_models_dir()) == str(tmp_path / "models")
+
+
+# ---------------------------------------------------------------------------
+# _prewarm_graph_model — non-fatal, mirrors the reranker branch (Task BE-8)
+# ---------------------------------------------------------------------------
+
+def test_prewarm_graph_model_calls_from_pretrained_with_cache_dir():
+    """GLiNER.from_pretrained is called with the same cache_dir as the runtime lazy-load."""
+    from archon_search.paths import (
+        GRAPH_NER_MODEL_NAME,
+        GRAPH_NER_MODEL_REVISION,
+        get_graph_models_dir,
+    )
+
+    mock_gliner_cls = MagicMock()
+    gliner_mod = types.ModuleType("gliner")
+    gliner_mod.GLiNER = mock_gliner_cls  # type: ignore[attr-defined]
+
+    with patch.dict(sys.modules, {"gliner": gliner_mod}):
+        _prewarm_graph_model()
+
+    mock_gliner_cls.from_pretrained.assert_called_once_with(
+        GRAPH_NER_MODEL_NAME,
+        revision=GRAPH_NER_MODEL_REVISION,
+        cache_dir=str(get_graph_models_dir()),
+    )
+
+
+def test_prewarm_entry_is_non_fatal_and_logs_first_use_will_download(caplog):
+    """A failed graph model pre-warm must not raise — it logs and lets first use download it."""
+    mock_gliner_cls = MagicMock()
+    mock_gliner_cls.from_pretrained.side_effect = RuntimeError("network hiccup")
+    gliner_mod = types.ModuleType("gliner")
+    gliner_mod.GLiNER = mock_gliner_cls  # type: ignore[attr-defined]
+
+    with patch.dict(sys.modules, {"gliner": gliner_mod}):
+        with caplog.at_level("WARNING"):
+            _prewarm_graph_model()  # must not raise
+
+    assert any("first use" in record.getMessage() for record in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# _prewarm_graph_model wiring into _prewarm_models (Task BE-8, finding 2:
+# _prewarm_graph_model was previously dead code, never called by anything)
+# ---------------------------------------------------------------------------
+
+
+def test_prewarm_models_invokes_graph_prewarm_when_requested():
+    """install_graph_extra=True must actually dispatch _prewarm_graph_model as
+    part of the same pre-warm call chain used by preload_models."""
+    profile = ENGLISH_PROFILES["minimal"]
+    mock_te = MagicMock()
+    mock_tce = MagicMock()
+    fe_mod = _make_fastembed_mock(mock_te, mock_tce)
+    graph_mock = MagicMock()
+
+    with patch("archon_search.install.prewarm._prewarm_graph_model", graph_mock), \
+         patch.dict(sys.modules, {"fastembed": fe_mod}):
+        _prewarm_models(profile, timeout=300, install_graph_extra=True)
+
+    graph_mock.assert_called_once_with()
+
+
+def test_prewarm_models_skips_graph_prewarm_when_not_requested():
+    """install_graph_extra=False (the default) must never dispatch the graph pre-warm."""
+    profile = ENGLISH_PROFILES["minimal"]
+    mock_te = MagicMock()
+    mock_tce = MagicMock()
+    fe_mod = _make_fastembed_mock(mock_te, mock_tce)
+    graph_mock = MagicMock()
+
+    with patch("archon_search.install.prewarm._prewarm_graph_model", graph_mock), \
+         patch.dict(sys.modules, {"fastembed": fe_mod}):
+        _prewarm_models(profile, timeout=300)
+
+    graph_mock.assert_not_called()
+
+
+def test_prewarm_models_skips_graph_prewarm_after_timeout(caplog):
+    """If the embedder/reranker pre-warm already timed out, the graph pre-warm must
+    be skipped (not silently dispatched after the wizard's timeout budget is spent)."""
+    import logging
+
+    profile = ENGLISH_PROFILES["minimal"]
+
+    def slow_embedding(*args, **kwargs):
+        time.sleep(0.1)  # sleep past the 0.01s timeout
+        return MagicMock()
+
+    mock_te = MagicMock(side_effect=slow_embedding)
+    mock_tce = MagicMock()
+    fe_mod = _make_fastembed_mock(mock_te, mock_tce)
+    graph_mock = MagicMock()
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.install"):
+        with patch("archon_search.install.prewarm._prewarm_graph_model", graph_mock), \
+             patch.dict(sys.modules, {"fastembed": fe_mod}):
+            _prewarm_models(profile, timeout=0.01, install_graph_extra=True)  # type: ignore[arg-type]
+
+    graph_mock.assert_not_called()
+    assert any("timed out" in r.message for r in caplog.records)
+
+
+def test_preload_models_passes_install_graph_extra_through_to_prewarm():
+    """RealInstaller.preload_models must forward install_graph_extra to _prewarm_models —
+    the actual call chain the wizard's Step 14 pre-warm goes through."""
+    from unittest.mock import patch as _patch
+
+    from archon_search.install.installer import RealInstaller
+
+    profile = ENGLISH_PROFILES["minimal"]
+    installer = RealInstaller.__new__(RealInstaller)  # bypass __init__ — no FS/service needed
+
+    with _patch("archon_search.install.installer._prewarm_models") as prewarm_mock, \
+         _patch.object(RealInstaller, "_fe1_reprobe", MagicMock()):
+        installer.preload_models(profile, None, False, install_graph_extra=True)
+
+    prewarm_mock.assert_called_once_with(profile, install_graph_extra=True)
