@@ -29,6 +29,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytest.importorskip(
+    "spacy",
+    reason="spacy removed from [graph] extra by BE-6; this file tests spacy-specific "
+    "provisioning logic slated for deletion at BE-15",
+)
+
 # Bound at module import (collection time), BEFORE any test fixture can install a
 # spaCy stub into sys.modules. Resolving this lazily inside _make_spacy_stub made
 # the fixture inherit whatever the worker's sys.modules happened to hold, which

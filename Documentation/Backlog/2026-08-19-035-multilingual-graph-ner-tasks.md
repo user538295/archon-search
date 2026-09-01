@@ -460,16 +460,18 @@ flowchart LR
 
 ### Phase 3 · Extract entities and typed relations from prose in any language *(the walking skeleton of the feature proper — one atomic change per Q30, gated on K2)*
 
-- [ ] **BE-6** — Add `gliner>=0.2.26` to `[graph]`, drop `spacy`, the `en-core-web-sm` `[tool.uv.sources]` entry **and its dev `dependency-groups` entry**, pin `transformers` in `[tool.uv]` `constraint-dependencies` with its reason commented, leave `onnxruntime` undeclared, and re-lock #backend-role
+- [x] **BE-6** — Add `gliner>=0.2.26` to `[graph]`, drop `spacy`, the `en-core-web-sm` `[tool.uv.sources]` entry **and its dev `dependency-groups` entry**, pin `transformers` in `[tool.uv]` `constraint-dependencies` with its reason commented, leave `onnxruntime` undeclared, and re-lock #backend-role
     - Frameworks & Drivers · 4.0h
     - needs K2 · completes S55
     - Tests
-        - #unit_test — `test_transformers_constraint_present_via_tomllib` — the pin parses out of `constraint-dependencies`
-        - #unit_test — `test_constraint_reason_comment_present_in_raw_text` — read as raw text, since `tomllib` discards comments
-        - #unit_test — `test_onnxruntime_absent_from_graph_extra` — the extra declares it nowhere
-        - #integration_test — `test_lock_matches_the_chosen_transformers_strategy` — one version everywhere, or today's platform split preserved, per K2's recorded choice
+        - [x] #unit_test — `test_transformers_constraint_present_via_tomllib` — the pin parses out of `constraint-dependencies`
+        - [x] #unit_test — `test_constraint_reason_comment_present_in_raw_text` — read as raw text, since `tomllib` discards comments
+        - [x] #unit_test — `test_onnxruntime_absent_from_graph_extra` — the extra declares it nowhere
+        - [x] #integration_test — `test_lock_matches_the_chosen_transformers_strategy` — one version everywhere, or today's platform split preserved, per K2's recorded choice
     - Notes
         - `torch` is already a base dependency (`pyproject.toml:26`, CPU-wheel-pinned on linux/x86_64) — the PyTorch-checkpoint decision (Spike gate — RESOLVED, team plan) adds nothing new here. `onnxruntime` stays undeclared regardless of which artifact ships: `gliner` pulls it transitively either way (K2a), so leaving it undeclared is correct under both the ONNX and the PyTorch decision.
+        - **Re-lock verified against the K2 decision.** `transformers` converges to a single `5.8.1` everywhere in `uv.lock` (no platform split); `gliner==0.2.28` present; `spacy`/`en-core-web-sm` fully gone from `pyproject.toml` and `uv.lock`; `onnxruntime` stays undeclared and only present transitively.
+        - **Known, expected red tests — by design, not a defect.** Per this file's own header ("Phase 3 is atomic by Q30 ... its tasks are an internal work order, not separate merges"), `uv run pytest` is not fully green after this task alone: 4 tests fail because `archon_search/graph_extractor.py`'s `ensure_spacy_importable` still imports `spacy` directly, which BE-6 correctly removed — `tests/pipeline/test_pipeline_ingest.py::test_create_pipeline_wires_all_components`, `::test_create_pipeline_uses_expanded_db_path`, `tests/test_graph_ner_model_visibility.py::test_status_surfaces_missing_graph_model`, `::test_status_surfaces_notes_separately_from_warnings`. The fix (rewiring the guard to check `gliner` instead of `spacy`) is explicitly BE-11's/BE-15's job, not BE-6's — confirmed via `/iterative-review` (3 devil's-advocate passes + Brooks-Lint + clean-code-review) and a user decision to proceed per this note rather than pull BE-11/BE-15's work forward. `tests/test_install_spacy_model.py` and `tests/test_graph_deps_construction_guard.py::test_guard_passes_when_spacy_importable` are skip-guarded for the same reason, pending BE-15. A 5th failure (`test_e2a_t4_scope_wildcard_benchmark.py::test_scope_wildcard_latency_p99_under_10ms`) is an unrelated pre-existing flaky latency benchmark. Full suite: 5 failed, 8769 passed, 14 skipped, 1 xfailed, 93.50% coverage (threshold 85%).
 - [ ] **BE-7** — Add `get_graph_models_dir()` and the pinned model+revision module constant to [paths.py](../../archon_search/paths.py), laid out as `<data>/models/graph/<model>-<revision>/` #backend-role
     - Frameworks & Drivers · 3.0h
     - needs K2, BE-2 · completes S41
