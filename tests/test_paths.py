@@ -15,7 +15,14 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.paths import get_data_dir, get_fasttext_models_dir, get_models_dir
+from archon_search.paths import (
+    GRAPH_NER_MODEL_NAME,
+    GRAPH_NER_MODEL_REVISION,
+    get_data_dir,
+    get_fasttext_models_dir,
+    get_graph_models_dir,
+    get_models_dir,
+)
 
 
 @pytest.mark.archon_unset_data_dir
@@ -142,6 +149,40 @@ def test_get_fasttext_models_dir_equals_get_models_dir(
     install's on-disk ``lid.176.ftz``."""
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
     assert get_fasttext_models_dir() == get_models_dir() == Path("/data/models")
+
+
+def test_graph_models_dir_follows_data_dir_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirecting ``ARCHON_SEARCH_DATA_DIR`` moves the graph model cache dir."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+    model_segment = GRAPH_NER_MODEL_NAME.replace("/", "--")
+    assert get_graph_models_dir() == Path("/data/models/graph") / (
+        f"{model_segment}-{GRAPH_NER_MODEL_REVISION}"
+    )
+
+
+def test_graph_models_dir_segment_derives_from_the_pinned_constant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ``<model>-<revision>`` path segment has one owner: the module
+    constant ``GRAPH_NER_MODEL_REVISION`` — not a duplicated string literal.
+
+    Monkeypatching the constant and asserting the returned segment tracks it
+    proves derivation; recomputing the same expression the implementation
+    uses would prove nothing (it can't detect a hardcoded duplicate)."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
+    import archon_search.paths as paths_module
+
+    monkeypatch.setattr(paths_module, "GRAPH_NER_MODEL_REVISION", "deadbeef")
+    model_segment = GRAPH_NER_MODEL_NAME.replace("/", "--")
+    assert paths_module.get_graph_models_dir().name == f"{model_segment}-deadbeef"
+
+
+def test_get_spacy_models_dir_is_gone() -> None:
+    """``get_spacy_models_dir()`` was removed — spaCy is no longer part of
+    the graph NER pipeline."""
+    import archon_search.paths as paths_module
+
+    assert not hasattr(paths_module, "get_spacy_models_dir")
 
 
 def test_does_not_create_directory(

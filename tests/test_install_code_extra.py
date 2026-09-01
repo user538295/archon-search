@@ -190,14 +190,14 @@ class TestInstallGraphExtra:
 
     def test_install_graph_extra_provisions_model_into_data_dir(self):
         """On success: the model is provisioned into the data-dir spaCy directory."""
-        from archon_search.paths import get_spacy_models_dir
+        from archon_search.paths import get_models_dir
 
         with patch("archon_search.install.extras._install_extra"), \
              patch("archon_search.install.extras._download_spacy_model") as mock_download, \
              patch("subprocess.run") as mock_run:
             _install_graph_extra(dry_run=False)
 
-        mock_download.assert_called_once_with(get_spacy_models_dir())
+        mock_download.assert_called_once_with(get_models_dir() / "spacy")
         # No package-manager route: `en-core-web-sm` is not on PyPI, and a
         # `uv tool` venv has no installer to run it with.
         mock_run.assert_not_called()

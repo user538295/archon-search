@@ -188,7 +188,7 @@ def test_download_spacy_model_is_resolvable_by_the_runtime(
 ) -> None:
     """Closes the loop: what the wizard places is what `find_spacy_model()` returns."""
     from archon_search.graph_extractor import find_spacy_model
-    from archon_search.paths import get_spacy_models_dir
+    from archon_search.paths import get_models_dir
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     load_calls: list[str] = []
@@ -196,7 +196,7 @@ def test_download_spacy_model_is_resolvable_by_the_runtime(
 
     with patch.dict(sys.modules, stub):
         with patch("urllib.request.urlopen", _make_urlopen()):
-            target = _download_spacy_model(get_spacy_models_dir())
+            target = _download_spacy_model(get_models_dir() / "spacy")
         assert find_spacy_model() == str(target)
 
 

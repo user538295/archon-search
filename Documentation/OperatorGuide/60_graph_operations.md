@@ -48,7 +48,7 @@ The `archon-search[graph]` extra installs the spaCy *library*; the `en_core_web_
 2. `<data-dir>/models/spacy/en_core_web_sm-<version>/` — `spacy.load()` accepts a filesystem path;
 3. neither present → degrade.
 
-`<data-dir>` is `~/.archon-search` unless `ARCHON_SEARCH_DATA_DIR` relocates it (`paths.get_spacy_models_dir()`).
+`<data-dir>` is `~/.archon-search` unless `ARCHON_SEARCH_DATA_DIR` relocates it (`paths.get_models_dir() / "spacy"`).
 
 **Degraded behavior is not an ingest failure.** Chunks still embed and persist, code-symbol graph nodes and edges are still written, prose NER is skipped for every document, one WARNING is logged once per process (not once per file), and each affected `IngestResult.warnings` carries the notice. Only a missing spaCy *library* is fatal, and that is caught at startup by `_check_graph_deps`.
 

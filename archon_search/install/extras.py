@@ -17,7 +17,7 @@ import click
 import tomlkit
 
 from archon_search._durable_io import atomic_write_bytes, fsync_dir, fsync_tree
-from archon_search.paths import get_spacy_models_dir
+from archon_search.paths import get_models_dir
 
 from .config_writer import WizardFeatures
 from .errors import InstallError
@@ -345,7 +345,7 @@ def _install_graph_extra(dry_run: bool = False) -> None:
     working for code symbols and degrades for prose.
     """
     _install_extra("archon-search[graph]", "graph enrichment", dry_run)
-    models_dir = get_spacy_models_dir()
+    models_dir = get_models_dir() / "spacy"
     if dry_run:
         click.echo(f"[dry-run] Would provision spaCy model {SPACY_MODEL_NAME} into {models_dir}")
         return

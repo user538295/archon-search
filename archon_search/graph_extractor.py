@@ -53,7 +53,7 @@ from archon_search.graph_types import (
     make_stable_edge_id,
     make_stable_entity_id,
 )
-from archon_search.paths import get_spacy_models_dir
+from archon_search.paths import get_models_dir
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig
@@ -68,7 +68,7 @@ _logger = logging.getLogger(__name__)
 # Public: the model name for every consumer that may import the graph layer —
 # model_validation.py's startup probe does. install/extras.py deliberately does
 # NOT: the install package must not depend on the graph layer, which is the same
-# reason get_spacy_models_dir() lives in paths.py rather than here. Its copy at
+# reason get_models_dir() lives in paths.py rather than here. Its copy at
 # install/extras.py:SPACY_MODEL_NAME is intentional duplication, not an
 # unfulfilled TODO; tests/test_install_spacy_model.py closes the loop by
 # asserting the wizard's output is what the runtime resolver finds
@@ -242,7 +242,7 @@ def resolve_spacy_model() -> SpacyModelResolution:
 
     Resolution order (2026-08-19-030): the installed package first — for pip
     installs that already carry it — then the wizard-provisioned directory
-    under ``get_spacy_models_dir()``, version-sorted (not lexicographic — a
+    under ``get_models_dir() / "spacy"``, version-sorted (not lexicographic — a
     directory-name compare would rank ``3.9.0`` before ``3.10.0``) and
     filtered to versions compatible with the installed spaCy (C1-I-3).
     Nothing here installs or downloads: a ``uv tool`` venv has no package
@@ -287,7 +287,7 @@ def resolve_spacy_model() -> SpacyModelResolution:
     # (2026-08-19-030 C2-I-21). Mirrors the wizard's own guard in extras.py.
     candidates = [
         path
-        for path in get_spacy_models_dir().glob(f"{SPACY_MODEL_NAME}-*")
+        for path in (get_models_dir() / "spacy").glob(f"{SPACY_MODEL_NAME}-*")
         if re.fullmatch(rf"{re.escape(SPACY_MODEL_NAME)}-\d+\.\d+\.\d+", path.name)
         and (path / "config.cfg").is_file()
     ]
@@ -440,13 +440,14 @@ class GraphExtractor:
             if resolution.incompatible_versions:
                 raise _SpacyModelUnavailable(
                     f"spaCy model {SPACY_MODEL_NAME!r} found under "
-                    f"{get_spacy_models_dir()} ({', '.join(resolution.incompatible_versions)}) "
+                    f"{get_models_dir() / 'spacy'} "
+                    f"({', '.join(resolution.incompatible_versions)}) "
                     "but incompatible with the installed spaCy version",
                     incompatible=True,
                 )
             raise _SpacyModelUnavailable(
                 f"spaCy model {SPACY_MODEL_NAME!r} is neither installed nor present in "
-                f"{get_spacy_models_dir()}",
+                f"{get_models_dir() / 'spacy'}",
                 incompatible=False,
             )
         return spacy.load(resolution.target)

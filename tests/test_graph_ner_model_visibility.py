@@ -300,19 +300,6 @@ async def test_graph_warnings_prepended_on_every_return_path(
     )
 
 
-# ---------------------------------------------------------------------------
-# T19: get_spacy_models_dir() honors ARCHON_SEARCH_DATA_DIR.
-# ---------------------------------------------------------------------------
-
-
-def test_get_spacy_models_dir_honors_data_dir_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from archon_search.paths import get_spacy_models_dir
-
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    assert get_spacy_models_dir() == tmp_path / "models" / "spacy"
-
 
 # ---------------------------------------------------------------------------
 # T20: the wizard summary's English-only disclosure requires GRAPH enabled,

@@ -22,7 +22,7 @@ for the canonical list.
 
 Every model-artifact directory accessor lives in ``paths.py`` — see
 ``get_models_dir()`` (the shared models root) and ``get_fasttext_models_dir()``
-/ ``get_spacy_models_dir()`` (derived from it) below.
+/ ``get_graph_models_dir()`` (derived from it) below.
 
 Raises ``ValueError`` (not ``ConfigError``) so it can be safely imported by
 ``archon_search.config`` without a circular import; ``load_config()`` wraps
@@ -35,6 +35,14 @@ import os
 from pathlib import Path
 
 _ENV_VAR: str = "ARCHON_SEARCH_DATA_DIR"
+
+#: Pinned GLiNER checkpoint (BE-8's ``ProseExtractionBackend`` loads this via
+#: ``GLiNER.from_pretrained(GRAPH_NER_MODEL_NAME, revision=GRAPH_NER_MODEL_REVISION,
+#: cache_dir=get_graph_models_dir())``) — see
+#: ``Documentation/Backlog/2026-08-19-035-multilingual-graph-ner-team-plan.md``
+#: (Q1/K2) for why this is the one checkpoint the plan settled on.
+GRAPH_NER_MODEL_NAME: str = "knowledgator/gliner-relex-multi-v1.0"
+GRAPH_NER_MODEL_REVISION: str = "e990d9ba6f471b846f7d78bf7e4b4dab11761ada"
 
 
 def get_data_dir() -> Path:
@@ -87,7 +95,7 @@ def get_data_dir() -> Path:
 def get_models_dir() -> Path:
     """Return the shared models root, resolved fresh on every call.
 
-    Base directory for all model-artifact caches (fasttext, spaCy, ...). Not
+    Base directory for all model-artifact caches (fasttext, graph NER, ...). Not
     guaranteed to exist.
     """
     return get_data_dir() / "models"
@@ -104,15 +112,17 @@ def get_fasttext_models_dir() -> Path:
     return get_models_dir()
 
 
-def get_spacy_models_dir() -> Path:
-    """Return the directory holding wizard-provisioned spaCy NER models.
+def get_graph_models_dir() -> Path:
+    """Return the pinned GLiNER checkpoint's cache directory, resolved fresh
+    on every call.
 
-    Defined here rather than in ``graph_extractor`` (see the module docstring
-    for why) so ``install/extras.py`` — the wizard, which writes into it —
-    does not need to import the graph layer. The only other direct consumer
-    is ``graph_extractor.find_spacy_model()`` (runtime, reads it);
-    ``model_validation.graph_ner_status()`` reaches it indirectly, through ``resolve_spacy_model()``.
-    Resolved fresh on every call so ``ARCHON_SEARCH_DATA_DIR`` relocates it;
-    not guaranteed to exist.
+    Layout: ``<data>/models/graph/<model>-<GRAPH_NER_MODEL_REVISION>/``, where
+    ``<model>`` is ``GRAPH_NER_MODEL_NAME`` with its ``/`` (HuggingFace repo
+    ids are ``org/name``) replaced by ``--`` so it stays a single path segment.
+    This is the ``cache_dir`` BE-8's ``ProseExtractionBackend`` passes to
+    ``GLiNER.from_pretrained(...)`` — mirroring how ``get_models_dir()`` serves
+    as the fastembed ``cache_dir`` for ``embedder.py``/``reranker.py``. Not
+    guaranteed to exist; ``huggingface_hub`` populates it on first use.
     """
-    return get_models_dir() / "spacy"
+    model_segment = GRAPH_NER_MODEL_NAME.replace("/", "--")
+    return get_models_dir() / "graph" / f"{model_segment}-{GRAPH_NER_MODEL_REVISION}"
