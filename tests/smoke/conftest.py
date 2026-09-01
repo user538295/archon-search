@@ -14,9 +14,12 @@ Helper functions (``_free_port``, ``_start_server``, ``_poll_health_and_ready``,
 fixture for tests needing ``[graph] enabled = true`` (e.g. the S3
 ``graph build-communities --wait`` e2e test) — kept off ``smoke_server``
 itself so the graph feature stays off by default for the rest of the suite.
-It ``importorskip``s spaCy before starting the server (the graph extra is not
-in the ``dev`` group) and seeds a multi-entity corpus so the extracted graph is
-large enough for community clustering.
+It ``importorskip``s spaCy before starting the server (defensive: the ``graph``
+extra is pulled into the ``dev`` group via its self-referencing
+``archon-search[...,graph,code]`` entry in ``pyproject.toml``, but this guards
+environments where that dev-group install was skipped) and seeds a
+multi-entity corpus so the extracted graph is large enough for community
+clustering.
 """
 
 from __future__ import annotations
@@ -373,11 +376,14 @@ def smoke_server_graph_enabled(tmp_path_factory) -> Iterator[SmokeServer]:
     (``uv run pytest tests/smoke/``), never part of the default suite.
 
     Graph extras guard: ``graph.enabled = true`` makes the server raise
-    ``ConfigError`` at startup if spaCy is absent (it lives in the optional
-    ``archon-search[graph]`` extra, not the ``dev`` group). ``importorskip`` is
-    therefore done HERE, before the subprocess is spawned — a guard in a
-    consuming test body runs only after this session fixture has already been
-    set up, too late to convert a startup failure into a clean skip.
+    ``ConfigError`` at startup if spaCy is absent. The ``graph`` extra is part
+    of the ``dev`` group today (pulled in via its self-referencing
+    ``archon-search[...,graph,code]`` entry in ``pyproject.toml``), so this
+    ``importorskip`` is now a defensive guard for environments where that
+    dev-group install was skipped, not the primary skip path. It is still done
+    HERE, before the subprocess is spawned — a guard in a consuming test body
+    runs only after this session fixture has already been set up, too late to
+    convert a startup failure into a clean skip.
 
     Seeds a multi-entity corpus (``_GRAPH_CORPUS_DOCS``) into a collection named
     ``smoke_graph`` via the real REST API, so extraction runs through the real

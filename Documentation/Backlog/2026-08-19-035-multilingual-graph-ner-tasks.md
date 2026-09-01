@@ -452,7 +452,7 @@ flowchart LR
     - needs K1
     - Tests
         - #manual_test — Pre-change throughput baseline — run the current spaCy-backed ingest once on CI and commit the recorded constant (non-automatable: a one-off measurement that must happen before the core deletes spaCy; once deleted there is no pre-change state left for an automated test to re-derive)
-- [ ] **T-3** — Correct the three doc claims that are false today: the relationship-type inventory in [130_data_architecture_and_persistence.md](../Architecture/130_data_architecture_and_persistence.md) (9 members, not 6), the stale CI-extras claim in [ci-graph-code-extras-gap.md](./ci-graph-code-extras-gap.md), and the matching docstrings at [tests/smoke/conftest.py](../../tests/smoke/conftest.py)`:17-19`/`:375-378` #tester-role
+- [x] **T-3** — Correct the three doc claims that are false today: the relationship-type inventory in [130_data_architecture_and_persistence.md](../Architecture/130_data_architecture_and_persistence.md) (9 members, not 6), the stale CI-extras claim in [ci-graph-code-extras-gap.md](./ci-graph-code-extras-gap.md), and the matching docstrings at [tests/smoke/conftest.py](../../tests/smoke/conftest.py)`:17-19`/`:375-378` #tester-role
     - — · 3.0h
     - needs K1
     - Tests
