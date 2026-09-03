@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from archon_search.graph_types import EntityType, RelationshipType
 from archon_search.paths import (
     GRAPH_NER_MODEL_NAME,
     GRAPH_NER_MODEL_REVISION,
@@ -41,6 +44,120 @@ _MPS_PROVIDER_MARKER = "coreml"
 # (or the install wizard's pre-warm step) forever.
 _LOAD_TIMEOUT_SECONDS = 300.0
 
+# Pinned module constant (Task BE-9, S53) — NOT a [graph] config key, mirroring
+# S43's treatment of adjacency_threshold. Chunks are grouped into sub-batches of
+# at most this many texts per call to gliner's own `inference()`, so a document
+# of N chunks issues ceil(N / GRAPH_NER_SUB_BATCH_SIZE) calls at the gliner
+# boundary, never one call per chunk and never one unbounded forward pass.
+GRAPH_NER_SUB_BATCH_SIZE: int = 8
+
+# Pinned word-count window (Task BE-9, S20) — gliner's own enforced `max_len`,
+# not the encoder's declared-but-unenforced 512 subword-token limit. A chunk
+# longer than this is truncated before being sent to the model.
+GRAPH_NER_TOKEN_WINDOW_WORDS: int = 2048
+
+# The "other" decoy entity label (Q3): its spans are always discarded before
+# reaching the graph — it exists only to give the model a place to put spans
+# that don't fit any real entity label, improving precision on the real labels.
+_OTHER_LABEL = "other"
+
+# Separator gliner's descriptive-label prompting convention uses between a
+# label and its one-line description.
+_LABEL_DESCRIPTION_SEP = " <> "
+
+# The graph's own entity labels, paired with a one-line description each (C1).
+# `code_symbol` is excluded — code-symbol chunks never reach this seam.
+_ENTITY_LABEL_DESCRIPTIONS: dict[str, str] = {
+    EntityType.person.value: "a named individual person",
+    EntityType.concept.value: "an abstract idea, topic, or named concept",
+    EntityType.system.value: "a named software system, product, service, or platform",
+    EntityType.event.value: "a named occurrence or incident",
+}
+
+# The graph's own prose relation labels (C1). `synonym_of` is excluded — it is
+# produced by a separate embedding-similarity mechanism (E2f), not RelEx.
+_RELATION_LABEL_DESCRIPTIONS: dict[str, str] = {
+    RelationshipType.uses.value: "the head uses or depends on the tail at runtime",
+    RelationshipType.implements.value: "the head implements the tail",
+    RelationshipType.depends_on.value: "the head requires the tail to function",
+    RelationshipType.related_to.value: "the head is generically related to the tail",
+    RelationshipType.calls.value: "the head calls or invokes the tail",
+    RelationshipType.imports.value: "the head imports the tail",
+    RelationshipType.defines.value: "the head defines the tail",
+    RelationshipType.inherits.value: "the head inherits from the tail",
+}
+
+# Sanitized, pinned log message (S30) — must NEVER interpolate chunk text.
+_TRUNCATION_LOG_MESSAGE = (
+    "graph NER: a chunk exceeded GRAPH_NER_TOKEN_WINDOW_WORDS words and was "
+    "truncated before extraction"
+)
+
+
+def _labels_with_descriptions(descriptions: dict[str, str]) -> list[str]:
+    """Build gliner's flat label prompt list from a label -> description dict."""
+    return [
+        f"{label}{_LABEL_DESCRIPTION_SEP}{description}"
+        for label, description in descriptions.items()
+    ]
+
+
+# The exact prompt lists sent to gliner — built once at import, not per call.
+_ENTITY_LABELS: list[str] = [
+    *_labels_with_descriptions(_ENTITY_LABEL_DESCRIPTIONS),
+    _OTHER_LABEL,
+]
+_RELATION_LABELS: list[str] = _labels_with_descriptions(_RELATION_LABEL_DESCRIPTIONS)
+
+# The real entity labels — anything else gliner decodes as a span type (the
+# "other" decoy above all) disqualifies a relation endpoint (C1).
+_REAL_ENTITY_LABELS: frozenset[str] = frozenset(_ENTITY_LABEL_DESCRIPTIONS)
+
+
+def _strip_label(label: str) -> str:
+    """Recover the bare label name from a `"label <> description"` prompt string."""
+    return label.split(_LABEL_DESCRIPTION_SEP, 1)[0]
+
+
+@dataclass(frozen=True)
+class ExtractedEntity:
+    """A single threshold-filtered entity span (real substring, char offsets)."""
+
+    text: str
+    label: str
+    start: int
+    end: int
+    score: float
+
+
+@dataclass(frozen=True)
+class ExtractedRelation:
+    """A single threshold-filtered, directed relation triple."""
+
+    head: str
+    tail: str
+    label: str
+    score: float
+
+
+@dataclass(frozen=True)
+class ChunkExtraction:
+    """Entities and relations extracted for one prose chunk."""
+
+    entities: list[ExtractedEntity] = field(default_factory=list)
+    relations: list[ExtractedRelation] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class BatchExtraction:
+    """Result of one ``ProseExtractionBackend.inference()`` call.
+
+    ``chunks`` is aligned index-for-index with the input ``texts``.
+    """
+
+    chunks: list[ChunkExtraction]
+    truncated: bool
+
 
 class ProseExtractionBackend:
     """Lazy-loading gliner.GLiNER backend for prose entity/relation extraction.
@@ -68,6 +185,12 @@ class ProseExtractionBackend:
         self._sync_lock = threading.Lock()
         self._load_lock = asyncio.Lock()
         self._load_exception: BaseException | None = None
+        # Truncation-log latch (S30): once per backend INSTANCE — and the backend
+        # itself is a per-process singleton by construction (one shared instance,
+        # BE-8), which is what makes that once-per-process in practice. Guarded by
+        # its own lock since inference() may run concurrently across threads.
+        self._truncation_log_lock = threading.Lock()
+        self._truncation_logged = False
 
     @property
     def is_loaded(self) -> bool:
@@ -170,3 +293,147 @@ class ProseExtractionBackend:
                 raise
             # asyncio.CancelledError is a BaseException, not Exception, in
             # Python 3.8+, so it propagates here without being latched above.
+
+    def _truncate_to_window(self, text: str) -> str:
+        """Truncate `text` to GRAPH_NER_TOKEN_WINDOW_WORDS words, logging the
+        first truncation for this backend instance at WARNING with the pinned
+        sanitized message — never the chunk text itself (S20, S30).
+
+        The result is always a byte-for-byte PREFIX of `text`: the offsets
+        gliner returns for the truncated string must still index the original
+        chunk text, so whitespace runs (newlines, tabs, double spaces) must
+        survive — a `" ".join(text.split())` rebuild would silently shift every
+        entity `start`/`end` past the first irregular gap.
+        """
+        words = list(re.finditer(r"\S+", text))
+        if len(words) <= GRAPH_NER_TOKEN_WINDOW_WORDS:
+            return text
+        with self._truncation_log_lock:
+            if not self._truncation_logged:
+                self._truncation_logged = True
+                logger.warning(_TRUNCATION_LOG_MESSAGE)
+        return text[: words[GRAPH_NER_TOKEN_WINDOW_WORDS - 1].end()]
+
+    @staticmethod
+    def _dedupe_relations(
+        relations: list[ExtractedRelation],
+    ) -> list[ExtractedRelation]:
+        """Deduplicate relation triples keyed on (head, tail, label) — NOT
+        (head, tail) — so distinct relation types over the same node pair
+        both survive. gliner's PyTorch checkpoint is known to emit exact
+        duplicate (head, tail, relation) triples 2x-4x."""
+        seen: set[tuple[str, str, str]] = set()
+        deduped: list[ExtractedRelation] = []
+        for relation in relations:
+            key = (relation.head, relation.tail, relation.label)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(relation)
+        return deduped
+
+    def _infer_sync(
+        self, texts: list[str], ner_confidence: float, relation_confidence: float
+    ) -> BatchExtraction:
+        """Blocking sub-batched inference — runs off the event loop via
+        asyncio.to_thread. Requires ``self._model`` to already be loaded."""
+        assert self._model is not None  # noqa: S101 — inference() enforces this
+
+        truncated_any = False
+        prepared_texts: list[str] = []
+        for text in texts:
+            truncated_text = self._truncate_to_window(text)
+            truncated_any = truncated_any or truncated_text != text
+            prepared_texts.append(truncated_text)
+
+        chunks: list[ChunkExtraction] = []
+        for start in range(0, len(prepared_texts), GRAPH_NER_SUB_BATCH_SIZE):
+            sub_batch = prepared_texts[start : start + GRAPH_NER_SUB_BATCH_SIZE]
+            # `adjacency_threshold` is deliberately NOT passed: K2g proved it inert
+            # on this checkpoint three independent ways (it only reaches candidate-
+            # pair selection when the model has a `relations_rep_layer`, which this
+            # one does not), so Q29's pinned ~0.6 was dropped rather than pinned —
+            # see the tasks file's spike-gate Notes ("REMOVED, not pinned").
+            batch_entities, batch_relations = self._model.inference(
+                sub_batch,
+                _ENTITY_LABELS,
+                relations=_RELATION_LABELS,
+                threshold=ner_confidence,
+                relation_threshold=relation_confidence,
+                batch_size=GRAPH_NER_SUB_BATCH_SIZE,
+                return_relations=True,
+            )
+            for raw_entities, raw_relations in zip(
+                batch_entities, batch_relations, strict=True
+            ):
+                entities = [
+                    ExtractedEntity(
+                        text=raw_entity["text"],
+                        label=label,
+                        start=raw_entity["start"],
+                        end=raw_entity["end"],
+                        score=raw_entity["score"],
+                    )
+                    for raw_entity in raw_entities
+                    if (label := _strip_label(raw_entity["label"]))
+                    in _REAL_ENTITY_LABELS
+                ]
+                relations = self._dedupe_relations(
+                    [
+                        ExtractedRelation(
+                            head=raw_relation["head"]["text"],
+                            tail=raw_relation["tail"]["text"],
+                            label=_strip_label(raw_relation["relation"]),
+                            score=raw_relation["score"],
+                        )
+                        for raw_relation in raw_relations
+                        # A relation whose head or tail span was itself decoded as
+                        # the "other" decoy (or any non-real label) must not reach
+                        # the graph — filtering entities alone leaves the decoy in
+                        # as a relation endpoint.
+                        if _strip_label(raw_relation["head"]["type"])
+                        in _REAL_ENTITY_LABELS
+                        and _strip_label(raw_relation["tail"]["type"])
+                        in _REAL_ENTITY_LABELS
+                    ]
+                )
+                chunks.append(ChunkExtraction(entities=entities, relations=relations))
+
+        if len(chunks) != len(texts):
+            # BatchExtraction.chunks is contracted to align index-for-index with
+            # the input texts; a short per-text list from gliner would silently
+            # misattribute every entity after the gap.
+            raise RuntimeError(
+                "graph NER returned "
+                f"{len(chunks)} per-chunk results for {len(texts)} input texts"
+            )
+        return BatchExtraction(chunks=chunks, truncated=truncated_any)
+
+    async def inference(
+        self, texts: list[str], ner_confidence: float, relation_confidence: float
+    ) -> BatchExtraction:
+        """Extract entities and relations for a batch of prose chunks (Task BE-9).
+
+        Prompts gliner with the graph's own entity/relation labels plus the
+        ``"other"`` decoy entity label (Q3); "other"-labelled spans are
+        discarded before reaching the graph, as are relations with an
+        "other"-typed head or tail. Both confidence thresholds are
+        applied by the model itself. Texts are grouped into sub-batches of at
+        most ``GRAPH_NER_SUB_BATCH_SIZE`` per call to ``gliner``'s own
+        ``inference()`` (S7, S53); any chunk exceeding
+        ``GRAPH_NER_TOKEN_WINDOW_WORDS`` words is truncated to a byte-for-byte
+        prefix with a sanitized log emitted once per backend instance — which
+        is once per process, the backend being a shared singleton (S20, S30).
+        Duplicate relation triples
+        — keyed on (head, tail, label) — are removed per chunk.
+
+        Requires ``load()`` to have completed; raises ``RuntimeError``
+        otherwise.
+        """
+        if self._model is None:
+            raise RuntimeError(
+                "ProseExtractionBackend.inference() called before load()"
+            )
+        return await asyncio.to_thread(
+            self._infer_sync, texts, ner_confidence, relation_confidence
+        )
