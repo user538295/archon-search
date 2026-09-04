@@ -2,16 +2,18 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import logging
 import shutil
 import urllib.error
 import urllib.request
 from pathlib import Path
 
+from archon_search._durable_io import atomic_write_bytes
 from archon_search.profiles import JINA_RERANKER_MODEL, InstallProfile
 
 from .errors import InstallError
-from .provisioning import ArtifactSpec, LicenseDisposition
+from .provisioning import ArtifactSpec, LicenseDisposition, ProvisionFailureKind
 
 logger = logging.getLogger(__name__)
 
@@ -153,57 +155,102 @@ FASTTEXT_ARTIFACT = ArtifactSpec(
 def _download_fasttext_model(models_dir: Path) -> None:
     """Download the fasttext language identification model to *models_dir*.
 
+    Durable, verified, single-file provisioning for ``lid.176.ftz`` (BE-13): check
+    free space -> download into memory (the file is under 1 MB, so buffering beats a
+    chunked write) -> verify byte count and digest, as two distinct failure
+    categories, BEFORE anything is placed on disk -> publish via
+    :func:`archon_search._durable_io.atomic_write_bytes`, which stages the bytes in a
+    temp file inside *models_dir* (same filesystem as the final path), fsyncs it,
+    atomically renames it onto the target, then fsyncs the parent directory.
+
     - Creates *models_dir* (mode 0o700) if absent.
-    - No-op if ``lid.176.ftz`` already exists and matches ``FASTTEXT_ARTIFACT.sha256``;
-      a mismatching file is deleted and re-downloaded (non-fatal, one time per install).
+    - No-op if ``lid.176.ftz`` already exists and matches both
+      ``FASTTEXT_ARTIFACT.sha256`` and ``FASTTEXT_ARTIFACT.size_bytes``; a mismatching
+      file is deleted and re-downloaded (non-fatal, one time per install).
     - Uses ``urllib.request.urlopen`` with an explicit 120-second socket timeout
       instead of ``urlretrieve`` (which has no timeout).
-    - Raises ``InstallError`` on network failure, or if the downloaded file is empty or
-      does not match ``FASTTEXT_ARTIFACT.sha256``.
+    - Raises ``InstallError`` on insufficient disk space, network failure, a
+      byte-count mismatch, or a digest mismatch — each a distinct failure category
+      from :class:`ProvisionFailureKind`.
     """
     target = models_dir / "lid.176.ftz"
 
     if target.exists():
-        # The file is under 1 MB, so one read beats a chunked hasher.
-        if hashlib.sha256(target.read_bytes()).hexdigest() == FASTTEXT_ARTIFACT.sha256:
-            logger.debug("fasttext model already present at %s — skipping download", target)
-            return
-        logger.warning(
-            "fasttext model at %s does not match the pinned digest — re-downloading", target
-        )
-        target.unlink()
+        try:
+            # The file is under 1 MB, so one read beats a chunked hasher.
+            existing = target.read_bytes()
+            matches = (
+                len(existing) == FASTTEXT_ARTIFACT.size_bytes
+                and hashlib.sha256(existing).hexdigest() == FASTTEXT_ARTIFACT.sha256
+            )
+        except OSError:
+            # Unreadable (e.g. a directory, permission-denied) — can't verify, so
+            # fall through and re-download; atomic_write_bytes's os.replace will
+            # overwrite it once the fresh download is verified.
+            logger.warning("fasttext model at %s could not be read — re-downloading", target)
+        else:
+            if matches:
+                logger.debug("fasttext model already present at %s — skipping download", target)
+                return
+            logger.warning(
+                "fasttext model at %s does not match the pinned digest/size — re-downloading",
+                target,
+            )
 
     models_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # mkdir(mode=...) is a no-op on an already-existing dir, so set it unconditionally
+    # to correct a directory created by an earlier version (matches extras.py:281).
+    models_dir.chmod(0o700)
+
+    usage = shutil.disk_usage(models_dir)
+    if usage.free < FASTTEXT_ARTIFACT.size_bytes:
+        raise InstallError(
+            f"Insufficient disk space for fasttext lid.176.ftz "
+            f"({ProvisionFailureKind.insufficient_disk}): needs "
+            f"~{FASTTEXT_ARTIFACT.size_bytes} bytes free at {models_dir}."
+        )
 
     print("[4b/5] Downloading fasttext language model...")
 
     try:
         with urllib.request.urlopen(FASTTEXT_MODEL_URL, timeout=120) as response:
-            with target.open("wb") as out_file:
-                shutil.copyfileobj(response, out_file)
-    except urllib.error.URLError as exc:
-        target.unlink(missing_ok=True)
+            # Bounded read: a mismatched size is caught below without buffering an
+            # unbounded response from a hostile or misconfigured server.
+            content = response.read(FASTTEXT_ARTIFACT.size_bytes + 1)
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+        logger.warning("fasttext model download failed: %s", exc)
         raise InstallError(
-            f"Failed to download fasttext lid.176.ftz model: {exc}. "
+            f"Failed to download fasttext lid.176.ftz model "
+            f"({ProvisionFailureKind.download_failed}). "
             "Check your network connection and re-run install."
         ) from exc
-    except OSError as exc:
-        target.unlink(missing_ok=True)
+
+    # Byte-count assert BEFORE the digest assert and BEFORE anything touches disk —
+    # a short download and a digest mismatch are distinct failure categories (S37, S11).
+    if len(content) != FASTTEXT_ARTIFACT.size_bytes:
         raise InstallError(
-            f"Failed to write fasttext lid.176.ftz model to disk: {exc}. "
+            f"fasttext model download appears corrupt "
+            f"({ProvisionFailureKind.size_mismatch}): expected "
+            f"{FASTTEXT_ARTIFACT.size_bytes} bytes, got {len(content)}; re-run install."
+        )
+
+    if hashlib.sha256(content).hexdigest() != FASTTEXT_ARTIFACT.sha256:
+        raise InstallError(
+            f"fasttext model digest verification failed "
+            f"({ProvisionFailureKind.digest_mismatch}): the fetched bytes do not "
+            "match the pinned sha256; re-run install."
+        )
+
+    # A stale .tmp from a prior crashed run of this same install path is our own
+    # leftover, not a real conflict (concurrent installs of this file are not a
+    # supported scenario) — atomic_write_bytes uses O_EXCL and will not unlink it.
+    target.with_suffix(target.suffix + ".tmp").unlink(missing_ok=True)
+
+    try:
+        atomic_write_bytes(target, content, mode=0o644)
+    except OSError as exc:
+        logger.warning("fasttext model publish to %s failed: %s", target, exc)
+        raise InstallError(
+            "Failed to write fasttext lid.176.ftz model to disk. "
             "Check available disk space and permissions."
         ) from exc
-
-    # Validate download
-    if target.stat().st_size == 0:
-        target.unlink(missing_ok=True)
-        raise InstallError(
-            "fasttext model download appears corrupt (empty file); re-run install."
-        )
-
-    if hashlib.sha256(target.read_bytes()).hexdigest() != FASTTEXT_ARTIFACT.sha256:
-        target.unlink(missing_ok=True)
-        raise InstallError(
-            "fasttext model digest verification failed after download "
-            "(the fetched bytes do not match the pinned sha256); re-run install."
-        )

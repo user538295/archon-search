@@ -533,7 +533,7 @@ flowchart LR
         - [x] #unit_test — `test_wait_timeout_degrades_and_leaves_loader_bookkeeping_untouched` — the waiter mutates nothing
         - [x] #integration_test — `test_missing_artifact_still_persists_chunks_and_code_symbols` — ingest succeeds degraded
         - [x] #integration_test — `test_mid_batch_raise_returns_the_pinned_sanitized_constant` — asserted **equal to** the `DETAIL`/`CODE` pair, not merely absent of exception text
-- [ ] **BE-13** — Rewrite `_download_fasttext_model` ([licenses.py](../../archon_search/install/licenses.py)`:93-134`) into a durable, verified single-file download: disclose → check space → stage inside the target filesystem → verify digest **and** byte count → fsync → atomic rename → fsync parent, for `lid.176.ftz` only #backend-role
+- [x] **BE-13** — Rewrite `_download_fasttext_model` ([licenses.py](../../archon_search/install/licenses.py)`:93-134`) into a durable, verified single-file download: disclose → check space → stage inside the target filesystem → verify digest **and** byte count → fsync → atomic rename → fsync parent, for `lid.176.ftz` only #backend-role
     - Frameworks & Drivers · 8.0h
     - needs BE-3 · completes C4, S11, S37
     - Tests
