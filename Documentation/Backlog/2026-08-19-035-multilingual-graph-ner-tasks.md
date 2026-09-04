@@ -507,7 +507,7 @@ flowchart LR
         - #integration_test — `test_truncation_logs_once_and_never_interpolates_chunk_text` — the emitted record equals the pinned sanitized constant
     - Notes
         - **+1.5h added to the estimate (10.0h → 11.5h) for the PyTorch-checkpoint decision (Spike gate — RESOLVED, team plan).** The call shape is unchanged — `model.inference(texts, labels, relations=..., batch_size=N)` works identically against the PyTorch checkpoint. `GRAPH_NER_SUB_BATCH_SIZE = 8`'s justification re-points at the PyTorch batch curve (K2's resolved figures: peak RSS @ batch 8 3737.0 MiB, peak @ batch 16 5557.5 MiB — more headroom than the ONNX curve K2f originally measured, not less), not K2f's ONNX-only measurement. The stub boundary this task's tests exercise narrows to `gliner` alone — no `onnxruntime.InferenceSession` exists to intercept.
-- [ ] **BE-10** — Add `ner_confidence` (0.5), `relation_confidence` (0.75) and `providers` to `GraphConfig` ([config.py](../../archon_search/config.py)`:136`), following the reject-bool-then-coerce-then-range idiom at `:925-936`; `adjacency_threshold` stays a pinned constant and is never parsed #backend-role
+- [x] **BE-10** — Add `ner_confidence` (0.5), `relation_confidence` (0.75) and `providers` to `GraphConfig` ([config.py](../../archon_search/config.py)`:136`), following the reject-bool-then-coerce-then-range idiom at `:925-936`; `adjacency_threshold` stays a pinned constant and is never parsed #backend-role
     - Frameworks & Drivers · 5.0h
     - needs K1 · completes C5, S43, S47
     - Tests

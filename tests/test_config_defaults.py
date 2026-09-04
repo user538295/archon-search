@@ -237,6 +237,9 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
             "ppr_damping": 0.85,
             "ppr_top_entities": 20,
             "naive_max_expansion_terms": 20,
+            "ner_confidence": 0.5,
+            "relation_confidence": 0.75,
+            "providers": None,
         },
         # [openai_shim]
         "openai_shim": {

@@ -208,6 +208,24 @@ class GraphConfig:
     naive_max_expansion_terms: int = 20
     """Maximum number of expansion terms added by the naive graph-expansion
     query rewriter. Must be >= 1."""
+    # C5 — engine confidence knobs and torch device placement
+    ner_confidence: float = 0.5
+    """Minimum engine score for a span to become a node and a mention.
+    Must be in the half-open range (0.0, 1.0]. Raising this starves
+    relation_confidence of candidates, since relations only reference
+    already-extracted spans."""
+    relation_confidence: float = 0.75
+    """Minimum engine score for a relation to become a typed edge. Only
+    relations between spans that already cleared ner_confidence are
+    candidates. Must be in the half-open range (0.0, 1.0]."""
+    providers: list[str] | None = None
+    """ONNX Runtime execution provider names for the graph NER/RelEx engine
+    (e.g. "CPUExecutionProvider", "CUDAExecutionProvider", "CoreMLExecutionProvider")
+    — the same vocabulary as [database].providers, matched by prose_extraction_backend.py
+    via a "cuda"/"coreml" substring check on the first entry. Its own [graph] setting —
+    never inherited from [database].providers, unlike resolve_reranker_providers's
+    fallback to [database].providers. None means the field was never written or was
+    written as an empty list, read by the engine as CPU."""
 
 
 _OPENAI_SHIM_TOP_K_DEFAULT: int = 5
@@ -383,6 +401,16 @@ def _coerce_bounded_int(raw: object, field_name: str, *, minimum: int) -> int:
     if raw < minimum:
         raise ConfigError(f"'{field_name}' must be >= {minimum}, got {raw}")
     return raw
+
+
+def _coerce_bounded_float(raw: object, field_name: str, *, minimum: float, maximum: float) -> float:
+    """Coerce to float and validate against (minimum, maximum] — exclusive lower, inclusive upper bound."""
+    if isinstance(raw, bool):
+        raise ConfigError(f"Expected float for '{field_name}', got bool")
+    value = _coerce_float(raw, field_name)
+    if not (minimum < value <= maximum):
+        raise ConfigError(f"{field_name} must be in ({minimum}, {maximum}], got {value}")
+    return value
 
 
 def _coerce_bool(value: object, field_name: str) -> bool:
@@ -966,15 +994,9 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             )
         graph.gc_rebuild_cpu_priority = raw_priority
     if "synonym_threshold" in graph_cfg:
-        raw_st = graph_cfg["synonym_threshold"]
-        if isinstance(raw_st, bool):
-            raise ConfigError("Expected float for '[graph].synonym_threshold', got bool")
-        synonym_threshold = _coerce_float(raw_st, "[graph].synonym_threshold")
-        if not (0.0 < synonym_threshold <= 1.0):
-            raise ConfigError(
-                f"[graph].synonym_threshold must be in (0.0, 1.0], got {synonym_threshold}"
-            )
-        graph.synonym_threshold = synonym_threshold
+        graph.synonym_threshold = _coerce_bounded_float(
+            graph_cfg["synonym_threshold"], "[graph].synonym_threshold", minimum=0.0, maximum=1.0
+        )
     if "alias_file" in graph_cfg:
         raw_af = graph_cfg["alias_file"]
         if not isinstance(raw_af, str):
@@ -1002,6 +1024,25 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         graph.naive_max_expansion_terms = _coerce_bounded_int(
             graph_cfg["naive_max_expansion_terms"], "[graph].naive_max_expansion_terms", minimum=1
         )
+    if "ner_confidence" in graph_cfg:
+        graph.ner_confidence = _coerce_bounded_float(
+            graph_cfg["ner_confidence"], "[graph].ner_confidence", minimum=0.0, maximum=1.0
+        )
+    if "relation_confidence" in graph_cfg:
+        graph.relation_confidence = _coerce_bounded_float(
+            graph_cfg["relation_confidence"], "[graph].relation_confidence", minimum=0.0, maximum=1.0
+        )
+    if "providers" in graph_cfg:
+        # Its own [graph] setting — never inherited from [database].providers.
+        raw_providers = graph_cfg["providers"]
+        if not isinstance(raw_providers, list) or not all(
+            isinstance(item, str) and item for item in raw_providers
+        ):
+            raise ConfigError(
+                "[graph].providers must be a list of non-empty strings, "
+                f"got {raw_providers!r}"
+            )
+        graph.providers = list(raw_providers) or None
     if "provider" in graph_cfg:
         graph.provider = _coerce_str(graph_cfg["provider"], "[graph].provider")
     if "llama_cpp_base_url" in graph_cfg:

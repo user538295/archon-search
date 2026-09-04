@@ -579,6 +579,22 @@ num_queries = 2
 # graph-mode query rewriting. Must be >= 1.
 # naive_max_expansion_terms = 20
 
+# ner_confidence (float, default 0.5): Minimum engine score for a span to become a node
+# and a mention. Must be in (0.0, 1.0]. Raising this starves relation_confidence of
+# candidates, since relations only reference spans that already cleared ner_confidence.
+# ner_confidence = 0.5
+
+# relation_confidence (float, default 0.75): Minimum engine score for a relation to become
+# a typed edge. Only relations between spans that already cleared ner_confidence are
+# candidates. Must be in (0.0, 1.0].
+# relation_confidence = 0.75
+
+# providers (list of str | null, default null): ONNX Runtime execution providers for the
+# graph NER/RelEx engine (same vocabulary as [database].providers, above). Its own [graph]
+# setting — never inherited from [database].providers. An empty list normalizes to null,
+# read by the engine as CPU.
+# providers = ["CoreMLExecutionProvider"]
+
 [openai_shim]
 # OpenAI-compatible shim endpoint (G9).
 # Disabled by default.

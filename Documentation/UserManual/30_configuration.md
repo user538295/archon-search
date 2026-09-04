@@ -233,6 +233,9 @@ Prose entity extraction additionally needs the `en_core_web_sm` spaCy model, whi
 | `ppr_damping` | `0.85` | Personalised PageRank damping, strictly in `(0.0, 1.0)`. |
 | `ppr_top_entities` | `20` | Top-ranked entities returned by PPR before chunk lookup (≥1). |
 | `naive_max_expansion_terms` | `20` | Cap on terms added by naive graph-mode query expansion (≥1). |
+| `ner_confidence` | `0.5` | Minimum engine score for a span to become a node/mention, in `(0.0, 1.0]`. Raising this starves `relation_confidence` of candidates, since relations only reference spans that already cleared `ner_confidence`. |
+| `relation_confidence` | `0.75` | Minimum engine score for a relation to become a typed edge, in `(0.0, 1.0]`. Only relations between spans that already cleared `ner_confidence` are candidates. |
+| `providers` | `null` | ONNX Runtime execution providers for the graph NER/RelEx engine (same vocabulary as `[database].providers`). Its own `[graph]` setting — never inherited from `[database].providers`. An empty list normalizes to `null`, read as CPU. |
 
 Graph search modes (`naive`/`local`/`global`/`ppr`) are documented in [`65_graph_search.md`](./65_graph_search.md); operator-side graph management in [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md).
 
