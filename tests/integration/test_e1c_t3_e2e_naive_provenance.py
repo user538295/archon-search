@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import json
 import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -63,54 +62,32 @@ pytestmark = pytest.mark.integration
 
 
 def _install_content_aware_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Install a fake spaCy that extracts graph entities from ingested text.
+    """Stub the gliner-backed extraction engine to extract graph entities from ingested text.
+
+    Historical name kept for minimal diff; no longer touches spaCy — BE-11
+    rewired GraphExtractor onto ProseExtractionBackend/gliner.
 
     Routing logic:
     - "AuthService" in text AND "UserStore" NOT in text:
-        → [AuthService(ORG), TokenValidator(ORG)]
+        → [AuthService(system), TokenValidator(system)]
         Simulates: AuthService depends on TokenValidator
     - "TokenValidator" in text (AuthService NOT in text):
-        → [TokenValidator(ORG)]
+        → [TokenValidator(system)]
     - otherwise: no entities
 
-    Must be called BEFORE make_real_app because create_app calls
-    ``_check_graph_deps`` which imports spacy synchronously.
+    Must be called BEFORE make_real_app: it patches the class
+    GraphExtractor.__init__ constructs, so it must run before that construction.
     """
+    from tests._graph_engine_stub import install_graph_engine_stub_custom
 
-    class _FakeEnt:
-        def __init__(self, text: str, label: str) -> None:
-            self.text = text
-            self.label_ = label
+    def _entities_for_text(text: str) -> list[tuple[str, str]]:
+        if "AuthService" in text and "UserStore" not in text:
+            return [("AuthService", "system"), ("TokenValidator", "system")]
+        if "TokenValidator" in text:
+            return [("TokenValidator", "system")]
+        return []
 
-    class _FakeDoc:
-        def __init__(self, ents: list[_FakeEnt]) -> None:
-            self.ents = ents
-
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            ents: list[_FakeEnt] = []
-            if "AuthService" in text:
-                if "UserStore" not in text:
-                    ents.append(_FakeEnt("AuthService", "ORG"))
-                    ents.append(_FakeEnt("TokenValidator", "ORG"))
-            elif "TokenValidator" in text:
-                ents.append(_FakeEnt("TokenValidator", "ORG"))
-            return _FakeDoc(ents)
-
-    nlp_instance = _FakeNLP()
-
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+    install_graph_engine_stub_custom(monkeypatch, _entities_for_text)
 
 
 def _install_deterministic_embedding(monkeypatch: pytest.MonkeyPatch) -> None:

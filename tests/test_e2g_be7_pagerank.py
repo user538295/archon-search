@@ -569,33 +569,13 @@ def test_graphBrowse_importanceSortMode_ordersByPersistedPageRank(
 ) -> None:
     """GET /graph/{collection}?salience=importance orders nodes by persisted pagerank_score,
     with a null-scored node sorting last (nulls-last)."""
-    import sys
-    import types
-
+    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
     from tests.integration.conftest import ingest_file_via_path, make_real_app
 
-    # Minimal spaCy stub (graph_enabled requires it at app-creation time).
-    class _FakeDoc:
-        def __init__(self) -> None:
-            self.ents: list = []
-
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            return _FakeDoc()
-
-    nlp_instance = _FakeNLP()
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+    # Stub the gliner-backed extraction engine (graph_enabled requires an
+    # importable engine at app-creation time); this test seeds graph state
+    # directly below and doesn't need real entity extraction.
+    install_graph_engine_stub_no_entities(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc_file = tmp_path / "doc-importance.txt"

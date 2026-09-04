@@ -14,8 +14,6 @@ Completes S5, S6, S8.
 from __future__ import annotations
 
 import json
-import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -31,70 +29,27 @@ pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
 
 
 def _install_spacy_stub_with_entities(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Install a fake spaCy that returns two named entities for any text.
+    """Stub the gliner-backed extraction engine to return two fixed entities.
 
-    Must be called BEFORE make_real_app (create_app imports spacy synchronously
-    via _check_graph_deps).
+    Historical name kept for minimal diff; no longer touches spaCy — BE-11
+    rewired GraphExtractor onto ProseExtractionBackend/gliner.
     """
+    from tests._graph_engine_stub import install_graph_engine_stub
 
-    class _FakeEnt:
-        def __init__(self, text: str, label: str) -> None:
-            self.text = text
-            self.label_ = label
-
-    class _FakeDoc:
-        def __init__(self) -> None:
-            self.ents = [_FakeEnt("Alice", "PERSON"), _FakeEnt("Google", "ORG")]
-
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            return _FakeDoc()
-
-    nlp_instance = _FakeNLP()
-
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+    install_graph_engine_stub(monkeypatch)
 
 
 def _install_spacy_stub_no_entities(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Install a fake spaCy that returns NO named entities for any text.
+    """Stub the gliner-backed extraction engine to return NO named entities.
 
-    Graph tables will be created but remain empty after ingest, producing
-    a zero-node graph (no-op expansion at query time).
+    Historical name kept for minimal diff; no longer touches spaCy — BE-11
+    rewired GraphExtractor onto ProseExtractionBackend/gliner. Graph tables
+    will be created but remain empty after ingest, producing a zero-node
+    graph (no-op expansion at query time).
     """
+    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
 
-    class _FakeDoc:
-        def __init__(self) -> None:
-            self.ents: list = []
-
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            return _FakeDoc()
-
-    nlp_instance = _FakeNLP()
-
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def _auth(api_key: str) -> dict[str, str]:

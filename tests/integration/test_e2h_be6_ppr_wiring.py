@@ -11,8 +11,6 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -58,63 +56,25 @@ def _mention(node: GraphNode, chunk_id: str) -> GraphMention:
 
 
 def _install_no_entity_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Install a spaCy stub that returns NO named entities for any text."""
+    """Stub the gliner-backed extraction engine to return no entities.
 
-    class _FakeDoc:
-        def __init__(self) -> None:
-            self.ents: list = []
+    Historical name kept for minimal diff; no longer touches spaCy — BE-11
+    rewired GraphExtractor onto ProseExtractionBackend/gliner.
+    """
+    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
 
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            return _FakeDoc()
-
-    nlp_instance = _FakeNLP()
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def _install_kubernetes_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Install a spaCy stub that returns 'kubernetes' as an entity when present in text."""
+    """Stub the gliner-backed extraction engine to tag 'kubernetes' when present in text.
 
-    class _FakeEnt:
-        def __init__(self, text: str, label: str) -> None:
-            self.text = text
-            self.label_ = label
+    Historical name kept for minimal diff; no longer touches spaCy — BE-11
+    rewired GraphExtractor onto ProseExtractionBackend/gliner.
+    """
+    from tests._graph_engine_stub import install_graph_engine_stub_content_aware
 
-    class _FakeDoc:
-        def __init__(self, ents: list) -> None:
-            self.ents = ents
-
-    _ENTITY_MAP = [("kubernetes", "ORG")]
-
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            ents = [_FakeEnt(name, label) for name, label in _ENTITY_MAP if name in text.lower()]
-            return _FakeDoc(ents)
-
-    nlp_instance = _FakeNLP()
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+    install_graph_engine_stub_content_aware(monkeypatch, entity_map=[("kubernetes", "system")])
 
 
 async def _seed_graph(

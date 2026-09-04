@@ -14,8 +14,6 @@ Scenarios: S1, S9, S13, S15.
 """
 from __future__ import annotations
 
-import sys
-import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,33 +28,14 @@ from archon_search.server.routes_explain import ExplainNearMiss
 
 
 def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Install a minimal spaCy stub that satisfies _check_graph_deps.
+    """Stub the gliner-backed extraction engine to return two fixed entities.
 
-    Must be called BEFORE make_real_app when graph_enabled=True;
-    create_app calls _check_graph_deps which imports spacy synchronously.
+    Historical name kept for minimal diff; no longer touches spaCy — BE-11
+    rewired GraphExtractor onto ProseExtractionBackend/gliner.
     """
+    from tests._graph_engine_stub import install_graph_engine_stub
 
-    class _FakeDoc:
-        def __init__(self) -> None:
-            self.ents: list = []
-
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            return _FakeDoc()
-
-    nlp_instance = _FakeNLP()
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+    install_graph_engine_stub(monkeypatch)
 
 
 def _minimal_pipeline_result(**kwargs) -> ExplainPipelineResult:

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -76,24 +75,6 @@ def _sha256_doc_id(name: str) -> str:
     return hashlib.sha256(name.encode()).hexdigest() + "-000001"
 
 
-def _install_spacy_stub():
-    """Install minimal spaCy stubs (same pattern as existing integration tests)."""
-    import types
-
-    spacy_mod = types.ModuleType("spacy")
-    spacy_mod.load = MagicMock()
-
-    lang_mod = types.ModuleType("spacy.lang")
-    en_mod = types.ModuleType("spacy.lang.en")
-    en_mod.STOP_WORDS = frozenset()
-    spacy_mod.lang = lang_mod
-    lang_mod.en = en_mod
-
-    sys.modules.setdefault("spacy", spacy_mod)
-    sys.modules.setdefault("spacy.lang", lang_mod)
-    sys.modules.setdefault("spacy.lang.en", en_mod)
-
-
 # ---------------------------------------------------------------------------
 # Integration test
 # ---------------------------------------------------------------------------
@@ -123,7 +104,6 @@ async def test_post_ingest_synonym_enrichment_fires_and_creates_edges(
     )
     from archon_search.store import SearchStore
 
-    _install_spacy_stub()
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
 
     db_path = str(tmp_path / "search")

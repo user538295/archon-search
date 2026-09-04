@@ -5,8 +5,6 @@ graph → expansion_used=True, expanded query bounded to ≤ naive_max_expansion
 """
 from __future__ import annotations
 
-import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -24,40 +22,15 @@ def _auth(api_key: str) -> dict[str, str]:
 
 
 def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch, seed_entity: str) -> None:
-    """Install a spaCy stub that recognises seed_entity as an ORG."""
+    """Stub the gliner-backed extraction engine to tag seed_entity where it
+    literally occurs in a chunk's text.
 
-    class _FakeEnt:
-        def __init__(self, text: str, label: str) -> None:
-            self.text = text
-            self.label_ = label
+    Historical name kept for minimal diff; no longer touches spaCy — BE-11
+    rewired GraphExtractor onto ProseExtractionBackend/gliner.
+    """
+    from tests._graph_engine_stub import install_graph_engine_stub_content_aware
 
-    class _FakeDoc:
-        def __init__(self, ents: list[_FakeEnt]) -> None:
-            self.ents = ents
-
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            ents: list[_FakeEnt] = []
-            if seed_entity in text:
-                ents.append(_FakeEnt(seed_entity, "ORG"))
-            return _FakeDoc(ents)
-
-    nlp_instance = _FakeNLP()
-
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+    install_graph_engine_stub_content_aware(monkeypatch, entity_map=[(seed_entity, "concept")])
 
 
 def test_naiveCap_endToEnd_expandedQueryBounded(

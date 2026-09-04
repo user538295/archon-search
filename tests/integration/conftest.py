@@ -362,59 +362,27 @@ async def make_real_pipeline(tmp_path, monkeypatch):
 
 
 def install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Install a fake spaCy NLP model that recognizes entity names in text.
+    """Stub the gliner-backed extraction engine to recognize entity names.
 
-    Recognises: "Alice" → PERSON, "Bob" → PERSON, "Google" → ORG.
+    Recognises: "Alice" → person, "Bob" → person, "Google" → concept — only
+    where the name literally occurs in a chunk's text (content-aware).
 
-    Must be called BEFORE make_real_app(graph_enabled=True) because create_app
-    calls _check_graph_deps which imports spaCy synchronously.
+    Historical name kept for minimal diff; no longer touches spaCy — BE-11
+    rewired GraphExtractor onto ProseExtractionBackend/gliner. Must still be
+    called BEFORE make_real_app(graph_enabled=True): it patches the class
+    GraphExtractor.__init__ constructs, so it must run before that construction.
 
     Usage::
         install_spacy_stub(monkeypatch)
         with make_real_app(..., graph_enabled=True) as (client, cfg, api_key):
             ...
     """
-    import sys
-    import types
+    from tests._graph_engine_stub import install_graph_engine_stub_content_aware
 
-    class _FakeEnt:
-        def __init__(self, text: str, label: str) -> None:
-            self.text = text
-            self.label_ = label
-
-    class _FakeDoc:
-        def __init__(self, ents: list) -> None:
-            self.ents = ents
-
-    _ENTITY_MAP = [
-        ("Alice", "PERSON"),
-        ("Bob", "PERSON"),
-        ("Google", "ORG"),
-    ]
-
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            ents = [
-                _FakeEnt(name, label)
-                for name, label in _ENTITY_MAP
-                if name in text
-            ]
-            return _FakeDoc(ents)
-
-    nlp_instance = _FakeNLP()
-
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+    install_graph_engine_stub_content_aware(
+        monkeypatch,
+        entity_map=[("Alice", "person"), ("Bob", "person"), ("Google", "concept")],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -496,14 +464,19 @@ def mcp_tool_call(
 
 
 def install_k8s_synonym_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Install a content-dependent spaCy stub for K8s/Kubernetes synonym e2e tests.
+    """Stub the gliner-backed extraction engine for K8s/Kubernetes synonym e2e tests.
 
-    Returns "K8s" (label "ORG" → EntityType.system) only when "K8s" appears in text.
-    Returns "Kubernetes" (label "ORG" → EntityType.system) only when "Kubernetes" appears.
+    Returns "K8s" (label "system") only when "K8s" appears in text.
+    Returns "Kubernetes" (label "system") only when "Kubernetes" appears.
     Both entities get the same entity_type so SynonymDetector groups them together.
 
-    Must be called BEFORE make_real_app(graph_enabled=True) because create_app
-    calls _check_graph_deps which imports spaCy synchronously.
+    Historical name kept for minimal diff; no longer touches spaCy — BE-11
+    rewired GraphExtractor onto ProseExtractionBackend/gliner, which uses the
+    engine's own label verbatim (no _LABEL_TO_ENTITY_TYPE mapping table), so
+    "system" is used directly rather than the old "ORG" spaCy category. Must
+    still be called BEFORE make_real_app(graph_enabled=True): it patches the
+    class GraphExtractor.__init__ constructs, so it must run before that
+    construction.
 
     Used by T-1 (synonym_search_e2e), T-2 (alias_file_manual_synonym_edge), and
     T-3 (health_metrics_synonym_e2e).
@@ -513,45 +486,9 @@ def install_k8s_synonym_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         with make_real_app(..., graph_enabled=True) as (client, cfg, api_key):
             ...
     """
-    import sys
-    import types
+    from tests._graph_engine_stub import install_graph_engine_stub_content_aware
 
-    class _FakeEnt:
-        def __init__(self, text: str, label: str) -> None:
-            self.text = text
-            self.label_ = label
-
-    class _FakeDoc:
-        def __init__(self, ents: list) -> None:
-            self.ents = ents
-
-    # ORG → EntityType.system in graph_extractor._LABEL_TO_ENTITY_TYPE.
-    # Content-dependent: each document produces exactly the entity named in its text.
-    _ENTITY_MAP = [
-        ("K8s", "ORG"),
-        ("Kubernetes", "ORG"),
-    ]
-
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            ents = [
-                _FakeEnt(name, label)
-                for name, label in _ENTITY_MAP
-                if name in text
-            ]
-            return _FakeDoc(ents)
-
-    nlp_instance = _FakeNLP()
-
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+    install_graph_engine_stub_content_aware(
+        monkeypatch,
+        entity_map=[("K8s", "system"), ("Kubernetes", "system")],
+    )

@@ -21,8 +21,6 @@ import graphs) rather than co-occurrence within a single text window.
 """
 from __future__ import annotations
 
-import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -37,69 +35,42 @@ def _auth(api_key: str) -> dict[str, str]:
 
 
 def _install_content_aware_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Install a fake spaCy package that simulates code-graph entity extraction.
+    """Stub the gliner-backed extraction engine to simulate code-graph entity extraction.
+
+    Historical name kept for minimal diff; no longer touches spaCy — BE-11
+    rewired GraphExtractor onto ProseExtractionBackend/gliner.
 
     Routing logic (order matters — AuthService check comes first):
     - "AuthService" in text AND "UserStore" NOT in text:
-        → [AuthService(ORG), TokenValidator(ORG)]
+        → [AuthService(system), TokenValidator(system)]
         Simulates: col1 dependency graph (AuthService → TokenValidator)
     - "AuthService" in text AND "UserStore" IS in text:
-        → [AuthService(ORG), UserStore(ORG)]
+        → [AuthService(system), UserStore(system)]
         Simulates: col2 dependency graph (AuthService → UserStore)
     - only "TokenValidator" in text:
-        → [TokenValidator(ORG)]
+        → [TokenValidator(system)]
     - only "UserStore" in text:
-        → [UserStore(ORG)]
+        → [UserStore(system)]
 
     Returning TokenValidator even when it is absent from the raw text is intentional:
     it simulates a static-analysis extractor that consults an import graph rather than
     NLP co-occurrence. The graph builder sees both entities in the same chunk → creates
     the AuthService ↔ TokenValidator edge.
     """
+    from tests._graph_engine_stub import install_graph_engine_stub_custom
 
-    class _FakeEnt:
-        def __init__(self, text: str, label: str) -> None:
-            self.text = text
-            self.label_ = label
+    def _entities_for_text(text: str) -> list[tuple[str, str]]:
+        if "AuthService" in text:
+            if "UserStore" in text:
+                return [("AuthService", "system"), ("UserStore", "system")]
+            return [("AuthService", "system"), ("TokenValidator", "system")]
+        if "TokenValidator" in text:
+            return [("TokenValidator", "system")]
+        if "UserStore" in text:
+            return [("UserStore", "system")]
+        return []
 
-    class _FakeDoc:
-        def __init__(self, ents: list[_FakeEnt]) -> None:
-            self.ents = ents
-
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            ents: list[_FakeEnt] = []
-            if "AuthService" in text:
-                if "UserStore" in text:
-                    # col2 scenario: AuthService depends on UserStore
-                    ents.append(_FakeEnt("AuthService", "ORG"))
-                    ents.append(_FakeEnt("UserStore", "ORG"))
-                else:
-                    # col1 / single-collection scenario: AuthService depends on TokenValidator
-                    ents.append(_FakeEnt("AuthService", "ORG"))
-                    ents.append(_FakeEnt("TokenValidator", "ORG"))
-            elif "TokenValidator" in text:
-                ents.append(_FakeEnt("TokenValidator", "ORG"))
-            elif "UserStore" in text:
-                ents.append(_FakeEnt("UserStore", "ORG"))
-            return _FakeDoc(ents)
-
-    nlp_instance = _FakeNLP()
-
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+    install_graph_engine_stub_custom(monkeypatch, _entities_for_text)
 
 
 # ---------------------------------------------------------------------------

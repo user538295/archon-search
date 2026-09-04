@@ -6,8 +6,6 @@ extractor itself, unlike the unit-test file's mocked-extractor tests).
 """
 from __future__ import annotations
 
-import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -549,35 +547,14 @@ async def test_gcOrphanSweep_defRefEdgesSurviveWithoutMentions(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Install a fake spaCy package into sys.modules so create_app's
-    _check_graph_deps() (which does `import spacy`) passes with graph.enabled=True.
-    Same pattern as tests/integration/test_e1a_t1_graph_status_e2e.py.
+    """Stub the gliner-backed extraction engine to return zero entities.
+
+    Historical name kept for minimal diff; no longer touches spaCy — BE-11
+    rewired GraphExtractor onto ProseExtractionBackend/gliner.
     """
+    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
 
-    class _FakeDoc:
-        def __init__(self) -> None:
-            self.ents = []
-
-    class _FakeNLP:
-        def __call__(self, text: str) -> _FakeDoc:
-            return _FakeDoc()
-
-    nlp_instance = _FakeNLP()
-
-    fake_util = types.ModuleType("spacy.util")
-    fake_util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-
-    fake_cli = types.ModuleType("spacy.cli")
-    fake_cli.download = lambda model: None  # type: ignore[attr-defined]
-
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.load = lambda model: nlp_instance  # type: ignore[attr-defined]
-    fake_spacy.util = fake_util  # type: ignore[attr-defined]
-    fake_spacy.cli = fake_cli  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_util)
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_cli)
+    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def test_appPy_wiresDefRefExtractorWhenGraphEnabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
