@@ -215,6 +215,56 @@ def test_load_config_providers_default_is_empty_list() -> None:
     assert config.providers == []
 
 
+def test_load_config_database_providers_bare_string_raises_config_error(tmp_path: Path) -> None:
+    """A bare string must not be silently iterated into one-character elements."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text('[database]\nproviders = "CUDAExecutionProvider"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="providers"):
+        load_config(path=toml_file)
+
+
+def test_load_config_database_providers_non_list_raises_config_error(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[database]\nproviders = 1\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="providers"):
+        load_config(path=toml_file)
+
+
+def test_load_config_database_providers_non_string_element_raises_config_error(
+    tmp_path: Path,
+) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[database]\nproviders = [1]\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="providers"):
+        load_config(path=toml_file)
+
+
+def test_load_config_reranker_providers_bare_string_raises_config_error(tmp_path: Path) -> None:
+    """A bare string must not be silently iterated into one-character elements."""
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text(
+        '[database]\nreranker_providers = "CUDAExecutionProvider"\n', encoding="utf-8"
+    )
+    with pytest.raises(ConfigError, match="providers"):
+        load_config(path=toml_file)
+
+
+def test_load_config_reranker_providers_non_list_raises_config_error(tmp_path: Path) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[database]\nreranker_providers = 1\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="providers"):
+        load_config(path=toml_file)
+
+
+def test_load_config_reranker_providers_non_string_element_raises_config_error(
+    tmp_path: Path,
+) -> None:
+    toml_file = tmp_path / "archon-search.toml"
+    toml_file.write_text("[database]\nreranker_providers = [1]\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="providers"):
+        load_config(path=toml_file)
+
+
 def test_load_config_top_k_from_database_section(tmp_path: Path) -> None:
     toml_file = tmp_path / "archon-search.toml"
     toml_file.write_text(

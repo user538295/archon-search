@@ -419,6 +419,12 @@ def _coerce_bool(value: object, field_name: str) -> bool:
     return value
 
 
+def _coerce_provider_list(raw: object, field_name: str) -> list[str]:
+    if not isinstance(raw, list) or not all(isinstance(item, str) and item for item in raw):
+        raise ConfigError(f"{field_name} must be a list of non-empty strings, got {raw!r}")
+    return list(raw)
+
+
 def _coerce_str(value: object, field_name: str) -> str:
     try:
         return str(value)
@@ -527,9 +533,11 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
             database["auto_reindex_on_chunk_size_change"], "auto_reindex_on_chunk_size_change"
         )
     if "providers" in database:
-        config.providers = list(database["providers"])
+        config.providers = _coerce_provider_list(database["providers"], "[database].providers")
     if "reranker_providers" in database:
-        config.reranker_providers = list(database["reranker_providers"])
+        config.reranker_providers = _coerce_provider_list(
+            database["reranker_providers"], "[database].reranker_providers"
+        )
     if "top_k_retrieve" in database:
         top_k_retrieve = _coerce_int(database["top_k_retrieve"], "top_k_retrieve")
         if top_k_retrieve <= 0:
@@ -1034,15 +1042,7 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         )
     if "providers" in graph_cfg:
         # Its own [graph] setting — never inherited from [database].providers.
-        raw_providers = graph_cfg["providers"]
-        if not isinstance(raw_providers, list) or not all(
-            isinstance(item, str) and item for item in raw_providers
-        ):
-            raise ConfigError(
-                "[graph].providers must be a list of non-empty strings, "
-                f"got {raw_providers!r}"
-            )
-        graph.providers = list(raw_providers) or None
+        graph.providers = _coerce_provider_list(graph_cfg["providers"], "[graph].providers") or None
     if "provider" in graph_cfg:
         graph.provider = _coerce_str(graph_cfg["provider"], "[graph].provider")
     if "llama_cpp_base_url" in graph_cfg:
