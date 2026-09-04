@@ -1,22 +1,22 @@
-"""Regression (2026-08-19-030): a failing spaCy model load must not abort ingest.
+"""Regression (2026-08-19-030): a failing model load must not abort ingest.
 
 Graph extraction is an auxiliary write (CLAUDE.md: "Auxiliary writes never fail
-their primary operation").  When ``en_core_web_sm`` cannot be loaded — the normal
-state in a pip-less ``uv tool install`` venv — ``ingest_file`` currently returns
-``status="error"`` before embed/persist, so nothing is indexed at all (production:
-24 documents persisted out of 1,325 walked files).
+their primary operation"). BE-11 rewired ``GraphExtractor`` onto the prose
+extraction backend (``ProseExtractionBackend``); a missing/unloadable model
+artifact is now the equivalent failure mode this regression guards — the
+degrade-not-abort property must survive the rewire.
 """
 from __future__ import annotations
 
-import sys
-import types
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from archon_search.config import GraphConfig
 from archon_search.graph_store import GraphStore
+from archon_search.graph_types import EntityType
+from tests.test_graph_extractor import ChunkExtraction, _entity, _FakeBackend
 
 pytestmark = pytest.mark.integration
 
@@ -65,7 +65,7 @@ def _make_pipeline_with_graph(store, graph_extractor, graph_store, graph_config)
 
 
 @pytest.mark.asyncio
-async def test_ingest_file_persists_when_spacy_model_load_fails(tmp_path: Path):
+async def test_ingest_file_persists_when_model_load_fails(tmp_path: Path):
     """Model-load failure degrades to a warning; the file still embeds and persists."""
     from archon_search.graph_extractor import GraphExtractor
     from archon_search.store import SearchStore
@@ -78,12 +78,10 @@ async def test_ingest_file_persists_when_spacy_model_load_fails(tmp_path: Path):
     await graph_store.connect()
 
     graph_extractor = GraphExtractor(GraphConfig(enabled=True))
-    # Pip-less venv: `spacy.cli.download` finds no package installer, so the load
-    # raises and `self._nlp` stays None.
-    graph_extractor._load_nlp_sync = MagicMock(  # type: ignore[method-assign]
-        side_effect=RuntimeError(
-            "spaCy model download failed (no package installer found; exit code 1)."
-        )
+    # A missing/unusable model artifact — the [graph] extra (gliner) is
+    # installed; only the model load itself fails.
+    graph_extractor._backend = _FakeBackend(
+        load_error=RuntimeError("model download failed (no network)."),
     )
 
     pipeline = _make_pipeline_with_graph(
@@ -99,15 +97,12 @@ async def test_ingest_file_persists_when_spacy_model_load_fails(tmp_path: Path):
 
     collection = "test_bug030_degrade"
     try:
-        # spaCy itself is importable (the [graph] extra is installed); only the
-        # model is missing.
-        with patch.dict(sys.modules, {"spacy": types.ModuleType("spacy")}):
-            result = await pipeline.ingest_file(
-                md_file, collection, embedder=_make_embedder()
-            )
+        result = await pipeline.ingest_file(
+            md_file, collection, embedder=_make_embedder()
+        )
 
         assert result.status == "ok", (
-            "A missing spaCy model is an auxiliary failure and must not fail the ingest; "
+            "A missing model artifact is an auxiliary failure and must not fail the ingest; "
             f"got status={result.status!r} error={result.error!r}"
         )
         assert result.error is None, (
@@ -116,7 +111,7 @@ async def test_ingest_file_persists_when_spacy_model_load_fails(tmp_path: Path):
         assert result.chunks_created > 0, (
             f"Expected chunks to be persisted, got chunks_created={result.chunks_created}"
         )
-        assert any("en_core_web_sm" in w for w in result.warnings), (
+        assert result.warnings, (
             f"Expected the degradation warning to reach the caller; got {result.warnings!r}"
         )
 
@@ -142,9 +137,10 @@ async def test_ingest_file_degrade_skips_llm_gate_and_preserves_code_symbols(
     tmp_path: Path,
 ) -> None:
     """T15: the degraded path must not fire the LLM-enrichment gate, and
-    code-symbol extraction (which does not depend on spaCy) must survive.
+    code-symbol extraction (which does not depend on the prose engine) must
+    survive.
 
-    A refactor that moved the LLM-enrichment gate ahead of the spaCy-NER
+    A refactor that moved the LLM-enrichment gate ahead of the prose-engine
     degrade check would fire one LLM call per chunk on every degraded ingest
     — this pins that it does not, in addition to the code-symbol survival
     already covered at the unit level (test_graph_extractor.py).
@@ -173,10 +169,8 @@ async def test_ingest_file_degrade_skips_llm_gate_and_preserves_code_symbols(
         enabled=True, provider="llama_cpp", extraction_model="model-x"
     )
     graph_extractor = GraphExtractor(graph_config, enrichment_client=mock_enrichment_client)
-    graph_extractor._load_nlp_sync = MagicMock(  # type: ignore[method-assign]
-        side_effect=RuntimeError(
-            "spaCy model download failed (no package installer found; exit code 1)."
-        )
+    graph_extractor._backend = _FakeBackend(
+        load_error=RuntimeError("model download failed (no network)."),
     )
 
     pipeline = _make_pipeline_with_graph(store, graph_extractor, graph_store, graph_config)
@@ -191,13 +185,12 @@ async def test_ingest_file_degrade_skips_llm_gate_and_preserves_code_symbols(
 
     collection = "test_bug030_degrade_llm_gate"
     try:
-        with patch.dict(sys.modules, {"spacy": types.ModuleType("spacy")}):
-            result = await pipeline.ingest_file(
-                py_file,
-                collection,
-                embedder=_make_embedder(),
-                collection_root=source_dir,
-            )
+        result = await pipeline.ingest_file(
+            py_file,
+            collection,
+            embedder=_make_embedder(),
+            collection_root=source_dir,
+        )
 
         assert result.status == "ok", f"ingest failed: {result.error}"
         mock_enrichment_client.label_relationships.assert_not_awaited()
@@ -246,35 +239,38 @@ async def test_reingest_under_degradation_leaves_no_orphan_prose_edges(tmp_path:
     namespace = "default"
 
     try:
-        # First pass: a WORKING model produces prose nodes, edges and mentions.
-        working_nlp = MagicMock()
-        graph_extractor._nlp = working_nlp
-        entities = [("Alice", "PERSON"), ("Acme Corp", "ORG"), ("London", "GPE")]
-        with patch.object(
-            GraphExtractor, "_run_ner_sync", return_value=[entities]
-        ), patch.dict(sys.modules, {"spacy": types.ModuleType("spacy")}):
-            first = await pipeline.ingest_file(
-                md_file, collection, embedder=_make_embedder()
+        # First pass: a WORKING backend produces prose nodes, edges and mentions.
+        # `default=` (rather than an exact-text map) tolerates the chunker not
+        # reproducing the source text byte-for-byte as a single chunk.
+        graph_extractor._backend = _FakeBackend(
+            default=ChunkExtraction(
+                entities=[
+                    _entity("Alice", EntityType.person.value),
+                    _entity("Acme Corp", EntityType.system.value),
+                    _entity("London", EntityType.system.value),
+                ]
             )
+        )
+        first = await pipeline.ingest_file(
+            md_file, collection, embedder=_make_embedder()
+        )
         assert first.status == "ok"
 
         edges_before = await graph_store.edge_count(collection, ns=namespace)
         assert edges_before > 0, "the working-model pass must produce prose edges to orphan"
 
-        # Second pass: same file, model now unavailable. The latch degrades.
-        graph_extractor._nlp = None
-        graph_extractor._nlp_unavailable = False
-        graph_extractor._load_nlp_sync = MagicMock(  # type: ignore[method-assign]
-            side_effect=RuntimeError("model gone")
+        # Second pass: same file, model now unavailable. The backend's own
+        # load() latch degrades.
+        graph_extractor._backend = _FakeBackend(
+            load_error=RuntimeError("model gone"),
         )
         md_file.write_text("Alice from Acme Corp met Bob in London. Revised.\n")
-        with patch.dict(sys.modules, {"spacy": types.ModuleType("spacy")}):
-            second = await pipeline.ingest_file(
-                md_file, collection, embedder=_make_embedder()
-            )
+        second = await pipeline.ingest_file(
+            md_file, collection, embedder=_make_embedder()
+        )
 
         assert second.status == "ok"
-        assert any("en_core_web_sm" in w for w in second.warnings)
+        assert second.warnings
 
         edges_after = await graph_store.edge_count(collection, ns=namespace)
         assert edges_after == 0, (

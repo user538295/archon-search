@@ -18,26 +18,22 @@ import sys
 import pytest
 
 from archon_search.config import ConfigError, GraphConfig
-from archon_search.graph_extractor import ensure_spacy_importable
+from archon_search.graph_extractor import ensure_graph_engine_importable
 
 
 def test_guard_noops_when_graph_disabled() -> None:
     """The overwhelmingly common config must not pay for the graph check."""
-    with _spacy_absent():
-        ensure_spacy_importable(GraphConfig(enabled=False))
+    with _gliner_absent():
+        ensure_graph_engine_importable(GraphConfig(enabled=False))
 
 
-@pytest.mark.skip(
-    reason="spacy intentionally removed by BE-6; ensure_spacy_importable still checks "
-    "for spacy until BE-11/BE-15 rewire it to check gliner"
-)
-def test_guard_passes_when_spacy_importable() -> None:
-    ensure_spacy_importable(GraphConfig(enabled=True))
+def test_guard_passes_when_gliner_importable() -> None:
+    ensure_graph_engine_importable(GraphConfig(enabled=True))
 
 
-def test_guard_raises_config_error_when_spacy_absent() -> None:
-    with _spacy_absent(), pytest.raises(ConfigError) as excinfo:
-        ensure_spacy_importable(GraphConfig(enabled=True))
+def test_guard_raises_config_error_when_gliner_absent() -> None:
+    with _gliner_absent(), pytest.raises(ConfigError) as excinfo:
+        ensure_graph_engine_importable(GraphConfig(enabled=True))
     message = str(excinfo.value)
     assert "graph.enabled=true" in message
     assert "archon-search[graph]" in message, (
@@ -61,7 +57,7 @@ def test_create_pipeline_raises_before_building_anything() -> None:
     cfg.graph = GraphConfig(enabled=True)
 
     with (
-        _spacy_absent(),
+        _gliner_absent(),
         patch("archon_search.pipeline.SearchStore", MagicMock()) as mock_store,
         patch("archon_search.pipeline.ModelEmbedder", MagicMock()) as mock_embedder,
         pytest.raises(ConfigError),
@@ -75,7 +71,7 @@ def test_create_pipeline_raises_before_building_anything() -> None:
 def test_app_and_pipeline_guards_share_one_implementation() -> None:
     """Two copies of this check would drift; one of them would then be wrong.
 
-    Behavioural, not a source-text scan: `"ensure_spacy_importable" in
+    Behavioural, not a source-text scan: `"ensure_graph_engine_importable" in
     getsource(...)` passes when the call is deleted but a comment mentioning it
     survives, and says nothing about `create_pipeline` — the half that actually
     regressed (C2-T-7). Both call sites import the name function-locally, so a
@@ -97,22 +93,23 @@ def test_app_and_pipeline_guards_share_one_implementation() -> None:
     def _raise(_config: GraphConfig) -> None:
         raise _Sentinel
 
-    with patch("archon_search.graph_extractor.ensure_spacy_importable", _raise):
+    with patch("archon_search.graph_extractor.ensure_graph_engine_importable", _raise):
         with pytest.raises(_Sentinel):
             create_pipeline(cfg)
         with pytest.raises(_Sentinel):
             create_app(cfg, MagicMock(spec=JobStore))
 
 
-class _spacy_absent:
-    """Bind ``sys.modules['spacy']`` to None — the suite's absent-module idiom."""
+class _gliner_absent:
+    """Bind ``sys.modules['gliner']`` to None — the suite's absent-module idiom
+    (K10: a clean ``find_spec`` miss, not the present-but-``__spec__``-less shape)."""
 
     def __enter__(self) -> None:
-        self._saved = sys.modules.get("spacy", ...)
-        sys.modules["spacy"] = None  # type: ignore[assignment]
+        self._saved = sys.modules.get("gliner", ...)
+        sys.modules["gliner"] = None  # type: ignore[assignment]
 
     def __exit__(self, *exc: object) -> None:
         if self._saved is ...:
-            sys.modules.pop("spacy", None)
+            sys.modules.pop("gliner", None)
         else:
-            sys.modules["spacy"] = self._saved  # type: ignore[assignment]
+            sys.modules["gliner"] = self._saved  # type: ignore[assignment]

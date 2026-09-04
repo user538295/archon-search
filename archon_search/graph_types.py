@@ -216,8 +216,8 @@ class GraphEdge:
     (cross-file name-based best-guess matches). This is a plain string field,
     not an enum — no validation is enforced on the value. ``None`` means the
     extraction method was not recorded — this includes every edge produced by
-    the spaCy named-entity co-occurrence path (``graph_extractor.py``), which
-    never sets this field, as well as any pre-E2f edge.
+    the prose named-entity co-occurrence path (``graph_extractor.py``, BE-11),
+    which never sets this field, as well as any pre-E2f edge.
     """
 
 
@@ -259,29 +259,24 @@ class GraphExtractionResult:
     a specific document. Empty by default; populated by ``GraphExtractor.extract()`` when
     graph extraction is enabled.
     """
-    llm_fallback_used: bool = False
-    """True when a per-chunk LLM relationship-labeling call (LLCP BE-7) raised and that
-    chunk fell back to spaCy-only co-occurrence edges. False (default) both when the
-    AND-gate (provider + extraction_model + enrichment_client) is closed -- a normal,
-    air-gap-safe configuration, not a failure -- and when every enrichment call succeeded.
-    """
     warnings: list[str] = field(default_factory=list)
     """Human-readable warning messages forwarded to ``IngestResult.warnings``."""
     degraded: bool = False
-    """True when prose NER could not run (model unavailable/incompatible, or the
-    NER call itself raised) and this result therefore carries code-symbol output
-    only. The pipeline uses it to delete the document's previous prose graph
-    rows instead of leaving edges behind with no mentions to support them
-    (2026-08-19-030 C2-I-2)."""
+    """True when prose extraction could not run (model unavailable/incompatible,
+    or the inference call itself raised) and this result therefore carries
+    code-symbol output only. The pipeline uses it to delete the document's
+    previous prose graph rows instead of leaving edges behind with no mentions
+    to support them (2026-08-19-030 C2-I-2)."""
     fatal_error: str | None = None
-    """Non-None ONLY when spaCy itself is not importable -- i.e. the ``[graph]`` extra is
-    missing, an operator misconfiguration. The pipeline sets ``IngestResult.status = "error"``
-    for that case alone. Every other spaCy failure (2026-08-19-030), an unavailable
-    ``en_core_web_sm`` model above all, leaves this None and degrades instead: prose NER is
-    skipped, code-symbol output is unaffected, and the notice goes to ``warnings``. Extraction
-    runs *before* persist, so a fatal return aborts the ingest -- which is why model
-    unavailability must never take this path (CLAUDE.md: auxiliary writes never fail their
-    primary operation). The value is an actionable human-readable error message.
+    """Non-None ONLY when the prose extraction engine (``gliner``) itself is not
+    importable -- i.e. the ``[graph]`` extra is missing, an operator misconfiguration.
+    The pipeline sets ``IngestResult.status = "error"`` for that case alone. Every other
+    engine failure (2026-08-19-030 / BE-11), an unavailable model artifact above all,
+    leaves this None and degrades instead: prose extraction is skipped, code-symbol
+    output is unaffected, and the notice goes to ``warnings``. Extraction runs *before*
+    persist, so a fatal return aborts the ingest -- which is why model unavailability
+    must never take this path (CLAUDE.md: auxiliary writes never fail their primary
+    operation). The value is an actionable human-readable error message.
     """
 
 

@@ -176,80 +176,60 @@ async def failed_result(reason: str, config: SearchConfig) -> ModelValidationRes
 
 
 def graph_ner_status(config: SearchConfig) -> tuple[list[str], list[str]]:
-    """Report graph prose-NER state at startup as ``(warnings, notes)`` (2026-08-19-030).
+    """Report graph prose-NER engine importability at startup as
+    ``(warnings, notes)`` (2026-08-19-030, rewired off spaCy in cycle-2
+    C2-A-01/C2-B-1/C1-B-1).
 
     The split is load-bearing: ``routes_ready`` grades ``checks.models`` on
     ``provider_warnings`` alone, so anything permanent and unactionable put
     there pins the check to ``WARN`` forever, with no operator action that can
     clear it — and ``OperatorGuide/20_monitoring_and_alerts.md`` tells
-    operators to alert on exactly that field. Actionable states (missing extra,
-    missing or incompatible model) are warnings; the English-only disclosure is
-    a permanent property of the chosen engine and is a *note* (C1-I-7).
+    operators to alert on exactly that field (C1-I-7). ``notes`` is currently
+    always ``[]``: the shipped prose extraction engine (gliner,
+    ``paths.GRAPH_NER_MODEL_NAME`` — "knowledgator/gliner-relex-multi-v1.0")
+    is multilingual, so there is no English-only disclosure to make (cycle-2
+    C2-A-02/C2-B-2, superseding the pre-BE-11 spaCy-based disclosure). The
+    ``notes`` return slot is kept so a future engine-specific limitation has
+    somewhere to surface without another wire-contract change.
 
-    Returns ``[]`` when ``[graph]`` is disabled. Otherwise probes the spaCy model
-    the same way the extractor resolves it (installed package, the
-    wizard-provisioned data-dir path, or "present but incompatible with the
-    installed spaCy" — C1-I-3) so a missing or unusable model surfaces on
-    ``GET /status`` instead of only in per-file ingest logs. A missing spaCy
-    *package* (the ``[graph]`` extra itself not installed) is reported
-    distinctly from a missing *model* — reusing
-    ``graph_extractor.SPACY_NOT_INSTALLED_MESSAGE`` so the two surfaces agree
-    (T6) — rather than blaming the model for spaCy's own absence. Also
-    discloses that ``en_core_web_sm`` is English-only when the deployment is
-    multilingual, even alongside a missing/incompatible model (T16 — both
-    notes are independently true and both are actionable) —
-    ``[[2026-08-19-035-multilingual-graph-ner-brief.md]]`` tracks the
-    successor engine.
+    Returns ``[]`` when ``[graph]`` is disabled. Otherwise probes gliner
+    import-ability the same way ``ensure_graph_engine_importable`` gates
+    ``GraphExtractor`` construction (``importlib.util.find_spec``, BE-11) so a
+    missing ``[graph]`` extra surfaces on ``GET /status`` instead of only
+    failing every ingest — reusing
+    ``graph_extractor.GLINER_NOT_INSTALLED_MESSAGE`` so the two surfaces agree
+    (T6). Unlike spaCy, gliner has no separate "installed but wrong model
+    artifact" state to probe here: ``ProseExtractionBackend.load()`` fetches
+    the pinned revision from the Hugging Face cache lazily and any load
+    failure there degrades per-ingest (``GraphExtractor._ensure_backend``),
+    not at startup.
 
-    Never raises (T7): every branch below is inside the ``try``; a broken data
-    dir, an import failure other than ``ImportError``, or any other surprise
-    reads as "cannot determine" rather than propagating.
+    Never raises (T7): every branch below is inside the ``try``; an import
+    failure other than an absent module, or any other surprise, reads as
+    "cannot determine" rather than propagating.
     """
     if not config.graph.enabled:
         return [], []
+    # Gap (not fixed here — BE-12/BE-15 territory): this only checks gliner
+    # import-ability. `ProseExtractionBackend.load()` latches a failed model
+    # artifact load permanently once it happens, degrading every subsequent
+    # ingest for the process lifetime — that state is invisible here.
     try:
-        try:
-            import spacy  # noqa: F401, PLC0415
-        except ImportError:
-            from archon_search.graph_extractor import (  # noqa: PLC0415
-                SPACY_NOT_INSTALLED_MESSAGE,
-            )
-
-            return (
-                [f"graph prose entity extraction is disabled: {SPACY_NOT_INSTALLED_MESSAGE}"],
-                [],
-            )
-
         from archon_search.graph_extractor import (  # noqa: PLC0415
-            ENGLISH_ONLY_DISCLOSURE,
-            SPACY_MODEL_NAME,
-            resolve_spacy_model,
+            GLINER_NOT_INSTALLED_MESSAGE,
+            gliner_absent,
         )
 
-        resolution = resolve_spacy_model()
+        if gliner_absent():
+            return (
+                [f"graph prose entity extraction is disabled: {GLINER_NOT_INSTALLED_MESSAGE}"],
+                [],
+            )
     except Exception as exc:  # never raises — validate_models_async must not fail
         logger.warning("graph NER model probe failed: %s", exc)
         return ["graph NER model presence could not be determined"], []
 
-    warnings: list[str] = []
-    if resolution.target is None:
-        if resolution.incompatible_versions:
-            warnings.append(
-                "graph prose entity extraction is disabled: spaCy model "
-                f"{SPACY_MODEL_NAME!r} is present under the data directory "
-                f"({', '.join(resolution.incompatible_versions)}) but incompatible "
-                "with the installed spaCy version — re-run `archon-search wizard` "
-                "to provision a compatible model"
-            )
-        else:
-            warnings.append(
-                "graph prose entity extraction is disabled: spaCy model "
-                f"{SPACY_MODEL_NAME!r} is neither installed nor provisioned under the "
-                "data directory — re-run `archon-search wizard` to provision it"
-            )
-        return warnings, ([ENGLISH_ONLY_DISCLOSURE] if config.multilingual else [])
-
-    return [], ([ENGLISH_ONLY_DISCLOSURE] if config.multilingual else [])
+    return [], []
 
 
 async def _probe_extraction_model(

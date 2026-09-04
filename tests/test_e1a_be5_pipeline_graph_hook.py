@@ -108,7 +108,6 @@ async def test_ingest_with_graph_enabled_calls_extractor(
         return_value=GraphExtractionResult(
             nodes=[],
             edges=[],
-            llm_fallback_used=False,
             warnings=["test warning"],
             fatal_error=None,
         )
@@ -160,7 +159,6 @@ async def test_ingest_threshold_warning_added_to_warnings(
         return_value=GraphExtractionResult(
             nodes=[],
             edges=[],
-            llm_fallback_used=False,
             warnings=[],
             fatal_error=None,
         )
@@ -201,7 +199,7 @@ async def test_ingest_threshold_warning_added_to_warnings(
 
 @pytest.mark.asyncio
 async def test_startup_config_error_when_extras_absent(tmp_path, monkeypatch):
-    """ConfigError is raised at create_app() time when graph.enabled=True but spacy is absent."""
+    """ConfigError is raised at create_app() time when graph.enabled=True but gliner is absent."""
     import sys
     from archon_search.config import SearchConfig, GraphConfig
     from archon_search.config import ConfigError
@@ -216,8 +214,9 @@ async def test_startup_config_error_when_extras_absent(tmp_path, monkeypatch):
     # `monkeypatch.setitem` rather than a hand-rolled save/restore: the manual
     # form restored "absent" by popping, which DELETES a `None` sentinel a
     # neighbouring test may have installed instead of putting it back
-    # (2026-08-19-030 C2-T-13). It also restores on exceptions.
-    monkeypatch.setitem(sys.modules, "spacy", None)
+    # (2026-08-19-030 C2-T-13). It also restores on exceptions. BE-11 rewired
+    # the construction guard to check `gliner` instead of `spacy`.
+    monkeypatch.setitem(sys.modules, "gliner", None)
     with pytest.raises(ConfigError, match="archon-search\\[graph\\]"):
         from archon_search.server.app import create_app
         create_app(config, job_store)
@@ -227,7 +226,7 @@ async def test_startup_config_error_when_extras_absent(tmp_path, monkeypatch):
 async def test_llm_failure_falls_back_to_spacy(
     connected_store, col_name, sample_md_file
 ):
-    """When llm_fallback_used=True in the extraction result, status is ok and warnings propagate."""
+    """When extract() reports a warning, status stays ok and the warning propagates."""
     graph_config = GraphConfig(enabled=True, backend_threshold_edges=10_000)
 
     mock_extractor = MagicMock()
@@ -235,7 +234,6 @@ async def test_llm_failure_falls_back_to_spacy(
         return_value=GraphExtractionResult(
             nodes=[],
             edges=[],
-            llm_fallback_used=True,
             warnings=["LLM fallback"],
             fatal_error=None,
         )
@@ -283,7 +281,6 @@ async def test_ingest_fatal_error_returns_error_status(
         return_value=GraphExtractionResult(
             nodes=[],
             edges=[],
-            llm_fallback_used=False,
             warnings=[],
             fatal_error="spaCy model load failed",
         )

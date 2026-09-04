@@ -3571,9 +3571,9 @@ def create_pipeline(
     # 2026-08-19-030: same construction-time guard `create_app` applies. Without
     # it, non-server callers (e.g. `install/installer.py`) built a pipeline whose
     # every graph ingest would abort pre-persist on the not-importable path.
-    from archon_search.graph_extractor import ensure_spacy_importable  # noqa: PLC0415
+    from archon_search.graph_extractor import ensure_graph_engine_importable  # noqa: PLC0415
 
-    ensure_spacy_importable(cfg.graph)
+    ensure_graph_engine_importable(cfg.graph)
 
     store = SearchStore(cfg.db_path)
     _embedder_backend: EmbedderBackend = embedder_backend or ModelEmbedder(

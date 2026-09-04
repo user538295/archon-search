@@ -515,7 +515,7 @@ flowchart LR
         - #unit_test — `test_boolean_true_rejected_before_coercion` — `true` is not silently coerced
         - #unit_test — `test_adjacency_threshold_is_not_a_recognised_key` — a value under that name has no effect
         - #integration_test — `test_unset_graph_providers_reads_as_cpu` — no inheritance from `[database].providers`, unlike `resolve_reranker_providers` (`:306-308`)
-- [ ] **BE-11** — Rewire [graph_extractor.py](../../archon_search/graph_extractor.py) onto the backend: delete `_LABEL_TO_ENTITY_TYPE` (`:131`), pass both configured thresholds through to `inference()`, use the engine's labels verbatim, route directed relations into the existing additive edge merge, keep the `related_to` loop's `sorted()` normalisation (`:797`), and drop `llm_fallback_used` (`:572`/`:779`/`:819`) #backend-role
+- [x] **BE-11** — Rewire [graph_extractor.py](../../archon_search/graph_extractor.py) onto the backend: delete `_LABEL_TO_ENTITY_TYPE` (`:131`), pass both configured thresholds through to `inference()`, use the engine's labels verbatim, route directed relations into the existing additive edge merge, keep the `related_to` loop's `sorted()` normalisation (`:797`), and drop `llm_fallback_used` (`:572`/`:779`/`:819`) #backend-role
     - Interface Adapters · 12.0h
     - needs BE-9, BE-10 · completes C2, S2, S3, S4, S5, S6, S21, S28, S59
     - Tests

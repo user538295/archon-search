@@ -461,9 +461,9 @@ def _check_graph_deps(config: SearchConfig) -> None:
     """
     # 2026-08-19-030: delegates to the single implementation shared with
     # `pipeline.create_pipeline`, so the two construction-time guards cannot drift.
-    from archon_search.graph_extractor import ensure_spacy_importable  # noqa: PLC0415
+    from archon_search.graph_extractor import ensure_graph_engine_importable  # noqa: PLC0415
 
-    ensure_spacy_importable(config.graph)
+    ensure_graph_engine_importable(config.graph)
 
 
 def _configure_openapi(app: FastAPI) -> None:

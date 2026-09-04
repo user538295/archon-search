@@ -1,26 +1,30 @@
-"""GraphExtractor — Interface Adapters layer, E1a GraphRAG.
+"""GraphExtractor — Interface Adapters layer, E1a/E1c GraphRAG.
 
-Wraps spaCy NER for entity extraction from text chunks and builds a graph of
-co-occurrence edges.  For C3-enriched code chunks (``symbol_type != None``),
-uses the code-symbol extraction path instead of spaCy NER — this avoids
-double-processing and misclassification of code identifiers.
+Delegates prose entity/relation extraction to a shared ``ProseExtractionBackend``
+instance (BE-8/BE-9, ``archon_search/prose_extraction_backend.py``) and builds
+a graph of co-occurrence edges from the entities it returns. For C3-enriched
+code chunks (``symbol_type != None``), uses the code-symbol extraction path
+instead — this avoids double-processing and misclassification of code
+identifiers; code chunks never reach the prose engine.
 
-LLM typed relationship extraction (LLCP BE-7) is gated by an AND-condition:
-``config.provider is not None AND config.extraction_model is not None AND
-enrichment_client is not None``.  When open, one ``label_relationships`` call
-is made per plain-text chunk (after spaCy NER) and the returned typed edges
-are persisted additively alongside the ``related_to`` co-occurrence edges.
+Entity types are the engine's own ``EntityType`` labels, used verbatim — no
+intermediate vocabulary. Directed relations the engine returns are persisted
+as typed edges, additive alongside the ``related_to`` co-occurrence edges
+built from the same chunk's entities (BE-11).
+
+LLM typed relationship extraction (LLCP BE-7) is gated by a SEPARATE
+AND-condition: ``config.provider is not None AND config.extraction_model is
+not None AND enrichment_client is not None``.  When open, one
+``label_relationships`` call is made per plain-text chunk (after prose
+extraction) and the returned typed edges are persisted additively alongside
+both the engine's own typed edges and the ``related_to`` co-occurrence edges.
 When any part of the gate is unset, enrichment is skipped silently (no
 warning) — this is a normal, air-gap-safe configuration, not a failure.  A
 per-chunk enrichment call that raises is caught, logged as a WARNING, and
-that chunk falls back to spaCy-only co-occurrence edges; it never fails the
-whole ``extract()`` call.
+that chunk falls back to whatever edges the prose engine and co-occurrence
+already produced; it never fails the whole ``extract()`` call.
 
-All CPU-bound spaCy operations inside ``extract()`` are wrapped in
-``asyncio.to_thread()`` because spaCy NER is CPU-bound and the ingest
-pipeline is async.
-
-Edge creation (spaCy-only mode):
+Edge creation (co-occurrence):
   For each pair of distinct entities co-occurring within the SAME CHUNK, ONE
   directed edge is created per ordered pair where ``source_id < target_id``
   (lexicographic comparison), making the graph de-facto undirected without
@@ -37,6 +41,7 @@ import json
 import logging
 import operator
 import re
+import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -54,6 +59,7 @@ from archon_search.graph_types import (
     make_stable_entity_id,
 )
 from archon_search.paths import get_models_dir
+from archon_search.prose_extraction_backend import ProseExtractionBackend
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig
@@ -65,53 +71,46 @@ _logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Public: the model name for every consumer that may import the graph layer —
-# model_validation.py's startup probe does. install/extras.py deliberately does
-# NOT: the install package must not depend on the graph layer, which is the same
-# reason get_models_dir() lives in paths.py rather than here. Its copy at
-# install/extras.py:SPACY_MODEL_NAME is intentional duplication, not an
-# unfulfilled TODO; tests/test_install_spacy_model.py closes the loop by
-# asserting the wizard's output is what the runtime resolver finds
-# (2026-08-19-030 C2-B-4/C2-A-11).
+# Public: retained ONLY for the (already-orphaned-at-runtime, BE-15-scoped-
+# for-deletion) install wizard spaCy-provisioning flow — install/extras.py's
+# own SPACY_MODEL_NAME copy and tests/test_install_spacy_model.py's
+# closes-the-loop check. model_validation.py's startup probe no longer
+# consumes this: the actual prose extraction engine since BE-11 is gliner
+# (paths.GRAPH_NER_MODEL_NAME), never spaCy (cycle-2 C2-A-01/C2-B-1/C1-B-1).
 SPACY_MODEL_NAME: str = "en_core_web_sm"
 
-# Public: the English-only limitation of `en_core_web_sm` as worded for every
-# consumer that may import the graph layer — model_validation.py's startup
-# disclosure reuses this string verbatim (2026-08-19-030 / 2026-08-19-035).
-# install/render.py's wizard summary carries its own wording for the same
-# reason it carries its own SPACY_MODEL_NAME: the install package must not
-# depend on the graph layer. That is deliberate, not a pending follow-up —
-# tests/test_install_ui.py pins the shared phrase so the two cannot drift
-# apart silently (C2-B-19/C2-T-16).
+# Public: retained ONLY for the install wizard's own summary text (same
+# already-orphaned-at-runtime spaCy provisioning flow as SPACY_MODEL_NAME
+# above; tests/test_install_ui.py pins this alongside its own wording).
+# model_validation.py's startup probe no longer discloses this: the shipped
+# prose extraction engine (gliner, GRAPH_NER_MODEL_NAME — see paths.py,
+# "knowledgator/gliner-relex-multi-v1.0") is multilingual, so there is
+# nothing English-only to disclose on GET /status (cycle-2 C2-A-02/C2-B-2).
 ENGLISH_ONLY_DISCLOSURE: str = (
     f"graph prose entity extraction is English-only ({SPACY_MODEL_NAME}) "
     "while multilingual = true; non-English documents contribute "
     "code-symbol entities only"
 )
 
-# Public: shared with model_validation.py so the "[graph] extra missing"
-# message reads identically whether it is surfaced from a failed ingest or
-# from GET /status (2026-08-19-030 T6).
-SPACY_NOT_INSTALLED_MESSAGE: str = (
-    "spaCy is not installed. Install the graph extras: pip install 'archon-search[graph]'"
+# Public: shared with model_validation.py's graph_ner_status so the
+# "[graph] extra missing" message reads identically whether it is surfaced
+# from ensure_graph_engine_importable's construction-time guard or from
+# GET /status (2026-08-19-030 T6, renamed off spaCy in cycle-2 C2-A-01).
+GLINER_NOT_INSTALLED_MESSAGE: str = (
+    "gliner is not installed. Install the graph extras: pip install 'archon-search[graph]'"
 )
 
-# Wire-facing degradation notices. Deliberately free of exception text: they
-# land in `GraphExtractionResult.warnings` → `IngestResult.warnings` (CLAUDE.md:
-# never put `str(exc)` in a wire-facing field). The underlying exception is
-# logged with a traceback instead. Two variants distinguish "never provisioned"
-# from "provisioned but incompatible with the installed spaCy" (C1-I-3) — the
-# operator fix differs (provision vs. re-provision).
-_MODEL_ABSENT_WARNING: str = (
-    f"spaCy model {SPACY_MODEL_NAME!r} is unavailable; prose entity extraction is "
-    "disabled for this ingest (code-symbol extraction is unaffected). "
-    "Run `archon-search wizard` to provision the model."
+# Wire-facing degradation notices for the prose extraction backend (BE-11).
+# Sanitized (never carry exception text) per the same rule as the spaCy
+# notices above. BE-12 owns tightening these into the pinned DETAIL/CODE
+# constant pairs S14/S17/S46 call for; these are BE-11's minimal versions.
+_BACKEND_UNAVAILABLE_WARNING: str = (
+    "graph prose extraction model is unavailable; prose entity extraction is "
+    "disabled for this ingest (code-symbol extraction is unaffected)."
 )
-_MODEL_INCOMPATIBLE_WARNING: str = (
-    f"spaCy model {SPACY_MODEL_NAME!r} is present under the data directory but "
-    "incompatible with the installed spaCy version; prose entity extraction is "
-    "disabled for this ingest (code-symbol extraction is unaffected). "
-    "Re-run `archon-search wizard` to provision a compatible model."
+_INFERENCE_FAILED_WARNING: str = (
+    "graph prose entity/relation extraction failed; prose entity extraction "
+    "was skipped for this document (code-symbol extraction is unaffected)."
 )
 
 # Comma-separated ">="/"<"-style clause operators, checked longest-prefix-first
@@ -123,23 +122,6 @@ _SPECIFIER_OPS = {
     "!=": operator.ne,
     ">": operator.gt,
     "<": operator.lt,
-}
-
-# Mapping from spaCy NER labels to EntityType.
-# Numeric / temporal categories (DATE, TIME, MONEY, PERCENT, QUANTITY,
-# ORDINAL, CARDINAL) are intentionally absent — they are noise for the graph.
-_LABEL_TO_ENTITY_TYPE: dict[str, EntityType] = {
-    "PERSON": EntityType.person,
-    "ORG": EntityType.system,
-    "GPE": EntityType.system,
-    "LOC": EntityType.system,
-    "FAC": EntityType.system,
-    "PRODUCT": EntityType.system,
-    "EVENT": EntityType.event,
-    "WORK_OF_ART": EntityType.concept,
-    "LAW": EntityType.concept,
-    "LANGUAGE": EntityType.concept,
-    "NORP": EntityType.concept,
 }
 
 
@@ -305,8 +287,30 @@ def resolve_spacy_model() -> SpacyModelResolution:
     return SpacyModelResolution(target=str(newest), incompatible_versions=sorted(incompatible))
 
 
-def ensure_spacy_importable(config: "GraphConfig") -> None:
-    """Raise ``ConfigError`` when graph is enabled but spaCy is not importable.
+def gliner_absent() -> bool:
+    """Return ``True`` when ``gliner`` is not importable.
+
+    Shared by :func:`ensure_graph_engine_importable`'s construction-time guard
+    and ``model_validation.graph_ner_status``'s ``GET /status`` probe so the
+    two presence checks cannot drift apart (C3-B-1).
+
+    `find_spec` avoids paying gliner's own multi-second cold import (it pulls
+    torch/transformers transitively) just to probe presence — but a
+    present-but-`__spec__`-less entry in `sys.modules` (the shape the test
+    suite's `sys.modules["gliner"] = None` absence stub takes) makes the bare
+    form raise `ValueError` instead of returning a clean `None`. A
+    `ValueError` only happens when *something* is already reachable under
+    that name, so it reads as "found", never as "absent".
+    """
+    try:
+        return importlib.util.find_spec("gliner") is None
+    except ValueError:
+        return False
+
+
+def ensure_graph_engine_importable(config: "GraphConfig") -> None:
+    """Raise ``ConfigError`` when graph is enabled but the prose extraction
+    engine (``gliner``) is not importable.
 
     The single implementation behind both construction-time guards
     (``server/app.py``'s ``_check_graph_deps`` and ``pipeline.create_pipeline``),
@@ -318,16 +322,8 @@ def ensure_spacy_importable(config: "GraphConfig") -> None:
         return
     from archon_search.config import ConfigError  # noqa: PLC0415
 
-    try:
-        # `sys.modules["spacy"] = None` (how the tests stub absence) makes the
-        # import statement itself raise ModuleNotFoundError — an ImportError
-        # subclass — so the name is never bound and no `is None` check can run.
-        import spacy  # type: ignore[import-untyped]  # noqa: PLC0415, F401
-    except ImportError as exc:
-        raise ConfigError(
-            "graph.enabled=true but spacy is not installed; "
-            "run: pip install archon-search[graph]"
-        ) from exc
+    if gliner_absent():
+        raise ConfigError(f"graph.enabled=true but {GLINER_NOT_INSTALLED_MESSAGE}")
 
 
 def find_spacy_model() -> str | None:
@@ -372,17 +368,45 @@ def _resolve_labeled_pair(
     return None, None
 
 
-class _SpacyModelUnavailable(RuntimeError):
-    """Raised by :meth:`GraphExtractor._load_nlp_sync` when no loadable model
-    was resolved. Carries the absent/incompatible classification directly so
-    the caller does not need a second :func:`resolve_spacy_model` filesystem
-    probe just to pick the right wire-facing message (2026-08-19-030 T1) —
-    ``resolve_spacy_model()`` already ran once, inside ``_load_nlp_sync``.
-    """
+def _build_typed_relation_edge(
+    src_id: str, tgt_id: str, label: str, doc_id: str
+) -> GraphEdge | None:
+    """Build a typed relation edge, or ``None`` when it must be skipped.
 
-    def __init__(self, message: str, *, incompatible: bool) -> None:
-        super().__init__(message)
-        self.incompatible = incompatible
+    Shared by BOTH the prose engine's own directed relations and LLM
+    relationship labeling (cycle-2 C2-I-1/C2-I-2/C2-B-5) so the two guards
+    below cannot drift apart between the paths:
+
+    - ``label == RelationshipType.related_to.value``: the co-occurrence loop
+      already produces the sorted()-normalised, undirected ``related_to``
+      edge for every pair (C1-I-2) -- persisting a second, directed one here
+      (from either the engine or an LLM echoing the same label) would double it.
+    - ``src_id == tgt_id``: a self-loop carries no graph signal and must
+      never be persisted, regardless of which path produced it.
+
+    An unrecognized *label* degrades to a per-relation skip (debug-logged),
+    never a raised ``ValueError`` — one bad label must not discard every
+    other relation for the chunk.
+    """
+    if label == RelationshipType.related_to.value:
+        return None
+    if src_id == tgt_id:
+        return None
+    try:
+        relationship_type = RelationshipType(label)
+    except ValueError:
+        _logger.debug(
+            "GraphExtractor: unknown relation label %r; skipping", label
+        )
+        return None
+    edge_id = make_stable_edge_id(src_id, tgt_id, label)
+    return GraphEdge(
+        id=edge_id,
+        source_node_id=src_id,
+        target_node_id=tgt_id,
+        relationship_type=relationship_type,
+        source_doc_id=doc_id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -393,11 +417,14 @@ class _SpacyModelUnavailable(RuntimeError):
 class GraphExtractor:
     """Extracts graph entities and co-occurrence edges from document chunks.
 
-    Thread-safety: ``_nlp`` is set lazily on first call to ``extract()``.
-    The class is NOT designed for concurrent access from multiple coroutines
-    on the same instance.  The pipeline creates one shared instance per server
-    process; ``asyncio.to_thread()`` serialises CPU-bound spaCy calls into the
-    default thread-pool executor.
+    Prose entity/relation extraction (BE-11) delegates to a shared
+    ``ProseExtractionBackend`` instance — ``gliner`` importability is already
+    guaranteed by the time ``extract()`` runs (``ensure_graph_engine_importable``
+    gates construction, in ``server/app.py``/``pipeline.py``), so only the
+    model *artifact* itself can still fail to load here; that is a degrade,
+    never a fatal abort (C2). The class is NOT designed for concurrent access
+    from multiple coroutines on the same instance; the pipeline creates one
+    shared instance per server process.
     """
 
     def __init__(
@@ -407,67 +434,45 @@ class GraphExtractor:
     ) -> None:
         self._config = config
         self._enrichment_client = enrichment_client
-        self._nlp: object = None  # spaCy NLP model; loaded lazily on first call
-        # Latches: each probe/failure runs at most once per process instead of
-        # once per file (2026-08-19-030: 734 retries in 27 minutes in
-        # production; C1-B-4: the "[graph] extra missing" probe had the same
-        # unlatched-reprobe shape and is fixed the same way).
-        self._spacy_not_importable: bool = False
-        self._nlp_unavailable: bool = False
-        self._nlp_unavailable_warning: str | None = None
-        self._load_lock: asyncio.Lock = asyncio.Lock()
-        # Latches the spaCy-NER-call-failure traceback to one log per process
-        # (C1-I-4) — the per-document `warnings` entry still fires every time.
-        self._ner_failure_logged: bool = False
+        self._backend = ProseExtractionBackend(providers=config.providers)
+        # Latches the inference-call-failure traceback to one log per process
+        # (mirrors the pre-BE-11 spaCy NER-call latch) — the per-document
+        # `warnings` entry still fires every time.
+        self._inference_failure_logged: bool = False
 
     # ------------------------------------------------------------------
-    # Internal helpers (synchronous — called inside asyncio.to_thread)
+    # Internal helpers
     # ------------------------------------------------------------------
 
-    def _load_nlp_sync(self) -> object:
-        """Load the spaCy NLP model synchronously.
+    async def _ensure_backend(self) -> str | None:
+        """Load the prose extraction backend at most once per process.
 
-        Resolves the model via :func:`resolve_spacy_model` and raises when it
-        is neither installed nor provisioned (or provisioned but incompatible
-        with the installed spaCy — C1-I-3) — runtime never downloads (the
-        wizard does that; see 2026-08-19-030).  Must be called inside
-        ``asyncio.to_thread()`` — do not call directly from async code.
+        Returns ``None`` when ready for inference, or a sanitized warning
+        when the model artifact itself could not be loaded. ``load()`` is
+        itself idempotent and latches a failed load (``ProseExtractionBackend``,
+        BE-8), so calling it again here after a failure is cheap and never
+        re-attempts a load that already failed.
         """
-        import spacy  # noqa: PLC0415
-
-        resolution = resolve_spacy_model()
-        if resolution.target is None:
-            if resolution.incompatible_versions:
-                raise _SpacyModelUnavailable(
-                    f"spaCy model {SPACY_MODEL_NAME!r} found under "
-                    f"{get_models_dir() / 'spacy'} "
-                    f"({', '.join(resolution.incompatible_versions)}) "
-                    "but incompatible with the installed spaCy version",
-                    incompatible=True,
-                )
-            raise _SpacyModelUnavailable(
-                f"spaCy model {SPACY_MODEL_NAME!r} is neither installed nor present in "
-                f"{get_models_dir() / 'spacy'}",
-                incompatible=False,
+        try:
+            await self._backend.load()
+        except asyncio.CancelledError:
+            # Cancellation says nothing about the model — never latch it as
+            # unavailable over a shutdown/job-cancel landing in the load window.
+            raise
+        except BaseException:
+            # `BaseException`, not `Exception`: mirrors the pre-BE-11 spaCy
+            # model-load path, which historically raised `SystemExit` — a
+            # narrower catch here would let that escape uncaught and crash
+            # the process, defeating the whole point of degrading instead of
+            # aborting. `exc_info=True` preserves the traceback so a load
+            # failure (import error, torch/gliner issue) is diagnosable
+            # instead of silently degrading forever with no trace (C1-A-04).
+            _logger.warning(
+                "GraphExtractor: prose extraction backend failed to load",
+                exc_info=True,
             )
-        return spacy.load(resolution.target)
-
-    def _run_ner_sync(
-        self,
-        nlp: object,
-        texts: list[str],
-    ) -> list[list[tuple[str, str]]]:
-        """Run spaCy NER on a list of texts synchronously.
-
-        Returns one list of ``(entity_text, spaCy_label)`` tuples per input text.
-        Must be called inside ``asyncio.to_thread()`` — do not call directly from
-        async code.
-        """
-        results: list[list[tuple[str, str]]] = []
-        for text in texts:
-            doc = nlp(text)  # type: ignore[operator]
-            results.append([(ent.text, ent.label_) for ent in doc.ents])
-        return results
+            return _BACKEND_UNAVAILABLE_WARNING
+        return None
 
     def _code_symbol_name(self, chunk: ChunkInput) -> str:
         """Derive the entity name for a C3 code chunk.
@@ -490,65 +495,6 @@ class GraphExtractor:
     # Public API
     # ------------------------------------------------------------------
 
-    async def _ensure_nlp(self) -> tuple[bool, str | None]:
-        """Load the spaCy model at most once per process.
-
-        Returns ``(is_fatal, message)`` — self-describing, so the caller never
-        has to separately re-read instance state to learn the outcome
-        (2026-08-19-030 C1-I-5). ``is_fatal=True`` ONLY when spaCy itself is
-        not importable (the ``[graph]`` extra is missing) — a misconfiguration
-        the operator must fix, with ``message`` as the ``fatal_error`` to
-        return. ``is_fatal=False`` covers both "ready to use"
-        (``message is None``) and "degraded" (``message`` names the auxiliary
-        failure the caller should append to ``warnings`` and skip prose NER
-        for). Both outcomes latch (``_spacy_not_importable`` /
-        ``_nlp_unavailable``) so the probe/load runs at most once per process,
-        not once per file — including the ImportError probe (C1-B-4).
-        """
-        async with self._load_lock:
-            if self._spacy_not_importable:
-                return True, SPACY_NOT_INSTALLED_MESSAGE
-            if self._nlp is not None or self._nlp_unavailable:
-                return False, self._nlp_unavailable_warning
-
-            try:
-                import spacy as _spacy_probe  # noqa: F401, PLC0415
-            except ImportError:
-                self._spacy_not_importable = True
-                return True, SPACY_NOT_INSTALLED_MESSAGE
-
-            # Load model (CPU-bound) in the default thread-pool executor.
-            # `BaseException`, not `Exception`: the model-load path historically
-            # raised `SystemExit` (spaCy's downloader called `sys.exit()` on
-            # failure) — a narrower catch here would let that escape uncaught
-            # and crash the process, defeating the whole point of degrading
-            # instead of aborting (2026-08-19-030; mirrors the same
-            # `except BaseException` pattern in model_validation.py).
-            try:
-                self._nlp = await asyncio.to_thread(self._load_nlp_sync)
-            except asyncio.CancelledError:
-                # Cancellation says nothing about the model. Swallowing it would
-                # both break structured concurrency and latch `_nlp_unavailable`
-                # for the process lifetime over a shutdown or job-cancel that
-                # happened to land in the load window — disabling prose NER for a
-                # model that is present and healthy (2026-08-19-030 C2-I-1).
-                raise
-            except BaseException as exc:
-                # `_load_nlp_sync` already ran `resolve_spacy_model()` once and
-                # encodes the classification on `_SpacyModelUnavailable` — no
-                # second filesystem probe here (2026-08-19-030 T1: the probe
-                # must run at most once per process, not twice per latch).
-                incompatible = (
-                    isinstance(exc, _SpacyModelUnavailable) and exc.incompatible
-                )
-                message = (
-                    _MODEL_INCOMPATIBLE_WARNING if incompatible else _MODEL_ABSENT_WARNING
-                )
-                self._nlp_unavailable = True
-                self._nlp_unavailable_warning = message
-                _logger.warning("GraphExtractor: %s", message, exc_info=True)
-        return False, self._nlp_unavailable_warning
-
     async def extract(
         self,
         chunks: list[ChunkInput],
@@ -558,19 +504,21 @@ class GraphExtractor:
         """Extract entities and co-occurrence edges from a list of chunks.
 
         C3-enriched code chunks (``symbol_type != None``) use the code-symbol
-        path; plain text chunks go through spaCy NER.
+        path; plain text chunks go through the prose extraction backend
+        (``ProseExtractionBackend``, BE-8/BE-9) — entities carry the engine's
+        own ``EntityType`` label verbatim (no intermediate vocabulary), and
+        any directed relations the engine returns are persisted as typed
+        edges, additive alongside the ``related_to`` co-occurrence edges.
 
-        All CPU-bound spaCy calls are wrapped in ``asyncio.to_thread()``.
-
-        Returns a ``GraphExtractionResult``.  ``fatal_error`` is non-None ONLY
-        when spaCy itself is not importable (the ``[graph]`` extra is missing);
-        the pipeline sets ``IngestResult.status = "error"`` for that case alone.
-        Every other spaCy failure — an unavailable model above all — degrades:
-        ``fatal_error`` stays None, prose NER is skipped, code-symbol output is
-        unaffected, and a warning is appended to ``warnings`` (2026-08-19-030).
+        Returns a ``GraphExtractionResult``.  ``fatal_error`` is reserved for
+        "the extraction package is not importable" — unreachable from here
+        since ``ensure_graph_engine_importable`` already gates ``GraphExtractor``
+        construction (``server/app.py``/``pipeline.py``). A missing/unusable
+        model *artifact*, or an inference call that raises, degrades instead:
+        ``fatal_error`` stays None, prose extraction is skipped, code-symbol
+        output is unaffected, and a warning is appended to ``warnings``.
         """
         warnings: list[str] = []
-        llm_fallback_used = False
         degraded = False
 
         # ------------------------------------------------------------------
@@ -595,12 +543,15 @@ class GraphExtractor:
         nodes: dict[str, GraphNode] = {}
         # Mentions: entity incidence records for salience derivation (E2b).
         mentions: list[GraphMention] = []
-        # LLM-typed relationship edges (LLCP BE-7) — additive alongside the
-        # related_to co-occurrence edges built below; merged in after.
-        llm_edges: dict[str, GraphEdge] = {}
+        # Typed relationship edges — from the prose engine's own directed
+        # relations (BE-11) and/or LLM relationship labeling (LLCP BE-7) —
+        # additive alongside the related_to co-occurrence edges built below;
+        # merged in after.
+        typed_edges: dict[str, GraphEdge] = {}
 
         # ------------------------------------------------------------------
-        # C3 code-symbol path — spaCy NER is NOT run on code chunks.
+        # C3 code-symbol path — the prose extraction backend is NOT run on
+        # code chunks.
         # ------------------------------------------------------------------
         for chunk in code_chunks:
             name = self._code_symbol_name(chunk)
@@ -631,76 +582,83 @@ class GraphExtractor:
             ))
 
         # ------------------------------------------------------------------
-        # spaCy NER path for plain-text chunks.
+        # Prose extraction backend path for plain-text chunks (BE-11).
         # ------------------------------------------------------------------
         if text_chunks:
-            # Gate: check spaCy is importable.  Fires when the [graph] extras
-            # are not installed (spaCy absent on the import path).
-            is_fatal, load_message = await self._ensure_nlp()
-            if is_fatal:
-                return GraphExtractionResult(
-                    nodes=list(nodes.values()),
-                    edges=[],
-                    mentions=[],
-                    fatal_error=load_message,
-                    warnings=[load_message] if load_message else [],
-                )
-            if load_message is not None:
-                # Degraded: no prose NER this run.  Code-symbol nodes, mentions
-                # and edges collected above still flow through to the caller,
-                # and the file still embeds and persists.
-                warnings.append(load_message)
+            # Gate: load the backend. Only a missing/unusable model artifact
+            # can fail here — gliner importability is already guaranteed by
+            # construction-time's ensure_graph_engine_importable.
+            load_warning = await self._ensure_backend()
+            if load_warning is not None:
+                # Degraded: no prose extraction this run. Code-symbol nodes,
+                # mentions and edges collected above still flow through to
+                # the caller, and the file still embeds and persists.
+                warnings.append(load_warning)
                 text_chunks = []
                 degraded = True
 
         if text_chunks:
-            # Run NER (CPU-bound) in a thread pool.
             texts = [c.text for c in text_chunks]
             try:
-                ner_per_chunk = await asyncio.to_thread(
-                    self._run_ner_sync, self._nlp, texts
+                batch = await self._backend.inference(
+                    texts, self._config.ner_confidence, self._config.relation_confidence
                 )
             except Exception:
-                # Auxiliary failure: warn and drop prose NER for this document
-                # rather than failing the ingest (2026-08-19-030). The
-                # traceback is logged once per process, not once per
-                # document, matching the model-load latch (C1-I-4) — the
-                # per-document `warnings` entry below still fires every time.
-                if not self._ner_failure_logged:
-                    self._ner_failure_logged = True
-                    _logger.warning("GraphExtractor: spaCy NER failed", exc_info=True)
+                # Auxiliary failure: warn and drop prose extraction for this
+                # document rather than failing the ingest. The traceback is
+                # logged once per process, not once per document.
+                if not self._inference_failure_logged:
+                    self._inference_failure_logged = True
+                    _logger.warning(
+                        "GraphExtractor: prose extraction inference failed", exc_info=True
+                    )
                 else:
                     _logger.debug(
-                        "GraphExtractor: spaCy NER failed again", exc_info=True
+                        "GraphExtractor: prose extraction inference failed again",
+                        exc_info=True,
                     )
-                warnings.append(
-                    "spaCy NER failed; prose entity extraction was skipped for "
-                    "this document (code-symbol extraction is unaffected)."
-                )
+                warnings.append(_INFERENCE_FAILED_WARNING)
                 # Set both explicitly rather than relying on zip()'s silent
                 # truncate-to-shortest: a future `zip(..., strict=True)` in
                 # the loop below must not raise inside the very handler whose
                 # job is keeping the ingest alive.
                 text_chunks = []
-                ner_per_chunk = []
+                batch = None
                 degraded = True
 
-            for text_chunk, raw_entities in zip(text_chunks, ner_per_chunk):
+            for text_chunk, chunk_extraction in zip(
+                text_chunks, batch.chunks if batch is not None else []
+            ):
                 ids_this_chunk: list[str] = []
-                for ent_text, ent_label in raw_entities:
-                    entity_type = _LABEL_TO_ENTITY_TYPE.get(ent_label)
-                    if entity_type is None:
-                        continue  # skip noise labels (CARDINAL, DATE, etc.)
-                    entity_id = make_stable_entity_id(entity_type.value, ent_text)
+                name_to_id: dict[str, str] = {}
+                for entity in chunk_extraction.entities:
+                    # Use the engine's own label verbatim — no intermediate
+                    # vocabulary (S2). ProseExtractionBackend only ever
+                    # returns real entity labels (the "other" decoy and
+                    # numeric/temporal noise are discarded before this point).
+                    # An off-vocabulary label must still degrade gracefully
+                    # (skip, not raise) rather than fail the whole ingest.
+                    try:
+                        entity_type = EntityType(entity.label)
+                    except ValueError:
+                        _logger.debug(
+                            "GraphExtractor: unknown entity label %r from prose "
+                            "engine; skipping entity %r",
+                            entity.label,
+                            entity.text,
+                        )
+                        continue
+                    entity_id = make_stable_entity_id(entity_type.value, entity.text)
                     if entity_id not in nodes:
                         nodes[entity_id] = GraphNode(
                             id=entity_id,
-                            entity_name=ent_text,
+                            entity_name=entity.text,
                             entity_type=entity_type,
                             source_doc_id=doc_id,
                             collection_name=collection,
                         )
                     ids_this_chunk.append(entity_id)
+                    name_to_id[entity.text] = entity_id
                     # Add mention for the entity in this chunk (E2b)
                     mentions.append(GraphMention(
                         entity_id=entity_id,
@@ -709,13 +667,30 @@ class GraphExtractor:
                     ))
                 chunk_entity_ids.append(ids_this_chunk)
 
-                # --------------------------------------------------------
+                # ----------------------------------------------------------
+                # Directed relations from the prose engine (BE-11, S3/S4/S5):
+                # persisted head→tail with no lexicographic normalisation —
+                # additive alongside the related_to co-occurrence edges built
+                # below, never overriding them.
+                # ----------------------------------------------------------
+                for relation in chunk_extraction.relations:
+                    src_id = name_to_id.get(relation.head)
+                    tgt_id = name_to_id.get(relation.tail)
+                    if src_id is None or tgt_id is None:
+                        continue
+                    edge = _build_typed_relation_edge(
+                        src_id, tgt_id, relation.label, doc_id
+                    )
+                    if edge is not None and edge.id not in typed_edges:
+                        typed_edges[edge.id] = edge
+
+                # ----------------------------------------------------------
                 # LLM relationship labeling (LLCP BE-7) — one call per text
-                # chunk with 2+ distinct entities, after spaCy NER. Never
-                # fails the whole extract() call: any exception here is
-                # caught, logged as a WARNING, and this chunk falls back to
-                # spaCy-only co-occurrence edges (added below, unaffected).
-                # --------------------------------------------------------
+                # chunk with 2+ distinct entities. Never fails the whole
+                # extract() call: any exception here is caught, logged as a
+                # WARNING, and this chunk falls back to co-occurrence edges
+                # only (added below, unaffected).
+                # ----------------------------------------------------------
                 seen_this_chunk: set[str] = set()
                 unique_ids_this_chunk: list[str] = []
                 for eid in ids_this_chunk:
@@ -732,7 +707,7 @@ class GraphExtractor:
                             (nodes[a].entity_name, nodes[b].entity_name)
                             for a, b in pairs_this_chunk
                         ]
-                        name_to_id = {
+                        llm_name_to_id = {
                             nodes[eid].entity_name: eid for eid in unique_ids_this_chunk
                         }
 
@@ -742,7 +717,7 @@ class GraphExtractor:
 
                         for rel in labeled:
                             src_id, tgt_id = _resolve_labeled_pair(
-                                rel.source_entity, rel.target_entity, name_to_id
+                                rel.source_entity, rel.target_entity, llm_name_to_id
                             )
                             if src_id is None or tgt_id is None:
                                 _logger.warning(
@@ -753,34 +728,32 @@ class GraphExtractor:
                                     text_chunk.chunk_id,
                                 )
                                 continue
-                            edge_id = make_stable_edge_id(
-                                src_id, tgt_id, rel.relationship_type
+                            # Same guards as the engine's own relations above
+                            # (cycle-2 C2-I-1/C2-I-2/C2-B-5): an LLM-returned
+                            # related_to would double the co-occurrence edge,
+                            # a self-loop carries no signal, and an unknown
+                            # relationship_type must skip this one relation
+                            # rather than aborting the whole chunk.
+                            edge = _build_typed_relation_edge(
+                                src_id, tgt_id, rel.relationship_type, doc_id
                             )
-                            if edge_id not in llm_edges:
-                                llm_edges[edge_id] = GraphEdge(
-                                    id=edge_id,
-                                    source_node_id=src_id,
-                                    target_node_id=tgt_id,
-                                    relationship_type=RelationshipType(rel.relationship_type),
-                                    source_doc_id=doc_id,
-                                )
+                            if edge is not None and edge.id not in typed_edges:
+                                typed_edges[edge.id] = edge
                     except Exception as exc:  # noqa: BLE001
                         _logger.warning(
                             "GraphExtractor: LLM relationship labeling failed for chunk "
-                            "%s: %s; falling back to spaCy-only co-occurrence edges for "
-                            "this chunk",
+                            "%s: %s; falling back to co-occurrence edges for this chunk",
                             text_chunk.chunk_id,
                             exc,
                         )
                         warnings.append(
                             f"LLM relationship labeling failed for chunk "
-                            f"{text_chunk.chunk_id!r}: {exc}; used spaCy-only "
-                            "co-occurrence edges instead."
+                            f"{text_chunk.chunk_id!r}; used co-occurrence "
+                            "edges instead."
                         )
-                        llm_fallback_used = True
 
         # ------------------------------------------------------------------
-        # Co-occurrence edge creation (spaCy-only mode).
+        # Co-occurrence edge creation.
         # For each chunk: ONE directed edge per ordered pair where
         # source_id < target_id (lexicographic).  N entities → N*(N-1)/2 edges.
         # ------------------------------------------------------------------
@@ -808,16 +781,16 @@ class GraphExtractor:
                         source_doc_id=doc_id,
                     )
 
-        # LLM-typed edges are additive: merge in alongside (never over) the
+        # Typed edges are additive: merge in alongside (never over) the
         # related_to co-occurrence edges above — distinct relationship_type
-        # values produce distinct stable edge IDs, so no key collision.
-        edges.update(llm_edges)
+        # and/or direction produce distinct stable edge IDs, so no key
+        # collision (S4).
+        edges.update(typed_edges)
 
         return GraphExtractionResult(
             nodes=list(nodes.values()),
             edges=list(edges.values()),
             mentions=mentions,
-            llm_fallback_used=llm_fallback_used,
             warnings=warnings,
             degraded=degraded,
         )

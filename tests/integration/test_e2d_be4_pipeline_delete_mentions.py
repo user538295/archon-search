@@ -120,7 +120,6 @@ def _make_stub_extractor_for_entity_names(entity_names: list[str], collection: s
             nodes=nodes,
             edges=[],
             mentions=mentions,
-            llm_fallback_used=False,
             warnings=[],
             fatal_error=None,
         )

@@ -4,7 +4,7 @@ These tests cover:
 - `make_stable_entity_id`: deterministic SHA-256 ID; type-prefixed collision avoidance
 - `make_stable_edge_id`: deterministic SHA-256 ID; distinct for different types/directions
 - `GraphNode`, `GraphEdge`, `GraphExtractionResult`, `ChunkInput` dataclass field presence
-- `GraphExtractionResult` defaults: `warnings=[]`, `llm_fallback_used=False`
+- `GraphExtractionResult` defaults: `warnings=[]`, `mentions=[]`
 - `RelationshipType` and `EntityType` enum completeness
 """
 
@@ -406,15 +406,14 @@ def test_graph_mention_dataclass_inequality_doc_id() -> None:
 
 
 def test_graph_extraction_result_defaults() -> None:
-    """`warnings=[]`, `mentions=[]`, and `llm_fallback_used=False` by default; nodes and edges can be empty."""
+    """`warnings=[]` and `mentions=[]` by default; nodes and edges can be empty."""
     result = GraphExtractionResult(nodes=[], edges=[])
     assert result.mentions == []
     assert result.warnings == []
-    assert result.llm_fallback_used is False
 
 
 def test_graph_extraction_result_with_values() -> None:
-    """GraphExtractionResult carries nodes, edges, llm_fallback_used, and warnings."""
+    """GraphExtractionResult carries nodes, edges, and warnings."""
     node = GraphNode(
         id=make_stable_entity_id("concept", "AI"),
         entity_name="AI",
@@ -425,11 +424,9 @@ def test_graph_extraction_result_with_values() -> None:
     result = GraphExtractionResult(
         nodes=[node],
         edges=[],
-        llm_fallback_used=True,
-        warnings=["LLM call failed; fell back to spaCy-only extraction."],
+        warnings=["LLM call failed; fell back to co-occurrence-only extraction."],
     )
     assert len(result.nodes) == 1
-    assert result.llm_fallback_used is True
     assert len(result.warnings) == 1
 
 

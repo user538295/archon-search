@@ -113,7 +113,6 @@ async def test_ingest_file_graph_entities_written(tmp_path: Path, monkeypatch):
         return_value=GraphExtractionResult(
             nodes=[node_a, node_b],
             edges=[edge],
-            llm_fallback_used=False,
             warnings=[],
             fatal_error=None,
         )
@@ -170,7 +169,6 @@ async def test_ingest_after_graph_disable_skips_extraction_preserves_tables(tmp_
         return GraphExtractionResult(
             nodes=[node_a],
             edges=[],
-            llm_fallback_used=False,
             warnings=[],
             fatal_error=None,
         )
@@ -251,14 +249,12 @@ async def test_ingest_two_docs_merges_graph(tmp_path: Path):
         GraphExtractionResult(
             nodes=[doc1_auth, doc1_token],
             edges=[edge1],
-            llm_fallback_used=False,
             warnings=[],
             fatal_error=None,
         ),
         GraphExtractionResult(
             nodes=[doc2_auth, doc2_user],
             edges=[edge2],
-            llm_fallback_used=False,
             warnings=[],
             fatal_error=None,
         ),

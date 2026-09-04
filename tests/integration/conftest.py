@@ -24,10 +24,38 @@ import sys
 import time
 import types
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+
+from archon_search.paths import GRAPH_NER_MODEL_NAME, GRAPH_NER_MODEL_REVISION
+
+# Resolved once at import time, before any test's monkeypatch overrides
+# ARCHON_SEARCH_DATA_DIR — this is the real, developer-machine cache location a
+# one-off `GLiNER.from_pretrained(..., cache_dir=get_graph_models_dir())` run
+# populates. Every graph_enabled=True make_real_app() call isolates
+# ARCHON_SEARCH_DATA_DIR to tmp_path, so without this every such test would
+# re-download the ~1.2GB checkpoint from Hugging Face from scratch.
+_GRAPH_MODEL_SEGMENT = f"{GRAPH_NER_MODEL_NAME.replace('/', '--')}-{GRAPH_NER_MODEL_REVISION}"
+_SHARED_GRAPH_MODEL_CACHE = Path.home() / ".archon-search" / "models" / "graph" / _GRAPH_MODEL_SEGMENT
+
+
+def _reuse_shared_graph_model_cache(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Symlink the pre-downloaded GLiNER checkpoint into a graph-enabled test's
+    tmp_path, so GLiNER.from_pretrained finds it locally instead of
+    re-downloading it. No-op when the shared cache isn't present on this
+    machine — those tests still hit the network exactly as before. Only called
+    for graph_enabled=True callers, never for the general tmp_path used by
+    every other test in the suite.
+    """
+    if not _SHARED_GRAPH_MODEL_CACHE.is_dir():
+        return
+    target_dir = tmp_path / "models" / "graph"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / _GRAPH_MODEL_SEGMENT).symlink_to(_SHARED_GRAPH_MODEL_CACHE, target_is_directory=True)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
 
 
 @pytest.fixture(autouse=True)
@@ -149,6 +177,7 @@ def make_real_app(
 
     if graph_enabled:
         cfg.graph.enabled = True
+        _reuse_shared_graph_model_cache(tmp_path, monkeypatch)
 
     if openai_shim_enabled:
         cfg.openai_shim.enabled = True

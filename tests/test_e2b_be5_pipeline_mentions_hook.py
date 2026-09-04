@@ -79,7 +79,6 @@ async def test_pipeline_hook_deletes_before_writing_mentions(
             nodes=[],
             edges=[],
             mentions=[mention],
-            llm_fallback_used=False,
             warnings=[],
             fatal_error=None,
         )
@@ -135,7 +134,6 @@ async def test_pipeline_hook_swallows_mention_write_exception(
             nodes=[],
             edges=[],
             mentions=[mention],
-            llm_fallback_used=False,
             warnings=[],
             fatal_error=None,
         )
@@ -188,7 +186,6 @@ async def test_pipeline_hook_swallows_mention_delete_exception(
             nodes=[],
             edges=[],
             mentions=[mention],
-            llm_fallback_used=False,
             warnings=[],
             fatal_error=None,
         )
@@ -238,9 +235,6 @@ async def test_ingest_writes_mentions_then_reingest_is_idempotent(
     tmp_path, monkeypatch, col_name
 ):
     """Ingest a file, check mention count; re-ingest the same file; check count unchanged (idempotent)."""
-    import sys
-    import types
-
     from tests.integration.conftest import make_real_app, ingest_file_via_path
 
     # Create a dummy document
@@ -249,10 +243,17 @@ async def test_ingest_writes_mentions_then_reingest_is_idempotent(
     doc_file = corpus_path / "test.md"
     doc_file.write_text("# Test\n\nAuthService is a service.\n")
 
-    # Stub spaCy before creating app (required for graph_enabled=True in tests)
-    # monkeypatch.setitem restores absent-vs-None correctly and on exceptions
-    # (2026-08-19-030 C2-T-13).
-    monkeypatch.setitem(sys.modules, "spacy", types.ModuleType("spacy"))
+    # `gliner` is genuinely installed (BE-11 rewired the construction guard to
+    # check it instead of spaCy), so real construction succeeds without a
+    # stub — but a real `ProseExtractionBackend.load()` would attempt a real
+    # network download of the model weights, which is far too slow for this
+    # test. Stub the load to fail fast instead, so prose extraction degrades
+    # (code-symbol extraction is unaffected) exactly like the old
+    # spaCy-absent path this test predates.
+    monkeypatch.setattr(
+        "archon_search.prose_extraction_backend.ProseExtractionBackend.load",
+        AsyncMock(side_effect=RuntimeError("stubbed: no real model download in tests")),
+    )
     # Create app with graph enabled
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         # Ingest the file
