@@ -526,13 +526,13 @@ flowchart LR
         - #integration_test — `test_code_symbol_chunks_never_reach_the_prose_engine` — the AST path is untouched
         - #integration_test — `test_relations_incapable_artifact_does_not_degrade_ingest` — entities persist, `degraded is False`, no typed edge
         - #integration_test — `test_same_process_double_ingest_is_id_stable` — S28's plumbing half stays in the default integration lane
-- [ ] **BE-12** — Degrade cleanly on every non-fatal failure: missing or unloadable artifact, a mid-batch raise, and a bounded load-wait timeout all delete the document's stale prose rows, return one sanitized wire-facing warning and never fail the ingest or return 503 #backend-role
+- [x] **BE-12** — Degrade cleanly on every non-fatal failure: missing or unloadable artifact, a mid-batch raise, and a bounded load-wait timeout all delete the document's stale prose rows, return one sanitized wire-facing warning and never fail the ingest or return 503 #backend-role
     - Interface Adapters · 8.0h
     - needs BE-11 · completes S14, S17, S46
     - Tests
-        - #unit_test — `test_wait_timeout_degrades_and_leaves_loader_bookkeeping_untouched` — the waiter mutates nothing
-        - #integration_test — `test_missing_artifact_still_persists_chunks_and_code_symbols` — ingest succeeds degraded
-        - #integration_test — `test_mid_batch_raise_returns_the_pinned_sanitized_constant` — asserted **equal to** the `DETAIL`/`CODE` pair, not merely absent of exception text
+        - [x] #unit_test — `test_wait_timeout_degrades_and_leaves_loader_bookkeeping_untouched` — the waiter mutates nothing
+        - [x] #integration_test — `test_missing_artifact_still_persists_chunks_and_code_symbols` — ingest succeeds degraded
+        - [x] #integration_test — `test_mid_batch_raise_returns_the_pinned_sanitized_constant` — asserted **equal to** the `DETAIL`/`CODE` pair, not merely absent of exception text
 - [ ] **BE-13** — Rewrite `_download_fasttext_model` ([licenses.py](../../archon_search/install/licenses.py)`:93-134`) into a durable, verified single-file download: disclose → check space → stage inside the target filesystem → verify digest **and** byte count → fsync → atomic rename → fsync parent, for `lid.176.ftz` only #backend-role
     - Frameworks & Drivers · 8.0h
     - needs BE-3 · completes C4, S11, S37

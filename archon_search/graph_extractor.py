@@ -59,7 +59,10 @@ from archon_search.graph_types import (
     make_stable_entity_id,
 )
 from archon_search.paths import get_models_dir
-from archon_search.prose_extraction_backend import ProseExtractionBackend
+from archon_search.prose_extraction_backend import (
+    ProseExtractionBackend,
+    ProseExtractionLoadTimeoutError,
+)
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig
@@ -100,17 +103,28 @@ GLINER_NOT_INSTALLED_MESSAGE: str = (
     "gliner is not installed. Install the graph extras: pip install 'archon-search[graph]'"
 )
 
-# Wire-facing degradation notices for the prose extraction backend (BE-11).
-# Sanitized (never carry exception text) per the same rule as the spaCy
-# notices above. BE-12 owns tightening these into the pinned DETAIL/CODE
-# constant pairs S14/S17/S46 call for; these are BE-11's minimal versions.
-_BACKEND_UNAVAILABLE_WARNING: str = (
+# Wire-facing degradation notices for the prose extraction backend (BE-11,
+# tightened by BE-12 for S14/S17/S46). Sanitized (never carry exception text
+# or str(exc)) per the same rule as the spaCy notices above, and per
+# parser.py's ``_PARSE_WORKER_LOST_DETAIL`` convention — a DETAIL-only
+# constant, since ``GraphExtractionResult.warnings`` is plain ``list[str]``
+# with no separate wire-facing "code" field (graph_types.py) to pair it with.
+_BACKEND_UNAVAILABLE_DETAIL: str = (
     "graph prose extraction model is unavailable; prose entity extraction is "
     "disabled for this ingest (code-symbol extraction is unaffected)."
 )
-_INFERENCE_FAILED_WARNING: str = (
+_INFERENCE_FAILED_DETAIL: str = (
     "graph prose entity/relation extraction failed; prose entity extraction "
     "was skipped for this document (code-symbol extraction is unaffected)."
+)
+# S46: a bounded WAITER timeout on another caller's in-flight backend load
+# (prose_extraction_backend.ProseExtractionLoadTimeoutError, a module-level
+# class, not nested under ProseExtractionBackend) — never a 503, always a
+# per-document degrade like the two notices above.
+_LOAD_WAIT_TIMEOUT_DETAIL: str = (
+    "graph prose extraction model is still loading for another document; "
+    "prose entity extraction is disabled for this ingest (code-symbol "
+    "extraction is unaffected)."
 )
 
 # Comma-separated ">="/"<"-style clause operators, checked longest-prefix-first
@@ -422,9 +436,15 @@ class GraphExtractor:
     guaranteed by the time ``extract()`` runs (``ensure_graph_engine_importable``
     gates construction, in ``server/app.py``/``pipeline.py``), so only the
     model *artifact* itself can still fail to load here; that is a degrade,
-    never a fatal abort (C2). The class is NOT designed for concurrent access
-    from multiple coroutines on the same instance; the pipeline creates one
-    shared instance per server process.
+    never a fatal abort (C2). ``extract()`` calls to the SAME instance from
+    concurrent coroutines are safe with respect to the shared
+    ``ProseExtractionBackend``'s load/waiter mechanism — one caller loads,
+    the rest wait, and a wait-timeout degrades just that document (Task
+    BE-12, S46) without disturbing the in-flight load. The remaining mutable
+    instance state (``self._inference_failure_logged``) is a best-effort
+    once-per-process log latch, not a correctness-critical value — a benign
+    race there can at most log one extra WARNING, never corrupt extraction
+    results. The pipeline creates one shared instance per server process.
     """
 
     def __init__(
@@ -445,13 +465,20 @@ class GraphExtractor:
     # ------------------------------------------------------------------
 
     async def _ensure_backend(self) -> str | None:
-        """Load the prose extraction backend at most once per process.
+        """Load the prose extraction backend, latching a genuine success or
+        failure at most once per process — with one deliberate exception.
 
         Returns ``None`` when ready for inference, or a sanitized warning
         when the model artifact itself could not be loaded. ``load()`` is
-        itself idempotent and latches a failed load (``ProseExtractionBackend``,
-        BE-8), so calling it again here after a failure is cheap and never
-        re-attempts a load that already failed.
+        itself idempotent and latches a genuine load failure
+        (``ProseExtractionBackend``, BE-8), so calling it again here after
+        such a failure is cheap and never re-attempts a load that already
+        failed. A ``ProseExtractionLoadTimeoutError`` (S46) is the exception
+        to that "at most once" claim: a timed-out WAITER's failure is
+        deliberately NOT latched — it carries no information about whether
+        the model itself is loadable, only that this caller didn't wait long
+        enough for someone else's load — so the next call here always gets a
+        genuine fresh wait/load attempt, never a cached timeout.
         """
         try:
             await self._backend.load()
@@ -459,6 +486,15 @@ class GraphExtractor:
             # Cancellation says nothing about the model — never latch it as
             # unavailable over a shutdown/job-cancel landing in the load window.
             raise
+        except ProseExtractionLoadTimeoutError:
+            # S46: we were a WAITER on another caller's in-flight load, and it
+            # didn't finish within the bounded wait. The loader itself is
+            # unaffected — degrade only this document, never raise/503.
+            _logger.warning(
+                "GraphExtractor: timed out waiting for the prose extraction "
+                "backend's in-flight load"
+            )
+            return _LOAD_WAIT_TIMEOUT_DETAIL
         except BaseException:
             # `BaseException`, not `Exception`: mirrors the pre-BE-11 spaCy
             # model-load path, which historically raised `SystemExit` — a
@@ -471,7 +507,7 @@ class GraphExtractor:
                 "GraphExtractor: prose extraction backend failed to load",
                 exc_info=True,
             )
-            return _BACKEND_UNAVAILABLE_WARNING
+            return _BACKEND_UNAVAILABLE_DETAIL
         return None
 
     def _code_symbol_name(self, chunk: ChunkInput) -> str:
@@ -617,7 +653,7 @@ class GraphExtractor:
                         "GraphExtractor: prose extraction inference failed again",
                         exc_info=True,
                     )
-                warnings.append(_INFERENCE_FAILED_WARNING)
+                warnings.append(_INFERENCE_FAILED_DETAIL)
                 # Set both explicitly rather than relying on zip()'s silent
                 # truncate-to-shortest: a future `zip(..., strict=True)` in
                 # the loop below must not raise inside the very handler whose

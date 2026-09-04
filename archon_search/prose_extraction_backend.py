@@ -44,6 +44,14 @@ _MPS_PROVIDER_MARKER = "coreml"
 # (or the install wizard's pre-warm step) forever.
 _LOAD_TIMEOUT_SECONDS = 300.0
 
+# Task BE-12 (S46). Bounds how long a WAITER — a concurrent caller whose load()
+# lands while another caller is already loading — blocks on that in-flight
+# load, mirroring EmbedderCache._LOAD_WAIT_TIMEOUT_SECONDS (embedder_cache.py).
+# Deliberately much shorter than _LOAD_TIMEOUT_SECONDS: a waiter here is a
+# per-document ingest that must degrade (skip prose extraction, keep going)
+# rather than hang the whole ingest for up to 300s behind someone else's load.
+_LOAD_WAIT_TIMEOUT_SECONDS = 30.0
+
 # Pinned module constant (Task BE-9, S53) — NOT a [graph] config key, mirroring
 # S43's treatment of adjacency_threshold. Chunks are grouped into sub-batches of
 # at most this many texts per call to gliner's own `inference()`, so a document
@@ -159,12 +167,27 @@ class BatchExtraction:
     truncated: bool
 
 
+class ProseExtractionLoadTimeoutError(RuntimeError):
+    """Raised when a WAITER times out on another caller's in-flight ``load()``.
+
+    Says nothing about whether the load itself will succeed or fail — the
+    loader keeps running, unaffected. Unlike ``EmbedderCache``'s
+    ``EmbedderNotReadyError`` (which callers map to HTTP 503), this must never
+    reach the wire as a 503: ``GraphExtractor`` catches it and degrades just
+    this document's prose extraction (S46), leaving the loader free to finish
+    for the next one.
+    """
+
+
 class ProseExtractionBackend:
     """Lazy-loading gliner.GLiNER backend for prose entity/relation extraction.
 
     One shared instance per process. ``load()`` is idempotent, single-flight
-    (concurrent cold callers wait on a lock; only one load runs), and off the
-    event loop via ``asyncio.to_thread``. A failed load is latched — the
+    (concurrent cold callers share one in-flight load: the first becomes the
+    LOADER, the rest become WAITERS blocking on an ``asyncio.Event`` bounded
+    by ``_LOAD_WAIT_TIMEOUT_SECONDS`` — Task BE-12, S46 — rather than each
+    triggering their own load), and off the event loop via
+    ``asyncio.to_thread``. A failed load is latched — the
     second call raises the same exception without retrying — except for
     ``asyncio.CancelledError``, which is never latched so a cancelled caller's
     successor can retry.
@@ -183,7 +206,12 @@ class ProseExtractionBackend:
         self._providers = providers or None
         self._model: GLiNER | None = None
         self._sync_lock = threading.Lock()
+        # Guards only the brief check-and-register step below — never held for
+        # the duration of an actual load (mirrors EmbedderCache._lock).
         self._load_lock = asyncio.Lock()
+        # Non-None while a load is in flight; set when that load finishes
+        # (success, failure, or cancellation) so waiters wake and re-check.
+        self._load_event: asyncio.Event | None = None
         self._load_exception: BaseException | None = None
         # Truncation-log latch (S30): once per backend INSTANCE — and the backend
         # itself is a per-process singleton by construction (one shared instance,
@@ -271,28 +299,78 @@ class ProseExtractionBackend:
         every subsequent call re-raises the same exception without retrying
         — except ``asyncio.CancelledError``, which never latches, so a
         cancelled caller's successor gets a genuine retry.
+
+        A concurrent caller that lands while another is already loading is a
+        WAITER, not the loader: it blocks on that in-flight load for at most
+        ``_LOAD_WAIT_TIMEOUT_SECONDS`` (Task BE-12, S46) and raises
+        ``ProseExtractionLoadTimeoutError`` on timeout — mirroring
+        ``EmbedderCache.get_or_load``'s waiter (``embedder_cache.py``). A
+        waiter's timeout NEVER touches ``_model``/``_load_exception``/
+        ``_load_event``: it has no authority over the loader's lifecycle,
+        which cleans up its own registration on every exit path.
         """
-        if self._model is not None:
-            return
-        if self._load_exception is not None:
-            raise self._load_exception
-        async with self._load_lock:
+        while True:
             if self._model is not None:
                 return
             if self._load_exception is not None:
                 raise self._load_exception
+
+            async with self._load_lock:
+                if self._model is not None:
+                    return
+                if self._load_exception is not None:
+                    raise self._load_exception
+                if self._load_event is not None:
+                    event = self._load_event
+                else:
+                    event = asyncio.Event()
+                    self._load_event = event
+                    break  # We are the loader — proceed below, lock released.
+
+            # We are a waiter — block outside the lock so the loader can run.
             try:
                 await asyncio.wait_for(
-                    asyncio.to_thread(self._load_sync), timeout=_LOAD_TIMEOUT_SECONDS
+                    event.wait(), timeout=_LOAD_WAIT_TIMEOUT_SECONDS
                 )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to load graph NER model %r: %s", self._model_name, exc
-                )
-                self._load_exception = exc
-                raise
-            # asyncio.CancelledError is a BaseException, not Exception, in
-            # Python 3.8+, so it propagates here without being latched above.
+            except asyncio.TimeoutError:
+                raise ProseExtractionLoadTimeoutError(
+                    "ProseExtractionBackend: timed out after "
+                    f"{_LOAD_WAIT_TIMEOUT_SECONDS}s waiting for another caller's "
+                    "in-flight model load"
+                ) from None
+            # Event fired: loop back and re-check model/exception. If the
+            # loader was cancelled without resolving either, self._load_event
+            # is already cleared (see finally below) and we become the next
+            # loader ourselves.
+
+        # --- We are the loader (lock released at the break above) ---
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(self._load_sync), timeout=_LOAD_TIMEOUT_SECONDS
+            )
+        except Exception as exc:
+            # asyncio.CancelledError is a BaseException, not an Exception, so
+            # it already bypasses this clause and is never latched here —
+            # cancellation says nothing about the model.
+            logger.warning(
+                "Failed to load graph NER model %r: %s", self._model_name, exc
+            )
+            self._load_exception = exc
+            raise
+        finally:
+            # Runs on every exit — success, exception, or cancellation — so a
+            # waiter is never left blocked past our own resolution. No lock
+            # here: the two writes are plain synchronous attribute ops with no
+            # await point between them, so they are already atomic under
+            # single-threaded asyncio. This is a defensive simplification —
+            # mirroring EmbedderCache.get_or_load's own lock-free wakeup in
+            # embedder_cache.py — not a fix for a reachable wedge: the
+            # loader-registration critical section this lock guards (see
+            # load()'s `async with self._load_lock` block above) contains no
+            # await point, so that lock can never actually be contended across
+            # a suspension point in the first place.
+            self._load_event = None
+            event.set()
 
     def _truncate_to_window(self, text: str) -> str:
         """Truncate `text` to GRAPH_NER_TOKEN_WINDOW_WORDS words, logging the

@@ -20,6 +20,7 @@ from archon_search.prose_extraction_backend import (
     _TORCH_INTER_OP_THREADS,
     _TORCH_INTRA_OP_THREADS,
     ProseExtractionBackend,
+    ProseExtractionLoadTimeoutError,
 )
 
 
@@ -298,6 +299,144 @@ async def test_concurrent_extractions_load_the_model_once() -> None:
         f"expected exactly one asyncio.to_thread dispatch across 8 concurrent "
         f"callers, got {len(to_thread_calls)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# test_loader_cancellation_frees_a_concurrent_waiter
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_loader_cancellation_frees_a_concurrent_waiter(
+    monkeypatch,
+) -> None:
+    """Cancelling the LOADER while a WAITER is genuinely blocked on the same
+    ``_load_event`` must unblock the waiter (not wedge it forever), clear
+    ``_load_event``, and let the waiter become the next loader itself.
+
+    This is NOT a regression test for a reachable wedge: the loader's
+    ``finally`` block clears ``_load_event`` and calls ``event.set()`` as a
+    lock-free, non-await synchronous pair (see the comment in ``load()``'s
+    ``finally`` block) — a defensive simplification, not a fix for an
+    actively-reachable bug, since the ``_load_lock`` critical section it once
+    also acquired here contains no await point and so could never actually
+    be contended across a suspension point. What this test DOES prove: a
+    cancelled loader's ``finally`` still runs to completion and correctly
+    wakes/frees a waiting waiter, which then becomes the next loader and
+    succeeds.
+    """
+    monkeypatch.setattr(
+        "archon_search.prose_extraction_backend._LOAD_WAIT_TIMEOUT_SECONDS", 5.0
+    )
+
+    from_pretrained = MagicMock(return_value=_model_with_to())
+    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    backend = ProseExtractionBackend()
+
+    dispatch_started = asyncio.Event()
+    never_release = asyncio.Event()
+
+    async def _blocking_to_thread(func, /, *args, **kwargs):
+        dispatch_started.set()
+        await never_release.wait()  # cancellation must interrupt this await
+        return func(*args, **kwargs)
+
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
+        with patch(
+            "archon_search.prose_extraction_backend.asyncio.to_thread",
+            _blocking_to_thread,
+        ):
+            loader_task = asyncio.create_task(backend.load())
+            await dispatch_started.wait()  # loader genuinely in flight
+
+            waiter_task = asyncio.create_task(backend.load())
+            await asyncio.sleep(0)  # let the waiter register on the event
+
+            loader_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await loader_task
+
+            # Let the waiter's own re-dispatch (it becomes the next loader)
+            # complete immediately instead of blocking forever on the same
+            # mock — it must be free to become the new loader.
+            never_release.set()
+
+            # Not wedged: the waiter must have woken up (event.set() ran) and
+            # _load_event cleared, letting it become the next loader and
+            # succeed — not hang for the full wait timeout.
+            await asyncio.wait_for(waiter_task, timeout=5)
+
+    assert backend.is_loaded is True
+    assert backend._load_event is None
+    assert from_pretrained.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# test_wait_timeout_degrades_and_leaves_loader_bookkeeping_untouched (BE-12, S46)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_wait_timeout_degrades_and_leaves_loader_bookkeeping_untouched(
+    monkeypatch,
+) -> None:
+    """A genuine two-coroutine race: task A is the real LOADER (blocked mid
+    ``_load_sync`` via a controllable event, not a hand-assigned
+    ``_load_event`` with no loader in flight), task B lands concurrently as
+    a WAITER and times out on a short bounded wait.
+
+    Asserts: (1) B raises ``ProseExtractionLoadTimeoutError`` without
+    touching A's bookkeeping; (2) once A's load completes, ``is_loaded`` is
+    True and a THIRD, subsequent ``load()`` call returns cleanly using the
+    now-loaded model — proving the loader was genuinely unaffected by B's
+    timeout (also exercises the finding-A fix: the loader's own ``finally``
+    still runs its lock-free clear + ``event.set()`` normally here).
+    """
+    import archon_search.prose_extraction_backend as pe_mod
+
+    monkeypatch.setattr(pe_mod, "_LOAD_WAIT_TIMEOUT_SECONDS", 0.01)
+
+    from_pretrained = MagicMock(return_value=_model_with_to())
+    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    backend = ProseExtractionBackend()
+
+    dispatch_started = asyncio.Event()
+    release_loader = asyncio.Event()
+
+    async def _blocking_to_thread(func, /, *args, **kwargs):
+        dispatch_started.set()
+        await release_loader.wait()  # holds the loader in flight for B to time out on
+        return func(*args, **kwargs)
+
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
+        with patch(
+            "archon_search.prose_extraction_backend.asyncio.to_thread",
+            _blocking_to_thread,
+        ):
+            loader_task = asyncio.create_task(backend.load())
+            await dispatch_started.wait()  # A is genuinely the in-flight loader
+            in_flight_event = backend._load_event
+            assert in_flight_event is not None
+
+            with pytest.raises(ProseExtractionLoadTimeoutError):
+                await backend.load()  # B: waits, times out
+
+            # B must not have mutated any of A's (the loader's) own state.
+            assert backend._model is None
+            assert backend._load_exception is None
+            assert backend._load_event is in_flight_event
+            assert not in_flight_event.is_set()
+
+            # Let A finish its load.
+            release_loader.set()
+            await loader_task
+
+    assert backend.is_loaded is True
+    assert backend._load_event is None
+    assert from_pretrained.call_count == 1
+
+    # A third, subsequent call must return cleanly using the loaded model —
+    # no re-dispatch, no lingering effect from B's timeout.
+    await backend.load()
+    assert from_pretrained.call_count == 1
 
 
 # ---------------------------------------------------------------------------
