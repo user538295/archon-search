@@ -8,7 +8,7 @@
     "graph_global_recall_at_5": 1.0,
     "graph_local_mrr": 0.9166666666666666,
     "graph_local_recall_at_5": 1.0,
-    "graph_mrr": 0.3086500655307995,
+    "graph_mrr": 0.3025702635794379,
     "graph_naive_recall_at_5": 0.5,
     "graph_negative_control_recall_at_5": 0.41,
     "graph_ppr_bridge_recall_at_5": 1.0,
