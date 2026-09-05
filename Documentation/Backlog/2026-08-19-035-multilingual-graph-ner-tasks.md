@@ -608,7 +608,7 @@ flowchart LR
         - #unit_test — `test_typed_edge_swept_when_endpoints_stop_co_occurring` — the same support test as `related_to`
         - #unit_test — `test_typed_edge_kept_while_endpoints_still_co_occur` — the accepted weaker guarantee
         - #integration_test — `test_defref_edges_remain_exempt_after_widening` — the AST half is untouched
-- [ ] **BE-21** — Add the structural meta-guards: S42's four properties (engine-name absence over `git ls-files` minus a pinned literal allowlist; the `graph_real_artifact` CI exclusions located via `_STEP_FILTER_MARKERS`; no docling parse-pool import on the engine call path; the pinned torch thread-count APIs) and the `BREAKING.md`-to-index parity guard with its 65-heading allowlist #backend-role
+- [x] **BE-21** — Add the structural meta-guards: S42's four properties (engine-name absence over `git ls-files` minus a pinned literal allowlist; the `graph_real_artifact` CI exclusions located via `_STEP_FILTER_MARKERS`; no docling parse-pool import on the engine call path; the pinned torch thread-count APIs) and the `BREAKING.md`-to-index parity guard with its 65-heading allowlist #backend-role
     - Frameworks & Drivers · 7.0h
     - needs BE-15, BE-16 · completes S42, S52
     - Tests

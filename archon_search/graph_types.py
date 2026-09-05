@@ -134,7 +134,7 @@ class ChunkInput:
     """Chunked text body to extract entities from."""
     symbol_type: str | None
     """C3-enriched code symbol type (e.g. ``"function"``, ``"class"``).
-    When non-None, the code-symbol extraction path is used instead of spaCy NER.
+    When non-None, the code-symbol extraction path is used instead of prose NER.
     """
     symbol_subtype: str | None
     """Optional C3 sub-label (e.g. ``"method"``); maps to ``GraphNode.entity_subtype``."""

@@ -453,7 +453,7 @@ def _parse_and_walk(
 
     CPU-bound (tree-sitter parse + recursive walk) — ``extract()`` runs this
     inside ``asyncio.to_thread`` so it never blocks the event loop, mirroring
-    the pattern ``GraphExtractor`` uses for its CPU-bound spaCy calls.
+    the pattern ``GraphExtractor`` uses for its CPU-bound prose NER calls.
     """
     from tree_sitter import Parser  # type: ignore[import-untyped]  # noqa: PLC0415
 

@@ -173,7 +173,7 @@ async def failed_result(reason: str, config: SearchConfig) -> ModelValidationRes
 
 def graph_ner_status(config: SearchConfig) -> list[str]:
     """Report graph prose-NER engine importability at startup as warnings
-    (2026-08-19-030, rewired off spaCy in cycle-2 C2-A-01/C2-B-1/C1-B-1).
+    (2026-08-19-030, rewired off the prior NER engine in cycle-2 C2-A-01/C2-B-1/C1-B-1).
 
     Everything returned here is operator-actionable, and that is the bar for
     this channel: ``routes_ready`` grades ``checks.models`` on
@@ -193,7 +193,7 @@ def graph_ner_status(config: SearchConfig) -> list[str]:
     missing ``[graph]`` extra surfaces on ``GET /status`` instead of only
     failing every ingest — reusing
     ``graph_extractor.GLINER_NOT_INSTALLED_MESSAGE`` so the two surfaces agree
-    (T6). Unlike spaCy, gliner has no separate "installed but wrong model
+    (T6). Unlike the prior NER engine, gliner has no separate "installed but wrong model
     artifact" state to probe here: ``ProseExtractionBackend.load()`` fetches
     the pinned revision from the Hugging Face cache lazily and any load
     failure there degrades per-ingest (``GraphExtractor._ensure_backend``),

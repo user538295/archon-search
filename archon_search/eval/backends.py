@@ -92,7 +92,7 @@ EVAL_GRAPH_ENTITY_MAP: dict[str, list[str]] = {
 class StubGraphExpander:
     """Deterministic stub GraphExpander for eval harness use only.
 
-    Uses a fixed entity→neighbours dict (no LanceDB, no spaCy).
+    Uses a fixed entity→neighbours dict (no LanceDB, no NER engine).
     Satisfies the GraphExpander protocol (``expand(query, collection) → ExpandedQuery``).
     """
 

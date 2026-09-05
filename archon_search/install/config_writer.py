@@ -406,8 +406,8 @@ def _revert_graph_enabled_flag(config_path: Path, dry_run: bool) -> None:
     whenever ``features.install_graph_extra`` is set, before the ``[graph]``
     extras are actually installed. If a later step aborts or fails before
     that install succeeds, leaving ``graph.enabled=true`` on disk would
-    hard-fail the next server start via app.py's ``_check_graph_deps`` (spaCy
-    absent) — strictly worse than BE-11's soft-degrade goal. Call this at
+    hard-fail the next server start via app.py's ``_check_graph_deps`` (graph
+    extra absent) — strictly worse than BE-11's soft-degrade goal. Call this at
     every such early-return point (C3-A-1 fix).
     """
     if dry_run or not config_path.exists():

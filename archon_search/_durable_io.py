@@ -92,11 +92,11 @@ def fsync_tree(root: Path) -> None:
 
     Nested directories must be fsynced too, not just *root*: fsyncing a file
     makes its *data* durable, but its *directory entry* only becomes durable
-    when the containing directory is fsynced. An ``en_core_web_sm`` model tree
-    nests its weights under ``ner/``, ``tok2vec/`` and friends, so syncing only
-    *root* can survive a crash as a valid-looking ``config.cfg`` beside empty
-    subdirectories — exactly the "on disk but unloadable" state the caller
-    relies on this to prevent (2026-08-19-030 C2-I-4).
+    when the containing directory is fsynced. A downloaded model tree nests its
+    weights under several subdirectories, so syncing only *root* can survive a
+    crash as a valid-looking top-level manifest beside empty subdirectories —
+    exactly the "on disk but unloadable" state the caller relies on this to
+    prevent (2026-08-19-030 C2-I-4).
     """
     directories: list[Path] = []
     for path in root.rglob("*"):

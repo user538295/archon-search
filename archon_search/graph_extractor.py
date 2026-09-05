@@ -60,7 +60,7 @@ _logger = logging.getLogger(__name__)
 # Public: shared with model_validation.py's graph_ner_status so the
 # "[graph] extra missing" message reads identically whether it is surfaced
 # from ensure_graph_engine_importable's construction-time guard or from
-# GET /status (2026-08-19-030 T6, renamed off spaCy in cycle-2 C2-A-01).
+# GET /status (2026-08-19-030 T6, renamed off the prior NER engine in cycle-2 C2-A-01).
 GLINER_NOT_INSTALLED_MESSAGE: str = (
     "gliner is not installed. Install the graph extras: pip install 'archon-search[graph]'"
 )
@@ -200,7 +200,7 @@ class GraphExtractor:
         self._config = config
         self._backend = ProseExtractionBackend(providers=config.providers)
         # Latches the inference-call-failure traceback to one log per process
-        # (mirrors the pre-BE-11 spaCy NER-call latch) — the per-document
+        # (mirrors the pre-BE-11 prose NER-call latch) — the per-document
         # `warnings` entry still fires every time.
         self._inference_failure_logged: bool = False
 
@@ -240,7 +240,7 @@ class GraphExtractor:
             )
             return _LOAD_WAIT_TIMEOUT_DETAIL
         except BaseException:
-            # `BaseException`, not `Exception`: mirrors the pre-BE-11 spaCy
+            # `BaseException`, not `Exception`: mirrors the pre-BE-11 prose
             # model-load path, which historically raised `SystemExit` — a
             # narrower catch here would let that escape uncaught and crash
             # the process, defeating the whole point of degrading instead of

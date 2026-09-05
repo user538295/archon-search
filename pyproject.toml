@@ -137,7 +137,7 @@ norecursedirs = [
 # -n is capped at 4 — never "auto": auto meant 14 workers on this 14-core machine, and on
 # model-loading paths each worker holds ~2 GB (fastembed/onnxruntime/torch); stacked runs
 # OOM-crashed the 48 GB machine on 2026-07-05 (Jetsam + WindowServer watchdog kill).
-addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n 8 --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark and not smoke and not live_eval and not docling\""  # -n 8 (raised from 4, 2026-07-20): default suite stubs fastembed → measured ~0.3GB/worker, memory-safe on 14-core/48GB. NEVER -n auto (=14 → 2GB/worker on real-model lanes OOM'd 2026-07-05). See CLAUDE.md testing policy.
+addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n 8 --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark and not smoke and not live_eval and not docling and not graph_real_artifact\""  # -n 8 (raised from 4, 2026-07-20): default suite stubs fastembed → measured ~0.3GB/worker, memory-safe on 14-core/48GB. NEVER -n auto (=14 → 2GB/worker on real-model lanes OOM'd 2026-07-05). See CLAUDE.md testing policy.
 markers = [
     "benchmark: latency benchmark — serialized via xdist_group('benchmark'); server-dependent tests auto-skip when server is unreachable",
     "integration: integration tests requiring live infrastructure",
@@ -150,6 +150,7 @@ markers = [
     "unit: plain unit tests with no infrastructure dependencies",
     "smoke: live subprocess smoke tests; require a real archon-search serve process; excluded from default run via norecursedirs + -m filter; run with `uv run pytest tests/smoke/ --no-cov`",
     "docling: tests that invoke the real docling parser / RapidOCR (PDF & image OCR); a single parse takes minutes on macOS (Metal/RapidOCR), so excluded from the default run via the -m filter; run with `uv run pytest -m docling --no-cov`",
+    "graph_real_artifact: tests that load a real graph-NER model artifact (memory / real-artifact determinism); heavyweight, so excluded from the default run via the -m filter and pinned to its own xdist_group; run with `uv run pytest -m graph_real_artifact --no-cov`",
 ]
 
 [tool.uv]

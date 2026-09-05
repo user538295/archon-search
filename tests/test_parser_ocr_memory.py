@@ -442,6 +442,39 @@ _STEP_FILTER_MARKERS = (
 )
 
 
+def assert_marker_excluded_on_step_lines(
+    repo_root: Path, workflow_files: tuple[str, ...], exclusion: str
+) -> None:
+    """Assert `exclusion` sits on the same `-m` line as each `_STEP_FILTER_MARKERS`-located
+    unit/integration step, in every workflow. `-o addopts=` wipes pyproject's own filter per
+    invocation, so each step is the only thing excluding its lane in CI. `_STEP_FILTER_MARKERS`
+    is the step LOCATOR, never extended (K11). Shared by the `docling` and `graph_real_artifact`
+    CI-exclusion guards — one implementation, two callers."""
+    for rel_path in workflow_files:
+        text = (repo_root / rel_path).read_text(encoding="utf-8")
+        # Track coverage PER MARKER, not one flag for both: with a single flag, rewording just
+        # one step's -m expression leaves that step silently unchecked while the other still
+        # sets the flag — reopening exactly the C1-I-1 hole this guard exists to close.
+        unmatched = set(_STEP_FILTER_MARKERS)
+        for line in text.splitlines():
+            if "uv run pytest" not in line or "-o addopts=" not in line:
+                continue
+            for marker in _STEP_FILTER_MARKERS:
+                if marker not in line:
+                    continue
+                unmatched.discard(marker)
+                assert exclusion in line, (
+                    f"{rel_path}: this uv run pytest step wipes addopts (-o addopts=) and must "
+                    f"re-assert {exclusion!r} in its own -m filter, or that lane runs in CI:\n"
+                    f"{line.strip()}"
+                )
+        assert not unmatched, (
+            f"{rel_path}: these step filters no longer match any line: {sorted(unmatched)}. "
+            "The workflow structure changed and this guard needs updating, rather than "
+            "silently passing vacuously on the steps it can still find."
+        )
+
+
 def test_pyproject_default_lane_excludes_docling() -> None:
     """pyproject.toml's own addopts `-m` filter must exclude `docling` (default-lane guard)."""
     import tomllib
@@ -462,29 +495,7 @@ def test_ci_workflows_exclude_docling_from_unit_and_integration_steps() -> None:
     without this each step's `-m` expression is the only thing standing between the
     `docling` lane and CI running (and hanging on) real OCR.
     """
-    for rel_path in _WORKFLOW_FILES:
-        text = (_REPO_ROOT / rel_path).read_text(encoding="utf-8")
-        # Track coverage PER MARKER, not one flag for both: with a single flag, rewording just
-        # one step's -m expression leaves that step silently unchecked while the other still
-        # sets the flag — reopening exactly the C1-I-1 hole this guard exists to close.
-        unmatched = set(_STEP_FILTER_MARKERS)
-        for line in text.splitlines():
-            if "uv run pytest" not in line or "-o addopts=" not in line:
-                continue
-            for marker in _STEP_FILTER_MARKERS:
-                if marker not in line:
-                    continue
-                unmatched.discard(marker)
-                assert "not docling" in line, (
-                    f"{rel_path}: this uv run pytest step wipes addopts (-o addopts=) and must "
-                    f"re-assert 'not docling' in its own -m filter, or docling tests run in CI:\n"
-                    f"{line.strip()}"
-                )
-        assert not unmatched, (
-            f"{rel_path}: these step filters no longer match any line: {sorted(unmatched)}. "
-            "The workflow structure changed and this guard needs updating, rather than "
-            "silently passing vacuously on the steps it can still find."
-        )
+    assert_marker_excluded_on_step_lines(_REPO_ROOT, _WORKFLOW_FILES, "not docling")
 
 
 def test_every_docling_test_is_pinned_to_the_docling_xdist_group() -> None:
