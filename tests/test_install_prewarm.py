@@ -280,8 +280,10 @@ def test_prewarm_entry_is_non_fatal_and_logs_first_use_will_download(caplog):
 
     with patch.dict(sys.modules, {"gliner": gliner_mod}):
         with caplog.at_level("WARNING"):
-            _prewarm_graph_model()  # must not raise
+            device = _prewarm_graph_model()  # must not raise
 
+    # Stage 2 rides this return: a failed load must yield None, not a device.
+    assert device is None
     assert any("first use" in record.getMessage() for record in caplog.records)
 
 

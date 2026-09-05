@@ -86,7 +86,7 @@ def _prewarm_timeout(profile: InstallProfile) -> int:
 
 def _prewarm_models(
     profile: InstallProfile, timeout: int | None = None, install_graph_extra: bool = False
-) -> None:
+) -> str | None:
     """Download embedder (and optionally reranker, and optionally graph NER) model
     files to the fastembed / graph-model cache.
 
@@ -94,7 +94,12 @@ def _prewarm_models(
     fastembed/HF progress is printed to stderr — not suppressed. When
     ``install_graph_extra`` is set, the graph NER model (Task BE-8) is pre-warmed
     inside the same timeout window as the embedder/reranker, non-fatally.
+
+    Returns the graph NER pre-warm's resolved torch device (Task BE-14's stage-2
+    device probe rides this), or ``None`` if the graph pre-warm did not run (not
+    requested, or skipped after a timeout) or ran and failed.
     """
+    graph_device: str | None = None
     import fastembed  # noqa: PLC0415 — lazy; not installed at import time
     TextEmbedding = fastembed.TextEmbedding  # noqa: N806
     try:
@@ -130,7 +135,7 @@ def _prewarm_models(
                 " same as default behavior.",
                 timeout,
             )
-            return
+            return None
 
         if profile.reranker is not None:
             try:
@@ -152,19 +157,20 @@ def _prewarm_models(
                     timeout,
                 )
             else:
-                _prewarm_graph_model()
+                graph_device = _prewarm_graph_model()
 
         timer.cancel()
     except InstallError:
         timer.cancel()
         raise
+    return graph_device
 
 
 # ---------------------------------------------------------------------------
 # Graph NER model pre-warm (Task BE-8 — optional, non-fatal)
 # ---------------------------------------------------------------------------
 
-def _prewarm_graph_model() -> None:
+def _prewarm_graph_model() -> str | None:
     """Pre-warm the graph NER/RelEx model (gliner.GLiNER).
 
     Mirrors the reranker's non-fatal branch above (:124-134): a failure here
@@ -172,15 +178,25 @@ def _prewarm_graph_model() -> None:
     same as the embedder and reranker. Uses the same cache_dir as the runtime
     lazy-load in ProseExtractionBackend.load() (get_graph_models_dir()), so
     pre-warm and first use share one on-disk cache rather than two.
+
+    Returns the resolved torch device string ("cpu"/"cuda"/"mps") read off the
+    loaded model on success (Task BE-14's stage-2 device probe rides this
+    pre-warm), or ``None`` on any failure.
     """
     try:
         from gliner import GLiNER  # noqa: PLC0415 — lazy; not installed at import time
 
-        GLiNER.from_pretrained(
+        model = GLiNER.from_pretrained(
             GRAPH_NER_MODEL_NAME,
             revision=GRAPH_NER_MODEL_REVISION,
             cache_dir=str(get_graph_models_dir()),
         )
+        # FE-5 forward-pointer: this reports gliner's AUTO-placed device, which
+        # may differ from where the runtime actually runs. FE-5 (wiring
+        # [graph].providers into the install profile) must apply
+        # model.to(resolve_torch_device(providers)) here — mirroring _load_sync
+        # in prose_extraction_backend.py — so the probed device matches runtime.
+        return model.device.type
     except Exception as exc:
         # Non-fatal: the [graph] extra may not be installed, or this may be a
         # transient download hiccup — either must not abort the wizard.
@@ -189,6 +205,7 @@ def _prewarm_graph_model() -> None:
             "the model will be downloaded on first use.",
             GRAPH_NER_MODEL_NAME, exc,
         )
+        return None
 
 
 # ---------------------------------------------------------------------------

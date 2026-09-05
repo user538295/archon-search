@@ -19,6 +19,7 @@ from archon_search.paths import (
     GRAPH_NER_MODEL_REVISION,
     get_graph_models_dir,
 )
+from archon_search.torch_device import resolve_torch_device
 
 if TYPE_CHECKING:
     # Type-checking only — the runtime import stays deferred inside _load_sync().
@@ -32,12 +33,6 @@ logger = logging.getLogger(__name__)
 # throughput in the fastembed backends.
 _TORCH_INTRA_OP_THREADS = 1
 _TORCH_INTER_OP_THREADS = 1
-
-# [graph].providers values are ONNX-style execution provider strings (see
-# archon-search.toml.example's [database] section, which the reranker/embedder
-# share) — never the literal "cuda"/"mps" torch device names.
-_CUDA_PROVIDER_MARKER = "cuda"
-_MPS_PROVIDER_MARKER = "coreml"
 
 # Mirrors embedder.py / reranker.py's _WARMUP_TIMEOUT_SECONDS: bounds the blocking
 # GLiNER.from_pretrained() download so a stalled network cannot hang the caller
@@ -225,40 +220,8 @@ class ProseExtractionBackend:
         return self._model is not None
 
     def _resolve_device(self) -> str:
-        """Map [graph].providers onto a torch device: cpu/cuda/mps.
-
-        Recognises this repo's real ONNX provider-string vocabulary
-        (``CUDAExecutionProvider``, ``CoreMLExecutionProvider``, ...), not
-        literal "cuda"/"mps". Steps down to CPU — logging a WARNING rather than
-        raising — when the resolved device is unavailable at runtime, so a
-        stale/misconfigured providers list cannot latch a permanent failure.
-        """
-        if not self._providers:
-            return "cpu"
-        first = self._providers[0].lower()
-        if _CUDA_PROVIDER_MARKER in first:
-            import torch  # noqa: PLC0415 — lazy; not installed at import time
-
-            if torch.cuda.is_available():
-                return "cuda"
-            logger.warning(
-                "[graph].providers=%r requests CUDA but torch.cuda.is_available() "
-                "is False — falling back to CPU.",
-                self._providers,
-            )
-            return "cpu"
-        if _MPS_PROVIDER_MARKER in first:
-            import torch  # noqa: PLC0415 — lazy; not installed at import time
-
-            if torch.backends.mps.is_available():
-                return "mps"
-            logger.warning(
-                "[graph].providers=%r requests CoreML/MPS but "
-                "torch.backends.mps.is_available() is False — falling back to CPU.",
-                self._providers,
-            )
-            return "cpu"
-        return "cpu"
+        """Map [graph].providers onto a torch device via ``resolve_torch_device`` (Task BE-14)."""
+        return resolve_torch_device(self._providers)
 
     def _load_sync(self) -> None:
         """Blocking model construction — runs off the event loop via asyncio.to_thread."""
