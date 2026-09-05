@@ -21,8 +21,9 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 - **[2026-08-21] (×4) 3rd-party wiring**: verify lib params per INPUT FORMAT (docling `OcrOptions.scale`) AND per CHECKPOINT — GLiNER `relations` no-ops off-RelEx; assert it at load. Leaks: `ProcessPoolExecutor(1, spawn, max_tasks_per_child)`.
 
 ## Plan-Making & Agent Process
-- **[2026-08-31] (×163) verify claims/state**: grep-verify every cite; prove repros vs unmodified HEAD (`git worktree add --detach`). Diffing WIP vs HEAD reads your own work as drift. NEVER trust a fix agent's "done" — 2 of 3 false once.
-- **[2026-08-23] (×44) subagents**: PRIMARY channel is a scratchpad drop — final text is DISCARDED and a mid-run death (API error) leaves NOTHING. `mkdir -p` that dir BEFORE spawning. A grandchild's completion routes to the GRANDPARENT — relay it.
+- **[2026-09-05] (×164) verify claims/state**: grep-verify every cite; prove repros vs unmodified HEAD (`git worktree add --detach`). Diffing WIP vs HEAD reads your own work as drift. NEVER trust a fix agent's "done" — 2 of 3 false once.
+- **[2026-09-05] (×45) subagents**: PRIMARY channel is a scratchpad drop — final text is DISCARDED and a mid-run death (API error) leaves NOTHING. `mkdir -p` that dir BEFORE spawning. A grandchild's completion routes to the GRANDPARENT — relay it.
+- **[2026-09-05] (×1) full-suite/eval**: stale `tests/eval/corpus/**/__pycache__/*.pyc` crash `load_eval_corpus` (ValueError, 55 fails)—trash first. `pytest>log;echo $?`=echo's 0 not pytest's. S42 guards: allowlist historical files, don't scrub facts.
 - **[2026-08-27] (×35) doc close-out**: grep the WHOLE tree (incl. `README.md`, `*.toml.example`) for the old invariant string — per-file scope orphans siblings. Never put a `>` block between table rows. Order: api-ref→catalog→CLAUDE.md→manual.
 - **[2026-08-24] (×3) plan/task authoring**: a fix in the body but not the Decisions table / mermaid / doc-checklist is the top defect — sweep all 8 surfaces + the `.tsp`. `#team` gate → agent-runnable findings; never flip the box.
 - **[2026-08-04] (×9) smoke/subprocess + TypeSpec**: `-o addopts=` not `-p no:xdist`; session fixtures use `tmp_path_factory`; pair `ARCHON_SEARCH_CONFIG` with `DATA_DIR`; seed real text. TypeSpec: `field?: T | null`; `namespace`/`model`/`op` reserved.
