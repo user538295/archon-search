@@ -2795,13 +2795,6 @@
             ],
             "title": "Llama Cpp Ok"
           },
-          "provider_notes": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Provider Notes",
-            "type": "array"
-          },
           "provider_warnings": {
             "items": {
               "type": "string"

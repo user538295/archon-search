@@ -10,7 +10,7 @@ extraction engine since BE-11 is gliner
 never the legacy NER engine — the probe below now checks gliner import-ability, mirroring
 ``ensure_graph_engine_importable``'s construction-time guard. The engine is
 also multilingual, so there is no English-only disclosure to make (C2-A-02/
-C2-B-2) — ``notes`` is always empty here.
+C2-B-2).
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def test_graph_disabled_produces_no_warnings(
     config = _config_with_graph(tmp_path, enabled=False, multilingual=True)
 
     with _gliner_absent():
-        assert graph_ner_status(config) == ([], [])
+        assert graph_ner_status(config) == []
 
 
 def test_gliner_absent_warns_at_startup(
@@ -67,9 +67,8 @@ def test_gliner_absent_warns_at_startup(
     config = _config_with_graph(tmp_path, enabled=True, multilingual=False)
 
     with _gliner_absent():
-        warnings, notes = graph_ner_status(config)
+        warnings = graph_ner_status(config)
 
-    assert notes == [], "gliner is multilingual — nothing to disclose"
     assert len(warnings) == 1, warnings
     assert "gliner" in warnings[0]
     assert "pip install" in warnings[0], "the warning must name the fix, not just the symptom"
@@ -82,7 +81,7 @@ def test_gliner_present_is_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     for multilingual in (False, True):
         config = _config_with_graph(tmp_path, enabled=True, multilingual=multilingual)
-        assert graph_ner_status(config) == ([], []), f"multilingual={multilingual}"
+        assert graph_ner_status(config) == [], f"multilingual={multilingual}"
 
 
 @pytest.mark.asyncio
@@ -141,7 +140,7 @@ def test_gliner_absent_message_names_the_extra(
     config = _config_with_graph(tmp_path, enabled=True, multilingual=False)
 
     with _gliner_absent():
-        warnings, _notes = graph_ner_status(config)
+        warnings = graph_ner_status(config)
 
     assert len(warnings) == 1, warnings
     assert GLINER_NOT_INSTALLED_MESSAGE in warnings[0]
@@ -166,10 +165,9 @@ def test_graph_ner_status_never_raises_on_unexpected_failure(
         "importlib.util.find_spec",
         side_effect=RuntimeError("boom: unexpected probe failure"),
     ):
-        warnings, notes = graph_ner_status(config)
+        warnings = graph_ner_status(config)
 
     assert warnings == ["graph NER model presence could not be determined"]
-    assert notes == []
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +188,7 @@ async def test_graph_warnings_prepended_on_every_return_path(
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(
         "archon_search.model_validation.graph_ner_status",
-        lambda config: (["graph test warning"], []),
+        lambda config: ["graph test warning"],
     )
 
     config = SearchConfig()
@@ -260,42 +258,37 @@ def test_wizard_summary_no_english_only_note_when_graph_disabled() -> None:
     )
 
 
-def test_status_surfaces_notes_separately_from_warnings(
+# ---------------------------------------------------------------------------
+# BE-18 (S23, C6): `provider_notes` is gone — no successor channel replaces it.
+# ---------------------------------------------------------------------------
+
+
+def test_model_validation_result_has_no_provider_notes_field() -> None:
+    """The dataclass carries no ``provider_notes`` slot — the removal is
+    structural, so a caller cannot resurrect the field by passing it."""
+    from dataclasses import fields
+
+    from archon_search.model_validation import ModelValidationResult
+
+    assert "provider_notes" not in {f.name for f in fields(ModelValidationResult)}
+    with pytest.raises(TypeError):
+        ModelValidationResult(provider_notes=["x"])  # type: ignore[call-arg]
+
+
+@pytest.mark.asyncio
+async def test_failed_result_path_returns_warnings_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """C1-I-7 on the wire: ``provider_notes`` is serialised as its own field,
-    so a permanent disclosure never lands in the one ``routes_ready`` grades.
-
-    Driven from a hand-built result rather than a real probe run: the
-    warnings/notes split itself is pinned by the unit tests above.
-    """
-    from archon_search.model_validation import ModelValidationResult
+    """The crash-path fallback consumes ``graph_ner_status``'s warnings-only
+    return and appends its own reason — the second call site BE-18 collapsed."""
+    from archon_search.model_validation import failed_result
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     config = _config_with_graph(tmp_path, enabled=True, multilingual=False)
 
-    job_store = JobStore(path=tmp_path / "jobs.json")
-    app = create_app(config, job_store)
-    mock_store = MagicMock()
-    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
-    mock_store.migrate_namespace = AsyncMock()
-    mock_store.connect = AsyncMock()
-    mock_store.disconnect = AsyncMock()
-    mock_store.ping = AsyncMock(return_value=True)
-    mock_store.pending_migrations = AsyncMock(return_value=[])
-    app.state.search_store = mock_store
-    app.state.model_validation = ModelValidationResult(
-        embedder_ok=True,
-        reranker_ok=True,
-        provider_warnings=[],
-        provider_notes=["some permanent, unactionable note"],
-    )
+    with _gliner_absent():
+        result = await failed_result("validation crashed", config)
 
-    client = TestClient(app, headers={"Authorization": f"Bearer {app.state.api_key}"})
-    body = client.get("/status").json()["model_validation"]
-
-    assert any("permanent" in n for n in body["provider_notes"]), body
-    assert body["provider_warnings"] == [], (
-        "a permanent disclosure in provider_warnings pins checks.models to WARN "
-        f"with no action that clears it; got {body['provider_warnings']!r}"
-    )
+    assert len(result.provider_warnings) == 2, result.provider_warnings
+    assert "gliner" in result.provider_warnings[0]
+    assert result.provider_warnings[1] == "validation crashed"

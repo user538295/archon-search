@@ -96,9 +96,6 @@ class ModelValidationResult:
     reranker_ok: bool | None = None
     llama_cpp_ok: bool | None = None
     provider_warnings: list[str] = field(default_factory=list)
-    # Informational, permanent, not operator-actionable — deliberately NOT
-    # graded by `routes_ready._models_check_status` (2026-08-19-030 C1-I-7).
-    provider_notes: list[str] = field(default_factory=list)
     validated_at: datetime | None = None
 
 
@@ -163,34 +160,32 @@ async def failed_result(reason: str, config: SearchConfig) -> ModelValidationRes
     network I/O.
     """
     try:
-        graph_warnings, graph_notes = await asyncio.to_thread(graph_ner_status, config)
+        graph_warnings = await asyncio.to_thread(graph_ner_status, config)
     except Exception:  # noqa: BLE001 — this fallback must never itself raise
-        graph_warnings, graph_notes = ["graph NER model presence could not be determined"], []
+        graph_warnings = ["graph NER model presence could not be determined"]
     return ModelValidationResult(
         embedder_ok=False,
         reranker_ok=False,
         provider_warnings=[*graph_warnings, reason],
-        provider_notes=graph_notes,
         validated_at=datetime.now(UTC),
     )
 
 
-def graph_ner_status(config: SearchConfig) -> tuple[list[str], list[str]]:
-    """Report graph prose-NER engine importability at startup as
-    ``(warnings, notes)`` (2026-08-19-030, rewired off spaCy in cycle-2
-    C2-A-01/C2-B-1/C1-B-1).
+def graph_ner_status(config: SearchConfig) -> list[str]:
+    """Report graph prose-NER engine importability at startup as warnings
+    (2026-08-19-030, rewired off spaCy in cycle-2 C2-A-01/C2-B-1/C1-B-1).
 
-    The split is load-bearing: ``routes_ready`` grades ``checks.models`` on
+    Everything returned here is operator-actionable, and that is the bar for
+    this channel: ``routes_ready`` grades ``checks.models`` on
     ``provider_warnings`` alone, so anything permanent and unactionable put
     there pins the check to ``WARN`` forever, with no operator action that can
     clear it — and ``OperatorGuide/20_monitoring_and_alerts.md`` tells
-    operators to alert on exactly that field (C1-I-7). ``notes`` is currently
-    always ``[]``: the shipped prose extraction engine (gliner,
-    ``paths.GRAPH_NER_MODEL_NAME`` — "knowledgator/gliner-relex-multi-v1.0")
-    is multilingual, so there is no English-only disclosure to make (cycle-2
-    C2-A-02/C2-B-2, superseding the pre-BE-11 spaCy-based disclosure). The
-    ``notes`` return slot is kept so a future engine-specific limitation has
-    somewhere to surface without another wire-contract change.
+    operators to alert on exactly that field (C1-I-7). There is deliberately no
+    second channel for an unactionable disclosure (BE-18, C6): the shipped
+    prose extraction engine (gliner, ``paths.GRAPH_NER_MODEL_NAME`` —
+    "knowledgator/gliner-relex-multi-v1.0") is multilingual, so there is no
+    English-only disclosure to make, and ADR 12 records the absence as
+    intentional rather than deferred.
 
     Returns ``[]`` when ``[graph]`` is disabled. Otherwise probes gliner
     import-ability the same way ``ensure_graph_engine_importable`` gates
@@ -209,7 +204,7 @@ def graph_ner_status(config: SearchConfig) -> tuple[list[str], list[str]]:
     "cannot determine" rather than propagating.
     """
     if not config.graph.enabled:
-        return [], []
+        return []
     # Gap (not fixed here — BE-12/BE-15 territory): this only checks gliner
     # import-ability. `ProseExtractionBackend.load()` latches a failed model
     # artifact load permanently once it happens, degrading every subsequent
@@ -221,15 +216,12 @@ def graph_ner_status(config: SearchConfig) -> tuple[list[str], list[str]]:
         )
 
         if gliner_absent():
-            return (
-                [f"graph prose entity extraction is disabled: {GLINER_NOT_INSTALLED_MESSAGE}"],
-                [],
-            )
+            return [f"graph prose entity extraction is disabled: {GLINER_NOT_INSTALLED_MESSAGE}"]
     except Exception as exc:  # never raises — validate_models_async must not fail
         logger.warning("graph NER model probe failed: %s", exc)
-        return ["graph NER model presence could not be determined"], []
+        return ["graph NER model presence could not be determined"]
 
-    return [], []
+    return []
 
 
 async def _probe_extraction_model(
@@ -479,7 +471,7 @@ async def validate_models_async(
     site could forget.
     """
     llama_cpp_ok = await _probe_llama_cpp(config)
-    graph_warnings, graph_notes = await asyncio.to_thread(graph_ner_status, config)
+    graph_warnings = await asyncio.to_thread(graph_ner_status, config)
     graph_warnings = graph_warnings + await _probe_extraction_model(
         config, llama_cpp_ok=llama_cpp_ok
     )
@@ -498,7 +490,6 @@ async def validate_models_async(
             reranker_ok=reranker_ok,
             llama_cpp_ok=llama_cpp_ok,
             provider_warnings=graph_warnings + extra_warnings,
-            provider_notes=list(graph_notes),
             validated_at=datetime.now(UTC),
         )
 

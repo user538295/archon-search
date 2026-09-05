@@ -591,7 +591,7 @@ flowchart LR
         - #integration_test — `test_no_provider_configured_raises_nothing_and_omits_summaries` — the factory and registry survive
     - Notes
         - ADR 12 also records the engine choice, the `[graph].providers` posture and its non-inheritance, the single-unbounded-resident-model deviation, and the deliberate absence of a `provider_notes` successor. The superseded ADR is not edited. If K2's finding 2 failed, this task drops C3 and ADR 12 entirely.
-- [ ] **BE-18** — Remove `provider_notes` from [model_validation.py](../../archon_search/model_validation.py)`:67`, [schemas.py](../../archon_search/server/schemas.py)`:245` and [routes_status.py](../../archon_search/server/routes_status.py)`:325`, collapsing `graph_ner_status`'s `(warnings, notes)` tuple to warnings alone at **both** call sites (`:129` and `:342-343`); regenerate both committed OpenAPI snapshots and edit the existing unreleased [BREAKING.md](../../BREAKING.md) entry to drop that bullet and reword the construction-time-failure one #backend-role
+- [x] **BE-18** — Remove `provider_notes` from [model_validation.py](../../archon_search/model_validation.py)`:67`, [schemas.py](../../archon_search/server/schemas.py)`:245` and [routes_status.py](../../archon_search/server/routes_status.py)`:325`, collapsing `graph_ner_status`'s `(warnings, notes)` tuple to warnings alone at **both** call sites (`:129` and `:342-343`); regenerate both committed OpenAPI snapshots and edit the existing unreleased [BREAKING.md](../../BREAKING.md) entry to drop that bullet and reword the construction-time-failure one #backend-role
     - Use Cases · 6.0h
     - needs BE-15 · completes C6, S23
     - Tests

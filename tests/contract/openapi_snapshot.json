@@ -1,6 +1,61 @@
 {
   "components": {
     "schemas": {
+      "AclGateSchema": {
+        "description": "ACL provenance envelope returned per search result when acl_context=true (g15 BE-5).\n\nPresent only when the caller requests ``acl_context=true`` in ``POST /search``.\n``warnings`` is always a non-null list (C3); the other fields may be null for\npre-G15 chunks whose provenance was not recorded.",
+        "properties": {
+          "allowed_principals": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Principals"
+          },
+          "sidecar_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sidecar Path"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "frontmatter",
+                  "sidecar",
+                  "collection_default"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "title": "AclGateSchema",
+        "type": "object"
+      },
       "AddCollectionRequest": {
         "properties": {
           "embedding_model": {
@@ -118,6 +173,33 @@
         "title": "CheckStatus",
         "type": "string"
       },
+      "CodeParsersStatusDetail": {
+        "description": "Code parser (tree-sitter) status sub-object for GET /status (E2g BE-11).\n\nPresent when ``[graph] enabled = true``; the parent ``code_parsers`` field\nbeing ``null`` signals that graph is disabled (this check is only\nmeaningful alongside code graphing).\n\n``degraded`` is ``True`` once any file extension has hit the missing-grammar\nbranch in ``code_enricher._get_grammar`` (lazy, per-extension cache \u2014\nreflects extensions actually attempted during this process's lifetime, not\nan eager scan of installed packages). ``missing_extensions`` lists the\nextensions with no available grammar so far. ``message`` names the fix.",
+        "properties": {
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "message": {
+            "default": "",
+            "title": "Message",
+            "type": "string"
+          },
+          "missing_extensions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Extensions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "degraded"
+        ],
+        "title": "CodeParsersStatusDetail",
+        "type": "object"
+      },
       "CollectionBackupStatus": {
         "description": "Per-collection backup state surfaced under StatusResponse.backup (D2 Task 4.2).",
         "properties": {
@@ -179,6 +261,17 @@
             "title": "Chunk Count",
             "type": "integer"
           },
+          "default_ttl_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Ttl Seconds"
+          },
           "description": {
             "default": "",
             "title": "Description",
@@ -239,6 +332,11 @@
             ],
             "title": "Reindex Job Id"
           },
+          "schema_version": {
+            "default": 0,
+            "title": "Schema Version",
+            "type": "integer"
+          },
           "status": {
             "title": "Status",
             "type": "string"
@@ -266,6 +364,17 @@
           "collection": {
             "title": "Collection",
             "type": "string"
+          },
+          "communities_invalidated": {
+            "default": false,
+            "title": "Communities Invalidated",
+            "type": "boolean"
+          },
+          "expired_chunks_removed_last_run": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Expired Chunks Removed Last Run",
+            "type": "integer"
           },
           "fts_optimized_at": {
             "anyOf": [
@@ -432,7 +541,8 @@
             "default": "frequency",
             "enum": [
               "frequency",
-              "tfidf"
+              "tfidf",
+              "importance"
             ],
             "title": "Salience Mode",
             "type": "string"
@@ -906,7 +1016,8 @@
                 "enum": [
                   "naive",
                   "local",
-                  "global"
+                  "global",
+                  "ppr"
                 ],
                 "type": "string"
               },
@@ -989,7 +1100,8 @@
                 "enum": [
                   "naive",
                   "local",
-                  "global"
+                  "global",
+                  "ppr"
                 ],
                 "type": "string"
               },
@@ -1010,6 +1122,17 @@
             },
             "title": "Near Misses",
             "type": "array"
+          },
+          "ppr_entities_matched": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ppr Entities Matched"
           },
           "rag_fusion_applied": {
             "default": false,
@@ -1114,6 +1237,9 @@
             ],
             "title": "Acl"
           },
+          "acl_gate": {
+            "$ref": "#/components/schemas/AclGateSchema"
+          },
           "breakdown": {
             "$ref": "#/components/schemas/ExplainScoreBreakdown"
           },
@@ -1197,7 +1323,8 @@
           "source_path",
           "text",
           "score",
-          "breakdown"
+          "breakdown",
+          "acl_gate"
         ],
         "title": "ExplainResult",
         "type": "object"
@@ -1312,11 +1439,16 @@
         "type": "object"
       },
       "GraphCollectionStats": {
-        "description": "Per-collection graph statistics (E1a FE-1 / C2).\n\nEach entry reports the number of nodes and edges in the collection's\n``_archon_graph_{col}_nodes`` / ``_archon_graph_{col}_edges`` tables.",
+        "description": "Per-collection graph statistics (E1a FE-1 / C2).\n\nEach entry reports the number of nodes and edges in the collection's\n``_archon_graph_{col}_nodes`` / ``_archon_graph_{col}_edges`` tables.\n``communities_invalidated`` is ``True`` when graph GC removed nodes/edges\nbut communities have not yet been rebuilt for this collection (BE-8).\n\nBE-7 health fields:\n``synonym_edge_count`` \u2014 number of edges with relationship_type='synonym_of'.\n``singleton_node_pct`` \u2014 percentage of nodes with no edges (isolated nodes, 0.0\u2013100.0).\n``synonym_link_rate`` \u2014 fraction of edges that are synonym edges (0.0\u20131.0). Proxy for\n    enrichment coverage.",
         "properties": {
           "collection": {
             "title": "Collection",
             "type": "string"
+          },
+          "communities_invalidated": {
+            "default": false,
+            "title": "Communities Invalidated",
+            "type": "boolean"
           },
           "edge_count": {
             "minimum": 0.0,
@@ -1327,6 +1459,21 @@
             "minimum": 0.0,
             "title": "Node Count",
             "type": "integer"
+          },
+          "singleton_node_pct": {
+            "default": 0.0,
+            "title": "Singleton Node Pct",
+            "type": "number"
+          },
+          "synonym_edge_count": {
+            "default": 0,
+            "title": "Synonym Edge Count",
+            "type": "integer"
+          },
+          "synonym_link_rate": {
+            "default": 0.0,
+            "title": "Synonym Link Rate",
+            "type": "number"
           }
         },
         "required": [
@@ -1342,6 +1489,11 @@
         "properties": {
           "edge_id": {
             "title": "Edge Id",
+            "type": "string"
+          },
+          "relationship_type": {
+            "default": "related_to",
+            "title": "Relationship Type",
             "type": "string"
           },
           "source_chunk_ids": {
@@ -1374,6 +1526,33 @@
         "title": "GraphEdgeResponse",
         "type": "object"
       },
+      "GraphImpactResponse": {
+        "description": "Response body for GET /graph/{collection}/impact/{symbol} (E2g BE-9).",
+        "properties": {
+          "callees": {
+            "$ref": "#/components/schemas/ImpactGroupResponse"
+          },
+          "callers": {
+            "$ref": "#/components/schemas/ImpactGroupResponse"
+          },
+          "depth_used": {
+            "title": "Depth Used",
+            "type": "integer"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "callers",
+          "callees",
+          "depth_used"
+        ],
+        "title": "GraphImpactResponse",
+        "type": "object"
+      },
       "GraphInspectionResponse": {
         "description": "Response body for GET /graph/{collection} (E2b).",
         "properties": {
@@ -1403,7 +1582,8 @@
             "default": "frequency",
             "enum": [
               "frequency",
-              "tfidf"
+              "tfidf",
+              "importance"
             ],
             "title": "Salience Mode",
             "type": "string"
@@ -1438,6 +1618,21 @@
             "title": "Entity Name",
             "type": "string"
           },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "pagerank_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pagerank Score"
+          },
           "salience": {
             "title": "Salience",
             "type": "number"
@@ -1447,7 +1642,8 @@
           "entity_id",
           "entity_name",
           "chunk_count",
-          "salience"
+          "salience",
+          "entity_type"
         ],
         "title": "GraphNodeResponse",
         "type": "object"
@@ -1471,7 +1667,7 @@
         "type": "object"
       },
       "GraphStatusDetail": {
-        "description": "Graph feature status sub-object for GET /status (E1a FE-1 / C2).\n\nPresent when ``[graph] enabled = true``; the parent ``graph`` field\nbeing ``null`` signals that graph is disabled.\n\n``backend_threshold_edges`` mirrors the configured operator threshold\nfor the NetworkX backend \u2014 above this count a WARNING is emitted on\ningest and the hint to migrate to Kuzu (E1b) is surfaced.",
+        "description": "Graph feature status sub-object for GET /status (E1a FE-1 / C2).\n\nPresent when ``[graph] enabled = true``; the parent ``graph`` field\nbeing ``null`` signals that graph is disabled.\n\n``backend_threshold_edges`` mirrors the configured operator threshold\nfor the NetworkX backend \u2014 above this count a WARNING is emitted on\ningest and a hint to prune old documents or raise\n``backend_threshold_edges`` is surfaced.\n``stale_mention_count`` is the aggregate count of stale mention rows\ndetected during the last graph GC pass (BE-8); 0 before any GC pass.",
         "properties": {
           "backend_threshold_edges": {
             "title": "Backend Threshold Edges",
@@ -1488,6 +1684,11 @@
           "enabled": {
             "title": "Enabled",
             "type": "boolean"
+          },
+          "stale_mention_count": {
+            "default": 0,
+            "title": "Stale Mention Count",
+            "type": "integer"
           }
         },
         "required": [
@@ -1539,17 +1740,98 @@
         "type": "object"
       },
       "HydeStatusDetail": {
-        "description": "HyDE feature status sub-object for GET /status (E0b BE-8 / C2).\n\nPresent only when ``[hyde] enabled = true``; the parent ``hyde`` field\nbeing ``null`` signals that HyDE is not configured.\n\n``key_available`` is ``True`` when ``ANTHROPIC_API_KEY`` is set in the\nserver's environment at request time.",
+        "description": "HyDE feature status sub-object for GET /status (E0b BE-8 / C2, G10 BE-5).\n\nPresent only when ``[hyde] enabled = true``; the parent ``hyde`` field\nbeing ``null`` signals that HyDE is not configured.\n\n``key_available`` semantics are provider-aware: Anthropic \u2192 ``ANTHROPIC_API_KEY``\nset; OpenAI \u2192 ``OPENAI_API_KEY`` set; Ollama \u2192 always ``True``.",
         "properties": {
           "key_available": {
             "title": "Key Available",
             "type": "boolean"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
           }
         },
         "required": [
-          "key_available"
+          "key_available",
+          "provider"
         ],
         "title": "HydeStatusDetail",
+        "type": "object"
+      },
+      "ImpactEdgeResponse": {
+        "description": "One caller/callee entry in an ``ImpactGroupResponse`` \u2014 E2g BE-9.",
+        "properties": {
+          "depth": {
+            "title": "Depth",
+            "type": "integer"
+          },
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "entity_name": {
+            "title": "Entity Name",
+            "type": "string"
+          },
+          "extraction_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extraction Method"
+          },
+          "relationship_type": {
+            "title": "Relationship Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_id",
+          "entity_name",
+          "relationship_type",
+          "extraction_method",
+          "depth"
+        ],
+        "title": "ImpactEdgeResponse",
+        "type": "object"
+      },
+      "ImpactGroupResponse": {
+        "description": "Direct vs. indirect callers/callees with truncation visibility \u2014 E2g BE-9.",
+        "properties": {
+          "direct": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactEdgeResponse"
+            },
+            "title": "Direct",
+            "type": "array"
+          },
+          "indirect": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactEdgeResponse"
+            },
+            "title": "Indirect",
+            "type": "array"
+          },
+          "omitted_count": {
+            "title": "Omitted Count",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "direct",
+          "indirect",
+          "truncated",
+          "omitted_count"
+        ],
+        "title": "ImpactGroupResponse",
         "type": "object"
       },
       "ImportRequest": {
@@ -1848,6 +2130,11 @@
           },
           "job_id": {
             "title": "Job Id",
+            "type": "string"
+          },
+          "job_type": {
+            "default": "ingest",
+            "title": "Job Type",
             "type": "string"
           },
           "kind": {
@@ -2309,6 +2596,17 @@
             ],
             "title": "Last Expired Pruned At"
           },
+          "last_graph_gc_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Graph Gc At"
+          },
           "last_run_at": {
             "anyOf": [
               {
@@ -2473,7 +2771,7 @@
         "type": "object"
       },
       "ModelValidationStatus": {
-        "description": "API-facing mirror of ModelValidationResult, nested under GET /status (D6 C1).\n\nA null (``None``) boolean field means the corresponding probe has not run /\ncompleted. ``validated_at`` is ``None`` while validation is pending and a UTC\ntimestamp once it has finished. See ``D6-model-validation-status.tsp`` (C1).",
+        "description": "API-facing mirror of ModelValidationResult, nested under GET /status (D6 C1).\n\nA null (``None``) boolean field means the corresponding probe has not run /\ncompleted. ``validated_at`` is ``None`` while validation is pending and a UTC\ntimestamp once it has finished. See ``D6-model-validation-status.tsp`` (C1).\n\n``llama_cpp_ok`` (S7, S17): ``None`` while pending or when ``llama_cpp`` is not\nconfigured as the provider in any of ``[hyde]``/``[rag_fusion]``/``[graph]``;\n``True``/``False`` reflects llama-server reachability. Warn-not-block \u2014 never\nfeeds the ``/ready`` FAIL gate (S25).",
         "properties": {
           "embedder_ok": {
             "anyOf": [
@@ -2485,6 +2783,17 @@
               }
             ],
             "title": "Embedder Ok"
+          },
+          "llama_cpp_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llama Cpp Ok"
           },
           "provider_warnings": {
             "items": {
@@ -2548,16 +2857,40 @@
         "title": "PatchCollectionBody",
         "type": "object"
       },
+      "QueuedBackupJob": {
+        "description": "One entry in BackupTriggerResponse.queued \u2014 collection name + job ID (brief 270).",
+        "properties": {
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "collection",
+          "job_id"
+        ],
+        "title": "QueuedBackupJob",
+        "type": "object"
+      },
       "RagFusionStatusDetail": {
-        "description": "RAG Fusion feature status sub-object for GET /status (E0b BE-8 / C2).\n\nPresent only when ``[rag_fusion] enabled = true``; the parent ``rag_fusion``\nfield being ``null`` signals that RAG Fusion is not configured.\n\n``key_available`` is ``True`` when ``ANTHROPIC_API_KEY`` is set in the\nserver's environment at request time.",
+        "description": "RAG Fusion feature status sub-object for GET /status (E0b BE-8 / C2, G10 BE-5).\n\nPresent only when ``[rag_fusion] enabled = true``; the parent ``rag_fusion``\nfield being ``null`` signals that RAG Fusion is not configured.\n\n``key_available`` semantics are provider-aware: Anthropic \u2192 ``ANTHROPIC_API_KEY``\nset; OpenAI \u2192 ``OPENAI_API_KEY`` set; Ollama \u2192 always ``True``.",
         "properties": {
           "key_available": {
             "title": "Key Available",
             "type": "boolean"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
           }
         },
         "required": [
-          "key_available"
+          "key_available",
+          "provider"
         ],
         "title": "RagFusionStatusDetail",
         "type": "object"
@@ -2597,6 +2930,10 @@
           },
           "storage": {
             "$ref": "#/components/schemas/CheckStatus"
+          },
+          "sync": {
+            "$ref": "#/components/schemas/CheckStatus",
+            "default": "pending"
           }
         },
         "required": [
@@ -2665,6 +3002,22 @@
           "checks"
         ],
         "title": "ReadinessResponse",
+        "type": "object"
+      },
+      "ReindexMetadataRequest": {
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "normalize_timestamps": {
+            "default": true,
+            "title": "Normalize Timestamps",
+            "type": "boolean"
+          }
+        },
+        "title": "ReindexMetadataRequest",
         "type": "object"
       },
       "RouteRequest": {
@@ -2887,6 +3240,11 @@
       },
       "SearchRequest": {
         "properties": {
+          "acl_context": {
+            "default": false,
+            "title": "Acl Context",
+            "type": "boolean"
+          },
           "collection": {
             "anyOf": [
               {
@@ -2928,7 +3286,8 @@
                 "enum": [
                   "naive",
                   "local",
-                  "global"
+                  "global",
+                  "ppr"
                 ],
                 "type": "string"
               },
@@ -3030,6 +3389,17 @@
             "title": "Hyde Applied",
             "type": "boolean"
           },
+          "ppr_entities_matched": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ppr Entities Matched"
+          },
           "rag_fusion_applied": {
             "default": false,
             "title": "Rag Fusion Applied",
@@ -3076,6 +3446,16 @@
             ],
             "title": "Acl"
           },
+          "acl_gate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AclGateSchema"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "chunk_id": {
             "title": "Chunk Id",
             "type": "string"
@@ -3115,6 +3495,17 @@
             },
             "title": "Metadata",
             "type": "object"
+          },
+          "reranker_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reranker Score"
           },
           "score": {
             "title": "Score",
@@ -3181,6 +3572,17 @@
         ],
         "title": "SkippedItem",
         "type": "object"
+      },
+      "StartupSyncResult": {
+        "description": "Startup collection-sync progress, mirrored onto ``app.state.sync_result``.\n\nSet by the lifespan's startup sync task: ``PENDING`` before/while the task\nruns, ``DONE`` on a clean completion, ``FAILED`` on a bounded timeout, a\nper-collection error (``SyncResult.errors`` non-empty), cancellation, or any\nother exception. ``SUPPRESSED`` is set instead of ``PENDING`` when the\ncrash-loop guard refused to start the task at all because the job store\nmarked an ingest-family job ``process_restart`` \u2014 collections are configured\nbut the corpus is potentially stale until an operator runs ``POST /sync``.\nDegraded-but-ready: no sync task exists, so ``/ready`` stays 200 \u2014 it\nreports the state as ``checks.sync = \"warn\"``, which does not gate ``ready``.\n``None`` (not a member of this enum) means no startup sync\nwas ever run, i.e. no collections are configured. Named ``StartupSyncResult``\nrather than ``SyncResult`` to avoid colliding with\n``archon_search.sync.SyncResult``, which is a different, unrelated type.\n\nThe single rule governing every rewrite after startup: **a clean\n``POST /sync`` clears any degraded startup state; boot history lives in the\nlogs.** Concretely (``routes_sync._clear_degraded_sync_state``), a\n``POST /sync`` that completes with no exception and no per-collection\nerrors moves ``SUPPRESSED`` *or* ``FAILED`` to ``DONE`` \u2014 and clears\n``app.state._startup_sync_failed`` in the same step, since ``GET /ready``\nreads that flag and ``GET /status`` reads this field; clearing one without\nthe other would make the two endpoints contradict each other. ``SUPPRESSED``\nis additionally backed by a durable sentinel file\n(``sync_suppression.py``) so it survives a process restart \u2014 the clean\nsync clears that too. A sync that raises, times out, or completes with\nnon-empty ``SyncResult.errors`` rewrites neither field.",
+        "enum": [
+          "pending",
+          "done",
+          "failed",
+          "suppressed"
+        ],
+        "title": "StartupSyncResult",
+        "type": "string"
       },
       "StatsResponse": {
         "properties": {
@@ -3397,6 +3799,16 @@
               }
             ]
           },
+          "code_parsers": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CodeParsersStatusDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "collections": {
             "items": {
               "$ref": "#/components/schemas/StatusCollectionEntry"
@@ -3508,6 +3920,16 @@
             "title": "Store Schema Version",
             "type": "integer"
           },
+          "sync_result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StartupSyncResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "telemetry": {
             "anyOf": [
               {
@@ -3521,6 +3943,16 @@
           "version": {
             "title": "Version",
             "type": "string"
+          },
+          "warmup_result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WarmupResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -3644,6 +4076,16 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "WarmupResult": {
+        "description": "Eager model warm-up progress, mirrored onto ``app.state.warmup_result``.\n\nSet by the lifespan's eager warm-up task: ``PENDING`` before the task\nstarts, ``DONE``/``FAILED`` once it finishes. ``None`` (not a member of\nthis enum) means eager warm-up was never run, i.e.\n``eager_load_embedders = false``.",
+        "enum": [
+          "pending",
+          "done",
+          "failed"
+        ],
+        "title": "WarmupResult",
+        "type": "string"
+      },
       "WatcherReport": {
         "properties": {
           "running": {
@@ -3663,25 +4105,6 @@
           "running"
         ],
         "title": "WatcherReport",
-        "type": "object"
-      },
-      "QueuedBackupJob": {
-        "description": "One entry in BackupTriggerResponse.queued \u2014 collection name + job ID (brief 270).",
-        "properties": {
-          "collection": {
-            "title": "Collection",
-            "type": "string"
-          },
-          "job_id": {
-            "title": "Job Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "collection",
-          "job_id"
-        ],
-        "title": "QueuedBackupJob",
         "type": "object"
       }
     },
@@ -3834,6 +4257,13 @@
             "description": "Unprocessable Entity"
           },
           "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
             "description": "Store busy \u2014 reindex in progress"
           }
         },
@@ -3910,6 +4340,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -4679,6 +5119,91 @@
         "summary": "Reindex Collection"
       }
     },
+    "/collections/{name}/reindex-metadata": {
+      "post": {
+        "description": "Enqueue an async metadata reindex job for a collection \u2014 CSP120 BE-4.\n\nFollows the rebuild_communities pattern (``routes_graph.py``):\nvalidate -> create job QUEUED -> transition QUEUED -> RUNNING -> spawn task\n-> return 202 with the full JobResponse body, so the response reports RUNNING.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in config or meta record absent.\n- 409: A metadata reindex is already in progress for this collection.",
+        "operationId": "reindex_metadata_collections__name__reindex_metadata_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReindexMetadataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Reindex Metadata"
+      }
+    },
     "/explain": {
       "post": {
         "description": "Return the per-stage retrieval/reranking trace for a query, plus the\nrouting decision when no collection is pinned.\n\n503 is reserved for meta-lookup / router failures (mirrors A3's /search\ntaxonomy); pipeline-stage failures (store / reranker) surface as 500 with a\nstage-specific detail. The query is never echoed in the response or telemetry.",
@@ -4713,6 +5238,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -4725,7 +5260,7 @@
     },
     "/graph/cross-collection": {
       "get": {
-        "description": "Inspect and merge graph data across multiple collections.\n\nQuery parameters:\n- `collections`: Comma-separated list of collection names (at least 2 required, deduped).\n- `format`: \"json\" (default) or \"graphml\" to export as GraphML XML.\n- `salience`: \"frequency\" (default, chunk ratio clamped to [0,1]) or\n  \"tfidf\" (TF\u00d7IDF across all namespace collections).\n\nReturns:\n- 200: Merged graph inspection response (JSON or GraphML)\n- 404: Collection not found\n- 422: graph.enabled=false or <2 collections after dedup or invalid format or invalid salience value\n\nScenarios:\n- S3: Merged graph data present \u2192 200 JSON with merged nodes, edges, truncated flag\n- S4: GraphML format \u2192 200 XML response\n- S5: graph.enabled=false \u2192 422\n- S7: Less than 2 collections \u2192 422\n- S17: One collection has no data \u2192 200 with data from other collections",
+        "description": "Inspect and merge graph data across multiple collections.\n\nQuery parameters:\n- `collections`: Comma-separated list of collection names (at least 2 required, deduped).\n- `format`: \"json\" (default) or \"graphml\" to export as GraphML XML.\n- `salience`: \"frequency\" (default, chunk ratio clamped to [0,1]) or\n  \"tfidf\" (TF\u00d7IDF across all namespace collections), or\n  \"importance\" (persisted PageRank score over code-symbol edges, nulls-last).\n\nReturns:\n- 200: Merged graph inspection response (JSON or GraphML)\n- 404: Collection not found\n- 422: graph.enabled=false or <2 collections after dedup or invalid format or invalid salience value\n\nScenarios:\n- S3: Merged graph data present \u2192 200 JSON with merged nodes, edges, truncated flag\n- S4: GraphML format \u2192 200 XML response\n- S5: graph.enabled=false \u2192 422\n- S7: Less than 2 collections \u2192 422\n- S17: One collection has no data \u2192 200 with data from other collections",
         "operationId": "get_graph_cross_collection_graph_cross_collection_get",
         "parameters": [
           {
@@ -4759,7 +5294,8 @@
               "default": "frequency",
               "enum": [
                 "frequency",
-                "tfidf"
+                "tfidf",
+                "importance"
               ],
               "title": "Salience",
               "type": "string"
@@ -4798,7 +5334,7 @@
     },
     "/graph/{collection}": {
       "get": {
-        "description": "Inspect a single collection's graph with derived metrics.\n\nQuery parameters:\n- `format`: \"json\" (default) or \"graphml\" to export as GraphML XML.\n- `salience`: \"frequency\" (default, chunk ratio clamped to [0,1]) or\n  \"tfidf\" (TF\u00d7IDF across all namespace collections).\n\nReturns:\n- 200: Graph inspection response (JSON or GraphML)\n- 404: Collection not found\n- 422: graph.enabled=false or invalid format or invalid salience value\n\nScenarios:\n- S1: Graph data present \u2192 200 JSON with nodes, edges, truncated flag\n- S2: GraphML format \u2192 200 XML response\n- S5: graph.enabled=false \u2192 422\n- S6: Unknown collection \u2192 404\n- S8: No graph data (tables absent) \u2192 200 with empty nodes/edges",
+        "description": "Inspect a single collection's graph with derived metrics.\n\nQuery parameters:\n- `format`: \"json\" (default) or \"graphml\" to export as GraphML XML.\n- `salience`: \"frequency\" (default, chunk ratio clamped to [0,1]) or\n  \"tfidf\" (TF\u00d7IDF across all namespace collections), or\n  \"importance\" (persisted PageRank score over code-symbol edges, nulls-last).\n\nReturns:\n- 200: Graph inspection response (JSON or GraphML)\n- 404: Collection not found\n- 422: graph.enabled=false or invalid format or invalid salience value\n\nScenarios:\n- S1: Graph data present \u2192 200 JSON with nodes, edges, truncated flag\n- S2: GraphML format \u2192 200 XML response\n- S5: graph.enabled=false \u2192 422\n- S6: Unknown collection \u2192 404\n- S8: No graph data (tables absent) \u2192 200 with empty nodes/edges",
         "operationId": "get_graph_graph__collection__get",
         "parameters": [
           {
@@ -4832,7 +5368,8 @@
               "default": "frequency",
               "enum": [
                 "frequency",
-                "tfidf"
+                "tfidf",
+                "importance"
               ],
               "title": "Salience",
               "type": "string"
@@ -4867,6 +5404,271 @@
           }
         ],
         "summary": "Get Graph"
+      }
+    },
+    "/graph/{collection}/impact/{symbol}": {
+      "get": {
+        "description": "Blast-radius (caller/callee) impact analysis for a code symbol \u2014 E2g BE-9.\n\nQuery parameters:\n- `file_path`: disambiguates same-named symbols to the one defined in this file.\n- `depth`: traversal depth (default 2, hard-capped at MAX_IMPACT_DEPTH server-side).\n- `direction`: \"callers\", \"callees\", or \"both\" (default \"both\").\n- `extraction_method_filter`: only traverse edges with this extraction method.\n\nReturns:\n- 200: GraphImpactResponse mirroring GraphStore.compute_impact's ImpactResult 1:1\n- 404: Collection not found\n- 422: graph.enabled=false or invalid direction value",
+        "operationId": "get_graph_impact_graph__collection__impact__symbol__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "title": "Collection",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "file_path",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "File Path"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Depth"
+            }
+          },
+          {
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Direction"
+            }
+          },
+          {
+            "in": "query",
+            "name": "extraction_method_filter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Extraction Method Filter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphImpactResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Graph Impact"
+      }
+    },
+    "/graph/{collection}/rebuild-communities": {
+      "post": {
+        "description": "Enqueue an async Leiden community rebuild for a collection \u2014 BE-2.\n\nFollows the migrate route's pattern (``routes_collections.py``,\n``migrate_collection``): validate -> create job QUEUED -> transition\nQUEUED -> RUNNING -> spawn task -> return 202 with the full JobResponse\nbody (``job_to_dict(running_job)``), so the response reports RUNNING,\nnot PENDING (S1).\n\nAuth is handled solely by ``APIKeyMiddleware`` \u2014 this route does not\nimplement its own ``?token=`` fallback (unlike ``get_graph_view``, whose\nbranch exists only for HTML-iframe embedding). A token resolving to\n``INVALID_NAMESPACE_SENTINEL`` never reaches this handler; the middleware\nreturns a bare 500 first (S14).\n\nThe optional ``?namespace=`` query param lets the CLI explicitly confirm\nwhich namespace it intends to target. If provided, it must match the\nnamespace resolved from the Bearer token; a mismatch returns 422 so the\ncaller knows to use the correct API key for the intended namespace.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in the caller's namespace.\n- 409: A rebuild is already in progress for this collection (BE-5).\n- 422: graph.enabled=false, or ?namespace= does not match token namespace.",
+        "operationId": "rebuild_communities_graph__collection__rebuild_communities_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "title": "Collection",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "default": "default",
+              "title": "Namespace",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Rebuild Communities"
+      }
+    },
+    "/graph/{collection}/view": {
+      "get": {
+        "description": "Serve a self-contained graph viewer HTML page for a collection \u2014 E2j BE-2.\n\nQuery parameters:\n- ``token``: Optional Bearer token (used when no Authorization header is present).\n  The middleware exemption lets this request bypass the header-presence check.\n\nReturns:\n- 200: Self-contained HTML page with C4 placeholders substituted.\n- 401: Missing or invalid auth (WWW-Authenticate: Bearer header always present).\n- 404: Collection not found.\n- 422: graph.enabled=false.\n\nAuth resolution order (C3 precedence):\n1. Authorization header (middleware already validated; handler recovers token for embedding).\n2. ?token= query param (handler validates via validate_token_and_get_namespace).",
+        "operationId": "get_graph_view_graph__collection__view_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "collection",
+            "required": true,
+            "schema": {
+              "title": "Collection",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Graph View"
       }
     },
     "/health": {
@@ -5163,6 +5965,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {
@@ -5732,6 +6544,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -5774,6 +6596,53 @@
           }
         ],
         "summary": "Status"
+      }
+    },
+    "/sync": {
+      "post": {
+        "description": "Enqueue an async full-collection sync \u2014 CSP120 BE-3.\n\nSyncs ALL server-configured collections (pinned_collections + collections)\nvia ``SearchCollectionSync.sync()``. No request body needed (C2).\n\nReturns:\n- 202: JobResponse-shaped body with status RUNNING.\n- 401: Missing or invalid Bearer token.\n- 409: A sync is already in progress.",
+        "operationId": "trigger_sync_sync_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Trigger Sync",
+        "tags": [
+          "sync"
+        ]
       }
     },
     "/telemetry/entries": {

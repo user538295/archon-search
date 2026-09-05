@@ -16,6 +16,10 @@ from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 
 SNAPSHOT_PATH = Path(__file__).parent / "openapi_snapshot.json"
+# The contract suite keeps its own copy of the same document. Both are written from
+# here so they cannot drift apart again (BE-18); their equality is pinned by
+# ``tests/integration/test_be18_provider_notes_removal.py``.
+CONTRACT_SNAPSHOT_PATH = Path(__file__).parents[1] / "contract" / "openapi_snapshot.json"
 UPDATE_FLAG = "--update-openapi-snapshot"
 
 # CPython 3.13 renamed the 422 reason phrase from "Unprocessable Entity" to
@@ -54,7 +58,9 @@ def test_openapi_spec_matches_snapshot(tmp_path: Path, pytestconfig: pytest.Conf
     spec = _strip_dynamic_fields(app.openapi())
 
     if pytestconfig.getoption(UPDATE_FLAG.lstrip("-").replace("-", "_"), default=False):
-        SNAPSHOT_PATH.write_text(json.dumps(spec, indent=2, sort_keys=True))
+        serialised = json.dumps(spec, indent=2, sort_keys=True)
+        SNAPSHOT_PATH.write_text(serialised)
+        CONTRACT_SNAPSHOT_PATH.write_text(serialised)
         return
 
     if not SNAPSHOT_PATH.exists():
