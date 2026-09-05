@@ -6,7 +6,7 @@ which prove REST/MCP shape parity for a *simple* (non-hub) graph. This test:
 
 - Ingests a small fixture file through the real ingest pipeline into a real
   collection before seeding the graph store directly. The shared
-  ``install_spacy_stub`` recognizes only "Alice"/"Bob"/"Google"
+  ``install_graph_stub`` recognizes only "Alice"/"Bob"/"Google"
   (``tests/integration/conftest.py``); the fixture text below contains none
   of those names, so ingest extracts zero graph nodes as a side effect of
   avoiding the stub's keywords, not because the stub is inert. Ingest's only
@@ -49,7 +49,7 @@ from archon_search.graph_types import (
 )
 from tests.integration.conftest import (
     ingest_file_via_path,
-    install_spacy_stub,
+    install_graph_stub,
     make_real_app,
     mcp_initialize,
     mcp_tool_call,
@@ -133,7 +133,7 @@ def test_e2e_graphImpact_truncatesBothGroups_withOmittedCount(
     MAX_IMPACT_GROUP_SIZE is capped on both sides, with explicit
     truncated/omitted_count fields — never a silently partial answer. Also
     asserts depth_used and HTTP/MCP parity (S5/S13) for this scenario."""
-    install_spacy_stub(monkeypatch)
+    install_graph_stub(monkeypatch)
 
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True
@@ -211,7 +211,7 @@ def test_e2e_graphImpact_depthTwoIndirectRipple_parityAndOrdering(
     direct and indirect entries, and a genuine 2-hop chain
     (grandcaller -> caller -> hub) surfaces in the callers group's
     ``indirect`` list with the correct ``depth_used``."""
-    install_spacy_stub(monkeypatch)
+    install_graph_stub(monkeypatch)
 
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True
@@ -286,7 +286,7 @@ def test_e2e_graphImpact_extractionMethodFilter_excludesInferredEdges(
     """S7: extraction_method_filter='extracted' on both REST and MCP excludes
     a caller reached only via an 'inferred' edge, and the excluded edge does
     not affect omitted_count for the extracted-only view."""
-    install_spacy_stub(monkeypatch)
+    install_graph_stub(monkeypatch)
 
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True

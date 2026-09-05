@@ -305,9 +305,9 @@ def test_docker_smoke_suite_exits_0(test_runner_image: str) -> None:
     - at least ``_DOCKER_SMOKE_MIN_PASSED`` tests reported as passed (guards
       against silent collection-failure where pytest exits 0 with 0 tests)
 
-    ``--extra graph`` and the spaCy model download are intentionally omitted:
+    ``--extra graph`` and the extraction model download are intentionally omitted:
     the docker smoke tests spawn ``archon-search serve`` without graph enabled
-    (the default), so spaCy is never imported during these tests.
+    (the default), so gliner is never imported during these tests.
     """
     result = subprocess.run(
         [

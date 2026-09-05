@@ -34,6 +34,7 @@ from archon_search.graph_types import (
     make_stable_entity_id,
 )
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
 
@@ -45,17 +46,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return zero entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def _symbol(
@@ -237,7 +227,7 @@ def test_graphImpactRoute_realRequest_returnsGroupedResult(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A real HTTP request returns the grouped direct/indirect result, PageRank-ordered."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc_file = tmp_path / "doc-impact.txt"
@@ -297,7 +287,7 @@ def test_graphImpactMcpTool_realRequest_matchesRestShape(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """MCP graph_impact's real response matches REST's for the same query."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True
@@ -341,7 +331,7 @@ def test_graphImpactRoute_filePathParam_reachesComputeImpact(
 ) -> None:
     """file_path on both REST and MCP surfaces actually reaches compute_impact
     (proven via an ambiguous same-named symbol fixture, not dropped silently)."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True
@@ -402,7 +392,7 @@ def test_graphImpactRoute_omittedDepthDirection_appliesDefaults(
 ) -> None:
     """Omitting depth/direction on both REST and MCP results in compute_impact being
     called with depth=2, direction='both'."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     captured_calls: list[dict] = []
     original_compute_impact = GraphStore.compute_impact
@@ -452,7 +442,7 @@ def test_graphImpactRoute_invalidDirection_returns422(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """REST returns 422 with an 'invalid direction' message for an unrecognized direction."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc_file = tmp_path / "doc-baddir.txt"
@@ -473,7 +463,7 @@ def test_graphImpactMcpTool_invalidDirection_returnsValidationError(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """MCP returns McpErrorResponse with code='validation_error' for an unrecognized direction."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True
@@ -500,7 +490,7 @@ def test_graphImpactRoute_collectionNotFound_returns404(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """REST returns 404 with detail 'collection not found' for a nonexistent collection."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         response = client.get(
@@ -517,7 +507,7 @@ def test_graphImpactMcpTool_collectionNotFound_returnsNotFound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """MCP returns McpErrorResponse with code='not_found' for a nonexistent collection."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True
@@ -540,7 +530,7 @@ def test_graphImpactRoute_depthZero_returns422(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """REST returns 422 for depth=0 rather than silently returning an empty 200."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc_file = tmp_path / "doc-depth0.txt"
@@ -560,7 +550,7 @@ def test_graphImpactMcpTool_depthZero_returnsValidationError(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """MCP returns McpErrorResponse with code='validation_error' for depth=0."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True
@@ -589,7 +579,7 @@ def test_graphImpactRoute_extractionMethodFilter_reachesComputeImpact(
     """extraction_method_filter='extracted' on REST reaches compute_impact and excludes
     'inferred'-tagged edges (proven via one extracted edge and one inferred edge from the
     same root to two different callees)."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc_file = tmp_path / "doc-extmethod.txt"
@@ -624,7 +614,7 @@ def test_graphImpactMcpTool_extractionMethodFilter_reachesComputeImpact(
 ) -> None:
     """extraction_method_filter='extracted' on MCP reaches compute_impact and excludes
     'inferred'-tagged edges (same fixture shape as the REST equivalent)."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(
         tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True

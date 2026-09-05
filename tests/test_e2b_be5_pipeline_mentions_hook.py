@@ -244,12 +244,12 @@ async def test_ingest_writes_mentions_then_reingest_is_idempotent(
     doc_file.write_text("# Test\n\nAuthService is a service.\n")
 
     # `gliner` is genuinely installed (BE-11 rewired the construction guard to
-    # check it instead of spaCy), so real construction succeeds without a
+    # check it instead of the legacy NER engine), so real construction succeeds without a
     # stub — but a real `ProseExtractionBackend.load()` would attempt a real
     # network download of the model weights, which is far too slow for this
     # test. Stub the load to fail fast instead, so prose extraction degrades
     # (code-symbol extraction is unaffected) exactly like the old
-    # spaCy-absent path this test predates.
+    # the legacy NER engine-absent path this test predates.
     monkeypatch.setattr(
         "archon_search.prose_extraction_backend.ProseExtractionBackend.load",
         AsyncMock(side_effect=RuntimeError("stubbed: no real model download in tests")),

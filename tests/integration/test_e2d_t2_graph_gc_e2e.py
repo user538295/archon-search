@@ -36,7 +36,7 @@ import pytest
 
 from tests.integration.conftest import (
     ingest_file_via_path,
-    install_spacy_stub,
+    install_graph_stub,
     make_real_app,
 )
 
@@ -245,7 +245,7 @@ def test_e2d_t2_gc_removes_orphan_nodes_visible_in_graph(
        Assert "Bob" PRESENT (survivor — GC did not over-delete).
     7. Assert maintenance.last_graph_gc_at is a non-null ISO-8601 string.
     """
-    install_spacy_stub(monkeypatch)
+    install_graph_stub(monkeypatch)
 
     col = "gc-orphan-col"
 
@@ -281,11 +281,11 @@ def test_e2d_t2_gc_removes_orphan_nodes_visible_in_graph(
         )
         assert any(n == "Alice" for n in node_names_after_ingest), (
             f"Expected 'Alice' in graph nodes after ingest; found: {node_names_after_ingest}. "
-            "spaCy stub may not have run — check graph_enabled and spacy stub installation."
+            "the graph-engine stub may not have run — check graph_enabled and the graph-engine stub installation."
         )
         assert any(n == "Bob" for n in node_names_after_ingest), (
             f"Expected 'Bob' in graph nodes after ingest; found: {node_names_after_ingest}. "
-            "spaCy stub did not extract 'Bob' from D2 text."
+            "the graph-engine stub did not extract 'Bob' from D2 text."
         )
 
         # C2-I-20: Verify Alice has at least one edge in the store BEFORE deletion.
@@ -461,7 +461,7 @@ def test_e2d_t2_gc_status_fields_populated(
     cached from last GC pass) — it reflects the MEASURED count from the most recent pass,
     not a live query.
     """
-    install_spacy_stub(monkeypatch)
+    install_graph_stub(monkeypatch)
 
     col = "gc-status-col"
 

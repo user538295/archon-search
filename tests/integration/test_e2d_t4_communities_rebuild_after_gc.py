@@ -72,7 +72,7 @@ import pytest
 
 from tests.integration.conftest import (
     ingest_file_via_path,
-    install_spacy_stub,
+    install_graph_stub,
     make_real_app,
 )
 from tests.integration.test_e2d_t2_graph_gc_e2e import (
@@ -303,12 +303,12 @@ def test_e2d_t4_communities_invalidated_then_rebuilt_after_gc(
       Pass 2: POST /maintenance/trigger → wait → assert communities_invalidated=False
               AND community_count >= 1 AND t4-rebuilt-comm in GraphStore (Fix #2).
     """
-    install_spacy_stub(monkeypatch)
+    install_graph_stub(monkeypatch)
 
     col = "t4-communities-rebuild-col"
     ns = "default"
 
-    # D1: "Alice" + "Google" from the spaCy stub.
+    # D1: "Alice" + "Google" from the graph-engine stub.
     doc_d1 = tmp_path / "t4_doc_d1.txt"
     doc_d1.write_text(
         "Alice works at Google Corp. Alice is a senior engineer.\n" * 10,
@@ -316,7 +316,7 @@ def test_e2d_t4_communities_invalidated_then_rebuilt_after_gc(
     )
     doc1_id = hashlib.sha256(str(doc_d1.resolve()).encode()).hexdigest()
 
-    # D2: "Bob" only — the spaCy stub returns Bob when text contains "Bob".
+    # D2: "Bob" only — the graph-engine stub returns Bob when text contains "Bob".
     doc_d2 = tmp_path / "t4_doc_d2.txt"
     doc_d2.write_text(
         "Bob is a junior developer. Bob joined last month.\n" * 10,
@@ -383,11 +383,11 @@ def test_e2d_t4_communities_invalidated_then_rebuilt_after_gc(
             )
             assert any(n == "Alice" for n in node_names_after_ingest), (
                 f"Expected 'Alice' in graph nodes after ingest; found: {node_names_after_ingest}. "
-                "spaCy stub may not have run — check graph_enabled and stub installation."
+                "the graph-engine stub may not have run — check graph_enabled and stub installation."
             )
             assert any(n == "Bob" for n in node_names_after_ingest), (
                 f"Expected 'Bob' in graph nodes after ingest; found: {node_names_after_ingest}. "
-                "spaCy stub did not extract 'Bob' from D2 text."
+                "the graph-engine stub did not extract 'Bob' from D2 text."
             )
 
             # -----------------------------------------------------------------------

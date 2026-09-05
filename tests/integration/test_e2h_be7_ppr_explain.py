@@ -22,6 +22,7 @@ from tests.integration.conftest import (
     ingest_file_via_path,
     make_real_app,
 )
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("ppr_explain")]
 
@@ -47,28 +48,6 @@ def _node(name: str, col: str, entity_type: EntityType = EntityType.concept) -> 
 
 def _mention(node: GraphNode, chunk_id: str) -> GraphMention:
     return GraphMention(entity_id=node.id, chunk_id=chunk_id, doc_id="doc1")
-
-
-def _install_kubernetes_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to tag 'kubernetes' when present in text.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_content_aware
-
-    install_graph_engine_stub_content_aware(monkeypatch, entity_map=[("kubernetes", "system")])
-
-
-def _install_no_entity_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return no entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 async def _seed_graph(
@@ -99,7 +78,7 @@ def test_explainEndpoint_pprMode_returnsGraphModeApplied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """POST /explain with graph_mode='ppr' returns graph_mode_applied='ppr' and ppr_entities_matched >= 0."""
-    _install_no_entity_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("kubernetes is a container orchestration system for deploying workloads.")
@@ -127,7 +106,7 @@ def test_explainEndpoint_pprMode_withSeededGraph_entitiesMatchedAndProvenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """PPR explain with seeded graph: ppr_entities_matched > 0, results have graph_provenance."""
-    _install_kubernetes_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, entities=[("kubernetes", "system")], content_aware=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc = tmp_path / "k8s.txt"
         doc.write_text("kubernetes is a container orchestration system for deploying workloads.")
@@ -179,7 +158,7 @@ def test_explainEndpoint_pprMode_emptyGraph_fallsBackToHybrid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """PPR explain with empty graph: falls back to hybrid, ppr_entities_matched=0, results non-empty."""
-    _install_no_entity_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("kubernetes is a container orchestration system.")

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests._graph_engine_stub import install_graph_engine_stub
+
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
@@ -19,18 +21,6 @@ _NEIGHBOUR_COUNT = 10  # exceeds the custom cap to prove the cap is enforced
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch, seed_entity: str) -> None:
-    """Stub the gliner-backed extraction engine to tag seed_entity where it
-    literally occurs in a chunk's text.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_content_aware
-
-    install_graph_engine_stub_content_aware(monkeypatch, entity_map=[(seed_entity, "concept")])
 
 
 def test_naiveCap_endToEnd_expandedQueryBounded(
@@ -53,7 +43,7 @@ def test_naiveCap_endToEnd_expandedQueryBounded(
     """
     _SEED_ENTITY = "HubEntity"
 
-    _install_spacy_stub(monkeypatch, _SEED_ENTITY)
+    install_graph_engine_stub(monkeypatch, entities=[(_SEED_ENTITY, "concept")], content_aware=True)
 
     col = "e2h-be8-cap-e2e"
 

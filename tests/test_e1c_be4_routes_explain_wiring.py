@@ -20,22 +20,12 @@ import pytest
 
 from archon_search.pipeline import ExplainPipelineResult
 from archon_search.server.routes_explain import ExplainNearMiss
+from tests._graph_engine_stub import install_graph_engine_stub
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return two fixed entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub
-
-    install_graph_engine_stub(monkeypatch)
 
 
 def _minimal_pipeline_result(**kwargs) -> ExplainPipelineResult:
@@ -118,13 +108,13 @@ def test_explain_endpoint_graph_mode_forwarded(tmp_path, monkeypatch, graph_mode
     graph_mode_applied from the returned ExplainPipelineResult.
 
     graph_enabled=True is required so the BE-5 guard (graph_not_enabled) does not
-    fire before the mocked pipeline.explain is reached. The spaCy stub must be
+    fire before the mocked pipeline.explain is reached. The graph-engine stub must be
     installed before make_real_app because create_app calls _check_graph_deps
     synchronously.
     """
     from tests.integration.conftest import make_real_app
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         pipeline = client.app.state.pipeline
         client.app.state.embedder_cache = None
@@ -212,7 +202,7 @@ def test_explain_route_graph_mode_and_hyde_true_returns_hyde_applied_false(
     """
     from tests.integration.conftest import make_real_app
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         pipeline = client.app.state.pipeline
         client.app.state.embedder_cache = None

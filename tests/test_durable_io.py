@@ -245,10 +245,10 @@ class TestFsyncTree:
         """C2-I-4: fsyncing a file makes its *data* durable; its *directory
         entry* only becomes durable when the containing directory is fsynced.
 
-        A spaCy model tree nests its weights under `ner/`, `tok2vec/` and
-        friends, so syncing only `root` can survive a crash as a valid-looking
-        `config.cfg` beside empty subdirectories — which the resolver accepts
-        and `spacy.load()` then fails on, latching permanent degradation.
+        A multi-directory model tree nests its weights under nested subdirectories
+        beside a top-level config file, so syncing only `root` can survive a crash
+        as a valid-looking config beside empty subdirectories — which the resolver
+        accepts and `model load` then fails on, latching permanent degradation.
         """
         from archon_search._durable_io import fsync_tree
 

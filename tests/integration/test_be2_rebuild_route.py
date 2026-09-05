@@ -34,6 +34,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tests.integration.conftest import make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
@@ -42,17 +43,6 @@ _STUB_EMBEDDING_DIM = 384
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine so graph-enabled apps can be created.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 async def _seed_collection(db_path: str, collection: str, ns: str = "default") -> None:
@@ -138,7 +128,7 @@ def test_rebuild_route_returns_202_running_job(tmp_path: Path, monkeypatch: pyte
     RUNNING, DONE, and FAILED are all valid post-transition states; only
     QUEUED/PENDING would indicate the transition didn't persist.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))
 
@@ -165,7 +155,7 @@ def test_rebuild_route_returns_202_running_job(tmp_path: Path, monkeypatch: pyte
 
 def test_rebuild_route_404_unknown_collection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Unknown collection -> 404, error echoed."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         resp = client.post("/graph/no-such-collection/rebuild-communities", headers=_auth(api_key))
 
@@ -211,7 +201,7 @@ def test_rebuild_route_422_when_graph_store_none(tmp_path: Path, monkeypatch: py
     which raises AttributeError outside the task's caught exception tuple,
     silently wedging the job at RUNNING forever after already returning 202.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))
 
@@ -234,7 +224,7 @@ def test_rebuild_route_422_when_graph_store_none(tmp_path: Path, monkeypatch: py
 
 def test_rebuild_route_401_missing_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing or invalid Bearer token -> 401 (middleware, no route-level auth)."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))
 
@@ -315,7 +305,7 @@ def test_rebuild_targets_token_namespace_tables(tmp_path: Path, monkeypatch: pyt
     rebuild wrote ONLY to its own namespace's tables (C1-I-21/22/2).
     """
     pytest.importorskip("leidenalg", reason="leidenalg not installed; skipping BE-2 S11 integration test")
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     key_a = secrets.token_hex(32)
     key_b = secrets.token_hex(32)
@@ -370,7 +360,7 @@ def test_rebuild_targets_token_namespace_tables(tmp_path: Path, monkeypatch: pyt
 
 def test_second_rebuild_returns_409(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An active community_rebuild_job_id -> 409, no duplicate job created (S7)."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))
 
@@ -402,7 +392,7 @@ def test_second_rebuild_returns_409(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_stale_job_id_cleared_and_proceeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A missing/terminal referenced job -> id cleared, request proceeds to 202 (lazy clear)."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))
 
@@ -530,7 +520,7 @@ def test_crash_recovery_unwedges_via_lazy_clear(tmp_path: Path, monkeypatch: pyt
     for JobStore._load's post-restart RUNNING -> FAILED crash flip, which
     never touches CollectionMeta) -> a new request returns 202, not 409, and
     the stale id is cleared (S16)."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))
 
@@ -593,7 +583,7 @@ def test_user_request_during_gc_rebuild_returns_202_then_blocks(
     from archon_search.community_builder import _get_rebuild_lock, _rebuild_locks
     from archon_search.types import JobStatus
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))
         asyncio.run(_seed_graph_node(cfg.db_path, "testcol", "default", "concept:alpha"))
@@ -679,7 +669,7 @@ def test_rebuild_namespace_query_param_matching_token_proceeds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """?namespace= matching the token namespace is accepted; proceeds to 202 (Guard 0 pass)."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))
 
@@ -701,7 +691,7 @@ def test_rebuild_namespace_query_param_mismatch_returns_422(
     target the wrong namespace; Guard 0 rejects it so the caller knows to use
     the correct API key.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))
 

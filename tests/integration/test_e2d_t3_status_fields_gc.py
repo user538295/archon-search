@@ -27,7 +27,7 @@ import pytest
 
 from tests.integration.conftest import (
     ingest_file_via_path,
-    install_spacy_stub,
+    install_graph_stub,
     make_real_app,
 )
 from tests.integration.test_e2d_t2_graph_gc_e2e import (
@@ -63,7 +63,7 @@ def test_e2d_t3_status_stale_mention_count_zero_after_clean_gc(
        - maintenance.last_graph_gc_at is a non-null ISO-8601 timestamp
     5. GET /status again and verify the value is cached (same value returned).
     """
-    install_spacy_stub(monkeypatch)
+    install_graph_stub(monkeypatch)
 
     col = "clean-gc-col"
 

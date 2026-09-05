@@ -1474,7 +1474,7 @@ class TestWaitForService:
         installer = _make_installer(tmp_path)
         log_path = tmp_path / "archon-search.log"
         log_path.write_text(
-            "DEBUG caught ImportError for optional spacy, continuing without graph\n"
+            "DEBUG caught ImportError for optional gliner, continuing without graph\n"
             "INFO archon_search.server.app started\n"
         )
         installer.cfg.log_file = str(log_path)

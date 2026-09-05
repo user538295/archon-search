@@ -112,8 +112,8 @@ def make_real_app(
     Cannot be combined with ``max_fanout`` / ``top_k_max`` kwargs; pass those values via
     the TOML string instead.
     Pass ``graph_enabled=True`` to enable the graph feature (``config.graph.enabled=True``).
-    Callers must patch spaCy in sys.modules BEFORE entering the context manager (create_app
-    calls _check_graph_deps which imports spacy synchronously).
+    Callers must patch gliner in sys.modules BEFORE entering the context manager (create_app
+    calls _check_graph_deps which imports gliner synchronously).
     The TestClient lifespan (startup + shutdown) is managed by the context block.
     """
     import secrets
@@ -357,31 +357,31 @@ async def make_real_pipeline(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# spaCy stub helpers — used by graph-related e2e tests (T-1, T-2, T-3, T-4).
+# Graph-engine stub helpers — used by graph-related e2e tests (T-1..T-4).
 # ---------------------------------------------------------------------------
 
 
-def install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+def install_graph_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the gliner-backed extraction engine to recognize entity names.
 
     Recognises: "Alice" → person, "Bob" → person, "Google" → concept — only
     where the name literally occurs in a chunk's text (content-aware).
 
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner. Must still be
-    called BEFORE make_real_app(graph_enabled=True): it patches the class
-    GraphExtractor.__init__ constructs, so it must run before that construction.
+    Must be called BEFORE make_real_app(graph_enabled=True): it patches the
+    class GraphExtractor.__init__ constructs, so it must run before that
+    construction.
 
     Usage::
-        install_spacy_stub(monkeypatch)
+        install_graph_stub(monkeypatch)
         with make_real_app(..., graph_enabled=True) as (client, cfg, api_key):
             ...
     """
-    from tests._graph_engine_stub import install_graph_engine_stub_content_aware
+    from tests._graph_engine_stub import install_graph_engine_stub
 
-    install_graph_engine_stub_content_aware(
+    install_graph_engine_stub(
         monkeypatch,
-        entity_map=[("Alice", "person"), ("Bob", "person"), ("Google", "concept")],
+        entities=[("Alice", "person"), ("Bob", "person"), ("Google", "concept")],
+        content_aware=True,
     )
 
 
@@ -463,32 +463,29 @@ def mcp_tool_call(
     return json.loads(text)
 
 
-def install_k8s_synonym_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+def install_k8s_synonym_graph_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the gliner-backed extraction engine for K8s/Kubernetes synonym e2e tests.
 
     Returns "K8s" (label "system") only when "K8s" appears in text.
     Returns "Kubernetes" (label "system") only when "Kubernetes" appears.
     Both entities get the same entity_type so SynonymDetector groups them together.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner, which uses the
-    engine's own label verbatim (no _LABEL_TO_ENTITY_TYPE mapping table), so
-    "system" is used directly rather than the old "ORG" spaCy category. Must
-    still be called BEFORE make_real_app(graph_enabled=True): it patches the
-    class GraphExtractor.__init__ constructs, so it must run before that
+    The engine's own label ("system") is set directly — there is no mapping
+    table. Must be called BEFORE make_real_app(graph_enabled=True): it patches
+    the class GraphExtractor.__init__ constructs, so it must run before that
     construction.
 
     Used by T-1 (synonym_search_e2e), T-2 (alias_file_manual_synonym_edge), and
     T-3 (health_metrics_synonym_e2e).
 
     Usage::
-        install_k8s_synonym_spacy_stub(monkeypatch)
+        install_k8s_synonym_graph_stub(monkeypatch)
         with make_real_app(..., graph_enabled=True) as (client, cfg, api_key):
             ...
     """
-    from tests._graph_engine_stub import install_graph_engine_stub_content_aware
+    from tests._graph_engine_stub import install_graph_engine_stub
 
-    install_graph_engine_stub_content_aware(
+    install_graph_engine_stub(
         monkeypatch,
-        entity_map=[("K8s", "system"), ("Kubernetes", "system")],
+        entities=[("K8s", "system"), ("Kubernetes", "system")],
+        content_aware=True,
     )

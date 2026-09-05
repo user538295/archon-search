@@ -34,11 +34,8 @@ def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
 
-def _install_content_aware_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+def _install_code_graph_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the gliner-backed extraction engine to simulate code-graph entity extraction.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
 
     Routing logic (order matters — AuthService check comes first):
     - "AuthService" in text AND "UserStore" NOT in text:
@@ -57,7 +54,7 @@ def _install_content_aware_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     NLP co-occurrence. The graph builder sees both entities in the same chunk → creates
     the AuthService ↔ TokenValidator edge.
     """
-    from tests._graph_engine_stub import install_graph_engine_stub_custom
+    from tests._graph_engine_stub import install_graph_engine_stub
 
     def _entities_for_text(text: str) -> list[tuple[str, str]]:
         if "AuthService" in text:
@@ -70,7 +67,7 @@ def _install_content_aware_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
             return [("UserStore", "system")]
         return []
 
-    install_graph_engine_stub_custom(monkeypatch, _entities_for_text)
+    install_graph_engine_stub(monkeypatch, entities=_entities_for_text)
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +110,7 @@ def test_e2e_graph_naive_single_collection_recall(
 
     Covers S4: naive expansion improves recall on relationship-dense corpora.
     """
-    _install_content_aware_spacy_stub(monkeypatch)
+    _install_code_graph_stub(monkeypatch)
 
     col = "e1a-t2-single-recall"
 
@@ -257,7 +254,7 @@ def test_e2e_graph_naive_fanout_per_collection(
 
     Covers S7: multi-collection fanout applies expansion per-collection independently.
     """
-    _install_content_aware_spacy_stub(monkeypatch)
+    _install_code_graph_stub(monkeypatch)
 
     col1 = "e1a-t2-fanout-col1"
     col2 = "e1a-t2-fanout-col2"

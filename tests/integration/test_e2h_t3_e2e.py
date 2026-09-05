@@ -24,9 +24,10 @@ from archon_search.graph_types import (
     make_stable_edge_id,
     make_stable_entity_id,
 )
+from tests._graph_engine_stub import install_graph_engine_stub
 from tests.integration.conftest import (
     ingest_file_via_path,
-    install_spacy_stub,
+    install_graph_stub,
     make_real_app,
     mcp_initialize,
     mcp_tool_call,
@@ -68,28 +69,6 @@ def _edge(source: GraphNode, target: GraphNode) -> GraphEdge:
     )
 
 
-def _install_no_entity_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return no entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
-
-
-def _install_kubernetes_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to tag 'kubernetes' when it appears in text.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_content_aware
-
-    install_graph_engine_stub_content_aware(monkeypatch, entity_map=[("kubernetes", "system")])
-
-
 async def _seed_graph(
     db_path: str,
     collection: str,
@@ -121,7 +100,7 @@ def test_e2h_t3_explainPprMode_provenanceAndCount(
     """POST /explain with graph_mode='ppr' and seeded graph returns graph_mode_applied='ppr',
     ppr_entities_matched > 0, and graph_provenance with PPR steps on at least one result.
     """
-    _install_kubernetes_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, entities=[("kubernetes", "system")], content_aware=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("kubernetes is a container orchestration system for deploying workloads.")
@@ -182,7 +161,7 @@ def test_e2h_t3_mcpSearchWithContext_rejectsPprMode(
     """MCP search_with_context with graph_mode='ppr' returns error code='graph_mode_not_supported'
     with message containing 'ppr'.
     """
-    _install_no_entity_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True) as (
         client,
         cfg,
@@ -220,7 +199,7 @@ def test_e2h_t3_naiveCap_highDegreeEntity_expansionBounded(
     POST /search with graph_mode='naive' must return expansion_used=True and complete
     without timing out — verifying the cap prevents unbounded expansion.
     """
-    install_spacy_stub(monkeypatch)
+    install_graph_stub(monkeypatch)
     # Use a custom cap of 5 so 10 seeded neighbours clearly exceed it
     toml = "[graph]\nenabled = true\nnaive_max_expansion_terms = 5\n"
     with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
@@ -293,7 +272,7 @@ def test_e2h_t3_explainMultiCollection_graphMode_returns422(
 
     The guard fires before any pipeline access, so no prior ingest is needed.
     """
-    _install_no_entity_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         resp = client.post(
             "/explain",

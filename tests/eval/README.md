@@ -447,7 +447,7 @@ Deterministic Leiden seed (`42`) ensures byte-identical representative chunk lis
 
 ### Graph extras requirement
 
-All graph eval tests require `archon-search[graph]` extras (`leidenalg`, `igraph`, `spacy`). Tests in `test_e2e_graph_eval_gate_v2.py` use `pytest.importorskip("leidenalg")` at module level; they skip gracefully when the extras are absent. The eval suite remains functional with or without the extras — graph metrics report as `None` when leidenalg is missing, no gate failure.
+All graph eval tests require `archon-search[graph]` extras (`leidenalg`, `igraph`, `gliner`). Tests in `test_e2e_graph_eval_gate_v2.py` use `pytest.importorskip("leidenalg")` at module level; they skip gracefully when the extras are absent. The eval suite remains functional with or without the extras — graph metrics report as `None` when leidenalg is missing, no gate failure.
 
 ## Code-lane eval gate (BE-10)
 

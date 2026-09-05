@@ -42,7 +42,7 @@ def _register_collection(client, col_path: str, api_key: str) -> None:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _inject_spacy_stub(spacy_stub):
+def _inject_graph_stub(graph_engine_stub):
     """Module-scoped alias for the shared fixture in ``conftest.py``."""
     yield
 

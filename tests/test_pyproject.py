@@ -145,11 +145,13 @@ def test_lock_matches_the_chosen_transformers_strategy():
     )
 
 
-def test_gliner_present_and_spacy_absent():
+def test_gliner_present():
+    # The removed engine's absence from pyproject.toml and uv.lock is asserted by
+    # test_removed_engine_absent_from_dependency_manifests (tests/test_graph_engine_stub.py),
+    # not restated here — a test file may not name the removed engine (BE-16's
+    # meta-guard). BE-21 later folds this into the repo-wide structural scan (S42).
     data = _load_pyproject()
     optional = data["project"].get("optional-dependencies", {})
-    core_deps = data["project"].get("dependencies", [])
-    dev_deps = data.get("dependency-groups", {}).get("dev", [])
 
     graph_deps = optional.get("graph", [])
     gliner_specs = [d for d in graph_deps if d.lower().startswith("gliner")]
@@ -158,27 +160,9 @@ def test_gliner_present_and_spacy_absent():
         f"gliner must have a version lower bound of >=0.2.26, got: {gliner_specs}"
     )
 
-    def _no_spacy(deps: list[str], where: str) -> None:
-        assert not any(d.lower().startswith("spacy") for d in deps), f"spacy must not appear in {where}"
-
-    _no_spacy(core_deps, "[project.dependencies]")
-    _no_spacy(dev_deps, "dependency-groups.dev")
-    for extra_name, extra_deps in optional.items():
-        _no_spacy(extra_deps, f"optional-dependencies[{extra_name!r}]")
-
-    assert not any("en-core-web-sm" in d for d in dev_deps), (
-        "en-core-web-sm must not appear in dependency-groups.dev"
-    )
-    uv_sources = data.get("tool", {}).get("uv", {}).get("sources", {})
-    assert "en-core-web-sm" not in uv_sources, "en-core-web-sm must not appear in [tool.uv.sources]"
-
     with open(UV_LOCK_PATH, "rb") as f:
         lock = tomllib.load(f)
     lock_packages = lock.get("package", [])
-    lock_names = {p.get("name") for p in lock_packages}
-    assert "spacy" not in lock_names, "spacy must not appear in uv.lock"
-    assert "en-core-web-sm" not in lock_names, "en-core-web-sm must not appear in uv.lock"
-
     gliner_lock_pkgs = [p for p in lock_packages if p.get("name") == "gliner"]
     assert gliner_lock_pkgs, "gliner must be present in uv.lock"
     for pkg in gliner_lock_pkgs:

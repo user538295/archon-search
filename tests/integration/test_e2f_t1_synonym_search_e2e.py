@@ -2,11 +2,11 @@
 search for one entity name returns content from the other's document.
 
 Strategy:
-- Install a content-dependent spaCy stub: returns "K8s" (ORG label → system type) only
-  when "K8s" appears in text; returns "Kubernetes" (ORG label → system type) only when
+- Install a content-dependent graph-engine stub: returns "K8s" (label "system") only
+  when "K8s" appears in text; returns "Kubernetes" (label "system") only when
   "Kubernetes" appears in text — so K8s-doc and Kubernetes-doc get different graph nodes.
-  Note: graph_extractor.py _LABEL_TO_ENTITY_TYPE maps "ORG" → EntityType.system; "CONCEPT"
-  is not in that map and would be silently discarded.
+  Note: the engine's own EntityType label ("system") is set directly — there is no
+  mapping table; a label that is not a valid EntityType is silently discarded.
 - Start app via make_real_app(graph_enabled=True).
 - Ingest K8s-doc (text mentions "K8s" only) → K8s system node written.
 - Ingest Kubernetes-doc (text mentions "Kubernetes" only) → Kubernetes system node.
@@ -150,7 +150,7 @@ def test_e2e_search_traverses_synonym_edges(tmp_path: Path, monkeypatch) -> None
     """Ingest K8s-doc and Kubernetes-doc; enrich synonyms; search K8s → returns Kubernetes content.
 
     Steps:
-    1. Install content-dependent spaCy stub.
+    1. Install content-dependent graph-engine stub.
     2. Start app with graph_enabled=True.
     3. Ingest K8s-doc (contains "K8s" but not "Kubernetes").
     4. Ingest Kubernetes-doc (contains "Kubernetes" but not "K8s").
@@ -160,10 +160,10 @@ def test_e2e_search_traverses_synonym_edges(tmp_path: Path, monkeypatch) -> None
     8. POST /search with graph_mode="naive" and query "K8s".
     9. Assert search results contain text from the Kubernetes document.
     """
-    from tests.integration.conftest import ingest_file_via_path, install_k8s_synonym_spacy_stub, make_real_app
+    from tests.integration.conftest import ingest_file_via_path, install_k8s_synonym_graph_stub, make_real_app
 
-    # Step 1: install content-dependent spaCy stub BEFORE make_real_app
-    install_k8s_synonym_spacy_stub(monkeypatch)
+    # Step 1: install content-dependent graph-engine stub BEFORE make_real_app
+    install_k8s_synonym_graph_stub(monkeypatch)
 
     col = "synonymdocs"
     ns = "default"

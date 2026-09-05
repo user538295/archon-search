@@ -15,7 +15,7 @@ from archon_search.collection_meta import CollectionMeta
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 
-# Stub spaCy to allow graph-enabled app creation
+# Stub the extraction engine to allow graph-enabled app creation
 
 
 def _auth(api_key: str) -> dict[str, str]:
@@ -24,7 +24,7 @@ def _auth(api_key: str) -> dict[str, str]:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _inject_spacy_stub(spacy_stub):
+def _inject_graph_stub(graph_engine_stub):
     """Module-scoped alias for the shared fixture in ``conftest.py``."""
     yield
 
@@ -73,7 +73,7 @@ class TestGetGraphJson:
     def test_get_graph_json_returns_200_with_data(self, tmp_path: Path, monkeypatch) -> None:
         """GET /graph/{collection} returns 200 JSON response after setup."""
         # Note: This test verifies response structure, not graph population
-        # (full end-to-end graph extraction requires spaCy integration, tested separately)
+        # (full end-to-end graph extraction requires the extraction engine, tested separately)
         toml_content = f'[collections]\ncollections = ["{tmp_path}"]\n'
         with make_real_app(tmp_path, monkeypatch, graph_enabled=True, toml_content=toml_content) as (client, cfg, api_key):
             # Query the graph endpoint — collection exists but is empty

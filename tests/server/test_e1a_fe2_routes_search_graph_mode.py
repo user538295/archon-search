@@ -41,16 +41,16 @@ def _make_app(tmp_path: Path, *, graph_enabled: bool = False) -> tuple:
     config.graph = GraphConfig(enabled=graph_enabled)
     job_store = JobStore(path=tmp_path / "jobs.json")
 
-    # When graph is enabled but spaCy is not installed, create_app raises ConfigError.
-    # Stub spacy in sys.modules so the startup check passes. The previous
-    # hand-rolled save/restore had a dead branch (`spacy_stub_injected` is only
-    # True when `original_spacy is None`, so the `is not None` restore could
-    # never run) and conflated "absent" with "bound to None"
-    # (2026-08-19-030 C2-T-13).
+    # When graph is enabled but the extraction engine is not installed,
+    # create_app raises ConfigError. Stub gliner in sys.modules so the startup
+    # check passes. The previous hand-rolled save/restore had a dead branch
+    # (`stub_injected` is only True when `original is None`, so the
+    # `is not None` restore could never run) and conflated "absent" with
+    # "bound to None" (2026-08-19-030 C2-T-13).
     with ExitStack() as stack:
-        if graph_enabled and "spacy" not in sys.modules:
+        if graph_enabled and "gliner" not in sys.modules:
             stack.enter_context(
-                patch.dict(sys.modules, {"spacy": types.ModuleType("spacy")})
+                patch.dict(sys.modules, {"gliner": types.ModuleType("gliner")})
             )
         with patch("archon_search.chunker.DocumentChunker.__init__", return_value=None):
             app = create_app(config, job_store)

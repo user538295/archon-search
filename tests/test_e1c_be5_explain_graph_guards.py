@@ -21,24 +21,14 @@ from unittest.mock import AsyncMock
 import pytest
 
 from tests.integration.conftest import make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# spaCy stub helpers (required for graph_enabled=True)
+# the graph-engine stub helpers (required for graph_enabled=True)
 # ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return zero entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def _auth(api_key: str) -> dict[str, str]:
@@ -58,7 +48,7 @@ def test_explain_route_graph_not_enabled_returns_422(
     The route must return a plain string detail (no 'code' field) matching the
     /search pattern exactly: "graph_mode requires [graph] enabled=true in server config".
 
-    graph.enabled=False is the default; no spaCy stub needed.
+    graph.enabled=False is the default; no graph-engine stub needed.
     (S5)
     """
     with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
@@ -135,7 +125,7 @@ def test_explain_route_communities_not_built_returns_422(
     """
     from archon_search.pipeline import GraphCommunitiesNotBuiltError
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         pipeline = client.app.state.pipeline
@@ -181,7 +171,7 @@ def test_explain_route_communities_not_built_global_returns_422(
     """
     from archon_search.pipeline import GraphCommunitiesNotBuiltError
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         pipeline = client.app.state.pipeline
@@ -278,7 +268,7 @@ def test_explain_route_graph_mode_with_collections_rejected_422(
     graph_enabled=True is required so the graph_not_enabled guard does not fire before
     the S14 guard. The S14 guard must fire and return the specific S14 error message.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         assert cfg.graph.enabled, "graph must be enabled so S14 guard fires, not graph_not_enabled"

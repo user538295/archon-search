@@ -123,7 +123,7 @@ def test_smoke_server_graph_enabled_has_graph_data(smoke_server_graph_enabled) -
     (``CommunityBuilder.build`` raising on an empty/single-node graph) instead
     of S3's happy path.
 
-    The graph extras are guarded (``importorskip("spacy")``) inside the
+    The graph extras are guarded (``importorskip("gliner")``) inside the
     ``smoke_server_graph_enabled`` fixture itself — before the server is
     spawned — so on a machine without them the fixture (and hence this test)
     skips cleanly rather than erroring at setup. No further guard is needed

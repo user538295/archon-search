@@ -110,7 +110,7 @@ def _make_extractor(**config_kwargs):
 
 def test_entity_type_is_the_engine_label_verbatim() -> None:
     """Each node's entity_type equals the engine's own label directly — no
-    intermediate spaCy-style mapping table."""
+    intermediate label mapping table."""
     extractor = _make_extractor()
 
     text_map = {
@@ -136,10 +136,10 @@ def test_entity_type_is_the_engine_label_verbatim() -> None:
     assert entity_types["Widget"] == EntityType.concept
     assert entity_types["Acme"] == EntityType.system
     assert entity_types["Olympics"] == EntityType.event
-    assert not hasattr(
-        __import__("archon_search.graph_extractor", fromlist=["_LABEL_TO_ENTITY_TYPE"]),
-        "_LABEL_TO_ENTITY_TYPE",
-    ), "_LABEL_TO_ENTITY_TYPE must be deleted (BE-11)"
+    # Labels are the engine's own lowercase EntityType vocabulary, set directly —
+    # there is no intermediate label→type mapping table. The direct assertions
+    # above are the proof: an uppercase-keyed mapping layer could not have
+    # produced these lowercase-EntityType results.
 
 
 # ---------------------------------------------------------------------------

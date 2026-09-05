@@ -13,7 +13,7 @@ not just entity extraction at ingest time.
 This is a TestClient-based e2e test exercising the full application stack:
 - graph enabled in config
 - real LanceDB store + GraphStore
-- stubbed spaCy returning a named entity for any text (prose graphing)
+- the stubbed graph engine returning a named entity for any text (prose graphing)
 - tree-sitter's Python grammar simulated absent (code graphing degrades softly)
 - ingest of both a code file and a prose file
 - GET /status reflects the degraded `code_parsers` field
@@ -26,23 +26,13 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return one fixed entity.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub
-
-    install_graph_engine_stub(monkeypatch, entity_map=[("Alice", "person")])
 
 
 def test_serverStarts_whenCodeParsersMissing_graphEnabled(
@@ -63,7 +53,7 @@ def test_serverStarts_whenCodeParsersMissing_graphEnabled(
     # stub pattern — see test_grammar_warning_logged_once in test_code_enricher.py).
     monkeypatch.setitem(sys.modules, "tree_sitter_python", None)
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, entities=[("Alice", "person")])
 
     col = "be11-code-parsers-missing"
     code_doc = tmp_path / "sample.py"
@@ -88,7 +78,7 @@ def test_serverStarts_whenCodeParsersMissing_graphEnabled(
         ingest_file_via_path(client, col, str(code_doc), api_key=api_key)
 
         # Ingest a plain prose file — proves prose graphing still works via the
-        # spaCy stub, independent of the code-parser degradation.
+        # graph-engine stub, independent of the code-parser degradation.
         ingest_file_via_path(client, col, str(prose_doc), api_key=api_key)
 
         resp = client.get("/status", headers=_auth(api_key))
@@ -107,7 +97,7 @@ def test_serverStarts_whenCodeParsersMissing_graphEnabled(
         assert code_parsers["message"], "message should name the fix when degraded"
 
         # Prose graphing still works: the ingested collection has a graph entry
-        # with node_count > 0 from the spaCy-stub-extracted entity.
+        # with node_count > 0 from graph-engine-stub-extracted entity.
         assert "graph" in data
         graph = data["graph"]
         assert graph is not None
@@ -117,25 +107,9 @@ def test_serverStarts_whenCodeParsersMissing_graphEnabled(
             f"got: {graph['collections']}"
         )
         assert col_entries[0]["node_count"] > 0, (
-            "Expected node_count > 0 from prose graphing (spaCy stub entity), "
+            "Expected node_count > 0 from prose graphing (the graph-engine stub entity), "
             f"got: {col_entries[0]['node_count']}"
         )
-
-
-def _install_spacy_stub_multi_entity(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to recognize "Alice"/"Google"
-    only where they literally appear in the chunk (content-dependent).
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner. Two
-    co-occurring entities are required so `graph_extractor.py`'s
-    `itertools.combinations` pairwise-edge builder actually produces an edge —
-    without an edge, `GraphExpander.expand`'s neighbour lookup is always empty
-    and `graph_mode="naive"` degrades to an unverifiable no-op.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_content_aware
-
-    install_graph_engine_stub_content_aware(monkeypatch)
 
 
 def test_e2e_gracefulDegradation_missingCodeParsers(
@@ -161,11 +135,10 @@ def test_e2e_gracefulDegradation_missingCodeParsers(
     # Simulate tree-sitter's Python grammar package being absent.
     monkeypatch.setitem(sys.modules, "tree_sitter_python", None)
 
-    # Two co-occurring entities (Alice, Google) are required so the graph gets
-    # a real edge — a single-entity stub (as the sibling test uses) can never
-    # produce a co-occurrence edge, making graph_mode="naive" an unverifiable
-    # no-op. See _install_spacy_stub_multi_entity's docstring.
-    _install_spacy_stub_multi_entity(monkeypatch)
+    # Two co-occurring entities (the default Alice + Google payload) are required
+    # so the graph gets a real edge — a single-entity stub can never produce a
+    # co-occurrence edge, making graph_mode="naive" an unverifiable no-op.
+    install_graph_engine_stub(monkeypatch, content_aware=True)
 
     col = "e2g-t1-graceful-degradation"
     code_doc = tmp_path / "sample.py"
@@ -206,7 +179,7 @@ def test_e2e_gracefulDegradation_missingCodeParsers(
             f"got: {graph_before['collections']}"
         )
         assert col_entries[0]["node_count"] > 0, (
-            "Expected node_count > 0 from prose graphing (spaCy stub entities), "
+            "Expected node_count > 0 from prose graphing (the graph-engine stub entities), "
             f"got: {col_entries[0]['node_count']}"
         )
 
@@ -323,7 +296,7 @@ def test_codeParsersStatus_healthyPath_notDegraded(
 
     assert ce.has_missing_code_parsers() is False
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, entities=[("Alice", "person")])
 
     col = "be11-healthy"
     prose_doc = tmp_path / "prose.txt"
@@ -378,7 +351,7 @@ def test_codeParsersStatus_wizardSuccessCase_notDegraded_withRealCodeParser(
     monkeypatch.setattr(ce, "_GRAMMAR_CACHE", {})
     monkeypatch.setattr(ce, "_GRAMMAR_LOGGED", set())
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, entities=[("Alice", "person")])
 
     col = "be11-wizard-success"
     code_doc = tmp_path / "sample.py"

@@ -2,7 +2,7 @@
 
 Covers:
 - POST /search graph_mode="ppr" with graph-enabled app → 200, ppr_entities_matched=0.
-  The spaCy stub satisfies the app-creation graph-deps import (_check_graph_deps); the
+  The graph-engine stub satisfies the app-creation graph-deps import (_check_graph_deps); the
   ppr_entities_matched=0 value is the BE-3 hardcoded fallback in _search_ppr_mode
   (pipeline.py), not a consequence of empty entity extraction.
 - POST /search graph_mode="ppr" when graph disabled → 422 with exact error message.
@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
@@ -25,17 +26,6 @@ pytestmark = pytest.mark.integration
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub_no_entities(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return zero entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def _auth(api_key: str) -> dict[str, str]:
@@ -51,7 +41,7 @@ def test_e2h_t1_pprMode_returns200_pprEntitiesMatchedPresent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """PPR mode with graph enabled and no entity matches → 200, ppr_entities_matched=0."""
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("Hello world, this is a test document.")
@@ -74,7 +64,7 @@ def test_e2h_t1_pprMode_graphDisabled_returns422(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """PPR mode with graph disabled → 422, detail mentions 'graph'."""
-    # No spaCy stub needed — graph_enabled=False so _check_graph_deps is not called
+    # No graph-engine stub needed — graph_enabled=False so _check_graph_deps is not called
     with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("Hello world.")
@@ -97,7 +87,7 @@ def test_e2h_t1_pprMode_scopeFilter_returns422(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """scope_filter + graph_mode=ppr → 422 (REST surface guard)."""
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("Hello world.")

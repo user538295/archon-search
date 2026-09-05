@@ -1,6 +1,6 @@
 """Integration test for BE-7: pipeline.search with graph_mode=naive uses expanded text.
 
-Uses a stub GraphExpander backed by a stub GraphStore — no real spaCy or LanceDB
+Uses a stub GraphExpander backed by a stub GraphStore — no real extraction engine or LanceDB
 graph tables needed.  The real SearchPipeline, real SearchStore, real LanceDB, and
 real embedder stubs are used so the full hybrid-search path is exercised.
 """

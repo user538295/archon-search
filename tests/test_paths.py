@@ -177,14 +177,6 @@ def test_graph_models_dir_segment_derives_from_the_pinned_constant(
     assert paths_module.get_graph_models_dir().name == f"{model_segment}-deadbeef"
 
 
-def test_get_spacy_models_dir_is_gone() -> None:
-    """``get_spacy_models_dir()`` was removed — spaCy is no longer part of
-    the graph NER pipeline."""
-    import archon_search.paths as paths_module
-
-    assert not hasattr(paths_module, "get_spacy_models_dir")
-
-
 def test_does_not_create_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

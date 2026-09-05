@@ -6,7 +6,7 @@ with graph enabled.
 This is a TestClient-based e2e test exercising the full application stack:
 - graph enabled in config
 - real LanceDB store + GraphStore
-- stubbed spaCy returning two entities for any text
+- the stubbed graph engine returning two entities for any text
 - ingest triggers GraphExtractor → GraphStore.write_graph
 - GET /status reflects live GraphStore node_count
 """
@@ -19,23 +19,13 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return two fixed entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub
-
-    install_graph_engine_stub(monkeypatch)
 
 
 # ---------------------------------------------------------------------------
@@ -51,9 +41,9 @@ def test_e2e_ingest_and_graph_status(
 
     Covers S3: GET /status graph collection entry has node_count > 0 after ingest.
     """
-    # Stub spaCy BEFORE create_app so _check_graph_deps import succeeds and
+    # Stub the extraction engine BEFORE create_app so _check_graph_deps import succeeds and
     # GraphExtractor.extract() uses the stub NLP during asyncio.to_thread.
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     col = "e1a-t1-graph-status"
     doc = tmp_path / "entity_doc.txt"
@@ -90,7 +80,7 @@ def test_e2e_ingest_and_graph_status(
         )
         col_stats = col_entries[0]
         assert col_stats["node_count"] > 0, (
-            f"Expected node_count > 0 after ingest (spaCy stub returns 2 entities "
+            f"Expected node_count > 0 after ingest (the graph-engine stub returns 2 entities "
             f"per chunk), got: {col_stats['node_count']}"
         )
         # The stub returns Alice (PERSON) and Google (ORG) in the same chunk;

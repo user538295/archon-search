@@ -16,24 +16,14 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
 
 
 # ---------------------------------------------------------------------------
-# Helpers: spaCy stub (needed for graph_enabled=True)
+# Helpers: the graph-engine stub (needed for graph_enabled=True)
 # ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub_no_entities(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return NO named entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +170,7 @@ def test_mcp_search_global_mode_real(tmp_path: Path, monkeypatch: pytest.MonkeyP
     """MCP search with graph_mode=global; real app + built communities → result dict with
     results list and graph_expansion_applied=True (S5).
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "be9-mcp-global-mode"
     doc = tmp_path / "doc.txt"
@@ -231,7 +221,7 @@ def test_mcp_search_local_mode_real(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     results list. Local mode with no entity match returns graph_expansion_applied=False (S5).
     The key check is that the parameter is threaded correctly (no 422, no error).
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "be9-mcp-local-mode"
     doc = tmp_path / "doc.txt"

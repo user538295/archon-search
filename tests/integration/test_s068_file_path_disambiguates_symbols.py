@@ -24,7 +24,7 @@ import pytest
 
 from tests.integration.conftest import (
     ingest_file_via_path,
-    install_spacy_stub,
+    install_graph_stub,
     make_real_app,
 )
 
@@ -65,7 +65,7 @@ def _direct_caller_names(client, collection: str, api_key: str, file_path: str) 
 
 def _ingest_dup_corpus(tmp_path: Path, monkeypatch):
     """Yield (cm, client, api_key, collection) with the two-file dup corpus ingested."""
-    install_spacy_stub(monkeypatch)
+    install_graph_stub(monkeypatch)
     code_dir = tmp_path / "code"
     code_dir.mkdir()
     (code_dir / "helpers_a.py").write_text(_HELPERS_A, encoding="utf-8")

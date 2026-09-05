@@ -26,25 +26,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# spaCy stub (same minimal stub as T-2 — no entities extracted; needed so
-# create_app's _check_graph_deps can import spacy without the real package)
+# the graph-engine stub (same minimal stub as T-2 — no entities extracted; needed so
+# create_app's _check_graph_deps can import gliner without the real package)
 # ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return zero entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def _auth(api_key: str) -> dict[str, str]:
@@ -110,7 +100,7 @@ def test_explain_community_local_mode_provenance_http(
     - At least one result has graph_provenance with community_id set.
     - TraversalStep.relationship is None (community mode, not naive).
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "t4-local-s3"
     doc = tmp_path / "payment_service.txt"
@@ -199,7 +189,7 @@ def test_explain_community_global_mode_provenance_http(
     - At least one result has graph_provenance with community_id set.
     - TraversalStep.relationship is None (community mode, not naive).
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "t4-global-s4"
     doc = tmp_path / "order_service.txt"
@@ -278,7 +268,7 @@ def test_explain_community_local_table_not_exists_returns_422_http(
     GraphCommunitiesNotBuiltError when communities_table_exists returns False,
     and the route handler catches it and returns 422 with structured detail.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "t4-local-no-communities"
     doc = tmp_path / "payment_no_comm.txt"

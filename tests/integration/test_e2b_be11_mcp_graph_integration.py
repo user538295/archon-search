@@ -2,7 +2,7 @@
 
 Tests:
 - test_mcp_get_graph_tool_registered
-    make_real_app(graph_enabled=True, mcp_enabled=True) + spaCy stub;
+    make_real_app(graph_enabled=True, mcp_enabled=True) + the graph-engine stub;
     MCP tools/list includes get_graph and get_graph_cross_collection
 - test_mcp_get_graph_returns_summary_after_ingest
     ingest doc; MCP tools/call get_graph → 200; top_nodes non-empty;
@@ -23,25 +23,15 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
 
 
 # ---------------------------------------------------------------------------
-# spaCy stub — needed for make_real_app(graph_enabled=True)
+# the graph-engine stub — needed for make_real_app(graph_enabled=True)
 # ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub_no_entities(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return zero entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def _mcp_headers(token: str, session_id: str | None = None) -> dict:
@@ -177,7 +167,7 @@ def test_mcp_get_graph_tool_registered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """MCP tools/list includes get_graph and get_graph_cross_collection when graph enabled."""
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(
         tmp_path,
@@ -201,7 +191,7 @@ def test_mcp_get_graph_returns_summary_after_ingest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """After ingest, MCP get_graph returns summary with top_nodes (len ≤ 20)."""
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(
         tmp_path,
@@ -337,7 +327,7 @@ def test_mcp_get_graph_prefers_typed_edge_over_untyped_at_equal_weight(
     tests. No tight edge cap is exposed at the MCP layer, so this asserts ordering in
     ``top_edges`` rather than survival under a cap.
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     col = "s35-mcp-tie-break"
 
     with make_real_app(
@@ -346,7 +336,7 @@ def test_mcp_get_graph_prefers_typed_edge_over_untyped_at_equal_weight(
         graph_enabled=True,
         mcp_enabled=True,
     ) as (client, cfg, api_key):
-        # Ingest a document so the collection has meta/chunk_count (spaCy stub yields no
+        # Ingest a document so the collection has meta/chunk_count (the graph-engine stub yields no
         # entities, so this doesn't interfere with the graph data seeded directly below).
         doc_file = tmp_path / "test.txt"
         doc_file.write_text("Alice works in Seattle.", encoding="utf-8")
@@ -379,7 +369,7 @@ def test_mcp_get_graph_cross_collection_returns_merged_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """After ingest into two collections, MCP get_graph_cross_collection returns merged summary."""
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(
         tmp_path,

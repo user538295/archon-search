@@ -22,24 +22,14 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# spaCy stub — needed for make_real_app(graph_enabled=True)
+# the graph-engine stub — needed for make_real_app(graph_enabled=True)
 # ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return NO named entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def _auth(api_key: str) -> dict[str, str]:
@@ -157,7 +147,7 @@ def test_e2e_local_mode_with_entity_match(
     - Query with "authservice" — the n-gram matching should find the node, which
       belongs to the seeded community, so community chunks are returned.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "t2-local-entity-match"
     # Entity name must be a single token so the 1-gram matches exactly.
@@ -233,7 +223,7 @@ def test_e2e_local_mode_no_entities_fallback(
     The pipeline falls back to standard hybrid search and sets
     graph_expansion_applied=False.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "t2-local-no-entity"
     entity_name = "Authservice"
@@ -306,7 +296,7 @@ def test_e2e_local_mode_isolated_node_fallback(
     - graph_expansion_applied must be True (S9 spec) and status must be 200
       (not a 4xx error).
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "t2-local-isolated-node"
 
@@ -374,7 +364,7 @@ def test_e2e_local_mode_multi_collection(
     - col_b: has NO community table → falls back to standard hybrid search for that leg.
     Both legs must return results; the fanout must not raise or return 4xx.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col_a = "t2-local-fanout-col-a"
     col_b = "t2-local-fanout-col-b"

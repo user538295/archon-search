@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
@@ -41,17 +42,6 @@ _STUB_EMBEDDING_DIM = 384
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return two fixed entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub
-
-    install_graph_engine_stub(monkeypatch)
 
 
 async def _seed_collection(db_path: str, collection: str, ns: str = "default") -> None:
@@ -89,7 +79,7 @@ def test_e2j_view_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     - api_key appears (JSON-encoded) in the response body
     - id="network-container" appears in the response body (graph container placeholder)
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
     monkeypatch.setattr(
         "archon_search.server.routes_graph._load_viewer_html",
         lambda: _STUB_HTML,
@@ -117,7 +107,7 @@ def test_e2j_view_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 def test_e2j_view_graph_disabled_422(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """S7: graph.enabled=false → 422 with exact detail string."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
     monkeypatch.setattr(
         "archon_search.server.routes_graph._load_viewer_html",
         lambda: _STUB_HTML,
@@ -140,7 +130,7 @@ def test_e2j_view_graph_disabled_422(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 def test_e2j_view_no_auth_401(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """S8: No Authorization header and no ?token= → 401 + WWW-Authenticate: Bearer."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
     monkeypatch.setattr(
         "archon_search.server.routes_graph._load_viewer_html",
         lambda: _STUB_HTML,
@@ -161,7 +151,7 @@ def test_e2j_view_no_auth_401(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 def test_e2j_view_collection_not_found_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """S10: Valid auth but unknown collection → 404."""
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
     monkeypatch.setattr(
         "archon_search.server.routes_graph._load_viewer_html",
         lambda: _STUB_HTML,
@@ -189,7 +179,7 @@ def test_e2j_view_no_external_urls(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     - No fetch("https:// or fetch('https://
     - No new XMLHttpRequest
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
     # Do NOT monkeypatch _load_viewer_html — use the real file.
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))

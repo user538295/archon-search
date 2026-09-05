@@ -3,7 +3,7 @@ edge from its ``related_to`` twin over the same node pair.
 
 No browser harness exists for this viewer — per the task note, the viewer is
 asserted as text. This test combines two real HTTP calls against a real app
-(TestClient, real GraphStore, real ``graph_viewer.html`` file — only spaCy stubbed):
+(TestClient, real GraphStore, real ``graph_viewer.html`` file — only the graph-engine stubbed):
 
   1. GET /graph/{collection}      — real BE-1-ranked edges for a node pair that
      carries BOTH a typed edge (``uses``) and a ``related_to`` edge.
@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.integration.conftest import install_spacy_stub, make_real_app
+from tests.integration.conftest import install_graph_stub, make_real_app
 from tests.server.test_e2j_fe1_graph_viewer_html import (
     _extract_function_body,
     _extract_json_like_block,
@@ -113,7 +113,7 @@ def test_e2e_viewer_differentiates_typed_and_untyped_edges(
 ) -> None:
     """S34/S35: over the same node pair, the served viewer colours the typed edge
     differently from its related_to twin and arrows only the typed edge."""
-    install_spacy_stub(monkeypatch)
+    install_graph_stub(monkeypatch)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         asyncio.run(_seed_typed_and_related_to_twin(cfg.db_path, "testcol"))
 

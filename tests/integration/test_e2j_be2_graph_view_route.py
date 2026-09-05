@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
@@ -45,17 +46,6 @@ _STUB_EMBEDDING_DIM = 384
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return two fixed entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub
-
-    install_graph_engine_stub(monkeypatch)
 
 
 async def _seed_collection(db_path: str, collection: str, ns: str = "default") -> None:
@@ -94,7 +84,7 @@ class TestViewHappyPath:
 
     def test_view_returns_html_content_type(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """GET /graph/{col}/view with valid Bearer returns 200 text/html."""
-        _install_spacy_stub(monkeypatch)
+        install_graph_engine_stub(monkeypatch)
         with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
             asyncio.run(_seed_collection(cfg.db_path, "testcol"))
             resp = client.get("/graph/testcol/view", headers=_auth(api_key))
@@ -103,7 +93,7 @@ class TestViewHappyPath:
 
     def test_view_token_injected_in_response(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The Bearer token literal appears verbatim (JSON-encoded) in the response body."""
-        _install_spacy_stub(monkeypatch)
+        install_graph_engine_stub(monkeypatch)
         with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
             asyncio.run(_seed_collection(cfg.db_path, "testcol"))
             resp = client.get("/graph/testcol/view", headers=_auth(api_key))
@@ -123,7 +113,7 @@ class TestViewAuthErrors:
 
     def test_view_invalid_token_returns_401(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Invalid Authorization: Bearer <bad> → 401 with WWW-Authenticate: Bearer."""
-        _install_spacy_stub(monkeypatch)
+        install_graph_engine_stub(monkeypatch)
         with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
             resp = client.get(
                 "/graph/testcol/view",
@@ -136,7 +126,7 @@ class TestViewAuthErrors:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """No auth header and no ?token= → 401 with WWW-Authenticate: Bearer."""
-        _install_spacy_stub(monkeypatch)
+        install_graph_engine_stub(monkeypatch)
         with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
             resp = client.get("/graph/testcol/view")
         assert resp.status_code == 401
@@ -153,7 +143,7 @@ class TestViewQueryParamToken:
 
     def test_view_query_param_token_happy_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Valid ?token=<raw> query param → 200 text/html with token in body."""
-        _install_spacy_stub(monkeypatch)
+        install_graph_engine_stub(monkeypatch)
         with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
             asyncio.run(_seed_collection(cfg.db_path, "testcol"))
             resp = client.get(f"/graph/testcol/view?token={api_key}")
@@ -165,7 +155,7 @@ class TestViewQueryParamToken:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Invalid ?token=<bad> → 401 with WWW-Authenticate: Bearer."""
-        _install_spacy_stub(monkeypatch)
+        install_graph_engine_stub(monkeypatch)
         with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
             resp = client.get("/graph/testcol/view?token=badtoken")
         assert resp.status_code == 401
@@ -175,7 +165,7 @@ class TestViewQueryParamToken:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A KeyStore-managed token after revocation → 401."""
-        _install_spacy_stub(monkeypatch)
+        install_graph_engine_stub(monkeypatch)
         from archon_search.key_manager import KeyStore
 
         with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
@@ -202,7 +192,7 @@ class TestViewQueryParamToken:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Legacy api_key marked revoked in keys.json → 401 on ?token= path."""
-        _install_spacy_stub(monkeypatch)
+        install_graph_engine_stub(monkeypatch)
 
         with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
             # Write a revoked record matching api_key into keys.json
@@ -229,7 +219,7 @@ class TestViewQueryParamToken:
         """?token= from namespace ns-a, collection only in ns-b → 404 (negative).
         ?token= from namespace ns-b, collection in ns-b → 200 (positive control).
         """
-        _install_spacy_stub(monkeypatch)
+        install_graph_engine_stub(monkeypatch)
         key_a = secrets.token_hex(32)
         key_b = secrets.token_hex(32)
 
@@ -254,7 +244,7 @@ class TestViewQueryParamToken:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Valid Authorization header + invalid ?token= → 200 (header wins)."""
-        _install_spacy_stub(monkeypatch)
+        install_graph_engine_stub(monkeypatch)
         with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
             asyncio.run(_seed_collection(cfg.db_path, "testcol"))
             # Valid header + invalid ?token= → header must win; middleware validates header

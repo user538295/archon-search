@@ -35,6 +35,7 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 # Embedding dimension produced by the fastembed stub (see tests/_search_stubs.py).
 _STUB_EMBEDDING_DIM = 384
@@ -50,17 +51,6 @@ pytestmark = pytest.mark.integration
 def _auth(api_key: str) -> dict[str, str]:
     """Return Authorization header dict."""
     return {"Authorization": f"Bearer {api_key}"}
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return two fixed entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub
-
-    install_graph_engine_stub(monkeypatch)
 
 
 async def _seed_node_with_mentions(
@@ -201,7 +191,7 @@ def test_get_graph_tfidf_echoes_salience_mode(
     Verifies the route echoes the salience mode in the JSON body regardless of
     whether the collection contains graph data.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc_file = tmp_path / "doc-tfidf-echo.txt"
@@ -244,7 +234,7 @@ def _make_rank_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """
     from archon_search.graph_types import EntityType, make_stable_entity_id
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     # chunk_size=50 guarantees many real chunks so frequency saliences stay below 1.0
     toml_content = "[database]\nchunk_size = 50\n"
@@ -385,7 +375,7 @@ def test_get_graph_frequency_default_echoes_salience_mode(
     Verifies that omitting ?salience= applies the 'frequency' default and the
     response body echoes it.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc_file = tmp_path / "doc-freq-default.txt"
@@ -418,7 +408,7 @@ def test_get_graph_explicit_frequency_identical_to_default(
 
     Both explicit and implicit frequency must produce exactly the same response.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc_file = tmp_path / "doc-explicit-freq.txt"
@@ -450,7 +440,7 @@ def test_get_graph_invalid_salience_422(
 
     FastAPI enum validation rejects any value not in {'frequency', 'tfidf'}.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc_file = tmp_path / "doc-invalid-sal.txt"
@@ -483,7 +473,7 @@ def test_get_graph_tfidf_graphml_returns_xml(
     """
     from archon_search.graph_types import EntityType, make_stable_entity_id
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc_file = tmp_path / "doc-graphml.txt"
@@ -563,10 +553,10 @@ def test_get_graph_tfidf_graph_disabled_422(
     """GET /graph/{col}?salience=tfidf → 422 when graph.enabled=false.
 
     The existing graph-disabled guard fires before salience is evaluated.
-    No spaCy stub is required here — create_app skips the spaCy check when
+    No graph-engine stub is required here — create_app skips the gliner check when
     graph.enabled=false.
     """
-    # graph_enabled=False (default) — no spaCy stub needed
+    # graph_enabled=False (default) — no graph-engine stub needed
     with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, cfg, api_key):
         response = client.get("/graph/any-collection?salience=tfidf", headers=_auth(api_key))
 
@@ -609,7 +599,7 @@ def test_get_graph_tfidf_namespace_idf_isolation(
     """
     from archon_search.graph_types import EntityType, make_stable_entity_id
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     # Two namespace api keys
     key_a = secrets.token_hex(32)
@@ -717,7 +707,7 @@ def test_get_graph_tfidf_unknown_collection_returns_404(
     IDF presence-fanout. A regression reordering these would turn a clean 404
     into a 500.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         response = client.get(
@@ -777,7 +767,7 @@ def test_cross_collection_route_tfidf_graphml_returns_xml(
     Verifies that the cross-collection endpoint with both tfidf and graphml format
     parameters returns a valid XML response with Content-Type: application/xml.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         for col_name in ("col-cc-gml-a", "col-cc-gml-b"):
@@ -815,7 +805,7 @@ def test_cross_collection_tfidf_echoes_salience_mode(
     Verifies the route echoes the salience mode in the cross-collection JSON body
     regardless of whether the collections contain graph data.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         for col_name in ("t2-tfidf-echo-a", "t2-tfidf-echo-b"):
@@ -847,7 +837,7 @@ def test_cross_collection_invalid_salience_422(
 
     FastAPI enum validation rejects any value not in {'frequency', 'tfidf'}.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         for col_name in ("t2-inv-a", "t2-inv-b"):
@@ -888,7 +878,7 @@ def test_cross_collection_frequency_default_echoes_salience_mode(
     Verifies that omitting ?salience= applies the 'frequency' default and the
     cross-collection response body echoes it.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         for col_name in ("t2-freq-def-a", "t2-freq-def-b"):
@@ -925,7 +915,7 @@ def test_cross_collection_explicit_frequency_identical_to_default(
     """
     from archon_search.graph_types import EntityType, make_stable_entity_id
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         # Seed both collections with real chunk data and a shared entity so the
@@ -975,10 +965,10 @@ def test_cross_collection_graph_disabled_422(
     """GET /graph/cross-collection → 422 when graph.enabled=false.
 
     The existing graph-disabled guard fires regardless of salience param.
-    No spaCy stub is required here — create_app skips the spaCy check when
+    No graph-engine stub is required here — create_app skips the gliner check when
     graph.enabled=false.
     """
-    # graph_enabled=False (default) — no spaCy stub needed
+    # graph_enabled=False (default) — no graph-engine stub needed
     with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, cfg, api_key):
         response = client.get(
             "/graph/cross-collection?collections=any-a,any-b",
@@ -1022,7 +1012,7 @@ def test_cross_collection_tfidf_idf_denominator_is_all_namespace_collections(
     """
     from archon_search.graph_types import EntityType, make_stable_entity_id
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         # Create 4 collections with precise chunk counts (default namespace)

@@ -20,7 +20,7 @@ from archon_search.graph_types import (
 )
 from tests.integration.conftest import (
     ingest_file_via_path,
-    install_spacy_stub,
+    install_graph_stub,
     make_real_app,
 )
 
@@ -95,7 +95,7 @@ def test_e2h_t2_pprMode_bridgeQuery_entityChunkInResults(
     - Doc B's chunk appears in PPR results (PPR graph walk pulled it in).
     - Doc B's chunk does NOT appear in plain hybrid results (verifies PPR changed output).
     """
-    install_spacy_stub(monkeypatch)
+    install_graph_stub(monkeypatch)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         # Doc A: contains query keyword → hybrid would rank this first
         doc_a = tmp_path / "doc_a.txt"
@@ -141,7 +141,7 @@ def test_e2h_t2_pprMode_bridgeQuery_entityChunkInResults(
         doc_b_chunk_id = doc_b_chunks[0]["chunk_id"]
 
         # Build graph: 'Archon' entity → mention → Doc B's chunk.
-        # No auto-extraction occurs (install_spacy_stub recognizes only Alice/Bob/Google);
+        # No auto-extraction occurs (install_graph_stub recognizes only Alice/Bob/Google);
         # entity_type can be arbitrary since find_nodes_by_name matches by name only.
         node_archon = _node("Archon", col)
 
@@ -205,7 +205,7 @@ def test_e2h_t2_pprMode_emptyGraph_hybrid_fallback(
     mentions. PPRWalker finds no entity matches → ppr_entities_matched=0.
     Hybrid fallback must return non-empty results.
     """
-    install_spacy_stub(monkeypatch)
+    install_graph_stub(monkeypatch)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("Archon is a powerful system for hybrid information retrieval.")

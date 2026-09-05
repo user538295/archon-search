@@ -297,7 +297,7 @@ _RECURSION_GUARD_ENV = "_ARCHON_E2E_SUBPROCESS"
 # 31 test functions collected total (test_cli.py: 18, test_conftest.py: 4,
 # test_rest.py: 9). Conditional skips that reduce the count:
 # - 1 recursion-guard skip: test_full_smoke_suite_passes itself
-# - 1 leidenalg/spacy importorskip: test_e2e_graph_build_communities_wait_against_server
+# - 1 leidenalg/gliner importorskip: test_e2e_graph_build_communities_wait_against_server
 # - 2 smoke_server_graph_enabled consumers in test_conftest.py (same importorskip)
 # - 5 SMOKE_NO_TIMING-gated tests (skipped only when that env var is set)
 # On a machine with graph extras installed: ~30 pass. Conservative floor of 25

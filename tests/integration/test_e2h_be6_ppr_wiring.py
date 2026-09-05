@@ -28,6 +28,7 @@ from tests.integration.conftest import (
     mcp_initialize,
     mcp_tool_call,
 )
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("ppr_wiring")]
 
@@ -53,28 +54,6 @@ def _node(name: str, col: str, entity_type: EntityType = EntityType.concept) -> 
 
 def _mention(node: GraphNode, chunk_id: str) -> GraphMention:
     return GraphMention(entity_id=node.id, chunk_id=chunk_id, doc_id="doc1")
-
-
-def _install_no_entity_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return no entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
-
-
-def _install_kubernetes_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to tag 'kubernetes' when present in text.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_content_aware
-
-    install_graph_engine_stub_content_aware(monkeypatch, entity_map=[("kubernetes", "system")])
 
 
 async def _seed_graph(
@@ -107,7 +86,7 @@ def test_pprMode_blendedResults_entityChunkInTopK(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """PPR mode: entity-linked chunk appears in results, ppr_entities_matched > 0."""
-    _install_kubernetes_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, entities=[("kubernetes", "system")], content_aware=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         # Ingest a document about kubernetes so the chunk lands in the store
         doc = tmp_path / "k8s.txt"
@@ -159,11 +138,11 @@ def test_pprMode_emptyNodeTable_fallsBackToHybrid(
 ) -> None:
     """PPR mode with no entity matches → falls back to hybrid, ppr_entities_matched=0.
 
-    Uses a no-entity spaCy stub so graph extraction produces no nodes during ingest.
+    Uses a no-entity graph-engine stub so graph extraction produces no nodes during ingest.
     PPRWalker then finds no entity matches → ppr_entities_matched=0, hybrid fallback.
     """
     # Use a stub that extracts NO entities so the graph stays empty after ingest
-    _install_no_entity_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("kubernetes is a container orchestration system.")
@@ -189,7 +168,7 @@ def test_pprMode_pprTopEntities_config_applied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """ppr_top_entities=1 config means at most 1 entity contributes to PPR result."""
-    _install_kubernetes_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, entities=[("kubernetes", "system")], content_aware=True)
     toml = "[graph]\nenabled = true\nppr_top_entities = 1\n"
     with make_real_app(tmp_path, monkeypatch, toml_content=toml) as (client, cfg, api_key):
         assert cfg.graph.ppr_top_entities == 1
@@ -233,7 +212,7 @@ def test_pprMode_mcpSearch_pprEntitiesMatchedInResponse(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """MCP search tool with graph_mode='ppr' returns ppr_entities_matched in response."""
-    _install_kubernetes_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, entities=[("kubernetes", "system")], content_aware=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True, mcp_enabled=True) as (client, cfg, api_key):
         doc = tmp_path / "k8s.txt"
         doc.write_text("kubernetes cluster management and scheduling.")
@@ -272,7 +251,7 @@ def test_pprMode_multiCollection_returns422(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Multi-collection PPR is not supported: POST /search with collections + graph_mode='ppr' returns 422."""
-    _install_kubernetes_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, entities=[("kubernetes", "system")], content_aware=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc = tmp_path / "k8s.txt"
         doc.write_text("kubernetes is used for container orchestration at scale.")
@@ -300,7 +279,7 @@ def test_pprMode_chunkOrdering_pprChunksPrependedBeforeHybrid(
     In PPR mode, the entity-linked chunk (non-keyword doc) should appear in results
     (PPR prepend guarantees it is included even if hybrid alone would not rank it first).
     """
-    _install_kubernetes_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, entities=[("kubernetes", "system")], content_aware=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         # Doc A: contains the keyword → hybrid search will rank this first
         doc_a = tmp_path / "doc_a.txt"

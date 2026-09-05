@@ -30,7 +30,7 @@ import tomlkit
 from archon_search.config import LLAMA_CPP_BASE_URL_DEFAULT
 from archon_search.install.config_writer import WizardFeatures, _apply_wizard_features_to_toml
 from archon_search.install.wizard import _list_cached_models_via_cli, _prompt_llama_cpp_model
-from tests.integration.conftest import ingest_file_via_path, install_spacy_stub, make_real_app
+from tests.integration.conftest import ingest_file_via_path, install_graph_stub, make_real_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.live]
 
@@ -147,7 +147,7 @@ def test_live_graph_enrichment_via_llama_cpp(tmp_path: Path, monkeypatch: pytest
     assertions below — not an exception — are what surfaces an unreachable
     llama-server.
     """
-    install_spacy_stub(monkeypatch)
+    install_graph_stub(monkeypatch)
 
     toml_content = (
         "[graph]\nenabled = true\nprovider = \"llama_cpp\"\nextraction_model = \"local-model\"\n"

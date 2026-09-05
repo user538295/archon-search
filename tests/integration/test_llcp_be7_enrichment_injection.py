@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from tests.integration.conftest import make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
@@ -29,17 +30,6 @@ _STUB_EMBEDDING_DIM = 384
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return two fixed entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub
-
-    install_graph_engine_stub(monkeypatch)
 
 
 async def _seed_collection(db_path: str, collection: str, ns: str = "default") -> None:
@@ -85,7 +75,7 @@ def test_app_state_has_enrichment_client_for_three_sites(
     non-None LlamaCppEnrichmentClient built once at composition root (S20a, S20b)."""
     from archon_search.enrichment.llama_cpp import LlamaCppEnrichmentClient
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
     # BE-23's startup probe would otherwise fire a real inference POST toward
     # `llama_cpp_base_url` (default http://localhost:8080) if a llama-server happens to be
     # running on the machine running this test — this test is only about client injection.

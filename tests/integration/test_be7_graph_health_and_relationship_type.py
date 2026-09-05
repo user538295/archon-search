@@ -19,24 +19,13 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return NO named entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner. Must be called
-    BEFORE make_real_app(graph_enabled=True).
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 async def _seed_graph_with_nodes_and_synonyms(
@@ -239,7 +228,7 @@ def test_health_metrics_reflect_synonym_edges_in_status_endpoint(
     - synonym_edge_count == 1  (filter discriminates — would be 2 if filter dropped)
     - synonym_link_rate == 0.5 (1/2 — formula: synonym_edge_count / edge_count)
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     col = "be7-health-metrics"
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
@@ -288,7 +277,7 @@ def test_count_synonym_edges_filter_discriminates_edge_types(
     GraphStore.count_synonym_edges discriminates between edge types.
     If the filter were dropped, count would be 2 (total edges), not 1.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     col = "be7-filter-discrimination"
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
@@ -328,7 +317,7 @@ def test_graph_inspection_shows_relationship_type_on_edges(
 
     Covers S7 — GraphEdgeResponse.relationship_type populated on single-collection route.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     col = "be7-edge-relationship-type"
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
@@ -365,7 +354,7 @@ def test_cross_collection_inspection_preserves_synonym_relationship_type(
 
     Covers S7 — GraphEdgeResponse.relationship_type populated on cross-collection route.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     col_a = "be7-cross-col-a"
     col_b = "be7-cross-col-b"
 

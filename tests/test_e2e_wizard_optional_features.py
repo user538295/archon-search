@@ -755,7 +755,7 @@ def test_e2e_graph_extra_install_failure_non_fatal(runner: CliRunner, tmp_path: 
     ``test_e2e_code_extra_install_failure_non_fatal`` above (C2-M-2). Also
     asserts the config-rollback behavior added for Fix A: a failed
     ``[graph]`` install must revert ``graph.enabled`` to ``False`` so the next
-    server start doesn't hard-fail on the missing spaCy dependency.
+    server start doesn't hard-fail on the missing gliner dependency.
     """
     config_path = tmp_path / "archon-search.toml"
     install_code_mock = MagicMock()
@@ -783,7 +783,7 @@ def test_e2e_graph_extra_install_failure_non_fatal(runner: CliRunner, tmp_path: 
     doc = tomlkit.parse(config_path.read_text())
     assert doc["graph"]["enabled"] is False, (
         "graph.enabled must be reverted to false when [graph] extras failed to "
-        "install — otherwise the next server start hard-fails on missing spaCy"
+        "install — otherwise the next server start hard-fails on missing gliner"
     )
 
 
@@ -830,7 +830,7 @@ def test_wizard_diskSpaceFailure_revertsGraphEnabled(runner: CliRunner, tmp_path
     assert doc["graph"]["enabled"] is False, (
         "graph.enabled must be reverted to false when the disk-space check "
         "fails after the config write — otherwise the next server start "
-        "hard-fails on missing spaCy"
+        "hard-fails on missing gliner"
     )
 
 
@@ -892,7 +892,7 @@ def test_wizard_declineProceedPrompt_revertsGraphEnabled(runner: CliRunner, tmp_
     assert doc["graph"]["enabled"] is False, (
         "graph.enabled must be reverted to false when the user declines the "
         "Proceed? prompt after the config write — otherwise the next server "
-        "start hard-fails on missing spaCy"
+        "start hard-fails on missing gliner"
     )
 
 

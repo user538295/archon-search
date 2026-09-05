@@ -57,13 +57,13 @@ def _make_client(
 ) -> TestClient:
     """Build a TestClient where graph is toggled on app.state after creation.
 
-    Creates the app with graph.enabled=False to bypass the spaCy import guard
+    Creates the app with graph.enabled=False to bypass the gliner import guard
     (_check_graph_deps), then overrides app.state.config.graph.enabled and
     app.state.graph_store so routes_status can read community stats.
     """
     from archon_search.collection_meta import CollectionMeta
 
-    # Always create app with graph disabled to avoid spaCy import at create_app time.
+    # Always create app with graph disabled to avoid the gliner import at create_app time.
     config = SearchConfig()
     config.db_path = str(tmp_db)
     config.graph = GraphConfig(enabled=False)

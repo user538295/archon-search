@@ -22,6 +22,7 @@ from archon_search.prose_extraction_backend import (
     ProseExtractionBackend,
     _TRUNCATION_LOG_MESSAGE,
 )
+from tests._graph_engine_stub import RecordingGlinerModel
 
 
 def _entity(text: str, label: str, start: int, end: int, score: float = 0.9) -> dict:
@@ -44,54 +45,6 @@ def _relation(
     }
 
 
-class _CountingFakeModel:
-    """Fake positioned at the gliner module boundary — records every call to
-    `inference()`, mirroring gliner's real (entities, relations) return shape.
-
-    The signature mirrors the installed `gliner==0.2.28`
-    `UniEncoderSpanRelexGLiNER.inference` declaration explicitly (verified via
-    `inspect.signature`) rather than swallowing arguments in `**kwargs`, so a
-    threshold/label wiring regression shows up as a captured value, and passing
-    an argument gliner does not accept fails loudly here.
-    """
-
-    def __init__(self) -> None:
-        self.calls: list[list[str]] = []
-        self.kwargs: list[dict] = []
-
-    def inference(
-        self,
-        texts,
-        labels,
-        relations=(),
-        flat_ner=True,
-        threshold=0.5,
-        adjacency_threshold=None,
-        relation_threshold=None,
-        multi_label=False,
-        batch_size=8,
-        packing_config=None,
-        input_spans=None,
-        return_relations=True,
-        return_class_probs=False,
-    ):
-        self.calls.append(list(texts))
-        self.kwargs.append(
-            {
-                "labels": list(labels),
-                "relations": list(relations),
-                "threshold": threshold,
-                "relation_threshold": relation_threshold,
-                "adjacency_threshold": adjacency_threshold,
-                "batch_size": batch_size,
-                "return_relations": return_relations,
-            }
-        )
-        entities = [[] for _ in texts]
-        rels = [[] for _ in texts]
-        return entities, rels
-
-
 def _backend_with_model(model) -> ProseExtractionBackend:
     backend = ProseExtractionBackend()
     backend._model = model  # bypass load() — deep fake at the gliner boundary
@@ -105,7 +58,7 @@ def _backend_with_model(model) -> ProseExtractionBackend:
 
 @pytest.mark.asyncio
 async def test_document_yields_ceil_n_over_sub_batch_calls() -> None:
-    fake_model = _CountingFakeModel()
+    fake_model = RecordingGlinerModel()
     backend = _backend_with_model(fake_model)
     n_chunks = GRAPH_NER_SUB_BATCH_SIZE * 3 + 2  # not an exact multiple
     texts = [f"chunk {i}" for i in range(n_chunks)]
@@ -125,7 +78,7 @@ async def test_document_yields_ceil_n_over_sub_batch_calls() -> None:
 
 @pytest.mark.asyncio
 async def test_no_single_call_exceeds_the_sub_batch_constant() -> None:
-    fake_model = _CountingFakeModel()
+    fake_model = RecordingGlinerModel()
     backend = _backend_with_model(fake_model)
     n_chunks = GRAPH_NER_SUB_BATCH_SIZE * 4 + 1
     texts = [f"chunk {i}" for i in range(n_chunks)]
@@ -274,7 +227,7 @@ async def test_duplicate_triples_do_not_inflate_edge_count() -> None:
 
 @pytest.mark.asyncio
 async def test_truncation_logs_once_and_never_interpolates_chunk_text(caplog) -> None:
-    fake_model = _CountingFakeModel()
+    fake_model = RecordingGlinerModel()
     backend = _backend_with_model(fake_model)
     long_text = " ".join(f"word{i}" for i in range(GRAPH_NER_TOKEN_WINDOW_WORDS + 500))
     another_long_text = " ".join(f"other{i}" for i in range(GRAPH_NER_TOKEN_WINDOW_WORDS + 10))
@@ -303,7 +256,7 @@ async def test_truncated_text_is_an_exact_prefix_of_the_original_chunk() -> None
     """Whitespace runs must survive truncation byte-for-byte: gliner's returned
     char offsets index the truncated string, which must therefore be a real
     substring of the chunk text the rest of the pipeline stores."""
-    fake_model = _CountingFakeModel()
+    fake_model = RecordingGlinerModel()
     backend = _backend_with_model(fake_model)
     # Irregular whitespace: double spaces, a newline, a tab.
     chunk = "".join(
@@ -343,7 +296,7 @@ def test_truncation_latch_is_per_instance_not_shared_between_instances(caplog) -
 
 @pytest.mark.asyncio
 async def test_relation_with_an_other_typed_endpoint_is_discarded() -> None:
-    class _FakeModel(_CountingFakeModel):
+    class _FakeModel(RecordingGlinerModel):
         def inference(self, texts, labels, **kwargs):
             super().inference(texts, labels, **kwargs)
             bad_tail = _relation(
@@ -369,7 +322,7 @@ async def test_relation_with_an_other_typed_endpoint_is_discarded() -> None:
 
 @pytest.mark.asyncio
 async def test_relation_between_two_real_labelled_entities_survives() -> None:
-    class _FakeModel(_CountingFakeModel):
+    class _FakeModel(RecordingGlinerModel):
         def inference(self, texts, labels, **kwargs):
             super().inference(texts, labels, **kwargs)
             good = _relation(
@@ -398,7 +351,7 @@ async def test_relation_between_two_real_labelled_entities_survives() -> None:
 
 @pytest.mark.asyncio
 async def test_both_thresholds_reach_the_model_unswapped() -> None:
-    fake_model = _CountingFakeModel()
+    fake_model = RecordingGlinerModel()
     backend = _backend_with_model(fake_model)
 
     await backend.inference(["a chunk"], ner_confidence=0.3, relation_confidence=0.9)
@@ -411,7 +364,7 @@ async def test_both_thresholds_reach_the_model_unswapped() -> None:
 async def test_adjacency_threshold_is_not_passed_to_the_model() -> None:
     """K2g proved `adjacency_threshold` inert on this checkpoint (Q29 closed —
     "REMOVED, not pinned"), so it is deliberately never sent."""
-    fake_model = _CountingFakeModel()
+    fake_model = RecordingGlinerModel()
     backend = _backend_with_model(fake_model)
 
     await backend.inference(["a chunk"], 0.5, 0.5)
@@ -421,7 +374,7 @@ async def test_adjacency_threshold_is_not_passed_to_the_model() -> None:
 
 @pytest.mark.asyncio
 async def test_prompted_labels_and_relations_are_the_graphs_own() -> None:
-    fake_model = _CountingFakeModel()
+    fake_model = RecordingGlinerModel()
     backend = _backend_with_model(fake_model)
 
     await backend.inference(["a chunk"], 0.5, 0.5)

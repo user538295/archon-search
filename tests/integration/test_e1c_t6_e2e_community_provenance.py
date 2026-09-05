@@ -39,33 +39,14 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# spaCy stub — extracts only "PaymentService" from any text that contains it
+# the graph-engine stub — extracts only "PaymentService" from any text that contains it
 # ---------------------------------------------------------------------------
-
-
-def _install_payment_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to extract 'PaymentService' when present.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-
-    Extracts exactly one entity per doc so the graph has 1 unique node.
-    A single-node graph skips Leiden inside CommunityBuilder.build(), making
-    the test leidenalg-free.
-
-    Must be called BEFORE make_real_app: it patches the class
-    GraphExtractor.__init__ constructs, so it must run before that construction.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_content_aware
-
-    install_graph_engine_stub_content_aware(
-        monkeypatch, entity_map=[("PaymentService", "system")]
-    )
 
 
 def _auth(api_key: str) -> dict[str, str]:
@@ -290,7 +271,7 @@ def test_explain_local_community_provenance_e2e(
     community → fetches representative chunks → attaches GraphProvenance with
     TraversalStep(community_id=...) to each community-retrieved candidate.
     """
-    _install_payment_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, entities=[("PaymentService", "system")], content_aware=True)
 
     col = "t6-s3-local-community"
     doc1, doc2 = _build_corpus(tmp_path)
@@ -376,7 +357,7 @@ def test_explain_global_community_provenance_e2e(
     representative chunks across all communities without an entity-matching
     step (list_community_representatives → get_chunks_by_ids).
     """
-    _install_payment_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, entities=[("PaymentService", "system")], content_aware=True)
 
     col = "t6-s4-global-community"
     doc1, doc2 = _build_corpus(tmp_path)
@@ -468,7 +449,7 @@ def test_mcp_explain_local_community_provenance_e2e(
 
     Uses the same corpus as S3/S4: two docs with "PaymentService" entity.
     """
-    _install_payment_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, entities=[("PaymentService", "system")], content_aware=True)
 
     col = "t6-s3-mcp-local"
     doc1, doc2 = _build_corpus(tmp_path)

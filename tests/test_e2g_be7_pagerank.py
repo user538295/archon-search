@@ -569,13 +569,13 @@ def test_graphBrowse_importanceSortMode_ordersByPersistedPageRank(
 ) -> None:
     """GET /graph/{collection}?salience=importance orders nodes by persisted pagerank_score,
     with a null-scored node sorting last (nulls-last)."""
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
+    from tests._graph_engine_stub import install_graph_engine_stub
     from tests.integration.conftest import ingest_file_via_path, make_real_app
 
     # Stub the gliner-backed extraction engine (graph_enabled requires an
     # importable engine at app-creation time); this test seeds graph state
     # directly below and doesn't need real entity extraction.
-    install_graph_engine_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc_file = tmp_path / "doc-importance.txt"

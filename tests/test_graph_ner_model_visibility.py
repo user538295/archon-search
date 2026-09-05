@@ -4,10 +4,10 @@ A missing graph engine dependency used to be discoverable only by reading
 per-file ingest logs. It now surfaces through
 ``ModelValidationResult.provider_warnings`` and therefore ``GET /status``.
 
-Rewired off spaCy in cycle-2 (C2-A-01/C2-B-1/C1-B-1): the shipped prose
+Rewired off the legacy NER engine in cycle-2 (C2-A-01/C2-B-1/C1-B-1): the shipped prose
 extraction engine since BE-11 is gliner
 (``paths.GRAPH_NER_MODEL_NAME`` = "knowledgator/gliner-relex-multi-v1.0"),
-never spaCy — the probe below now checks gliner import-ability, mirroring
+never the legacy NER engine — the probe below now checks gliner import-ability, mirroring
 ``ensure_graph_engine_importable``'s construction-time guard. The engine is
 also multilingual, so there is no English-only disclosure to make (C2-A-02/
 C2-B-2) — ``notes`` is always empty here.

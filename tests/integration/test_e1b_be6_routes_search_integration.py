@@ -19,24 +19,14 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# Helpers: spaCy stub (needed for graph_enabled=True)
+# Helpers: the graph-engine stub (needed for graph_enabled=True)
 # ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub_no_entities(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return NO named entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def _auth(api_key: str) -> dict[str, str]:
@@ -92,7 +82,7 @@ def test_post_search_global_mode_200(
 
     Requires: graph.enabled=True, collection exists, communities built with valid chunk IDs.
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "e1b-be6-global-200"
     doc = tmp_path / "test_doc.txt"
@@ -166,7 +156,7 @@ def test_post_search_global_no_communities_422(
     Communities are NOT built; the route must catch GraphCommunitiesNotBuiltError
     and return 422 with {"detail": {"code": "graph_communities_not_built"}}.
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "e1b-be6-global-no-communities"
     doc = tmp_path / "test_doc.txt"
@@ -219,7 +209,7 @@ def test_post_search_local_no_communities_422(
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "e1b-be6-local-no-communities"
     doc = tmp_path / "test_doc.txt"
@@ -272,7 +262,7 @@ def test_post_search_local_no_entity_graph_expansion_false(
     Communities are built but the query has no entity matches;
     local mode falls back to hybrid search with graph_expansion_applied=False.
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "e1b-be6-local-no-entities"
     doc = tmp_path / "test_doc.txt"
@@ -336,7 +326,7 @@ def test_global_mode_acl_filters_community_chunks_integration(
     - Search from default namespace (no access to ns-b)
     - Expect: 200 response; restricted chunks do NOT appear in results
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "e1b-be6-acl-global"
     # Ingest a document WITHOUT ACL so a regular search can find it.
@@ -424,7 +414,7 @@ def test_post_search_fanout_global_no_communities_422(
     Tests the search_many() route branch (collections plural, not collection singular).
     The route's GraphCommunitiesNotBuiltError catch at the search_many path must fire.
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "e1b-be6-fanout-no-communities"
     doc = tmp_path / "test_doc.txt"
@@ -468,7 +458,7 @@ def test_post_search_graph_mode_disabled_422(
 ) -> None:
     """graph.enabled=False; any graph_mode (naive, local, global) → 422.
 
-    No spaCy stub needed since graph is disabled (no _check_graph_deps call).
+    No graph-engine stub needed since graph is disabled (no _check_graph_deps call).
     """
     col = "e1b-be6-graph-disabled"
 

@@ -18,24 +18,14 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# spaCy stub — needed for make_real_app(graph_enabled=True)
+# the graph-engine stub — needed for make_real_app(graph_enabled=True)
 # ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub_no_entities(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return NO named entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def _auth(api_key: str) -> dict[str, str]:
@@ -194,7 +184,7 @@ def test_e2e_status_community_fields(
     - GET /status and verify the collection entry has community_count >= 1
       and last_built_at is a non-null ISO 8601 timestamp string.
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "t3-status-community-fields"
     built_at = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -288,7 +278,7 @@ def test_e2e_mcp_search_global_mode(
     - Verify the result contains a 'results' key with non-empty list
       and graph_expansion_applied=True  (S5).
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "t3-mcp-global-mode"
     doc = tmp_path / "doc.txt"
@@ -360,7 +350,7 @@ def test_e2e_mcp_search_local_mode(
     - Verify the result contains a 'results' key and no error  (S5).
     - graph_expansion_applied may be True or False depending on entity matching.
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "t3-mcp-local-mode"
     doc = tmp_path / "doc.txt"
@@ -405,7 +395,7 @@ def test_e2e_mcp_search_local_mode(
         assert "error" not in parsed, (
             f"Unexpected error in MCP search result: {parsed!r}"
         )
-        # With the no-entity spaCy stub, graph_expansion_applied is always False
+        # With the no-entity graph-engine stub, graph_expansion_applied is always False
         # (no entity match → hybrid fallback). Key contract: the field must be
         # present and the call must not error.
         assert "graph_expansion_applied" in parsed, (

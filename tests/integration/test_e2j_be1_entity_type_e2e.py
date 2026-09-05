@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
@@ -28,17 +29,6 @@ pytestmark = pytest.mark.integration
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return two fixed entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub
-
-    install_graph_engine_stub(monkeypatch)
 
 
 _STUB_EMBEDDING_DIM = 384
@@ -148,7 +138,7 @@ def test_graph_response_includes_entity_type(
     - entity_type values are in the known valid set
     - The specific expected types are present
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
     col = "e2j-be1-entity-type-single"
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
@@ -194,7 +184,7 @@ def test_cross_collection_graph_response_includes_entity_type(
     - Every node in the cross-collection response has entity_type
     - entity_type values are valid EntityType values
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
     col_a = "e2j-be1-cross-col-a"
     col_b = "e2j-be1-cross-col-b"
 

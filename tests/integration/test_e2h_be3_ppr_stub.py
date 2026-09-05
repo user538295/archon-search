@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
@@ -20,17 +21,6 @@ pytestmark = pytest.mark.integration
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub_no_entities(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return zero entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def _auth(api_key: str) -> dict[str, str]:
@@ -44,7 +34,7 @@ def _auth(api_key: str) -> dict[str, str]:
 
 def test_pprMode_noEntityMatch_fallsBackToHybrid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """S3: PPR with no entity match falls back to hybrid search, ppr_entities_matched=0."""
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         # Ingest a document so the collection exists
         doc = tmp_path / "doc.txt"
@@ -63,7 +53,7 @@ def test_pprMode_noEntityMatch_fallsBackToHybrid(tmp_path: Path, monkeypatch: py
 
 def test_pprMode_graphDisabled_returns422(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """S5: PPR with graph disabled → 422."""
-    # No spaCy stub needed — graph_enabled=False so _check_graph_deps is not called
+    # No graph-engine stub needed — graph_enabled=False so _check_graph_deps is not called
     with make_real_app(tmp_path, monkeypatch, graph_enabled=False) as (client, cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("Hello world.")
@@ -79,7 +69,7 @@ def test_pprMode_graphDisabled_returns422(tmp_path: Path, monkeypatch: pytest.Mo
 
 def test_pprMode_scopeFilterConflict_returns422(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """S6: scope_filter + graph_mode=ppr → 422."""
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("Hello world.")
@@ -100,7 +90,7 @@ def test_pprMode_scopeFilterConflict_returns422(tmp_path: Path, monkeypatch: pyt
 
 def test_pprMode_searchPipelineResult_carriesPprCount(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """SearchPipelineResult.ppr_entities_matched=0 is propagated to SearchResponse."""
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
         doc = tmp_path / "doc.txt"
         doc.write_text("Retrieval augmented generation pipeline test.")

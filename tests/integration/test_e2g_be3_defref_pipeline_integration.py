@@ -23,6 +23,7 @@ from archon_search.config import GraphConfig  # noqa: E402
 from archon_search.defref_extractor import DefRefExtractor  # noqa: E402
 from archon_search.graph_store import GraphStore  # noqa: E402
 from archon_search.graph_types import RelationshipType  # noqa: E402
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
@@ -546,16 +547,6 @@ async def test_gcOrphanSweep_defRefEdgesSurviveWithoutMentions(tmp_path: Path):
 # Finding 2: production server (app.py) wiring
 # ---------------------------------------------------------------------------
 
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return zero entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
-
 
 def test_appPy_wiresDefRefExtractorWhenGraphEnabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Finding 2: the production server (server/app.py) must wire a DefRefExtractor
@@ -566,7 +557,7 @@ def test_appPy_wiresDefRefExtractorWhenGraphEnabled(tmp_path: Path, monkeypatch:
     """
     from tests.integration.conftest import make_real_app
 
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, _cfg, _api_key):
         pipeline = client.app.state.pipeline

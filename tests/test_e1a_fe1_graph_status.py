@@ -185,8 +185,6 @@ def test_get_status_graph_subobject(
 ) -> None:
     """GET /status returns graph sub-object with enabled:true when graph is enabled."""
     import secrets
-    import sys
-    import types
 
     from archon_search.config import SearchConfig
     from archon_search.jobs.store import JobStore
@@ -196,15 +194,11 @@ def test_get_status_graph_subobject(
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ARCHON_SEARCH_API_KEY", api_key)
 
-    # Stub spaCy so _check_graph_deps + GraphExtractor import succeed without install
-    fake_spacy = types.ModuleType("spacy")
-    fake_spacy.util = types.ModuleType("spacy.util")  # type: ignore[attr-defined]
-    fake_spacy.util.get_installed_models = lambda: ["en_core_web_sm"]  # type: ignore[attr-defined]
-    fake_spacy.cli = types.ModuleType("spacy.cli")  # type: ignore[attr-defined]
-    fake_spacy.load = lambda model: None  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "spacy", fake_spacy)
-    monkeypatch.setitem(sys.modules, "spacy.util", fake_spacy.util)  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "spacy.cli", fake_spacy.cli)  # type: ignore[attr-defined]
+    # Stub the extraction engine so graph-enabled app creation needs no real
+    # model load; this test asserts on status fields, not extraction output.
+    from tests._graph_engine_stub import install_graph_engine_stub
+
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "db")

@@ -19,37 +19,14 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
 
 
 # ---------------------------------------------------------------------------
-# Helpers: spaCy stubs
+# Helpers: the graph-engine stubs
 # ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub_with_entities(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return two fixed entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub
-
-    install_graph_engine_stub(monkeypatch)
-
-
-def _install_spacy_stub_no_entities(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return NO named entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner. Graph tables
-    will be created but remain empty after ingest, producing a zero-node
-    graph (no-op expansion at query time).
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def _auth(api_key: str) -> dict[str, str]:
@@ -193,12 +170,12 @@ def test_e2e_graph_mode_noop_empty_graph(
     Covers S5: when no query tokens match any entity in the graph (or the graph
     is empty), expansion is a no-op and the search proceeds normally.
 
-    The spaCy stub returns no entities so ingest creates the collection with chunks
+    The graph-engine stub returns no entities so ingest creates the collection with chunks
     but leaves graph tables at zero nodes. GraphExpander finds no entity name
     matches in the query → expansionApplied=False → response has
     graph_expansion_applied=False.
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "e1a-t3-empty-graph"
     doc = tmp_path / "simple.txt"
@@ -253,7 +230,7 @@ def test_e2e_mcp_search_graph_mode(
     - graph_expansion_applied is a bool (True or False — depends on whether query
       tokens matched any of the ingested entity names).
     """
-    _install_spacy_stub_with_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     col = "e1a-t3-mcp-search"
     doc = tmp_path / "entity_doc.txt"
@@ -342,9 +319,9 @@ def test_e2e_mcp_search_with_context_graph_mode(
     stronger and more realistic scenario (a developer with graph enabled attempting
     graph_mode on search_with_context).
     """
-    # spaCy stub required because graph_enabled=True triggers _check_graph_deps
-    # during create_app, which imports spacy synchronously.
-    _install_spacy_stub_with_entities(monkeypatch)
+    # the graph-engine stub required because graph_enabled=True triggers _check_graph_deps
+    # during create_app, which imports gliner synchronously.
+    install_graph_engine_stub(monkeypatch)
 
     with make_real_app(tmp_path, monkeypatch, mcp_enabled=True, graph_enabled=True) as (client, cfg, api_key):
         assert cfg.graph.enabled is True, (

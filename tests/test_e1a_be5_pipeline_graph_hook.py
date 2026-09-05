@@ -215,7 +215,7 @@ async def test_startup_config_error_when_extras_absent(tmp_path, monkeypatch):
     # form restored "absent" by popping, which DELETES a `None` sentinel a
     # neighbouring test may have installed instead of putting it back
     # (2026-08-19-030 C2-T-13). It also restores on exceptions. BE-11 rewired
-    # the construction guard to check `gliner` instead of `spacy`.
+    # the construction guard to check `gliner` instead of `the legacy NER engine`.
     monkeypatch.setitem(sys.modules, "gliner", None)
     with pytest.raises(ConfigError, match="archon-search\\[graph\\]"):
         from archon_search.server.app import create_app
@@ -223,7 +223,7 @@ async def test_startup_config_error_when_extras_absent(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_llm_failure_falls_back_to_spacy(
+async def test_llm_failure_falls_back_to_extraction_engine(
     connected_store, col_name, sample_md_file
 ):
     """When extract() reports a warning, status stays ok and the warning propagates."""
@@ -282,7 +282,7 @@ async def test_ingest_fatal_error_returns_error_status(
             nodes=[],
             edges=[],
             warnings=[],
-            fatal_error="spaCy model load failed",
+            fatal_error="the extraction model load failed",
         )
     )
 
@@ -314,6 +314,6 @@ async def test_ingest_fatal_error_returns_error_status(
 
     assert result.status == "error"
     assert result.chunks_created == 0
-    assert "spaCy model load failed" in (result.error or "")
+    assert "the extraction model load failed" in (result.error or "")
     # Graph write must NOT have been called (extraction failed before persist)
     mock_store.write_graph.assert_not_called()

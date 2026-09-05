@@ -12,12 +12,12 @@ Only the ``ProseExtractionBackend`` boundary is faked (same seam as
 degrade wiring end to end.
 
 The fake backend is the shared ``_FakeBackend`` from ``tests/test_graph_extractor.py``
-(also reused by ``tests/integration/test_bug030_graph_spacy_latch_ingest.py``) —
+(also reused by the bug030 graph-degradation latch ingest test) —
 not an ad-hoc per-file class — so this stays the one fixture for the seam.
 
 Stale-row deletion on a degraded re-ingest is proven via ``GraphStore.edge_count``,
 the same proxy ``test_reingest_under_degradation_leaves_no_orphan_prose_edges``
-(test_bug030_graph_spacy_latch_ingest.py) uses — NOT via the mentions table:
+(the bug030 latch-ingest test) uses — NOT via the mentions table:
 ``delete_mentions_by_doc`` runs unconditionally on every ingest (pipeline.py),
 degraded or not, so a mention-based assertion cannot distinguish a genuinely
 degraded re-ingest from a non-degraded one. Edges, by contrast, are only

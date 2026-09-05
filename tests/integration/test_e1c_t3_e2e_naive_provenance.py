@@ -57,15 +57,12 @@ pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# spaCy stub helpers
+# the graph-engine stub helpers
 # ---------------------------------------------------------------------------
 
 
-def _install_content_aware_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+def _install_code_graph_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the gliner-backed extraction engine to extract graph entities from ingested text.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
 
     Routing logic:
     - "AuthService" in text AND "UserStore" NOT in text:
@@ -78,7 +75,7 @@ def _install_content_aware_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     Must be called BEFORE make_real_app: it patches the class
     GraphExtractor.__init__ constructs, so it must run before that construction.
     """
-    from tests._graph_engine_stub import install_graph_engine_stub_custom
+    from tests._graph_engine_stub import install_graph_engine_stub
 
     def _entities_for_text(text: str) -> list[tuple[str, str]]:
         if "AuthService" in text and "UserStore" not in text:
@@ -87,7 +84,7 @@ def _install_content_aware_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
             return [("TokenValidator", "system")]
         return []
 
-    install_graph_engine_stub_custom(monkeypatch, _entities_for_text)
+    install_graph_engine_stub(monkeypatch, entities=_entities_for_text)
 
 
 def _install_deterministic_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -378,7 +375,7 @@ def test_explain_naive_provenance_e2e(
     attaches GraphProvenance(steps=[TraversalStep(entity="AuthService", ...)])
     to each graph-retrieved candidate.
     """
-    _install_content_aware_spacy_stub(monkeypatch)
+    _install_code_graph_stub(monkeypatch)
 
     col = "t3-s2-naive-provenance"
     doc1, doc2 = _build_corpus(tmp_path)
@@ -473,7 +470,7 @@ def test_explain_naive_mixed_results_e2e(
     S7: both provenance and null-provenance appear in results[].
     S8: no duplicate chunk_ids (graph provenance wins in dedup).
     """
-    _install_content_aware_spacy_stub(monkeypatch)
+    _install_code_graph_stub(monkeypatch)
     _install_deterministic_embedding(monkeypatch)
 
     col = "t3-s7-mixed-results"
@@ -600,7 +597,7 @@ def test_mcp_explain_naive_provenance_e2e(
     contain graph_mode_applied="naive" and at least one result item with
     non-null graph_provenance.
     """
-    _install_content_aware_spacy_stub(monkeypatch)
+    _install_code_graph_stub(monkeypatch)
 
     col = "t3-s12-mcp-explain-naive"
     doc1, doc2 = _build_corpus(tmp_path)

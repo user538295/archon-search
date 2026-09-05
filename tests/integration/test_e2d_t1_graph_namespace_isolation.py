@@ -43,6 +43,7 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
@@ -64,21 +65,10 @@ def _auth(api_key: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# spaCy stub — returns [Alice (PERSON), Google (ORG)] for any input text.
+# the graph-engine stub — returns [Alice (PERSON), Google (ORG)] for any input text.
 # Must be installed BEFORE make_real_app(graph_enabled=True) because create_app
-# calls _check_graph_deps which imports spaCy synchronously.
+# calls _check_graph_deps which imports gliner synchronously.
 # ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return two fixed entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub
-
-    install_graph_engine_stub(monkeypatch)
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +259,7 @@ def test_e2d_t1_delete_removes_mentions_namespace_isolated(
     6. Assert nsb mention count for shared_doc_id == count-before (unaffected).
        Two-sided check: both must hold simultaneously.
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     col = "docs"
 
@@ -283,7 +273,7 @@ def test_e2d_t1_delete_removes_mentions_namespace_isolated(
 
     shared_entity_id = make_stable_entity_id(EntityType.concept.value, "sharedentity")
 
-    # Graph-enabled app context (spaCy stub installed above).
+    # Graph-enabled app context (the graph-engine stub installed above).
     # Multi-namespace API keys are set up but no HTTP endpoints are called;
     # the isolation assertion lives entirely in graph store tables.
     key_a = secrets.token_hex(32)
@@ -386,7 +376,7 @@ def test_e2d_t1_shared_entity_survives_partial_delete(
 
     Steps:
     1. HTTP-ingest two files (D1, D2) with graph enabled.
-       The spaCy stub returns [Alice (PERSON), Google (ORG)] for any text;
+       The graph-engine stub returns [Alice (PERSON), Google (ORG)] for any text;
        both D1 and D2 get the same entity set — "Alice" is the shared entity E.
     2. Verify both D1 and D2 have mention rows for "Alice".
     3. Delete D1 (remove vector chunks + graph mention rows for doc_id_d1).
@@ -398,7 +388,7 @@ def test_e2d_t1_shared_entity_survives_partial_delete(
     8. GET /graph/{col} → assert "Alice" absent.
        (Requires BE-5 + BE-7 — WILL FAIL until GC is implemented.)
     """
-    _install_spacy_stub(monkeypatch)
+    install_graph_engine_stub(monkeypatch)
 
     col = "shared-col"
 
@@ -418,7 +408,7 @@ def test_e2d_t1_shared_entity_survives_partial_delete(
 
     with make_real_app(tmp_path, monkeypatch, graph_enabled=True) as (client, cfg, api_key):
 
-        # Step 1: HTTP-ingest both docs. spaCy stub writes Alice + Google mentions for both.
+        # Step 1: HTTP-ingest both docs. the graph-engine stub writes Alice + Google mentions for both.
         ingest_file_via_path(client, col, str(doc_d1), api_key=api_key)
         ingest_file_via_path(client, col, str(doc_d2), api_key=api_key)
 
@@ -431,11 +421,11 @@ def test_e2d_t1_shared_entity_survives_partial_delete(
         )
         assert count_d1_before > 0, (
             f"Expected D1 mentions after ingest; got {count_d1_before}. "
-            "Graph extraction may not have run — check spaCy stub installation."
+            "Graph extraction may not have run — check the graph-engine stub installation."
         )
         assert count_d2_before > 0, (
             f"Expected D2 mentions after ingest; got {count_d2_before}. "
-            "Graph extraction may not have run — check spaCy stub installation."
+            "Graph extraction may not have run — check the graph-engine stub installation."
         )
 
         # Step 3: Delete D1 (vector chunks + graph mention rows).

@@ -6,10 +6,10 @@ Scenarios covered:
 - S7: GET /graph/{collection} edge responses include relationship_type="synonym_of"
 
 Strategy:
-- Install a content-dependent spaCy stub: returns "K8s" (ORG label → system type)
-  only when "K8s" appears in text; returns "Kubernetes" (ORG label → system type) only
+- Install a content-dependent graph-engine stub: returns "K8s" (label "system")
+  only when "K8s" appears in text; returns "Kubernetes" (label "system") only
   when "Kubernetes" appears in text — so K8s-doc and Kubernetes-doc get different nodes.
-  graph_extractor._LABEL_TO_ENTITY_TYPE maps "ORG" → EntityType.system.
+  The engine's own EntityType label ("system") is set directly — there is no mapping table.
 - Start app via make_real_app(graph_enabled=True).
 - Ingest K8s-doc and Kubernetes-doc to produce two distinct graph nodes.
 - Backfill name_embedding on both nodes with near-identical vectors (cosine ≈ 0.9997, well above the 0.85 default threshold).
@@ -111,7 +111,7 @@ def test_e2e_health_metrics_reflect_synonym_activity(
     S7: GET /graph/{collection} edge responses include relationship_type="synonym_of".
 
     Steps:
-    1. Install content-dependent spaCy stub.
+    1. Install content-dependent graph-engine stub.
     2. Start app with graph_enabled=True.
     3. Ingest K8s-doc (contains "K8s") → K8s system node written.
     4. Ingest Kubernetes-doc (contains "Kubernetes") → Kubernetes system node.
@@ -120,10 +120,10 @@ def test_e2e_health_metrics_reflect_synonym_activity(
     7. GET /status → assert synonym_edge_count > 0 in the collection's GraphCollectionStats.
     8. GET /graph/{collection} → assert at least one edge has relationship_type="synonym_of".
     """
-    from tests.integration.conftest import ingest_file_via_path, install_k8s_synonym_spacy_stub, make_real_app
+    from tests.integration.conftest import ingest_file_via_path, install_k8s_synonym_graph_stub, make_real_app
 
-    # Step 1: install content-dependent spaCy stub BEFORE make_real_app
-    install_k8s_synonym_spacy_stub(monkeypatch)
+    # Step 1: install content-dependent graph-engine stub BEFORE make_real_app
+    install_k8s_synonym_graph_stub(monkeypatch)
 
     col = "t3-health-metrics"
     ns = "default"

@@ -14,7 +14,7 @@ Helper functions (``_free_port``, ``_start_server``, ``_poll_health_and_ready``,
 fixture for tests needing ``[graph] enabled = true`` (e.g. the S3
 ``graph build-communities --wait`` e2e test) — kept off ``smoke_server``
 itself so the graph feature stays off by default for the rest of the suite.
-It ``importorskip``s spaCy before starting the server (defensive: the ``graph``
+It ``importorskip``s gliner before starting the server (defensive: the ``graph``
 extra is pulled into the ``dev`` group via its self-referencing
 ``archon-search[...,graph,code]`` entry in ``pyproject.toml``, but this guards
 environments where that dev-group install was skipped) and seeds a
@@ -324,7 +324,7 @@ def smoke_server(tmp_path_factory) -> Iterator[SmokeServer]:
 
 # Graph-corpus docs: unlike ``_CORPUS_DOCS`` (generic prose that yields at most
 # one entity per doc and therefore no co-occurrence edges), these sentences pack
-# several spaCy-recognised named entities (PERSON/ORG/GPE) into each chunk so the
+# several engine-recognised named entities (PERSON/ORG/GPE) into each chunk so the
 # real extraction pipeline produces MULTIPLE nodes AND co-occurrence edges. Only
 # then does ``CommunityBuilder.build`` clear its ``len(nodes) < 2`` short-circuit
 # and actually run Leiden clustering — the real S3 happy path T-1 exercises. A
@@ -376,7 +376,7 @@ def smoke_server_graph_enabled(tmp_path_factory) -> Iterator[SmokeServer]:
     (``uv run pytest tests/smoke/``), never part of the default suite.
 
     Graph extras guard: ``graph.enabled = true`` makes the server raise
-    ``ConfigError`` at startup if spaCy is absent. The ``graph`` extra is part
+    ``ConfigError`` at startup if gliner is absent. The ``graph`` extra is part
     of the ``dev`` group today (pulled in via its self-referencing
     ``archon-search[...,graph,code]`` entry in ``pyproject.toml``), so this
     ``importorskip`` is now a defensive guard for environments where that
@@ -393,7 +393,7 @@ def smoke_server_graph_enabled(tmp_path_factory) -> Iterator[SmokeServer]:
     single-node short-circuit — the S3 happy path, not the S8 empty-graph
     failure path.
     """
-    pytest.importorskip("spacy")
+    pytest.importorskip("gliner")
 
     port = _free_port()
     data_dir = tmp_path_factory.mktemp("smoke_data_graph")

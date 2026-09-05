@@ -2,13 +2,13 @@
 
 Tests:
 - test_post_ingest_synonym_enrichment_fires_and_creates_edges: full ingest via
-  real SearchStore + SearchPipeline (graph_enabled=True) + spaCy stub → trigger
+  real SearchStore + SearchPipeline (graph_enabled=True) + the graph-engine stub → trigger
   enrichment callback → synonym_of edge exists in graph store.
 
 Strategy:
 - Use a real SearchStore + SearchPipeline (no HTTP layer needed — the callback
   fires synchronously within ingest_file via on_synonym_edges_written).
-- Install a spaCy stub (same pattern as test_e1a_be5_ingest_graph_integration.py).
+- Install a graph-engine stub (same pattern as test_e1a_be5_ingest_graph_integration.py).
 - Patch GraphExtractor.extract() to return two CONCEPT nodes with pre-set
   name_embeddings whose cosine similarity exceeds the default threshold (0.85).
 - Call pipeline.ingest_file() directly.

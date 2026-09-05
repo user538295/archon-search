@@ -24,24 +24,14 @@ from pathlib import Path
 import pytest
 
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
 
 pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# spaCy stub — needed for make_real_app(graph_enabled=True)
+# the graph-engine stub — needed for make_real_app(graph_enabled=True)
 # ---------------------------------------------------------------------------
-
-
-def _install_spacy_stub_no_entities(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the gliner-backed extraction engine to return NO named entities.
-
-    Historical name kept for minimal diff; no longer touches spaCy — BE-11
-    rewired GraphExtractor onto ProseExtractionBackend/gliner.
-    """
-    from tests._graph_engine_stub import install_graph_engine_stub_no_entities
-
-    install_graph_engine_stub_no_entities(monkeypatch)
 
 
 def _auth(api_key: str) -> dict[str, str]:
@@ -94,7 +84,7 @@ def test_e2e_global_mode_returns_results(
 
     Communities are seeded directly into the store (no leidenalg needed).
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "t1-global-mode-results"
     doc = tmp_path / "test_doc.txt"
@@ -171,7 +161,7 @@ def test_e2e_global_mode_no_communities_422(
     Verifies that the route catches GraphCommunitiesNotBuiltError and returns a 422
     with {"detail": {"code": "graph_communities_not_built"}} body.
     """
-    _install_spacy_stub_no_entities(monkeypatch)
+    install_graph_engine_stub(monkeypatch, empty=True)
 
     col = "t1-global-no-communities"
     doc = tmp_path / "test_doc.txt"
