@@ -109,6 +109,18 @@ _DEFREF_RELATIONSHIP_TYPES = frozenset(
     }
 )
 
+# Prose relationship types the NER path produces mention-by-mention; the only
+# types the unsupported-edge sweep may judge by co-mention (BE-20). `synonym_of`
+# is dictionary-derived and the def/ref types are file-derived — both excluded.
+_MENTION_DERIVED_RELATIONSHIP_TYPES = frozenset(
+    {
+        RelationshipType.related_to.value,
+        RelationshipType.uses.value,
+        RelationshipType.implements.value,
+        RelationshipType.depends_on.value,
+    }
+)
+
 
 def _edge_is_defref(extraction_method: str | None, relationship_type: str) -> bool:
     """Return True when an edge row is def/ref tier (BE-3 GC exemption + doc delete)."""
@@ -2199,8 +2211,10 @@ class GraphStore:
         # accurate collection-wide ledger — it is replaced per-doc on every
         # ingest and pruned for dead chunks — so ask it instead.
         #
-        # Scoped to `related_to`, which the NER co-occurrence loop
-        # (`graph_extractor.py`) is the only producer of. Def/ref edges are
+        # Scoped to the mention-derived prose types (`related_to`, `uses`,
+        # `implements`, `depends_on`), which the prose extraction paths in
+        # `graph_extractor.py` are the only producer of (`related_to` from the
+        # co-occurrence loop, the typed edges from the relation path). Def/ref edges are
         # file-derived and synonym/alias edges are dictionary-derived; neither is
         # mention-backed, so neither may be judged by co-mention. `_edge_is_defref`
         # covers both the extraction-method tags and the def/ref relationship types.
@@ -2214,7 +2228,7 @@ class GraphStore:
                 rel_types,
                 methods,
             ):
-                if rel_type != RelationshipType.related_to.value:
+                if rel_type not in _MENTION_DERIVED_RELATIONSHIP_TYPES:
                     continue
                 if eid in exempt_edge_ids or eid in _orphaned:
                     continue

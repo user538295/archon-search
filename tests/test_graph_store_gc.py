@@ -19,7 +19,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pyarrow as pa
 import pytest
 
-from archon_search.graph_store import GraphStore
+from archon_search.graph_store import (
+    _DEFREF_RELATIONSHIP_TYPES,
+    _MENTION_DERIVED_RELATIONSHIP_TYPES,
+    GraphStore,
+)
 from archon_search.graph_types import (
     EntityType,
     GcPassResult,
@@ -340,13 +344,18 @@ def test_delete_orphan_nodes_preserves_nodes_with_remaining_mentions() -> None:
 
 
 def test_delete_orphan_edges_preserves_edges_between_live_nodes() -> None:
-    """Edges connecting two live nodes (both with mentions) must NOT be deleted."""
+    """Edges between two live nodes (both mentioned) that still co-occur in a
+    chunk must NOT be deleted — this isolates the orphan-node path from the
+    co-mention sweep."""
     node_a = _node("EntityA")
     node_b = _node("EntityB")
     edge_ab = _edge(node_a, node_b)
 
+    # Same chunk: the pair co-occurs, so the mention-derived `uses` edge stays
+    # supported under the BE-20 widened sweep and this test still isolates the
+    # orphan-node deletion path (both nodes live → edge kept).
     mention_a = _mention(node_a.id, "chunk-1")
-    mention_b = _mention(node_b.id, "chunk-2")
+    mention_b = _mention(node_b.id, "chunk-1")
 
     mentions_q = AsyncMock()
     mentions_q.to_arrow = AsyncMock(return_value=_mentions_arrow([mention_a, mention_b]))
@@ -1400,8 +1409,9 @@ def test_gc_removes_related_to_edge_whose_pair_is_no_longer_co_mentioned(
         acme = _node("Acme Corp", EntityType.system)
         london = _node("London", EntityType.system)
 
-        # `related_to` explicitly: `_edge` builds `uses`, which the sweep does not
-        # touch. Co-occurrence edges are what this bug is about.
+        # `related_to` explicitly (the `_edge` helper builds `uses`): this test
+        # predates BE-20 and pins the original co-occurrence sweep behaviour on
+        # its first-covered type, so keep it on `related_to`.
         def _related(src: GraphNode, tgt: GraphNode) -> GraphEdge:
             return GraphEdge(
                 id=make_stable_edge_id(src.id, tgt.id, RelationshipType.related_to.value),
@@ -1459,10 +1469,11 @@ def test_gc_removes_related_to_edge_whose_pair_is_no_longer_co_mentioned(
 
 
 def test_gc_sweep_spares_defref_and_synonym_edges(tmp_path: Path) -> None:
-    """The sweep is scoped to `related_to`, which the NER co-occurrence path is the
-    only producer of. Def/ref edges (`calls`/`imports`/`defines`/`inherits`) are
-    file-derived and synonym edges are dictionary-derived — neither is
-    mention-backed, so neither may be judged by co-mention."""
+    """The sweep is scoped to the mention-derived prose types (`related_to`,
+    `uses`, `implements`, `depends_on`). Def/ref edges (`calls`/`imports`/
+    `defines`/`inherits`) are file-derived and synonym edges are
+    dictionary-derived — neither is mention-backed, so neither may be judged by
+    co-mention."""
 
     async def _run() -> None:
         store = GraphStore(tmp_path)
@@ -1517,6 +1528,211 @@ def test_gc_sweep_spares_defref_and_synonym_edges(tmp_path: Path) -> None:
         await store.disconnect()
 
     asyncio.run(_run())
+
+
+def test_typed_edge_swept_when_endpoints_stop_co_occurring(tmp_path: Path) -> None:
+    """A mention-derived typed edge (`uses`/`implements`/`depends_on`) whose
+    endpoints no longer co-occur in any chunk is swept exactly as `related_to`
+    is (BE-20, S22/S40). The allowlist widened from `related_to` alone."""
+
+    async def _run() -> None:
+        store = GraphStore(tmp_path)
+        await store.connect()
+
+        alice = _node("Alice", EntityType.person)
+        acme = _node("Acme Corp", EntityType.system)
+        london = _node("London", EntityType.system)
+
+        def _typed(
+            src: GraphNode, tgt: GraphNode, rel: RelationshipType
+        ) -> GraphEdge:
+            return GraphEdge(
+                id=make_stable_edge_id(src.id, tgt.id, rel.value),
+                source_node_id=src.id,
+                target_node_id=tgt.id,
+                relationship_type=rel,
+                source_doc_id="doc-1",
+            )
+
+        supported = _typed(alice, london, RelationshipType.uses)      # still co-mentioned
+        unsupported = _typed(alice, acme, RelationshipType.depends_on)  # pair split apart
+
+        await store.ensure_graph_tables(_COL, ns=_NS)
+        await store.write_graph(
+            _COL, [alice, acme, london], [supported, unsupported], ns=_NS
+        )
+        # Every node still mentioned (nothing orphaned), but Alice and Acme no
+        # longer share a chunk.
+        await store.write_mentions(
+            _COL,
+            [
+                GraphMention(entity_id=alice.id, chunk_id="chunk-2", doc_id="doc-1"),
+                GraphMention(entity_id=london.id, chunk_id="chunk-2", doc_id="doc-1"),
+                GraphMention(entity_id=acme.id, chunk_id="chunk-3", doc_id="doc-1"),
+            ],
+            ns=_NS,
+        )
+
+        result = await store.delete_orphan_nodes_and_edges(_COL, _NS)
+
+        remaining = {e.id for e in await store.get_all_edges(_COL, ns=_NS)}
+        assert unsupported.id not in remaining, (
+            "a typed prose edge whose endpoints no longer co-occur asserts a "
+            "relationship no document supports; it must be swept like related_to"
+        )
+        assert supported.id in remaining, (
+            "a typed edge whose pair still shares a chunk must survive"
+        )
+        assert result.orphan_nodes_removed == 0
+        assert result.orphan_edges_removed == 1
+
+        await store.disconnect()
+
+    asyncio.run(_run())
+
+
+def test_typed_edge_kept_while_endpoints_still_co_occur(tmp_path: Path) -> None:
+    """The accepted weaker guarantee (S22): a typed edge is kept while its
+    endpoints still co-occur in a chunk — the sweep is a support test, not a
+    blanket delete of every typed edge."""
+
+    async def _run() -> None:
+        store = GraphStore(tmp_path)
+        await store.connect()
+
+        src = _node("HttpServer", EntityType.system)
+        tgt = _node("TokenBucket", EntityType.system)
+
+        edge = GraphEdge(
+            id=make_stable_edge_id(src.id, tgt.id, RelationshipType.implements.value),
+            source_node_id=src.id,
+            target_node_id=tgt.id,
+            relationship_type=RelationshipType.implements,
+            source_doc_id="doc-1",
+        )
+
+        await store.ensure_graph_tables(_COL, ns=_NS)
+        await store.write_graph(_COL, [src, tgt], [edge], ns=_NS)
+        # Both endpoints co-occur in the same chunk → still supported.
+        await store.write_mentions(
+            _COL,
+            [
+                GraphMention(entity_id=src.id, chunk_id="chunk-1", doc_id="doc-1"),
+                GraphMention(entity_id=tgt.id, chunk_id="chunk-1", doc_id="doc-1"),
+            ],
+            ns=_NS,
+        )
+
+        result = await store.delete_orphan_nodes_and_edges(_COL, _NS)
+
+        remaining = {e.id for e in await store.get_all_edges(_COL, ns=_NS)}
+        assert edge.id in remaining, "a still-co-occurring typed edge must be kept"
+        assert result.orphan_edges_removed == 0
+
+        await store.disconnect()
+
+    asyncio.run(_run())
+
+
+def test_defref_edges_remain_exempt_after_widening(tmp_path: Path) -> None:
+    """Widening the allowlist to typed prose edges leaves the def/ref exemption
+    intact on BOTH of its branches (BE-20, S40):
+
+    - a `calls` edge is spared by the relationship-type filter — `calls` is not
+      in the widened allowlist, so the sweep skips it before ever asking about
+      support;
+    - a mention-derived `uses` edge tagged `extraction_method="inferred"` (the
+      shape BE-4 cross-file inferred edges take: mention-derived rel_type, no
+      chunk boundary) reaches the sweep's support check but is spared by the
+      `_edge_is_defref` extraction-method branch — the branch a `calls` edge
+      never exercises. Without this case the exemption's live half is untested.
+
+    Both endpoints of each edge are mentioned but never share a chunk, so an
+    unscoped sweep would delete both."""
+
+    async def _run() -> None:
+        store = GraphStore(tmp_path)
+        await store.connect()
+
+        caller = _node("parse_config", EntityType.code_symbol)
+        callee = _node("read_toml", EntityType.code_symbol)
+        src = _node("HttpServer", EntityType.system)
+        tgt = _node("TokenBucket", EntityType.system)
+
+        defref = GraphEdge(
+            id=make_stable_edge_id(caller.id, callee.id, RelationshipType.calls.value),
+            source_node_id=caller.id,
+            target_node_id=callee.id,
+            relationship_type=RelationshipType.calls,
+            source_doc_id="doc-code",
+            extraction_method="extracted",
+        )
+        # Mention-derived type IN the widened allowlist, so it passes the
+        # rel-type filter; spared only by the extraction_method exemption branch.
+        inferred = GraphEdge(
+            id=make_stable_edge_id(src.id, tgt.id, RelationshipType.uses.value),
+            source_node_id=src.id,
+            target_node_id=tgt.id,
+            relationship_type=RelationshipType.uses,
+            source_doc_id="doc-code",
+            extraction_method="inferred",
+        )
+
+        await store.ensure_graph_tables(_COL, ns=_NS)
+        await store.write_graph(
+            _COL, [caller, callee, src, tgt], [defref, inferred], ns=_NS
+        )
+        # Every node mentioned, but no PAIR shares a chunk — both edges are
+        # unsupported by co-mention; only the def/ref exemption keeps them.
+        await store.write_mentions(
+            _COL,
+            [
+                GraphMention(entity_id=caller.id, chunk_id="c1", doc_id="doc-code"),
+                GraphMention(entity_id=callee.id, chunk_id="c2", doc_id="doc-code"),
+                GraphMention(entity_id=src.id, chunk_id="c3", doc_id="doc-code"),
+                GraphMention(entity_id=tgt.id, chunk_id="c4", doc_id="doc-code"),
+            ],
+            ns=_NS,
+        )
+
+        result = await store.delete_orphan_nodes_and_edges(_COL, _NS)
+
+        remaining = {e.id for e in await store.get_all_edges(_COL, ns=_NS)}
+        assert defref.id in remaining, (
+            "a `calls` edge is not mention-derived; the rel-type filter spares it"
+        )
+        assert inferred.id in remaining, (
+            "a mention-derived edge tagged `inferred` must be spared by the "
+            "extraction-method exemption even when its endpoints no longer co-occur"
+        )
+        assert result.orphan_edges_removed == 0
+
+        await store.disconnect()
+
+    asyncio.run(_run())
+
+
+def test_relationship_types_partition_across_edge_tiers() -> None:
+    """The sweep's correctness rests on every `RelationshipType` belonging to
+    exactly one tier: def/ref (file-derived), mention-derived (prose), or
+    `synonym_of` (dictionary-derived). A future enum member left out of all
+    three would silently escape the co-mention sweep (a new prose type never
+    reaped) or be misjudged. This guard forces a conscious placement (BE-20)."""
+
+    tiers = (
+        _DEFREF_RELATIONSHIP_TYPES
+        | _MENTION_DERIVED_RELATIONSHIP_TYPES
+        | {RelationshipType.synonym_of.value}
+    )
+    all_types = {rel.value for rel in RelationshipType}
+    assert tiers == all_types, (
+        "every RelationshipType must be classified into exactly one edge tier; "
+        f"unclassified: {all_types - tiers}"
+    )
+    assert not (_DEFREF_RELATIONSHIP_TYPES & _MENTION_DERIVED_RELATIONSHIP_TYPES), (
+        "def/ref and mention-derived tiers must stay disjoint — the sweep's "
+        "rel-type filter and def/ref exemption assume no overlap"
+    )
 
 
 def test_gc_sweep_survives_pre_e2f_edges_table_without_extraction_method() -> None:
