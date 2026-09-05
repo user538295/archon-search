@@ -30,6 +30,10 @@ from archon_search.install import (
     _prompt_optional_features,
     _prompt_provider,
 )
+from archon_search.install.extras import (
+    CODE_EXTRA_SIZE_ESTIMATE,
+    GRAPH_MODEL_SIZE_ESTIMATE,
+)
 from archon_search.install.wizard import (
     _LLAMA_CPP_CACHE_LIST_TIMEOUT_SECONDS,
     _LLAMA_CPP_DEFAULT_PORT,
@@ -780,6 +784,92 @@ class TestPromptOptionalFeaturesExplanations:
                 profile=self._profile_with_reranker,
             )
         assert mock_input.call_count == 9
+
+
+class TestPromptOptionalFeaturesBundledDisclosure:
+    """FE-2 (S9, S36) — one bundled question, two stated download costs."""
+
+    _profile = ENGLISH_PROFILES["minimal"]
+
+    def test_one_question_still_installs_code_and_graph_together(self) -> None:
+        """Answering yes installs both [code] and [graph] — the switch<->package guarantee."""
+        with patch("builtins.input", side_effect=AssertionError("should not prompt")):
+            features = _prompt_optional_features(
+                non_interactive=True,
+                profile=self._profile,
+                install_code=True,
+            )
+        assert features.install_code_extra is True
+        assert features.install_graph_extra is True
+
+    def test_declining_installs_neither_code_nor_graph(self) -> None:
+        """Declining installs neither extra — the bundle holds downward too (no upward decouple)."""
+        features = _prompt_optional_features(
+            non_interactive=True,
+            profile=self._profile,
+            install_code=False,
+        )
+        assert features.install_code_extra is False, "declining must not install the code extra"
+        assert features.install_graph_extra is False, "declining must not install the graph extra"
+
+    # Full labelled bullet lines, built from the descriptors so the assertions
+    # prove each feature's own cost is present as its own line (not a bare "18"
+    # that is also a substring of "1218").
+    _CODE_COST_LINE = (
+        "Code enrichment: tree-sitter language parsers, "
+        f"about {CODE_EXTRA_SIZE_ESTIMATE.declared_mb} MB"
+    )
+    _GRAPH_COST_LINE = (
+        "Graph extraction: a prose entity/relation model, an estimated "
+        f"{GRAPH_MODEL_SIZE_ESTIMATE.declared_mb} MB"
+    )
+
+    def test_two_separate_costs_are_stated_before_the_question(self, capsys) -> None:
+        """Two distinct per-feature cost lines, each labelled and carrying its own MB."""
+        _prompt_optional_features(non_interactive=True, profile=self._profile)
+        out = capsys.readouterr().out
+        assert self._CODE_COST_LINE in out, "code cost line (label + MB) missing from disclosure"
+        assert self._GRAPH_COST_LINE in out, "graph cost line (label + MB) missing from disclosure"
+
+    def test_disclosure_precedes_question_and_one_yes_installs_both(self, capsys) -> None:
+        """Interactive: disclosure prints before the code question (S9); one yes installs both (S36)."""
+        pre_question: dict[str, str] = {}
+        call_no = {"n": 0}
+
+        def _fake_input(_prompt: str) -> str:
+            call_no["n"] += 1
+            if call_no["n"] == 1:  # the code/graph question — the first prompt
+                pre_question["out"] = capsys.readouterr().out
+                return "y"
+            return ""  # decline / accept-default every later prompt so the call completes
+
+        with patch("builtins.input", _fake_input):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
+
+        assert self._CODE_COST_LINE in pre_question["out"], "code cost must print before the question"
+        assert self._GRAPH_COST_LINE in pre_question["out"], "graph cost must print before the question"
+        assert features.install_code_extra is True, "one 'yes' must install the code extra"
+        assert features.install_graph_extra is True, "one 'yes' must install the graph extra (bundled)"
+
+    def test_graph_prompt_names_no_engine_and_quotes_the_declared_estimate(self, capsys) -> None:
+        """Graph half quotes the declared estimate + license, names no engine."""
+        _prompt_optional_features(non_interactive=True, profile=self._profile)
+        out = capsys.readouterr().out
+        assert self._GRAPH_COST_LINE in out, "graph declared estimate missing"
+        assert GRAPH_MODEL_SIZE_ESTIMATE.license in out, "graph license not disclosed"
+        lowered = out.lower()
+        # The current engine + runtime must not leak. The removed engine is not
+        # asserted here on purpose: naming it literally would itself trip S42's
+        # repo-wide removed-engine guard (test_removed_engine_repo_guard.py),
+        # which already proves it appears in no tracked file — including this
+        # disclosure's source.
+        assert "gliner" not in lowered, "engine name 'gliner' leaked into disclosure"
+        assert "onnx" not in lowered, "runtime name 'onnx' leaked into disclosure"
 
 
 class TestWizardFeaturesC15NewFields:

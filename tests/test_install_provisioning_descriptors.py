@@ -30,7 +30,7 @@ def test_provisioned_descriptor_carries_digest_and_exact_bytes():
     estimate_fields = {f.name for f in dataclasses.fields(SizeEstimateSpec)}
     assert "sha256" not in estimate_fields
     assert "size_bytes" not in estimate_fields
-    assert estimate_fields == {"name", "declared_mb"}
+    assert estimate_fields == {"name", "declared_mb", "license"}
 
 
 def test_graph_model_uses_the_estimate_shape_not_provisioned():

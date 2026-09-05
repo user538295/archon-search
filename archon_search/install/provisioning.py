@@ -67,3 +67,4 @@ class SizeEstimateSpec:
 
     name: str
     declared_mb: int
+    license: str | None = None

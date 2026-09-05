@@ -113,6 +113,11 @@ model SizeEstimateSpec {
 
   /// Declared install size in megabytes — an estimate, not a measured byte count.
   declaredMb: int32;
+
+  /// SPDX license identifier, surfaced in the pre-download disclosure. Unset for estimates
+  /// whose license is not disclosed here (e.g. the tree-sitter bundle); set for the graph
+  /// model estimate (`Apache-2.0`). Disclose-only — this shape carries no `licenseDisposition`.
+  license?: string;
 }
 
 /// The license rule, applied to every artifact descriptor rather than decided per model.

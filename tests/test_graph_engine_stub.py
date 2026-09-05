@@ -83,11 +83,12 @@ def test_no_test_file_names_the_removed_engine() -> None:
     second offending file cannot hide behind one):
 
     * ``_ALLOWLIST`` — files that may legitimately name the engine: this guard
-      itself (it must contain the search terms), and the captured spaCy
-      throughput baseline (``_graph_ner_throughput_baseline.py``), a frozen
-      historical measurement record whose whole purpose is to record what the
-      pre-removal engine produced — its facts must not be rewritten to pass a
-      lint.
+      itself (it must contain the search terms), BE-21's repo-wide guard
+      (``test_removed_engine_repo_guard.py``), which must also carry the search
+      literal, and the captured spaCy throughput baseline
+      (``_graph_ner_throughput_baseline.py``), a frozen historical measurement
+      record whose whole purpose is to record what the pre-removal engine
+      produced — its facts must not be rewritten to pass a lint.
     * ``_DATA_PREFIX`` — the Wikipedia-derived eval *corpus* is retrieval DATA,
       not test code; a source document that legitimately mentions spaCy must not
       trip a code-naming guard. BE-21's repo-wide scan owns corpus coverage.
@@ -96,6 +97,7 @@ def test_no_test_file_names_the_removed_engine() -> None:
     fixture under ``tests/`` cannot crash the scan with ``UnicodeDecodeError``."""
     _ALLOWLIST = {
         "tests/test_graph_engine_stub.py",
+        "tests/test_removed_engine_repo_guard.py",
         "tests/eval/_graph_ner_throughput_baseline.py",
     }
     _DATA_PREFIX = "tests/eval/corpus/"

@@ -21,6 +21,10 @@ from archon_search.platform.types import GpuType
 from archon_search.profiles import VALID_PROFILE_NAMES, InstallProfile
 
 from .config_writer import WizardFeatures
+from .extras import (
+    CODE_EXTRA_SIZE_ESTIMATE,
+    GRAPH_MODEL_SIZE_ESTIMATE,
+)
 from .render import _render_profile_table
 
 logger = logging.getLogger(__name__)
@@ -650,11 +654,17 @@ def _prompt_optional_features(
     # --- install_code_extra + install_graph_extra (BE-11: bundled auto-install) ---
     print(
         "\nCode enrichment (tree-sitter) + code graphing:\n"
-        "  Parses and indexes code files structurally — functions, classes, docstrings.\n"
-        "  Installs tree-sitter language parsers (~50 MB) and graph enrichment (spaCy),\n"
-        "  and enables graph.enabled in the generated config. Both are set up together\n"
-        "  automatically so code graphing works out of the box. Recommended if your\n"
-        "  corpus includes source code. Default: disabled."
+        "  Parses and indexes code files structurally — functions, classes, docstrings,\n"
+        "  and enables graph.enabled in the generated config. Both features below are set\n"
+        "  up together automatically so code graphing works out of the box. Recommended if\n"
+        "  your corpus includes source code. Default: disabled.\n"
+        "  Estimated download sizes, shown before anything is fetched:\n"
+        "    - Code enrichment: tree-sitter language parsers, about "
+        f"{CODE_EXTRA_SIZE_ESTIMATE.declared_mb} MB, installed now.\n"
+        "    - Graph extraction: a prose entity/relation model, an estimated "
+        f"{GRAPH_MODEL_SIZE_ESTIMATE.declared_mb} MB (approximate, not a verified "
+        "size), fetched on first use, licensed under "
+        f"{GRAPH_MODEL_SIZE_ESTIMATE.license}."
     )
     if install_code is not None:
         _install_code_extra_val = install_code

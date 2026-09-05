@@ -153,7 +153,9 @@ CODE_EXTRA_SIZE_ESTIMATE = SizeEstimateSpec(name="archon-search[code]", declared
 # digest-pinned provisioning seam, so it declares an estimate too. 1218 MB is the 1,276,776,490
 # byte ONNX export measured during the graph-NER spike — a ballpark for the display and the disk
 # guard, not a verified download size.
-GRAPH_MODEL_SIZE_ESTIMATE = SizeEstimateSpec(name="gliner-relex-multi-v1.0", declared_mb=1218)
+GRAPH_MODEL_SIZE_ESTIMATE = SizeEstimateSpec(
+    name="gliner-relex-multi-v1.0", declared_mb=1218, license="Apache-2.0"
+)
 
 
 def _install_code_extra(dry_run: bool = False) -> None:
