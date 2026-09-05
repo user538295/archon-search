@@ -1,13 +1,12 @@
 """Tests for BE-0: LLMEnrichmentClientProtocol and AnthropicEnrichmentClient.
 
-TDD test suite — written before production code exists.
+Narrowed to community summarisation only (BE-17): the protocol and the
+AnthropicEnrichmentClient carry a single method, ``summarize_community``.
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import time
-from dataclasses import fields
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -47,30 +46,7 @@ def _make_ready_client(
 
 
 # ---------------------------------------------------------------------------
-# 1. LabeledRelationship dataclass
-# ---------------------------------------------------------------------------
-
-
-def test_label_relationship_dataclass() -> None:
-    """LabeledRelationship must expose source_entity, target_entity, relationship_type fields."""
-    from archon_search.graph_enrichment_protocol import LabeledRelationship
-
-    field_names = {f.name for f in fields(LabeledRelationship)}
-    assert field_names == {"source_entity", "target_entity", "relationship_type"}
-
-    # Constructible with positional args
-    lr = LabeledRelationship(
-        source_entity="A",
-        target_entity="B",
-        relationship_type="uses",
-    )
-    assert lr.source_entity == "A"
-    assert lr.target_entity == "B"
-    assert lr.relationship_type == "uses"
-
-
-# ---------------------------------------------------------------------------
-# 2. Protocol structural typing
+# Protocol structural typing
 # ---------------------------------------------------------------------------
 
 
@@ -87,7 +63,7 @@ def test_protocol_method_signatures() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. summarize_community raises on API error
+# summarize_community raises on API error
 # ---------------------------------------------------------------------------
 
 
@@ -116,36 +92,7 @@ async def test_client_raises_on_api_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. label_relationships raises on error
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_client_raises_on_label_relationships_error() -> None:
-    """AnthropicEnrichmentClient.label_relationships must propagate (not swallow) errors."""
-    client = _make_client()
-
-    class _FakeAPIError(Exception):
-        pass
-
-    fake_messages = MagicMock()
-    fake_messages.create = AsyncMock(side_effect=_FakeAPIError("network error"))
-    fake_anthropic_client = MagicMock()
-    fake_anthropic_client.messages = fake_messages
-    client._client = fake_anthropic_client
-    client._anthropic_available = True
-
-    client._check_rate_limit = AsyncMock(return_value=None)
-
-    with pytest.raises(_FakeAPIError):
-        await client.label_relationships(
-            entity_pairs=[("A", "B")],
-            chunk_text="A uses B",
-        )
-
-
-# ---------------------------------------------------------------------------
-# 5. summarize_community happy path
+# summarize_community happy path
 # ---------------------------------------------------------------------------
 
 
@@ -165,146 +112,7 @@ async def test_summarize_community_returns_text() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. label_relationships happy path
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_label_relationships_returns_labeled_relationships() -> None:
-    """label_relationships parses the JSON array into LabeledRelationship objects."""
-    from archon_search.graph_enrichment_protocol import LabeledRelationship
-
-    payload = json.dumps([
-        {"source_entity": "A", "target_entity": "B", "relationship_type": "uses"},
-        {"source_entity": "C", "target_entity": "D", "relationship_type": "depends_on"},
-    ])
-    client, _ = _make_ready_client(mock_response_text=payload)
-    client._check_rate_limit = AsyncMock(return_value=None)
-
-    results = await client.label_relationships(
-        entity_pairs=[("A", "B"), ("C", "D")],
-        chunk_text="A uses B. C depends on D.",
-    )
-
-    assert len(results) == 2
-    assert results[0] == LabeledRelationship(
-        source_entity="A", target_entity="B", relationship_type="uses"
-    )
-    assert results[1] == LabeledRelationship(
-        source_entity="C", target_entity="D", relationship_type="depends_on"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 7. label_relationships skips unknown relationship types
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_label_relationships_unknown_type_skipped() -> None:
-    """label_relationships drops items with unknown relationship_type."""
-    from archon_search.graph_enrichment_protocol import LabeledRelationship
-
-    payload = json.dumps([
-        {"source_entity": "A", "target_entity": "B", "relationship_type": "uses"},
-        {"source_entity": "X", "target_entity": "Y", "relationship_type": "knows_about"},
-    ])
-    client, _ = _make_ready_client(mock_response_text=payload)
-    client._check_rate_limit = AsyncMock(return_value=None)
-
-    results = await client.label_relationships(
-        entity_pairs=[("A", "B"), ("X", "Y")],
-        chunk_text="A uses B. X knows about Y.",
-    )
-
-    assert len(results) == 1
-    assert results[0] == LabeledRelationship(
-        source_entity="A", target_entity="B", relationship_type="uses"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 8. label_relationships: malformed item (KeyError path) skipped
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_label_relationships_malformed_item_skipped() -> None:
-    """Items missing source_entity/target_entity are skipped; good items in the same batch survive."""
-    client, _ = _make_ready_client(
-        mock_response_text='[{"relationship_type": "uses"}, {"source_entity": "A", "target_entity": "B", "relationship_type": "implements"}]'
-    )
-    client._check_rate_limit = AsyncMock(return_value=None)
-    result = await client.label_relationships(
-        entity_pairs=[("A", "B")],
-        chunk_text="A implements B",
-    )
-    # The first item has a valid type but missing source/target → skipped
-    # The second item is complete → kept
-    assert len(result) == 1
-    assert result[0].relationship_type == "implements"
-    assert result[0].source_entity == "A"
-    assert result[0].target_entity == "B"
-
-
-# ---------------------------------------------------------------------------
-# 9. label_relationships: non-dict item (AttributeError path) skipped
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_label_relationships_non_dict_item_skipped() -> None:
-    """Non-dict items in the JSON array are skipped (AttributeError path)."""
-    client, _ = _make_ready_client(
-        mock_response_text='["not a dict", {"source_entity": "A", "target_entity": "B", "relationship_type": "uses"}]'
-    )
-    client._check_rate_limit = AsyncMock(return_value=None)
-    result = await client.label_relationships(
-        entity_pairs=[("A", "B")],
-        chunk_text="A uses B",
-    )
-    assert len(result) == 1
-    assert result[0].relationship_type == "uses"
-
-
-# ---------------------------------------------------------------------------
-# 10. label_relationships: non-list JSON raises ValueError
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_label_relationships_non_list_json_raises() -> None:
-    """Non-list JSON (e.g. dict) from LLM raises ValueError."""
-    client, _ = _make_ready_client(
-        mock_response_text='{"relationships": []}'
-    )
-    client._check_rate_limit = AsyncMock(return_value=None)
-    with pytest.raises(ValueError, match="Expected JSON array"):
-        await client.label_relationships(
-            entity_pairs=[("A", "B")],
-            chunk_text="A uses B",
-        )
-
-
-# ---------------------------------------------------------------------------
-# 11. label_relationships: malformed JSON raises ValueError
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_label_relationships_malformed_json_raises() -> None:
-    """Malformed JSON from LLM raises ValueError/JSONDecodeError."""
-    client, _ = _make_ready_client(mock_response_text="not json at all")
-    client._check_rate_limit = AsyncMock(return_value=None)
-    with pytest.raises(ValueError):
-        await client.label_relationships(
-            entity_pairs=[("A", "B")],
-            chunk_text="A uses B",
-        )
-
-
-# ---------------------------------------------------------------------------
-# 12. Rate-limit exhaustion and refill
+# Rate-limit exhaustion and refill
 # ---------------------------------------------------------------------------
 
 
@@ -336,7 +144,7 @@ async def test_check_rate_limit_refills_after_window() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 13. RuntimeError when anthropic unavailable
+# RuntimeError when anthropic unavailable
 # ---------------------------------------------------------------------------
 
 
@@ -349,17 +157,8 @@ async def test_summarize_community_raises_when_anthropic_unavailable() -> None:
         await client.summarize_community(chunk_texts=["text"], entity_names=["Entity"])
 
 
-@pytest.mark.asyncio
-async def test_label_relationships_raises_when_anthropic_unavailable() -> None:
-    """label_relationships raises RuntimeError when anthropic is not available."""
-    client = _make_client()
-    client._anthropic_available = False
-    with pytest.raises(RuntimeError, match="anthropic"):
-        await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="A uses B")
-
-
 # ---------------------------------------------------------------------------
-# 14. Empty content branch
+# Empty content branch
 # ---------------------------------------------------------------------------
 
 
@@ -380,25 +179,8 @@ async def test_summarize_community_returns_none_on_empty_content() -> None:
     assert result is None
 
 
-@pytest.mark.asyncio
-async def test_label_relationships_returns_empty_on_empty_content() -> None:
-    """label_relationships returns [] when LLM response has empty content list."""
-    client = _make_client()
-    mock_response = MagicMock()
-    mock_response.content = []
-    mock_messages = MagicMock()
-    mock_messages.create = AsyncMock(return_value=mock_response)
-    mock_anthropic = MagicMock()
-    mock_anthropic.messages = mock_messages
-    client._client = mock_anthropic
-    client._anthropic_available = True
-    client._check_rate_limit = AsyncMock(return_value=None)
-    result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="A uses B")
-    assert result == []
-
-
 # ---------------------------------------------------------------------------
-# 15. summarize_community propagates asyncio.TimeoutError
+# summarize_community propagates asyncio.TimeoutError
 # ---------------------------------------------------------------------------
 
 
@@ -421,7 +203,7 @@ async def test_summarize_community_raises_on_timeout() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 16. summarize_community passes max_tokens to API
+# summarize_community passes max_tokens to API
 # ---------------------------------------------------------------------------
 
 
@@ -438,7 +220,7 @@ async def test_summarize_community_passes_token_budget_to_api() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 17. summarize_community returns None on whitespace-only response
+# summarize_community returns None on whitespace-only response
 # ---------------------------------------------------------------------------
 
 
@@ -452,7 +234,7 @@ async def test_summarize_community_returns_none_on_whitespace_response() -> None
 
 
 # ---------------------------------------------------------------------------
-# 18. Rate limit exhaustion prevents API call
+# Rate limit exhaustion prevents API call
 # ---------------------------------------------------------------------------
 
 
@@ -476,59 +258,7 @@ async def test_rate_limit_exhausted_prevents_api_call() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 19. Silent-drop WARNING is emitted for unknown relationship type
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_label_relationships_logs_warning_on_unknown_type(caplog) -> None:
-    """label_relationships logs a WARNING when an item has an unknown relationship_type."""
-    import logging
-
-    payload = json.dumps([
-        {"source_entity": "X", "target_entity": "Y", "relationship_type": "knows_about"},
-    ])
-    client, _ = _make_ready_client(mock_response_text=payload)
-    client._check_rate_limit = AsyncMock(return_value=None)
-
-    with caplog.at_level(logging.WARNING, logger="archon_search.enrichment.anthropic"):
-        results = await client.label_relationships(
-            entity_pairs=[("X", "Y")], chunk_text="X knows about Y."
-        )
-
-    assert results == []
-    assert any("knows_about" in record.message for record in caplog.records), (
-        "Expected WARNING mentioning the unknown relationship_type 'knows_about'"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 20. Silent-drop WARNING is emitted for malformed item (missing keys)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_label_relationships_logs_warning_on_malformed_item(caplog) -> None:
-    """label_relationships logs a WARNING when an item is missing source_entity/target_entity."""
-    import logging
-
-    payload = json.dumps([{"relationship_type": "uses"}])  # missing source/target
-    client, _ = _make_ready_client(mock_response_text=payload)
-    client._check_rate_limit = AsyncMock(return_value=None)
-
-    with caplog.at_level(logging.WARNING, logger="archon_search.enrichment.anthropic"):
-        results = await client.label_relationships(
-            entity_pairs=[("A", "B")], chunk_text="A uses B."
-        )
-
-    assert results == []
-    assert any("malformed" in record.message for record in caplog.records), (
-        "Expected WARNING mentioning malformed relationship item"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 21. LLCP BE-5 — constructible from a real (non-MagicMock) GraphConfig
+# LLCP BE-5 — constructible from a real (non-MagicMock) GraphConfig
 # ---------------------------------------------------------------------------
 
 
@@ -555,7 +285,7 @@ def test_anthropic_client_constructible_from_real_graphconfig() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 22. aclose() — BE-23 cycle-3 fix: the resource-leak regression gate
+# aclose() — BE-23 cycle-3 fix: the resource-leak regression gate
 # ---------------------------------------------------------------------------
 
 

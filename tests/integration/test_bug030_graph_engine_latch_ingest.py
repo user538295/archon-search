@@ -9,7 +9,6 @@ degrade-not-abort property must survive the rewire.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -133,20 +132,13 @@ async def test_ingest_file_persists_when_model_load_fails(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_ingest_file_degrade_skips_llm_gate_and_preserves_code_symbols(
+async def test_ingest_file_degrade_preserves_code_symbols(
     tmp_path: Path,
 ) -> None:
-    """T15: the degraded path must not fire the LLM-enrichment gate, and
-    code-symbol extraction (which does not depend on the prose engine) must
-    survive.
-
-    A refactor that moved the LLM-enrichment gate ahead of the prose-engine
-    degrade check would fire one LLM call per chunk on every degraded ingest
-    — this pins that it does not, in addition to the code-symbol survival
-    already covered at the unit level (test_graph_extractor.py).
+    """T15: when the prose engine fails to load, the ingest degrades cleanly —
+    code-symbol extraction (which does not depend on the prose engine) still
+    survives, at the integration level.
     """
-    from unittest.mock import AsyncMock
-
     from archon_search.graph_extractor import GraphExtractor
     from archon_search.store import SearchStore
 
@@ -157,18 +149,10 @@ async def test_ingest_file_degrade_skips_llm_gate_and_preserves_code_symbols(
     graph_store = GraphStore(db_path)
     await graph_store.connect()
 
-    # AND-gate fully open (provider + extraction_model + enrichment_client) —
-    # if the degrade path failed to skip it, this mock would be awaited. Not a
-    # raising side_effect: `extract()` catches per-chunk enrichment exceptions
-    # and turns them into a warning, so a raise here would be silently
-    # absorbed rather than failing the test — `assert_not_awaited()` below is
-    # the real assertion.
-    mock_enrichment_client = MagicMock()
-    mock_enrichment_client.label_relationships = AsyncMock(return_value=[])
     graph_config = GraphConfig(
         enabled=True, provider="llama_cpp", extraction_model="model-x"
     )
-    graph_extractor = GraphExtractor(graph_config, enrichment_client=mock_enrichment_client)
+    graph_extractor = GraphExtractor(graph_config)
     graph_extractor._backend = _FakeBackend(
         load_error=RuntimeError("model download failed (no network)."),
     )
@@ -193,7 +177,6 @@ async def test_ingest_file_degrade_skips_llm_gate_and_preserves_code_symbols(
         )
 
         assert result.status == "ok", f"ingest failed: {result.error}"
-        mock_enrichment_client.label_relationships.assert_not_awaited()
 
         nodes = await graph_store.find_nodes_by_name(collection, ["parse_config"], "default")
         assert nodes, "code-symbol node must survive the degraded (no-NER) ingest"

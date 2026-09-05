@@ -6,26 +6,21 @@ over raw ``httpx`` — deliberately **not** the ``ollama`` SDK used by
 ``providers/ollama_provider.py`` (query-expansion adapter); httpx is a core
 dependency, so enrichment needs no lazy-import availability guard.
 
+Narrowed to community summarisation only (BE-17, ADR 12).
+
 Design decisions (C2 contract):
 - Raises on any transport failure (connection error, timeout, non-2xx
-  status, whole-body JSON parse failure). Callers (CommunityBuilder,
-  GraphExtractor) catch and substitute None / [].
-- Per-item skip vs whole-call raise: individual unparseable relationship
-  items are skipped with a WARNING; the call raises only on transport
-  failure or a whole-body JSON parse failure (S19).
+  status, whole-body JSON parse failure). Callers (CommunityBuilder) catch
+  and substitute None.
 - Model string format: bare model id (caller has already parsed any
   "provider:model" prefix).
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 import httpx
-
-from archon_search.enrichment import _VALID_RELATIONSHIP_TYPES, strip_json_code_fences
-from archon_search.graph_enrichment_protocol import LabeledRelationship
 
 _logger = logging.getLogger(__name__)
 
@@ -40,26 +35,6 @@ Entities: {entity_names}
 
 Passages:
 {chunk_texts}
-"""
-
-_LABEL_PROMPT_TEMPLATE = """\
-You are a relationship classifier. Given a text passage and a list of entity pairs, \
-classify the relationship between each pair. Use exactly one of these types:
-- uses
-- implements
-- depends_on
-
-Respond with a JSON array. Each element must have exactly these keys:
-  "source_entity", "target_entity", "relationship_type"
-
-Only include pairs where the text clearly supports a relationship. \
-Omit pairs where the relationship is unclear.
-
-Text:
-{chunk_text}
-
-Entity pairs to classify:
-{entity_pairs}
 """
 
 
@@ -112,63 +87,6 @@ class OllamaEnrichmentClient:
         # _extract_content already filters empty/whitespace content and returns
         # None for it, so `text` here is always non-empty after strip().
         return text.strip()
-
-    async def label_relationships(
-        self,
-        entity_pairs: list[tuple[str, str]],
-        chunk_text: str,
-    ) -> list[LabeledRelationship]:
-        """Label relationships between entity pairs using the chunk text as context.
-
-        Raises on transport failure or a whole-body JSON parse failure.
-        Individual unparseable items are skipped with a WARNING.
-        """
-        pairs_text = "\n".join(f"- {a} / {b}" for a, b in entity_pairs)
-        prompt = _LABEL_PROMPT_TEMPLATE.format(
-            chunk_text=chunk_text,
-            entity_pairs=pairs_text,
-        )
-
-        data = await self._post_chat_completion(prompt)
-        raw_text = self._extract_content(data)
-        if not raw_text:
-            return []
-
-        # Whole-body JSON parse failure raises (C2 contract) — not caught here.
-        parsed = json.loads(strip_json_code_fences(raw_text))
-
-        if not isinstance(parsed, list):
-            raise ValueError(f"Expected JSON array from LLM, got {type(parsed).__name__}")
-
-        results: list[LabeledRelationship] = []
-        for item in parsed:
-            try:
-                rel_type = item.get("relationship_type", "")
-                if rel_type not in _VALID_RELATIONSHIP_TYPES:
-                    _logger.warning(
-                        "OllamaEnrichmentClient: unknown relationship_type %r; "
-                        "skipping pair (%r, %r)",
-                        rel_type,
-                        item.get("source_entity"),
-                        item.get("target_entity"),
-                    )
-                    continue
-                results.append(
-                    LabeledRelationship(
-                        source_entity=item["source_entity"],
-                        target_entity=item["target_entity"],
-                        relationship_type=rel_type,
-                    )
-                )
-            except (KeyError, AttributeError) as exc:
-                _logger.warning(
-                    "OllamaEnrichmentClient: malformed relationship item %r: %s; skipping",
-                    item,
-                    exc,
-                )
-                continue
-
-        return results
 
     async def _post_chat_completion(self, prompt: str) -> dict[str, Any]:
         """POST to Ollama's OpenAI-compatible chat completions endpoint.

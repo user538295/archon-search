@@ -39,12 +39,12 @@ _RERANKER_SPLIT_VALIDATION_FAILED_MESSAGE: str = (
 )
 
 # BE-23 (2026-08-19-035 K3): fixed, trivial probe inputs for _probe_extraction_model — never
-# derived from real ingest content, so a large production chunk/candidate-pair prompt's own
-# truncation behaviour can never reach this probe's warn/no-warn decision. Probes
-# `label_relationships` (the real per-chunk economically-relevant path), not
-# `summarize_community`.
+# derived from real ingest content, so a large production prompt's own truncation behaviour can
+# never reach this probe's warn/no-warn decision. Since BE-17 narrowed the enrichment protocol to
+# community summarisation only, the probe exercises the surviving `summarize_community` method —
+# the reasoning-model economic disqualifier it guards against applies to that path too.
 _EXTRACTION_MODEL_PROBE_CHUNK_TEXT: str = "Alpha uses Beta."
-_EXTRACTION_MODEL_PROBE_ENTITY_PAIRS: tuple[tuple[str, str], ...] = (("Alpha", "Beta"),)
+_EXTRACTION_MODEL_PROBE_ENTITY_NAMES: tuple[str, ...] = ("Alpha", "Beta")
 
 # K3's actual finding: the shipped `extraction_timeout_seconds` default (30.0s) is the real
 # disqualifier — a reasoning model returns valid content in 111-286s, well past it. A timeout
@@ -55,7 +55,7 @@ _EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING: str = (
     "graph enrichment: [graph].extraction_model did not return usable content within the "
     "extraction probe's time budget (the smaller of your configured extraction_timeout_seconds "
     "and this project's own fixed economic ceiling) — it may be a reasoning model that is not "
-    "economically supportable for per-chunk enrichment; see OperatorGuide/60_graph_operations.md"
+    "economically supportable for per-community summarisation; see OperatorGuide/60_graph_operations.md"
 )
 _EXTRACTION_MODEL_PROBE_ERROR_WARNING: str = (
     "graph enrichment: [graph].extraction_model startup probe failed (not a timeout) — verify "
@@ -238,11 +238,11 @@ async def _probe_extraction_model(
     """One-shot startup probe for ``[graph].extraction_model`` (BE-23, acting on K3's outcome).
 
     K3 (2026-08-19-035 team plan) found reasoning models economically unsupportable via the
-    per-chunk enrichment path — the shipped ``extraction_timeout_seconds`` default (30.0s) is
-    the actual disqualifier: a reasoning model needs 111s-286s per chunk (measured), far past
-    it, and raising inside the enrichment clients is inert because it lands inside
-    ``graph_extractor.py``'s blanket ``except Exception``, which silently falls back to
-    co-occurrence-only edges. The only reachable, observable enforcement point is a one-shot
+    per-community summarisation path — the shipped ``extraction_timeout_seconds`` default (30.0s)
+    is the actual disqualifier: a reasoning model needs 111s-286s per community (measured), far
+    past it, and raising inside the enrichment clients is inert because it lands inside
+    ``community_builder.py``'s blanket ``except Exception``, which silently falls back to an
+    unsummarised community. The only reachable, observable enforcement point is a one-shot
     startup probe feeding ``provider_warnings`` — the same pattern as :func:`graph_ner_status`
     and :func:`_probe_llama_cpp` above. Warn-not-block: never raises, never fails startup, and
     never blocks it either — the probe is bounded by
@@ -252,13 +252,13 @@ async def _probe_extraction_model(
     needed exactly this) can never defeat detection by rising past the fixed economic ceiling.
 
     Runs a single, fixed, trivial round-trip (never real ingest content) against
-    ``label_relationships`` — the real per-chunk candidate-pair relation-extraction path
-    (``graph_extractor.py:738``), not ``summarize_community`` — through the same
+    ``summarize_community`` — the one surviving enrichment path since BE-17 removed
+    relationship labelling — through the same
     :class:`~archon_search.enrichment.factory.EnrichmentClientFactory` client production
     enrichment would use. Because the probe input is fixed and small, a genuinely oversized
-    *production* chunk/candidate-pair prompt hitting ``finish_reason="length"`` on a
-    non-reasoning model (BE-22's warn-only case) can never reach this probe's decision — that
-    failure mode is structurally isolated to production traffic.
+    *production* prompt hitting ``finish_reason="length"`` on a non-reasoning model (BE-22's
+    warn-only case) can never reach this probe's decision — that failure mode is structurally
+    isolated to production traffic.
 
     A timed-out call — ``asyncio.TimeoutError``/``TimeoutError`` from our own
     ``asyncio.wait_for``, or ``httpx.ReadTimeout`` (the server accepted the connection and is
@@ -304,9 +304,9 @@ async def _probe_extraction_model(
         probe_start = time.monotonic()
         try:
             await asyncio.wait_for(
-                client.label_relationships(
-                    list(_EXTRACTION_MODEL_PROBE_ENTITY_PAIRS),
-                    _EXTRACTION_MODEL_PROBE_CHUNK_TEXT,
+                client.summarize_community(
+                    [_EXTRACTION_MODEL_PROBE_CHUNK_TEXT],
+                    list(_EXTRACTION_MODEL_PROBE_ENTITY_NAMES),
                 ),
                 timeout=probe_timeout,
             )

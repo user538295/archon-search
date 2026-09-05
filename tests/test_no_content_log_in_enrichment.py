@@ -5,7 +5,9 @@ Analogous to ``tests/test_no_query_log_in_hyde.py`` (S15a), extended to scan
 every module in the ``enrichment`` package and to guard three content-bearing
 identifiers instead of one:
 
-- ``chunk_text``  — the per-chunk text passed to ``label_relationships``.
+- ``chunk_text``  — guarded defensively; it was the per-chunk text passed to
+  the former ``label_relationships`` path (removed by BE-17), kept in the guard
+  so a future re-introduction cannot leak it.
 - ``chunk_texts`` — the per-community list of chunk texts passed to
   ``summarize_community`` (the actual parameter name used by all four v1
   clients for what the plan/task text calls "community text").

@@ -286,14 +286,14 @@ When `[rag_fusion] enabled = true` in config *and* a request includes `rag_fusio
 
 ### Graph enrichment external LLM transmission (LLCP) — explicit opt-in exception, third transmission surface
 
-`[graph] provider` (a discrete field, distinct from `[hyde]`/`[rag_fusion] provider`) gates LLM-backed graph enrichment: community summarisation and typed relationship labelling, performed by `EnrichmentClientFactory`-built adapters injected into `CommunityBuilder` and `GraphExtractor`. Unlike HyDE/RAG Fusion, `[graph] provider` defaults to `None` and IS the enable gate itself — there is no separate `[graph].enrichment_enabled` — so enrichment is off by default even when `[graph] enabled = true` (which only turns on entity extraction, PPR, and communities).
+`[graph] provider` (a discrete field, distinct from `[hyde]`/`[rag_fusion] provider`) gates LLM-backed graph enrichment: community summarisation, performed by an `EnrichmentClientFactory`-built adapter injected into `CommunityBuilder`. Typed relationship edges are produced locally by the graph engine and never leave the host. Unlike HyDE/RAG Fusion, `[graph] provider` defaults to `None` and IS the enable gate itself — there is no separate `[graph].enrichment_enabled` — so enrichment is off by default even when `[graph] enabled = true` (which only turns on entity extraction, PPR, and communities).
 
-When set, community representative-chunk text and per-chunk text containing co-occurring entities are sent to the configured provider (same five-provider set as HyDE/RAG Fusion, except `claude_cli`, which has no v1 enrichment client and is never offered — the factory logs a WARNING and returns `None` if configured anyway). The same local-vs-external split applies: `anthropic`/`openai` leave the host; `ollama`/`llama_cpp` do not.
+When set, each community's representative-chunk text and the entity names within that community are sent to the configured provider for summarisation (same five-provider set as HyDE/RAG Fusion, except `claude_cli`, which has no v1 enrichment client and is never offered — the factory logs a WARNING and returns `None` if configured anyway). The same local-vs-external split applies: `anthropic`/`openai` leave the host; `ollama`/`llama_cpp` do not.
 
 **Invariants preserved:**
 - The `LLMEnrichmentClientProtocol` adapters (`archon_search/enrichment/`) never receive raw user query text — only community chunk text and entity names already persisted in the graph.
 - Community texts and LLM prompts are never logged — the no-raw-query telemetry guarantee extends to enrichment.
-- Adapter contract is raise-on-failure: `CommunityBuilder`/`GraphExtractor` catch every exception and substitute `None`/`[]`; a failed enrichment call never fails ingest or a community rebuild.
+- Adapter contract is raise-on-failure: `CommunityBuilder` catches every exception and substitutes `None`; a failed enrichment call never fails a community rebuild.
 - No rate limiting for `llama_cpp` (`extraction_rate_limit_rpm` is honoured only by the `anthropic` client) — parity with the HyDE/RAG-Fusion `llama_cpp` adapter.
 
 See `Documentation/ADRs/C6-local-llm-provider.md` for the full decision record and `Documentation/OperatorGuide/60_graph_operations.md` for operator-facing configuration.

@@ -2,13 +2,15 @@
 
 Concrete implementation of LLMEnrichmentClientProtocol backed by the Anthropic API.
 
+Narrowed to community summarisation only (BE-17, ADR 12).
+
 Design decisions:
 - Lazy Anthropic import — no top-level ``import anthropic``; keeps the package optional.
 - In-process fixed-window rate limiter (per-process, in-memory; N requests per 60-second window).
 - asyncio.wait_for for timeout enforcement.
-- Raises on any failure — callers (CommunityBuilder, GraphExtractor) catch all exceptions
-  and substitute None / empty list. This is the inverse of HyDE/RAGFusion which swallow
-  errors internally; here the adapter is dumb and callers decide the fallback.
+- Raises on any failure — callers (CommunityBuilder) catch all exceptions and
+  substitute None. This is the inverse of HyDE/RAGFusion which swallow errors
+  internally; here the adapter is dumb and callers decide the fallback.
 - Config fields consumed: extraction_timeout_seconds, extraction_rate_limit_rpm,
   extraction_token_budget.
 - Model string format: bare model id (caller has already parsed the "provider:model" prefix).
@@ -16,13 +18,9 @@ Design decisions:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from typing import Any
-
-from archon_search.enrichment import _VALID_RELATIONSHIP_TYPES, strip_json_code_fences
-from archon_search.graph_enrichment_protocol import LabeledRelationship
 
 _logger = logging.getLogger(__name__)
 
@@ -37,26 +35,6 @@ Entities: {entity_names}
 
 Passages:
 {chunk_texts}
-"""
-
-_LABEL_PROMPT_TEMPLATE = """\
-You are a relationship classifier. Given a text passage and a list of entity pairs, \
-classify the relationship between each pair. Use exactly one of these types:
-- uses
-- implements
-- depends_on
-
-Respond with a JSON array. Each element must have exactly these keys:
-  "source_entity", "target_entity", "relationship_type"
-
-Only include pairs where the text clearly supports a relationship. \
-Omit pairs where the relationship is unclear.
-
-Text:
-{chunk_text}
-
-Entity pairs to classify:
-{entity_pairs}
 """
 
 
@@ -174,73 +152,3 @@ class AnthropicEnrichmentClient:
 
         text = response.content[0].text.strip()
         return text if text else None
-
-    async def label_relationships(
-        self,
-        entity_pairs: list[tuple[str, str]],
-        chunk_text: str,
-    ) -> list[LabeledRelationship]:
-        """Label relationships between entity pairs using the chunk text as context.
-
-        Raises on any failure including JSON parse errors.
-        """
-        if not self._anthropic_available:
-            raise RuntimeError(
-                "The 'anthropic' package is required for LLM enrichment. "
-                "Install it with: pip install anthropic"
-            )
-
-        await self._check_rate_limit()
-
-        pairs_text = "\n".join(f"- {a} / {b}" for a, b in entity_pairs)
-        prompt = _LABEL_PROMPT_TEMPLATE.format(
-            chunk_text=chunk_text,
-            entity_pairs=pairs_text,
-        )
-
-        response = await asyncio.wait_for(
-            self._client.messages.create(  # type: ignore[union-attr]
-                model=self._model,
-                max_tokens=self._token_budget,
-                messages=[{"role": "user", "content": prompt}],
-            ),
-            timeout=self._timeout,
-        )
-
-        if not response.content:
-            return []
-
-        raw_text = response.content[0].text.strip()
-
-        # Parse JSON — raises ValueError (a subclass of Exception) on bad JSON
-        parsed = json.loads(strip_json_code_fences(raw_text))
-
-        if not isinstance(parsed, list):
-            raise ValueError(f"Expected JSON array from LLM, got {type(parsed).__name__}")
-
-        results: list[LabeledRelationship] = []
-        for item in parsed:
-            try:
-                rel_type = item.get("relationship_type", "")
-                if rel_type not in _VALID_RELATIONSHIP_TYPES:
-                    _logger.warning(
-                        "LLM returned unknown relationship_type %r; skipping pair (%r, %r)",
-                        rel_type,
-                        item.get("source_entity"),
-                        item.get("target_entity"),
-                    )
-                    continue
-                results.append(
-                    LabeledRelationship(
-                        source_entity=item["source_entity"],
-                        target_entity=item["target_entity"],
-                        relationship_type=rel_type,
-                    )
-                )
-            except (KeyError, AttributeError) as exc:
-                _logger.warning(
-                    "LLM returned malformed relationship item %r: %s; skipping", item, exc
-                )
-                continue
-
-        return results

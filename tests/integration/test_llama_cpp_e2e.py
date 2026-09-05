@@ -139,11 +139,12 @@ def test_live_graph_enrichment_via_llama_cpp(tmp_path: Path, monkeypatch: pytest
     """S3: ``[graph] provider="llama_cpp"`` + ``extraction_model`` set, against
     a live llama-server.
 
-    Ingest exercises ``GraphExtractor``'s real per-chunk
-    ``label_relationships`` call; a direct ``CommunityBuilder.build()`` call
-    (using the server's own composition-root enrichment client) exercises the
-    real ``summarize_community`` call. Both are try/except-guarded in
-    production (S9) and fall back silently on transport failure, so the
+    Ingest exercises ``GraphExtractor``'s local prose-engine relation
+    extraction (typed edges are produced locally since BE-17, not via an LLM);
+    a direct ``CommunityBuilder.build()`` call (using the server's own
+    composition-root enrichment client) exercises the real
+    ``summarize_community`` call. Summarisation is try/except-guarded in
+    production (S9) and falls back silently on transport failure, so the
     assertions below — not an exception — are what surfaces an unreachable
     llama-server.
     """
@@ -202,8 +203,8 @@ def test_live_graph_enrichment_via_llama_cpp(tmp_path: Path, monkeypatch: pytest
 
         typed_relationship_types = {"uses", "implements", "depends_on"}
         assert any(e.relationship_type in typed_relationship_types for e in edges), (
-            "no typed relationship edges were produced by the live label_relationships call — is "
-            f"a llama-server running and reachable at {cfg.graph.llama_cpp_base_url}? "
+            "no typed relationship edges were produced by the local prose engine — is "
+            f"the graph model loaded and reachable at {cfg.graph.llama_cpp_base_url}? "
             f"edge relationship_types={[e.relationship_type for e in edges]!r}"
         )
 

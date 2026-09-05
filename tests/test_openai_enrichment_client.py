@@ -2,23 +2,20 @@
 
 Tests the OpenAI enrichment adapter that implements LLMEnrichmentClientProtocol
 over raw ``httpx`` — deliberately NOT the ``openai`` SDK used by
-``providers/openai_provider.py`` (query-expansion adapter).
+``providers/openai_provider.py`` (query-expansion adapter). Narrowed to
+community summarisation only (BE-17).
 
 Mocking convention: patch ``archon_search.enrichment.openai.httpx.AsyncClient``
 directly.
 """
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from archon_search.graph_enrichment_protocol import (
-    LabeledRelationship,
-    LLMEnrichmentClientProtocol,
-)
+from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
 
 
 def _make_config() -> MagicMock:
@@ -103,22 +100,6 @@ async def test_openai_enrichment_missing_api_key_raises(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
-async def test_openai_enrichment_label_relationships_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    body = json.dumps([{"source_entity": "A", "target_entity": "B", "relationship_type": "implements"}])
-    response = _make_response(_choices_body(body))
-    mock_cls = _make_async_client_cls(response=response)
-
-    client = _make_client()
-    with patch("archon_search.enrichment.openai.httpx.AsyncClient", mock_cls):
-        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="A implements B.")
-
-    assert result == [
-        LabeledRelationship(source_entity="A", target_entity="B", relationship_type="implements")
-    ]
-
-
-@pytest.mark.asyncio
 async def test_openai_enrichment_summarize_returns_none_on_malformed_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -134,58 +115,6 @@ async def test_openai_enrichment_summarize_returns_none_on_malformed_body(
 
 
 @pytest.mark.asyncio
-async def test_openai_enrichment_label_relationships_empty_response_returns_empty_list(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    response = _make_response({"unexpected": "shape"})
-    mock_cls = _make_async_client_cls(response=response)
-
-    client = _make_client()
-    with patch("archon_search.enrichment.openai.httpx.AsyncClient", mock_cls):
-        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
-
-    assert result == []
-
-
-@pytest.mark.asyncio
-async def test_openai_enrichment_label_relationships_non_list_json_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    body = json.dumps({"not": "a list"})
-    response = _make_response(_choices_body(body))
-    mock_cls = _make_async_client_cls(response=response)
-
-    client = _make_client()
-    with (
-        patch("archon_search.enrichment.openai.httpx.AsyncClient", mock_cls),
-        pytest.raises(ValueError, match="Expected JSON array"),
-    ):
-        await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
-
-
-@pytest.mark.asyncio
-async def test_openai_enrichment_label_relationships_key_error_item_skipped(
-    monkeypatch: pytest.MonkeyPatch, caplog
-) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    body = json.dumps([{"relationship_type": "uses"}])
-    response = _make_response(_choices_body(body))
-    mock_cls = _make_async_client_cls(response=response)
-
-    client = _make_client()
-    with (
-        patch("archon_search.enrichment.openai.httpx.AsyncClient", mock_cls),
-        caplog.at_level("WARNING"),
-    ):
-        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
-
-    assert result == []
-    assert len(caplog.records) == 1
-
-
-@pytest.mark.asyncio
 async def test_openai_enrichment_extract_content_non_str_returns_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -198,63 +127,6 @@ async def test_openai_enrichment_extract_content_non_str_returns_none(
         result = await client.summarize_community(chunk_texts=["chunk"], entity_names=["Entity A"])
 
     assert result is None
-
-
-@pytest.mark.asyncio
-async def test_openai_enrichment_empty_content_logs_warning(
-    monkeypatch: pytest.MonkeyPatch, caplog
-) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    response = _make_response(_choices_body(""))
-    mock_cls = _make_async_client_cls(response=response)
-
-    client = _make_client()
-    with (
-        patch("archon_search.enrichment.openai.httpx.AsyncClient", mock_cls),
-        caplog.at_level("WARNING"),
-    ):
-        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
-
-    assert result == []
-    assert len(caplog.records) == 1
-    assert "no usable content" in caplog.records[0].message
-
-
-@pytest.mark.asyncio
-async def test_openai_enrichment_whitespace_content_logs_warning(
-    monkeypatch: pytest.MonkeyPatch, caplog
-) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    response = _make_response(_choices_body("   \n\t  "))
-    mock_cls = _make_async_client_cls(response=response)
-
-    client = _make_client()
-    with (
-        patch("archon_search.enrichment.openai.httpx.AsyncClient", mock_cls),
-        caplog.at_level("WARNING"),
-    ):
-        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
-
-    assert result == []
-    assert len(caplog.records) == 1
-    assert "no usable content" in caplog.records[0].message
-
-
-@pytest.mark.asyncio
-async def test_openai_enrichment_empty_content_does_not_raise(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Auxiliary-write invariant: an empty-content reply must not propagate as an exception
-    up through the public label_relationships API — only [] with a warning."""
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    response = _make_response(_choices_body(""))
-    mock_cls = _make_async_client_cls(response=response)
-
-    client = _make_client()
-    with patch("archon_search.enrichment.openai.httpx.AsyncClient", mock_cls):
-        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
-
-    assert result == []
 
 
 @pytest.mark.asyncio
@@ -275,37 +147,3 @@ async def test_openai_enrichment_summarize_empty_content_logs_warning(
     assert result is None
     assert len(caplog.records) == 1
     assert "no usable content" in caplog.records[0].message
-
-
-@pytest.mark.asyncio
-async def test_openai_enrichment_genuine_empty_relation_list_does_not_warn(
-    monkeypatch: pytest.MonkeyPatch, caplog
-) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    response = _make_response(_choices_body("[]"))
-    mock_cls = _make_async_client_cls(response=response)
-
-    client = _make_client()
-    with (
-        patch("archon_search.enrichment.openai.httpx.AsyncClient", mock_cls),
-        caplog.at_level("WARNING"),
-    ):
-        result = await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")
-
-    assert result == []
-    assert len(caplog.records) == 0
-
-
-@pytest.mark.asyncio
-async def test_openai_enrichment_label_relationships_transport_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    mock_cls = _make_async_client_cls(post_side_effect=httpx.TimeoutException("timed out"))
-
-    client = _make_client()
-    with (
-        patch("archon_search.enrichment.openai.httpx.AsyncClient", mock_cls),
-        pytest.raises(httpx.TimeoutException),
-    ):
-        await client.label_relationships(entity_pairs=[("A", "B")], chunk_text="text")

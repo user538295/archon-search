@@ -10,19 +10,8 @@ identifiers; code chunks never reach the prose engine.
 Entity types are the engine's own ``EntityType`` labels, used verbatim — no
 intermediate vocabulary. Directed relations the engine returns are persisted
 as typed edges, additive alongside the ``related_to`` co-occurrence edges
-built from the same chunk's entities (BE-11).
-
-LLM typed relationship extraction (LLCP BE-7) is gated by a SEPARATE
-AND-condition: ``config.provider is not None AND config.extraction_model is
-not None AND enrichment_client is not None``.  When open, one
-``label_relationships`` call is made per plain-text chunk (after prose
-extraction) and the returned typed edges are persisted additively alongside
-both the engine's own typed edges and the ``related_to`` co-occurrence edges.
-When any part of the gate is unset, enrichment is skipped silently (no
-warning) — this is a normal, air-gap-safe configuration, not a failure.  A
-per-chunk enrichment call that raises is caught, logged as a WARNING, and
-that chunk falls back to whatever edges the prose engine and co-occurrence
-already produced; it never fails the whole ``extract()`` call.
+built from the same chunk's entities (BE-11) — the sole source of typed prose
+edges since BE-17 removed the LLM relationship-labelling path.
 
 Edge creation (co-occurrence):
   For each pair of distinct entities co-occurring within the SAME CHUNK, ONE
@@ -38,7 +27,6 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
-import re
 import importlib.util
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -62,7 +50,6 @@ from archon_search.prose_extraction_backend import (
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig
-    from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
 
 _logger = logging.getLogger(__name__)
 
@@ -101,11 +88,6 @@ _LOAD_WAIT_TIMEOUT_DETAIL: str = (
     "prose entity extraction is disabled for this ingest (code-symbol "
     "extraction is unaffected)."
 )
-
-# Splits an LLM-merged entity field like "Bob / Google" back into its parts
-# (used by _resolve_labeled_pair in the enrichment-labeling path).
-_NAME_SPLIT_PATTERN = re.compile(r"\s*(?:/|,| and )\s*")
-
 
 def gliner_absent() -> bool:
     """Return ``True`` when ``gliner`` is not importable.
@@ -146,52 +128,19 @@ def ensure_graph_engine_importable(config: "GraphConfig") -> None:
         raise ConfigError(f"graph.enabled=true but {GLINER_NOT_INSTALLED_MESSAGE}")
 
 
-def _resolve_labeled_pair(
-    source_raw: str, target_raw: str, name_to_id: dict[str, str]
-) -> tuple[str | None, str | None]:
-    """Resolve a labeled relationship's entity names to node IDs.
-
-    Small local models occasionally merge both entity names of a pair into a
-    single field (e.g. ``source_entity="Bob / Google"``,
-    ``target_entity="Google"``) instead of keeping them separate. When one
-    side resolves directly and the other splits into exactly two known
-    names — one of which is the side that already resolved — recover the
-    missing side as the other split part. Returns ``(None, None)`` when
-    recovery isn't possible.
-    """
-    src_id = name_to_id.get(source_raw)
-    tgt_id = name_to_id.get(target_raw)
-    if src_id is not None and tgt_id is not None:
-        return src_id, tgt_id
-
-    if src_id is None and tgt_id is not None:
-        parts = [p for p in _NAME_SPLIT_PATTERN.split(source_raw) if p]
-        others = {name_to_id[p] for p in parts if p in name_to_id} - {tgt_id}
-        if len(parts) == 2 and len(others) == 1:
-            return next(iter(others)), tgt_id
-
-    if tgt_id is None and src_id is not None:
-        parts = [p for p in _NAME_SPLIT_PATTERN.split(target_raw) if p]
-        others = {name_to_id[p] for p in parts if p in name_to_id} - {src_id}
-        if len(parts) == 2 and len(others) == 1:
-            return src_id, next(iter(others))
-
-    return None, None
-
-
 def _build_typed_relation_edge(
     src_id: str, tgt_id: str, label: str, doc_id: str
 ) -> GraphEdge | None:
     """Build a typed relation edge, or ``None`` when it must be skipped.
 
-    Shared by BOTH the prose engine's own directed relations and LLM
-    relationship labeling (cycle-2 C2-I-1/C2-I-2/C2-B-5) so the two guards
-    below cannot drift apart between the paths:
+    Fed by the prose engine's own directed relations (cycle-2
+    C2-I-1/C2-I-2/C2-B-5). The guards below hold for every relation the
+    engine emits:
 
     - ``label == RelationshipType.related_to.value``: the co-occurrence loop
       already produces the sorted()-normalised, undirected ``related_to``
       edge for every pair (C1-I-2) -- persisting a second, directed one here
-      (from either the engine or an LLM echoing the same label) would double it.
+      would double it.
     - ``src_id == tgt_id``: a self-loop carries no graph signal and must
       never be persisted, regardless of which path produced it.
 
@@ -247,10 +196,8 @@ class GraphExtractor:
     def __init__(
         self,
         config: "GraphConfig",
-        enrichment_client: "LLMEnrichmentClientProtocol | None" = None,
     ) -> None:
         self._config = config
-        self._enrichment_client = enrichment_client
         self._backend = ProseExtractionBackend(providers=config.providers)
         # Latches the inference-call-failure traceback to one log per process
         # (mirrors the pre-BE-11 spaCy NER-call latch) — the per-document
@@ -355,16 +302,6 @@ class GraphExtractor:
         degraded = False
 
         # ------------------------------------------------------------------
-        # LLM relationship-labeling AND-gate (LLCP BE-7). When closed, this is
-        # a normal, air-gap-safe configuration -- no warning, no fallback flag.
-        # ------------------------------------------------------------------
-        enrichment_gate_open = (
-            self._config.provider is not None
-            and self._config.extraction_model is not None
-            and self._enrichment_client is not None
-        )
-
-        # ------------------------------------------------------------------
         # Partition chunks into code (C3) vs plain-text.
         # ------------------------------------------------------------------
         code_chunks = [c for c in chunks if c.symbol_type]
@@ -377,9 +314,8 @@ class GraphExtractor:
         # Mentions: entity incidence records for salience derivation (E2b).
         mentions: list[GraphMention] = []
         # Typed relationship edges — from the prose engine's own directed
-        # relations (BE-11) and/or LLM relationship labeling (LLCP BE-7) —
-        # additive alongside the related_to co-occurrence edges built below;
-        # merged in after.
+        # relations (BE-11) — additive alongside the related_to co-occurrence
+        # edges built below; merged in after.
         typed_edges: dict[str, GraphEdge] = {}
 
         # ------------------------------------------------------------------
@@ -516,74 +452,6 @@ class GraphExtractor:
                     )
                     if edge is not None and edge.id not in typed_edges:
                         typed_edges[edge.id] = edge
-
-                # ----------------------------------------------------------
-                # LLM relationship labeling (LLCP BE-7) — one call per text
-                # chunk with 2+ distinct entities. Never fails the whole
-                # extract() call: any exception here is caught, logged as a
-                # WARNING, and this chunk falls back to co-occurrence edges
-                # only (added below, unaffected).
-                # ----------------------------------------------------------
-                seen_this_chunk: set[str] = set()
-                unique_ids_this_chunk: list[str] = []
-                for eid in ids_this_chunk:
-                    if eid not in seen_this_chunk:
-                        unique_ids_this_chunk.append(eid)
-                        seen_this_chunk.add(eid)
-
-                if enrichment_gate_open and len(unique_ids_this_chunk) >= 2:
-                    try:
-                        pairs_this_chunk = list(
-                            itertools.combinations(sorted(unique_ids_this_chunk), 2)
-                        )
-                        entity_pairs_by_name = [
-                            (nodes[a].entity_name, nodes[b].entity_name)
-                            for a, b in pairs_this_chunk
-                        ]
-                        llm_name_to_id = {
-                            nodes[eid].entity_name: eid for eid in unique_ids_this_chunk
-                        }
-
-                        labeled = await self._enrichment_client.label_relationships(  # type: ignore[union-attr]
-                            entity_pairs_by_name, text_chunk.text
-                        )
-
-                        for rel in labeled:
-                            src_id, tgt_id = _resolve_labeled_pair(
-                                rel.source_entity, rel.target_entity, llm_name_to_id
-                            )
-                            if src_id is None or tgt_id is None:
-                                _logger.warning(
-                                    "GraphExtractor: LLM returned an unknown entity name "
-                                    "in relationship (%r -> %r) for chunk %s; skipping",
-                                    rel.source_entity,
-                                    rel.target_entity,
-                                    text_chunk.chunk_id,
-                                )
-                                continue
-                            # Same guards as the engine's own relations above
-                            # (cycle-2 C2-I-1/C2-I-2/C2-B-5): an LLM-returned
-                            # related_to would double the co-occurrence edge,
-                            # a self-loop carries no signal, and an unknown
-                            # relationship_type must skip this one relation
-                            # rather than aborting the whole chunk.
-                            edge = _build_typed_relation_edge(
-                                src_id, tgt_id, rel.relationship_type, doc_id
-                            )
-                            if edge is not None and edge.id not in typed_edges:
-                                typed_edges[edge.id] = edge
-                    except Exception as exc:  # noqa: BLE001
-                        _logger.warning(
-                            "GraphExtractor: LLM relationship labeling failed for chunk "
-                            "%s: %s; falling back to co-occurrence edges for this chunk",
-                            text_chunk.chunk_id,
-                            exc,
-                        )
-                        warnings.append(
-                            f"LLM relationship labeling failed for chunk "
-                            f"{text_chunk.chunk_id!r}; used co-occurrence "
-                            "edges instead."
-                        )
 
         # ------------------------------------------------------------------
         # Co-occurrence edge creation.

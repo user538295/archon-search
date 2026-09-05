@@ -2,15 +2,16 @@
 
 Verifies the enrichment client built once at composition root
 (``create_app()``'s ``_enrichment_client`` local, stored as
-``app.state.enrichment_client``) reaches all three server-process construction
-sites with the correct concrete type when ``[graph].provider`` is configured:
+``app.state.enrichment_client``) reaches both community-summarisation
+construction sites with the correct concrete type when ``[graph].provider`` is
+configured. Since BE-17 narrowed enrichment to summarisation, ``GraphExtractor``
+no longer consumes the enrichment client — only ``CommunityBuilder`` does:
 
-1. ``app.py`` — the ``GraphExtractor`` inside ``SearchPipeline`` (``app.py:~653``).
-2. ``routes_graph.py`` — the ``CommunityBuilder`` built per rebuild-communities request.
-3. ``maintenance_loop.py`` — the ``CommunityBuilder`` built for a GC-triggered rebuild.
+1. ``routes_graph.py`` — the ``CommunityBuilder`` built per rebuild-communities request.
+2. ``maintenance_loop.py`` — the ``CommunityBuilder`` built for a GC-triggered rebuild.
 
 Covers:
-- #integration_test test_app_state_has_enrichment_client_for_three_sites (S20a, S20b)
+- #integration_test test_app_state_has_enrichment_client_for_summarisation_sites (S20a, S20b)
 """
 from __future__ import annotations
 
@@ -67,12 +68,13 @@ def _poll_job(client, job_id: str, api_key: str, timeout_s: float = 10.0) -> dic
     pytest.fail(f"job {job_id} did not reach a terminal state in {timeout_s}s")
 
 
-def test_app_state_has_enrichment_client_for_three_sites(
+def test_app_state_has_enrichment_client_for_summarisation_sites(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """[graph].provider="llama_cpp" -> GraphExtractor (pipeline), CommunityBuilder
-    (rebuild route), and CommunityBuilder (MaintenanceLoop GC path) each receive a
-    non-None LlamaCppEnrichmentClient built once at composition root (S20a, S20b)."""
+    """[graph].provider="llama_cpp" -> CommunityBuilder (rebuild route) and
+    CommunityBuilder (MaintenanceLoop GC path) each receive a non-None
+    LlamaCppEnrichmentClient built once at composition root (S20a, S20b).
+    GraphExtractor no longer consumes it (BE-17)."""
     from archon_search.enrichment.llama_cpp import LlamaCppEnrichmentClient
 
     install_graph_engine_stub(monkeypatch)
@@ -97,12 +99,7 @@ def test_app_state_has_enrichment_client_for_three_sites(
         # Site 0: app.state.enrichment_client itself (the composition-root local).
         assert isinstance(client.app.state.enrichment_client, LlamaCppEnrichmentClient)
 
-        # Site 1: GraphExtractor inside the pipeline (app.py construction site).
-        graph_extractor = client.app.state.pipeline._graph_extractor
-        assert graph_extractor is not None
-        assert isinstance(graph_extractor._enrichment_client, LlamaCppEnrichmentClient)
-
-        # Site 2: CommunityBuilder built per rebuild-communities request (routes_graph.py).
+        # Site 1: CommunityBuilder built per rebuild-communities request (routes_graph.py).
         asyncio.run(_seed_collection(cfg.db_path, "testcol"))
         with patch("archon_search.server.routes_graph.CommunityBuilder") as mock_cb:
             mock_cb.return_value.build = AsyncMock(return_value=[])
@@ -117,7 +114,7 @@ def test_app_state_has_enrichment_client_for_three_sites(
             mock_cb.call_args.kwargs["enrichment_client"], LlamaCppEnrichmentClient
         )
 
-        # Site 3: CommunityBuilder built for a GC-triggered rebuild (maintenance_loop.py).
+        # Site 2: CommunityBuilder built for a GC-triggered rebuild (maintenance_loop.py).
         with patch("archon_search.community_builder.CommunityBuilder") as mock_cb2:
             mock_cb2.return_value.build = AsyncMock(return_value=[])
             asyncio.run(
