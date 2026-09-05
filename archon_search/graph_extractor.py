@@ -37,12 +37,9 @@ from __future__ import annotations
 
 import asyncio
 import itertools
-import json
 import logging
-import operator
 import re
 import importlib.util
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -58,7 +55,6 @@ from archon_search.graph_types import (
     make_stable_edge_id,
     make_stable_entity_id,
 )
-from archon_search.paths import get_models_dir
 from archon_search.prose_extraction_backend import (
     ProseExtractionBackend,
     ProseExtractionLoadTimeoutError,
@@ -74,27 +70,6 @@ _logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Public: retained ONLY for the (already-orphaned-at-runtime, BE-15-scoped-
-# for-deletion) install wizard spaCy-provisioning flow — install/extras.py's
-# own SPACY_MODEL_NAME copy and tests/test_install_spacy_model.py's
-# closes-the-loop check. model_validation.py's startup probe no longer
-# consumes this: the actual prose extraction engine since BE-11 is gliner
-# (paths.GRAPH_NER_MODEL_NAME), never spaCy (cycle-2 C2-A-01/C2-B-1/C1-B-1).
-SPACY_MODEL_NAME: str = "en_core_web_sm"
-
-# Public: retained ONLY for the install wizard's own summary text (same
-# already-orphaned-at-runtime spaCy provisioning flow as SPACY_MODEL_NAME
-# above; tests/test_install_ui.py pins this alongside its own wording).
-# model_validation.py's startup probe no longer discloses this: the shipped
-# prose extraction engine (gliner, GRAPH_NER_MODEL_NAME — see paths.py,
-# "knowledgator/gliner-relex-multi-v1.0") is multilingual, so there is
-# nothing English-only to disclose on GET /status (cycle-2 C2-A-02/C2-B-2).
-ENGLISH_ONLY_DISCLOSURE: str = (
-    f"graph prose entity extraction is English-only ({SPACY_MODEL_NAME}) "
-    "while multilingual = true; non-English documents contribute "
-    "code-symbol entities only"
-)
-
 # Public: shared with model_validation.py's graph_ner_status so the
 # "[graph] extra missing" message reads identically whether it is surfaced
 # from ensure_graph_engine_importable's construction-time guard or from
@@ -105,7 +80,7 @@ GLINER_NOT_INSTALLED_MESSAGE: str = (
 
 # Wire-facing degradation notices for the prose extraction backend (BE-11,
 # tightened by BE-12 for S14/S17/S46). Sanitized (never carry exception text
-# or str(exc)) per the same rule as the spaCy notices above, and per
+# or str(exc)) per the same rule as the gliner notice above, and per
 # parser.py's ``_PARSE_WORKER_LOST_DETAIL`` convention — a DETAIL-only
 # constant, since ``GraphExtractionResult.warnings`` is plain ``list[str]``
 # with no separate wire-facing "code" field (graph_types.py) to pair it with.
@@ -127,178 +102,9 @@ _LOAD_WAIT_TIMEOUT_DETAIL: str = (
     "extraction is unaffected)."
 )
 
-# Comma-separated ">="/"<"-style clause operators, checked longest-prefix-first
-# so ">=" is not mistaken for ">" (used by _specifier_satisfied below).
-_SPECIFIER_OPS = {
-    ">=": operator.ge,
-    "<=": operator.le,
-    "==": operator.eq,
-    "!=": operator.ne,
-    ">": operator.gt,
-    "<": operator.lt,
-}
-
-
+# Splits an LLM-merged entity field like "Bob / Google" back into its parts
+# (used by _resolve_labeled_pair in the enrichment-labeling path).
 _NAME_SPLIT_PATTERN = re.compile(r"\s*(?:/|,| and )\s*")
-
-
-@dataclass(frozen=True)
-class SpacyModelResolution:
-    """Outcome of :func:`resolve_spacy_model` (2026-08-19-030 C1-I-3).
-
-    ``target`` is the installed package name or the data-dir path once
-    resolution succeeds, else ``None``. ``incompatible_versions`` names
-    data-dir candidates that exist but whose ``meta.json`` ``spacy_version``
-    range excludes the installed spaCy — "present but not usable", which the
-    operator-facing message must distinguish from "absent entirely".
-    """
-
-    target: str | None
-    incompatible_versions: list[str]
-
-
-def _version_key(version: str) -> tuple[int, ...]:
-    """Parse a dotted version string into a comparable tuple of ints.
-
-    Stops at the first non-digit run (adequate for spaCy's plain ``X.Y.Z``
-    releases). No dependency on ``packaging`` — it is only a transitive
-    dependency here, not a declared one (2026-08-19-030 C1-I-2).
-    """
-    parts: list[int] = []
-    for piece in version.split("."):
-        digits = "".join(itertools.takewhile(str.isdigit, piece))
-        if not digits:
-            break
-        parts.append(int(digits))
-    return tuple(parts)
-
-
-def _model_version_key(path: Path) -> tuple[int, ...]:
-    """Version-aware sort key for a ``en_core_web_sm-<version>`` directory name."""
-    _, _, version = path.name.partition(f"{SPACY_MODEL_NAME}-")
-    return _version_key(version)
-
-
-def _specifier_satisfied(specifier: str, version: str) -> bool:
-    """Check *version* against a comma-separated ``>=``/``<``-style specifier.
-
-    Covers the clause forms spaCy's ``meta.json`` publishes for its
-    ``spacy_version`` field (e.g. ``">=3.8.0,<3.9.0"``). Raises ``ValueError``
-    on an unrecognized clause so the caller can fail open rather than
-    mis-evaluate.
-    """
-    parsed = _version_key(version)
-    for clause in specifier.split(","):
-        clause = clause.strip()
-        if not clause:
-            continue
-        for op_symbol in _SPECIFIER_OPS:  # declared longest-prefix-first
-            if clause.startswith(op_symbol):
-                operand = clause[len(op_symbol):].strip()
-                # A wildcard/pre-release operand (`3.8.*`, `3.9.0a1`) would
-                # truncate to a shorter tuple and compare wrongly — treat it as
-                # unrecognized so the caller fails OPEN rather than declaring a
-                # usable model incompatible (2026-08-19-030 C2-B-18).
-                if not re.fullmatch(r"\d+(?:\.\d+)*", operand):
-                    raise ValueError(f"unrecognized version operand: {operand!r}")
-                target = _version_key(operand)
-                if not _SPECIFIER_OPS[op_symbol](parsed, target):
-                    return False
-                break
-        else:
-            raise ValueError(f"unrecognized version clause: {clause!r}")
-    return True
-
-
-def _model_dir_compatible(model_dir: Path, installed_spacy_version: str) -> bool:
-    """Return ``False`` only when ``meta.json`` unambiguously rules out
-    *installed_spacy_version* (2026-08-19-030 C1-I-3).
-
-    Missing/unreadable ``meta.json``, an absent or unparseable
-    ``spacy_version`` field, or an unrecognized clause all read as
-    compatible (fail open) — this check exists only to stop a KNOWN-stale
-    model directory from reporting healthy on ``GET /status``;
-    ``spacy.load()`` at ingest time remains the final authority.
-    """
-    try:
-        meta = json.loads((model_dir / "meta.json").read_text())
-    except (OSError, ValueError):
-        return True
-    spec = meta.get("spacy_version")
-    if not isinstance(spec, str) or not spec.strip() or not installed_spacy_version:
-        return True
-    try:
-        return _specifier_satisfied(spec, installed_spacy_version)
-    except ValueError:
-        return True
-
-
-def resolve_spacy_model() -> SpacyModelResolution:
-    """Resolve a loadable ``en_core_web_sm`` and classify what was found.
-
-    Resolution order (2026-08-19-030): the installed package first — for pip
-    installs that already carry it — then the wizard-provisioned directory
-    under ``get_models_dir() / "spacy"``, version-sorted (not lexicographic — a
-    directory-name compare would rank ``3.9.0`` before ``3.10.0``) and
-    filtered to versions compatible with the installed spaCy (C1-I-3).
-    Nothing here installs or downloads: a ``uv tool`` venv has no package
-    installer, so a runtime download can only ever fail. Both fields read
-    empty/``None`` when spaCy itself is not importable.
-    """
-    try:
-        import spacy.util  # noqa: PLC0415
-    except ImportError:
-        return SpacyModelResolution(target=None, incompatible_versions=[])
-
-    # `import spacy.util` above also binds the `spacy` package name itself.
-    installed_spacy_version = getattr(spacy, "__version__", "")
-
-    incompatible: list[str] = []
-    if SPACY_MODEL_NAME in spacy.util.get_installed_models():
-        # The installed package gets the same compatibility check as a data-dir
-        # candidate. Without it, an old pinned `en_core_web_sm` left over from a
-        # previous spaCy shadows a correctly provisioned data-dir model
-        # permanently — resolution returns here and never reaches the fallback
-        # — while reporting healthy on GET /status (2026-08-19-030 C2-I-6).
-        try:
-            package_path = Path(spacy.util.get_package_path(SPACY_MODEL_NAME))
-        except Exception:  # noqa: BLE001 — an unreadable package reads as usable
-            return SpacyModelResolution(target=SPACY_MODEL_NAME, incompatible_versions=[])
-        model_dirs = [package_path, *sorted(package_path.glob(f"{SPACY_MODEL_NAME}-*"))]
-        for model_dir in model_dirs:
-            if (model_dir / "meta.json").is_file():
-                if _model_dir_compatible(model_dir, installed_spacy_version):
-                    return SpacyModelResolution(
-                        target=SPACY_MODEL_NAME, incompatible_versions=[]
-                    )
-                incompatible.append(f"{SPACY_MODEL_NAME} (installed package)")
-                break
-        else:
-            # No meta.json anywhere in the package — fail open, as elsewhere.
-            return SpacyModelResolution(target=SPACY_MODEL_NAME, incompatible_versions=[])
-
-    # Strict `X.Y.Z` suffix: a bare glob also matches siblings like
-    # `en_core_web_sm-3.8.0.bak`, which `_model_version_key` parses to the same
-    # key as the real directory, making `max()` pick between them arbitrarily
-    # (2026-08-19-030 C2-I-21). Mirrors the wizard's own guard in extras.py.
-    candidates = [
-        path
-        for path in (get_models_dir() / "spacy").glob(f"{SPACY_MODEL_NAME}-*")
-        if re.fullmatch(rf"{re.escape(SPACY_MODEL_NAME)}-\d+\.\d+\.\d+", path.name)
-        and (path / "config.cfg").is_file()
-    ]
-    compatible: list[Path] = []
-    for path in candidates:
-        if _model_dir_compatible(path, installed_spacy_version):
-            compatible.append(path)
-        else:
-            incompatible.append(path.name)
-
-    if not compatible:
-        return SpacyModelResolution(target=None, incompatible_versions=sorted(incompatible))
-
-    newest = max(compatible, key=_model_version_key)
-    return SpacyModelResolution(target=str(newest), incompatible_versions=sorted(incompatible))
 
 
 def gliner_absent() -> bool:
@@ -338,15 +144,6 @@ def ensure_graph_engine_importable(config: "GraphConfig") -> None:
 
     if gliner_absent():
         raise ConfigError(f"graph.enabled=true but {GLINER_NOT_INSTALLED_MESSAGE}")
-
-
-def find_spacy_model() -> str | None:
-    """Return a loadable ``en_core_web_sm`` reference, or ``None`` if absent.
-
-    Thin wrapper around :func:`resolve_spacy_model` for callers that only
-    need the resolved target, not the incompatible-versions detail.
-    """
-    return resolve_spacy_model().target
 
 
 def _resolve_labeled_pair(

@@ -455,7 +455,7 @@ def _check_graph_deps(config: SearchConfig) -> None:
 
     Called synchronously in ``create_app()`` before ``SearchPipeline`` is
     constructed.  Raises ``ConfigError`` with an actionable message when
-    ``spacy`` is not installed.
+    ``gliner`` is not installed.
 
     No-ops when ``config.graph.enabled`` is ``False``.
     """

@@ -47,13 +47,12 @@ services:
       - sh
       - -c
       - >-
-          uv sync --dev --extra hyde --extra rag-fusion --extra graph &&
-          uv run python -m spacy download en_core_web_sm --quiet;
+          uv sync --dev --extra hyde --extra rag-fusion --extra graph;
           uv run pytest;
           uv run pytest tests/smoke/ --no-cov
 
   # Long-running dev shell — same image as the test runner, shares its deps volumes.
-  # First start runs `uv sync` + spaCy download once, then stays alive.
+  # First start runs `uv sync` once, then stays alive.
   # Usage:
   #   docker compose up -d archon-dev-shell            # start (setup runs once)
   #   docker compose exec archon-dev-shell bash        # shell in; run tests/server interactively
@@ -78,8 +77,7 @@ services:
       - -c
       - >-
           if [ ! -f /venv/bin/activate ]; then
-          uv sync --dev --extra hyde --extra rag-fusion --extra graph &&
-          uv run python -m spacy download en_core_web_sm --quiet;
+          uv sync --dev --extra hyde --extra rag-fusion --extra graph;
           fi;
           exec sleep infinity
 

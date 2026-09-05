@@ -19,17 +19,13 @@ def _run(tmp_path: Path, extras: str = "graph") -> tuple[subprocess.CompletedPro
     stamp = tmp_path / ".extras-installed"
     pip_called = tmp_path / "pip_called"
 
-    # Fake python3 -m pip: record invocation
-    fake_pip_module = bin_dir / "pip_module_marker"
-    # We intercept `python3` entirely: handle both `-m pip install` and
-    # `-c "import en_core_web_sm"` (return 0 for both so spacy skips) and
-    # `-m spacy download` (record + return 0).
+    # We intercept `python3` entirely: handle the version probe (`-c "import
+    # importlib..."`) and record `-m pip install`.
     fake_python3 = bin_dir / "python3"
     fake_python3.write_text(
         f"#!/bin/sh\n"
         f'case "$*" in\n'
         f'  *"import importlib"*) echo "0.0.1+test" ;;\n'  # version probe
-        f'  *"import en_core_web_sm"*) exit 0 ;;\n'       # spacy import check: present
         f'  *pip*install*) touch {pip_called}; exit 0 ;;\n'
         f'  *) exit 0 ;;\n'
         f'esac\n'

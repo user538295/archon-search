@@ -1,8 +1,6 @@
 #!/bin/sh
-# Installs optional extras and the spaCy model into the /pip-packages named
-# volume on first start (or when ARCHON_EXTRAS changes), then execs CMD.
-# ponytail: PIP_TARGET propagates into spacy's internal pip call so the model
-# lands in the same volume without a separate --target flag.
+# Installs optional extras into the /pip-packages named volume on first start
+# (or when ARCHON_EXTRAS changes), then execs CMD.
 set -e
 
 log() { echo "[entrypoint] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
@@ -30,21 +28,6 @@ else
 fi
 
 export PYTHONPATH="/pip-packages${PYTHONPATH:+:$PYTHONPATH}"
-
-case ",${EXTRAS}," in
-    *,graph,*)
-        if ! python3 -c "import en_core_web_sm" 2>/dev/null; then
-            log "spaCy model en_core_web_sm not found — downloading …"
-            { PIP_TARGET=/pip-packages python3 -m spacy download en_core_web_sm; } 2>&1
-            log "spaCy model en_core_web_sm download complete."
-        else
-            log "spaCy model en_core_web_sm already present — skipping download."
-        fi
-        ;;
-    *)
-        log "graph extra not in ARCHON_EXTRAS — skipping spaCy model download."
-        ;;
-esac
 
 log "=== setup complete — handing off to: $* ==="
 exec "$@"

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -181,72 +181,23 @@ class TestInstallExtra:
 
 
 class TestInstallGraphExtra:
-    """Unit tests for _install_graph_extra() — spaCy model provisioning.
+    """Unit tests for _install_graph_extra() — thin wrapper over _install_extra.
 
-    2026-08-19-030: the model is neither on PyPI nor installable in a pip-less
-    ``uv tool`` venv, so the wizard fetches the pinned wheel and places it under
-    the data dir, where the runtime resolves it by path.
+    The gliner NER checkpoint is fetched lazily by ``GLiNER.from_pretrained`` at
+    first ingest, so the wizard only installs the pip extra (BE-15).
     """
 
-    def test_install_graph_extra_provisions_model_into_data_dir(self):
-        """On success: the model is provisioned into the data-dir spaCy directory."""
-        from archon_search.paths import get_models_dir
-
-        with patch("archon_search.install.extras._install_extra"), \
-             patch("archon_search.install.extras._download_spacy_model") as mock_download, \
-             patch("subprocess.run") as mock_run:
+    def test_install_graph_extra_delegates_to_install_extra(self):
+        """_install_graph_extra() delegates to _install_extra with the graph package."""
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_graph_extra(dry_run=False)
+            mock_extra.assert_called_once_with("archon-search[graph]", "graph enrichment", False)
 
-        mock_download.assert_called_once_with(get_models_dir() / "spacy")
-        # No package-manager route: `en-core-web-sm` is not on PyPI, and a
-        # `uv tool` venv has no installer to run it with.
-        mock_run.assert_not_called()
-
-    def test_install_graph_extra_spacy_download_failure_is_nonfatal(self, capsys):
-        """A failed model fetch must not raise; a warning is printed to stderr."""
-        with patch("archon_search.install.extras._install_extra"), \
-             patch(
-                 "archon_search.install.extras._download_spacy_model",
-                 side_effect=InstallError("no route to host"),
-             ):
-            _install_graph_extra(dry_run=False)  # must not raise
-        captured = capsys.readouterr()
-        assert "Warning" in captured.err
-        assert "spaCy" in captured.err
-
-    def test_install_graph_extra_dry_run_no_download(self):
-        """dry_run=True must not fetch anything."""
-        with patch("archon_search.install.extras._install_extra"), \
-             patch("archon_search.install.extras._download_spacy_model") as mock_download, \
-             patch("subprocess.run") as mock_run:
+    def test_install_graph_extra_delegates_dry_run_to_install_extra(self):
+        """_install_graph_extra(dry_run=True) delegates dry_run=True to _install_extra."""
+        with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_graph_extra(dry_run=True)
-            mock_download.assert_not_called()
-            mock_run.assert_not_called()
-
-    def test_install_graph_extra_dry_run_prints_message(self, capsys):
-        """dry_run=True should print a message indicating what would be run."""
-        with patch("archon_search.install.extras._install_extra"), \
-             patch("archon_search.install.extras._download_spacy_model"):
-            _install_graph_extra(dry_run=True)
-        captured = capsys.readouterr()
-        assert "[dry-run]" in captured.out
-        assert "en_core_web_sm" in captured.out
-
-    def test_install_graph_extra_partial_failure_extras_succeed_spacy_fails(self):
-        """When _install_extra succeeds but the model fetch fails, InstallError is NOT raised.
-
-        The caller reverts ``graph.enabled`` on InstallError — a missing prose
-        model must not trigger that: code-symbol graphing still works.
-        """
-        with patch("archon_search.install.extras._install_extra"), \
-             patch(
-                 "archon_search.install.extras._download_spacy_model",
-                 side_effect=InstallError("download failed"),
-             ):
-            try:
-                _install_graph_extra(dry_run=False)
-            except InstallError:
-                pytest.fail("_install_graph_extra raised InstallError on spaCy download failure")
+            mock_extra.assert_called_once_with("archon-search[graph]", "graph enrichment", True)
 
 
 class TestInstallMultilingualExtra:

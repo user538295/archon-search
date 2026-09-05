@@ -1,4 +1,4 @@
-"""Construction-time spaCy guard for graph.enabled (2026-08-19-030).
+"""Construction-time gliner guard for graph.enabled (2026-08-19-030).
 
 A missing ``[graph]`` extra is an operator misconfiguration, so it must fail
 when the pipeline is BUILT — not once per file, pre-persist, inside every
@@ -18,7 +18,7 @@ import sys
 import pytest
 
 from archon_search.config import ConfigError, GraphConfig
-from archon_search.graph_extractor import ensure_graph_engine_importable
+from archon_search.graph_extractor import ensure_graph_engine_importable, gliner_absent
 
 
 def test_guard_noops_when_graph_disabled() -> None:
@@ -98,6 +98,34 @@ def test_app_and_pipeline_guards_share_one_implementation() -> None:
             create_pipeline(cfg)
         with pytest.raises(_Sentinel):
             create_app(cfg, MagicMock(spec=JobStore))
+
+
+def test_present_but_spec_less_stub_is_treated_as_found() -> None:
+    """A present-but-``__spec__``-less ``sys.modules`` entry makes ``find_spec``
+    raise ``ValueError`` — the guard must read that as *found* (something is
+    reachable under the name), never as absent, so it must NOT raise."""
+    saved = sys.modules.get("gliner", ...)
+    sys.modules["gliner"] = object()  # no __spec__ → find_spec raises ValueError
+    try:
+        assert gliner_absent() is False  # ValueError read as "found", never "absent"
+        ensure_graph_engine_importable(GraphConfig(enabled=True))  # must not raise
+    finally:
+        if saved is ...:
+            sys.modules.pop("gliner", None)
+        else:
+            sys.modules["gliner"] = saved
+
+
+def test_create_pipeline_signature_is_unchanged() -> None:
+    """Folded-in S50: ``create_pipeline``'s public signature must not move."""
+    import inspect
+
+    from archon_search.pipeline import create_pipeline
+
+    params = inspect.signature(create_pipeline).parameters
+    assert list(params) == ["cfg", "embedder_backend", "reranker_backend"]
+    assert params["embedder_backend"].default is None
+    assert params["reranker_backend"].default is None
 
 
 class _gliner_absent:
