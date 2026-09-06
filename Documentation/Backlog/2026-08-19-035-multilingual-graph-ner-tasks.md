@@ -651,7 +651,7 @@ flowchart LR
         - #unit_test — `test_configure_providers_writes_the_named_section` — the section and provider-list parameters are real, not reused
     - Notes
         - **Tied to BE-14's fate (Provisioning decision, team plan `:111-130`): 5.0h → 4.5h (-0.5h).** BE-14 no longer rides a mandatory, guaranteed-to-run smoke-load — it rides the optional pre-warm — so this task gains one more "no answer yet" case (pre-warm never ran) alongside its existing "a stage failed" case, both of which already resolve to the same silent-CPU behaviour. `configure_providers()`'s generalisation (named section + CPU-write branch) is unaffected — it is still real, still-needed installer work regardless of what gates the offer.
-- [ ] **T-4** — e2e: drive the wizard through the CLI test runner over `lid.176.ftz`'s provisioning paths — happy path, re-run, digest mismatch, byte-count mismatch, disk guard #tester-role
+- [x] **T-4** — e2e: drive the wizard through the CLI test runner over `lid.176.ftz`'s provisioning paths — happy path, re-run, digest mismatch, byte-count mismatch, disk guard #tester-role
     - — · 7.0h
     - needs BE-13, FE-4 · completes S11, S37
     - Tests

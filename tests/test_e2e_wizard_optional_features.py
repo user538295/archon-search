@@ -3,7 +3,9 @@
 These tests invoke the real `wizard` Click command via CliRunner, then parse
 the written TOML with tomlkit to assert on config values.  All tests run
 --non-interactive (except interactive-mode use-cases) with --config pointing to
-a tmp_path so no real services or model downloads are triggered.
+a tmp_path so no real services are triggered.  The T-4 block at the end of this
+file is the one exception: it runs the real fasttext provisioning code against a
+mocked URL opener, so no bytes ever cross the network there either.
 
 Run:
     uv run pytest tests/test_e2e_wizard_optional_features.py -m integration -v
@@ -11,6 +13,7 @@ Run:
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -24,7 +27,13 @@ from click.testing import CliRunner, Result
 
 from archon_search.cli.main import main
 from archon_search.install import InstallError, RealInstaller
+from archon_search.install.licenses import (
+    _download_fasttext_model,
+    _prompt_fasttext_license,
+)
+from archon_search.paths import get_fasttext_models_dir
 from archon_search.platform.types import GpuType
+from tests.test_install_fasttext_download import _pin_digest_of
 
 
 @contextmanager
@@ -2151,3 +2160,231 @@ def test_s561_log_format_written_when_explicitly_passed(
     assert log_format == "text", (
         f"log_format should be written when explicitly passed; got {log_format!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# T-4 — lid.176.ftz provisioning driven end to end through the wizard (S11, S37)
+# ---------------------------------------------------------------------------
+
+# Stand-in for the real ~938 KB lid.176.ftz. Only the transport is mocked: the
+# free-space guard, byte-count assert, digest assert and atomic publish all run
+# for real, against FASTTEXT_ARTIFACT re-pinned to these bytes' known digest and
+# byte count (_pin_digest_of, shared with tests/test_install_fasttext_download.py).
+# _pin_digest_of patches only the licenses binding; prewarm.py:26 imports its own
+# FASTTEXT_ARTIFACT, which keeps the real values — harmless only while
+# _patched_wizard mocks _prewarm_models.
+_STAND_IN_MODEL = b"lid.176.ftz stand-in payload\n" * 64
+
+
+def _served_response(content: bytes) -> MagicMock:
+    """urlopen() stand-in whose read(n) honours its bound.
+
+    The production code reads ``size_bytes + 1`` so an over-long body is caught
+    without buffering an unbounded response; a mock that ignores ``n`` would let
+    that bound rot untested.
+    """
+    response = MagicMock()
+    response.__enter__ = lambda s: s
+    response.__exit__ = MagicMock(return_value=False)
+    response.read.side_effect = lambda n=None: content if n is None else content[:n]
+    return response
+
+
+@contextmanager
+def _real_fasttext_provisioning(data_dir: Path, **extra: Any) -> Generator[Path, None, None]:
+    """Wizard with the REAL fasttext license gate and download, rooted at *data_dir*.
+
+    Yields the path lid.176.ftz must be published to, read from the same accessor
+    the installer itself passes to the downloader (installer.py:1346).
+    """
+    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(data_dir)}):
+        with _patched_wizard(
+            _prompt_fasttext_license=_prompt_fasttext_license,
+            _download_fasttext_model=_download_fasttext_model,
+            **extra,
+        ):
+            yield get_fasttext_models_dir() / "lid.176.ftz"
+
+
+# The literal opening of every InstallError _download_fasttext_model raises
+# (licenses.py:206-241). S11 calls for a *sanitized* category, and CLAUDE.md forbids
+# str(exc) in operator-facing copy — these embed the models-dir path and raw byte
+# counts, so none of them may reach the transcript.
+_RAW_EXCEPTION_FRAGMENTS = (
+    "Insufficient disk space for fasttext",
+    "fasttext model download appears corrupt",
+    "fasttext model digest verification failed",
+)
+
+
+def _assert_sanitized(output: str) -> None:
+    """Fail if any raw exception message leaked into the operator transcript."""
+    for fragment in _RAW_EXCEPTION_FRAGMENTS:
+        assert fragment not in output, f"raw exception text leaked: {fragment!r} in {output}"
+
+
+def _multilingual_wizard_args(config_path: Path) -> list[str]:
+    """Non-interactive multilingual invocation — the only one that provisions fasttext."""
+    return _wizard_args(config_path, "--multilingual", "--accept-fasttext-license")
+
+
+@pytest.mark.integration
+def test_e2e_wizard_provisions_verifies_and_publishes(runner: CliRunner, tmp_path: Path) -> None:
+    """Happy path: the wizard downloads lid.176.ftz once, verifies it against the
+    pinned digest and byte count, publishes it atomically, and stays multilingual."""
+    config_path = tmp_path / "archon-search.toml"
+
+    with _real_fasttext_provisioning(tmp_path) as target, _pin_digest_of(_STAND_IN_MODEL), patch(
+        "urllib.request.urlopen", return_value=_served_response(_STAND_IN_MODEL)
+    ) as mock_urlopen:
+        result = runner.invoke(main, _multilingual_wizard_args(config_path))
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    mock_urlopen.assert_called_once()
+    assert target.read_bytes() == _STAND_IN_MODEL
+    assert not (target.parent / "lid.176.ftz.tmp").exists(), "staging file left behind"
+    assert "Downloading fasttext language model" in result.output, (
+        f"download step not in transcript: {result.output}"
+    )
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["multilingual"] is True
+
+
+@pytest.mark.integration
+def test_e2e_wizard_rerun_reports_already_provisioned(
+    runner: CliRunner, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Re-running the wizard re-verifies the placed file and does not re-download it."""
+    config_path = tmp_path / "archon-search.toml"
+
+    with _real_fasttext_provisioning(tmp_path) as target, _pin_digest_of(_STAND_IN_MODEL), patch(
+        "urllib.request.urlopen", return_value=_served_response(_STAND_IN_MODEL)
+    ):
+        first = runner.invoke(main, _multilingual_wizard_args(config_path))
+    assert first.exit_code == 0, f"Exit {first.exit_code}: {first.output}"
+    assert target.read_bytes() == _STAND_IN_MODEL
+
+    # side_effect, not a bare MagicMock: a re-download regression then fails on the
+    # assertion below rather than on a confusing TypeError deep inside urllib.
+    with _real_fasttext_provisioning(tmp_path), _pin_digest_of(_STAND_IN_MODEL), patch(
+        "urllib.request.urlopen", side_effect=AssertionError("re-downloaded a matching file")
+    ) as mock_urlopen, caplog.at_level(logging.DEBUG, logger="archon_search.install.licenses"):
+        rerun = runner.invoke(main, _multilingual_wizard_args(config_path))
+
+    assert rerun.exit_code == 0, f"Exit {rerun.exit_code}: {rerun.output}"
+    # Distinguishes "re-verified the placed file, then skipped" from "never ran the
+    # provisioning step at all" — assert_not_called() alone cannot tell them apart.
+    assert "already present" in caplog.text, (
+        f"provisioning step did not re-verify the placed file: {caplog.text}"
+    )
+    mock_urlopen.assert_not_called()
+    assert target.read_bytes() == _STAND_IN_MODEL
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["multilingual"] is True
+
+
+# Literal remedy fragments, deliberately NOT built by calling _render_provision_failure:
+# the point is that the operator reads two visibly different remedies, which a
+# tautological "renderer output == renderer output" assert could never catch drifting
+# into one another. Sourced from render.py's _PROVISION_REMEDIES (:156-172).
+_SIZE_REMEDY = "the transfer ended early and was discarded"
+_DIGEST_REMEDY = "did not match the pinned checksum"
+_DISK_REMEDY = "not enough free disk space for the model"
+
+
+@pytest.mark.integration
+def test_e2e_wizard_replaces_a_mismatching_already_present_model(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """The other half of re-run: a corrupt lid.176.ftz on disk is re-downloaded, not
+    trusted and not fatal (licenses.py:186-199)."""
+    config_path = tmp_path / "archon-search.toml"
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    (models_dir / "lid.176.ftz").write_bytes(b"truncated leftover from a crashed run")
+
+    with _real_fasttext_provisioning(tmp_path) as target, _pin_digest_of(_STAND_IN_MODEL), patch(
+        "urllib.request.urlopen", return_value=_served_response(_STAND_IN_MODEL)
+    ) as mock_urlopen:
+        result = runner.invoke(main, _multilingual_wizard_args(config_path))
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    mock_urlopen.assert_called_once()
+    assert target.read_bytes() == _STAND_IN_MODEL, "corrupt file was trusted instead of replaced"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["multilingual"] is True
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("served", "remedy", "other_remedy"),
+    [
+        # Right length, wrong bytes — passes the byte-count assert, fails the digest one.
+        pytest.param(bytes(len(_STAND_IN_MODEL)), _DIGEST_REMEDY, _SIZE_REMEDY, id="digest"),
+        # Short read — fails the byte-count assert first, never reaching the digest one.
+        pytest.param(_STAND_IN_MODEL[:100], _SIZE_REMEDY, _DIGEST_REMEDY, id="size"),
+        # Over-long body — only the bounded read(size + 1) turns this into a
+        # byte-count mismatch instead of an unbounded buffer of a hostile response.
+        pytest.param(_STAND_IN_MODEL + b"padding", _SIZE_REMEDY, _DIGEST_REMEDY, id="oversize"),
+    ],
+)
+def test_e2e_digest_and_size_mismatches_place_nothing_and_degrade_to_english_only(
+    runner: CliRunner, tmp_path: Path, served: bytes, remedy: str, other_remedy: str
+) -> None:
+    """S11 + S37: a wrong-digest response and a short response are two distinct
+    sanitized categories; each places nothing and degrades to English-only."""
+    config_path = tmp_path / "archon-search.toml"
+    multilingual_extra = MagicMock()
+
+    with _real_fasttext_provisioning(
+        tmp_path, _install_multilingual_extra=multilingual_extra
+    ) as target, _pin_digest_of(_STAND_IN_MODEL), patch(
+        "urllib.request.urlopen", return_value=_served_response(served)
+    ):
+        result = runner.invoke(main, _multilingual_wizard_args(config_path))
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    assert not target.exists(), "model was placed despite a failed verify"
+    assert not (target.parent / "lid.176.ftz.tmp").exists(), "staging file left behind"
+    assert remedy in result.output, f"category not rendered: {result.output}"
+    assert other_remedy not in result.output, f"rendered the other category too: {result.output}"
+    _assert_sanitized(result.output)
+    # installer.py:601-603 states the degrade also skips the [multilingual] extra.
+    multilingual_extra.assert_not_called()
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["multilingual"] is False, "did not degrade to English-only"
+
+
+@pytest.mark.integration
+def test_e2e_disk_guard_blocks_download_and_degrades_to_english_only(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """The free-space guard fires before any network call, places nothing, reports
+    its own category, and degrades to English-only."""
+    config_path = tmp_path / "archon-search.toml"
+
+    multilingual_extra = MagicMock()
+
+    with _real_fasttext_provisioning(
+        tmp_path, _install_multilingual_extra=multilingual_extra
+    ) as target, _pin_digest_of(_STAND_IN_MODEL), patch(
+        "shutil.disk_usage", return_value=MagicMock(free=1)
+    ) as mock_disk_usage, patch(
+        "urllib.request.urlopen", side_effect=AssertionError("downloaded despite the disk guard")
+    ) as mock_urlopen:
+        result = runner.invoke(main, _multilingual_wizard_args(config_path))
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    mock_urlopen.assert_not_called()
+    # The guard must measure the directory it is about to write into, not some other
+    # mount — a process-wide disk_usage patch would mask that.
+    mock_disk_usage.assert_called_once_with(target.parent)
+    assert not target.exists()
+    assert not (target.parent / "lid.176.ftz.tmp").exists(), "staging file left behind"
+    assert _DISK_REMEDY in result.output, (
+        f"insufficient-disk category not rendered: {result.output}"
+    )
+    _assert_sanitized(result.output)
+    multilingual_extra.assert_not_called()
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["database"]["multilingual"] is False
