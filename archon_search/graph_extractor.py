@@ -204,6 +204,13 @@ class GraphExtractor:
         # `warnings` entry still fires every time.
         self._inference_failure_logged: bool = False
 
+    @property
+    def load_count(self) -> int:
+        """Passthrough to the backend's `load_count` (C1 `EngineCapability.loadCount`,
+        S26/S48) — spares callers a private `_backend` reach for the one figure the
+        real-artifact lane's non-vacuity assert needs."""
+        return self._backend.load_count
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

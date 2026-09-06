@@ -1054,3 +1054,13 @@ def test_same_process_double_ingest_is_id_stable() -> None:
     assert {n.id for n in first.nodes} == {n.id for n in second.nodes}
     assert {e.id for e in first.edges} == {e.id for e in second.edges}
     assert len(first.mentions) == len(second.mentions)
+
+
+def test_load_count_passthrough_forwards_to_backend() -> None:
+    """GraphExtractor.load_count must forward to the backend's own counter, not read
+    some independent state — the real-artifact lane's non-vacuity assert reads this
+    property directly (T-8, S26/S48) rather than reaching into `extractor._backend`."""
+    extractor = _make_extractor()
+    assert extractor.load_count == 0
+    extractor._backend._load_count = 1
+    assert extractor.load_count == 1

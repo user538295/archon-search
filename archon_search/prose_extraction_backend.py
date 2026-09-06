@@ -200,6 +200,11 @@ class ProseExtractionBackend:
         # list. Unset (None/[]) means CPU.
         self._providers = providers or None
         self._model: GLiNER | None = None
+        # Monotonic count of ACTUAL model constructions (C1 `EngineCapability.loadCount`,
+        # S26/S48). Incremented only where `GLiNER.from_pretrained` really ran, so it
+        # discriminates "the load path executed" from "config resolved a provider list" —
+        # the latter is computable with no model loaded and proves nothing.
+        self._load_count = 0
         self._sync_lock = threading.Lock()
         # Guards only the brief check-and-register step below — never held for
         # the duration of an actual load (mirrors EmbedderCache._lock).
@@ -218,6 +223,15 @@ class ProseExtractionBackend:
     @property
     def is_loaded(self) -> bool:
         return self._model is not None
+
+    @property
+    def load_count(self) -> int:
+        """How many times this backend actually constructed the model (C1 ``loadCount``).
+
+        Read-only. ``load()`` is idempotent and single-flight, so a healthy process
+        reaches exactly 1 no matter how many concurrent extractions ran (S26, S48).
+        """
+        return self._load_count
 
     def _resolve_device(self) -> str:
         """Map [graph].providers onto a torch device via ``resolve_torch_device`` (Task BE-14)."""
@@ -252,7 +266,12 @@ class ProseExtractionBackend:
                 revision=self._revision,
                 cache_dir=str(get_graph_models_dir()),
             )
+            # After `.to(device)` succeeds, not right after `from_pretrained` — a
+            # device-placement failure (e.g. CUDA OOM) must not count as a load: the
+            # property's contract is "the model really was built", and self._model is
+            # what `is_loaded`/inference actually gate on, so the two must agree.
             self._model = model.to(self._resolve_device())
+            self._load_count += 1
 
     async def load(self) -> None:
         """Load the model, off the event loop, on first call.

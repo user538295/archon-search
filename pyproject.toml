@@ -150,7 +150,7 @@ markers = [
     "unit: plain unit tests with no infrastructure dependencies",
     "smoke: live subprocess smoke tests; require a real archon-search serve process; excluded from default run via norecursedirs + -m filter; run with `uv run pytest tests/smoke/ --no-cov`",
     "docling: tests that invoke the real docling parser / RapidOCR (PDF & image OCR); a single parse takes minutes on macOS (Metal/RapidOCR), so excluded from the default run via the -m filter; run with `uv run pytest -m docling --no-cov`",
-    "graph_real_artifact: tests that load a real graph-NER model artifact (memory / real-artifact determinism); heavyweight, so excluded from the default run via the -m filter and pinned to its own xdist_group; run with `uv run pytest -m graph_real_artifact --no-cov`",
+    "graph_real_artifact: tests that load a real graph-NER model artifact (memory / real-artifact determinism); heavyweight, so excluded from the default run via the -m filter and pinned to its own xdist_group; run with `ARCHON_SEARCH_DATA_DIR=\"$HOME/.archon-search\" uv run pytest -m graph_real_artifact --no-cov` (the env var must point at a data dir whose models/graph/ already holds the pinned checkpoint, or the run re-downloads it)",
 ]
 
 [tool.uv]

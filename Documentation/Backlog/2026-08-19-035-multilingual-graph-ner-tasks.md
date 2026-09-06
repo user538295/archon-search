@@ -675,7 +675,7 @@ flowchart LR
         - #e2e_test — `test_e2e_two_fasttext_failure_categories_render_differently` — distinct remedy tokens; the two categories are `lid.176.ftz`'s own `digest_mismatch` and `size_mismatch`. **Retargeted 2026-08-24:** the original paired `relations_not_supported` against `digest_mismatch`, but `relations_not_supported` lost its only producer when the graph model moved to the fastembed fetch pattern — it is now a retained-but-unreachable category, so an e2e asserting on its rendering could never pass.
         - #e2e_test — `test_e2e_conflicting_runtimes_reaches_the_operator` — the wizard actually renders the probe's category
         - #e2e_test — `test_e2e_accelerator_offered_only_after_both_stages` — and no prompt on either failure
-- [ ] **T-8** — Build the `graph_real_artifact` lane — registered marker, `-m` exclusions in both workflows, its own `xdist_group`, its own CI step with artifact cache, prefetch and a `--junitxml` did-it-actually-run assertion mirroring `live_benchmark` — and land the memory guard inside it as two separate test functions #tester-role
+- [x] **T-8** — Build the `graph_real_artifact` lane — registered marker, `-m` exclusions in both workflows, its own `xdist_group`, its own CI step with artifact cache, prefetch and a `--junitxml` did-it-actually-run assertion mirroring `live_benchmark` — and land the memory guard inside it as two separate test functions #tester-role
     - — · 12.0h
     - needs BE-6, BE-11 · completes S26
     - Tests

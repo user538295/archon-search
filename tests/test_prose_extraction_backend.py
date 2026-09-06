@@ -459,3 +459,65 @@ def test_module_import_does_not_pull_in_ml_libraries() -> None:
         [sys.executable, "-c", script], capture_output=True, text=True, timeout=60
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ---------------------------------------------------------------------------
+# load_count — C1 `EngineCapability.loadCount` (Task T-8, S26/S48)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_load_count_counts_only_real_model_constructions() -> None:
+    """`load_count` starts at 0, reaches 1 on a real construction, and stays 1 across
+    repeated `load()` calls — the real-artifact lane asserts `== 1` to prove the load path
+    executed, so a counter that also ticked on a no-op re-`load()` would not discriminate."""
+    from_pretrained = MagicMock(return_value=_model_with_to())
+    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    backend = ProseExtractionBackend()
+
+    assert backend.load_count == 0
+
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
+        await backend.load()
+        assert backend.load_count == 1
+        await backend.load()
+
+    assert backend.load_count == 1
+    assert from_pretrained.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_load_count_stays_zero_when_construction_fails() -> None:
+    """A failed load must NOT increment `load_count`. The lane's non-vacuity assert reads
+    `== 1` as "the model really was built"; counting attempts instead would let a degraded
+    run — the exact silent no-op the assert exists to catch — report a successful load."""
+    from_pretrained = MagicMock(side_effect=RuntimeError("boom"))
+    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    backend = ProseExtractionBackend()
+
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
+        with pytest.raises(RuntimeError):
+            await backend.load()
+
+    assert backend.load_count == 0
+    assert backend.is_loaded is False
+
+
+@pytest.mark.asyncio
+async def test_load_count_stays_zero_when_device_placement_fails() -> None:
+    """A `from_pretrained` that succeeds but whose `.to(device)` call raises must also
+    NOT increment `load_count` — the increment sits after `.to()` specifically so a
+    device-placement failure (e.g. a CUDA OOM) can never leave `load_count == 1` while
+    `is_loaded` is False, which would contradict the property's own "the model really
+    was built" contract."""
+    model = _model_with_to()
+    model.to.side_effect = RuntimeError("device placement failed")
+    from_pretrained = MagicMock(return_value=model)
+    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    backend = ProseExtractionBackend()
+
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
+        with pytest.raises(RuntimeError):
+            await backend.load()
+
+    assert backend.load_count == 0
+    assert backend.is_loaded is False

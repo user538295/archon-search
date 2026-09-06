@@ -15,6 +15,7 @@ from pathlib import Path
 from tests.test_parser_ocr_memory import (
     _WORKFLOW_FILES,
     assert_marker_excluded_on_step_lines,
+    find_marker_tests_missing_xdist_group,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -364,3 +365,20 @@ def test_s52_allowlist_is_pinned_and_self_tightening() -> None:
         f"so the allowlist keeps shrinking: {now_indexed}"
     )
 
+
+def test_every_graph_real_artifact_test_is_pinned_to_its_xdist_group() -> None:
+    """S42(3) mirror: every `@pytest.mark.graph_real_artifact` test must also carry
+    `@pytest.mark.xdist_group("graph_real_artifact")`.
+
+    `addopts` mandates `-n 8 --dist=loadgroup`, so an unpinned lane test lands on an
+    arbitrary second xdist worker and loads a second ~1.2 GB GLiNER artifact concurrently
+    with the pinned group — two full torch model stacks at once. This guard protects only
+    the local parallel run; it is inert in CI, which passes `-n0`. Delegates to the shared
+    scan (one implementation, two callers — the other is the `docling` lane's).
+    """
+    offenders = find_marker_tests_missing_xdist_group(_REPO_ROOT, "graph_real_artifact")
+    assert not offenders, (
+        "these @pytest.mark.graph_real_artifact tests are missing "
+        '@pytest.mark.xdist_group("graph_real_artifact"), so under -n 8 --dist=loadgroup '
+        f"they can load a second real ~1.2 GB model stack concurrently: {offenders}"
+    )

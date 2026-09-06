@@ -498,6 +498,37 @@ def test_ci_workflows_exclude_docling_from_unit_and_integration_steps() -> None:
     assert_marker_excluded_on_step_lines(_REPO_ROOT, _WORKFLOW_FILES, "not docling")
 
 
+def find_marker_tests_missing_xdist_group(repo_root: Path, marker: str) -> list[str]:
+    """Return every `@pytest.mark.<marker>` test under `tests/` that is NOT also pinned to
+    `@pytest.mark.xdist_group("<marker>")`, as `path:lineno` strings.
+
+    `addopts` mandates `-n 8 --dist=loadgroup`, so an unpinned heavyweight test lands on an
+    arbitrary second xdist worker and runs its real-model work concurrently with the pinned
+    group. Shared by the `docling` and `graph_real_artifact` xdist-group guards — one
+    implementation, two callers (each supplies its own failure wording, since the resource
+    each lane doubles up on differs). The group name is the marker name at both call sites.
+    """
+    decorator = f"@pytest.mark.{marker}"
+    pin = f'xdist_group("{marker}")'
+    offenders: list[str] = []
+    for path in sorted((repo_root / "tests").rglob("test_*.py")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for lineno, line in enumerate(lines):
+            if line.strip() != decorator:
+                continue
+            # The decorator stack is contiguous; scan it in both directions from this line.
+            start = lineno
+            while start > 0 and lines[start - 1].lstrip().startswith("@"):
+                start -= 1
+            end = lineno
+            while end + 1 < len(lines) and lines[end + 1].lstrip().startswith("@"):
+                end += 1
+            stack = lines[start : end + 1]
+            if not any(pin in line_in_stack for line_in_stack in stack):
+                offenders.append(f"{path.relative_to(repo_root)}:{lineno + 1}")
+    return offenders
+
+
 def test_every_docling_test_is_pinned_to_the_docling_xdist_group() -> None:
     """Every `@pytest.mark.docling` test must also carry `@pytest.mark.xdist_group("docling")`.
 
@@ -508,24 +539,31 @@ def test_every_docling_test_is_pinned_to_the_docling_xdist_group() -> None:
     `tests/CLAUDE.md` records stacked real-model runs OOM-crashing this 48 GB machine, which is
     the failure class this whole change exists to prevent (C2-B-2).
     """
-    offenders: list[str] = []
-    for path in sorted((_REPO_ROOT / "tests").rglob("test_*.py")):
-        lines = path.read_text(encoding="utf-8").splitlines()
-        for lineno, line in enumerate(lines):
-            if line.strip() != "@pytest.mark.docling":
-                continue
-            # The decorator stack is contiguous; scan it in both directions from this line.
-            start = lineno
-            while start > 0 and lines[start - 1].lstrip().startswith("@"):
-                start -= 1
-            end = lineno
-            while end + 1 < len(lines) and lines[end + 1].lstrip().startswith("@"):
-                end += 1
-            stack = lines[start : end + 1]
-            if not any('xdist_group("docling")' in decorator for decorator in stack):
-                offenders.append(f"{path.relative_to(_REPO_ROOT)}:{lineno + 1}")
+    offenders = find_marker_tests_missing_xdist_group(_REPO_ROOT, "docling")
     assert not offenders, (
         "these @pytest.mark.docling tests are missing @pytest.mark.xdist_group(\"docling\"), so "
         "under -n 8 --dist=loadgroup they can run a real docling parse — and spawn a second "
         f"~1 GB parse worker — concurrently with the pinned group: {offenders}"
     )
+
+
+def test_find_marker_tests_missing_xdist_group_detects_an_unpinned_test(tmp_path) -> None:
+    """`find_marker_tests_missing_xdist_group` must actually flag an unpinned marked test,
+    not just return `[]` on the two real callers' already-conformant trees — an empty
+    result is indistinguishable from "nothing to find" and from "the scan is broken"
+    unless something proves the positive case."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_fake_lane.py").write_text(
+        "import pytest\n"
+        "\n"
+        "@pytest.mark.some_marker\n"
+        "def test_unpinned() -> None:\n"
+        "    pass\n"
+        "\n"
+        "@pytest.mark.some_marker\n"
+        '@pytest.mark.xdist_group("some_marker")\n'
+        "def test_pinned() -> None:\n"
+        "    pass\n"
+    )
+    offenders = find_marker_tests_missing_xdist_group(tmp_path, "some_marker")
+    assert offenders == ["tests/test_fake_lane.py:3"], offenders
