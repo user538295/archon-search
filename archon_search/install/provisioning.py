@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from archon_search.platform.types import GpuType
+
 
 class LicenseDisposition(StrEnum):
     """The one license rule, applied per descriptor rather than decided per model."""
@@ -45,6 +47,15 @@ TORCH_DEVICE_CPU = "cpu"
 TORCH_DEVICE_CUDA = "cuda"
 TORCH_DEVICE_MPS = "mps"
 DEVICE_PROBE_NOT_YET_VALIDATED = "not_yet_validated"
+
+# The one detected-GPU -> ONNX execution provider mapping. Both the [database]
+# writer (installer.configure_providers) and the [graph] candidate derivation
+# (wizard._graph_candidate_providers) read it, so the vocabulary cannot drift.
+GPU_EXECUTION_PROVIDER: dict[GpuType, str] = {
+    GpuType.CUDA: "CUDAExecutionProvider",
+    GpuType.METAL: "CoreMLExecutionProvider",
+}
+CPU_EXECUTION_PROVIDER = "CPUExecutionProvider"
 
 
 @dataclass(frozen=True)

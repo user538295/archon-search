@@ -306,7 +306,7 @@ def test_prewarm_models_invokes_graph_prewarm_when_requested():
          patch.dict(sys.modules, {"fastembed": fe_mod}):
         _prewarm_models(profile, timeout=300, install_graph_extra=True)
 
-    graph_mock.assert_called_once_with()
+    graph_mock.assert_called_once_with(None)
 
 
 def test_prewarm_models_skips_graph_prewarm_when_not_requested():
@@ -363,4 +363,6 @@ def test_preload_models_passes_install_graph_extra_through_to_prewarm():
          _patch.object(RealInstaller, "_fe1_reprobe", MagicMock()):
         installer.preload_models(profile, None, False, install_graph_extra=True)
 
-    prewarm_mock.assert_called_once_with(profile, install_graph_extra=True)
+    prewarm_mock.assert_called_once_with(
+        profile, install_graph_extra=True, graph_providers=None
+    )

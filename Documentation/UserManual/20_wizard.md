@@ -540,7 +540,8 @@ All flags for the `wizard` command (verified against `archon_search/cli/install_
 | `--no-reranker` | False | Disable the cross-encoder reranker for lower latency. |
 | `--routing-strategy {centroid,hybrid}` | Not set (interactive) | Set the routing strategy directly, skipping the interactive prompt. |
 | `--log-format {text,json}` | Not set (interactive) | Set the log format directly, skipping the interactive prompt. |
-| `--disable-gpu` | False | Force CPU execution; skip GPU detection and confirmation entirely. |
+| `--disable-gpu` | False | Force CPU execution; skip GPU detection and confirmation entirely. Also forces `[graph].providers` to CPU, overriding `--graph-providers`. |
+| `--graph-providers TEXT` | Not set | Comma-separated ONNX execution providers for the graph extraction engine (`[graph].providers`), e.g. `CUDAExecutionProvider`. Unknown names are rejected. An empty string forces CPU. This supplies *candidates* only: the value is written just when the install-time two-stage device probe validates it against the pre-warmed model — otherwise CPU. Without this flag a `--non-interactive` install never opts into an accelerator, since nobody is there to accept one the guardrails were not tuned for. Ignored (with a note) when graph extraction is not being installed. |
 | **Tier 1 deployment flags** | | |
 | `--host TEXT` | Not set (uses `127.0.0.1`) | Bind address for the HTTP API. Use `0.0.0.0` for remote or Docker access. Non-loopback values print a security note reminding you to add a firewall or reverse proxy. Cannot be an empty string. |
 | `--port INTEGER` | Not set (uses `8765`) | HTTP port for the installed config (valid range 1–65535). This is an **install-time config flag** — it writes `[server].port`; there is no runtime `--port` flag on `serve`/`start`. Port conflicts are not detected at wizard time; the OS reports an error at service start. |

@@ -42,6 +42,7 @@ from .config_writer import (
     _revert_multilingual_flag,
     _write_profile_config,
 )
+from .device_probe import probe_device_availability, probe_device_validation
 from .errors import InstallError, NeedsForceDeleteError
 from .extras import (
     _install_code_extra,
@@ -66,10 +67,12 @@ from .prewarm import (
     _planned_total_bytes,
     _prewarm_models,
 )
-from .provisioning import BYTES_PER_MB
+from .provisioning import BYTES_PER_MB, GPU_EXECUTION_PROVIDER, TORCH_DEVICE_CPU
 from .render import _print_next_steps, _render_provision_failure, _render_summary
 from .service_ops import _create_secrets_env, _legacy_service_path, _remove_legacy_service
 from .wizard import (
+    _graph_candidate_providers,
+    _prompt_graph_accelerator,
     _prompt_gpu_confirm,
     _prompt_multilingual,
     _prompt_optional_features,
@@ -86,6 +89,9 @@ _WAIT_FOR_SERVICE_TIMEOUT = 60
 # Their presence in the service log lets the readiness gate tolerate one
 # supervisor crash-and-restart cycle instead of reporting a bare timeout.
 _STARTUP_CRASH_MARKERS = ("ModuleNotFoundError", "ImportError")
+# TOML sections configure_providers can target.
+_DATABASE_SECTION = "database"
+_GRAPH_SECTION = "graph"
 
 
 def _compute_svc_timeout(eager_load: bool, total_bytes: int) -> int:
@@ -125,7 +131,9 @@ class InstallerProtocol(Protocol):
     def install_deps(self, gpu: GpuType) -> None: ...
     def validate_providers(self, providers: list[str]) -> bool: ...
     def validate_embedder_only(self, providers: list[str]) -> bool: ...
-    def configure_providers(self, gpu: GpuType) -> None: ...
+    def configure_providers(
+        self, gpu: GpuType | None = ..., *, section: str = ..., providers: list[str] | None = ...
+    ) -> None: ...
     def configure_reranker_providers(self, providers: list[str]) -> None: ...
     def clear_reranker_providers(self) -> None: ...
     def create_data_dir(self) -> None: ...
@@ -380,7 +388,13 @@ class BaseInstaller(ABC):
     def install_deps(self, gpu: GpuType) -> None: ...
 
     @abstractmethod
-    def configure_providers(self, gpu: GpuType) -> None: ...
+    def configure_providers(
+        self,
+        gpu: GpuType | None = None,
+        *,
+        section: str = _DATABASE_SECTION,
+        providers: list[str] | None = None,
+    ) -> None: ...
 
     @abstractmethod
     def configure_reranker_providers(self, providers: list[str]) -> None: ...
@@ -435,8 +449,8 @@ class BaseInstaller(ABC):
     @abstractmethod
     def preload_models(
         self, prof: object, gpu_provider: str | None, split_coreml: bool,
-        install_graph_extra: bool = False,
-    ) -> None: ...
+        install_graph_extra: bool = False, graph_providers: list[str] | None = None,
+    ) -> str | None: ...
 
     @abstractmethod
     def register_and_start(self) -> int: ...
@@ -447,6 +461,46 @@ class BaseInstaller(ABC):
     # ------------------------------------------------------------------
     # Orchestration (shared; mutation is delegated to the abstract methods)
     # ------------------------------------------------------------------
+
+    def _configure_graph_providers(
+        self,
+        candidates: list[str],
+        availability: str,
+        prewarm_device: str | None,
+        non_interactive: bool,
+    ) -> None:
+        """Settle ``[graph].providers`` from the two-stage device probe (S31/S32).
+
+        The accelerator is offered — with itself as the default — only when
+        stage 1 said it was available AND stage 2 (riding the pre-warm) resolved
+        the model onto it. Pre-warm not having run, or either stage failing,
+        shows no prompt at all and settles on CPU silently: the reason is logged at
+        WARNING and never rendered to the operator or raised. A proven failure — which
+        includes an accelerator that was asked for and that the pre-warm never landed
+        on — writes ``[]`` outright. Only the genuinely empty answer (nothing was asked
+        for and nothing came back) writes nothing at all, since unset already reads as
+        CPU and there is no evidence to justify overwriting an operator's own list.
+        """
+        result = probe_device_validation(candidates, prewarm_device)
+        if result.not_yet_validated:
+            # No evidence either way. Unset already means CPU (config.py normalises
+            # an absent/empty list to None), so writing nothing gives a fresh install
+            # the same CPU outcome without clobbering a value an operator set by hand.
+            logger.warning("Graph accelerator not validated (pre-warm did not run) — leaving CPU.")
+            return
+        chosen: list[str] = []
+        if result.failure is not None:
+            logger.warning(
+                "Graph accelerator not validated (%s) — writing [graph].providers = [] (CPU).",
+                result.failure,
+            )
+        elif (
+            availability != TORCH_DEVICE_CPU
+            and result.device != TORCH_DEVICE_CPU
+            and _prompt_graph_accelerator(non_interactive, result.device)
+        ):
+            chosen = list(candidates)
+        self.configure_providers(section=_GRAPH_SECTION, providers=chosen)
 
     def run(
         self,
@@ -479,6 +533,8 @@ class BaseInstaller(ABC):
         enable_rag_fusion: bool = False,
         # C15 Tier 2 custom server key
         server_key: str | None = None,
+        # FE-5: [graph].providers for non-interactive installs
+        graph_providers: list[str] | None = None,
     ) -> int:
         """Execute the full install flow. Returns 0 on success."""
         print(self._MODE_BANNER)
@@ -751,6 +807,19 @@ class BaseInstaller(ABC):
             else:
                 self.configure_providers(gpu=gpu)
 
+            # Step 9b: graph execution-provider candidates + the free stage-1
+            # availability pre-check (FE-5 / S31). Runs before any bytes move and
+            # never loads a model; stage 2 rides the Step 14 pre-warm.
+            graph_candidates = _graph_candidate_providers(
+                gpu, enable_gpu, graph_providers, non_interactive
+            )
+            graph_availability = probe_device_availability(graph_candidates)
+            if graph_providers and not features.install_graph_extra:
+                print(
+                    "  Note: --graph-providers was ignored — graph extraction is not "
+                    "being installed, so [graph].providers is not written."
+                )
+
             # Step 10: create data directory
             self.create_data_dir()
 
@@ -807,10 +876,12 @@ class BaseInstaller(ABC):
                     # Non-fatal — continue
 
             # Before Step 14: install graph enrichment packages if requested (BE-11)
+            graph_extra_ready = features.install_graph_extra
             if features.install_graph_extra:
                 try:
                     _install_graph_extra(dry_run=self.dry_run)
                 except InstallError as exc:
+                    graph_extra_ready = False
                     print(f"Warning: graph enrichment install failed: {exc}", file=sys.stderr)
                     # Non-fatal — continue, but roll back the already-written
                     # graph.enabled=true config flag (C2-A / C3-A-1 fix).
@@ -857,11 +928,13 @@ class BaseInstaller(ABC):
                 self.write_server_key(server_key)
 
             # Step 14: pre-warm
+            graph_prewarm_device: str | None = None
             if not skip_preload:
                 try:
-                    self.preload_models(
+                    graph_prewarm_device = self.preload_models(
                         prof, gpu_provider, split_coreml,
                         install_graph_extra=features.install_graph_extra,
+                        graph_providers=graph_candidates,
                     )
                 except InstallError as exc:
                     # Real-only: dry never raises, so this rollback runs only when
@@ -876,6 +949,23 @@ class BaseInstaller(ABC):
                             shutil.copy2(bak, config_path)
                     # branch == "force": leave backup, new config stays
                     return 1
+
+            # Step 14b: settle [graph].providers from the two-stage probe (FE-5).
+            # After pre-warm because stage 2 rides it. Auxiliary — a failure here
+            # must never fail the install, so CPU is written and the reason logged.
+            # skip_preload is absence of evidence, not evidence of failure: without a
+            # pre-warm there is no stage 2 at all, and the probe cannot tell that apart
+            # from a real failure — so settle nothing rather than clobber a hand-set list.
+            if graph_extra_ready and not skip_preload:
+                try:
+                    self._configure_graph_providers(
+                        graph_candidates, graph_availability,
+                        graph_prewarm_device, non_interactive,
+                    )
+                except Exception:
+                    # Sanitized on purpose: exc_info here would reach the operator's
+                    # stderr through logging.lastResort in an unconfigured CLI process.
+                    logger.warning("Could not settle [graph].providers — leaving it unchanged (CPU).")
 
             # Step 15: register and start service. Snapshot the log size first so
             # the readiness gate only reads crashes from this launch.
@@ -1008,8 +1098,14 @@ class DryRunInstaller(BaseInstaller):
     def install_deps(self, gpu: GpuType) -> None:
         print("[DRY RUN] Would install search dependencies.")
 
-    def configure_providers(self, gpu: GpuType) -> None:
-        print("[DRY RUN] Would configure GPU execution providers.")
+    def configure_providers(
+        self,
+        gpu: GpuType | None = None,
+        *,
+        section: str = _DATABASE_SECTION,
+        providers: list[str] | None = None,
+    ) -> None:
+        print(f"[DRY RUN] Would configure [{section}] execution providers.")
 
     def configure_reranker_providers(self, providers: list[str]) -> None:
         print("[DRY RUN] Would configure reranker execution providers.")
@@ -1085,11 +1181,12 @@ class DryRunInstaller(BaseInstaller):
 
     def preload_models(
         self, prof: object, gpu_provider: str | None, split_coreml: bool,
-        install_graph_extra: bool = False,
-    ) -> None:
+        install_graph_extra: bool = False, graph_providers: list[str] | None = None,
+    ) -> str | None:
         print(f"[DRY RUN] Would download models (~{prof.download_mb} MB).")
         if install_graph_extra:
             print("[DRY RUN] Would pre-warm graph NER model.")
+        return None
 
     def register_and_start(self) -> int:
         print("[DRY RUN] Would register and start the search service.")
@@ -1131,20 +1228,33 @@ class RealInstaller(BaseInstaller):
             check=True,
         )
 
-    def configure_providers(self, gpu: GpuType) -> None:
-        """Write providers list to [database] section via tomlkit based on gpu type.
+    def configure_providers(
+        self,
+        gpu: GpuType | None = None,
+        *,
+        section: str = _DATABASE_SECTION,
+        providers: list[str] | None = None,
+    ) -> None:
+        """Write a providers list into *section* via tomlkit.
+
+        With ``providers`` supplied (FE-5's ``[graph]`` path) the list is written
+        verbatim — including the empty list, which is the explicit CPU write —
+        and *gpu* is ignored.
+
+        With ``providers`` left None the legacy ``[database]`` mapping applies:
 
         - GpuType.CUDA: write ["CUDAExecutionProvider"]
         - GpuType.METAL: write ["CoreMLExecutionProvider"]
         - GpuType.NONE: no-op
         """
-        _provider_map = {
-            GpuType.CUDA: "CUDAExecutionProvider",
-            GpuType.METAL: "CoreMLExecutionProvider",
-        }
-        target_provider = _provider_map.get(gpu)
-        if target_provider is None:
-            return
+        if providers is None:
+            target_provider = GPU_EXECUTION_PROVIDER.get(gpu)
+            if target_provider is None:
+                return
+            providers = [target_provider]
+            skip_if_present = True
+        else:
+            skip_if_present = False
 
         config_path = Path(self.config_file) if self.config_file else get_default_config_path()
         if not config_path.exists():
@@ -1152,15 +1262,19 @@ class RealInstaller(BaseInstaller):
             return
 
         doc = tomlkit.parse(config_path.read_text())
-        if "database" not in doc:
-            doc["database"] = tomlkit.table()
-
-        database_section = doc["database"]
-        if isinstance(database_section, dict):
-            existing_providers = database_section.get("providers", [])
-            if target_provider in existing_providers:
-                return  # already set — skip to preserve user-extended chains
-            database_section["providers"] = [target_provider]
+        existing = doc.get(section, {})
+        if not isinstance(existing, dict):
+            logger.warning("[%s] in %s is not a table — skipping provider config", section, config_path)
+            return
+        if skip_if_present and providers[0] in existing.get("providers", []):
+            return  # already set — skip to preserve user-extended chains
+        if not skip_if_present and existing.get("providers") == providers:
+            return  # unchanged — skip the rewrite (comment reflow risk)
+        if section not in doc:
+            doc[section] = tomlkit.table()
+        arr = tomlkit.array()
+        arr.extend(providers)
+        doc[section]["providers"] = arr
 
         atomic_write_bytes(config_path, tomlkit.dumps(doc).encode())
 
@@ -1290,11 +1404,14 @@ class RealInstaller(BaseInstaller):
 
     def preload_models(
         self, prof: object, gpu_provider: str | None, split_coreml: bool,
-        install_graph_extra: bool = False,
-    ) -> None:
+        install_graph_extra: bool = False, graph_providers: list[str] | None = None,
+    ) -> str | None:
         print("[4/5] Downloading models...")
-        _prewarm_models(prof, install_graph_extra=install_graph_extra)
+        graph_device = _prewarm_models(
+            prof, install_graph_extra=install_graph_extra, graph_providers=graph_providers
+        )
         self._fe1_reprobe(gpu_provider, prof, split_coreml)
+        return graph_device
 
     def register_and_start(self) -> int:
         print("[5/5] Starting search service...")

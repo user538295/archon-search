@@ -25,6 +25,7 @@ from .extras import (
     CODE_EXTRA_SIZE_ESTIMATE,
     GRAPH_MODEL_SIZE_ESTIMATE,
 )
+from .provisioning import GPU_EXECUTION_PROVIDER
 from .render import _render_profile_table
 
 logger = logging.getLogger(__name__)
@@ -915,6 +916,52 @@ def _prompt_gpu_confirm(non_interactive: bool, gpu: GpuType) -> bool:
         prompt = "NVIDIA GPU detected — enable CUDA acceleration? [Y/n]: "
     try:
         raw = input(prompt).strip().lower()
+    except EOFError:
+        return True
+    return raw not in {"n", "no"}
+
+
+# ---------------------------------------------------------------------------
+# Graph execution providers ([graph].providers — Task FE-5, S31/S32)
+# ---------------------------------------------------------------------------
+
+def _graph_candidate_providers(
+    gpu: GpuType, enable_gpu: bool, flag_value: list[str] | None, non_interactive: bool
+) -> list[str]:
+    """Return the [graph].providers candidates the two-stage device probe checks.
+
+    ``enable_gpu`` is checked first so ``--disable-gpu`` (and a declined GPU prompt)
+    forces CPU even against an explicit ``--graph-providers``. Otherwise the flag
+    wins. Without the flag a non-interactive install yields no candidates: Q7 makes
+    the flag the non-interactive answer, and nobody is there to accept an
+    accelerator the guardrails were never tuned for.
+    """
+    if not enable_gpu:
+        return []
+    if flag_value is not None:
+        return list(flag_value)
+    if non_interactive:
+        return []
+    provider = GPU_EXECUTION_PROVIDER.get(gpu)
+    return [provider] if provider else []
+
+
+def _prompt_graph_accelerator(non_interactive: bool, device: str) -> bool:
+    """Offer the validated accelerator for graph extraction, accelerator as default.
+
+    Only ever called once BOTH probe stages validated *device* (S31), so the
+    default is safe: a bare Enter — and EOF — accepts the accelerator. Accepts
+    "n"/"no" as the step-down to CPU. Never prompts in non-interactive mode, where
+    reaching this at all means ``--graph-providers`` already asked for the device
+    (``_graph_candidate_providers`` yields nothing non-interactively without it).
+    """
+    if non_interactive:
+        return True
+    try:
+        raw = input(
+            f"Graph extraction validated on {device} — use it? "
+            "(accelerated but unmeasured; guardrails are tuned for CPU) [Y/n]: "
+        ).strip().lower()
     except EOFError:
         return True
     return raw not in {"n", "no"}

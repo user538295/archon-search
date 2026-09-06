@@ -592,7 +592,11 @@ num_queries = 2
 # providers (list of str | null, default null): ONNX Runtime execution providers for the
 # graph NER/RelEx engine (same vocabulary as [database].providers, above). Its own [graph]
 # setting — never inherited from [database].providers. An empty list normalizes to null,
-# read by the engine as CPU.
+# read by the engine as CPU. Written by the install wizard, which offers an accelerator
+# only after its two-stage device probe validates one against the pre-warmed model and
+# otherwise writes CPU; `archon-search wizard --graph-providers` supplies the candidates
+# for non-interactive installs. Guardrails are tuned for CPU; an accelerator is allowed
+# but unmeasured.
 # providers = ["CoreMLExecutionProvider"]
 
 [openai_shim]

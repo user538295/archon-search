@@ -172,6 +172,9 @@ def test_stage_two_validates_against_a_real_pre_warmed_load() -> None:
     # A fake gliner whose loaded model reports CUDA — a device this host cannot
     # provide, proving the answer comes from the pre-warmed load, not the host.
     fake_model = types.SimpleNamespace(device=types.SimpleNamespace(type=TORCH_DEVICE_CUDA))
+    # FE-5 places the model before reading its device; .to() returns the model.
+    placements: list[str] = []
+    fake_model.to = lambda device: (placements.append(device), fake_model)[1]  # type: ignore[attr-defined]
     gliner_cls = MagicMock()
     gliner_cls.from_pretrained.return_value = fake_model
     gliner_mod = types.ModuleType("gliner")
@@ -180,6 +183,7 @@ def test_stage_two_validates_against_a_real_pre_warmed_load() -> None:
     with patch.dict(sys.modules, {"gliner": gliner_mod}):
         prewarmed_device = _prewarm_graph_model()
 
+    assert placements == [TORCH_DEVICE_CPU], "no providers must place the model on CPU"
     assert prewarmed_device == TORCH_DEVICE_CUDA
     result = probe_device_validation(None, prewarmed_device)
     assert result == DeviceProbeResult.resolved(TORCH_DEVICE_CUDA)

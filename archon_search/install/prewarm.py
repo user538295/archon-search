@@ -18,6 +18,7 @@ from archon_search.paths import (
 )
 from archon_search.platform.runtime import get_search_service
 from archon_search.profiles import InstallProfile
+from archon_search.torch_device import resolve_torch_device
 
 from .config_writer import WizardFeatures, _write_profile_config
 from .errors import InstallError, NeedsForceDeleteError
@@ -85,7 +86,10 @@ def _prewarm_timeout(profile: InstallProfile) -> int:
 
 
 def _prewarm_models(
-    profile: InstallProfile, timeout: int | None = None, install_graph_extra: bool = False
+    profile: InstallProfile,
+    timeout: int | None = None,
+    install_graph_extra: bool = False,
+    graph_providers: list[str] | None = None,
 ) -> str | None:
     """Download embedder (and optionally reranker, and optionally graph NER) model
     files to the fastembed / graph-model cache.
@@ -93,7 +97,8 @@ def _prewarm_models(
     Uses a threading.Timer for cross-platform timeout (signal.alarm is POSIX-only).
     fastembed/HF progress is printed to stderr — not suppressed. When
     ``install_graph_extra`` is set, the graph NER model (Task BE-8) is pre-warmed
-    inside the same timeout window as the embedder/reranker, non-fatally.
+    inside the same timeout window as the embedder/reranker, non-fatally, placed
+    on the device ``graph_providers`` resolves to (Task FE-5).
 
     Returns the graph NER pre-warm's resolved torch device (Task BE-14's stage-2
     device probe rides this), or ``None`` if the graph pre-warm did not run (not
@@ -157,7 +162,7 @@ def _prewarm_models(
                     timeout,
                 )
             else:
-                graph_device = _prewarm_graph_model()
+                graph_device = _prewarm_graph_model(graph_providers)
 
         timer.cancel()
     except InstallError:
@@ -170,7 +175,7 @@ def _prewarm_models(
 # Graph NER model pre-warm (Task BE-8 — optional, non-fatal)
 # ---------------------------------------------------------------------------
 
-def _prewarm_graph_model() -> str | None:
+def _prewarm_graph_model(providers: list[str] | None = None) -> str | None:
     """Pre-warm the graph NER/RelEx model (gliner.GLiNER).
 
     Mirrors the reranker's non-fatal branch above (:124-134): a failure here
@@ -191,11 +196,10 @@ def _prewarm_graph_model() -> str | None:
             revision=GRAPH_NER_MODEL_REVISION,
             cache_dir=str(get_graph_models_dir()),
         )
-        # FE-5 forward-pointer: this reports gliner's AUTO-placed device, which
-        # may differ from where the runtime actually runs. FE-5 (wiring
-        # [graph].providers into the install profile) must apply
-        # model.to(resolve_torch_device(providers)) here — mirroring _load_sync
-        # in prose_extraction_backend.py — so the probed device matches runtime.
+        # Place the model exactly where the runtime will (mirrors _load_sync in
+        # prose_extraction_backend.py) rather than reporting gliner's auto
+        # placement, so the device stage 2 probes is the device ingest gets.
+        model = model.to(resolve_torch_device(providers))
         return model.device.type
     except Exception as exc:
         # Non-fatal: the [graph] extra may not be installed, or this may be a

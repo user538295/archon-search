@@ -1298,6 +1298,122 @@ def test_configure_providers_after_config_write(tmp_path: Path) -> None:
     )
 
 
+def test_graph_providers_are_settled_after_the_prewarm(tmp_path: Path) -> None:
+    """FE-5 Step 14b: [graph].providers is settled from the pre-warm's own device,
+    and only after pre-warm — stage 2 rides it, so the order is load-bearing."""
+    from archon_search.install import WizardFeatures
+    config_path, call_log, patches, method_patches = _make_ordered_installer(tmp_path)
+
+    def _log(name, result=None):
+        def side_effect(*args, **kwargs):
+            call_log.append(name)
+            return result
+        return side_effect
+
+    patches["archon_search.install.installer._prompt_optional_features"] = MagicMock(
+        side_effect=_log("optional_features", WizardFeatures(install_graph_extra=True))
+    )
+    patches["archon_search.install.installer._install_graph_extra"] = MagicMock()
+    method_patches["preload_models"] = MagicMock(side_effect=_log("preload_models", "cuda"))
+    graph_mock = MagicMock(side_effect=_log("settle_graph_providers"))
+    method_patches["_configure_graph_providers"] = graph_mock
+
+    with patch.multiple("archon_search.install.installer", **{
+        k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
+    }):
+        with patch.multiple(RealInstaller, **method_patches):
+            rc = create_installer(config_file=str(config_path)).run(
+                non_interactive=True, profile="minimal",
+                graph_providers=["CUDAExecutionProvider"],
+            )
+
+    assert rc == 0
+    assert call_log.index("preload_models") < call_log.index("settle_graph_providers"), call_log
+    candidates, _availability, prewarm_device, non_interactive = graph_mock.call_args.args
+    assert candidates == ["CUDAExecutionProvider"], "--graph-providers must reach the probe"
+    assert prewarm_device == "cuda", "the pre-warm's resolved device must be passed"
+    assert non_interactive is True
+    # _availability is probe_device_availability(candidates) — host-dependent, so unasserted.
+
+
+def test_a_failure_settling_graph_providers_never_fails_the_install(tmp_path: Path) -> None:
+    """Step 14b is an auxiliary write: it logs and continues, it does not abort run()."""
+    from archon_search.install import WizardFeatures
+    config_path, _call_log, patches, method_patches = _make_ordered_installer(tmp_path)
+
+    patches["archon_search.install.installer._prompt_optional_features"] = MagicMock(
+        return_value=WizardFeatures(install_graph_extra=True)
+    )
+    patches["archon_search.install.installer._install_graph_extra"] = MagicMock()
+    method_patches["preload_models"] = MagicMock(return_value="cuda")
+    method_patches["_configure_graph_providers"] = MagicMock(side_effect=OSError("disk gone"))
+
+    with patch.multiple("archon_search.install.installer", **{
+        k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
+    }):
+        with patch.multiple(RealInstaller, **method_patches):
+            rc = create_installer(config_file=str(config_path)).run(
+                non_interactive=True, profile="minimal",
+            )
+
+    assert rc == 0
+
+
+def test_graph_providers_are_not_settled_when_prewarm_is_skipped(tmp_path: Path) -> None:
+    """--skip-preload leaves no stage-2 evidence, so nothing is settled and an
+    operator's hand-set [graph].providers survives a re-run."""
+    from archon_search.install import WizardFeatures
+    config_path, _call_log, patches, method_patches = _make_ordered_installer(tmp_path)
+
+    patches["archon_search.install.installer._prompt_optional_features"] = MagicMock(
+        return_value=WizardFeatures(install_graph_extra=True)
+    )
+    patches["archon_search.install.installer._install_graph_extra"] = MagicMock()
+    graph_mock = MagicMock()
+    method_patches["_configure_graph_providers"] = graph_mock
+
+    with patch.multiple("archon_search.install.installer", **{
+        k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
+    }):
+        with patch.multiple(RealInstaller, **method_patches):
+            rc = create_installer(config_file=str(config_path)).run(
+                non_interactive=True, profile="minimal", skip_preload=True,
+            )
+
+    assert rc == 0
+    graph_mock.assert_not_called()
+
+
+def test_graph_providers_are_not_settled_when_the_graph_extra_failed(tmp_path: Path) -> None:
+    """A failed graph install reverts graph.enabled — providers must not be written
+    into a config whose graph is now off."""
+    from archon_search.install import WizardFeatures
+    from archon_search.install.errors import InstallError
+    config_path, call_log, patches, method_patches = _make_ordered_installer(tmp_path)
+
+    patches["archon_search.install.installer._prompt_optional_features"] = MagicMock(
+        return_value=WizardFeatures(install_graph_extra=True)
+    )
+    patches["archon_search.install.installer._install_graph_extra"] = MagicMock(
+        side_effect=InstallError("boom")
+    )
+    patches["archon_search.install.installer._revert_graph_enabled_flag"] = MagicMock()
+    method_patches["preload_models"] = MagicMock(return_value="cuda")
+    graph_mock = MagicMock()
+    method_patches["_configure_graph_providers"] = graph_mock
+
+    with patch.multiple("archon_search.install.installer", **{
+        k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
+    }):
+        with patch.multiple(RealInstaller, **method_patches):
+            rc = create_installer(config_file=str(config_path)).run(
+                non_interactive=True, profile="minimal",
+            )
+
+    assert rc == 0
+    graph_mock.assert_not_called()
+
+
 def test_reorder_non_interactive_still_succeeds(tmp_path: Path) -> None:
     """Full non-interactive run with all wizard flags returns exit code 0."""
     config_path = tmp_path / "archon-search.toml"
