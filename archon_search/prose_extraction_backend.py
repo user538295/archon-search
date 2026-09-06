@@ -59,11 +59,6 @@ GRAPH_NER_SUB_BATCH_SIZE: int = 8
 # longer than this is truncated before being sent to the model.
 GRAPH_NER_TOKEN_WINDOW_WORDS: int = 2048
 
-# The "other" decoy entity label (Q3): its spans are always discarded before
-# reaching the graph — it exists only to give the model a place to put spans
-# that don't fit any real entity label, improving precision on the real labels.
-_OTHER_LABEL = "other"
-
 # Separator gliner's descriptive-label prompting convention uses between a
 # label and its one-line description.
 _LABEL_DESCRIPTION_SEP = " <> "
@@ -106,14 +101,24 @@ def _labels_with_descriptions(descriptions: dict[str, str]) -> list[str]:
 
 
 # The exact prompt lists sent to gliner — built once at import, not per call.
-_ENTITY_LABELS: list[str] = [
-    *_labels_with_descriptions(_ENTITY_LABEL_DESCRIPTIONS),
-    _OTHER_LABEL,
-]
-_RELATION_LABELS: list[str] = _labels_with_descriptions(_RELATION_LABEL_DESCRIPTIONS)
+# A bare `"other"` decoy label was prompted here (Q3) until it was found to
+# absorb nearly every real span under `inference(..., return_relations=True)`,
+# leaving real corpora with zero entities after the filter below.
+_ENTITY_LABELS: list[str] = _labels_with_descriptions(_ENTITY_LABEL_DESCRIPTIONS)
+# Relation labels are prompted BARE, without their descriptions: measured against
+# the pinned checkpoint over the reference corpus, the descriptive form returns
+# zero relations where the bare form returns real ones. The descriptions are
+# kept above as the documented meaning of each label.
+#
+# `related_to` stays in this list even though `_build_typed_relation_edge` discards
+# every `related_to` relation: it earns its slot as the decoy the removed `"other"`
+# label failed to be. Measured on the pinned checkpoint, prompting it returns THREE
+# typed relations (incl. `uses archon-search -> LanceDB` @0.954); dropping it returns
+# two — the vague pairs it absorbs are otherwise mislabelled over the specific labels.
+_RELATION_LABELS: list[str] = list(_RELATION_LABEL_DESCRIPTIONS)
 
-# The real entity labels — anything else gliner decodes as a span type (the
-# "other" decoy above all) disqualifies a relation endpoint (C1).
+# The real entity labels — anything else gliner decodes as a span type
+# disqualifies a relation endpoint (C1).
 _REAL_ENTITY_LABELS: frozenset[str] = frozenset(_ENTITY_LABEL_DESCRIPTIONS)
 
 
@@ -447,10 +452,9 @@ class ProseExtractionBackend:
                             score=raw_relation["score"],
                         )
                         for raw_relation in raw_relations
-                        # A relation whose head or tail span was itself decoded as
-                        # the "other" decoy (or any non-real label) must not reach
-                        # the graph — filtering entities alone leaves the decoy in
-                        # as a relation endpoint.
+                        # A relation whose head or tail span was decoded under a
+                        # non-real label must not reach the graph — filtering
+                        # entities alone leaves it in as a relation endpoint.
                         if _strip_label(raw_relation["head"]["type"])
                         in _REAL_ENTITY_LABELS
                         and _strip_label(raw_relation["tail"]["type"])
@@ -474,10 +478,9 @@ class ProseExtractionBackend:
     ) -> BatchExtraction:
         """Extract entities and relations for a batch of prose chunks (Task BE-9).
 
-        Prompts gliner with the graph's own entity/relation labels plus the
-        ``"other"`` decoy entity label (Q3); "other"-labelled spans are
-        discarded before reaching the graph, as are relations with an
-        "other"-typed head or tail. Both confidence thresholds are
+        Prompts gliner with the graph's own entity/relation labels; spans
+        decoded under any other label are discarded before reaching the graph,
+        as are relations with such a head or tail. Both confidence thresholds are
         applied by the model itself. Texts are grouped into sub-batches of at
         most ``GRAPH_NER_SUB_BATCH_SIZE`` per call to ``gliner``'s own
         ``inference()`` (S7, S53); any chunk exceeding

@@ -22,3 +22,5 @@
 - **[2026-09-06] test vacuity (compacted from learnings.md, 2nd pass)**: dropped clause — a guard tripping the FIRST filter never reaches the branch it names.
 
 - **[2026-09-06] test vacuity (compacted from learnings.md)**: dropped clause — a shared `MagicMock.read` ignoring its `n` arg silently voids a bounded `read(size+1)`; now documented in `_served_response`, `tests/test_e2e_wizard_optional_features.py`.
+
+- **[2026-09-06] 3rd-party wiring (compacted from learnings.md)**: dropped example — the INPUT FORMAT half of the rule was docling `OcrOptions.scale`, which applies per input format (PDF vs image), not globally.

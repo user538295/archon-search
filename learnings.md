@@ -18,7 +18,7 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 - **[2026-08-20] (×12) job-spawning route**: guard→404→create→`transition({QUEUED},RUNNING)` BEFORE `create_task`→track + `add_done_callback`. 409 via persisted `meta.<job>_job_id`, cleared BEFORE `job_store.update(DONE/FAILED)`.
 - **[2026-08-03] (×9) LanceDB quirks**: `.limit()` is a scan limit, not sort-then-limit. `merge_insert(["c1","c2"])` for composite keys; `when_matched_update_all()` replaces the whole row. Missing table → `ValueError`. `db.close()` is sync.
 - **[2026-09-06] (×30) install/wizard**: unprinted doc option → fix the CODE. A pinned prompt admits ONE wording. `is_multilingual=False` re-resolves `prof`. CliRunner echoes input() PROMPTS, not answers. Wizard WARNINGs reach stderr via `lastResort`.
-- **[2026-08-21] (×4) 3rd-party wiring**: verify lib params per INPUT FORMAT (docling `OcrOptions.scale`) AND per CHECKPOINT — GLiNER `relations` no-ops off-RelEx; assert it at load. Leaks: `ProcessPoolExecutor(1, spawn, max_tasks_per_child)`.
+- **[2026-09-06] (×6) 3rd-party wiring**: verify params per INPUT FORMAT AND per CHECKPOINT, on the REAL model: GLiNER `relations` no-op off-RelEx; bare `"other"` ate all spans; `label<>desc`→0 relations; but descriptive `related_to` LIFTS typed yield.
 
 ## Plan-Making & Agent Process
 - **[2026-09-06] (×173) verify claims/state**: grep-verify every cite; prove repros vs unmodified HEAD (`git worktree add --detach`). Diffing WIP vs HEAD reads own work as drift. Distrust a reviewer's "untested X" — often covered by a sibling test.

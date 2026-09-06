@@ -410,7 +410,7 @@ class GraphExtractor:
                 for entity in chunk_extraction.entities:
                     # Use the engine's own label verbatim — no intermediate
                     # vocabulary (S2). ProseExtractionBackend only ever
-                    # returns real entity labels (the "other" decoy and
+                    # returns real entity labels (non-real labels and
                     # numeric/temporal noise are discarded before this point).
                     # An off-vocabulary label must still degrade gracefully
                     # (skip, not raise) rather than fail the whole ingest.

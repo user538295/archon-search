@@ -47,34 +47,50 @@ namespace ProseExtractionEngine;
 /// The graph's own entity vocabulary, handed to the engine as zero-shot labels.
 /// `code_symbol` is AST-derived and is NEVER part of the prompt set.
 ///
-/// `other` is a DECOY (Q3): it is prompted so the model has somewhere to put spans that
-/// belong to none of the four real types, and every span returned under it is DISCARDED.
-/// Without it a zero-shot span decoder pushes those spans onto the nearest real label —
-/// `concept` in practice — and over-extracts on technical prose.
+/// A bare `other` DECOY member was prompted here (Q3) until 2026-09-06: measured against
+/// the pinned checkpoint it absorbed nearly every real span, all of which the real-label
+/// filter then discarded, leaving real corpora with zero entities. It is gone; the four
+/// real labels are prompted with their descriptions. The discard filter it motivated is
+/// retained (see `BatchExtraction` below) and still drops any off-vocabulary span.
 enum ProseEntityLabel {
   person,
   concept,
   system,
   event,
-  other,
 }
 
-/// The graph's own prose relation vocabulary, handed to the engine as zero-shot labels.
-/// The code-symbol types (calls/imports/defines/inherits) and `synonym_of` are produced
-/// elsewhere and are NEVER part of the prompt set.
+/// The graph's own relation vocabulary, handed to the engine as zero-shot labels — BARE,
+/// without descriptions (the descriptive form returns zero relations from the pinned
+/// checkpoint). `synonym_of` is excluded: it comes from embedding similarity (E2f), not RelEx.
+///
+/// As shipped this is every `RelationshipType` except `synonym_of`, so the code-symbol types
+/// are prompted too — an earlier draft of this contract said they were NEVER prompted. Both
+/// vocabularies were measured on the pinned checkpoint and the typed yield is a wash (3 typed
+/// relations either way, differing in WHICH), so the shipped set stands rather than churn
+/// extraction output for no measured gain. `related_to` earns its slot as the decoy the
+/// removed `other` failed to be: dropping it costs a typed edge. Prompted here, still never
+/// persisted — `_build_typed_relation_edge` discards it so the co-occurrence loop owns it.
 enum ProseRelationLabel {
   uses,
   implements,
   depends_on,
+  related_to,
+  calls,
+  imports,
+  defines,
+  inherits,
 }
 
 /// A prompted label paired with the one-line natural-language description the model is
 /// actually conditioned on (Q3). The schema value is what gets stored; the description is
 /// what disambiguates it. `depends_on` in particular reads as jargon on its own.
 ///
-/// Both prompt sets are built from these pairs. The descriptions are part of the contract:
-/// changing one changes extraction output and therefore node and edge identity, so they are
-/// pinned in code beside the labels, never assembled ad hoc at the call site.
+/// Only the ENTITY prompt set is built from these pairs. Relation labels are prompted bare
+/// (the descriptive form returns zero relations from the pinned checkpoint); their
+/// descriptions are retained solely as the documented meaning of each label. Where a
+/// description IS prompted it is part of the contract: changing one changes extraction output
+/// and therefore node identity, so they stay pinned in code beside the labels, never
+/// assembled ad hoc at the call site.
 model LabelPrompt {
   /// The stored schema value — a `ProseEntityLabel` or a `ProseRelationLabel` member name.
   label: string;
@@ -125,7 +141,9 @@ model ExtractedRelation {
 }
 
 /// The batch result. Both collections are already threshold-filtered by the engine, and
-/// spans decoded under the `other` decoy label are already dropped.
+/// spans decoded under any label outside the real entity schema are already dropped. (This
+/// once named the `"other"` decoy specifically; the decoy was removed 2026-09-06 — see Q3 in
+/// the team plan — but the filter it motivated is retained.)
 ///
 /// **`relations` is deduplicated by the adapter before it is returned (measured, not
 /// hypothetical).** K2d recorded gliner's real PyTorch return shape verbatim and found the raw

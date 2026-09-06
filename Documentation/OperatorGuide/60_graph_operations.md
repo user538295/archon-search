@@ -158,6 +158,14 @@ All under `[graph]` (`config.py`). Defaults shown:
 
 ## Inspecting the graph
 
+> **An empty graph on a collection ingested before 2026-09-06 is expected.** The prose NER
+> prompt shipped in a form that extracted nothing (GRAPH-3 in
+> [530](../Architecture/530_technical_debt_refactoring_roadmap.md)): ingests reported success
+> and wrote no entities. The fix applies at extraction time only, so it does not backfill —
+> a collection ingested under the broken prompt keeps its empty graph until its documents are
+> re-ingested. Check with `GET /graph/{collection}`; if it returns no nodes and the collection
+> has content, re-ingest it.
+
 Two read-only endpoints (`server/routes_graph.py`) expose the graph as JSON or GraphML.
 
 `GET /graph/{collection}` — single collection.

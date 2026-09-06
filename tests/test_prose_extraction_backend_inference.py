@@ -15,11 +15,14 @@ import logging
 
 import pytest
 
+from archon_search.graph_types import EntityType, RelationshipType
 from archon_search.prose_extraction_backend import (
     GRAPH_NER_SUB_BATCH_SIZE,
     GRAPH_NER_TOKEN_WINDOW_WORDS,
     ExtractedRelation,
     ProseExtractionBackend,
+    _ENTITY_LABEL_DESCRIPTIONS,
+    _RELATION_LABEL_DESCRIPTIONS,
     _TRUNCATION_LOG_MESSAGE,
 )
 from tests._graph_engine_stub import RecordingGlinerModel
@@ -102,15 +105,18 @@ def test_sub_batch_size_is_not_a_graph_config_key() -> None:
 
 
 # ---------------------------------------------------------------------------
-# "other" decoy discard
+# Non-real-label span discard
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_other_labelled_spans_are_discarded() -> None:
+async def test_non_real_label_spans_are_discarded() -> None:
     class _FakeModel:
         def inference(self, texts, labels, relations=None, **kwargs):
-            assert "other" in labels  # the decoy is actually prompted
+            # The bare "other" decoy is no longer prompted (it absorbed nearly
+            # every real span), but a span decoded under any non-real label
+            # must still be discarded.
+            assert "other" not in labels
             entities = [
                 [
                     _entity("Acme Corp", "system <> a named software system, product, service, or platform", 0, 9),
@@ -138,7 +144,7 @@ async def test_other_labelled_spans_are_discarded() -> None:
 async def test_duplicate_relation_triples_are_deduplicated() -> None:
     class _FakeModel:
         def inference(self, texts, labels, relations=None, **kwargs):
-            dup = _relation("Kafka", "Zookeeper", "depends_on <> the head requires the tail to function", 0.77)
+            dup = _relation("Kafka", "Zookeeper", "depends_on", 0.77)
             return [[]], [[dup, dict(dup), dict(dup)]]
 
     backend = _backend_with_model(_FakeModel())
@@ -155,8 +161,8 @@ async def test_duplicate_relation_triples_are_deduplicated() -> None:
 async def test_distinct_triples_over_the_same_pair_both_survive() -> None:
     class _FakeModel:
         def inference(self, texts, labels, relations=None, **kwargs):
-            uses = _relation("ServiceA", "ServiceB", "uses <> the head uses or depends on the tail at runtime")
-            depends = _relation("ServiceA", "ServiceB", "depends_on <> the head requires the tail to function")
+            uses = _relation("ServiceA", "ServiceB", "uses")
+            depends = _relation("ServiceA", "ServiceB", "depends_on")
             return [[]], [[uses, depends]]
 
     backend = _backend_with_model(_FakeModel())
@@ -198,8 +204,8 @@ async def test_duplicate_triples_do_not_inflate_edge_count() -> None:
                 # an index derived from `enumerate(texts)` would restart at 0
                 # for every sub-batch instead of tracking the whole document.
                 idx = text.split()[0][1:]  # "A7 uses ..." -> "7"
-                uses = _relation(f"A{idx}", f"B{idx}", "uses <> the head uses or depends on the tail at runtime")
-                depends = _relation(f"A{idx}", f"B{idx}", "depends_on <> the head requires the tail to function")
+                uses = _relation(f"A{idx}", f"B{idx}", "uses")
+                depends = _relation(f"A{idx}", f"B{idx}", "depends_on")
                 # Each relation duplicated 3x, mirroring gliner's measured 2x-4x
                 # duplicate-triple behaviour (K2d) — across every sub-batch.
                 rels.append([uses, dict(uses), dict(uses), depends, dict(depends)])
@@ -300,15 +306,15 @@ async def test_relation_with_an_other_typed_endpoint_is_discarded() -> None:
         def inference(self, texts, labels, **kwargs):
             super().inference(texts, labels, **kwargs)
             bad_tail = _relation(
-                "Acme Corp", "some noise", "uses <> the head uses or depends on the tail at runtime",
+                "Acme Corp", "some noise", "uses",
                 tail_type="other",
             )
             bad_head = _relation(
-                "some noise", "Acme Corp", "uses <> the head uses or depends on the tail at runtime",
+                "some noise", "Acme Corp", "uses",
                 head_type="other",
             )
             unknown = _relation(
-                "Acme Corp", "Foo", "uses <> the head uses or depends on the tail at runtime",
+                "Acme Corp", "Foo", "uses",
                 tail_type="code_symbol",
             )
             return [[]], [[bad_tail, bad_head, unknown]]
@@ -328,7 +334,7 @@ async def test_relation_between_two_real_labelled_entities_survives() -> None:
             good = _relation(
                 "archon-search",
                 "LanceDB",
-                "uses <> the head uses or depends on the tail at runtime",
+                "uses",
                 score=0.98,
                 head_type="system <> a named software system, product, service, or platform",
                 tail_type="system <> a named software system, product, service, or platform",
@@ -387,18 +393,35 @@ async def test_prompted_labels_and_relations_are_the_graphs_own() -> None:
         "concept <> an abstract idea, topic, or named concept",
         "system <> a named software system, product, service, or platform",
         "event <> a named occurrence or incident",
-        "other",  # the bare decoy, no description
-    ]
+    ]  # no bare "other" decoy — it absorbed nearly every real span
+    # Bare, without descriptions: the descriptive form returns zero relations
+    # from the pinned checkpoint.
     assert relations == [
-        "uses <> the head uses or depends on the tail at runtime",
-        "implements <> the head implements the tail",
-        "depends_on <> the head requires the tail to function",
-        "related_to <> the head is generically related to the tail",
-        "calls <> the head calls or invokes the tail",
-        "imports <> the head imports the tail",
-        "defines <> the head defines the tail",
-        "inherits <> the head inherits from the tail",
+        "uses",
+        "implements",
+        "depends_on",
+        "related_to",
+        "calls",
+        "imports",
+        "defines",
+        "inherits",
     ]
+
+
+def test_prompt_vocabularies_cover_every_enum_member() -> None:
+    """A new `EntityType`/`RelationshipType` member must not be silently unprompted.
+
+    The list-equality test above is derived from the description dicts, so adding an
+    enum member without adding its description leaves that test green while the new
+    type is never extractable — the same silent-no-op class as the `"other"` decoy.
+    """
+    assert set(_ENTITY_LABEL_DESCRIPTIONS) == {
+        entity_type.value for entity_type in EntityType
+    } - {EntityType.code_symbol.value}, "code_symbol is AST-derived; all others are prompted"
+
+    assert set(_RELATION_LABEL_DESCRIPTIONS) == {
+        relationship_type.value for relationship_type in RelationshipType
+    } - {RelationshipType.synonym_of.value}, "synonym_of comes from embedding similarity (E2f)"
 
 
 # ---------------------------------------------------------------------------
