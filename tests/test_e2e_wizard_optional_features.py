@@ -3,15 +3,17 @@
 These tests invoke the real `wizard` Click command via CliRunner, then parse
 the written TOML with tomlkit to assert on config values.  All tests run
 --non-interactive (except interactive-mode use-cases) with --config pointing to
-a tmp_path so no real services are triggered.  The T-4 block at the end of this
-file is the one exception: it runs the real fasttext provisioning code against a
-mocked URL opener, so no bytes ever cross the network there either.
+a tmp_path so no real services are triggered.  The T-4 block, second from the end
+of this file, is the one exception: it runs the real fasttext provisioning code
+against a mocked URL opener, so no bytes ever cross the network there either.
+The T-5 block after it closes the file.
 
 Run:
     uv run pytest tests/test_e2e_wizard_optional_features.py -m integration -v
 """
 from __future__ import annotations
 
+import builtins
 import contextlib
 import logging
 import os
@@ -27,6 +29,7 @@ from click.testing import CliRunner, Result
 
 from archon_search.cli.main import main
 from archon_search.install import InstallError, RealInstaller
+from archon_search.install.extras import CODE_EXTRA_SIZE_ESTIMATE, GRAPH_MODEL_SIZE_ESTIMATE
 from archon_search.install.licenses import (
     _download_fasttext_model,
     _prompt_fasttext_license,
@@ -2388,3 +2391,255 @@ def test_e2e_disk_guard_blocks_download_and_degrades_to_english_only(
     multilingual_extra.assert_not_called()
     doc = tomlkit.parse(config_path.read_text())
     assert doc["database"]["multilingual"] is False
+
+
+# ---------------------------------------------------------------------------
+# T-5 — the pre-download disclosure, the one bundled question with both stated
+# costs, and the rendered summary in all three configurations (S9, S36, S57)
+# ---------------------------------------------------------------------------
+
+# Every wizard step that downloads or installs anything, with the value its mock
+# must return. S9's "before any bytes move" is asserted against these, recorded in
+# call order beside the prompts, so a disclosure moved after the fetch fails the
+# test instead of still reading fine in the transcript.  ``_install_multilingual_extra``
+# and ``_download_fasttext_model`` cannot fire on this English ``--profile minimal``
+# run; they stay listed so a regression that starts moving multilingual bytes on an
+# English run is recorded rather than silently ignored.
+_BYTE_MOVING_STEPS: tuple[tuple[str, Any], ...] = (
+    ("_prewarm_models", None),
+    ("_install_code_extra", None),
+    ("_install_graph_extra", None),
+    ("_install_multilingual_extra", None),
+    # Returns the sections that failed to install; [] keeps the caller's revert quiet.
+    ("_install_query_expansion_extras", []),
+    ("_download_fasttext_model", None),
+)
+
+# wizard.py:657 — the header of the one bundled optional-feature step.
+_DISCLOSURE_HEADER = "Code enrichment (tree-sitter) + code graphing:"
+# wizard.py:686 — the next section printed, which bounds that step's transcript.
+_NEXT_SECTION_HEADER = "Reranker:"
+# The full labelled bullet lines (wizard.py:663-668), built from the descriptors so
+# each assertion proves that feature's own cost is present as its own labelled line —
+# a bare "18 MB" is also a substring of "1218 MB".
+_CODE_COST_LINE = (
+    "Code enrichment: tree-sitter language parsers, "
+    f"about {CODE_EXTRA_SIZE_ESTIMATE.declared_mb} MB"
+)
+_GRAPH_COST_LINE = (
+    "Graph extraction: a prose entity/relation model, an estimated "
+    f"{GRAPH_MODEL_SIZE_ESTIMATE.declared_mb} MB"
+)
+# The bundled question itself (wizard.py:676) — one wording, so it can be pinned.
+_BUNDLED_QUESTION_PREFIX = "Index code files"
+# The graph half must name the artifact's cost and licence, never its engine and never
+# the runtime that ships with it. The spec's own ``name`` is what would leak if the copy
+# ever interpolated the wrong field, so it is the token to check; whether any *removed*
+# engine is still named anywhere is S42(1)'s repository-wide scan
+# (tests/test_removed_engine_repo_guard.py), which this file must not restate: that
+# guard's ``_ENGINE_PATTERN`` (:24) is built from the REMOVED engine's literals, so
+# spelling those out here — not the current engine's name — is what would trip it, and
+# would make this very file an offender.
+_ENGINE_NAME = GRAPH_MODEL_SIZE_ESTIMATE.name.lower()
+_RUNTIME_NAME = "onnx"
+
+
+@contextmanager
+def _recorded_wizard(events: list[tuple[str, str]], **extra: Any) -> Generator[None, None, None]:
+    """``_patched_wizard`` with every prompt and byte-moving step appended to *events*.
+
+    Entries are ``("prompt", prompt_text)`` and ``("bytes", step_name)``, in the
+    order they happened, which is what makes the S9 ordering assertion real rather
+    than eyeballed.  ``input`` is *wrapped*, not replaced, so CliRunner's stdin
+    queue still supplies the answers.
+    """
+    real_input = builtins.input
+
+    def spy_input(prompt: str = "") -> str:
+        events.append(("prompt", prompt))
+        return real_input(prompt)
+
+    def recorder(step: str, result: Any) -> Any:
+        def _side_effect(*_args: Any, **_kwargs: Any) -> Any:
+            events.append(("bytes", step))
+            return result
+
+        return _side_effect
+
+    steps = {
+        name: MagicMock(side_effect=recorder(name, result))
+        for name, result in _BYTE_MOVING_STEPS
+    }
+    with patch("builtins.input", spy_input):
+        with _patched_wizard(**steps, **extra):
+            yield
+
+
+def _answers(*, multilingual: str, graph: str) -> str:
+    """One interactive "minimal" run's answers, in prompt order.
+
+    The bundled code/graph question is the second one; the AI-query-expansion step is
+    pre-answered by --enable-hyde, so its prompts never fire.
+    """
+    return "\n".join([
+        multilingual,  # Will your corpus include non-English documents?
+        graph,         # the one bundled code-indexing + graph-extraction question
+        "",            # Keep reranker enabled? (minimal ships one)
+        "n",           # Auto-watch directories?
+        "n",           # Enable local query telemetry?
+        "n",           # Eager-load models at startup?
+        "",            # Routing strategy (default)
+        "",            # Log format (default)
+        "y",           # Proceed?
+    ]) + "\n"
+
+
+def _run_wizard(
+    runner: CliRunner,
+    tmp_path: Path,
+    events: list[tuple[str, str]],
+    *,
+    multilingual: str = "n",
+    graph: str = "y",
+) -> tuple[Result, Path]:
+    """Drive one interactive wizard run to completion, recording prompts and byte moves.
+
+    ``--enable-hyde`` pre-answers the AI-query-expansion step (installer.py:629), which
+    keeps its prompts — including the unrelated "Enable LLM-backed graph enrichment?"
+    one (wizard.py:500) — out of the run, so the fixed answer sequence stays aligned.
+    Pre-load is deliberately NOT skipped: ``_prewarm_models`` is one of the byte-moving
+    steps the disclosure must precede.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
+        with _recorded_wizard(events):
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "minimal",
+                    "--config", str(config_path),
+                    "--enable-hyde",
+                ],
+                input=_answers(multilingual=multilingual, graph=graph),
+            )
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    return result, config_path
+
+
+def _run_bundled_question_wizard(
+    runner: CliRunner, tmp_path: Path, events: list[tuple[str, str]]
+) -> tuple[Result, Path]:
+    """``_run_wizard`` on the English profile, answering yes to the bundled question.
+
+    English on purpose: a multilingual run downloads lid.176.ftz *before* the
+    optional-feature step (installer.py:590-596), which would put unrelated bytes
+    ahead of the disclosure S9 is about.
+    """
+    return _run_wizard(runner, tmp_path, events)
+
+
+def _bundled_step_transcript(output: str) -> str:
+    """Return the slice of the transcript belonging to the bundled step alone."""
+    start = output.find(_DISCLOSURE_HEADER)
+    assert start != -1, f"bundled optional-feature step not in transcript: {output}"
+    end = output.find(_NEXT_SECTION_HEADER, start)
+    assert end != -1, f"bundled step never ended: {output[start:]}"
+    return output[start:end]
+
+
+@pytest.mark.integration
+def test_e2e_size_and_license_shown_before_any_bytes_move(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """S9: the graph artifact's declared size and its licence are on the transcript
+    before the operator answers, and nothing is fetched or installed until then."""
+    events: list[tuple[str, str]] = []
+    result, _ = _run_bundled_question_wizard(runner, tmp_path, events)
+
+    step = _bundled_step_transcript(result.output)
+    assert _GRAPH_COST_LINE in step, f"declared size estimate not disclosed: {step}"
+    assert GRAPH_MODEL_SIZE_ESTIMATE.license in step, f"artifact licence not disclosed: {step}"
+    # The graph half quotes an estimate, not a verified transfer size (extras.py:152-158).
+    assert "not a verified" in step, f"estimate disclosed as a fact: {step}"
+    lowered = step.lower()
+    assert _ENGINE_NAME not in lowered, f"disclosure names the engine: {step}"
+    assert _RUNTIME_NAME not in lowered, f"disclosure names the runtime: {step}"
+
+    # From the recorded event log. S9's proof is the second assertion below: the
+    # disclosure is on stdout before the operator is asked. The `bundled < first_bytes`
+    # check proves something narrower but still worth pinning — no byte-moving step has
+    # been hoisted into the prompt phase (installer.py:619 runs every prompt; the
+    # installs and downloads start later, at :873).
+    kinds = [kind for kind, _ in events]
+    assert "bytes" in kinds, f"no byte-moving step ran at all: {events}"
+    bundled = next(
+        i for i, (kind, text) in enumerate(events)
+        if kind == "prompt" and text.startswith(_BUNDLED_QUESTION_PREFIX)
+    )
+    first_bytes = kinds.index("bytes")
+    assert bundled < first_bytes, (
+        f"{events[first_bytes][1]} ran before the operator answered: {events}"
+    )
+    question = events[bundled][1]
+    assert result.output.index(_DISCLOSURE_HEADER) < result.output.index(question), (
+        f"the question was asked before its disclosure: {result.output}"
+    )
+
+
+@pytest.mark.integration
+def test_e2e_one_question_two_costs(runner: CliRunner, tmp_path: Path) -> None:
+    """S36: code indexing and graph extraction stay ONE question — asked once,
+    installing both — preceded by two separately stated download costs."""
+    events: list[tuple[str, str]] = []
+    result, config_path = _run_bundled_question_wizard(runner, tmp_path, events)
+
+    prompts = [text for kind, text in events if kind == "prompt"]
+    # Structural singleness: nothing besides the bundled question is asked inside the
+    # bundled step, so graph extraction gets no extra-install question of its own.
+    step = _bundled_step_transcript(result.output)
+    in_step = [p for p in prompts if p in step]
+    assert len(in_step) == 1, f"the bundled step asked more than one question: {in_step}"
+    assert in_step[0].startswith(_BUNDLED_QUESTION_PREFIX), f"unexpected question: {in_step[0]!r}"
+
+    # One "y" installs both halves and enables the graph subsystem.
+    installed = [step_name for kind, step_name in events if kind == "bytes"]
+    assert "_install_code_extra" in installed, f"code extra not installed: {installed}"
+    assert "_install_graph_extra" in installed, f"graph extra not installed: {installed}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert doc["graph"]["enabled"] is True, "the bundled yes did not enable the graph"
+
+    # Two costs, one per feature, each a labelled line carrying its own MB figure.
+    assert _CODE_COST_LINE in step, f"code download cost not stated: {step}"
+    assert _GRAPH_COST_LINE in step, f"graph download cost not stated: {step}"
+
+
+# render.py:119-124 — the pointer the deleted English-only disclosure was replaced by.
+_NER_KNOB = "[graph].ner_confidence"
+_RELATION_KNOB = "[graph].relation_confidence"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("multilingual", "graph", "expect_pointer"),
+    [("y", "y", True), ("n", "y", True), ("n", "n", False)],
+)
+def test_e2e_summary_pointer_across_three_configurations(
+    runner: CliRunner, tmp_path: Path, multilingual: str, graph: str, expect_pointer: bool
+) -> None:
+    """S57 at the CLI: the confidence-knob pointer reaches the operator's transcript
+    whenever the graph extra is installed, multilingual or not, and never when it is
+    not — replacing the four deleted ENGLISH_ONLY_DISCLOSURE-pinning tests.
+
+    Driven through CliRunner rather than calling ``_render_summary``: the unit-level
+    property is already pinned in tests/test_install_ui.py, so what is left for an
+    e2e is that the summary actually reaches stdout in a real run.
+    """
+    result, _ = _run_wizard(runner, tmp_path, [], multilingual=multilingual, graph=graph)
+
+    for knob in (_NER_KNOB, _RELATION_KNOB):
+        present = knob in result.output
+        assert present is expect_pointer, (
+            f"{knob}: present={present}, expected={expect_pointer} "
+            f"(multilingual={multilingual!r}, graph={graph!r})\n{result.output}"
+        )

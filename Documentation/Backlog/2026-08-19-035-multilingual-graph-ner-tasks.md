@@ -660,7 +660,7 @@ flowchart LR
         - #e2e_test — `test_e2e_digest_and_size_mismatches_place_nothing_and_degrade_to_english_only` — two distinct categories, the existing `is_multilingual` degrade fires
     - Notes
         - **Rescoped 2026-08-24 (Provisioning decision, team plan `:111-130`): 12.0h → 7.0h (-5.0h).** Drops the capability-failure and smoke-load-failure e2e legs entirely — BE-13 no longer performs either step for any artifact, so there is nothing left to inject a canned `EngineCapability` against. The remaining three legs exercise `lid.176.ftz` for real (mocked transport, real digest/byte-count/atomic-rename logic) rather than a synthetic graph artifact, and the harness is simpler without the old capability-assert stubbing machinery `S8`/`S10`/`S12`'s legs needed.
-- [ ] **T-5** — e2e: the pre-download disclosure, the one bundled question with both stated costs, and the rendered summary in all three configurations #tester-role
+- [x] **T-5** — e2e: the pre-download disclosure, the one bundled question with both stated costs, and the rendered summary in all three configurations #tester-role
     - — · 5.0h
     - needs FE-2, FE-3 · completes S9, S36, S57
     - Tests
