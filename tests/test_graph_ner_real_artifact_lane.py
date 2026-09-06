@@ -4,7 +4,9 @@ This lane exists because every other graph test in the suite runs against a stub
 engine, which certifies the fixture rather than the engine. Its two tests load the real
 multi-hundred-MB artifact, so it is excluded from the default run by the
 `graph_real_artifact` marker (`pyproject.toml` `addopts`, and both CI workflows' unit and
-integration `-m` filters — BE-21) and runs as its own CI step in `archon-search-pr.yml`.
+integration `-m` filters — BE-21) and runs as its own CI step in both `archon-search-pr.yml`
+and `archon-search-release.yml` (GRAPH-4 — a tag can be pushed from a commit that never
+went through the PR gate, so the publish path needs its own copy of this guard).
 
 Run it explicitly — `ARCHON_SEARCH_DATA_DIR` must point at a data dir whose
 `models/graph/` already holds the pinned checkpoint (see `_lane_data_dir` below for why):

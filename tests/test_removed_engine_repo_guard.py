@@ -187,6 +187,68 @@ def test_both_workflows_exclude_the_new_marker_on_the_same_filter_line() -> None
     assert_marker_excluded_on_step_lines(_REPO_ROOT, _WORKFLOW_FILES, _GRAPH_MARKER_EXCLUSION)
 
 
+# --- GRAPH-4: the lane's own step must EXIST in both workflows -------------------------
+#
+# The three guards above all assert the marker is EXCLUDED somewhere. Every one of them
+# passed while the release workflow ran the lane nowhere at all — that is precisely how
+# GRAPH-4 happened. An absence assert needs a presence anchor, so this pair is the anchor.
+
+_GRAPH_LANE_SELECTOR = "-m graph_real_artifact"
+_GRAPH_CACHE_KEY_PREFIX = "key: graph-ner-"
+
+
+def _lane_step_lines(text: str) -> list[str]:
+    return [
+        line
+        for line in text.splitlines()
+        if "uv run pytest" in line and _GRAPH_LANE_SELECTOR in line
+    ]
+
+
+def test_both_workflows_run_the_graph_real_artifact_lane() -> None:
+    """Both CI workflows must actually RUN the lane, not merely exclude it elsewhere.
+
+    `archon-search-release.yml` triggers on tag push, and `release.sh`'s pre-flight checks
+    branch, tree cleanliness and origin sync — never CI status — so a tag can be cut from a
+    commit that never met the PR gate. Without this guard, deleting the release workflow's
+    lane step reopens GRAPH-4 (a publish with zero real-model coverage) and nothing fails.
+    """
+    for rel_path in _WORKFLOW_FILES:
+        matches = _lane_step_lines((_REPO_ROOT / rel_path).read_text(encoding="utf-8"))
+        assert matches, (
+            f"{rel_path}: no `uv run pytest` step selects {_GRAPH_LANE_SELECTOR!r}. The lane "
+            "is the only guard that drives the real GLiNER checkpoint and fails on a vacuous "
+            "extraction — every workflow that gates a merge or a publish must run it."
+        )
+
+
+def test_graph_artifact_cache_key_is_identical_across_workflows() -> None:
+    """The lane's `actions/cache` key must match in both workflows.
+
+    The step block is duplicated per workflow (GitHub Actions has no cheaper sharing for
+    four steps), so the one field that silently degrades on drift — a mismatched key means
+    a guaranteed cache miss and a ~1.2 GB re-download per release — is pinned here.
+    """
+    keys = {
+        rel_path: [
+            line.strip()
+            for line in (_REPO_ROOT / rel_path).read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith(_GRAPH_CACHE_KEY_PREFIX)
+        ]
+        for rel_path in _WORKFLOW_FILES
+    }
+    for rel_path, found in keys.items():
+        assert len(found) == 1, (
+            f"{rel_path}: expected exactly one {_GRAPH_CACHE_KEY_PREFIX!r} line for the graph "
+            f"NER artifact cache, found {len(found)} — this guard can no longer compare keys."
+        )
+    distinct = {found[0] for found in keys.values()}
+    assert len(distinct) == 1, (
+        "the graph NER artifact cache key differs between workflows, so one of them takes a "
+        f"guaranteed cache miss and re-downloads ~1.2 GB every run: {keys}"
+    )
+
+
 # --- S42 property 3: no docling parse-pool reuse on the engine call path ---------------
 
 _ENGINE_CALL_PATH = (

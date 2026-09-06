@@ -61,7 +61,65 @@ jobs:
       - name: Run integration suite on disk-backed basetemp, coverage append
         run: uv run pytest --basetemp=/var/tmp/archon-search-it -o addopts= --strict-markers --strict-config --cov=archon_search --cov-append -m "integration and not eval and not docling and not graph_real_artifact" tests/
 
+      - name: Restore graph NER artifact cache
+        uses: actions/cache@v6.1.0
+        with:
+          # ProseExtractionBackend passes get_graph_models_dir() as GLiNER's cache_dir,
+          # which resolves under ARCHON_SEARCH_DATA_DIR (default ~/.archon-search) —
+          # archon_search/paths.py get_data_dir()/get_graph_models_dir().
+          path: ~/.archon-search/models/graph
+          # The key pins GRAPH_NER_MODEL_NAME + GRAPH_NER_MODEL_REVISION
+          # (archon_search/paths.py). Update it whenever either changes — and keep it
+          # identical to archon-search-pr.yml's so both workflows share one cache entry.
+          key: graph-ner-knowledgator-gliner-relex-multi-v1.0-e990d9ba6f471b846f7d78bf7e4b4dab11761ada
+          restore-keys: graph-ner-knowledgator-gliner-relex-multi-v1.0-
+
+      - name: Prefetch graph NER artifact (3 attempts, linear backoff)
+        run: |
+          prefetch_ok=false
+          for attempt in 1 2 3; do
+            uv run python -c "
+          import asyncio
+          from archon_search.prose_extraction_backend import ProseExtractionBackend
+          backend = ProseExtractionBackend()
+          asyncio.run(backend.load())
+          assert backend.load_count == 1, backend.load_count
+          print('Graph NER artifact prefetched')
+          " && { prefetch_ok=true; break; }
+            echo "Attempt $attempt failed; retrying in $((attempt * 5))s..."
+            sleep $((attempt * 5))
+          done
+          if [ "$prefetch_ok" != "true" ]; then
+            echo "All prefetch attempts failed"; exit 1
+          fi
+
+      - name: Run graph real-artifact lane
+        # GRAPH-4: this lane is the only guard that drives the real GLiNER checkpoint and
+        # fails on a vacuous extraction, so it must gate the publish too — a tag can be
+        # pushed from a commit that never went through the PR gate — release.sh's pre-flight
+        # checks branch, tree cleanliness and origin sync, never CI status.
+        # --no-cov: tests/CLAUDE.md reserves --cov-append across separate invocations for
+        # this workflow's -n0 coverage accumulation, which the fail-under step below reads.
+        # ARCHON_SEARCH_DATA_DIR is explicit because tests/conftest.py's autouse fixture
+        # otherwise redirects it at a throwaway per-worker dir, which would send
+        # GLiNER.from_pretrained past the cache restored above and re-download the model.
+        # $HOME/.archon-search is the same path the cache and prefetch steps above use
+        # (it is get_data_dir()'s own default, which those two steps rely on).
+        # tests/ (not the single lane file): scoping by marker alone — matching the eval
+        # and integration steps above — means a lane test that ends up in another file
+        # still runs and is still verified below.
+        timeout-minutes: 25
+        run: ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m graph_real_artifact --junitxml=graph-real-artifact-results.xml tests/
+
+      - name: Verify graph real-artifact tests ran (not just skipped)
+        # pytest's default junit_family=xunit2 puts tests/skipped on the <testsuite> CHILD,
+        # not the <testsuites> root find() returns — reading the root's own .attrib always
+        # returns the int(...) defaults (0), so `tests-skips>0` would always be False here.
+        run: uv run python -c "import xml.etree.ElementTree as ET; t=ET.parse('graph-real-artifact-results.xml').getroot(); t=t.find('testsuite') or t; tests=int(t.attrib.get('tests',0)); skips=int(t.attrib.get('skipped',0)); assert tests-skips>0, f'All {tests} graph real-artifact tests were skipped or none ran — check the artifact cache prefetch step'"
+
       - name: Enforce coverage fail-under=85
+        # The three --cov pytest steps above all use --cov-append into a single .coverage
+        # file; the graph real-artifact step between them uses --no-cov and doesn't touch it.
         run: uv run coverage report --fail-under=85
 
   # ---------------------------------------------------------------------------
