@@ -3,10 +3,11 @@
 These tests invoke the real `wizard` Click command via CliRunner, then parse
 the written TOML with tomlkit to assert on config values.  All tests run
 --non-interactive (except interactive-mode use-cases) with --config pointing to
-a tmp_path so no real services are triggered.  The T-4 block, second from the end
-of this file, is the one exception: it runs the real fasttext provisioning code
-against a mocked URL opener, so no bytes ever cross the network there either.
-The T-5 block after it closes the file.
+a tmp_path so no real services are triggered.  The T-4 block near the end of this
+file is the one exception: it runs the real fasttext provisioning code against a
+mocked URL opener, so no bytes ever cross the network there either.  The T-5 and
+T-6 blocks follow it; T-6 reuses T-4's provisioning harness for its two-category
+comparison and T-5's interactive harness for the graph-enabled transcript.
 
 Run:
     uv run pytest tests/test_e2e_wizard_optional_features.py -m integration -v
@@ -34,9 +35,15 @@ from archon_search.install.licenses import (
     _download_fasttext_model,
     _prompt_fasttext_license,
 )
+from archon_search.install.provisioning import (
+    TORCH_DEVICE_CPU,
+    TORCH_DEVICE_CUDA,
+    ProvisionFailureKind,
+)
 from archon_search.paths import get_fasttext_models_dir
 from archon_search.platform.types import GpuType
 from tests.test_install_fasttext_download import _pin_digest_of
+from tests.test_removed_engine_repo_guard import _ENGINE_PATTERN, _files_naming_engine
 
 
 @contextmanager
@@ -2643,3 +2650,305 @@ def test_e2e_summary_pointer_across_three_configurations(
             f"{knob}: present={present}, expected={expect_pointer} "
             f"(multilingual={multilingual!r}, graph={graph!r})\n{result.output}"
         )
+
+
+# ---------------------------------------------------------------------------
+# T-6 — the rendered transcript names no removed engine, the two lid.176.ftz
+# failure categories render distinguishably, and the accelerator offer /
+# silent-CPU paths behave as specified (S49, S51, S33, S31, S32)
+# ---------------------------------------------------------------------------
+
+# The removed engine's literals are NOT restated here: the pinned pattern is
+# imported from the S42(1) guard that owns it, so this file never becomes an
+# offender of the very scan it reuses, and a widened pattern automatically
+# widens this check too. Its liveness anchor is that guard's own scanner over its
+# own allowlisted historical record, not a second reimplementation of it.
+_KNOWN_ENGINE_NAMING_FILE = "BREAKING.md"
+
+# FE-3's replacement bullet, appended by `_render_summary` immediately where the
+# deleted disclosure used to sit. Asserting it PRESENT is what stops the two absence
+# assertions below from passing on a transcript where the summary never rendered.
+_GRAPH_SUMMARY_POINTER = "Tune prose extraction for your corpus with [graph].ner_confidence"
+
+# The graph-specific disclosure FE-3 deleted (commit 5838760a), verbatim minus the
+# engine name `_ENGINE_PATTERN` already covers. Asserted absent from a graph-ENABLED
+# transcript, the configuration S42(1) cannot reach: its pattern is built from the
+# engine's own literals and never matches a reworded reintroduction.
+# NOT the bare substring "English-only" — that also occurs in two live, legitimate
+# strings (render.py:186 `_render_provision_failure`, config_writer.py:449's revert
+# note), so a bare-substring guard would fire on a fasttext failure, not on this.
+_ENGLISH_ONLY_DISCLOSURE = "prose entity extraction is English-only"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("multilingual", ["y", "n"])
+def test_e2e_rendered_transcript_names_no_removed_engine(
+    runner: CliRunner, tmp_path: Path, multilingual: str
+) -> None:
+    """S49: no operator-facing line of a real graph-enabled run names the outgoing
+    engine or its model — the check S42(1)'s static source scan cannot make, since a
+    computed or formatted string leaves no literal behind for a source-level guard.
+
+    Also closes TEST-1 (tech-debt register): the same rendered transcript is asserted
+    free of the deleted English-only disclosure, in the graph-**enabled**
+    configurations that `test_wizard_summary_no_english_only_note_when_graph_disabled`
+    leaves uncovered and that `_ENGINE_PATTERN` never matched.
+    """
+    result, config_path = _run_wizard(runner, tmp_path, [], multilingual=multilingual, graph="y")
+
+    # Liveness anchor 1 — the scanner still detects the engine somewhere known, or
+    # "no match in the transcript" proves nothing. Reuses the guard's own helper
+    # rather than re-reading the file with a second, drifting encoding rule.
+    assert _files_naming_engine([_KNOWN_ENGINE_NAMING_FILE]) == [_KNOWN_ENGINE_NAMING_FILE], (
+        f"the engine-name scanner no longer detects {_KNOWN_ENGINE_NAMING_FILE} — "
+        "the transcript check below is vacuous"
+    )
+
+    # Liveness anchor 2 — the summary's graph bullets actually rendered. Without this
+    # the two absence assertions would also pass on an empty or aborted transcript,
+    # which is precisely how the deleted unit assertions could have been replaced by
+    # nothing at all (TEST-1).
+    assert _GRAPH_SUMMARY_POINTER in result.output, (
+        f"the graph summary bullets never rendered — absences prove nothing:\n{result.output}"
+    )
+    assert _DISCLOSURE_HEADER in result.output, f"not a graph-enabled run: {result.output}"
+    assert tomlkit.parse(config_path.read_text())["graph"]["enabled"] is True
+
+    hit = _ENGINE_PATTERN.search(result.output)
+    assert hit is None, f"the rendered transcript names the removed engine: {hit!r}"
+    assert _ENGLISH_ONLY_DISCLOSURE not in result.output, (
+        "a graph-enabled transcript must not carry the deleted English-only "
+        f"disclosure (TEST-1):\n{result.output}"
+    )
+
+
+# render.py:183 — the one shared opening every rendered fasttext failure carries.
+# Everything after it is the category's own remedy, which is what must differ.
+_FAILURE_LINE_PREFIX = "Warning: fasttext model download failed: "
+
+
+def _rendered_failure_line(runner: CliRunner, data_dir: Path, served: bytes) -> str:
+    """Run one real multilingual provisioning attempt and return its rendered failure line.
+
+    Deliberately returns the LIVE string rather than comparing it to a pinned
+    constant: T-4 already pins each category against `_DIGEST_REMEDY`/`_SIZE_REMEDY`,
+    so what is left for S51 is whether the two strings the operator actually reads
+    differ from *each other*.
+    """
+    data_dir.mkdir()
+    config_path = data_dir / "archon-search.toml"
+
+    with _real_fasttext_provisioning(data_dir) as target, _pin_digest_of(_STAND_IN_MODEL), patch(
+        "urllib.request.urlopen", return_value=_served_response(served)
+    ):
+        result = runner.invoke(main, _multilingual_wizard_args(config_path))
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    assert not target.exists(), "model was placed despite a failed verify"
+    _assert_sanitized(result.output)
+    lines = [ln for ln in result.output.splitlines() if ln.startswith(_FAILURE_LINE_PREFIX)]
+    assert len(lines) == 1, f"expected exactly one rendered failure line, got {lines!r}"
+    return lines[0]
+
+
+@pytest.mark.integration
+def test_e2e_two_fasttext_failure_categories_render_differently(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """S51: `digest_mismatch` and `size_mismatch` — both members of C4's frozen enum,
+    both raised by `lid.176.ftz`'s own provisioning — render as two strings that are
+    not equal, each carrying a remedy token the other does not.
+
+    Overlaps T-4's `test_e2e_digest_and_size_mismatches_...`, which already pins each
+    category against `_DIGEST_REMEDY`/`_SIZE_REMEDY` and asserts the other one absent. What is
+    left for S51 is narrow and stated rather than oversold: the two lines the operator
+    reads are compared to each OTHER, with no constant on either side, and each run is
+    asserted to render exactly ONE failure line.
+    """
+    # Right length, wrong bytes: clears the byte-count assert, fails the digest one.
+    digest_line = _rendered_failure_line(runner, tmp_path / "digest", bytes(len(_STAND_IN_MODEL)))
+    # Short read: fails the byte-count assert first and never reaches the digest one.
+    size_line = _rendered_failure_line(runner, tmp_path / "size", _STAND_IN_MODEL[:100])
+
+    assert digest_line != size_line, (
+        f"both categories render identically — the operator cannot tell them apart: {digest_line!r}"
+    )
+    digest_remedy = digest_line[len(_FAILURE_LINE_PREFIX):]
+    size_remedy = size_line[len(_FAILURE_LINE_PREFIX):]
+    assert digest_remedy and size_remedy, f"a category rendered an empty remedy: {digest_line!r} / {size_line!r}"
+    assert digest_remedy not in size_remedy, f"the digest remedy is not its own: {size_remedy!r}"
+    assert size_remedy not in digest_remedy, f"the size remedy is not its own: {digest_remedy!r}"
+
+
+# wizard.py:962 — the accelerator offer's one wording, so it can be pinned.
+_ACCELERATOR_OFFER = "Graph extraction validated on"
+_CUDA_PROVIDER = "CUDAExecutionProvider"
+
+# Captured before any test replaces it: `_patched_wizard` mocks `configure_providers`
+# out, and every leg below asserts on the [graph].providers it really writes.
+_REAL_CONFIGURE_PROVIDERS = RealInstaller.configure_providers
+
+
+@contextmanager
+def _unconfigured_cli_logging() -> Generator[None, None, None]:
+    """Strip the handlers pytest attaches, so WARNINGs reach stderr as they do for an operator.
+
+    A real `archon-search wizard` run never calls `configure_logging`, so a WARNING
+    with no handler anywhere in the hierarchy is emitted to `sys.stderr` by
+    `logging.lastResort` — which CliRunner captures. pytest's logging plugin attaches a
+    root handler that would intercept it, turning the operator-visible half of S33 into
+    a caplog-only assertion that proves nothing about what is rendered.
+    """
+    # Every ancestor of the emitting logger, not just root: a handler anywhere on the
+    # chain stops propagation short of `lastResort` and would silently void the assertion.
+    touched = [logging.getLogger()]
+    touched += [
+        logging.getLogger(name)
+        for name in ("archon_search", "archon_search.install", "archon_search.install.installer")
+    ]
+    saved = [(lg, lg.handlers[:], lg.level, lg.propagate) for lg in touched]
+    try:
+        for lg in touched:
+            lg.handlers = []
+            lg.propagate = True
+        logging.getLogger().setLevel(logging.WARNING)
+        yield
+    finally:
+        for lg, handlers, level, propagate in saved:
+            lg.handlers = handlers
+            lg.setLevel(level)
+            lg.propagate = propagate
+
+
+def _run_graph_provider_wizard(
+    runner: CliRunner,
+    tmp_path: Path,
+    *,
+    availability: str,
+    prewarm_device: str | None,
+    offer_answer: str = "",
+) -> tuple[Result, Path]:
+    """Drive one interactive graph-enabled run with both probe stages pinned.
+
+    `--graph-providers` supplies the candidate list (so no real GPU is needed), stage 1
+    is pinned through `probe_device_availability` and stage 2 through what the pre-warm
+    returns — the two inputs `_configure_graph_providers` gates the offer on. Pre-load is
+    NOT skipped: stage 2 rides it. The real `configure_providers` is restored so the
+    written TOML, not a mock call, is what the assertions read.
+    """
+    config_path = tmp_path / "archon-search.toml"
+    with patch.dict(os.environ, {"ARCHON_SEARCH_DATA_DIR": str(tmp_path)}):
+        with _patched_wizard(
+            _prewarm_models=MagicMock(return_value=prewarm_device),
+            probe_device_availability=MagicMock(return_value=availability),
+        ):
+            with patch.object(RealInstaller, "configure_providers", _REAL_CONFIGURE_PROVIDERS):
+                with _unconfigured_cli_logging():
+                    result = runner.invoke(
+                        main,
+                        [
+                            "wizard",
+                            "--profile", "minimal",
+                            "--config", str(config_path),
+                            "--enable-hyde",
+                            "--graph-providers", _CUDA_PROVIDER,
+                        ],
+                        # One extra line answers the accelerator offer when it is shown
+                        # (empty = a bare Enter, which accepts the accelerator default);
+                        # it is left unread on every leg where no offer appears.
+                        input=_answers(multilingual="n", graph="y") + offer_answer + "\n",
+                    )
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    return result, config_path
+
+
+@pytest.mark.integration
+def test_e2e_conflicting_runtimes_reaches_the_operator(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """S33: the probe's sanitized category is what the wizard actually renders — it
+    neither swallows the ambiguity nor picks a runtime.
+
+    The wizard is driven to the one reachable producer of this category: an
+    accelerator was asked for, and the pre-warm did not land the model on it.
+    """
+    result, config_path = _run_graph_provider_wizard(
+        runner, tmp_path, availability=TORCH_DEVICE_CUDA, prewarm_device=TORCH_DEVICE_CPU
+    )
+
+    assert ProvisionFailureKind.conflicting_onnx_runtimes.value in result.output, (
+        f"the probe's category never reached the operator:\n{result.output}"
+    )
+    # Sanitized: a category name, not an exception message. `"Traceback" not in output`
+    # would be inert here — CliRunner captures a raised exception into `result.exception`
+    # and the exit code is already asserted, so it could never have fired.
+    _assert_sanitized(result.output)
+    # Never "picks a runtime": CPU is settled, and the operator is not asked to choose.
+    assert _ACCELERATOR_OFFER not in result.output, f"prompted despite the failure: {result.output}"
+    doc = tomlkit.parse(config_path.read_text())
+    assert list(doc["graph"]["providers"]) == []
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("availability", "prewarm_device", "offered", "why"),
+    [
+        (TORCH_DEVICE_CUDA, TORCH_DEVICE_CUDA, True, "both stages validated the accelerator"),
+        (TORCH_DEVICE_CPU, TORCH_DEVICE_CUDA, False, "stage 1 found no accelerator"),
+        # The stage-2 step-down (CUDA, CPU) is NOT a leg here: it is the exact input
+        # `test_e2e_conflicting_runtimes_reaches_the_operator` drives, and that test
+        # already asserts this test's two properties (no offer, CPU written) on it.
+        # `probe_device_validation` routes this leg to the same proven-failure branch —
+        # an accelerator was requested and the pre-warm landed nothing — NOT to
+        # `not_yet_validated`, which needs no candidates at all and is unreachable
+        # behind `--graph-providers` (covered at unit level, test_install_graph_
+        # accelerator.py::test_nothing_requested_and_no_answer_never_overwrites_a_hand_set_list).
+        (TORCH_DEVICE_CUDA, None, False, "an accelerator was requested, pre-warm landed nothing"),
+    ],
+)
+def test_e2e_accelerator_offered_only_after_both_stages(
+    runner: CliRunner,
+    tmp_path: Path,
+    availability: str,
+    prewarm_device: str | None,
+    offered: bool,
+    why: str,
+) -> None:
+    """S31/S32 at the CLI: the offer appears on the operator's transcript only after
+    BOTH probe stages passed, and either stage failing shows no prompt at all and
+    writes CPU silently — with the accelerator itself as the default when it is offered
+    (a bare Enter accepts, and that is what lands in `[graph].providers`)."""
+    result, config_path = _run_graph_provider_wizard(
+        runner, tmp_path, availability=availability, prewarm_device=prewarm_device
+    )
+
+    assert (_ACCELERATOR_OFFER in result.output) is offered, f"{why}\nOUT: {result.output}"
+    written = list(tomlkit.parse(config_path.read_text())["graph"]["providers"])
+    assert written == ([_CUDA_PROVIDER] if offered else []), why
+    # A failure is never rendered as an exception message (S32).
+    _assert_sanitized(result.output)
+
+
+@pytest.mark.integration
+def test_e2e_declining_the_offer_is_what_the_operator_typed(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Negative control for the accept leg above, which on its own proves nothing about
+    the default: `_prompt_graph_accelerator` returns True on EOFError too, so a bare
+    Enter that never reached the prompt would land CUDA just the same.
+
+    "n" is the one answer EOF cannot produce. It landing CPU proves the prompt really
+    reads the operator's stream — and therefore that the accept leg's Enter was read as
+    the accelerator default rather than defaulted past.
+    """
+    result, config_path = _run_graph_provider_wizard(
+        runner,
+        tmp_path,
+        availability=TORCH_DEVICE_CUDA,
+        prewarm_device=TORCH_DEVICE_CUDA,
+        offer_answer="n",
+    )
+
+    assert _ACCELERATOR_OFFER in result.output, f"the offer never appeared: {result.output}"
+    written = list(tomlkit.parse(config_path.read_text())["graph"]["providers"])
+    assert written == [], f"declining still wrote the accelerator: {written!r}"

@@ -475,7 +475,10 @@ class BaseInstaller(ABC):
         stage 1 said it was available AND stage 2 (riding the pre-warm) resolved
         the model onto it. Pre-warm not having run, or either stage failing,
         shows no prompt at all and settles on CPU silently: the reason is logged at
-        WARNING and never rendered to the operator or raised. A proven failure — which
+        WARNING and never raised, and never printed as wizard UI. "Silently" means no
+        prompt and no exception — not invisible: the CLI configures no logging, so the
+        WARNING reaches the operator's stderr via ``logging.lastResort``, which is what
+        makes S33's category reach them at all. A proven failure — which
         includes an accelerator that was asked for and that the pre-warm never landed
         on — writes ``[]`` outright. Only the genuinely empty answer (nothing was asked
         for and nothing came back) writes nothing at all, since unset already reads as

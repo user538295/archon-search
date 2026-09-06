@@ -667,7 +667,7 @@ flowchart LR
         - #e2e_test — `test_e2e_size_and_license_shown_before_any_bytes_move` — asserted on the captured CLI transcript
         - #e2e_test — `test_e2e_one_question_two_costs` — the bundled question is intact
         - #e2e_test — `test_e2e_summary_pointer_across_three_configurations` — replaces the four deleted disclosure-pinning tests
-- [ ] **T-6** — e2e: the wizard's rendered transcript names no removed engine, two failure categories render distinguishably, and the accelerator offer / silent-CPU paths behave as specified #tester-role
+- [x] **T-6** — e2e: the wizard's rendered transcript names no removed engine, two failure categories render distinguishably, and the accelerator offer / silent-CPU paths behave as specified #tester-role
     - — · 6.0h
     - needs BE-15, FE-4, FE-5 · completes S31, S32, S33, S49, S51
     - Tests
