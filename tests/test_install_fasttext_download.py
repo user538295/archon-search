@@ -160,7 +160,7 @@ def test_download_fasttext_model_insufficient_disk_space_raises_its_own_category
             _download_fasttext_model(tmp_path)
 
     mock_urlopen.assert_not_called()
-    assert ProvisionFailureKind.insufficient_disk in str(exc_info.value)
+    assert exc_info.value.kind is ProvisionFailureKind.insufficient_disk
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +180,11 @@ def test_download_fasttext_model_network_error_message(tmp_path: Path):
     with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("timeout")):
         with pytest.raises(InstallError) as exc_info:
             _download_fasttext_model(tmp_path)
-    assert "fasttext" in str(exc_info.value).lower() or "download" in str(exc_info.value).lower() or "lid.176" in str(exc_info.value).lower()
+    message = str(exc_info.value).lower()
+    assert "fasttext" in message
+    assert "lid.176" in message
+    assert "download" in message
+    assert exc_info.value.kind is ProvisionFailureKind.download_failed
 
 
 def test_download_fasttext_model_network_error_leaves_nothing_on_disk(tmp_path: Path):
@@ -210,8 +214,7 @@ def test_short_download_fails_the_byte_count_assert_before_placement(tmp_path: P
         with pytest.raises(InstallError) as exc_info:
             _download_fasttext_model(tmp_path)
 
-    assert ProvisionFailureKind.size_mismatch in str(exc_info.value)
-    assert ProvisionFailureKind.digest_mismatch not in str(exc_info.value)
+    assert exc_info.value.kind is ProvisionFailureKind.size_mismatch
     assert not (tmp_path / "lid.176.ftz").exists()
     assert not (tmp_path / "lid.176.ftz.tmp").exists()
 
@@ -223,7 +226,7 @@ def test_download_fasttext_model_empty_file_raises_install_error(tmp_path: Path)
         with pytest.raises(InstallError) as exc_info:
             _download_fasttext_model(tmp_path)
 
-    assert "size" in str(exc_info.value).lower() or "corrupt" in str(exc_info.value).lower()
+    assert "corrupt" in str(exc_info.value).lower()
     assert not (tmp_path / "lid.176.ftz").exists()
 
 
@@ -245,8 +248,7 @@ def test_digest_mismatch_places_nothing_and_reports_its_own_category(tmp_path: P
         with pytest.raises(InstallError) as exc_info:
             _download_fasttext_model(tmp_path)
 
-    assert ProvisionFailureKind.digest_mismatch in str(exc_info.value)
-    assert ProvisionFailureKind.size_mismatch not in str(exc_info.value)
+    assert exc_info.value.kind is ProvisionFailureKind.digest_mismatch
     assert not (tmp_path / "lid.176.ftz").exists()
     assert not (tmp_path / "lid.176.ftz.tmp").exists()
 
@@ -323,7 +325,7 @@ def test_download_fasttext_model_prints_step_label(tmp_path: Path, capsys):
         _download_fasttext_model(tmp_path)
 
     captured = capsys.readouterr()
-    assert "[4b/5]" in captured.out or "[4b/5]" in captured.err
+    assert "[4b/5]" in captured.out
 
 
 def test_download_fasttext_model_prints_fasttext_language_model(tmp_path: Path, capsys):

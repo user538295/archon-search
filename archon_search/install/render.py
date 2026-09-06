@@ -7,7 +7,7 @@ from archon_search.config import get_default_config_path
 from archon_search.profiles import InstallProfile, get_profile
 
 from .config_writer import WizardFeatures
-from .provisioning import BYTES_PER_MB
+from .provisioning import BYTES_PER_MB, ProvisionFailureKind
 
 _PROFILE_ORDER = ("minimal", "balanced", "max")
 _PROFILE_CAPS = {"minimal": "Minimal", "balanced": "Balanced", "max": "Max"}
@@ -145,6 +145,47 @@ def _render_summary(
             lines.append("  Optional features:")
             lines.extend(f"    {b}" for b in feature_bullets)
     return "\n".join(lines)
+
+
+# Sanitized, remedy-bearing copy for each provisioning failure category the
+# fasttext download can reach (`licenses.py:_download_fasttext_model`). The
+# exception messages are not wire material — the insufficient-disk one embeds the
+# models directory path — so the wizard renders these constants, keyed on the
+# exception's structured `kind`, instead of interpolating it. The remedies differ
+# per category, so no two of these may read alike (S11, S37, S51).
+_PROVISION_REMEDIES: dict[ProvisionFailureKind | None, str] = {
+    ProvisionFailureKind.insufficient_disk:
+        "not enough free disk space for the model; free some up before retrying",
+    ProvisionFailureKind.download_failed:
+        "the download could not be completed; check your network connection before retrying",
+    ProvisionFailureKind.size_mismatch:
+        "the transfer ended early and was discarded; retrying usually fetches the rest",
+    ProvisionFailureKind.digest_mismatch:
+        "the fetched bytes did not match the pinned checksum and were discarded; "
+        "if it repeats, a proxy or mirror is altering the file",
+    # The filesystem failures around the download — the mkdir/chmod/unlink that
+    # precede it and the durable publish that follows it — are reachable but have no
+    # member in the frozen enum, so they are keyed on None rather than sharing the
+    # unmapped fallback.
+    None:
+        "the model directory could not be prepared or written; check the data "
+        "directory's free space and permissions",
+}
+
+# The frozen enum holds members no fasttext failure can reach. Should one ever gain a
+# raiser on this path, say only what is true of every category rather than guess a
+# remedy — and never raise KeyError inside the degrade path.
+_UNMAPPED_REMEDY = "the model could not be provisioned"
+
+
+def _render_provision_failure(kind: ProvisionFailureKind | None) -> str:
+    """Return the operator-facing warning for a failed fasttext model download."""
+    return (
+        f"Warning: fasttext model download failed: "
+        f"{_PROVISION_REMEDIES.get(kind, _UNMAPPED_REMEDY)}.\n"
+        "Continuing in English-only mode. Re-run the wizard "
+        "to enable multilingual language detection."
+    )
 
 
 # SYNC: must match the default returned by `key_manager.get_key_file()`

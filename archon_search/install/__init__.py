@@ -83,6 +83,7 @@ from .render import _PROFILE_ORDER as _PROFILE_ORDER
 from .render import _mask_api_key as _mask_api_key
 from .render import _print_next_steps as _print_next_steps
 from .render import _render_profile_table as _render_profile_table
+from .render import _render_provision_failure as _render_provision_failure
 from .render import _render_summary as _render_summary
 from .service_ops import _create_secrets_env as _create_secrets_env
 from .service_ops import _legacy_service_path as _legacy_service_path

@@ -633,7 +633,7 @@ flowchart LR
         - #unit_test — `test_pointer_shown_for_graph_extra_regardless_of_multilingual` — both configurations
         - #unit_test — `test_pointer_absent_without_the_graph_extra` — the third configuration
         - #unit_test — `test_pointer_names_both_confidence_knobs` — actionable, not decorative
-- [ ] **FE-4** — Render fasttext's provisioning failures as sanitized, remedy-bearing categories at [installer.py](../../archon_search/install/installer.py)`:531-545` instead of interpolating `str(exc)`, reusing the existing `is_multilingual = False` degrade-to-English-only path rather than building a new revert #frontend-role
+- [x] **FE-4** — Render fasttext's provisioning failures as sanitized, remedy-bearing categories at [installer.py](../../archon_search/install/installer.py)`:531-545` instead of interpolating `str(exc)`, reusing the existing `is_multilingual = False` degrade-to-English-only path rather than building a new revert #frontend-role
     - Presentation · 3.5h
     - needs BE-13 · completes S11, S37, S51
     - Tests

@@ -1,6 +1,7 @@
 """Tests for RealInstaller.run() — TDD (Task 3.4)."""
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 from contextlib import contextmanager
@@ -2231,6 +2232,92 @@ def test_multilingual_download_failure_degrades_to_english(tmp_path: Path) -> No
     assert "multilingual = false" in config_path.read_text()
     # Degraded to English-only → the [multilingual] extra is not installed.
     install_extra_mock.assert_not_called()
+
+
+def test_no_rendered_failure_contains_exception_text(tmp_path: Path, capsys, caplog) -> None:
+    """The wizard renders the sanitized category, never the caught exception (FE-4).
+
+    The insufficient-disk message embeds the models directory path, so the call
+    site's old `str(exc)` interpolation was wire-facing. Sanitizing it must not
+    also discard the detail, so it is logged instead of printed, and the install
+    still degrades to English-only (S11).
+    """
+    from archon_search.install import InstallError, _render_provision_failure
+    from archon_search.install.provisioning import ProvisionFailureKind
+
+    leak = "SENTINEL /private/var/models/lid.176.ftz internals"
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    patches = _multilingual_run_patches(
+        config_path, fake_legacy,
+        _download_fasttext_model=MagicMock(
+            side_effect=InstallError(leak, kind=ProvisionFailureKind.digest_mismatch)
+        ),
+        _prompt_fasttext_license=MagicMock(),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.install.installer"):
+        with patch.multiple("archon_search.install.installer", **patches):
+            with patch.multiple(RealInstaller, **_MULTILINGUAL_METHOD_PATCHES):
+                installer = create_installer(config_file=str(config_path))
+                rc = installer.run(
+                    non_interactive=True,
+                    profile="minimal",
+                    multilingual=True,
+                    skip_preload=True,
+                    accept_fasttext_license=True,
+                )
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "SENTINEL" not in captured.err + captured.out
+    assert _render_provision_failure(ProvisionFailureKind.digest_mismatch) in captured.err
+
+    # Sanitized on the wire, but not thrown away — the operator can still recover it.
+    assert leak in caplog.text
+
+    # S11: the install still degrades to English-only rather than aborting.
+    assert "multilingual = false" in config_path.read_text()
+
+
+def test_bare_oserror_from_provisioning_degrades_instead_of_crashing(tmp_path: Path, capsys) -> None:
+    """A read-only models dir must degrade to English-only, not crash the wizard.
+
+    The mkdir/chmod/disk_usage/unlink calls around the download raise OSError bare,
+    outside any InstallError wrapper, so catching InstallError alone let them escape
+    run() as a traceback — the opposite of S11.
+    """
+    from archon_search.install import _render_provision_failure
+
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    patches = _multilingual_run_patches(
+        config_path, fake_legacy,
+        _download_fasttext_model=MagicMock(
+            side_effect=PermissionError(13, "Permission denied", str(tmp_path / "models"))
+        ),
+        _prompt_fasttext_license=MagicMock(),
+    )
+
+    with patch.multiple("archon_search.install.installer", **patches):
+        with patch.multiple(RealInstaller, **_MULTILINGUAL_METHOD_PATCHES):
+            installer = create_installer(config_file=str(config_path))
+            rc = installer.run(
+                non_interactive=True,
+                profile="minimal",
+                multilingual=True,
+                skip_preload=True,
+                accept_fasttext_license=True,
+            )
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    # OSError carries no `kind`, so it renders the filesystem copy, not a KeyError.
+    assert _render_provision_failure(None) in captured.err
+    assert "Permission denied" not in captured.err + captured.out
+    assert "multilingual = false" in config_path.read_text()
 
 
 # ---------------------------------------------------------------------------

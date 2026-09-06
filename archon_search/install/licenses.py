@@ -205,9 +205,9 @@ def _download_fasttext_model(models_dir: Path) -> None:
     usage = shutil.disk_usage(models_dir)
     if usage.free < FASTTEXT_ARTIFACT.size_bytes:
         raise InstallError(
-            f"Insufficient disk space for fasttext lid.176.ftz "
-            f"({ProvisionFailureKind.insufficient_disk}): needs "
-            f"~{FASTTEXT_ARTIFACT.size_bytes} bytes free at {models_dir}."
+            f"Insufficient disk space for fasttext lid.176.ftz: needs "
+            f"~{FASTTEXT_ARTIFACT.size_bytes} bytes free at {models_dir}.",
+            kind=ProvisionFailureKind.insufficient_disk,
         )
 
     print("[4b/5] Downloading fasttext language model...")
@@ -220,25 +220,25 @@ def _download_fasttext_model(models_dir: Path) -> None:
     except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
         logger.warning("fasttext model download failed: %s", exc)
         raise InstallError(
-            f"Failed to download fasttext lid.176.ftz model "
-            f"({ProvisionFailureKind.download_failed}). "
-            "Check your network connection and re-run install."
+            "Failed to download fasttext lid.176.ftz model. "
+            "Check your network connection and re-run install.",
+            kind=ProvisionFailureKind.download_failed,
         ) from exc
 
     # Byte-count assert BEFORE the digest assert and BEFORE anything touches disk —
     # a short download and a digest mismatch are distinct failure categories (S37, S11).
     if len(content) != FASTTEXT_ARTIFACT.size_bytes:
         raise InstallError(
-            f"fasttext model download appears corrupt "
-            f"({ProvisionFailureKind.size_mismatch}): expected "
-            f"{FASTTEXT_ARTIFACT.size_bytes} bytes, got {len(content)}; re-run install."
+            f"fasttext model download appears corrupt: expected "
+            f"{FASTTEXT_ARTIFACT.size_bytes} bytes, got {len(content)}; re-run install.",
+            kind=ProvisionFailureKind.size_mismatch,
         )
 
     if hashlib.sha256(content).hexdigest() != FASTTEXT_ARTIFACT.sha256:
         raise InstallError(
-            f"fasttext model digest verification failed "
-            f"({ProvisionFailureKind.digest_mismatch}): the fetched bytes do not "
-            "match the pinned sha256; re-run install."
+            "fasttext model digest verification failed: the fetched bytes do not "
+            "match the pinned sha256; re-run install.",
+            kind=ProvisionFailureKind.digest_mismatch,
         )
 
     # A stale .tmp from a prior crashed run of this same install path is our own

@@ -67,7 +67,7 @@ from .prewarm import (
     _prewarm_models,
 )
 from .provisioning import BYTES_PER_MB
-from .render import _print_next_steps, _render_summary
+from .render import _print_next_steps, _render_provision_failure, _render_summary
 from .service_ops import _create_secrets_env, _legacy_service_path, _remove_legacy_service
 from .wizard import (
     _prompt_gpu_confirm,
@@ -538,19 +538,25 @@ class BaseInstaller(ABC):
                     return int(e.code) if e.code is not None else 1
                 try:
                     self.download_fasttext_model()
-                except InstallError as exc:
+                except (InstallError, OSError) as exc:
                     # Degrade to English-only rather than aborting, so the
                     # server still boots (mirrors _revert_multilingual_flag's
                     # philosophy). The config is not written until Step 6/7/8,
                     # so setting is_multilingual=False here is the rollback:
                     # the config writer emits multilingual=false and the
                     # [multilingual] extra install is skipped. (Dry never raises.)
-                    print(
-                        f"Warning: fasttext model download failed: {exc}\n"
-                        "Continuing in English-only mode. Re-run the wizard "
-                        "to enable multilingual language detection.",
-                        file=sys.stderr,
+                    # OSError is caught alongside InstallError because the mkdir,
+                    # chmod, disk_usage and unlink calls that precede the download
+                    # raise it bare — uncaught, they crash the wizard on a
+                    # read-only models dir instead of degrading (S11).
+                    kind = getattr(exc, "kind", None)
+                    # The sanitized copy deliberately drops the exception text, and
+                    # only two of the raise sites log it themselves — so record it
+                    # here or the byte counts and paths are lost with no diagnostic.
+                    logger.warning(
+                        "fasttext model provisioning failed (%s)", kind, exc_info=exc
                     )
+                    print(_render_provision_failure(kind), file=sys.stderr)
                     is_multilingual = False
 
             # Step 3c: collect optional-feature choices (after all license gates)

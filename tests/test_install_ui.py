@@ -3,7 +3,15 @@ from __future__ import annotations
 
 import pytest
 
-from archon_search.install import _render_profile_table, _render_summary, WizardFeatures, _print_next_steps
+from archon_search.install import (
+    WizardFeatures,
+    _print_next_steps,
+    _render_profile_table,
+    _render_provision_failure,
+    _render_summary,
+)
+from archon_search.install.provisioning import ProvisionFailureKind
+from archon_search.install.render import _PROVISION_REMEDIES
 from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES, InstallProfile, get_profile
 
 
@@ -508,3 +516,61 @@ def test_next_steps_not_printed_in_dry_run(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "Next steps:" not in out, "Next steps must NOT appear in dry-run output"
+
+
+# ---------------------------------------------------------------------------
+# _render_provision_failure tests (FE-4 — S11, S37, S51)
+# ---------------------------------------------------------------------------
+
+# The ProvisionFailureKind members `_download_fasttext_model` can actually raise
+# (licenses.py: insufficient disk, network failure, byte-count mismatch, digest
+# mismatch). The frozen enum's other four members have no raiser on this path.
+# `None` is the fifth reachable outcome: the durable-publish OSError branch,
+# which carries no category.
+_FASTTEXT_FAILURE_OUTCOMES = (
+    ProvisionFailureKind.insufficient_disk,
+    ProvisionFailureKind.download_failed,
+    ProvisionFailureKind.size_mismatch,
+    ProvisionFailureKind.digest_mismatch,
+    None,
+)
+
+
+def test_every_reachable_category_renders_its_own_remedy_token():
+    """No two reachable outcomes render the same string.
+
+    Each also carries at least one word none of the others carries — a digest
+    mismatch and a short download must not read identically to the operator,
+    because the remedies differ (S51).
+    """
+    rendered = {outcome: _render_provision_failure(outcome) for outcome in _FASTTEXT_FAILURE_OUTCOMES}
+
+    assert len(set(rendered.values())) == len(rendered), "two outcomes render the same string"
+
+    for outcome, text in rendered.items():
+        other_words = set().union(*(set(t.split()) for k, t in rendered.items() if k is not outcome))
+        assert set(text.split()) - other_words, f"{outcome} shares every word with another outcome"
+
+
+def test_reachable_outcomes_match_what_the_fasttext_download_actually_raises():
+    """`_FASTTEXT_FAILURE_OUTCOMES` is hand-written; this pins it to the real raisers.
+
+    Without it, a new `kind=` in `_download_fasttext_model` would silently render
+    the unmapped fallback and no test above would notice.
+    """
+    import inspect
+    import re
+
+    from archon_search.install.licenses import _download_fasttext_model
+
+    source = inspect.getsource(_download_fasttext_model)
+    raised = {
+        ProvisionFailureKind(name)
+        for name in re.findall(r"kind=ProvisionFailureKind\.(\w+)", source)
+    }
+
+    assert raised == {o for o in _FASTTEXT_FAILURE_OUTCOMES if o is not None}
+    assert all(outcome in _PROVISION_REMEDIES for outcome in _FASTTEXT_FAILURE_OUTCOMES), (
+        "a reachable outcome fell through to the unmapped fallback instead of "
+        "carrying its own remedy"
+    )
