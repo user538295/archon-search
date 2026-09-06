@@ -55,7 +55,7 @@ _GUARD_FILES = frozenset({
 # task to strike it from this list. This set must shrink to empty by feature close-out.
 # The count is pinned (below): it may only SHRINK — decrement the constant when striking an
 # entry — so a later task cannot dodge the repo-wide guard by appending a new file here.
-_EXPECTED_PENDING_CLEANUP = 19
+_EXPECTED_PENDING_CLEANUP = 18
 _PENDING_CLEANUP = frozenset({
     'Documentation/Architecture/100_system_architecture_overview.md',  # T-14 (Documentation update)
     'Documentation/Architecture/110_component_catalog_and_layer_breakdown.md',  # T-14 (Documentation update)
@@ -75,7 +75,6 @@ _PENDING_CLEANUP = frozenset({
     'Documentation/UserManual/70_code_graph_and_impact.md',  # T-14 (Documentation update)
     'Documentation/docker-test-runner.md',  # T-14 (Documentation update)
     'archon-search.toml.example',  # T-14 (Documentation update)
-    'archon_search/install/render.py',  # FE-3
 })
 
 

@@ -626,7 +626,7 @@ flowchart LR
         - #unit_test — `test_graph_prompt_names_no_engine_and_quotes_the_declared_estimate` — sourced from the size-estimate descriptor, not a verified byte count
     - Notes
         - **Rescoped 2026-08-24 (Provisioning decision, team plan `:111-130`): 6.0h → 4.5h (-1.5h).** The graph model is no longer a provisioned artifact with a real, verified size to quote — it moves to the size-estimate shape (BE-3), the same declared-MB-only fidelity the tree-sitter bundle (and, transitively, the embedder/reranker) already gets. `needs BE-13` is dropped — the graph half's number now comes from BE-3's descriptor, not BE-13's (fasttext-only) provisioner.
-- [ ] **FE-3** — Replace the English-only disclosure in [render.py](../../archon_search/install/render.py) with an actionable pointer naming both `ner_confidence` and `relation_confidence`, shown whenever the graph extra is installed and no longer nested under `multilingual` #frontend-role
+- [x] **FE-3** — Replace the English-only disclosure in [render.py](../../archon_search/install/render.py) with an actionable pointer naming both `ner_confidence` and `relation_confidence`, shown whenever the graph extra is installed and no longer nested under `multilingual` #frontend-role
     - Presentation · 4.0h
     - needs BE-10, BE-15 · completes S57
     - Tests

@@ -264,6 +264,38 @@ def test_render_summary_multilingual_extra_absent_by_default():
     assert "Language detection" not in output  # multilingual bullet absent
 
 
+def _render_graph_summary(multilingual: bool, install_graph_extra: bool = True) -> str:
+    profile = get_profile("minimal", multilingual=multilingual)
+    return _render_summary(
+        "minimal",
+        profile,
+        multilingual=multilingual,
+        providers=[],
+        features=WizardFeatures(install_graph_extra=install_graph_extra),
+    )
+
+
+@pytest.mark.parametrize("multilingual", [True, False])
+def test_pointer_shown_for_graph_extra_regardless_of_multilingual(multilingual):
+    """S57: the tuning pointer is gated on the graph extra, not on multilingual."""
+    output = _render_graph_summary(multilingual)
+    assert "ner_confidence" in output
+
+
+def test_pointer_absent_without_the_graph_extra():
+    """S57: no graph extra installed → no pointer."""
+    output = _render_graph_summary(multilingual=True, install_graph_extra=False)
+    assert "ner_confidence" not in output
+    assert "relation_confidence" not in output
+
+
+def test_pointer_names_both_confidence_knobs():
+    """S57: actionable — both knobs and the config section are named."""
+    output = _render_graph_summary(multilingual=False)
+    assert "[graph].ner_confidence" in output
+    assert "[graph].relation_confidence" in output
+
+
 def test_render_summary_base_content_preserved_with_features():
     """Base profile content (embedder, chunk size) is still present when features are non-None."""
     profile = get_profile("balanced", multilingual=False)
