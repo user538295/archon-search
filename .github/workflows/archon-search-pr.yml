@@ -132,10 +132,12 @@ jobs:
         timeout-minutes: 25
         run: ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m graph_real_artifact --junitxml=graph-real-artifact-results.xml tests/
 
-      - name: Verify graph real-artifact tests ran (not just skipped)
-        # See the benchmark step's identical fix above: tests/skipped live on the
-        # <testsuite> child under junit_family=xunit2, not the <testsuites> root.
-        run: uv run python -c "import xml.etree.ElementTree as ET; t=ET.parse('graph-real-artifact-results.xml').getroot(); t=t.find('testsuite') or t; tests=int(t.attrib.get('tests',0)); skips=int(t.attrib.get('skipped',0)); assert tests-skips>0, f'All {tests} graph real-artifact tests were skipped or none ran — check the artifact cache prefetch step'"
+      - name: Verify the blocking non-vacuity test actually ran
+        # Asserts on THAT test by name, not an aggregate count. The lane's other test is
+        # xfail-marked, and xunit2 records an xfail as <skipped type="pytest.xfail"> while a
+        # non-strict XPASS records as passed — so `tests-skipped>0` can be satisfied entirely
+        # by the soft test while the blocking one never ran. Naming it closes that hole.
+        run: uv run python -c "import xml.etree.ElementTree as ET; c=[t for t in ET.parse('graph-real-artifact-results.xml').getroot().iter('testcase') if t.get('name')=='test_graph_ner_lane_non_vacuity']; assert len(c)==1, f'expected exactly one test_graph_ner_lane_non_vacuity testcase, found {len(c)} — the lane did not run; check the prefetch step'; assert c[0].find('skipped') is None, 'test_graph_ner_lane_non_vacuity was skipped — the real-artifact guard did not execute'"
 
       - name: Enforce coverage fail-under=85
         # The three --cov pytest steps (default suite, eval slice, integration suite)

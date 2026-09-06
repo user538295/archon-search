@@ -210,12 +210,15 @@ def _check_host_safety_or_exit(
         )
 
 
-# Captured at IMPORT time, before `tests/conftest.py`'s function-scoped autouse fixture
-# redirects `ARCHON_SEARCH_DATA_DIR` at a throwaway per-worker directory (conftest.py:198).
-# That redirect is right for the stubbed suite and wrong for this lane: it moves
-# `get_graph_models_dir()` off the populated cache, so `GLiNER.from_pretrained` re-downloads
-# the ~1.2 GB checkpoint on every run — which is also what would make the CI artifact-cache
-# step pointless. `_lane_data_dir` puts the operator's value back for these two tests only.
+# Captured at IMPORT time, before `tests/conftest.py`'s autouse fixture can touch
+# `ARCHON_SEARCH_DATA_DIR`. That fixture's per-worker redirect is right for the stubbed
+# suite and wrong for this lane — being function-scoped it lands AFTER the module-scoped
+# `_lane_data_dir` below, and `GLiNER.from_pretrained` reads `get_graph_models_dir()`
+# lazily on first extract, so the redirect would move the load off the populated cache and
+# re-download the ~1.2 GB checkpoint on every run, making the CI cache step pointless.
+# `_archon_isolated_data_dir` therefore skips tests carrying the `graph_real_artifact`
+# marker; `_lane_data_dir` supplies the operator's value, and the non-vacuity test asserts
+# it actually survived into the test body.
 _LANE_DATA_DIR = os.environ.get("ARCHON_SEARCH_DATA_DIR")
 
 
@@ -307,6 +310,17 @@ async def test_graph_ner_lane_non_vacuity(graph_pipeline) -> None:
     """
     extractor = graph_pipeline._graph_extractor
     assert extractor is not None, "graph.enabled=True must construct a GraphExtractor"
+
+    # The data dir must still be the operator's INSIDE the test body, not only during this
+    # module's fixture setup: `GLiNER.from_pretrained` reads `get_graph_models_dir()` lazily
+    # on first extract (prose_extraction_backend.py:272), so a function-scoped override that
+    # lands after `_lane_data_dir` would silently re-download ~1.2 GB past the CI cache and
+    # still pass every assert below. Checked here, not in the fixture, for that exact reason.
+    assert str(get_graph_models_dir()).startswith(_LANE_DATA_DIR), (
+        f"the lane is reading models from {get_graph_models_dir()}, outside the operator's "
+        f"ARCHON_SEARCH_DATA_DIR={_LANE_DATA_DIR!r} — something re-redirected the data dir "
+        "after `_lane_data_dir` ran, so this run bypasses the artifact cache entirely"
+    )
 
     chunks = _build_prose_chunks(_MIN_CHUNKS)
     baseline_mib = _read_own_rss_mib()

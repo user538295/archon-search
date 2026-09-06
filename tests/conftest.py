@@ -194,7 +194,13 @@ def _archon_isolated_data_dir(
 
     if "archon_unset_data_dir" in request.keywords:
         monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
-    else:
+    elif "graph_real_artifact" not in request.keywords:
+        # The lane owns its own data dir. Being function-scoped, this fixture runs AFTER
+        # the lane's module-scoped `_lane_data_dir`, so redirecting here would win — and
+        # `GLiNER.from_pretrained` reads `get_graph_models_dir()` lazily inside the test
+        # body (prose_extraction_backend.py:272), i.e. after that override. The lane would
+        # then re-download ~1.2 GB past the CI cache on every run, which is exactly what
+        # the cache and prefetch steps exist to prevent.
         monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(_archon_worker_data_dir))
 
 

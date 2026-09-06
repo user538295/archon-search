@@ -75,9 +75,9 @@ Once the tag lands on the origin remote, `archon-search-release.yml` takes over.
 
 ### What the release workflow does
 
-`.github/workflows/archon-search-release.yml` is the only workflow that publishes. It is triggered by `push: tags: "*"` and by `workflow_dispatch:` (the dispatch trigger has no `inputs:` block; the "Resolve tag name" step nonetheless requires a tag context and errors out if none can be resolved). It runs three jobs:
+`.github/workflows/archon-search-release.yml` is the only workflow that publishes. It is triggered by `push: tags: "*"` and by `workflow_dispatch:` (the dispatch trigger has no `inputs:` block; the "Resolve tag name" step nonetheless requires a tag context and errors out if none can be resolved). It runs four jobs:
 
-1. **`test`**: clean install via `uv sync --dev`, default test suite with coverage, eval slice with thresholds, then `coverage report --fail-under=85`. The publish job will not start unless this passes.
+1. **`test`**: clean install via `uv sync --dev`, default test suite with coverage, eval slice with thresholds, integration suite, then the `graph_real_artifact` lane (prefetches the real GLiNER checkpoint and fails on a vacuous extraction — GRAPH-4), then `coverage report --fail-under=85`. The publish job will not start unless this passes. The lane has no `actions/cache` step here on purpose: GitHub scopes caches by ref, so a tag run could never restore the PR gate's cache — every release pays a cold ~1.2 GB fetch.
 2. **`publish`**:
    - Resolves the tag name from `GITHUB_REF` (or `git describe --exact-match` for `workflow_dispatch`).
    - Builds wheel and sdist with `hatch build --clean`.
@@ -103,7 +103,7 @@ flowchart TD
     CountCheck -- no --> Fail3[Abort with recovery hint]
     CountCheck -- yes --> TagPush[git tag + git push origin TAG]
     TagPush --> GHA["GitHub Actions:<br/>archon-search-release.yml"]
-    GHA --> TestJob["Job: test<br/>(default suite + eval slice<br/>+ coverage ≥ 85%)"]
+    GHA --> TestJob["Job: test<br/>(default suite + eval slice<br/>+ integration + graph_real_artifact lane<br/>+ coverage ≥ 85%)"]
     TestJob -- pass --> PublishJob["Job: publish"]
     TestJob -- fail --> Stop[No publish]
     PublishJob --> Build["hatch build --clean"]
@@ -125,8 +125,8 @@ Three workflows live under `.github/workflows/`. Each has a single, narrow purpo
 
 | Workflow file                  | Trigger                              | Purpose                                                                                                                                                                                                |
 | ------------------------------ | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `archon-search-pr.yml`         | `pull_request`                       | PR gate. Installs with `uv sync --dev`, runs the default test suite with coverage append, then the eval slice with thresholds, then the integration suite (`-m integration` on a disk-backed `/var/tmp` basetemp because GHA `/tmp` is tmpfs), then enforces `coverage report --fail-under=85`. All pytest steps use `--cov-append` against a single `.coverage` file; there is no `coverage combine` step. |
-| `archon-search-release.yml`    | `push: tags: "*"`, `workflow_dispatch` | Manual release. Job 1 re-runs the default suite + eval slice + integration suite (same disk-backed-basetemp pattern as the PR gate) and enforces the coverage floor; Job 2 builds the wheel, verifies the wheel version matches the pushed tag, and publishes to PyPI via OIDC; Job 3 (`github-release`) extracts the first section from `CHANGELOG.md` and creates a GitHub Release via the REST API. |
+| `archon-search-pr.yml`         | `pull_request`                       | PR gate. Installs with `uv sync --dev`, runs the default test suite with coverage append, then the eval slice with thresholds, then the integration suite (`-m integration` on a disk-backed `/var/tmp` basetemp because GHA `/tmp` is tmpfs), then the `live_benchmark` and `graph_real_artifact` real-model lanes, then enforces `coverage report --fail-under=85`. All pytest steps use `--cov-append` against a single `.coverage` file; there is no `coverage combine` step. |
+| `archon-search-release.yml`    | `push: tags: "*"`, `workflow_dispatch` | Manual release. Job 1 re-runs the default suite + eval slice + integration suite (same disk-backed-basetemp pattern as the PR gate) plus the `graph_real_artifact` real-model lane (GRAPH-4), and enforces the coverage floor; Job 2 builds the wheel, verifies the wheel version matches the pushed tag, and publishes to PyPI via OIDC; Job 3 (`github-release`) extracts the first section from `CHANGELOG.md` and creates a GitHub Release via the REST API. |
 | `archon-search-eval-live.yml`  | `push: tags: "*"`, `workflow_dispatch` | Live model eval. Runs `pytest -m live_eval tests/eval/live/` with real fastembed + cross-encoder weights. Runs **concurrently** with `archon-search-release.yml` on tag push — it does not block the release. The test step uses `continue-on-error: true` and always uploads the `live-eval-report` artifact. In v1 the `live_thresholds.toml` is a comment-only stub, so this workflow is **report-only** (no gates fire) until the baseline is calibrated and thresholds are added. |
 
 All three workflows pin Python 3.12 and use `astral-sh/setup-uv@v3` to install `uv`. The release workflow additionally installs `hatch` out-of-band via `uv tool install hatch` for the build step — `hatch` is not a declared project dependency (only `hatchling` and `hatch-vcs` appear in `[build-system].requires`). The `github-release` job uses `curl` and `jq` (both available on the GitHub-hosted runner) to call the GitHub REST API; no additional action is needed. `git-cliff >= 2.4` is a **local** prerequisite for the developer running `release.sh` — it is not installed in CI (the CHANGELOG.md commit is pushed to `main` by `release.sh` before the tag push triggers the workflow).

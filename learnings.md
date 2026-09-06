@@ -4,7 +4,7 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 
 ## What Has Failed
 - **[2026-08-20] (×58) pytest OOM/memory RCA**: rules: `tests/CLAUDE.md`. A DIFFERENT timing test failing per run = contention; raise a failure-path-only budget 5s→30s. Native leaks need a guarded repro (RSS cap+alarm); count BOTH embedder copies.
-- **[2026-08-27] (×1) CI regex guards**: scan width = its kwarg list — positional `.where(f"` alone shipped `where=f"…"`. 7 patterns: +`filter=`/`updates_sql=`/`.add_columns(` (RAW SQL, unlike `updates=`) +`rf`/`F`. Guard only files with callsites.
+- **[2026-09-06] (×1) release-path CI**: GH caches are ref-scoped — a tag run reads its own tag or `main` only, and nothing runs on `main` here, so a release cache step never hits, only evicts the PR gate's. Autouse function fixtures beat module env.
 ## What Has Worked
 - **[2026-08-27] (×1) TOCTOU lock fixes**: `asyncio.Lock` is non-reentrant — wrapping a method's body in its own lock deadlocks any caller that already holds it. Add `_locked_by_caller` (matches `ingest_chunks`), don't just wrap.
 - **[2026-08-22] (×122) briefs**: failing repro FIRST; fix at the guard layer. Verify a brief's CANDIDATE FIX, not its symptom. Briefs undercount blast radius (sync.py mirrors pipeline). Re-filed name in `Completed/` → `<name>-reopened.md`.

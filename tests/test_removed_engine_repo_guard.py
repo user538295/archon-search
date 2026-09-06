@@ -12,6 +12,7 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+from archon_search.paths import GRAPH_NER_MODEL_REVISION
 from tests.test_parser_ocr_memory import (
     _WORKFLOW_FILES,
     assert_marker_excluded_on_step_lines,
@@ -195,6 +196,8 @@ def test_both_workflows_exclude_the_new_marker_on_the_same_filter_line() -> None
 
 _GRAPH_LANE_SELECTOR = "-m graph_real_artifact"
 _GRAPH_CACHE_KEY_PREFIX = "key: graph-ner-"
+# The only workflow that can benefit from caching the artifact (see the revision guard).
+_CACHING_WORKFLOW = ".github/workflows/archon-search-pr.yml"
 
 
 def _lane_step_lines(text: str) -> list[str]:
@@ -222,30 +225,29 @@ def test_both_workflows_run_the_graph_real_artifact_lane() -> None:
         )
 
 
-def test_graph_artifact_cache_key_is_identical_across_workflows() -> None:
-    """The lane's `actions/cache` key must match in both workflows.
+def test_graph_artifact_cache_key_pins_the_model_revision() -> None:
+    """The PR gate's `actions/cache` key must pin the checkpoint currently being fetched.
 
-    The step block is duplicated per workflow (GitHub Actions has no cheaper sharing for
-    four steps), so the one field that silently degrades on drift — a mismatched key means
-    a guaranteed cache miss and a ~1.2 GB re-download per release — is pinned here.
+    Only the PR gate caches the artifact — GitHub scopes caches by ref, so a tag run can
+    restore only its own (always fresh) tag ref or the default branch, and nothing in this
+    repo runs on push to main; see the comment where `archon-search-release.yml` explains
+    why it deliberately has no cache step. A key that outlives a revision bump is worse than
+    no key: it restores the previous checkpoint's tree and the lane then certifies a model
+    the shipped code no longer loads.
     """
-    keys = {
-        rel_path: [
-            line.strip()
-            for line in (_REPO_ROOT / rel_path).read_text(encoding="utf-8").splitlines()
-            if line.strip().startswith(_GRAPH_CACHE_KEY_PREFIX)
-        ]
-        for rel_path in _WORKFLOW_FILES
-    }
-    for rel_path, found in keys.items():
-        assert len(found) == 1, (
-            f"{rel_path}: expected exactly one {_GRAPH_CACHE_KEY_PREFIX!r} line for the graph "
-            f"NER artifact cache, found {len(found)} — this guard can no longer compare keys."
-        )
-    distinct = {found[0] for found in keys.values()}
-    assert len(distinct) == 1, (
-        "the graph NER artifact cache key differs between workflows, so one of them takes a "
-        f"guaranteed cache miss and re-downloads ~1.2 GB every run: {keys}"
+    key_lines = [
+        line.strip()
+        for line in (_REPO_ROOT / _CACHING_WORKFLOW).read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith(_GRAPH_CACHE_KEY_PREFIX)
+    ]
+    assert len(key_lines) == 1, (
+        f"{_CACHING_WORKFLOW}: expected exactly one {_GRAPH_CACHE_KEY_PREFIX!r} line for the "
+        f"graph NER artifact cache, found {len(key_lines)}"
+    )
+    assert GRAPH_NER_MODEL_REVISION in key_lines[0], (
+        f"{_CACHING_WORKFLOW}: the graph NER cache key does not pin the current "
+        f"GRAPH_NER_MODEL_REVISION ({GRAPH_NER_MODEL_REVISION}), so a revision bump would "
+        f"silently restore the previous checkpoint: {key_lines[0]}"
     )
 
 

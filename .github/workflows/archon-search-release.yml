@@ -61,20 +61,20 @@ jobs:
       - name: Run integration suite on disk-backed basetemp, coverage append
         run: uv run pytest --basetemp=/var/tmp/archon-search-it -o addopts= --strict-markers --strict-config --cov=archon_search --cov-append -m "integration and not eval and not docling and not graph_real_artifact" tests/
 
-      - name: Restore graph NER artifact cache
-        uses: actions/cache@v6.1.0
-        with:
-          # ProseExtractionBackend passes get_graph_models_dir() as GLiNER's cache_dir,
-          # which resolves under ARCHON_SEARCH_DATA_DIR (default ~/.archon-search) —
-          # archon_search/paths.py get_data_dir()/get_graph_models_dir().
-          path: ~/.archon-search/models/graph
-          # The key pins GRAPH_NER_MODEL_NAME + GRAPH_NER_MODEL_REVISION
-          # (archon_search/paths.py). Update it whenever either changes — and keep it
-          # identical to archon-search-pr.yml's so both workflows share one cache entry.
-          key: graph-ner-knowledgator-gliner-relex-multi-v1.0-e990d9ba6f471b846f7d78bf7e4b4dab11761ada
-          restore-keys: graph-ner-knowledgator-gliner-relex-multi-v1.0-
-
+      # Deliberately NO actions/cache step here, unlike archon-search-pr.yml.
+      # GitHub scopes caches by ref: a run can restore only caches created on its own ref
+      # or on the default branch, PR-run caches live on `refs/pull/N/merge` and "can only
+      # be restored by re-runs of the pull request", and runs "cannot restore caches
+      # created for different tag names". This workflow triggers on tag push, every tag is
+      # a fresh ref, and NO workflow in this repo runs on push to main — so a cache step
+      # here could never hit. It would only WRITE ~1.2 GB per release into the repo's 10 GB
+      # LRU budget and evict the fastembed/HF caches the PR gate actually depends on.
+      # The accepted cost of GRAPH-4 is therefore a cold ~1.2 GB fetch on every release.
       - name: Prefetch graph NER artifact (3 attempts, linear backoff)
+        # Bounded explicitly: the fetch is always cold here, and three sequential retries
+        # of a ~1.2 GB download inheriting the 360-minute job default could stall a publish
+        # for hours on a slow or flapping HuggingFace.
+        timeout-minutes: 30
         run: |
           prefetch_ok=false
           for attempt in 1 2 3; do
@@ -98,28 +98,26 @@ jobs:
         # fails on a vacuous extraction, so it must gate the publish too — a tag can be
         # pushed from a commit that never went through the PR gate — release.sh's pre-flight
         # checks branch, tree cleanliness and origin sync, never CI status.
-        # --no-cov: tests/CLAUDE.md reserves --cov-append across separate invocations for
-        # this workflow's -n0 coverage accumulation, which the fail-under step below reads.
-        # ARCHON_SEARCH_DATA_DIR is explicit because tests/conftest.py's autouse fixture
-        # otherwise redirects it at a throwaway per-worker dir, which would send
-        # GLiNER.from_pretrained past the cache restored above and re-download the model.
-        # $HOME/.archon-search is the same path the cache and prefetch steps above use
-        # (it is get_data_dir()'s own default, which those two steps rely on).
-        # tests/ (not the single lane file): scoping by marker alone — matching the eval
-        # and integration steps above — means a lane test that ends up in another file
-        # still runs and is still verified below.
-        timeout-minutes: 25
+        # ARCHON_SEARCH_DATA_DIR is explicit so the lane reads the same tree the prefetch
+        # step above populated; it is get_data_dir()'s own default, which that step relies on.
+        # tests/ (not the single lane file): scoping by marker alone means a lane test that
+        # ends up in another file still runs and is still verified below.
+        # The budget must exceed the tests' OWN caps so a real overrun is reported by the
+        # test (with its RSS trace) rather than killed opaquely by the step: two tests at
+        # _RUN_BUDGET_S=900s each is 30 minutes of measured loop before model load.
+        timeout-minutes: 45
         run: ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m graph_real_artifact --junitxml=graph-real-artifact-results.xml tests/
 
-      - name: Verify graph real-artifact tests ran (not just skipped)
-        # pytest's default junit_family=xunit2 puts tests/skipped on the <testsuite> CHILD,
-        # not the <testsuites> root find() returns — reading the root's own .attrib always
-        # returns the int(...) defaults (0), so `tests-skips>0` would always be False here.
-        run: uv run python -c "import xml.etree.ElementTree as ET; t=ET.parse('graph-real-artifact-results.xml').getroot(); t=t.find('testsuite') or t; tests=int(t.attrib.get('tests',0)); skips=int(t.attrib.get('skipped',0)); assert tests-skips>0, f'All {tests} graph real-artifact tests were skipped or none ran — check the artifact cache prefetch step'"
+      - name: Verify the blocking non-vacuity test actually ran
+        # Asserts on THAT test by name, not an aggregate count. The lane's other test is
+        # xfail-marked, and xunit2 records an xfail as <skipped type="pytest.xfail"> while a
+        # non-strict XPASS records as passed — so `tests-skipped>0` can be satisfied entirely
+        # by the soft test while the blocking one never ran. Naming it closes that hole.
+        run: uv run python -c "import xml.etree.ElementTree as ET; c=[t for t in ET.parse('graph-real-artifact-results.xml').getroot().iter('testcase') if t.get('name')=='test_graph_ner_lane_non_vacuity']; assert len(c)==1, f'expected exactly one test_graph_ner_lane_non_vacuity testcase, found {len(c)} — the lane did not run; check the prefetch step'; assert c[0].find('skipped') is None, 'test_graph_ner_lane_non_vacuity was skipped — the real-artifact guard did not execute'"
 
       - name: Enforce coverage fail-under=85
         # The three --cov pytest steps above all use --cov-append into a single .coverage
-        # file; the graph real-artifact step between them uses --no-cov and doesn't touch it.
+        # file; the graph real-artifact step uses --no-cov and does not touch it.
         run: uv run coverage report --fail-under=85
 
   # ---------------------------------------------------------------------------
