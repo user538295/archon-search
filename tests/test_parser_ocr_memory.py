@@ -85,30 +85,22 @@ def _tree_rss_mb(rows: list[tuple[int, int, int, str]], root: int) -> float:
     return sum(kb for pid, _ppid, kb, _args in rows if pid in under) / 1024
 
 
-# Helper processes that are NOT recycled parse workers: multiprocessing's singleton
-# resource tracker / forkserver.
-_NON_WORKER_MARKERS = ("resource_tracker", "forkserver")
+def _live_worker_pids(parser: DocumentParser) -> set[int]:
+    """PIDs `ProcessPoolExecutor` currently considers live for *parser*'s docling pool.
 
-
-def _worker_pids(rows: list[tuple[int, int, int, str]], root: int) -> set[int]:
-    """Multiprocessing task workers under *root*.
-
-    A changing PID set is the observable signal that the parse worker was recycled, so
-    everything that is merely long-lived plumbing must be filtered out.
+    Reads `ProcessPoolExecutor._processes` (private, but stable since 3.9's introduction of
+    `max_tasks_per_child`) directly instead of grepping `ps` output for a `multiprocessing`
+    marker in each row's `args`: that marker is CPython-spawn-bootstrap text, and whether `ps`
+    exposes it intact (untruncated, present at all) turned out to be platform-dependent —
+    it silently came back empty on a Linux CI runner even while the worker was verifiably
+    recycled (two separate OCR-model-load log blocks in the same test run). The pool is
+    scoped to this one parser, so there is no need to baseline "preexisting" workers the way
+    the `ps`-based approach did.
     """
-    under = _descendants(rows, root) - {root}
-    return {
-        pid
-        for pid, _ppid, _kb, args in rows
-        if pid in under
-        # This predicate — not _NON_WORKER_MARKERS — is what excludes the `ps` child this
-        # module spawns to take each sample; it is a child of the test process and would
-        # otherwise read as a fresh worker generation, inflating the count that proves the
-        # recycle. Loosen it and the >= _MIN_WORKER_GENERATIONS assertion starts passing on
-        # `ps` noise.
-        and "multiprocessing" in args
-        and not any(marker in args for marker in _NON_WORKER_MARKERS)
-    }
+    pool = parser._pool
+    if pool is None or pool._processes is None:
+        return set()
+    return set(pool._processes.keys())
 
 
 def _make_icon(path: Path, size: int, label: str) -> Path:
@@ -163,13 +155,6 @@ async def test_image_ocr_memory_bounded_over_mixed_size_corpus(tmp_path: Path) -
     )
     warmup, *corpus = _mixed_size_corpus(tmp_path / "icons", _CORPUS_SIZE + 1)
     me = os.getpid()
-    # Baseline the worker PIDs that already exist BEFORE this test's parser is built, and
-    # subtract them from every later sample. `xdist_group("docling")` pins the whole docling
-    # lane to one process and tests/test_parser.py sorts first, so its parsers' pools are
-    # still GC-pending here. Counting those stale PIDs would let the >= 2 generations
-    # assertion pass with ZERO actual recycles, and a stale ~1 GB worker alive at baseline
-    # but gone by the end would understate growth_mb — both weaken this guard silently.
-    preexisting_workers = _worker_pids(_ps_rows(), me)
     parser = DocumentParser()
     seen_workers: set[int] = set()
 
@@ -186,7 +171,7 @@ async def test_image_ocr_memory_bounded_over_mixed_size_corpus(tmp_path: Path) -
 
     rows = _ps_rows()
     baseline_mb = _tree_rss_mb(rows, me)
-    seen_workers |= _worker_pids(rows, me) - preexisting_workers
+    seen_workers |= _live_worker_pids(parser)
     curve: list[tuple[int, float]] = []
     started = time.monotonic()
 
@@ -194,7 +179,7 @@ async def test_image_ocr_memory_bounded_over_mixed_size_corpus(tmp_path: Path) -
         await parser.parse(image)
         rows = _ps_rows()
         current_mb = _tree_rss_mb(rows, me)
-        seen_workers |= _worker_pids(rows, me) - preexisting_workers
+        seen_workers |= _live_worker_pids(parser)
         curve.append((_ICON_SIZES[(i + 1) % len(_ICON_SIZES)], current_mb))
         assert current_mb < _RSS_CEILING_MB, (
             f"aborting at image {i + 1}/{len(corpus)}: process-tree RSS {current_mb:.0f} MB "
