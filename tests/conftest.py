@@ -40,6 +40,12 @@ from _search_stubs import install_stubs  # noqa: E402
 
 install_stubs()
 
+# Captured before the override below, so a genuinely shell-exported key is still
+# distinguishable from this suite-wide default — see test_multi_instance_e2e.py's
+# compose_stack fixture, which checks this instead of the live env var (the live
+# one is always this suite's own TEST_API_KEY by the time that fixture runs).
+ORIGINAL_ARCHON_SEARCH_API_KEY = os.environ.get("ARCHON_SEARCH_API_KEY")
+
 # Fixed test API key injected into all tests so create_app() uses a known key.
 TEST_API_KEY = "0" * 64
 os.environ["ARCHON_SEARCH_API_KEY"] = TEST_API_KEY

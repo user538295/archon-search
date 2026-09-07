@@ -30,7 +30,8 @@ import tomlkit
 from archon_search.config import LLAMA_CPP_BASE_URL_DEFAULT
 from archon_search.install.config_writer import WizardFeatures, _apply_wizard_features_to_toml
 from archon_search.install.wizard import _list_cached_models_via_cli, _prompt_llama_cpp_model
-from tests.integration.conftest import ingest_file_via_path, install_graph_stub, make_real_app
+from tests._graph_engine_stub import install_graph_engine_stub
+from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.live]
 
@@ -148,7 +149,17 @@ def test_live_graph_enrichment_via_llama_cpp(tmp_path: Path, monkeypatch: pytest
     assertions below — not an exception — are what surfaces an unreachable
     llama-server.
     """
-    install_graph_stub(monkeypatch)
+    # install_graph_stub()'s convenience wrapper never wires a `relations=` payload
+    # into the stub (tests/integration/conftest.py:364-385 only passes `entities=`),
+    # so it can never produce a typed (uses/implements/depends_on) edge — the
+    # assertion below needs one. Call the lower-level stub installer directly with
+    # both `entities=` and `relations=` so the typed edge is actually reachable.
+    install_graph_engine_stub(
+        monkeypatch,
+        entities=[("archon-search", "system"), ("LanceDB", "system")],
+        relations=[("archon-search", "LanceDB", "uses")],
+        content_aware=True,
+    )
 
     toml_content = (
         "[graph]\nenabled = true\nprovider = \"llama_cpp\"\nextraction_model = \"local-model\"\n"
@@ -161,7 +172,7 @@ def test_live_graph_enrichment_via_llama_cpp(tmp_path: Path, monkeypatch: pytest
     ):
         doc = tmp_path / "entities.txt"
         doc.write_text(
-            "Alice and Bob both work at Google on the search infrastructure team.\n",
+            "archon-search uses LanceDB to store vector embeddings for hybrid retrieval.\n",
             encoding="utf-8",
         )
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
@@ -194,7 +205,7 @@ def test_live_graph_enrichment_via_llama_cpp(tmp_path: Path, monkeypatch: pytest
 
         communities, edges = asyncio.run(_build_communities_and_read_edges())
 
-        assert communities, "Leiden produced zero communities from a 3-entity graph (Alice, Bob, Google)"
+        assert communities, "Leiden produced zero communities from a 2-entity graph (archon-search, LanceDB)"
         assert any(c.summary_text for c in communities), (
             "no LLM-generated community summary was produced — is a llama-server running and "
             f"reachable at {cfg.graph.llama_cpp_base_url} with model {cfg.graph.extraction_model!r} "

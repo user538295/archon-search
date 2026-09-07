@@ -40,6 +40,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import ORIGINAL_ARCHON_SEARCH_API_KEY
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 SMOKE_OPT_IN_ENV = "ARCHON_SEARCH_RUN_DOCKER_SMOKE"
@@ -197,7 +199,10 @@ def compose_stack() -> object:
     if not _docker_available():
         pytest.skip("docker not available")
 
-    shell_key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    # `os.environ["ARCHON_SEARCH_API_KEY"]` is always set by this time (tests/conftest.py
+    # injects a fixed suite-wide default at import), so a genuinely shell-exported key is
+    # checked via the value conftest.py captured BEFORE that override, not the live env var.
+    shell_key = ORIGINAL_ARCHON_SEARCH_API_KEY
     if shell_key:
         pytest.fail(
             "ARCHON_SEARCH_API_KEY is set in the shell environment. "
@@ -207,9 +212,25 @@ def compose_stack() -> object:
 
     # Start only archon-dev and archon-test — NOT archon-prod (port 8765).
     # archon-prod conflicts with a native prod instance running on port 8765.
-    # ``--wait`` is passed for compatibility but provides no readiness guarantee
-    # here because docker-compose.yml defines no healthcheck.  The explicit
-    # ``_wait_for_ready`` polls below are the authoritative readiness gate.
+    # ``--wait`` DOES block on real readiness: the image's own ``Dockerfile``
+    # defines ``HEALTHCHECK --start-period=600s`` (600s to accommodate a cold
+    # model/dependency fetch), so `docker compose up --wait` waits for that
+    # healthcheck to report healthy, not just for the containers to start. A
+    # cold `archon-dev` (live-build dev container, fresh `uv sync` into an
+    # empty volume) plus a cold `archon-test` competing for the same host CPU
+    # measured 5-10+ minutes end to end — 120s undercounted this by an order
+    # of magnitude. 900s leaves headroom over the image's 600s start-period
+    # plus its 3 retries. The explicit ``_wait_for_ready`` polls below remain
+    # a real (if now redundant) readiness gate.
+    #
+    # `env=` is explicit and drops `ARCHON_SEARCH_API_KEY`: subprocess.run inherits the
+    # CURRENT process's environment by default, and tests/conftest.py sets that var to a
+    # fixed suite-wide default ("0"*64) for the whole pytest process — not just a real
+    # shell export. Without this, that default (not a real leak) is what
+    # `${ARCHON_SEARCH_API_KEY:-}` interpolates into BOTH services in docker-compose.yml,
+    # giving them the same key and making key-isolation vacuous — exactly what the guard
+    # above exists to catch, just from a different source than a genuine shell export.
+    compose_env = {k: v for k, v in os.environ.items() if k != "ARCHON_SEARCH_API_KEY"}
     subprocess.run(
         [
             "docker",
@@ -221,8 +242,9 @@ def compose_stack() -> object:
             "--wait",
         ],
         check=True,
-        timeout=120,
+        timeout=900,
         cwd=REPO_ROOT,
+        env=compose_env,
     )
 
     try:
