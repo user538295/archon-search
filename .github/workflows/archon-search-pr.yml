@@ -12,6 +12,9 @@ on:
 jobs:
   eval-gate:
     runs-on: ubuntu-latest
+    # Step timeouts sum to ~178 min (45 docling + ...); this is comfortably above that,
+    # same reasoning as archon-search-release.yml's test job (mirror it if either drifts).
+    timeout-minutes: 240
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -41,8 +44,11 @@ jobs:
           path: |
             ~/.cache/fastembed
             ~/.cache/huggingface
-          # Update the key suffix (v1→v2 etc.) if model names change.
-          key: model-cache-bge-small-en-v1.5-ms-marco-MiniLM-L-6-v2-v1
+          # Update the key suffix (v1→v2 etc.) if model names change, or if a new step
+          # populates these directories — the docling lane below pulls the layout/TableFormer
+          # and RapidOCR weights into ~/.cache/huggingface, and an exact hit on the old key
+          # never re-saves, so every run would re-download them.
+          key: model-cache-bge-small-en-v1.5-ms-marco-MiniLM-L-6-v2-docling-v2
           restore-keys: model-cache-bge-small-en-v1.5-ms-marco-MiniLM-L-6-v2-
 
       - name: Prefetch models (3 attempts, exponential backoff)
@@ -77,6 +83,27 @@ jobs:
       - name: Run integration suite on disk-backed basetemp, coverage append
         run: uv run pytest --basetemp=/var/tmp/archon-search-it -o addopts= --strict-markers --strict-config --cov=archon_search --cov-append -m "integration and not eval and not docling and not graph_real_artifact" tests/
 
+      - name: Run docling parser lane
+        # The `transformers` constraint in [tool.uv] constraint-dependencies steps down a
+        # BASE dependency: docling pulls torch/transformers, so a resolver change there can
+        # break real PDF/OCR parsing without a single unit test noticing. The unit and
+        # integration steps above both filter the lane out (`not docling`), so this step is
+        # the only place it runs. A tag can be cut from a commit that never met the PR gate
+        # (release.sh checks branch/tree/origin, never CI status), so the release workflow
+        # runs it too — the same reasoning as GRAPH-4 for the real-artifact lane below.
+        timeout-minutes: 45
+        run: uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m docling --junitxml=docling-results.xml tests/
+
+      - name: Verify docling tests ran (not just skipped)
+        # tests/integration/test_http_enrichment_metadata.py's two lane tests pytest.skip()
+        # when a PDF/image ingest fails or times out — deliberate, those paths are slow and
+        # flaky on a shared runner. The other 6 docling-marked tests never skip (they
+        # pytest.fail on error), so an aggregate tests-skips>0 check is always satisfied by
+        # those 6 alone and can never catch the two skip-prone tests going silently green
+        # with no real OCR exercised. Name the two testcases explicitly instead, mirroring
+        # the graph_real_artifact lane's "verify the blocking non-vacuity test" step below.
+        run: uv run python -c "import xml.etree.ElementTree as ET; cases=dict((c.get('name'), c) for c in ET.parse('docling-results.xml').getroot().iter('testcase')); names=['test_pdf_page_number_in_search_response','test_image_file_assigns_page_start_one']; missing=[n for n in names if n not in cases]; assert not missing, f'expected docling testcases not found - {missing} - the lane did not run, check the prefetch step'; skipped=[n for n in names if cases[n].find('skipped') is not None]; assert not skipped, f'docling testcases skipped, no real OCR exercised - {skipped}'"
+
       - name: Run real-model latency benchmark
         timeout-minutes: 3
         run: uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m live_benchmark --junitxml=benchmark-results.xml tests/eval/live_benchmark/
@@ -85,7 +112,7 @@ jobs:
         # pytest's default junit_family=xunit2 puts tests/skipped on the <testsuite> CHILD,
         # not the <testsuites> root find() returns — reading the root's own .attrib always
         # returns the int(...) defaults (0), so `tests-skips>0` was always False here.
-        run: uv run python -c "import xml.etree.ElementTree as ET; t=ET.parse('benchmark-results.xml').getroot(); t=t.find('testsuite') or t; tests=int(t.attrib.get('tests',0)); skips=int(t.attrib.get('skipped',0)); assert tests-skips>0, f'All {tests} benchmark tests were skipped or none ran — check model cache prefetch step'"
+        run: uv run python -c "import xml.etree.ElementTree as ET; t=ET.parse('benchmark-results.xml').getroot(); ts=t.find('testsuite'); t=ts if ts is not None else t; tests=int(t.attrib.get('tests',0)); skips=int(t.attrib.get('skipped',0)); assert tests-skips>0, f'All {tests} benchmark tests were skipped or none ran — check model cache prefetch step'"
 
       - name: Restore graph NER artifact cache
         uses: actions/cache@v6.1.0
@@ -155,7 +182,7 @@ jobs:
 
       - name: Enforce coverage fail-under=85
         # The three --cov pytest steps (default suite, eval slice, integration suite)
-        # all use --cov-append, which writes to a single .coverage file — the
+        # all use --cov-append, which writes to a single .coverage file — the docling,
         # live_benchmark and graph real-artifact steps between them use --no-cov and
         # don't touch it. There is no parallel-mode shard set to merge, so we skip
         # `coverage combine` (it would error with "No data to combine") and report

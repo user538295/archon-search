@@ -94,6 +94,11 @@ model GraphExtractionResult {
   /// capability assert is `relations_not_supported`, the engine still loads and still returns
   /// entities — `extract` calls `inference()` normally and persists whatever entities and
   /// (empty) relations come back, with `degraded` staying `false`.
+  /// AS SHIPPED that carve-out is vacuous, and deliberately so: no capability sentinel is
+  /// written for the graph model at all (the post-placement smoke-load stage was dropped —
+  /// see C6), so `relations_not_supported` survives only as a raiser-less member of the frozen
+  /// `ProvisionFailureKind` enum (`archon_search/install/provisioning.py:36`). Nothing records
+  /// the assert, so nothing can read it. The rule stands unchanged for a future recorder.
   degraded: boolean;
 
   /// Non-null ONLY when the extraction package itself is not importable. The caller aborts

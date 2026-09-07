@@ -46,7 +46,7 @@ Notes: Go/Rust/Bash have no class inheritance, so `inherits` stays empty for the
 
    The wizard installs both bundles automatically. If you enable `[graph]` **without** the code parsers, the server still starts and prose graphing still works, but code graphing is skipped with a one-time startup WARNING (and a per-file warning in the ingest result). It never blocks boot.
 
-2. **`[graph] enabled = true`** in `~/.archon-search/archon-search.toml`. With `spacy` absent this raises a `ConfigError` at startup; the code grammars degrade gracefully as above. See [Configuration](30_configuration.md) and [Graph operations](../OperatorGuide/60_graph_operations.md).
+2. **`[graph] enabled = true`** in `~/.archon-search/archon-search.toml`. With `gliner` absent this raises a `ConfigError` at startup — `[graph].enabled` gates the whole graph subsystem, so the prose extraction library is a hard requirement even for a code-only corpus; the code grammars, by contrast, degrade gracefully as above. See [Configuration](30_configuration.md) and [Graph operations](../OperatorGuide/60_graph_operations.md).
 
 3. **Re-ingest to gain edges.** Existing collections do **not** retroactively gain def/ref edges — there is no backfill pass. Edges appear only for newly ingested or re-ingested files. After upgrading or enabling the graph, re-ingest your code corpus:
 

@@ -109,53 +109,59 @@ See [`65_graph_search.md`](./65_graph_search.md).
 
 Related 422s from the same guard block: `graph_mode requires [graph] enabled=true in server config` (graph disabled), and `graph_mode is not supported with multi-collection fanout; use a single collection` (`graph_mode=ppr` with `collections[]`).
 
-## Symptom: server refuses to start — `graph.enabled=true but spacy is not installed`
+## Symptom: server refuses to start — `graph.enabled=true but gliner is not installed`
 
-When `[graph].enabled = true` but the `spacy` package is missing, `create_app()`'s `_check_graph_deps` raises a `ConfigError` at startup:
+When `[graph].enabled = true` but the `gliner` package is missing, `create_app()`'s `_check_graph_deps` — delegating to `ensure_graph_engine_importable` in `archon_search/graph_extractor.py` — raises a `ConfigError` at startup:
 
 ```
-graph.enabled=true but spacy is not installed; run: pip install archon-search[graph]
+graph.enabled=true but gliner is not installed. Install the graph extras:
+pip install 'archon-search[graph]'
 ```
 
-1. **Install the extra**: `pip install archon-search[graph]`, or
+1. **Install the extra**: `pip install 'archon-search[graph]'`, or
 2. **Disable graphing**: set `[graph].enabled = false`.
 
-Note: the `en_core_web_sm` NER *model*, `leidenalg`/`igraph` (community clustering), and code-parser extras (`archon-search[code]`) are **not** checked at startup — a missing NER model degrades prose extraction (next symptom); a missing Leiden install fails only a `build-communities` job; missing code parsers log a WARNING and surface a per-file warning in `IngestResult.warnings`, but the server still starts and prose graphing still works.
+Note: the prose extraction *checkpoint*, `leidenalg`/`igraph` (community clustering), and code-parser extras (`archon-search[code]`) are **not** checked at startup — a checkpoint that will not load degrades prose extraction (next symptom); a missing Leiden install fails only a `build-communities` job; missing code parsers log a WARNING and surface a per-file warning in `IngestResult.warnings`, but the server still starts and prose graphing still works.
 
-## Symptom: graph has no prose entities — `spaCy model 'en_core_web_sm' is unavailable`
+## Symptom: graph has no prose entities — `graph prose extraction model is unavailable`
 
 The graph fills with `code_symbol` entities from code files but no `person` / `concept` / `system` / `event` entities from prose, and ingests succeed carrying this warning in `IngestResult.warnings`:
 
 ```
-spaCy model 'en_core_web_sm' is unavailable; prose entity extraction is disabled
-for this ingest (code-symbol extraction is unaffected). Run `archon-search wizard`
-to provision the model.
+graph prose extraction model is unavailable; prose entity extraction is disabled
+for this ingest (code-symbol extraction is unaffected).
 ```
 
-The `archon-search[graph]` extra installs the spaCy library; the model is a separate artifact that `archon-search wizard` provisions automatically (air-gapped or scripted installs can place it by hand instead — see below). **This is not an ingest failure** — chunks embed and persist, search works, and only prose entity extraction is skipped. The server logs one matching WARNING per process (not per file), and `GET /status` reports it under `model_validation.provider_warnings`.
+The `archon-search[graph]` extra installs the `gliner` library; its checkpoint (`knowledgator/gliner-relex-multi-v1.0`, pinned by revision in `archon_search/paths.py`) is a separate artifact fetched from Hugging Face into `<data-dir>/models/graph/` — pre-warmed by `archon-search wizard`, or downloaded lazily by the server on first graph ingest. This warning means that fetch or load did not succeed. **It is not an ingest failure** — chunks embed and persist, search works, and only prose extraction is skipped.
 
-1. **Re-run the wizard**: `archon-search wizard` — it fetches the model, places it under `<data-dir>/models/spacy/`, and smoke-loads it.
-2. **Or place it by hand** (air-gapped / scripted installs): see [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model).
-3. **Re-ingest** afterwards. Documents indexed while degraded are not retroactively extracted.
+**The failure latches for the life of the process.** Once a load fails, every subsequent ingest in that server process degrades the same way without retrying, so fixing the cause requires a restart to take effect. `GET /status` does **not** show this: `model_validation.provider_warnings` reports a missing `gliner` package, not a checkpoint that failed to load. The server log and the ingest warnings are the only surfaces.
 
-### The variant: `is present under the data directory but incompatible`
+1. **Check egress.** The usual cause is that the process cannot reach Hugging Face. The server log carries the underlying reason from `ProseExtractionBackend.load()`.
+2. **Pre-warm on a host that can reach it**: `archon-search wizard`, then make `<data-dir>/models/graph/` available to the server — for containers, bind-mount the host `models/` directory (see [`140_running_with_docker.md`](./140_running_with_docker.md#graph-extraction-in-a-container)).
+3. **Restart the server**, because of the latch.
+4. **Re-ingest** afterwards. Documents indexed while degraded are not retroactively extracted.
 
-A different wording means a different remedy. If the warning reads:
+### The variants: extraction failed, and still loading
+
+Two other wordings mean different things and neither is fixed by provisioning. If the warning reads:
 
 ```
-spaCy model 'en_core_web_sm' is present under the data directory but incompatible
-with the installed spaCy version; prose entity extraction is disabled for this
-ingest (code-symbol extraction is unaffected). Re-run `archon-search wizard` to
-provision a compatible model.
+graph prose entity/relation extraction failed; prose entity extraction was
+skipped for this document (code-symbol extraction is unaffected).
 ```
 
-then the model is on disk but was built for a different spaCy minor version — the
-usual cause is upgrading `archon-search` (and with it spaCy) without re-running the
-wizard. `GET /status` names the stale directory. Re-run `archon-search wizard`: it
-pins the model to the installed spaCy and provisions the matching release. The old
-directory is left in place and simply ignored; delete it if you want the space back.
+then the model loaded fine and the extraction call itself failed for that one document. The rest of the ingest is unaffected and the next document is retried normally; check the server log for the cause.
 
-`python -m spacy download en_core_web_sm` is not a fix on a `uv tool install` deployment — that venv has no package installer, so the command exits with "No package installer found". It does work where pip is available (Docker image, dev checkout).
+If it reads:
+
+```
+graph prose extraction model is still loading for another document; prose entity
+extraction is disabled for this ingest (code-symbol extraction is unaffected).
+```
+
+then this document waited on another document's in-flight model load and gave up rather than stalling behind it. This is bounded concurrency working as designed, not a fault: the load continues, and later documents in the same run get the loaded model. It is deliberately never surfaced as a 503. If you see it on every document, the load is failing rather than being slow — treat it as the first symptom above.
+
+All three wordings are sanitized constants in `archon_search/graph_extractor.py` and never carry exception text; the cause is always in the server log, not in the warning.
 
 ## Symptom: HyDE or RAG Fusion not working — "expansion failed" in response
 

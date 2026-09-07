@@ -461,9 +461,13 @@ interface ArtifactProvisioner {
 
   /// Total planned download for a whole install — every provisioned-artifact spec in the
   /// profile plus every size-estimate spec from a selected extra. Every `declaredMb` is
-  /// converted at `* 1024 * 1024` (binary megabytes, matching `prewarm.py:36`'s existing
-  /// factor) before summing with every `sizeBytes`, which is bytes throughout — the two units
-  /// never mix past this point. The sum, `totalBytes`, is NOT itself one of the three
+  /// converted at `* BYTES_PER_MB` before summing with every `sizeBytes`, which is bytes
+  /// throughout — the two units never mix past this point. AS SHIPPED that factor is
+  /// `1_000_000`, DECIMAL megabytes, pinned once in `provisioning.py:42` and shared by the
+  /// summing side (`prewarm.py:36-49`) and the rendering side (`render.py:107`), so
+  /// `declared_mb * BYTES_PER_MB // BYTES_PER_MB` round-trips exactly. An earlier draft of
+  /// this comment said `* 1024 * 1024` (binary MiB); it was wrong, and the two would disagree
+  /// by ~5%. The sum, `totalBytes`, is NOT itself one of the three
   /// consumers (Q12) — it feeds three DERIVED, distinct quantities computed elsewhere: the
   /// disk guard's `requiredFreeBytes = totalBytes * 2` (no `ceil()` — `totalBytes` is already
   /// an integer sum, so rounding a whole number is a no-op), the service-ready timeouts, and

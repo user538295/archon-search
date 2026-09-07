@@ -23,7 +23,9 @@ model CommunitySummaryInput {
 /// The surviving protocol. Raise-on-failure semantics are unchanged: a provider error
 /// propagates to the caller, which treats community summarisation as optional.
 interface LLMEnrichmentClient {
-  summarizeCommunity(input: CommunitySummaryInput): string;
+  /// Returns the summary, or null when the provider comes back entirely empty. Never null
+  /// for a swallowed transport failure — those raise (`graph_enrichment_protocol.py`).
+  summarizeCommunity(input: CommunitySummaryInput): string | null;
 }
 
 /// Explicitly removed by this feature, recorded here so the deletion is reviewable:

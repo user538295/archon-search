@@ -475,6 +475,32 @@ def assert_marker_excluded_on_step_lines(
         )
 
 
+def assert_marker_lane_runs(
+    repo_root: Path, workflow_files: tuple[str, ...], selector: str, why: str
+) -> None:
+    """Assert some `uv run pytest` step in every workflow actually SELECTS `selector`.
+
+    The presence anchor for the exclusion guards: those all assert a lane is EXCLUDED
+    somewhere, and every one of them passes while the lane runs in no workflow at all — the
+    GRAPH-4 shape. Comment-blind (splits at the first `#`, the same approach
+    ``tests/test_removed_engine_repo_guard.py``'s ``_names_on_code_line`` uses) so a
+    commented-out step cannot false-PASS. Shared by the `docling` and `graph_real_artifact`
+    presence guards — one implementation, two callers (the latter imports this one; see
+    that module).
+    """
+    for rel_path in workflow_files:
+        text = (repo_root / rel_path).read_text(encoding="utf-8")
+        matches = [
+            line
+            for line in text.splitlines()
+            if "uv run pytest" in (code := line.split("#", 1)[0]) and selector in code
+        ]
+        assert matches, (
+            f"{rel_path}: no live `uv run pytest` step selects {selector!r}. {why} Every "
+            "workflow that gates a merge or a publish must run it."
+        )
+
+
 def test_pyproject_default_lane_excludes_docling() -> None:
     """pyproject.toml's own addopts `-m` filter must exclude `docling` (default-lane guard)."""
     import tomllib
@@ -496,6 +522,23 @@ def test_ci_workflows_exclude_docling_from_unit_and_integration_steps() -> None:
     `docling` lane and CI running (and hanging on) real OCR.
     """
     assert_marker_excluded_on_step_lines(_REPO_ROOT, _WORKFLOW_FILES, "not docling")
+
+
+def test_both_workflows_run_the_docling_lane() -> None:
+    """The presence anchor for the exclusion guard above.
+
+    Every guard in this file asserts the lane is EXCLUDED somewhere; all of them passed for
+    months while `-m docling` ran in no workflow at all — the same shape as GRAPH-4. The
+    `transformers` constraint in `[tool.uv] constraint-dependencies` steps down a BASE
+    dependency docling pulls, so a resolver change can break real PDF/OCR parsing with the
+    whole default suite still green.
+    """
+    assert_marker_lane_runs(
+        _REPO_ROOT,
+        _WORKFLOW_FILES,
+        "-m docling",
+        "The lane is the only coverage the real docling parser and RapidOCR have.",
+    )
 
 
 def find_marker_tests_missing_xdist_group(repo_root: Path, marker: str) -> list[str]:

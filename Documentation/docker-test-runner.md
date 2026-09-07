@@ -10,7 +10,7 @@ You will learn what they do, how to use them, why they are built the way they ar
 
 - You want to run the tests exactly the way CI runs them (Linux, Python 3.12) — even though you develop on a Mac.
 - You want a **clean-room** test run: no leftover state from your local `.venv`, no "works on my machine" surprises.
-- You are onboarding and don't want to install `uv`, spaCy models, or the ML weights locally just to confirm the tests pass.
+- You are onboarding and don't want to install `uv` or the ML weights locally just to confirm the tests pass.
 
 You do **not** need this for everyday development. Running `uv run pytest` on your host is faster for the tight edit-test loop. The Docker runner is for confidence checks, onboarding, and reproducing CI.
 
@@ -26,7 +26,7 @@ docker compose build archon-test-runner
 docker compose run --rm archon-test-runner
 ```
 
-That second command spins up a Linux container, installs the project (core + `hyde` + `rag-fusion` + `graph` extras and the spaCy model), runs ~7,800 tests in parallel, then runs the smoke tests, and prints the results. When it finishes, the container is thrown away (`--rm`), but the downloaded packages, the installed venv, and the ML models are kept for next time.
+That second command spins up a Linux container, installs the project (core + `hyde` + `rag-fusion` + `graph` extras), runs ~7,800 tests in parallel, then runs the smoke tests, and prints the results. When it finishes, the container is thrown away (`--rm`), but the downloaded packages, the installed venv, and the fastembed model weights are kept for next time.
 
 ---
 
@@ -57,7 +57,8 @@ RUN useradd --uid 1000 --create-home --shell /bin/sh runner && \
     chown runner:runner /cache/uv /cache/fastembed /venv
 USER runner
 WORKDIR /workspace
-ENV HOME=/home/runner \
+ENV PATH="/venv/bin:$PATH" \
+    HOME=/home/runner \
     ARCHON_SEARCH_CONTAINER=1 \
     ARCHON_SEARCH_DATA_DIR=/tmp/archon-test \
     UV_PROJECT_ENVIRONMENT=/venv \
@@ -75,6 +76,7 @@ Line by line, in plain terms:
 | `RUN apt-get install ... git` | Adds `git` to the image. | The project derives its version number from git tags (via `hatch-vcs`), so `git` must be present or the install step fails. The `rm -rf /var/lib/apt/lists/*` afterward deletes the package-manager download cache to keep the image small. |
 | `RUN useradd ... runner` + `USER runner` | Creates a non-root user `runner` (uid 1000) and switches to it. | **This is why the permission tests pass.** The suite has tests that confirm the app *refuses* to read files whose permissions forbid it. As `root` those assertions fail (root can read anything); as a normal user they hold. Running as uid 1000 matches the test expectations. |
 | `WORKDIR /workspace` | Sets the working folder inside the container to `/workspace`. | This is the folder your Mac's source code gets mounted onto (see below). |
+| `PATH="/venv/bin:$PATH"` | Puts the container's own venv first on `PATH`. | Bare `python`/`pytest` inside an interactive shell resolve to the container venv rather than the base image's interpreter. |
 | `ARCHON_SEARCH_CONTAINER=1` | Tells the app it's running inside a container. | This flag makes the app send its logs to standard error so `docker logs` captures them — otherwise container output can vanish. |
 | `ARCHON_SEARCH_DATA_DIR=/tmp/archon-test` | Points the app's runtime data (its database, keys, job state) at a temporary folder. | Keeps test data out of the way and disposable — it lives inside the container's temp space, not your project. |
 | `UV_PROJECT_ENVIRONMENT=/venv` | Tells `uv` to build its virtual environment at `/venv` *inside the container*, not at the default `/workspace/.venv`. | **This is the most important line.** `/venv` is a named volume, so the installed environment survives container restarts. See the next section. |
@@ -105,8 +107,7 @@ Notice what is **not** here: there is no `COPY` of your source code, and no `RUN
       - sh
       - -c
       - >-
-          uv sync --dev --extra hyde --extra rag-fusion --extra graph &&
-          uv run python -m spacy download en_core_web_sm --quiet;
+          uv sync --dev --extra hyde --extra rag-fusion --extra graph;
           uv run pytest;
           uv run pytest tests/smoke/ --no-cov
 
@@ -120,10 +121,10 @@ The four `volumes` lines are the heart of the whole design, so we'll give them t
 
 - **`.:/workspace`** — mount your current project folder (`.`) onto `/workspace` inside the container, live. The container reads *your* code, not a frozen copy.
 - **`archon-uv-cache:/cache/uv`** — a persistent cache of downloaded Python packages, so the second run is much faster than the first.
-- **`archon-docker-venv:/venv`** — a persistent copy of the installed Linux venv, so `uv sync` and the spaCy download only pay their full cost once.
+- **`archon-docker-venv:/venv`** — a persistent copy of the installed Linux venv, so `uv sync` only pays its full cost once.
 - **`~/.cache/fastembed:/cache/fastembed`** — share the ML model weights already on your Mac, so the container doesn't re-download hundreds of megabytes.
 
-The `command` runs, in sequence: install the project with the `hyde`, `rag-fusion`, and `graph` extras, download the spaCy model, run the main test suite, then run the smoke tests. See [Why the graph extra and spaCy model](#why-the-graph-extra-and-spacy-model) for what those extras buy you.
+The `command` runs, in sequence: install the project with the `hyde`, `rag-fusion`, and `graph` extras, run the main test suite, then run the smoke tests. The three steps are chained with `;`, not `&&` — a failing suite does not stop the next one, so you always see both phases' results. See [Why the graph extra](#why-the-graph-extra) for what those extras buy you.
 
 > This service lives in `docker-compose.override.yml` alongside two other services: `archon-dev` (a lean development server, unrelated to testing) and `archon-dev-shell` (a persistent version of this test runner — see below).
 
@@ -181,7 +182,7 @@ The line `UV_PROJECT_ENVIRONMENT=/venv` sidesteps this entirely: the container b
 
 ### Why the package cache and venv are named volumes
 
-The first `uv sync` downloads every dependency wheel *and* builds the venv — that takes a few minutes, and the spaCy model download adds to it. Storing the downloads in `archon-uv-cache` and the built environment in `archon-docker-venv` means Docker keeps both after the container is deleted. The **next** run reuses them, and `uv sync` finishes in a handful of seconds instead of minutes.
+The first `uv sync` downloads every dependency wheel *and* builds the venv — that takes a few minutes (the `graph` extra alone pulls `gliner`, which sits on top of `torch` and `transformers`). Storing the downloads in `archon-uv-cache` and the built environment in `archon-docker-venv` means Docker keeps both after the container is deleted. The **next** run reuses them, and `uv sync` finishes in a handful of seconds instead of minutes.
 
 ### Why the model weights are shared from your Mac
 
@@ -189,14 +190,17 @@ This project uses `fastembed`, which relies on machine-learning model files that
 
 ---
 
-## Why the graph extra and spaCy model
+## Why the graph extra
 
-The install command pulls in three optional extras — `hyde`, `rag-fusion`, and `graph` — and then downloads a spaCy model. The `graph` extra is the one that matters for the smoke suite:
+The install command names three optional extras — `hyde`, `rag-fusion`, and `graph`. The `graph` extra is the one that matters for the smoke suite:
 
-- **`graph`** installs the graph subsystem's dependencies, including `spacy` (named-entity recognition for entity extraction) and `leidenalg` + `python-igraph` (the Leiden clustering algorithm used to build graph communities).
-- **`en_core_web_sm`** is spaCy's small English model — the actual NER weights. Prose entity extraction needs it; without it the graph path degrades (code-symbol entities only, one WARNING, ingest still succeeds), so the graph smoke tests skip rather than fail. `python -m spacy download` is the right way to get it *here* because this container has pip; end-user installs get it from `archon-search wizard` instead, which places it under `<data-dir>/models/spacy/` — the runtime resolves either location and downloads neither.
+- **`graph`** installs the graph subsystem's dependencies: `gliner` (the multilingual GLiNER engine that does prose entity *and* relation extraction) plus `leidenalg` + `python-igraph` (the Leiden clustering algorithm used to build graph communities).
+- **The model weights are not a package.** `gliner` ships no checkpoint. The pinned one (`knowledgator/gliner-relex-multi-v1.0`, ~1.2 GB — `archon_search/install/extras.py:157`) is fetched from HuggingFace at first model load, into `<data-dir>/models/graph/`. There is no download step in the compose command and none is needed here: end-user installs provision it up front via `archon-search wizard`, while the smoke server subprocess fetches it on demand the first time prose extraction runs. Without it the graph path degrades (code-symbol entities only, a sanitized notice on `IngestResult.warnings` plus one WARNING in the server log, ingest still succeeds). It does **not** show up on `GET /status`: the startup probe behind `model_validation.provider_warnings` checks `gliner` package importability, never the checkpoint.
+- **`--extra graph` on the command line is belt-and-braces.** `uv sync --dev` already pulls `graph` and `code` in through the self-referencing `archon-search[...,graph,code]` entry in the `dev` dependency group (`pyproject.toml:77`), so no test skips in this container for a missing optional dependency.
 
-Why bother? Because two of the smoke tests exercise the graph feature end-to-end (entity extraction plus a community rebuild via Leiden). Without `graph` + the spaCy model installed, those two tests **skip**. With them installed, they run and pass — which is why the base smoke suite (pre-DCS) reported `31 passed` rather than `29 passed, 2 skipped`. The DCS feature added `tests/smoke/docker/` with 20 additional Docker-mode CLI tests, bringing the smoke-suite total to approximately 51 tests. `hyde` and `rag-fusion` are installed for completeness of the dev/test dependency surface.
+Why bother? Because two of the smoke tests exercise the graph feature end-to-end (entity extraction plus a community rebuild via Leiden). Their session fixture `importorskip`s `gliner` before it starts the server, so without the extra installed those two tests **skip**. With it installed they run and pass — which is why the base smoke suite (pre-DCS) reported `31 passed` rather than `29 passed, 2 skipped`. The DCS feature added `tests/smoke/docker/` with 20 additional Docker-mode CLI tests, bringing the smoke-suite total to approximately 51 tests. `hyde` and `rag-fusion` are installed for completeness of the dev/test dependency surface.
+
+> **The graph checkpoint is not cached between runs.** The graph smoke fixture points the server subprocess at a fresh temporary data directory per session (`tests/smoke/conftest.py`, `tmp_path_factory.mktemp("smoke_data_graph")`), and `<data-dir>/models/graph/` lives inside it — so unlike the fastembed weights, the GLiNER checkpoint is re-fetched on every smoke run and the container needs network access for those two tests. The heavyweight `graph_real_artifact` lane is a separate opt-in suite, excluded from both phases here; see `tests/CLAUDE.md` for how to run it against a pre-downloaded checkpoint.
 
 ---
 
@@ -210,13 +214,12 @@ The `archon-test-runner` runs the suites once and exits. When you want to *work 
       - -c
       - >-
           if [ ! -f /venv/bin/activate ]; then
-          uv sync --dev --extra hyde --extra rag-fusion --extra graph &&
-          uv run python -m spacy download en_core_web_sm --quiet;
+          uv sync --dev --extra hyde --extra rag-fusion --extra graph;
           fi;
           exec sleep infinity
 ```
 
-The `command` is the whole trick: on start it checks whether `/venv/bin/activate` already exists. If the venv volume is empty (first ever start), it runs the same `uv sync` + spaCy download the test runner uses; if the venv is already populated (because either service set it up on a previous run), it skips straight to `exec sleep infinity`, which keeps the container alive doing nothing until you stop it.
+The `command` is the whole trick: on start it checks whether `/venv/bin/activate` already exists. If the venv volume is empty (first ever start), it runs the same `uv sync` the test runner uses; if the venv is already populated (because either service set it up on a previous run), it skips straight to `exec sleep infinity`, which keeps the container alive doing nothing until you stop it.
 
 ### Workflow
 
@@ -257,7 +260,7 @@ sequenceDiagram
     You->>Compose: docker compose run --rm archon-test-runner
     Compose->>Container: start container from the built image
     Note over Container: mounts source, uv-cache,<br/>venv volume, fastembed weights
-    Container->>UV: uv sync --dev --extra ... graph<br/>+ spacy download en_core_web_sm
+    Container->>UV: uv sync --dev --extra ... graph
     Note over UV: reads pyproject.toml,<br/>builds Linux venv in /venv volume,<br/>reuses cached wheels (seconds after first run)
     UV-->>Container: environment ready
     Container->>Pytest: uv run pytest  (default suite)
@@ -271,12 +274,11 @@ sequenceDiagram
     Note over Compose: named volumes + fastembed cache survive
 ```
 
-The command runs, in order (`&&` and `;` chain them in the shell):
+The command runs, in order (`;` chains them in the shell, so each step runs whether or not the previous one succeeded):
 
 1. `uv sync --dev --extra hyde --extra rag-fusion --extra graph` — install the project and its dev/test/graph dependencies into the container's Linux venv.
-2. `uv run python -m spacy download en_core_web_sm --quiet` — download the spaCy English model the graph subsystem needs.
-3. `uv run pytest` — the main suite: about 7,800 tests across 8 parallel workers, roughly 122 seconds.
-4. `uv run pytest tests/smoke/ --no-cov` — the smoke tests, run separately (see below), roughly 128 seconds.
+2. `uv run pytest` — the main suite: about 7,800 tests across 8 parallel workers, roughly 122 seconds.
+3. `uv run pytest tests/smoke/ --no-cov` — the smoke tests, run separately (see below), roughly 128 seconds.
 
 ---
 
@@ -318,7 +320,7 @@ When you run the full suite in Docker, you should see roughly:
 ~51 passed                                      # smoke suite (31 base + 20 Docker CLI), ~128s
 ```
 
-**Zero failures in both phases.** Because the test runner runs as a non-root user (uid 1000), the permission tests that used to fail under root now pass. And because the `graph` extra + spaCy model are installed, the two graph smoke tests run instead of skipping. The Docker CLI smoke tests (`tests/smoke/docker/`) add ~20 additional tests covering container-mode CLI behavior.
+**Zero failures in both phases.** Because the test runner runs as a non-root user (uid 1000), the permission tests that used to fail under root now pass. And because the `graph` extra is installed, the two graph smoke tests run instead of skipping. The Docker CLI smoke tests (`tests/smoke/docker/`) add ~20 additional tests covering container-mode CLI behavior.
 
 The 41 skips in the default suite are the usual markers excluded by default (`live_benchmark`, `smoke`, `live_eval`, `docling`, and `live` tests that need real infrastructure) — see `CLAUDE.md` for the marker rules. **Any actual failure — in either phase — is a real signal worth investigating.**
 
@@ -404,10 +406,10 @@ Notes:
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| First run is very slow | Downloading all dependencies, the spaCy model, and (if absent) model weights for the first time, plus building the venv. | Normal. Subsequent runs reuse the `archon-uv-cache` and `archon-docker-venv` volumes and the shared `~/.cache/fastembed` folder — expect `uv sync` to drop to a few seconds. |
+| First run is very slow | Downloading all dependencies and (if absent) model weights for the first time, plus building the venv. | Normal. Subsequent runs reuse the `archon-uv-cache` and `archon-docker-venv` volumes and the shared `~/.cache/fastembed` folder — expect `uv sync` to drop to a few seconds. The ~1.2 GB GLiNER checkpoint is re-fetched every smoke run regardless (see [Why the graph extra](#why-the-graph-extra)). |
 | Tests can't find the ML models / try to re-download them | `~/.cache/fastembed` on your Mac is empty. | Run the project once on your host so the weights download, or just let the container download them (slower first run). |
 | `ModuleNotFoundError` on a targeted single-file run | The container's venv hasn't been created yet on a fresh volume. | Run the default command (`docker compose run --rm archon-test-runner`) once, or start the dev shell once, to populate `/venv`, then targeted runs work. |
-| The 2 graph smoke tests skip | `graph` extra or spaCy model missing from the venv (e.g. an old venv volume built before they were added). | Remove the stale venv volume (`docker volume rm archon-docker-venv`) and re-run so `uv sync --extra graph` + the spaCy download repopulate it. |
+| The 2 graph smoke tests skip | `gliner` missing from the venv (e.g. an old venv volume built before the `graph` extra was added). | Remove the stale venv volume (`docker volume rm archon-docker-venv`) and re-run so `uv sync --extra graph` repopulates it. |
 | Any failure in either phase | The suite is expected to be fully green. | Treat as a genuine problem and read the failure names — there are no known-good failures anymore. |
 | Stopped containers accumulating | You forgot `--rm` on a one-shot run, or left `archon-dev-shell` up. | Use `--rm` for one-shot runs; `docker compose stop archon-dev-shell` when done. Clean up leftovers with `docker container prune`. |
 

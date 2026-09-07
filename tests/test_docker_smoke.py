@@ -297,6 +297,21 @@ def test_docker_marker_in_pyproject() -> None:
     )
 
 
+def test_smoke_lane_still_invoked_by_docker_compose() -> None:
+    """``tests/smoke/`` runs in no GitHub Actions workflow — its only runner is
+    ``docker-compose.override.yml``'s ``archon-test-runner`` service (opt-in,
+    ``docker compose run --rm archon-test-runner``). Neither workflow file
+    references docker-compose at all, so this is the sole presence anchor
+    against the invocation being silently deleted — the same GRAPH-4/docling
+    shape, pointed at the correct surface for this lane.
+    """
+    text = (REPO_ROOT / "docker-compose.override.yml").read_text()
+    assert "tests/smoke" in text, (
+        "docker-compose.override.yml no longer invokes tests/smoke/ — that is "
+        "the only place the smoke lane's graph assertions (Q28) ever run"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Docker-gated smoke tests
 # ---------------------------------------------------------------------------

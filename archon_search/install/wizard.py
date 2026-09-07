@@ -475,8 +475,8 @@ def _prompt_graph_provider(
 ) -> tuple[str, str, str, str]:
     """Ask whether to enable LLM-backed graph enrichment and gather its settings.
 
-    Graph enrichment (community summaries, relationship labels) is optional and
-    disabled by default — unlike HyDE/RAG Fusion, ``[graph].provider`` is itself
+    Graph enrichment (community summaries) is optional and disabled by
+    default — unlike HyDE/RAG Fusion, ``[graph].provider`` is itself
     the enable gate (there is no separate ``[graph].enabled`` for enrichment;
     that key gates the graph subsystem — entity extraction, PPR, communities —
     which works fine without enrichment). Offers the four v1 enrichment
@@ -492,9 +492,9 @@ def _prompt_graph_provider(
     """
     print(
         "\nLLM-backed graph enrichment:\n"
-        "  Uses an LLM to write community summaries and label relationship types\n"
-        "  during graph community builds. Optional — the graph subsystem (entity\n"
-        "  extraction, PPR, communities) works without it.\n"
+        "  Uses an LLM to write community summaries during graph community\n"
+        "  builds. Optional — the graph subsystem (entity extraction, PPR,\n"
+        "  communities) works without it.\n"
         "  Default: disabled."
     )
     if not ask_yn("Enable LLM-backed graph enrichment? [y/N]: "):

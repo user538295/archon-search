@@ -29,14 +29,21 @@ model GraphEngineSettings {
   /// Default 0.75 (Q2) — deliberately stricter than the entity knob.
   relationConfidence: float32;
 
-  /// Torch device placement for the graph engine (`cpu` / `cuda` / `mps`), as its OWN setting
-  /// (Q7) rather than a hardcoded CPU pin. This FOLLOWS the split-providers ADR (per-model-role
-  /// provider configuration, probed at install time) instead of departing from it.
+  /// Device selection for the graph engine, as its OWN setting (Q7) rather than a hardcoded
+  /// CPU pin. This FOLLOWS the split-providers ADR (per-model-role provider configuration,
+  /// probed at install time) instead of departing from it.
   ///
-  /// The field name and its `string[]` shape are unchanged from the superseded ONNX reading;
-  /// only the meaning of the strings moved, from ONNX Runtime execution providers to torch
-  /// devices (Spike gate — RESOLVED 2026-08-24). C1's and C4's `activeProviders` — the
-  /// RESOLVED counterpart to this CONFIGURED list — carry the same wording.
+  /// AS SHIPPED: the field name, its `string[]` shape AND its string VOCABULARY are all
+  /// unchanged — the values are this repo's ONNX-Runtime execution-provider names
+  /// (`CPUExecutionProvider`, `CUDAExecutionProvider`, `CoreMLExecutionProvider`), the same
+  /// vocabulary as `[database].providers`, never literal `"cuda"` / `"mps"`. What changed is
+  /// only the CONSUMER: the graph engine loads through torch, not ONNX Runtime, so
+  /// `resolve_torch_device` (`archon_search/torch_device.py:36-48`) MAPS the first entry onto
+  /// a torch device by a `"cuda"` / `"coreml"` substring check, then steps down to `cpu` with
+  /// a WARNING — never an exception — when that device is unavailable at runtime. An earlier
+  /// draft of this contract said the strings themselves became torch device names; they did
+  /// not. C1's and C4's `activeProviders` — the RESOLVED counterpart to this CONFIGURED list
+  /// — carry the same vocabulary.
   ///
   /// Written by the wizard through a GENERALISED `configure_providers()` — real installer
   /// work, not reuse of an existing pattern: today it is hardcoded to the `[database]`
@@ -63,19 +70,26 @@ enum ProviderProbeStage {
   /// smoke-load inside `ArtifactProvisioner.provision()` (C4). That smoke-load no longer
   /// exists for the graph model; the checkpoint is now fetched lazily via
   /// `GLiNER.from_pretrained` (C1), and install time gets only an OPTIONAL, non-fatal
-  /// pre-warm (Scope -> Provisioning, team plan) — too weak on its own to ground a claim of
-  /// "mandatory validation," since a skipped or failed pre-warm must not silently make a
-  /// probed accelerator look untested. Stage 2 is therefore no longer PIGGYBACKED on any other
-  /// step: it is its OWN dedicated, always-attempted reprobe call, mirroring the shape the
-  /// embedder/reranker already use for the identical problem — `validate_providers_shared`
-  /// (`model_validation.py:229-294`), constructing the model directly under the candidate
-  /// provider and running one cheap inference call, invoked a second time after download via
-  /// `installer.py:247-261`'s `_fe1_reprobe` — rather than a step folded inside a provisioner.
-  /// The graph engine's analogous reprobe constructs a `ProvisioningBackendFactory`-built
-  /// backend (C1) under the candidate device and exercises `inference()` once. It stays
-  /// MANDATORY in the sense that matters here: the wizard always performs it before offering
-  /// an accelerator, deterministically, independent of whether the optional pre-warm ran —
-  /// only its home moved, from a step inside `provision()` to a standalone reprobe call.
+  /// pre-warm (Scope -> Provisioning, team plan). A draft of this contract then proposed a
+  /// standalone, always-attempted reprobe built through C1's `ProvisioningBackendFactory`.
+  ///
+  /// AS SHIPPED (BE-14, `archon_search/install/device_probe.py`) stage 2 DOES ride the
+  /// optional pre-warm, and neither that factory nor a dedicated reprobe exists. The shape is:
+  /// `_prewarm_graph_model` (`prewarm.py:178-212`) loads the checkpoint, places it via
+  /// `resolve_torch_device(providers)` and returns the device the model actually landed on,
+  /// or `null` on any failure — pre-warm stays non-fatal. `probe_device_validation(providers,
+  /// prewarmResolvedDevice)` then grades that one value into a three-state
+  /// `DeviceProbeResult`: `resolved(device)`, `failed(kind)`, or the neutral
+  /// `not_validated()` sentinel (`DEVICE_PROBE_NOT_YET_VALIDATED`), with exactly one state
+  /// enforced in `__post_init__`.
+  ///
+  /// The hazard the draft named — a skipped or failed pre-warm silently making an untested
+  /// accelerator look validated — is closed by that third state rather than by a dedicated
+  /// call: a configured non-CPU device with nothing back from pre-warm grades as a FAILURE,
+  /// not as `not_validated`. And `installer.py:962-970` settles `[graph].providers` only when
+  /// `graph_extra_ready and not skip_preload`, so a run with no pre-warm at all leaves the
+  /// field untouched rather than clobbering a hand-set list. Settling is auxiliary: any
+  /// exception there is caught, logged sanitized, and leaves the field unchanged (CPU).
   ///
   /// Q26's original example of a stage-2 failure — two importable ONNX runtimes — no longer
   /// applies to the graph engine: it loads through torch and never creates an
@@ -113,7 +127,7 @@ enum ProviderOffer {
 model RetainedEnrichmentKnobs {
   provider: string | null;
   extractionModel: string | null;
-  extractionTimeoutSeconds: int32;
+  extractionTimeoutSeconds: float32;
   extractionRateLimitRpm: int32;
   extractionTokenBudget: int32;
 }

@@ -1,7 +1,7 @@
 **Purpose**: Document the practical capacity envelope of a single-process `archon-search` deployment and the cost surfaces that bend that envelope.
 **Audience**: SREs and sysadmins sizing or scaling `archon-search` on a single host.
 **Status**: Draft
-**Last reviewed**: 2026-07-29
+**Last reviewed**: 2026-09-07
 **Next review**: 2027-07-29
 
 # Capacity and Performance
@@ -74,13 +74,15 @@ Enabling the graph subsystem adds cost surfaces at several points. This section 
 
 | Surface | When it runs | Cost driver |
 | --- | --- | --- |
-| Entity / def-ref extraction | After each ingest (post-persist, non-blocking) | spaCy NER in a worker thread; AST parse for code files (`tree-sitter`). Proportional to chunk count. |
+| Entity / def-ref extraction | After each ingest (post-persist, non-blocking) | A `gliner` transformer (`knowledgator/gliner-relex-multi-v1.0`) run off the event loop via `asyncio.to_thread`, in sub-batches of 8 chunks; AST parse for code files (`tree-sitter`). Proportional to chunk count. Roughly 100 ms/chunk on CPU (dev-machine measurement, not a CI figure). |
 | Community rebuild (Leiden) | `POST /graph/{collection}/rebuild-communities`, or `MaintenanceLoop` GC | Leiden clustering over the whole collection graph; serialised per collection. O(nodes + edges). |
 | PPR (`graph_mode="ppr"`) | Query time | Personalised PageRank via `networkx.pagerank` in a worker thread; seeded from matched entities. Adds per-query latency on top of retrieval. |
 | PageRank precompute | Debounced background pass (`MaintenanceLoop`) | Runs over code-symbol edges; `gc_rebuild_cpu_priority` (low/normal/high) bounds contention. |
 | Synonym / LLM enrichment | Post-ingest callback (optional; `enrichment_auto`) | Embedding-based synonym detection; never blocks or fails an ingest (logs WARNING on error). |
 
 Extraction and enrichment are fire-and-forget: a graph write failure never fails the ingest. Community rebuild is the heavy operation — schedule it, don't run it inline on large collections.
+
+**Memory: budget for one permanently-resident transformer.** The prose extraction checkpoint is loaded once per server process, on the first prose ingest, and is never evicted — unbounded and uncached, a deliberate deviation from the bounded+LRU pattern the embedder and reranker use. Plan for roughly 3 GB resident on top of the embedder/reranker footprint, and about 1.2 GB of disk under `<data-dir>/models/graph/`. Steady-state growth after warm-up is guarded at 600 MiB over 1,000 chunks (`tests/test_graph_ner_real_artifact_lane.py`); those figures are **provisional** dev-machine measurements, and the guardrail binds the **CPU** configuration only — an accelerator via `[graph].providers` is permitted but unmeasured. #Unverified
 
 ### Watcher
 

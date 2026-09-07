@@ -1,8 +1,8 @@
 **Purpose**: Document the accessibility (a11y) and internationalization (i18n) surface of `archon-search`, a backend-only service.
 **Audience**: Maintainers, integrators building CLIs/UIs on top of the HTTP and MCP APIs.
 **Status**: Stable
-**Last reviewed**: 2026-05-20
-**Next review**: 2026-08-20
+**Last reviewed**: 2026-09-07
+**Next review**: 2026-12-07
 
 # Accessibility and Internationalization
 
@@ -13,7 +13,7 @@
 1. **No GUI, so a11y is CLI-scoped.** Frontend a11y concerns (WCAG, ARIA, screen-reader semantics, keyboard navigation) do not apply at the service boundary. They are the responsibility of any client that wraps these APIs.
 2. **English only by design in v1.** All operator-facing strings — log messages, CLI output, HTTP/MCP error bodies, telemetry `error_kind` identifiers — are English. No translation layer, no locale negotiation, no `Accept-Language` handling.
 3. **CLI output is plain text, machine-parseable as well as human-readable.** No ANSI color, no Unicode box-drawing, no terminal progress bars.
-4. **Avoid color-only signaling.** Errors are distinguished by being written to stderr, not by color or symbols.
+4. **Avoid color-only signaling — a CLI-scoped guarantee today.** Errors are distinguished by being written to stderr, not by color or symbols. This principle is *enforced* only on the CLI; the one browser-rendered surface this service serves (the graph viewer) does not meet it — see "Graph viewer: colour-only relationship signalling" below.
 5. **Structured over decorated.** Status, errors, and progress are exposed as structured data (JSON state file, JSON HTTP bodies) rather than visual cues.
 
 ## Scope
@@ -35,12 +35,32 @@ The consequence for assistive technology: any screen reader or accessibility too
 
 The HTTP and MCP surfaces return structured JSON (see `Architecture/520_api_design_and_contracts.md` and `Architecture/600_api_reference_or_public_interface.md`). Accessibility for end users happens entirely in the calling client; the service has no presentation layer to make accessible. Error responses from the `routes_*.py` modules are JSON objects with English `detail` strings (FastAPI serialises raised `HTTPException` instances). The auth middleware (`server/middleware_auth.py`) is the one exception: it returns bare-body `401` responses with only a `WWW-Authenticate: Bearer` header and no JSON body. These responses are intended for developers and operators, not end users.
 
+## Graph viewer: colour-only relationship signalling
+
+`GET /graph/{collection}/view` serves `archon_search/server/graph_viewer.html`, a vis-network page — the one browser-rendered surface in the tree, and the reason principle 1's "no GUI" is a near-truth rather than a fact.
+
+The viewer distinguishes the nine `relationship_type` values **by colour** (`RELATIONSHIP_COLORS`, with `DEFAULT_EDGE_COLOR` for `related_to` and for a missing type). The only non-colour cues are an arrowhead on directional edges — which separates directional from undirected (`related_to`, `synonym_of`), *not* one type from another — and the per-edge hover tooltip carrying the raw `relationship_type` string, which is the honest text fallback and the only cue that fully disambiguates.
+
+**A mandatory per-type dash pattern was considered and rejected.** The multilingual-graph-extraction change that introduced type colouring specified the dash as an *optional* secondary cue, and the shipped viewer took the option: colour plus arrowhead, no dash. Making the dash mandatory would satisfy principle 4 for this surface, but it is a viewer-wide accessibility decision — it changes how every edge renders, including the def/ref code-graph edges that predate that change — so it does not belong as a side effect of an edge-colouring change owned by a different feature. Deferred deliberately, recorded here rather than dropped.
+
+Consequences for a reader with a colour-vision deficiency, stated plainly: all nine types are distinguishable only by hovering each edge individually — the arrowhead splits directional from undirected but never identifies which type within either group. There is no legend and no relationship-type filter (both were explicitly out of scope). The remedy, when it is taken up, is a per-type dash pattern plus a legend — not a colour-palette swap, which would move the problem rather than remove it.
+
 ## Internationalization
 
 - Logs, CLI messages, and HTTP/MCP error bodies are English. There is no message catalog, no gettext, no locale switch.
 - Telemetry `error_kind` is a closed set of English identifiers defined in `archon_search/telemetry/entry.py`: `empty_query`, `slot_out_of_range`, `timeout`, `internal_error`, `validation_error`, `other`. These are stable API identifiers, not user-facing copy, and must not be translated.
 - Timestamps are ISO 8601 in UTC (see `progress.py` and telemetry entries). This is locale-neutral by construction.
 - For the broader error model and `error_kind` semantics, see `Architecture/140_error_handling_strategy.md`.
+
+### Corpus language vs interface language
+
+These are two different things and only one of them is English. Conflating them is the mistake this section exists to prevent, and it is the section the two graph guides — [`OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md) and [`UserManual/65_graph_search.md`](../UserManual/65_graph_search.md) — cross-reference for the distinction.
+
+- **The interface is English by design.** Everything above this heading — logs, CLI copy, HTTP/MCP error bodies, telemetry `error_kind` identifiers — is English, with no message catalog and no locale negotiation. That is a deliberate v1 scope decision, not a gap awaiting work.
+- **The corpus is unrestricted.** Nothing in the ingest path rejects, downgrades or warns about a non-English document. Language detection (fasttext `lid.176.ftz`, enabled by `[database].multilingual = true`) *tags* a document's language; it never gates it. Prose graph extraction runs through a multilingual checkpoint — `paths.GRAPH_NER_MODEL_NAME` = `knowledgator/gliner-relex-multi-v1.0` — so a Hungarian or French document produces entity nodes, mentions and typed relations exactly as an English one does. There is no English-only restriction anywhere in the graph path and, correspondingly, no English-only disclosure on any surface.
+- **Quality varies by language, and that is a quality gap, not a supported/unsupported line.** Span quality, entity recall and relation precision are all a property of the checkpoint's training distribution and differ per language. A language that extracts measurably worse than English ships with a *recorded* gap rather than a blocked feature: the engine still works, the benefit is narrower. Per-language findings are recorded in the review notes at the end of `tests/test_graph_ner_real_artifact_lane.py`, not on the wire.
+- **There is no runtime channel for that gap, deliberately.** `provider_notes` — the field that once carried permanent, non-actionable disclosures on `GET /status` — was removed and has no successor (ADR 12). `provider_warnings`, the only remaining channel, is the sole input to `checks.models` on `GET /ready`, so anything permanent and unactionable placed there would pin that check to `warn` for the life of the deployment. A per-language quality gap is exactly that shape, so it lives in documentation and in test records instead. Restoring a disclosure channel is a deliberate decision for a later reader to make, not an oversight.
+- **The choice of embedding model is a separate axis.** Corpus language being unrestricted for *extraction* says nothing about retrieval quality: that follows the per-collection embedding model, which is configurable and may or may not be multilingual. See `Architecture/130_data_architecture_and_persistence.md`.
 
 ## Future work
 

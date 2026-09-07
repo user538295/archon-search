@@ -155,23 +155,49 @@ model ExtractedRelation {
 /// relying on that would make correctness depend on an accident nobody asserted, and any
 /// consumer counting raw relation objects instead of persisted edges would silently inflate by
 /// gliner's variable duplication factor.
-/// `relationsSupported` is the structural answer to the silent-degradation hazard: a
+/// `relationsSupported` was the structural answer to the silent-degradation hazard: a
 /// checkpoint without relation-extraction heads accepts the relation labels and simply
 /// omits relations, which is indistinguishable from "found none" without this flag.
+///
+/// AS SHIPPED (`archon_search/prose_extraction_backend.py:130-168`) this seam differs from
+/// the logical model below in two ways, both deliberate:
+///   - `relationsSupported` DOES NOT EXIST. It was only ever consumed by the provisioner's
+///     capability assert, which was dropped with `ArtifactProvisioner` (C4/C6). With nothing
+///     recording the result, the flag had no reader, so it was not built. The hazard it
+///     named is therefore uncovered — recorded as such, not silently dropped.
+///   - Chunk attribution is STRUCTURAL, not an index field. `BatchExtraction` carries
+///     `chunks: ChunkExtraction[]`, aligned index-for-index with the input `texts`, and each
+///     `ChunkExtraction` holds that chunk's own `entities` / `relations`. The `textIndex`
+///     field on the two DTOs below is how this contract expresses the same attribution
+///     logically; the shipped code expresses it by position instead. Likewise shipped
+///     `ExtractedRelation` carries `head` / `tail` as the span TEXT, not as nested entity
+///     objects. This file is logical-only by its own header, so those are shape choices, not
+///     contradictions — the flag's absence is the real one.
 model BatchExtraction {
   entities: ExtractedEntity[];
   relations: ExtractedRelation[];
-  relationsSupported: boolean;
 
   /// True when at least one input text exceeded the model window and was truncated.
   /// The caller logs this at most once per process.
   truncated: boolean;
 }
 
-/// What the engine reports about itself once loaded — read by the provisioner's smoke-load
-/// and capability assert (C4), and by the memory/concurrency guards that read `loadCount`
-/// below (S26, S48). The background probe (Q9) never holds one of these: it reads
-/// `capability_status.json` instead.
+/// What the engine reports about itself once loaded.
+///
+/// AS SHIPPED, only `loadCount` survives as real surface, and as a property rather than a
+/// return value: `ProseExtractionBackend.load()` returns nothing, and the memory/concurrency
+/// guards read `backend.load_count` / `backend.is_loaded` directly
+/// (`prose_extraction_backend.py:229-239`, cited by name from the code). There is no
+/// `EngineCapability` object. Its other three fields died with their only reader — the
+/// provisioner's smoke-load and capability assert, dropped with `ArtifactProvisioner` for
+/// this artifact (C4/C6): `relationsSupported` (see `BatchExtraction`, above),
+/// `artifactName` / `artifactRevision` (the pinned identity now lives in exactly one place,
+/// `paths.GRAPH_NER_MODEL_NAME` / `GRAPH_NER_MODEL_REVISION`, so re-reporting it off a loaded
+/// model would be a second source of truth), and `activeProviders`. The device the model
+/// actually landed on IS still observed, but at install time only, by `_prewarm_graph_model`
+/// reading `model.device.type` and handing it to stage 2 of the device probe (C5) — never
+/// off a runtime instance. This model is retained as the logical statement of what a load
+/// would report if a reader for it were ever reintroduced.
 model EngineCapability {
   relationsSupported: boolean;
 
@@ -233,9 +259,17 @@ interface ProseExtractionBackend {
   /// guardrail by passing an oversized batch straight through to one forward pass.
   ///
   /// Two decoding parameters are likewise deliberately NOT arguments here and NOT config
-  /// knobs: flat single-label spans (pinned), and the relation adjacency threshold, which is
-  /// a pinned constant at the model card's midpoint (Q29) because its effect is indirect and
-  /// unmeasurable without span-level scoring the eval harness does not have.
+  /// knobs: flat single-label spans (pinned), and the relation adjacency threshold. On the
+  /// latter this contract's earlier "pinned constant at the model card's midpoint (Q29)"
+  /// reading was SUPERSEDED by the K2g spike and by C5: `adjacency_threshold` is inert on the
+  /// pinned checkpoint, so nothing pins it — it is simply never passed
+  /// (`prose_extraction_backend.py:417`).
+  ///
+  /// AS SHIPPED the two label lists are not parameters either: `inference(texts,
+  /// ner_confidence, relation_confidence)` reads the entity and relation prompt sets from
+  /// module-level constants, so a caller cannot vary node identity per call. The logical
+  /// parameters below record what the call is conditioned on, not the Python signature —
+  /// this file is logical-only by its own header.
   inference(
     texts: string[],
     entityLabels: LabelPrompt[],
@@ -258,6 +292,16 @@ interface ProseExtractionBackend {
 /// `model_validation.py`-resident check mirroring the shape of the embedder/reranker's own
 /// post-download reprobe (`installer.py:247-261`, `_fe1_reprobe`) rather than riding a
 /// smoke-load `ArtifactProvisioner` no longer performs.
+///
+/// AS SHIPPED THIS FACTORY DOES NOT EXIST — no symbol named `ProvisioningBackendFactory` or
+/// `for_providers` is in the tree. The construction need it was invented for evaporated with
+/// its second caller: stage 2 of the device probe does NOT build a backend under a candidate
+/// device. It rides the optional pre-warm instead, which loads the checkpoint through
+/// `GLiNER.from_pretrained` directly and reports `model.device.type` (`prewarm.py:178-212`,
+/// graded by `device_probe.probe_device_validation` — see C5). The shared instance is never
+/// disturbed because pre-warm never touches it: it runs in the wizard process, not as a
+/// second instance inside the server. Retained here as the logical record of a construction
+/// path that was designed and then not needed.
 interface ProvisioningBackendFactory {
   forProviders(providers: string[]): ProseExtractionBackend;
 }

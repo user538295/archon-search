@@ -13,17 +13,19 @@ This guide is task-oriented. For the operator side — community rebuild interna
 
 Graph support ships as an optional extra and is **off by default**.
 
-1. Install the extra (pulls in `spacy`, `networkx`, `leidenalg`, `igraph`):
+1. Install the extra (pulls in `gliner` — and with it torch and transformers — plus `networkx`, `leidenalg`, `igraph`):
 
    ```bash
    pip install 'archon-search[graph]'
    ```
 
-2. Provision the `en_core_web_sm` NER model — the extra installs the spaCy library, not its weights:
+2. Optionally pre-warm the prose extraction checkpoint — the extra installs the `gliner` library, not its weights:
 
    ```bash
    archon-search wizard
    ```
+
+   This is a convenience, not a prerequisite: the server fetches the pinned checkpoint from Hugging Face on first graph ingest if it is not already cached. Pre-warming just moves the ~1218 MB download out of your first ingest.
 
 3. Turn it on in `~/.archon-search/archon-search.toml`:
 
@@ -34,25 +36,40 @@ Graph support ships as an optional extra and is **off by default**.
 
 4. Restart the server.
 
-**The spaCy library is a hard startup requirement; its model is not.** With `[graph] enabled = true` but `spacy` not installed, the server refuses to boot with a `ConfigError` (`_check_graph_deps` in `archon_search/server/app.py`). A missing `en_core_web_sm` model is a softer failure: the server boots, ingest keeps working, and only prose entity extraction is skipped — see [What happens at ingest](#what-happens-at-ingest) and the two remedies in [../OperatorGuide/60_graph_operations.md](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model). Leiden clustering deps (`leidenalg`/`igraph`) are checked lazily — a missing install surfaces only when a community rebuild runs, not at boot. All the `[graph]` knobs live in the `[graph]` config section; see [30_configuration.md](30_configuration.md).
+**The `gliner` library is a hard startup requirement; its checkpoint is not.** With `[graph] enabled = true` but `gliner` not installed, the server refuses to boot with a `ConfigError` (`_check_graph_deps` in `archon_search/server/app.py`, delegating to `ensure_graph_engine_importable` in `archon_search/graph_extractor.py`). A checkpoint that cannot be fetched or loaded is a softer failure: the server boots, ingest keeps working, and only prose extraction is skipped — see [What happens at ingest](#what-happens-at-ingest) and [../OperatorGuide/60_graph_operations.md](../OperatorGuide/60_graph_operations.md). Leiden clustering deps (`leidenalg`/`igraph`) are checked lazily — a missing install surfaces only when a community rebuild runs, not at boot. All the `[graph]` knobs live in the `[graph]` config section; see [30_configuration.md](30_configuration.md).
 
 ### What happens at ingest
 
-Once the graph is enabled, every ingest runs an extra step: spaCy NER pulls entities (typed `person`, `concept`, `system`, `event`, and — for code files — `code_symbol`) out of each chunk, and the resulting nodes and co-occurrence edges are written to the collection's graph tables after the chunks themselves are persisted. **A missing NER model degrades, it does not fail the ingest**: chunks still embed and persist, code-symbol entities are unaffected, prose NER is skipped, and a WARNING lands in `IngestResult.warnings` (see below). A graph-write failure (after persist) is likewise never fatal — it logs a WARNING and lets the already-persisted chunks stand. The one remaining hard failure is `[graph].enabled = true` with the spaCy *library* itself missing (not just the model) — that is a startup `ConfigError` on the supported server and wizard entry points, so it should never be reached at ingest time; if it is, it still aborts the ingest before persist. Existing collections do **not** retroactively gain a graph — re-ingest is the only way to backfill entities into a collection that was indexed before you enabled the graph.
+Once the graph is enabled, every ingest runs an extra step. Chunks are split two ways. Chunks carrying a code-symbol type go down the AST path and yield `code_symbol` entities; they never reach the prose engine. Every other chunk goes to the GLiNER checkpoint, prompted with the graph's own labels — `person`, `concept`, `system`, `event` — so each entity's type comes straight from the engine, with no intermediate vocabulary in between. The same forward pass also returns **directed relations**, which become typed edges (`uses`, `implements`, `depends_on`) alongside the undirected `related_to` co-occurrence edges the extractor builds for every pair sharing a chunk. Typed edges merge additively: a distinct relationship type over the same node pair gets its own stable edge id, so nothing is overwritten. All of this is local — typed edges are produced with no provider configured and no network access. Nodes and edges are written to the collection's graph tables after the chunks themselves are persisted.
 
-**Without the `en_core_web_sm` model**, ingest degrades rather than failing: chunks embed and persist normally, `code_symbol` entities are still extracted from code files, prose NER is skipped for every document, and each affected response carries a warning in `IngestResult.warnings`:
+Chunks are sent to the engine in batches, not one call per chunk (`GRAPH_NER_SUB_BATCH_SIZE = 8` in `archon_search/prose_extraction_backend.py`), and a chunk longer than `GRAPH_NER_TOKEN_WINDOW_WORDS` (2048 words) is truncated to a prefix before extraction, logged once per process.
+
+**Prose extraction degrades, it does not fail the ingest**: chunks still embed and persist, code-symbol entities are unaffected, and a warning lands in `IngestResult.warnings` (see below). A graph-write failure (after persist) is likewise never fatal — it logs a WARNING and lets the already-persisted chunks stand. The one remaining hard failure is `[graph].enabled = true` with the `gliner` *library* itself missing (not the checkpoint) — that is a startup `ConfigError` on the supported server and wizard entry points, so it should never be reached at ingest time; if it is, it still aborts the ingest before persist. Existing collections do **not** retroactively gain a graph — re-ingest is the only way to backfill entities into a collection that was indexed before you enabled the graph.
+
+**Without a loadable checkpoint**, ingest degrades rather than failing: chunks embed and persist normally, `code_symbol` entities are still extracted from code files, prose extraction is skipped, and each affected response carries a warning in `IngestResult.warnings`:
 
 ```
-spaCy model 'en_core_web_sm' is unavailable; prose entity extraction is disabled
-for this ingest (code-symbol extraction is unaffected). Run `archon-search wizard`
-to provision the model.
+graph prose extraction model is unavailable; prose entity extraction is disabled
+for this ingest (code-symbol extraction is unaffected).
 ```
 
-A second wording — `is present under the data directory but incompatible with the installed spaCy version` — means the model is on disk but was built for a different spaCy minor, usually after upgrading `archon-search` without re-running the wizard. Same command fixes it (`archon-search wizard` re-pins the model to the installed spaCy); the wording differs so you can tell "never provisioned" from "provisioned, now stale".
+A second wording means the model loaded but the extraction call itself failed for that document:
 
-The server logs the matching WARNING once per process, not once per file, and `GET /status` reports the miss under `model_validation.provider_warnings`.
+```
+graph prose entity/relation extraction failed; prose entity extraction was
+skipped for this document (code-symbol extraction is unaffected).
+```
 
-**Prose entities are English only.** `en_core_web_sm` is an English model. With `multilingual = true`, non-English documents still chunk, embed, and search normally, but contribute only `code_symbol` entities to the graph. `GET /status` states this under `model_validation.provider_notes` — a separate field from `provider_warnings` precisely because it is permanent and needs no action, so it does not raise `checks.models` on `GET /ready`.
+A third, narrower one appears only under concurrency — this document waited too long on another document's in-flight model load and gave up rather than stalling the ingest. It is never a 503:
+
+```
+graph prose extraction model is still loading for another document; prose entity
+extraction is disabled for this ingest (code-symbol extraction is unaffected).
+```
+
+All three are sanitized constants in `archon_search/graph_extractor.py`; none of them carries exception text. Note that a *failed load* latches for the life of the process, and `GET /status` does not report it — `model_validation.provider_warnings` covers the missing `gliner` package, not a checkpoint that failed to load. The ingest warnings and the server log are where you see that.
+
+**Corpus language is not a constraint.** The pinned checkpoint is multilingual, so non-English prose produces entities and typed relations like any other. Quality still varies by language, and a specific language may extract less well than English — that is a quality gap, not a supported/unsupported line. Only the *interface* — logs, CLI copy, error bodies — is English by design; see [../Architecture/220_accessibility_and_internationalization.md](../Architecture/220_accessibility_and_internationalization.md#internationalization) for the corpus-language vs interface-language distinction.
 
 ## The four `graph_mode` values
 
@@ -82,7 +99,7 @@ curl -s -X POST http://127.0.0.1:8765/search \
 
 The response carries `graph_expansion_applied: true` when expansion fired. Nothing needs to be pre-built beyond the graph itself.
 
-**Precondition — the trigger is lexical, not semantic.** Expansion fires only when an N-gram (1–3 words) of your query matches an extracted **entity name** verbatim (case-insensitive), after which that entity's first-degree neighbours are appended to the query. Entity names come from spaCy proper-noun NER, so the match is against *names in the graph*, **not by semantic relevance**. A query with the same meaning but no matching entity-name N-gram returns `graph_expansion_applied: false` with plain hybrid results and no error or warning — so `false` means "your phrasing missed an entity name", not "the feature is broken" or "the graph is empty". Inspect the available names with `GET /graph/{collection}` (the `nodes[].entity_name` values) and phrase queries to overlap them.
+**Precondition — the trigger is lexical, not semantic.** Expansion fires only when an N-gram (1–3 words) of your query matches an extracted **entity name** verbatim (case-insensitive), after which that entity's first-degree neighbours are appended to the query. Entity names are the spans the extraction engine returned, so the match is against *names in the graph*, **not by semantic relevance**. A query with the same meaning but no matching entity-name N-gram returns `graph_expansion_applied: false` with plain hybrid results and no error or warning — so `false` means "your phrasing missed an entity name", not "the feature is broken" or "the graph is empty". Inspect the available names with `GET /graph/{collection}` (the `nodes[].entity_name` values) and phrase queries to overlap them.
 
 ### `local` and `global` — need communities first
 
@@ -140,7 +157,7 @@ Once linked, **every** graph mode traverses synonym edges transparently — sear
 
 ## Graph viewer
 
-`GET /graph/{collection}/view` serves a self-contained, interactive HTML graph — force-directed layout, node search, and click-to-inspect side panels — with no install and no external tools. Nodes are **colored by `entity_type`** and **sized by salience**; edge thickness is proportional to co-occurrence weight, with the relationship type shown on hover. A banner appears if the graph was truncated to the server's inspection caps.
+`GET /graph/{collection}/view` serves a self-contained, interactive HTML graph — force-directed layout, node search, and click-to-inspect side panels — with no install and no external tools. Nodes are **colored by `entity_type`** and **sized by salience**; edge thickness is proportional to co-occurrence weight. Edges are additionally **colored by relationship type** — `uses`, `implements`, `depends_on`, `synonym_of`, `calls`, `imports`, `defines`, `inherits` each get their own color, and anything else (including `related_to` co-occurrence) falls back to grey — and **directional types draw an arrowhead** from head to tail; `related_to` and `synonym_of` are symmetric and draw none. The relationship type is still shown on hover as well; the color and arrowhead augment that tooltip rather than replacing it. There is no legend and no relationship-type filter. A banner appears if the graph was truncated to the server's inspection caps.
 
 Because browsers cannot attach an `Authorization: Bearer` header when you just open a URL, the viewer accepts the key as a `?token=` query parameter (`archon_search/server/routes_graph.py:get_graph_view`). Open this in a browser:
 

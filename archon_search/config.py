@@ -138,8 +138,8 @@ class GraphConfig:
     extraction_model: str | None = None
     # BE-4 enrichment provider fields
     provider: str | None = None
-    """Enrichment provider for community summarisation / relationship labelling.
-    Defaults to `None` (enrichment disabled) — unlike [hyde]/[rag_fusion].provider,
+    """Enrichment provider for community summarisation (BE-17/ADR 12 removed the
+    relationship-labelling half). Defaults to `None` (disabled) — unlike [hyde]/[rag_fusion].provider,
     which default to "anthropic", graph enrichment has no separate `enabled` gate:
     this field IS the gate, so `None` is required to preserve the air-gap guarantee."""
     llama_cpp_base_url: str = LLAMA_CPP_BASE_URL_DEFAULT

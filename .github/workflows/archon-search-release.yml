@@ -25,6 +25,11 @@ jobs:
   # ---------------------------------------------------------------------------
   test:
     runs-on: ubuntu-latest
+    # The step timeouts alone sum to 205 min (45 docling + 30 prefetch + 130 graph lane) and
+    # the untimed suite/eval/integration steps sit on top. GitHub's 360-min default would let
+    # a wedged step hold the publish for six hours; 270 leaves ~65 min of headroom over the
+    # capped steps and still fails fast enough to be actionable.
+    timeout-minutes: 270
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -60,6 +65,27 @@ jobs:
 
       - name: Run integration suite on disk-backed basetemp, coverage append
         run: uv run pytest --basetemp=/var/tmp/archon-search-it -o addopts= --strict-markers --strict-config --cov=archon_search --cov-append -m "integration and not eval and not docling and not graph_real_artifact" tests/
+
+      - name: Run docling parser lane
+        # The `transformers` constraint in [tool.uv] constraint-dependencies steps down a
+        # BASE dependency: docling pulls torch/transformers, so a resolver change there can
+        # break real PDF/OCR parsing without a single unit test noticing. The unit and
+        # integration steps above both filter the lane out (`not docling`), so this step is
+        # the only place it runs. A tag can be cut from a commit that never met the PR gate
+        # (release.sh checks branch/tree/origin, never CI status), so the release workflow
+        # runs it too — the same reasoning as GRAPH-4 for the real-artifact lane below.
+        timeout-minutes: 45
+        run: uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m docling --junitxml=docling-results.xml tests/
+
+      - name: Verify docling tests ran (not just skipped)
+        # tests/integration/test_http_enrichment_metadata.py's two lane tests pytest.skip()
+        # when a PDF/image ingest fails or times out — deliberate, those paths are slow and
+        # flaky on a shared runner. The other 6 docling-marked tests never skip (they
+        # pytest.fail on error), so an aggregate tests-skips>0 check is always satisfied by
+        # those 6 alone and can never catch the two skip-prone tests going silently green
+        # with no real OCR exercised. Name the two testcases explicitly instead, mirroring
+        # the graph_real_artifact lane's "verify the blocking non-vacuity test" step below.
+        run: uv run python -c "import xml.etree.ElementTree as ET; cases=dict((c.get('name'), c) for c in ET.parse('docling-results.xml').getroot().iter('testcase')); names=['test_pdf_page_number_in_search_response','test_image_file_assigns_page_start_one']; missing=[n for n in names if n not in cases]; assert not missing, f'expected docling testcases not found - {missing} - the lane did not run, check the prefetch step'; skipped=[n for n in names if cases[n].find('skipped') is not None]; assert not skipped, f'docling testcases skipped, no real OCR exercised - {skipped}'"
 
       # Deliberately NO actions/cache step here, unlike archon-search-pr.yml.
       # GitHub scopes caches by ref: a run can restore only caches created on its own ref
@@ -128,7 +154,7 @@ jobs:
 
       - name: Enforce coverage fail-under=85
         # The three --cov pytest steps above all use --cov-append into a single .coverage
-        # file; the graph real-artifact step uses --no-cov and does not touch it.
+        # file; the docling and graph real-artifact steps use --no-cov and do not touch it.
         run: uv run coverage report --fail-under=85
 
   # ---------------------------------------------------------------------------

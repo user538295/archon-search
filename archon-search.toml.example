@@ -419,12 +419,23 @@ num_queries = 2
 # or:
 #   pip install 'archon-search[graph]'
 #
-# The extras install the spaCy library but NOT its en_core_web_sm NER model —
-# that model is not on PyPI. Provision it with `archon-search wizard`, which
-# places it under <data-dir>/models/spacy/. The server never downloads it.
-# Without it, ingest still succeeds: chunks embed and persist, code-symbol
-# graph nodes are still written, prose entity extraction is skipped, and
-# GET /status reports the miss under model_validation.provider_warnings.
+# The extras install the gliner library but NOT its model weights, which are
+# not on PyPI. Prose entity + relation extraction uses one pinned multilingual
+# GLiNER checkpoint (knowledgator/gliner-relex-multi-v1.0, pinned by revision in
+# archon_search/paths.py). The checkpoint is pre-warmed, not provisioned:
+# `archon-search wizard` calls GLiNER.from_pretrained once and lets
+# huggingface_hub download and cache it under <data-dir>/models/graph/. There is
+# no digest or size verification and no smoke-load step, and a failed pre-warm is
+# non-fatal. Skip the wizard and the server fetches it from HuggingFace on the
+# first prose extraction (bounded by a load timeout), which needs network access.
+# When the checkpoint is unavailable, ingest still succeeds: chunks embed and
+# persist, code-symbol graph nodes are still written, and prose entity extraction
+# is skipped with a sanitized notice on IngestResult.warnings. GET /status does
+# NOT surface this — model_validation.provider_warnings reports a missing gliner
+# package only, because the startup probe checks package importability and never
+# the checkpoint. The ingest warnings and the server log are the only surfaces.
+# The corpus language is unrestricted — the checkpoint is multilingual — though
+# span quality varies by language.
 # Manual placement (air-gapped installs):
 #   Documentation/OperatorGuide/60_graph_operations.md
 #
@@ -445,8 +456,10 @@ num_queries = 2
 #
 # enabled = false
 
-# Optional: enrichment provider for LLM-based community summarisation and typed
-# relationship extraction. Valid values: "anthropic", "ollama", "openai",
+# Optional: enrichment provider for LLM-based community summarisation. It does
+# NOT label relationships — typed prose edges (uses, implements, depends_on) are
+# produced locally by the graph extraction engine with no provider configured and
+# no network access. Valid values: "anthropic", "ollama", "openai",
 # "llama_cpp" (local; zero-transmission, no API key), "claude_cli" (accepted but
 # has no v1 enrichment client yet — deferred; a WARNING is logged and enrichment
 # stays disabled). Defaults to unset (None): enrichment is disabled unless BOTH
@@ -454,8 +467,8 @@ num_queries = 2
 # whose provider defaults to "anthropic", this preserves the air-gap guarantee.
 # provider = "llama_cpp"
 
-# Model used for community summarisation / relationship labelling — always a
-# bare model name, never a "provider:model" string.
+# Model used for community summarisation — always a bare model name, never a
+# "provider:model" string. It plays no part in relationship labelling.
 # For "anthropic": a Claude model name (e.g. "claude-haiku-4-5-20251001").
 #   Requires ANTHROPIC_API_KEY in the server environment.
 # For "ollama": the Ollama model tag (e.g. "llama3.2:3b").
@@ -479,7 +492,7 @@ num_queries = 2
 # ollama_base_url = "http://localhost:11434"
 
 # Per-request timeout (seconds) for enrichment LLM calls (community
-# summarisation / relationship labelling). Must be > 0.
+# summarisation). Must be > 0.
 # extraction_timeout_seconds = 30.0
 
 # Per-minute rate limit for enrichment LLM calls. Must be >= 1. Ignored by the

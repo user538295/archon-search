@@ -27,9 +27,10 @@ class TestThreePagePdfFixture:
 
         Fails — never skips — when docling is non-functional. `docling` is a hard runtime
         dependency (pyproject.toml), so a broken install *is* the failure. The `docling` lane
-        is excluded from the default run and from both CI steps, so it executes only when a
-        developer deliberately types `-m docling`: a skip there would hide the answer from
-        exactly the person who asked the question.
+        is excluded from the default run and from both workflows' unit and integration steps,
+        so it executes only in its own dedicated CI step or when a developer deliberately
+        types `-m docling`: a skip there would hide the answer from exactly the person who
+        asked the question.
         """
         import pytest
 

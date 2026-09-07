@@ -56,7 +56,7 @@ Some features ship as optional dependency groups (`[project.optional-dependencie
 
 | Extra | Installs | Unlocks |
 | --- | --- | --- |
-| `graph` | spaCy, networkx, leidenalg, igraph | Knowledge-graph extraction, community detection, PPR / naive graph search — see [`65_graph_search.md`](./65_graph_search.md). |
+| `graph` | gliner (pulls torch + transformers), networkx, leidenalg, igraph | Knowledge-graph extraction, community detection, PPR / naive graph search — see [`65_graph_search.md`](./65_graph_search.md). |
 | `code` | tree-sitter parsers (Python, TS/JS, Go, Rust, Java, Bash, Swift, C#) | AST-aware def/ref extraction and impact traversal for code files — see [`70_code_graph_and_impact.md`](./70_code_graph_and_impact.md). Also selectable via the wizard's `--code` flag. |
 | `multilingual` | fasttext-wheel | Non-English language detection (`language=<code>` search filter). Pair with a multilingual install profile (below). |
 | `hyde` | anthropic SDK | HyDE query expansion at search time — see [`60_searching.md`](./60_searching.md). |
@@ -65,9 +65,9 @@ Some features ship as optional dependency groups (`[project.optional-dependencie
 | `openai-provider` | openai SDK | OpenAI provider for HyDE / RAG-Fusion. |
 | *(none for llama.cpp)* | `httpx` (core dep) | Local llama-server provider for HyDE / RAG-Fusion / graph enrichment — no extra install. Set `provider = "llama_cpp"` in the relevant config sections. |
 
-`graph.enabled = true` with the spaCy *library* absent raises a `ConfigError` at startup; missing `code` parsers only log a warning and skip code files, so prose graphing still works.
+`graph.enabled = true` with the `gliner` *library* absent raises a `ConfigError` at startup (`ensure_graph_engine_importable` in `archon_search/graph_extractor.py`); missing `code` parsers only log a warning and skip code files, so prose graphing still works.
 
-The `graph` extra installs spaCy but **not** its `en_core_web_sm` NER model — that model is not on PyPI, so `archon-search wizard` fetches and places it under `<data-dir>/models/spacy/` and the server never downloads it. A missing model is not a startup failure and not an ingest failure: prose entity extraction is skipped, code-symbol graphing keeps working, and `GET /status` reports the miss. Remedies: [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model).
+The `graph` extra installs the `gliner` library but **not** its model weights. The prose extraction engine is a pinned GLiNER PyTorch checkpoint — `knowledgator/gliner-relex-multi-v1.0` at the revision pinned in `archon_search/paths.py` (`GRAPH_NER_MODEL_NAME` / `GRAPH_NER_MODEL_REVISION`) — and model weights are not distributed on PyPI, so they are fetched from Hugging Face by `huggingface_hub`, exactly the way the embedding and reranker models already are. `archon-search wizard` pre-warms that fetch (an estimated 1218 MB, Apache-2.0) so the first ingest is not the one that pays for it; the runtime otherwise downloads it lazily on first use into `<data-dir>/models/graph/`. A checkpoint that cannot be fetched or loaded is neither a startup failure nor an ingest failure: prose entity and relation extraction is skipped, code-symbol graphing keeps working, and each affected response carries a warning in `IngestResult.warnings`. The distinction matters — the *library* is checked at startup and fails it; the *checkpoint* is not checked at startup at all, and only degrades. `GET /status` → `model_validation.provider_warnings` reports the missing library (`graph_ner_status` in `archon_search/model_validation.py`), not a failed checkpoint load: a failed load latches for the life of the process and is visible only in the ingest warnings and the server log. Remedies: [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md).
 
 ## ONNX Runtime providers (GPU acceleration)
 
@@ -217,7 +217,7 @@ rm -rf ~/.archon-search/
 | `~/.archon-search/logs/archon-search.log` | Server log. |
 | `~/.archon-search/search-logs/` | Telemetry JSONL (only when telemetry is enabled). |
 | `~/.archon-search/models/lid.176.ftz` | **C2** — fasttext language identification model (only when installed with `--multilingual`). |
-| `~/.archon-search/models/spacy/en_core_web_sm-<ver>/` | spaCy NER model for graph prose extraction (only when the wizard provisioned the graph extra). The server never writes or downloads this — see [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model). |
+| `~/.archon-search/models/graph/knowledgator--gliner-relex-multi-v1.0-<revision>/` | Hugging Face cache for the pinned GLiNER prose extraction checkpoint (only when the graph extra is in use). Written by the wizard's pre-warm, or lazily by the server on first graph ingest — `get_graph_models_dir()` in `archon_search/paths.py` builds this path from `GRAPH_NER_MODEL_NAME` and `GRAPH_NER_MODEL_REVISION`. |
 
 > The entire runtime tree relocates with a single env var: set `ARCHON_SEARCH_DATA_DIR` to move DB, models, keys, and logs off `~/.archon-search/`.
 

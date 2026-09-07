@@ -338,7 +338,26 @@ _GRAPH_CORPUS_DOCS: dict[str, str] = {
         "Google is headquartered in Mountain View, California. Alice and Bob "
         "both moved to Mountain View to join the Kubernetes team at Google."
     ),
+    # Non-English (Q28): the engine is multilingual, so the smoke corpus must not
+    # be able to pass on English alone. An English-only engine extracts nothing here.
+    "equipe.txt": (
+        "Alice travaille chez Google en Californie. Le projet Kubernetes utilise "
+        "Docker. Alice et Bob dependent de Kubernetes pour le projet Google."
+    ),
 }
+# The typed, non-co-occurrence relationship types S26 names for this assert verbatim
+# (mirrors ``_TYPED_RELATIONSHIPS`` in ``tests/test_graph_ner_real_artifact_lane.py``). The
+# prose engine's full relation vocabulary is wider (calls/imports/defines/inherits/
+# related_to, ``archon_search/prose_extraction_backend.py``'s
+# ``_RELATION_LABEL_DESCRIPTIONS``) — this set is deliberately the S26-specified subset, not
+# the full vocabulary. ``related_to``/``synonym_of`` are excluded regardless: the former
+# comes from the co-occurrence loop and the latter from the synonym-enrichment pass
+# (``GraphConfig.enrichment_auto`` defaults True), so accepting either would let the
+# assertion below pass with zero real prose relations — the exact no-op it exists to catch.
+_PROSE_RELATION_TYPES = frozenset({"uses", "implements", "depends_on"})
+# Entity names that appear ONLY in ``equipe.txt``. Nothing in the English documents can
+# produce either, so requiring one proves the French document actually reached the engine.
+_FRENCH_ONLY_ENTITIES = frozenset({"docker", "californie"})
 
 
 def _write_graph_corpus(corpus_dir: Path) -> None:
@@ -387,13 +406,31 @@ def smoke_server_graph_enabled(tmp_path_factory) -> Iterator[SmokeServer]:
 
     Seeds a multi-entity corpus (``_GRAPH_CORPUS_DOCS``) into a collection named
     ``smoke_graph`` via the real REST API, so extraction runs through the real
-    pipeline. Asserts the resulting graph has >= 2 nodes AND >= 1 edge before
-    yielding, so a consumer is guaranteed a graph large enough for
-    ``CommunityBuilder.build`` to reach Leiden clustering rather than its
-    single-node short-circuit — the S3 happy path, not the S8 empty-graph
-    failure path.
+    pipeline. Three assertions run before yielding:
+
+    1. >= 2 nodes AND >= 1 edge, so a consumer is guaranteed a graph large
+       enough for ``CommunityBuilder.build`` to reach Leiden clustering rather
+       than its single-node short-circuit — the S3 happy path, not the S8
+       empty-graph failure path.
+    2. At least one edge carrying a ``_PROSE_RELATION_TYPES`` label, so a run
+       where the engine returned no relations at all (and only co-occurrence
+       and synonym edges exist) fails instead of passing silently.
+    3. At least one ``_FRENCH_ONLY_ENTITIES`` node, so the multilingual claim
+       is actually exercised. Note: only ``equipe.txt`` (French) contains
+       uses/implements/depends_on phrasing, so assertions 2 and 3 both hinge on
+       it — the English documents alone satisfy assertion 1 but not 2.
     """
     pytest.importorskip("gliner")
+    # Q28 also asked for a missing-ARTIFACT skip beside this missing-package one. Deliberately
+    # not implemented, but NOT because the artifact is unfindable: `install/prewarm.py`'s
+    # `_prewarm_graph_model` DOES pre-place it, under the deterministic revision-pinned
+    # `get_graph_models_dir()` tree (`archon_search/paths.py`), and `archon-search.toml.example`
+    # tells operators the wizard does exactly that. The reason is that absence is not a skip
+    # condition here: `GLiNER.from_pretrained` falls back to fetching the checkpoint on first
+    # ingest, so an un-prewarmed host still runs the real path (downloading ~1.2 GB once). Only
+    # an OFFLINE un-prewarmed host actually degrades — ingest falls back to code-symbol-only —
+    # and the prose-relation assert below reports that as a failure rather than hiding it
+    # behind a skip.
 
     port = _free_port()
     data_dir = tmp_path_factory.mktemp("smoke_data_graph")
@@ -426,6 +463,32 @@ def smoke_server_graph_enabled(tmp_path_factory) -> Iterator[SmokeServer]:
         assert graph["edge_count"] >= 1, (
             f"graph-enabled corpus pre-seed produced {graph['edge_count']} edge(s); "
             "need >= 1 co-occurrence edge for meaningful clustering — fixture misconfiguration"
+        )
+        # Q28: `edge_count >= 1` passes on co-occurrence alone, which is exactly the
+        # silent-no-op the engine swap can regress into — the extractor emits `related_to`
+        # for any two entities sharing a chunk even when the model asserts no relation.
+        # Requiring one edge with a PROSE relation label is the assertion that fails on that.
+        # `graph["edges"]` is capped at `max_inspection_edges`, so report ITS length, not
+        # `edge_count` (the uncapped total) — only the capped list was scanned.
+        edges = graph["edges"]
+        typed = [e for e in edges if e["relationship_type"] in _PROSE_RELATION_TYPES]
+        assert typed, (
+            f"graph-enabled corpus pre-seed: none of the {len(edges)} inspected edge(s) "
+            f"(of {graph['edge_count']} total, capped at max_inspection_edges) carries a "
+            f"prose relation label {sorted(_PROSE_RELATION_TYPES)} — the prose engine "
+            "returned no relations. `related_to` co-occurrence and `synonym_of` enrichment "
+            "edges both appear without the engine extracting anything"
+        )
+        # Q28: the smoke corpus must not be able to pass on English alone. Neither English
+        # document contains uses/implements/depends_on phrasing, so the prose-relation
+        # assertion just above already hinges on `equipe.txt` — this assertion additionally
+        # requires an entity that only `equipe.txt` can produce, so a French extraction miss
+        # fails the fixture on both grounds rather than just one.
+        names = {n["entity_name"].strip().lower() for n in graph["nodes"]}
+        assert names & _FRENCH_ONLY_ENTITIES, (
+            "graph-enabled corpus pre-seed produced no entity unique to the French document "
+            f"(expected one of {sorted(_FRENCH_ONLY_ENTITIES)}, got {sorted(names)}) — the "
+            "multilingual engine extracted nothing from `equipe.txt`"
         )
     except Exception:
         _terminate(proc)

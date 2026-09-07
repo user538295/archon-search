@@ -1,7 +1,7 @@
 ---
 feature: Multilingual Graph Extraction Engine (GLiNER-class, ONNX) — Entities + Relations
 plan: 2026-08-19-035-multilingual-graph-ner-team-plan.md
-status: draft        # draft → in-progress → done
+status: done        # draft → in-progress → done
 ---
 
 # MGE · Multilingual Graph Extraction Engine — Task Breakdown
@@ -715,7 +715,7 @@ flowchart LR
 
 ### Phase 4 · Close-out
 
-- [ ] **T-14** — Project close-out & acceptance fact-check #tester-role
+- [x] **T-14** — Project close-out & acceptance fact-check #tester-role
     - — · 12.0h
     - needs all prior tasks · completes (acceptance gate)
     - Tests

@@ -22,8 +22,9 @@ The container entrypoint is `scripts/docker-entrypoint.sh` (copied to `/entrypoi
 
 1. Reads `ARCHON_EXTRAS` (default `graph,code,multilingual`; empty string = core-only, no install).
 2. Checks a stamp file at `/pip-packages/.extras-installed`. If the stamp is absent or the extras list has changed, runs `python3 -m pip install --no-cache-dir --target /pip-packages ".[${ARCHON_EXTRAS}]"`.
-3. If `graph` is in `ARCHON_EXTRAS`, downloads the spaCy model `en_core_web_sm` into `/pip-packages` if not already present (required by `graph.enabled = true`).
-4. Prepends `/pip-packages` to `PYTHONPATH` and execs the CMD (`archon-search serve`).
+3. Prepends `/pip-packages` to `PYTHONPATH` and execs the CMD (`archon-search serve`).
+
+There is **no model-provisioning step**. The entrypoint installs Python packages and nothing else: the graph extra brings the `gliner` library, never its checkpoint. See [Graph extraction in a container](#graph-extraction-in-a-container) below for what that means if you turn `[graph].enabled` on.
 
 **First start** triggers a pip install whose duration is network-bound. The image bakes `PIP_NO_CACHE_DIR=1`, so every first start on a fresh `/pip-packages` volume re-downloads the full dependency set — typically a few minutes on a fast idle uplink, and longer on a slow or contended one. The `HEALTHCHECK` allows up to 10 minutes (600s start-period) before it counts failures. Subsequent starts are instant (stamp matches). Mount `/pip-packages` as a named volume to persist the install across container recreates:
 
@@ -170,7 +171,10 @@ When `/data` is mounted, the volume looks like this after a few requests:
 ├── search-logs/
 │   └── YYYY-MM-DD.jsonl         # telemetry, when [telemetry].enabled=true
 ├── models/
-│   └── lid.176.ftz              # fasttext language detector (multilingual only)
+│   ├── lid.176.ftz              # fasttext language detector (multilingual only)
+│   └── graph/                   # GLiNER prose-extraction checkpoint cache — only if you
+│                                # put it there yourself (see below); nothing in the
+│                                # container provisions it
 ├── fastembed-cache/             # fastembed model weights
 └── history/
     └── sessions/                # history sessions directory
@@ -181,9 +185,25 @@ When `/pip-packages` is mounted (recommended), it holds the optional-extras inst
 ```
 /pip-packages
 ├── .extras-installed            # stamp file: contents = last installed ARCHON_EXTRAS value
-├── en_core_web_sm/              # spaCy model (present when graph extra is installed)
 └── <wheel contents …>           # graph, code, multilingual extras and their transitive deps
 ```
+
+No model weights live here. The graph extra installs the `gliner` library into `/pip-packages`; its checkpoint, if present at all, lives under the data directory at `/data/models/graph/` — see below.
+
+## Graph extraction in a container
+
+`[graph].enabled` defaults to `false`. **A default container runs no graph extraction at all and emits no warning about it** — everything in this section applies only once you have turned the flag on.
+
+If you do turn it on, understand what the container does and does not give you. The `graph` extra makes `gliner` importable, which is what the startup check requires, so the server boots. But **nothing in the container provisions the prose extraction checkpoint**: the install wizard is the only thing that pre-warms it, and the container never runs the wizard. The runtime's own lazy fetch from Hugging Face is the sole remaining path, and where that is unavailable — an air-gapped host, a blocked egress, a transient failure — the load fails. A failed load latches for the life of the process, so from that point on the container runs **permanently degraded: code-symbol extraction only, prose entities and typed relations skipped, one warning per affected ingest** in `IngestResult.warnings`. It never fails an ingest and never returns a 503.
+
+The workaround is to provision on the host and mount the result in. Run `archon-search wizard` on the host (or otherwise let a host-side `gliner` load populate the cache), then bind-mount the host models directory over the container's:
+
+```yaml
+volumes:
+  - ~/.archon-search/models:/data/models
+```
+
+This is exactly what the `archon-dev` service in `docker-compose.override.yml` already does. The container-side path the runtime looks in is `get_graph_models_dir()` — `/data/models/graph/<model>-<revision>/` with `ARCHON_SEARCH_DATA_DIR=/data` — so mounting the whole `models/` tree keeps host and container agreeing on the layout without hardcoding the revision anywhere.
 
 ## Development workflow (claude_cli + full extras)
 
@@ -216,9 +236,9 @@ When `/pip-packages` is mounted (recommended), it holds the optional-extras inst
    - `archon-dev-packages:/pip-packages` — cached optional extras
    - `./archon-search.docker-dev.toml:/config/archon-search.toml:ro` — dev config (full profile, graph enabled, claude_cli HyDE/RAG Fusion)
    - `~/.cache/fastembed:/data/fastembed-cache` — host fastembed model cache (avoids re-downloading ~500 MB)
-   - `~/.archon-search/models:/data/models` — host fasttext model cache
+   - `~/.archon-search/models:/data/models` — host model cache: the fasttext language detector, and the graph prose-extraction checkpoint if the host has provisioned one
 
-3. **First start only:** the entrypoint installs graph + code + multilingual extras and downloads `en_core_web_sm` — a network-bound download that takes a few minutes (longer on a slow uplink; the image allows up to 10 minutes before the healthcheck counts failures). Watch progress with `docker compose logs -f archon-dev`.
+3. **First start only:** the entrypoint installs graph + code + multilingual extras — a network-bound pip install that takes a few minutes (longer on a slow uplink; the image allows up to 10 minutes before the healthcheck counts failures). Watch progress with `docker compose logs -f archon-dev`. No model weights are downloaded here; the `~/.archon-search/models:/data/models` mount above is what supplies the graph checkpoint, if your host has one.
 
 4. **Smoke-test:**
 
@@ -310,7 +330,7 @@ Separate from the production image above, `docker-compose.override.yml` defines 
   docker compose stop archon-dev-shell
   ```
 
-Both share a named venv volume (`archon-docker-venv`), so the one-time install (core + `graph` extra + spaCy model) is paid once and reused across both services and across restarts. Model weights are bind-mounted from your host `~/.cache/fastembed`.
+Both share a named venv volume (`archon-docker-venv`), so the one-time install (core + `graph` extra, packages only — no model weights) is paid once and reused across both services and across restarts. Embedding model weights are bind-mounted from your host `~/.cache/fastembed`.
 
 For the full explanation — volume architecture, the two-phase test split, and why the graph extra matters — see [`../docker-test-runner.md`](../docker-test-runner.md).
 

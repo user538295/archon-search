@@ -16,6 +16,7 @@ from archon_search.paths import GRAPH_NER_MODEL_REVISION
 from tests.test_parser_ocr_memory import (
     _WORKFLOW_FILES,
     assert_marker_excluded_on_step_lines,
+    assert_marker_lane_runs,
     find_marker_tests_missing_xdist_group,
 )
 
@@ -36,7 +37,6 @@ _HISTORICAL_PREFIXES = (
 # Permanent, defensive entries: append-only / generated records that must not be rewritten to
 # pass a lint. Some may not name the engine today (e.g. ADR 12, the agent logs) — allowlisting a
 # non-match is inert and harmless; the entry stands so a future append here can't trip the guard.
-# This list is permanent (unlike _PENDING_CLEANUP, it is NOT expected to shrink).
 _HISTORICAL_EXACT = frozenset({
     "BREAKING.md",              # append-only compatibility contract
     "CHANGELOG.md",             # generated release history
@@ -55,33 +55,6 @@ _GUARD_FILES = frozenset({
     "tests/test_docker_smoke.py",
 })
 
-# Self-tightening TEMPORARY allowlist: live files a LATER task still owns. Each still
-# names the engine today; the test below fails if one stops matching, forcing the owning
-# task to strike it from this list. This set must shrink to empty by feature close-out.
-# The count is pinned (below): it may only SHRINK — decrement the constant when striking an
-# entry — so a later task cannot dodge the repo-wide guard by appending a new file here.
-_EXPECTED_PENDING_CLEANUP = 18
-_PENDING_CLEANUP = frozenset({
-    'Documentation/Architecture/100_system_architecture_overview.md',  # T-14 (Documentation update)
-    'Documentation/Architecture/110_component_catalog_and_layer_breakdown.md',  # T-14 (Documentation update)
-    'Documentation/Architecture/130_data_architecture_and_persistence.md',  # T-14 (Documentation update)
-    'Documentation/Architecture/530_technical_debt_refactoring_roadmap.md',  # T-14 (Documentation update)
-    'Documentation/Architecture/600_api_reference_or_public_interface.md',  # T-14 (Documentation update)
-    'Documentation/OperatorGuide/20_monitoring_and_alerts.md',  # T-14 (Documentation update)
-    'Documentation/OperatorGuide/60_graph_operations.md',  # T-14 (Documentation update)
-    'Documentation/OperatorGuide/80_capacity_and_performance.md',  # T-14 (Documentation update)
-    'Documentation/OperatorGuide/90_incident_runbook.md',  # T-14 (Documentation update)
-    'Documentation/UserManual/10_installation.md',  # T-14 (Documentation update)
-    'Documentation/UserManual/140_running_with_docker.md',  # T-14 (Documentation update)
-    'Documentation/UserManual/160_troubleshooting.md',  # T-14 (Documentation update)
-    'Documentation/UserManual/20_wizard.md',  # T-14 (Documentation update)
-    'Documentation/UserManual/30_configuration.md',  # T-14 (Documentation update)
-    'Documentation/UserManual/65_graph_search.md',  # T-14 (Documentation update)
-    'Documentation/UserManual/70_code_graph_and_impact.md',  # T-14 (Documentation update)
-    'Documentation/docker-test-runner.md',  # T-14 (Documentation update)
-    'archon-search.toml.example',  # T-14 (Documentation update)
-})
-
 
 def _tracked_files() -> list[str]:
     """Every git-tracked path (the .gitignore-aware scan S42(1) specifies; a bare
@@ -98,7 +71,6 @@ def _is_allowlisted(path: str) -> bool:
         path.startswith(_HISTORICAL_PREFIXES)
         or path in _HISTORICAL_EXACT
         or path in _GUARD_FILES
-        or path in _PENDING_CLEANUP
     )
 
 
@@ -109,9 +81,8 @@ def _files_naming_engine(paths: list[str]) -> list[str]:
             hits.append(rel)
             continue
         path = _REPO_ROOT / rel
-        # A tracked path may be absent (e.g. an owning task DELETED a _PENDING_CLEANUP file
-        # rather than scrubbing the literal). Skip it: the self-tightening test then reports
-        # "no longer names the engine" cleanly instead of raising FileNotFoundError.
+        # `git ls-files` lists a path deleted in the working tree but not yet staged; skip it
+        # rather than raising FileNotFoundError from the scan.
         if not path.is_file():
             continue
         # Strip NULs then decode latin-1 (never raises): a UTF-16 file interleaves NULs
@@ -129,8 +100,7 @@ def test_no_untracked_reference_to_the_removed_engine_remains() -> None:
     """
     # Liveness anchor: the scanner MUST detect the engine name in a file known to carry it,
     # so a silent scan regression (early exit, decode masking, path-scope shrink) cannot let
-    # this guard pass vacuously. BREAKING.md is a permanent allowlisted historical record, so
-    # this backstop outlives the self-tightening _PENDING_CLEANUP list once it empties.
+    # this guard pass vacuously. BREAKING.md is a permanent allowlisted historical record.
     assert _files_naming_engine(["BREAKING.md"]) == ["BREAKING.md"], (
         "the engine-name scanner failed to detect the known reference in BREAKING.md — the "
         "scan is broken and any 'no offenders' result below is meaningless"
@@ -140,25 +110,6 @@ def test_no_untracked_reference_to_the_removed_engine_remains() -> None:
     assert not offenders, (
         "these git-tracked files still name the removed engine and are not on any "
         f"S42 allowlist category: {sorted(offenders)}"
-    )
-
-
-def test_pending_cleanup_allowlist_is_self_tightening() -> None:
-    """The temporary ``_PENDING_CLEANUP`` list is a forcing function, not suppression:
-    every entry must STILL name the engine today. When an owning task finishes its cleanup,
-    its file stops matching and this test fails until the file is struck from the list —
-    driving the list provably to empty by close-out.
-    """
-    assert len(_PENDING_CLEANUP) == _EXPECTED_PENDING_CLEANUP, (
-        "_PENDING_CLEANUP changed size — it must only SHRINK as owning tasks clean up. "
-        "Decrement _EXPECTED_PENDING_CLEANUP when striking an entry; never grow it to dodge "
-        "the repo-wide engine-absence guard"
-    )
-    matched = set(_files_naming_engine(sorted(_PENDING_CLEANUP)))
-    cleaned = sorted(_PENDING_CLEANUP - matched)
-    assert not cleaned, (
-        "these files no longer name the removed engine — their owning task must remove "
-        f"them from _PENDING_CLEANUP so the allowlist keeps shrinking: {cleaned}"
     )
 
 
@@ -203,14 +154,6 @@ _GRAPH_CACHE_KEY_PREFIX = "key: graph-ner-"
 _CACHING_WORKFLOW = ".github/workflows/archon-search-pr.yml"
 
 
-def _lane_step_lines(text: str) -> list[str]:
-    return [
-        line
-        for line in text.splitlines()
-        if "uv run pytest" in line and _GRAPH_LANE_SELECTOR in line
-    ]
-
-
 def test_both_workflows_run_the_graph_real_artifact_lane() -> None:
     """Both CI workflows must actually RUN the lane, not merely exclude it elsewhere.
 
@@ -218,14 +161,16 @@ def test_both_workflows_run_the_graph_real_artifact_lane() -> None:
     branch, tree cleanliness and origin sync — never CI status — so a tag can be cut from a
     commit that never met the PR gate. Without this guard, deleting the release workflow's
     lane step reopens GRAPH-4 (a publish with zero real-model coverage) and nothing fails.
+    Delegates to the shared presence helper (one implementation, two callers — the other is
+    the `docling` lane's).
     """
-    for rel_path in _WORKFLOW_FILES:
-        matches = _lane_step_lines((_REPO_ROOT / rel_path).read_text(encoding="utf-8"))
-        assert matches, (
-            f"{rel_path}: no `uv run pytest` step selects {_GRAPH_LANE_SELECTOR!r}. The lane "
-            "is the only guard that drives the real GLiNER checkpoint and fails on a vacuous "
-            "extraction — every workflow that gates a merge or a publish must run it."
-        )
+    assert_marker_lane_runs(
+        _REPO_ROOT,
+        _WORKFLOW_FILES,
+        _GRAPH_LANE_SELECTOR,
+        "The lane is the only guard that drives the real GLiNER checkpoint and fails on a "
+        "vacuous extraction.",
+    )
 
 
 def test_graph_artifact_cache_key_pins_the_model_revision() -> None:

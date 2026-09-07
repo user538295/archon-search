@@ -1,7 +1,7 @@
 **Purpose**: Explain `archon-search`'s versioning scheme, how to read `BREAKING.md`, and how to pin a client across releases.
 **Audience**: Engineers maintaining a long-lived integration who need to know what guarantees they have between two `archon-search` versions.
 **Status**: Draft
-**Last reviewed**: 2026-05-20 / **Next review**: 2027-05-20
+**Last reviewed**: 2026-09-07 / **Next review**: 2027-09-07
 
 # Versioning and Breaking Changes
 
@@ -37,7 +37,7 @@ Each section heading is the release name. Each entry has the shape:
 **Announced in**: the release where the deprecation was first published (often the same release that ships the change — there is no formal deprecation period yet).
 ```
 
-Current entries at the time of this doc (verified against `BREAKING.md` at the repo root):
+Two illustrative entries — **not** the full list. `BREAKING.md` carries 67 `### ` headings, all of them `[next release]`; the two below are the two that `MigrationGuide/03_breaking_changes_index.md` also indexes (as NR-1 and NR-2). Never treat this section, or that index, as an inventory: read `BREAKING.md` itself before an upgrade.
 
 - **MCP `search` response shape.** Now `{"results": [...], "acl_filtered": bool}`; previously a bare list. Update consumers to read `response["results"]`.
 - **REST `/search` `top_k` ignored.** Request schema still accepts the field (Pydantic validates `1 ≤ top_k ≤ 100`), but the route does not pass it to the pipeline. Configure `top_k_return` in `archon-search.toml` instead. #Unverified — `BREAKING.md` suggests `[search] top_k_return`, but the loader in `archon_search/config.py` reads `top_k_return` from the `[database]` section; consult `archon-search.toml.example` for the authoritative section name.

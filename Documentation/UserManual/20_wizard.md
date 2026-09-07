@@ -180,35 +180,54 @@ After the license gates, the wizard asks about optional features. Each question 
 
 ```
 Code enrichment (tree-sitter) + code graphing:
-  Parses and indexes code files structurally — functions, classes, docstrings.
-  Installs tree-sitter language parsers (~50 MB) and graph enrichment (spaCy),
-  and enables graph.enabled in the generated config. Both are set up together
-  automatically so code graphing works out of the box. Recommended if your
-  corpus includes source code. Default: disabled.
+  Parses and indexes code files structurally — functions, classes, docstrings,
+  and enables graph.enabled in the generated config. Both features below are set
+  up together automatically so code graphing works out of the box. Recommended if
+  your corpus includes source code. Default: disabled.
+  Estimated download sizes, shown before anything is fetched:
+    - Code enrichment: tree-sitter language parsers, about 18 MB, installed now.
+    - Graph extraction: a prose entity/relation model, an estimated 1218 MB
+      (approximate, not a verified size), fetched on first use, licensed under
+      Apache-2.0.
 Index code files (installs tree-sitter + graph enrichment, enables graph)? [y/N]:
 ```
 
 **Default**: No.
 
-If you answer `y`, the wizard writes `[graph].enabled = true` to the generated config first, then installs the `archon-search[code]` extra packages (tree-sitter grammars for Python, TypeScript, JavaScript, Go, Rust, Java, and Bash) *and* the `archon-search[graph]` extra, and provisions the `en_core_web_sm` spaCy NER model. Write-first is load-bearing: if installing the `archon-search[graph]` package itself fails, the wizard rolls back the already-written `graph.enabled = true` flag rather than leaving a half-configured install (a failed *model* fetch is handled differently — see below). Code enrichment and code graphing are always set up as a bundle so code graphing works out of the box. Once installed, ingesting code files automatically extracts symbol-level metadata (`_symbol_type`, `_containing_function`, `_containing_class`, etc.) from each chunk. This makes code search significantly more precise.
+**This is one question covering two features, and it discloses their two download costs separately** — the tree-sitter parsers, installed during the wizard run, and the prose extraction model, fetched from Hugging Face. The two are quoted apart rather than as a single combined figure because they differ by two orders of magnitude and are paid at different moments. Both figures come from `archon_search/install/extras.py` (`CODE_EXTRA_SIZE_ESTIMATE`, `GRAPH_MODEL_SIZE_ESTIMATE`); the model figure is an estimate from the graph-NER spike, not a verified download size, and it also feeds the pre-install disk guard and the displayed download total (`_planned_total_bytes` in `archon_search/install/prewarm.py`).
 
-**The wizard is the automated way to provision the NER model.** It is not on PyPI under any name, so the wizard pins its version against the installed spaCy, fetches that release's wheel from the spacy-models GitHub release, unpacks the model into `<data-dir>/models/spacy/en_core_web_sm-<version>/`, and smoke-loads it before reporting success — the same pattern the fasttext `lid.176.ftz` model uses. The server never downloads it at runtime. Air-gapped or scripted installs can place the model by hand instead — see [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model). **A failed fetch is non-fatal**: the wizard prints a warning, leaves `[graph].enabled = true`, and the install completes:
+If you answer `y`, the wizard writes `[graph].enabled = true` to the generated config first, then installs the `archon-search[code]` extra packages (tree-sitter grammars for Python, TypeScript, JavaScript, Go, Rust, Java, and Bash) *and* the `archon-search[graph]` extra. Write-first is load-bearing: if installing the `archon-search[graph]` package itself fails, the wizard rolls back the already-written `graph.enabled = true` flag rather than leaving a half-configured install (a failed *model* fetch is handled differently — see below). Code enrichment and code graphing are always set up as a bundle so code graphing works out of the box. Once installed, ingesting code files automatically extracts symbol-level metadata (`_symbol_type`, `_containing_function`, `_containing_class`, etc.) from each chunk. This makes code search significantly more precise.
+
+**The prose extraction model is pre-warmed, not provisioned.** There is no bespoke provisioning seam for it: the wizard's pre-warm step calls `GLiNER.from_pretrained()` for the pinned checkpoint and revision (`GRAPH_NER_MODEL_NAME` / `GRAPH_NER_MODEL_REVISION` in `archon_search/paths.py`), letting `huggingface_hub` download and cache it under `<data-dir>/models/graph/` — the same cache directory the server's own lazy load uses, so pre-warm and first use share one copy on disk. This is the same pattern the embedding and reranker models already follow. Model weights are not published on PyPI, which is why the extra installs the `gliner` library but never its checkpoint.
+
+**A failed pre-warm is non-fatal.** It is logged as a WARNING and the install completes with `[graph].enabled = true` left in place; the model is downloaded on first use instead:
 
 ```
-Warning: spaCy model provisioning failed: <reason>. Graph ingest will extract
-code symbols only until the wizard is re-run.
+Failed to pre-warm graph NER model 'knowledgator/gliner-relex-multi-v1.0': <reason>
+ — the model will be downloaded on first use.
 ```
 
-In that state, graph ingest still works for code symbols and skips prose entity extraction; re-running the wizard (or placing the model by hand) fixes it — see [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model).
+Only a failure of the `archon-search[graph]` *package* install reverts the flag, and that failure says so explicitly:
 
-If you also chose multilingual models (which writes `[database].multilingual = true`), the pre-install summary discloses the NER model's language limit right under the graph bullet:
+```
+Warning: graph enrichment install failed: <reason>
+Warning: graph.enabled has been reverted to false because the install did not
+complete; re-run the wizard or install archon-search[graph] manually to enable
+code/prose graphing.
+```
+
+Reverting the flag disables the code-symbol/def-ref graph too, not just prose extraction — `[graph].enabled` gates the whole graph subsystem.
+
+The pre-install summary lists the graph bullet with the two confidence knobs you can tune afterwards:
 
 ```
   Optional features:
     • Graph enrichment (code graphing)
-      Note: prose entity extraction is English-only (en_core_web_sm);
-      non-English documents contribute code-symbol entities only.
+      Tune prose extraction for your corpus with [graph].ner_confidence
+      and [graph].relation_confidence in <data-dir>/archon-search.toml
 ```
+
+Corpus language is not a constraint: the pinned checkpoint is multilingual, so non-English documents produce prose entities and relations like any other. Only the interface — logs, CLI copy, error bodies — is English by design; see [`../Architecture/220_accessibility_and_internationalization.md`](../Architecture/220_accessibility_and_internationalization.md#internationalization).
 
 You can install this separately at any time with `pip install archon-search[code]`. Code enrichment also feeds the code graph — see [`70_code_graph_and_impact.md`](./70_code_graph_and_impact.md) for def/ref extraction and impact analysis.
 
@@ -393,16 +412,18 @@ To configure providers manually after the wizard, edit `archon-search.toml` dire
 
 #### 5i. Graph enrichment provider
 
-Shown right after the HyDE/RAG Fusion questions above, on the same "truly interactive" gate (skipped when `--enable-hyde`/`--enable-rag-fusion` were passed as flags, or the wizard is running non-interactively). This step is independent of both HyDE/RAG Fusion and of `[graph].enabled`: graph enrichment (LLM-written community summaries, typed relationship labels) is optional, and `[graph].provider` is itself the enable gate — there is no separate `[graph].enrichment_enabled`. The graph subsystem (entity extraction, PPR, communities) works fine without it.
+Shown right after the HyDE/RAG Fusion questions above, on the same "truly interactive" gate (skipped when `--enable-hyde`/`--enable-rag-fusion` were passed as flags, or the wizard is running non-interactively). This step is independent of both HyDE/RAG Fusion and of `[graph].enabled`: graph enrichment is **community summarisation only** (BE-17 / [ADR 12](../ADRs/12_local_prose_relations_enrichment_narrowed.md) removed LLM relationship labelling — typed edges such as `uses`/`implements`/`depends_on` come from the local prose extraction model, with no provider and no network), it is optional, and `[graph].provider` is itself the enable gate — there is no separate `[graph].enrichment_enabled`. The graph subsystem (entity extraction, PPR, communities) works fine without it.
 
 ```
 LLM-backed graph enrichment:
-  Uses an LLM to write community summaries and label relationship types
-  during graph community builds. Optional — the graph subsystem (entity
-  extraction, PPR, communities) works without it.
+  Uses an LLM to write community summaries during graph community
+  builds. Optional — the graph subsystem (entity extraction, PPR,
+  communities) works without it.
   Default: disabled.
 Enable LLM-backed graph enrichment? [y/N]:
 ```
+
+Enabling this buys community summaries and nothing else.
 
 **Default**: No — `[graph].provider` stays `null`.
 
@@ -460,14 +481,7 @@ Code enrichment packages installed.
 
 If the install fails, a warning is shown but the overall wizard continues — code enrichment is optional.
 
-If you enabled the **graph** (Step 5a), the `archon-search[graph]` extra is installed at this step too, and the `en_core_web_sm` NER model is provisioned immediately after it:
-
-```
-Downloading en_core_web_sm 3.8.0...
-spaCy model en_core_web_sm 3.8.0 provisioned at <data-dir>/models/spacy/en_core_web_sm-3.8.0
-```
-
-Already present and loadable, it says `spaCy model already provisioned at <path>` and does nothing. A failure here is **not** fatal — the wizard prints `Warning: spaCy model provisioning failed: ...` and continues, leaving graph ingest working for code symbols and degraded for prose. See Step 5a for what the model is and [`../OperatorGuide/60_graph_operations.md`](../OperatorGuide/60_graph_operations.md#provisioning-the-spacy-ner-model) for placing it by hand.
+If you enabled the **graph** (Step 5a), the `archon-search[graph]` extra is installed at this step too. Its prose extraction model is *not* fetched here — that happens in Step 8, together with the embedder and reranker weights. If the package install fails, the wizard prints `Warning: graph enrichment install failed: ...`, reverts `graph.enabled` to `false`, and continues; see Step 5a for the exact copy.
 
 If you chose a **multilingual** profile, the wizard also installs the `archon-search[multilingual]` extra (`fasttext-wheel`, used for language detection) at this step — the server needs it to start when `multilingual = true`. If that install fails, the wizard reverts `multilingual = false` in the config so the server still starts (in English-only mode) instead of crashing on the next start. You can install it separately at any time with `pip install archon-search[multilingual]`.
 
@@ -478,6 +492,22 @@ If you chose a **multilingual** profile, the wizard also installs the `archon-se
 ```
 
 The wizard downloads the embedding model and (if applicable) the reranker model weights to the fastembed/HuggingFace cache. For multilingual installs, `lid.176.ftz` is also downloaded to `~/.archon-search/models/`.
+
+If you enabled the graph (Step 5a), the prose extraction checkpoint is pre-warmed at the end of this step, into `<data-dir>/models/graph/`. This is the ~1218 MB download quoted in Step 5a and it dominates the step's wall time. A failure is non-fatal and logged, not fatal to the install — the model downloads on first graph ingest instead.
+
+Immediately after the pre-warm, and only when the graph extra was installed and `--skip-preload` was not passed, the wizard settles `[graph].providers`. The accelerator is offered only when both probe stages agreed — your GPU was detected and accepted in Step 3 (or `--graph-providers` named a device), *and* the pre-warm actually resolved the model onto that device:
+
+```
+Graph extraction validated on cuda — use it? (accelerated but unmeasured;
+guardrails are tuned for CPU) [Y/n]:
+```
+
+The accelerator is the default here: a bare Enter accepts it, `n` steps down to CPU. If either stage failed, no prompt is shown at all — the wizard logs the reason at WARNING and writes `[graph].providers = []` (CPU). If the pre-warm did not run, nothing is written, because unset already means CPU and there is no evidence to justify overwriting a list you may have set by hand. `--disable-gpu` forces CPU here even against an explicit `--graph-providers`, and `--graph-providers` is ignored outright when the graph extra is not being installed:
+
+```
+  Note: --graph-providers was ignored — graph extraction is not being installed,
+  so [graph].providers is not written.
+```
 
 Depending on your chosen profile and connection speed this can take from a few seconds (Minimal) to several minutes (Max). Progress is printed to the terminal by fastembed.
 
