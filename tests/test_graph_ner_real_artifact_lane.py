@@ -1227,7 +1227,10 @@ async def test_graph_ner_french_spans_with_offsets(graph_pipeline) -> None:
 # matched its own text, including the accented and multi-word ones, so the accent-heavy
 # input surfaces no offset bug in the path exercised (all six inputs sit far below
 # `GRAPH_NER_TOKEN_WINDOW_WORDS`, so the truncation path is NOT exercised and this says
-# nothing about it). All four prompted entity labels appear; nothing collapsed onto one.
+# nothing about it). All four prompted entity labels appear, so nothing collapsed onto a
+# single label — but the distribution is heavily concentrated (system 17, concept 3,
+# event 2, person 1): 74% `system`. Read that as "the taxonomy is not degenerate", not as
+# balanced label diversity.
 #
 #   ¶1 system  `rendszer`                 [2:10]    @0.921
 #   ¶1 system  `REST API-t`               [110:120] @0.652   ← accusative suffix retained
@@ -1276,7 +1279,12 @@ async def test_graph_ner_french_spans_with_offsets(graph_pipeline) -> None:
 # across 31 paragraphs — 2.65 entities and 0.16 relations per paragraph, against
 # Hungarian's 3.83 and 0.33. Hungarian is denser than French on BOTH axes, so sparse
 # relations are a property of this label set on short technical prose, not a Hungarian
-# deficit. The sample is small (6 paragraphs) and was authored by the same agent that ran
+# deficit. One confound, measured rather than hedged: 8 of the 31 French paragraphs (25%)
+# are list- or table-shaped, versus none of the Hungarian six, and list blocks are
+# entity-bearing but relation-poor — so the French relation rate is depressed by input
+# shape as well as by language, and the true gap is narrower than 0.33-vs-0.16 alone
+# suggests. The comparison still holds in direction; do not read the ratio as exact.
+# The sample is small (6 paragraphs) and was authored by the same agent that ran
 # and judged the review — its subject matter was fixed to match `fr-docs/` to limit that,
 # but it is not an independent corpus and the density comparison is the load-bearing
 # evidence here, not the raw counts.
