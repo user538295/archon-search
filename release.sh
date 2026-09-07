@@ -3,7 +3,12 @@
 #
 # What this script does:
 #   1. Pre-flight: working tree clean, on `main`, in sync with origin/main,
-#      and git-cliff >= 2.4 is available.
+#      git-cliff >= 2.4 is available, then every lane archon-search-release.yml's
+#      `test` job gates publish on — default suite, eval slice, integration
+#      suite, docling parser lane (real OCR), graph_real_artifact lane (real
+#      GLiNER checkpoint) — followed by the same coverage >= 85% enforcement.
+#      A lane broken on `main` therefore fails HERE, before the tag is even
+#      created, instead of only after it is already pushed to origin.
 #   2. Compute the provisional CalVer tag: YY.M.<git-rev-list-count-HEAD + 1>
 #      (the +1 accounts for the CHANGELOG.md commit added in step 4).
 #   3. Confirm the tag is new (locally + on origin).
@@ -92,10 +97,74 @@ check_git_cliff() {
 check_git_cliff
 
 if [ -z "${RELEASE_SH_TEST_MODE:-}" ]; then
-    echo "Running full test suite before release..."
+    # Mirrors archon-search-release.yml's `test` job step for step (same markers, same
+    # --cov-append/--no-cov split, same coverage enforcement at the end) so a lane that
+    # would fail the publish gate fails here instead, before the tag exists.
+    echo "Running every archon-search-release.yml test lane before release (this takes a while)..."
     _suite_start=$SECONDS
-    uv run pytest || bail "test suite failed — fix all failures before releasing"
-    echo "Test suite passed in $(( SECONDS - _suite_start ))s."
+    rm -f .coverage
+
+    echo "[1/5] Default suite (coverage, no fail-under yet)..."
+    uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append -n0 \
+        -m "not live and not eval and not benchmark and not integration and not live_eval and not docling and not graph_real_artifact" \
+        || bail "default suite failed — fix all failures before releasing"
+
+    echo "[2/5] Eval slice (thresholds, runxfail)..."
+    uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append --runxfail \
+        -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/ \
+        || bail "eval slice failed — fix all failures before releasing"
+
+    echo "[3/5] Integration suite (disk-backed basetemp)..."
+    mkdir -p /var/tmp/archon-search-it
+    uv run pytest --basetemp=/var/tmp/archon-search-it -o addopts= --strict-markers --strict-config --cov=archon_search --cov-append \
+        -m "integration and not eval and not docling and not graph_real_artifact" tests/ \
+        || bail "integration suite failed — fix all failures before releasing"
+
+    echo "[4/5] Docling parser lane (real OCR — minutes)..."
+    uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m docling --junitxml=docling-results.xml tests/ \
+        || bail "docling lane failed — fix all failures before releasing"
+    uv run python -c "
+import xml.etree.ElementTree as ET
+cases = {c.get('name'): c for c in ET.parse('docling-results.xml').getroot().iter('testcase')}
+names = ['test_pdf_page_number_in_search_response', 'test_image_file_assigns_page_start_one']
+missing = [n for n in names if n not in cases]
+assert not missing, f'expected docling testcases not found - {missing} - the lane did not run'
+skipped = [n for n in names if cases[n].find('skipped') is not None]
+assert not skipped, f'docling testcases skipped, no real OCR exercised - {skipped}'
+" || bail "docling lane ran but its non-vacuity check failed"
+    rm -f docling-results.xml
+
+    echo "[5/5] Graph real-artifact lane (real GLiNER checkpoint)..."
+    _prefetch_ok=false
+    for attempt in 1 2 3; do
+        uv run python -c "
+import asyncio
+from archon_search.prose_extraction_backend import ProseExtractionBackend
+backend = ProseExtractionBackend()
+asyncio.run(backend.load())
+assert backend.load_count == 1, backend.load_count
+print('Graph NER artifact prefetched')
+" && { _prefetch_ok=true; break; }
+        echo "Attempt $attempt failed; retrying in $((attempt * 5))s..."
+        sleep $((attempt * 5))
+    done
+    [ "$_prefetch_ok" = true ] || bail "graph NER artifact prefetch failed after 3 attempts"
+
+    ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 \
+        -m graph_real_artifact --junitxml=graph-real-artifact-results.xml tests/ \
+        || bail "graph real-artifact lane failed — fix all failures before releasing"
+    uv run python -c "
+import xml.etree.ElementTree as ET
+c = [t for t in ET.parse('graph-real-artifact-results.xml').getroot().iter('testcase') if t.get('name') == 'test_graph_ner_lane_non_vacuity']
+assert len(c) == 1, f'expected exactly one test_graph_ner_lane_non_vacuity testcase, found {len(c)} — the lane did not run'
+assert c[0].find('skipped') is None, 'test_graph_ner_lane_non_vacuity was skipped — the real-artifact guard did not execute'
+" || bail "graph real-artifact lane ran but its non-vacuity check failed"
+    rm -f graph-real-artifact-results.xml
+
+    echo "Enforcing coverage >= 85% across default+eval+integration lanes..."
+    uv run coverage report --fail-under=85 || bail "coverage below 85% — fix before releasing"
+
+    echo "All release-gating test lanes passed in $(( SECONDS - _suite_start ))s."
 fi
 
 # 2. Compute provisional CalVer tag (count+1 accounts for the CHANGELOG.md commit added later).

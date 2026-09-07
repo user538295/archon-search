@@ -62,7 +62,7 @@ bash release.sh --dry-run # show what would happen; do not tag or push
 
 ### What `release.sh` does
 
-1. **Pre-flight**: refuses to run unless the working tree is clean, the current branch is `main`, `HEAD` matches `origin/main`, and `git-cliff >= 2.4` is available in `PATH`.
+1. **Pre-flight**: refuses to run unless the working tree is clean, the current branch is `main`, `HEAD` matches `origin/main`, and `git-cliff >= 2.4` is available in `PATH`. Then runs every lane `archon-search-release.yml`'s `test` job gates publish on — default suite, eval slice, integration suite, docling parser lane (with its non-vacuity check), graph_real_artifact lane (prefetch + lane + non-vacuity check) — then enforces `coverage >= 85%` the same way. A lane broken on `main` fails here, before the tag is created, instead of only after it is pushed. Skippable only via `RELEASE_SH_TEST_MODE` (the script's own self-test harness).
 2. **Compute the provisional tag**: `YY.M.<git rev-list --count HEAD + 1>` — the `+1` accounts for the CHANGELOG.md commit added in the next step.
 3. **Confirm the tag is new**: rejects if the tag already exists locally or on the origin remote.
 4. **Confirm with the operator** (unless `-y` / `--yes`). In `--dry-run` mode, prints the provisional tag, the git-cliff notes, and the GitHub Releases API payload — then exits without writing anything.
@@ -77,7 +77,7 @@ Once the tag lands on the origin remote, `archon-search-release.yml` takes over.
 
 `.github/workflows/archon-search-release.yml` is the only workflow that publishes. It is triggered by `push: tags: "*"` and by `workflow_dispatch:` (the dispatch trigger has no `inputs:` block; the "Resolve tag name" step nonetheless requires a tag context and errors out if none can be resolved). It runs four jobs:
 
-1. **`test`**: clean install via `uv sync --dev`, default test suite with coverage, eval slice with thresholds, integration suite, then the `graph_real_artifact` lane (prefetches the real GLiNER checkpoint and fails on a vacuous extraction — GRAPH-4), then `coverage report --fail-under=85`. The publish job will not start unless this passes. The lane has no `actions/cache` step here on purpose: GitHub scopes caches by ref, so a tag run could never restore the PR gate's cache — every release pays a cold ~1.2 GB fetch.
+1. **`test`**: clean install via `uv sync --dev`, default test suite with coverage, eval slice with thresholds, integration suite, then the `docling` lane (real PDF/image OCR via RapidOCR, with a non-vacuity check against the JUnit output), then the `graph_real_artifact` lane (prefetches the real GLiNER checkpoint and fails on a vacuous extraction — GRAPH-4), then `coverage report --fail-under=85`. The publish job will not start unless this passes. The `graph_real_artifact` lane has no `actions/cache` step here on purpose: GitHub scopes caches by ref, so a tag run could never restore the PR gate's cache — every release pays a cold ~1.2 GB fetch.
 2. **`publish`**:
    - Resolves the tag name from `GITHUB_REF` (or `git describe --exact-match` for `workflow_dispatch`).
    - Builds wheel and sdist with `hatch build --clean`.
@@ -94,7 +94,9 @@ Once the tag lands on the origin remote, `archon-search-release.yml` takes over.
 flowchart TD
     Dev["Developer runs<br/>bash release.sh"] --> Preflight{"Clean tree?<br/>On main?<br/>Synced with origin?<br/>git-cliff ≥ 2.4?"}
     Preflight -- no --> Fail1[Abort]
-    Preflight -- yes --> Compute["Compute provisional tag<br/>YY.M.&lt;rev-count+1&gt;"]
+    Preflight -- yes --> LocalLanes{"Default suite + eval slice<br/>+ integration + docling lane<br/>+ graph_real_artifact lane<br/>+ coverage ≥ 85%<br/>(same lanes as the test job below)"}
+    LocalLanes -- fail --> Fail1b[Abort — fix before releasing]
+    LocalLanes -- pass --> Compute["Compute provisional tag<br/>YY.M.&lt;rev-count+1&gt;"]
     Compute --> Confirm{Tag new?<br/>Operator OK?}
     Confirm -- no --> Fail2[Abort]
     Confirm -- yes --> Cliff["git-cliff --unreleased --tag TAG<br/>(abort if no commits)"]
@@ -103,7 +105,7 @@ flowchart TD
     CountCheck -- no --> Fail3[Abort with recovery hint]
     CountCheck -- yes --> TagPush[git tag + git push origin TAG]
     TagPush --> GHA["GitHub Actions:<br/>archon-search-release.yml"]
-    GHA --> TestJob["Job: test<br/>(default suite + eval slice<br/>+ integration + graph_real_artifact lane<br/>+ coverage ≥ 85%)"]
+    GHA --> TestJob["Job: test<br/>(default suite + eval slice<br/>+ integration + docling lane<br/>+ graph_real_artifact lane<br/>+ coverage ≥ 85%)"]
     TestJob -- pass --> PublishJob["Job: publish"]
     TestJob -- fail --> Stop[No publish]
     PublishJob --> Build["hatch build --clean"]
