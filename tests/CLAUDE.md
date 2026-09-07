@@ -29,6 +29,12 @@ uv run pytest -m docling --no-cov                                     # `-m` fil
 ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m graph_real_artifact  # real GLiNER checkpoint must be pre-downloaded there
 ```
 
+The smoke lane's server subprocesses run on a throwaway `ARCHON_SEARCH_DATA_DIR`, but `_link_model_cache`
+(`tests/smoke/conftest.py`) symlinks their `models/` at the persistent `~/.archon-search/models` — every
+cache in the tree derives from that one env var (`paths.py`), so without the link each run would
+re-download ~1.3 GB of weights and the lane's latency budgets would be network-bound. First run on a
+cold host pays that download once, into the shared cache.
+
 ## PARALLEL TESTS ARE MANDATORY
 
 `addopts` sets `-n 8 --dist=loadgroup`. Never `-n auto` (=14 here) and never `-n0` in a normal run:

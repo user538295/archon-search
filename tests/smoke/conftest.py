@@ -214,6 +214,30 @@ def _terminate(proc: subprocess.Popen) -> None:
             proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
 
 
+#: Persistent model cache shared with a normal install — the default
+#: ``get_models_dir()`` location (``archon_search/paths.py``), which
+#: ``install/prewarm.py`` also populates.
+_SHARED_MODELS_DIR: Path = Path.home() / ".archon-search" / "models"
+
+
+def _link_model_cache(data_dir: Path) -> None:
+    """Symlink ``{data_dir}/models`` at the persistent shared model cache.
+
+    Every model cache in the tree derives from ``ARCHON_SEARCH_DATA_DIR`` —
+    ``get_models_dir()`` (fastembed embedder + cross-encoder reranker) and
+    ``get_graph_models_dir()`` (pinned GLiNER checkpoint) both hang off
+    ``<data>/models`` (``archon_search/paths.py``), with no per-cache env
+    override by design. These fixtures point that env var at a throwaway
+    ``tmp_path_factory`` dir, so without this link every smoke run re-downloads
+    ~1.3 GB of weights from HuggingFace — which made this suite's latency
+    budgets network-bound rather than compute-bound (a cold cross-encoder
+    download turned the first ``POST /search`` into ~14 s against a 5 s bound,
+    and the graph corpus pre-seed into ~195 s against a 60 s bound).
+    """
+    _SHARED_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    (data_dir / "models").symlink_to(_SHARED_MODELS_DIR)
+
+
 def _write_corpus(corpus_dir: Path) -> None:
     for filename, text in _CORPUS_DOCS.items():
         (corpus_dir / filename).write_text(text)
@@ -292,6 +316,7 @@ def smoke_server(tmp_path_factory) -> Iterator[SmokeServer]:
     api_key = secrets.token_hex(32)
 
     _write_corpus(corpus_dir)
+    _link_model_cache(data_dir)
 
     proc = _start_server(port=port, data_dir=data_dir, api_key=api_key)
     base_url = f"http://127.0.0.1:{port}"
@@ -365,9 +390,22 @@ def _write_graph_corpus(corpus_dir: Path) -> None:
         (corpus_dir / filename).write_text(text)
 
 
+#: Relation-confidence floor for the graph smoke server. The pinned checkpoint's
+#: best typed relation on ``_GRAPH_CORPUS_DOCS`` is ``Kubernetes -[uses]-> Docker``
+#: at 0.67, with ``Bob -[depends_on]-> Kubernetes`` at 0.66 — both below
+#: ``GraphConfig.relation_confidence``'s 0.75 default, which is tuned for the
+#: paragraph-scale prose of a real corpus rather than three seed sentences. Left at
+#: the default, the fixture's prose-relation assertion below can never hold no matter
+#: how the corpus is phrased. 0.5 keeps that assertion's full strength (it still
+#: demands a real typed relation from the engine, and the model's own
+#: highest-scoring ``related_to`` here is only 0.45) while clearing both real
+#: relations by ~0.16.
+_GRAPH_RELATION_CONFIDENCE: float = 0.5
+
+
 def _write_graph_enabled_config(data_dir: Path) -> None:
-    """Write ``[graph] enabled = true`` to the config path ``_subprocess_env``
-    points the subprocess at, before the server starts.
+    """Write the graph-enabled config to the path ``_subprocess_env`` points the
+    subprocess at, before the server starts.
 
     ``_subprocess_env`` always sets ``ARCHON_SEARCH_CONFIG`` to
     ``{data_dir}/archon-search.toml`` (a path that does not exist by default,
@@ -375,7 +413,10 @@ def _write_graph_enabled_config(data_dir: Path) -> None:
     Writing this file at that same path before ``_start_server`` is called is
     the only hook needed to turn the graph feature on for a smoke server.
     """
-    (data_dir / "archon-search.toml").write_text("[graph]\nenabled = true\n")
+    (data_dir / "archon-search.toml").write_text(
+        "[graph]\nenabled = true\n"
+        f"relation_confidence = {_GRAPH_RELATION_CONFIDENCE}\n"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -439,6 +480,7 @@ def smoke_server_graph_enabled(tmp_path_factory) -> Iterator[SmokeServer]:
 
     _write_graph_corpus(corpus_dir)
     _write_graph_enabled_config(data_dir)
+    _link_model_cache(data_dir)
 
     proc = _start_server(port=port, data_dir=data_dir, api_key=api_key)
     base_url = f"http://127.0.0.1:{port}"
