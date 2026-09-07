@@ -109,13 +109,12 @@ def test_e2e_non_latin_spans_through_the_stubbed_engine(
         f"names returned: {sorted(by_name)}"
     )
 
-    # Byte-exact, not merely present: a normalising or transcoding layer would return a
-    # name that compares unequal to the source spelling while still looking plausible.
+    # The `missing` check above is already the byte-exactness check: `by_name` is keyed by
+    # the name the route returned, so a dict hit is exact string equality against the source
+    # spelling — a normalising or transcoding layer produces a different key and lands in
+    # `missing`. Re-asserting `node["entity_name"] == name` here would be tautological.
     for name, entity_type in _NON_LATIN_ENTITIES:
         node = by_name[name]
-        assert node["entity_name"] == name, (
-            f"{name!r} came back as {node['entity_name']!r} — the plumbing rewrote the span"
-        )
         assert node["entity_type"] == entity_type, (
             f"{name!r} came back typed {node['entity_type']!r}, expected {entity_type!r} — "
             "the entity type is not carried per-span"

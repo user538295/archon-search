@@ -192,11 +192,12 @@ _DETERMINISM_CHUNKS = 64
 _DETERMINISM_COLLECTION = "determinism_col"
 
 # Wall-clock cap for the two SMALL T-10 workloads — each determinism child (one model
-# load, 64 chunks) and the French leg (one model load, ~30 paragraphs). Much tighter than
-# `_RUN_BUDGET_S`, which sizes the 1,000-chunk loops. Both workflows' `timeout-minutes`
-# on the lane step is sized above the sum of every cap in this file, so a real overrun is
-# reported by the test rather than killed opaquely by the step.
-_SMALL_RUN_BUDGET_S = 300
+# load, 64 chunks) and the French leg (one model load, ~30 paragraphs). Tighter than
+# `_RUN_BUDGET_S`, which sizes the 1,000-chunk loops, but deliberately ABOVE
+# `prose_extraction_backend._LOAD_TIMEOUT_SECONDS` (300 s): each of these windows contains
+# a full model load, so a cap equal to the load's own timeout leaves a legitimate cold
+# load zero margin and turns a slow-but-fine fetch into a lane failure.
+_SMALL_RUN_BUDGET_S = 600
 
 # Prefix on the child's single result line. The child shares stdout with huggingface's
 # own download/progress chatter, so the parent locates the payload by marker rather than
@@ -225,19 +226,32 @@ _CHILD_RESULT_PREFIX = "GRAPH_LANE_DETERMINISM_JSON:"
 #
 # A SUBSET assertion, not an equality one: pinning all 82 spans would fail on any
 # checkpoint revision that legitimately found one more entity, which is not a regression.
-# These six are the highest-confidence French spans in the recorded output (0.581-0.937,
-# against `GraphConfig.ner_confidence`'s 0.5 floor), so the margin is real rather than
-# threshold-adjacent.
+#
+# MARGIN, and why one recorded span is deliberately NOT pinned. This comparison BLOCKS,
+# and it was recorded on macOS arm64 — never on the x86 GitHub runner it will gate. Torch
+# CPU kernels are not bit-identical across architectures, so a score sitting just over
+# `GraphConfig.ner_confidence`'s 0.5 floor could drop under it there and red the gate on a
+# non-regression. `centroïdes de collection pré-calculés` scored 0.581 — the most
+# characteristically French span in the output, and the one closest to the floor — so it
+# is left out rather than pinned. Every span below scored 0.778-0.937, i.e. at least 0.278
+# of headroom, which no cross-architecture rounding difference plausibly closes.
 #
 # Matched against the spans pooled across ALL chunks rather than per-paragraph, on
 # purpose: the discriminating content is the surface form and its exact offset, and
 # binding each pin to a paragraph INDEX as well would break the test on any reflow of the
 # corpus without making it harder for an English-only engine to satisfy.
+# Corpus identity for `_FR_CORPUS`, in the same shape the throughput baseline pins
+# `_CORPUS`. The spans below are offsets INTO this corpus's paragraphs, so a three-character
+# edit to any of these five documents shifts them — and without this pin the test would
+# report a "multilingual regression" when the real cause is that the corpus changed.
+_FR_CORPUS_FILE_COUNT = 5
+_FR_CORPUS_TOTAL_BYTES = 6467
+_FR_CORPUS_SHA256_16 = "9d5bf4be090f1b6c"
+
 _FRENCH_SPANS: frozenset[tuple[str, str, int, int]] = frozenset(
     {
         ("architecture en couches", "system", 31, 54),
         ("routeur multi-collection", "system", 3, 27),
-        ("centroïdes de collection pré-calculés", "concept", 141, 178),
         ("seuil de confiance", "concept", 3, 21),
         ("variables d'environnement", "concept", 4, 29),
         ("répertoire personnel", "system", 67, 87),
@@ -385,20 +399,63 @@ def _build_prose_chunks(count: int) -> list[ChunkInput]:
     ]
 
 
-def _corpus_identity() -> tuple[int, int, str]:
+def _corpus_identity(corpus: Path = _CORPUS) -> tuple[int, int, str]:
     """`(file_count, total_bytes, sha256[:16])` over the files `_INGEST_GLOB_PATTERN` matches.
 
     Byte-for-byte the computation the deleted standalone module used to derive the pins
-    above, so the two are directly comparable.
+    above, so the two are directly comparable. Defaulted rather than required so the
+    throughput test's existing call site stays unchanged; the French leg passes
+    `_FR_CORPUS` to pin its own input the same way.
     """
     digest = hashlib.sha256()
     total_bytes = 0
-    files = sorted(p for p in _CORPUS.glob(_INGEST_GLOB_PATTERN) if p.is_file())
+    files = sorted(p for p in corpus.glob(_INGEST_GLOB_PATTERN) if p.is_file())
     for path in files:
         data = path.read_bytes()
         digest.update(data)
         total_bytes += len(data)
     return len(files), total_bytes, digest.hexdigest()[:16]
+
+
+def _assert_extraction_non_vacuity(
+    *, degraded: bool, warnings: list, nodes: list, edges: list, load_count: int, corpus: str
+) -> None:
+    """S26's four blocking non-vacuity asserts. Keyword-only, because the non-vacuity test
+    accumulates these across batches while the French leg reads them off one result.
+
+    Shared by `test_graph_ner_lane_non_vacuity` and the French leg, which S1 requires to
+    carry the same checks — one copy, so the two cannot drift into asserting different
+    things under the same name. `_assert_child_non_vacuity`'s version stays separate on
+    purpose: it reads a JSON payload from another process, not live objects.
+
+    Ordered deliberately, and each assert closes a distinct way the lane could pass while
+    proving nothing. Degradation first: a degraded run skips prose extraction entirely and
+    still returns `status == "ok"`, so every later assert is meaningless without it. Then
+    `load_count`, so an empty graph reports "the model never loaded" rather than "the graph
+    is empty" — deliberately not the resolved provider list, which is computable from
+    config with no model loaded. Then emptiness (the engine can run and return nothing).
+    Then the typed-edge check, split out so a graph with nodes but no real relations still
+    fails: `related_to` co-occurrence edges appear whenever two entities share a chunk, so
+    `len(edges) >= 1` passes without any relation extraction at all (Q28).
+    """
+    assert degraded is False, (
+        f"prose extraction degraded over {corpus} — the real artifact did not load "
+        f"or inference raised. warnings={warnings}"
+    )
+    assert load_count == 1, (
+        "expected exactly one real model construction for this process, got "
+        f"{load_count} — the engine's load path did not execute once"
+    )
+    assert nodes, (
+        f"the real engine returned zero entity nodes over {corpus} — a silent no-op: "
+        "extraction ran, did not degrade, and produced nothing"
+    )
+    typed_edges = [edge for edge in edges if edge.relationship_type in _TYPED_RELATIONSHIPS]
+    assert typed_edges, (
+        f"no typed (uses/implements/depends_on) edge was extracted from {corpus} — only "
+        "co-occurrence `related_to` edges, which prove nothing about relation extraction. "
+        f"edge types seen: {sorted({e.relationship_type.value for e in edges})}"
+    )
 
 
 def _check_host_safety_or_exit(
@@ -407,10 +464,14 @@ def _check_host_safety_or_exit(
     """Abort the whole pytest session via `pytest.exit()` if own-process RSS has crossed
     the host-safety ceiling or the wall-clock cap has been exhausted.
 
-    Shared by all three lane tests: a real-artifact ingest at this scale is exactly as
-    capable of exhausting a host's memory or hanging regardless of which test drives it, so
-    all three call this after every batch — not only the `xfail`-marked budget test, whose
-    numeric comparison is the only thing meant to be soft. `pytest.exit()` bypasses `xfail`
+    Called by the three tests that run a batched loop at 1,000-chunk scale — non-vacuity,
+    memory budget, throughput — after every batch: such a run is exactly as capable of
+    exhausting a host's memory or hanging regardless of which test drives it, so this is
+    not only the `xfail`-marked budget test's guard, whose numeric comparison is the only
+    thing meant to be soft. T-10's two legs deliberately do NOT call it: the determinism
+    parent holds no model at all (its copies live in child processes bounded by
+    `_SMALL_RUN_BUDGET_S`), and the French leg runs ~30 paragraphs in one shot with no loop
+    to sample between, bounded by the same cap. `pytest.exit()` bypasses `xfail`
     entirely (see the module docstring), so this is safe to call from any of them. It stays
     `pytest.exit()` in the unmarked tests too: host safety is a reason to abandon the whole
     session, not to fail one test and start the next one on a host already near its limit.
@@ -486,15 +547,18 @@ def graph_pipeline(_lane_data_dir, tmp_path_factory):
     `_LANE_GRAPH_CONFIG.enabled=True` is what makes `create_pipeline` construct a
     `GraphExtractor` (and therefore a real `ProseExtractionBackend`).
 
-    Module-scoped, deliberately: one shared backend for both tests in this file, not one
-    each. Each `ProseExtractionBackend` instance loads its own full GLiNER stack (spike:
-    ~3.2 GiB resident, ~3.7 GiB peak) — on a standard GitHub Actions runner (7 GiB total),
-    two of those resident at once in the same process would risk a genuine OOM, not just a
-    tighter host-safety margin. `load()` is idempotent (`prose_extraction_backend.py`), so
-    sharing costs nothing: whichever test runs first pays the one real load, `load_count`
-    stays `== 1` for the rest of the module, and the second test's own "warm-up" step below
-    becomes a no-op reload rather than a genuine one — which only makes its baseline more
-    settled, not less.
+    Module-scoped, deliberately: ONE shared backend for every test in this file that takes
+    it, not one each. Each `ProseExtractionBackend` instance loads its own full GLiNER
+    stack (spike: ~3.2 GiB resident, ~3.7 GiB peak) — on a standard GitHub Actions runner
+    (7 GiB total), two of those resident at once in the same process would risk a genuine
+    OOM, not just a tighter host-safety margin. `load()` is idempotent
+    (`prose_extraction_backend.py`), so sharing costs nothing: whichever test runs first
+    pays the one real load, `load_count` stays `== 1` for the rest of the module, and the
+    budget test's own "warm-up" step becomes a no-op reload rather than a genuine one —
+    which only makes its baseline more settled, not less.
+
+    `test_graph_ner_determinism_across_processes` deliberately does NOT take this fixture;
+    see the module docstring for why its model copies must live in child processes.
     """
     tmp_path = tmp_path_factory.mktemp("graph_real_artifact_db")
     config = SearchConfig(db_path=str(tmp_path / "db"), graph=_LANE_GRAPH_CONFIG)
@@ -592,7 +656,11 @@ def _run_determinism_child(run_index: int) -> dict:
     child = subprocess.run(
         [sys.executable, str(Path(__file__).resolve())],
         capture_output=True,
-        text=True,
+        # Explicit UTF-8: huggingface's own progress output on this stdout is non-ASCII,
+        # and `text=True` alone would decode it with the locale encoding — a C/POSIX-locale
+        # runner would then raise UnicodeDecodeError instead of reporting a real result.
+        encoding="utf-8",
+        errors="replace",
         timeout=_SMALL_RUN_BUDGET_S,
         cwd=str(_REPO_ROOT),
         env=env,
@@ -708,17 +776,9 @@ async def test_graph_ner_lane_non_vacuity(graph_pipeline) -> None:
     through the same host-safety ceiling and wall-clock cap: this workload is exactly as
     capable of exhausting the host as the budget test's, so it carries the same guards.
 
-    Each assert closes a distinct way the lane could pass while proving nothing:
-
-    1. `degraded is False` — a degraded run skips prose extraction entirely and still
-       returns `status == "ok"`, so ingest success alone is not evidence.
-    2. entity node count > 0 — the engine can run and return nothing (the silent no-op).
-    3. at least one **typed** edge — `related_to` co-occurrence edges appear whenever two
-       entities share a chunk, so `edge_count >= 1` passes without any real relation
-       extraction (Q28).
-    4. `load_count == 1` — proves the load path actually executed. Deliberately not the
-       resolved provider list, which is computable from config with no model loaded and
-       so cannot discriminate a real load from a configuration read.
+    The four asserts themselves live in `_assert_extraction_non_vacuity`, which the French
+    leg shares — see that helper for what each one closes off. What is specific to this
+    test is the data-dir check below and the 1,000-chunk scale.
     """
     extractor = graph_pipeline._graph_extractor
     assert extractor is not None, "graph.enabled=True must construct a GraphExtractor"
@@ -756,35 +816,15 @@ async def test_graph_ner_lane_non_vacuity(graph_pipeline) -> None:
         trace.append(round(_read_own_rss_mib(), 1))
         _check_host_safety_or_exit(trace[-1], baseline_mib, started, trace)
 
-    # (1) Not degraded. Checked first and on its own: every assert below is meaningless
-    # if prose extraction never ran, so this must not be folded into a compound condition.
-    assert degraded is False, (
-        "prose extraction degraded — the real artifact did not load or inference raised. "
-        f"warnings={warnings}"
-    )
-
-    # (4) The load path actually executed. Read before the emptiness asserts so a failure
-    # here is reported as "the model never loaded" rather than "the graph is empty".
-    assert extractor.load_count == 1, (
-        "expected exactly one real model construction for this process, got "
-        f"{extractor.load_count} — the engine's load path did not execute once"
-    )
-
-    # (2) The engine produced prose entities. `nodes` here are prose nodes by
-    # construction: every chunk above carries `symbol_type=None`, so the C3 code-symbol
-    # path contributed nothing.
-    assert len(nodes) > 0, (
-        "the real engine returned zero entity nodes over the committed prose corpus — a "
-        "silent no-op: extraction ran, did not degrade, and produced nothing"
-    )
-
-    # (3) At least one typed, non-co-occurrence edge. Split out from the count assert
-    # above so a graph that has nodes but no real relations still fails loudly.
-    typed_edges = [edge for edge in edges if edge.relationship_type in _TYPED_RELATIONSHIPS]
-    assert typed_edges, (
-        "no typed (uses/implements/depends_on) edge was extracted — only co-occurrence "
-        f"`related_to` edges, which prove nothing about relation extraction. "
-        f"edge types seen: {sorted({e.relationship_type.value for e in edges})}"
+    # `nodes` here are prose nodes by construction: every chunk above carries
+    # `symbol_type=None`, so the C3 code-symbol path contributed nothing.
+    _assert_extraction_non_vacuity(
+        degraded=degraded,
+        warnings=warnings,
+        nodes=nodes,
+        edges=edges,
+        load_count=extractor.load_count,
+        corpus="the committed prose corpus",
     )
 
 
@@ -1038,6 +1078,20 @@ async def test_graph_ner_french_spans_with_offsets(graph_pipeline) -> None:
     extractor = graph_pipeline._graph_extractor
     assert extractor is not None, "graph.enabled=True must construct a GraphExtractor"
 
+    # The pinned spans are offsets into this corpus's own paragraphs, so the comparison is
+    # only valid while the input is unchanged. Checked FIRST: without it, an edit to the
+    # corpus reports itself as a multilingual regression in the engine.
+    assert _corpus_identity(_FR_CORPUS) == (
+        _FR_CORPUS_FILE_COUNT,
+        _FR_CORPUS_TOTAL_BYTES,
+        _FR_CORPUS_SHA256_16,
+    ), (
+        f"{_FR_CORPUS} no longer matches the corpus _FRENCH_SPANS was recorded over — got "
+        f"{_corpus_identity(_FR_CORPUS)}, pinned ({_FR_CORPUS_FILE_COUNT}, "
+        f"{_FR_CORPUS_TOTAL_BYTES}, {_FR_CORPUS_SHA256_16!r}). Re-record the spans against "
+        "the new corpus rather than re-pointing this test."
+    )
+
     paragraphs = _paragraphs(_FR_CORPUS)
     chunks = [
         ChunkInput(
@@ -1054,31 +1108,18 @@ async def test_graph_ner_french_spans_with_offsets(graph_pipeline) -> None:
     async with asyncio.timeout(_SMALL_RUN_BUDGET_S):
         result = await extractor.extract(chunks, "fr-doc", "graph_real_artifact_french")
 
-    # --- S26's non-vacuity asserts, which S1 requires this leg to be preceded by (K13).
-    assert result.degraded is False, (
-        "prose extraction degraded over the French corpus — the real artifact did not "
-        f"load or inference raised. warnings={result.warnings}"
-    )
-    assert extractor.load_count == 1, (
-        "expected exactly one real model construction for this process, got "
-        f"{extractor.load_count} — the engine's load path did not execute once"
-    )
-    assert result.nodes, (
-        "the real engine returned zero entity nodes over the French corpus — a silent "
-        "no-op: extraction ran, did not degrade, and produced nothing"
+    # S26's non-vacuity asserts, which S1 requires this leg to be preceded by (K13).
+    _assert_extraction_non_vacuity(
+        degraded=result.degraded,
+        warnings=result.warnings,
+        nodes=result.nodes,
+        edges=result.edges,
+        load_count=extractor.load_count,
+        corpus="the French corpus",
     )
     assert result.mentions, (
         "entity nodes were created from the French prose but no mentions were — S1 "
         "requires both, and salience/co-occurrence derive from the mention rows"
-    )
-    typed_edges = [
-        edge for edge in result.edges if edge.relationship_type in _TYPED_RELATIONSHIPS
-    ]
-    assert typed_edges, (
-        "no typed (uses/implements/depends_on) edge was extracted from the French corpus "
-        "— only co-occurrence `related_to` edges, which prove nothing about relation "
-        f"extraction. edge types seen: "
-        f"{sorted({e.relationship_type.value for e in result.edges})}"
     )
 
     # --- The spans themselves, with offsets.

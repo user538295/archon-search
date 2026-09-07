@@ -103,19 +103,27 @@ jobs:
         # tests/ (not the single lane file): scoping by marker alone means a lane test that
         # ends up in another file still runs and is still verified below.
         # The budget must exceed the tests' OWN caps so a real overrun is reported by the
-        # test (with its RSS trace) rather than killed opaquely by the step: three tests at
-        # _RUN_BUDGET_S=900s each (non-vacuity, memory, throughput) is 45 minutes, plus
-        # four _SMALL_RUN_BUDGET_S=300s caps added by T-10 — one per determinism child
-        # process, and one on each of the French leg's two awaits — for 65 minutes of
-        # capped work before model loads.
-        timeout-minutes: 70
+        # test (with its RSS trace) rather than killed opaquely by the step. The real sum,
+        # recounted at T-10 because every earlier figure here undercounted it:
+        #   non-vacuity      900s  (_RUN_BUDGET_S, between-batch wall-clock check)
+        #   memory budget    900s  (same)
+        #   throughput      2700s  (_THROUGHPUT_RUNS=3 x asyncio.timeout(_RUN_BUDGET_S) —
+        #                          the cap is PER RUN, inside the loop, not per test; this
+        #                          is the dominant term and predates T-10)
+        #   determinism     1200s  (2 child processes x _SMALL_RUN_BUDGET_S=600s)
+        #   French          1200s  (2 capped awaits x _SMALL_RUN_BUDGET_S)
+        #                = 6900s = 115 minutes, plus uncapped model loads and warm-ups.
+        # 130 covers it. A ceiling, not an expectation: a healthy run is ~5 minutes.
+        timeout-minutes: 130
         run: ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m graph_real_artifact --junitxml=graph-real-artifact-results.xml tests/
 
       - name: Verify the blocking non-vacuity test actually ran
-        # Asserts on THAT test by name, not an aggregate count. The lane's other test is
-        # xfail-marked, and xunit2 records an xfail as <skipped type="pytest.xfail"> while a
-        # non-strict XPASS records as passed — so `tests-skipped>0` can be satisfied entirely
-        # by the soft test while the blocking one never ran. Naming it closes that hole.
+        # Asserts on THAT test by name, not an aggregate count: the lane's memory-budget
+        # test is xfail-marked, and xunit2 records an xfail as <skipped type="pytest.xfail">
+        # while a non-strict XPASS records as passed — so `tests-skipped>0` can be satisfied
+        # entirely by the soft test while the blocking one never ran. Naming it closes that
+        # hole for this test only; the lane's three OTHER blocking tests are not covered
+        # here — see TEST-4 in Documentation/Architecture/530_technical_debt_refactoring_roadmap.md.
         run: uv run python -c "import xml.etree.ElementTree as ET; c=[t for t in ET.parse('graph-real-artifact-results.xml').getroot().iter('testcase') if t.get('name')=='test_graph_ner_lane_non_vacuity']; assert len(c)==1, f'expected exactly one test_graph_ner_lane_non_vacuity testcase, found {len(c)} — the lane did not run; check the prefetch step'; assert c[0].find('skipped') is None, 'test_graph_ner_lane_non_vacuity was skipped — the real-artifact guard did not execute'"
 
       - name: Enforce coverage fail-under=85
