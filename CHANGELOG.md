@@ -1,6 +1,25 @@
 # Changelog
 
 
+## [26.9.2101] - 2026-09-07
+
+**Graph NER engine documentation migration, multilingual span validation, and test infrastructure hardening**
+
+**Graph Engine Documentation**
+- Updated `GraphConfig.provider` docstring and 30+ documentation locations from deprecated spaCy prose engine to shipped GLiNER checkpoint, resolving contradictions and unworkable remedies
+- Lowered `GraphConfig.relation_confidence` from 0.75 to 0.5 in smoke fixtures, where the pinned checkpoint's best typed relations score 0.66–0.67 on validation corpus — prevents false assertion failures on valid extractions
+
+**Container & Smoke Testing**
+- Added container smoke legs for graph-enabled and graph-disabled scenarios, verifying default containers emit no graph warnings while operator-enabled ones degrade gracefully to code-symbols-only when GLiNER checkpoint unavailable
+- Introduced shared persistent model cache (`~/.archon-search/models`) for smoke fixtures, eliminating 1.3 GB re-downloads and network-bound timeouts (cold cross-encoder: ~14s → sub-second on warm cache)
+- Fixed smoke test configuration: `SMOKE_API_KEY` validation (previously rejected as non-hex), `READY_TIMEOUT_S` raised to 600s for cold extras install, and improved connection-error detection in `_wait_for_ready` to catch `set -e` aborts instead of timeout spin
+
+**E2E & Graph Extraction**
+- Fixed multi-instance e2e isolation by capturing `ORIGINAL_ARCHON_SEARCH_API_KEY` before suite-wide override and passing explicit `env=` to `docker compose up` to prevent key leakage, while raising timeout from 120s to 900s for cold-start scenarios
+- Fixed graph enrichment test to wire both `entities=` and `relations=` through `install_graph_engine_stub`, ensuring typed edges (`uses`/`implements`/`depends_on`) are produced instead of remaining structurally impossible
+- Added multilingual span validation: Hungarian manual review confirms entity/relation extraction at production defaults, French leg pins six morphology-aware spans with byte-exact character offsets to guard against cross-architecture drift
+
+
 ## [26.8.1987] - 2026-08-18
 
 **CLI error messaging fix for `--api-url` + wizard prompt restoration**
