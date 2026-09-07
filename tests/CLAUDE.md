@@ -26,7 +26,7 @@ uv run pytest tests/smoke/ --no-cov                                   # spawns a
 uv run pytest tests/smoke/docker/ --no-cov                            # covered by the same tests/smoke exclusion
 uv run pytest tests/eval/live/ --no-cov                               # real fastembed weights; hangs if auto-collected
 uv run pytest -m docling --no-cov                                     # `-m` filter only — not a dedicated directory
-ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run pytest -m graph_real_artifact --no-cov  # needs the real GLiNER checkpoint pre-downloaded there
+ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m graph_real_artifact  # real GLiNER checkpoint must be pre-downloaded there
 ```
 
 ## PARALLEL TESTS ARE MANDATORY

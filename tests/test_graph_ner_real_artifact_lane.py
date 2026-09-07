@@ -1,7 +1,7 @@
 """The `graph_real_artifact` lane — real GLiNER artifact, no stubs (Task T-8, S26).
 
 This lane exists because every other graph test in the suite runs against a stubbed
-engine, which certifies the fixture rather than the engine. Its two tests load the real
+engine, which certifies the fixture rather than the engine. Its three tests load the real
 multi-hundred-MB artifact, so it is excluded from the default run by the
 `graph_real_artifact` marker (`pyproject.toml` `addopts`, and both CI workflows' unit and
 integration `-m` filters — BE-21) and runs as its own CI step in both `archon-search-pr.yml`
@@ -34,17 +34,32 @@ In this file's own CI step that phase is exercised first by `test_graph_ner_lane
 (no `xfail` marker, and file-definition order runs it first), so a broken artifact still
 fails loudly there; running the budget test in isolation loses that guarantee.
 
+`test_graph_ner_throughput_within_budget` (T-9, S27) is NOT marked either — its comparison
+BLOCKS. `xfail(strict=False)` would make it unfailable in both directions (a pass reports
+XPASS, a failure reports XFAIL), so marking it would deliver zero enforcement instead of a
+soft signal. `REGRESSION_MULTIPLIER` is widened to absorb a slower CI runner instead, and
+every check in that function's body is therefore a plain `assert`, including S27's own
+non-vacuity gate (K13, which is why that gate can live inside the throughput function
+rather than needing a fourth test). Only the shared `_check_host_safety_or_exit` still
+calls `pytest.exit()` there — that is host safety, not the comparison.
+
 **Never `importorskip`.** A missing artifact or a missing `[graph]` extra must fail this
 lane loudly: the whole point is to detect a silent no-op, and skipping on absence is how a
 silent no-op stays invisible.
 
 fastembed stays stubbed here (`tests/conftest.py` `install_stubs()`): only the GLiNER path
 must be real, and a real embedder would add its own resident footprint to an RSS budget
-that is meant to bind the graph engine alone.
+that is meant to bind the graph engine alone. That stubbing also removes real embedding
+cost from `test_graph_ner_throughput_within_budget`'s timed window, which the pre-change
+baseline it compares against DID pay — see the COMPARABILITY CAVEAT beside
+`THROUGHPUT_BASELINE_MS`.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import os
+import statistics
 import subprocess
 import time
 from pathlib import Path
@@ -52,6 +67,7 @@ from pathlib import Path
 import pytest
 
 from archon_search.config import GraphConfig, SearchConfig
+from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.graph_types import RelationshipType, ChunkInput
 from archon_search.paths import get_graph_models_dir
 from archon_search.pipeline import create_pipeline
@@ -129,6 +145,86 @@ _TYPED_RELATIONSHIPS = frozenset(
     {RelationshipType.uses, RelationshipType.implements, RelationshipType.depends_on}
 )
 
+# --- throughput constants (T-9, S27) ------------------------------------------------
+#
+# Moved here verbatim from the standalone `tests/eval/_graph_ner_throughput_baseline.py`,
+# which T-2 captured before the old engine was deleted and which T-9 deletes now that this
+# lane's test file exists to hold the figure (team plan → Corpus, Q21, K10). Both constants
+# are named WITHOUT the leading underscore the rest of this file uses: S27 and the Tester
+# Done-when checklist name `THROUGHPUT_BASELINE_MS` and `REGRESSION_MULTIPLIER` verbatim.
+#
+# PROVENANCE of the baseline — figure, corpus, machine, provider, date, as captured:
+#   figure    1335.3 ms — the median of three local runs (1296.9 / 1335.3 / 1345.4 ms).
+#             A DURATION, not a rate: LOWER IS BETTER, which is what makes the
+#             `measured <= BASELINE * MULTIPLIER` direction below correct.
+#   corpus    tests/eval/corpus/docs/ — 17 files, 18380 bytes, sha256[:16] 5b5717d98f2ac6e7,
+#             ingested with the `**/*` glob. Pinned below and re-checked before timing.
+#   machine   Darwin 25.5.0 arm64 (macOS 26.5.2) — a local dev machine, NOT a CI runner.
+#             The standalone module recorded that gap honestly and said the figure "should
+#             be re-captured on CI before being trusted as the S27 regression baseline";
+#             that gap is exactly what `REGRESSION_MULTIPLIER` below is sized to absorb,
+#             and what K9's CI re-capture closes.
+#   provider  fastembed's own default provider selection (`SearchConfig.providers == []`),
+#             graph enabled with `graph.provider=None` so no LLM enrichment call ran, and
+#             ANTHROPIC_API_KEY unset so no description-generation call was timed.
+#   date      2026-09-01, at commit b5b8ba6ca7a45457811d2f8bff7ce8b3e7ddf4fe.
+#
+# COMPARABILITY CAVEAT, stated plainly rather than papered over — and deliberately NOT
+# "fixed" by adding a second assertion, which is exactly the defect M13 exists to prevent.
+# The baseline timed the OUTGOING NER engine with the REAL fastembed embedder inside the
+# timed window. This lane keeps fastembed STUBBED (`tests/conftest.py` → `install_stubs()`,
+# module docstring above) and runs the real GLiNER artifact. The two figures therefore
+# differ on two axes at once, pushing in opposite directions: embedding cost is now
+# ~free (biasing the measurement DOWN) while a real transformer forward pass replaces a
+# lightweight statistical tagger (biasing it heavily UP). REGRESSION_MULTIPLIER absorbs a
+# whole engine swap, not machine noise — it is not a tight "no regression" bound and must
+# not be read as one.
+THROUGHPUT_BASELINE_MS = 1335.3
+
+# Allowed regression over that baseline. Provisional in exactly the way
+# `_RSS_GROWTH_BUDGET_MIB` above is, and set the same way: headroom over a local
+# measurement taken by this very test, macOS arm64 dev machine, 2026-09-06, CPU only:
+# 4002.8 ms as the whole lane runs it (median of 4000.9 / 4002.8 / 4097.0), 3858.2 ms with
+# this test run alone — 3.0x the baseline, taking the in-lane figure. The run-to-run spread
+# is ~1%, so the headroom below is not covering measurement noise; it is covering the
+# machine gap. This comparison BLOCKS — it carries no `xfail` (module docstring) — so the
+# multiplier must absorb a slower GitHub Actions runner rather than flake the build: 10.0
+# is that 3.0x with roughly 3x headroom over it.
+#
+# Stated plainly rather than overclaimed: at 10.0 this catches CATASTROPHIC regressions —
+# a lost batch, a per-chunk model reload, an accidental serialization of the forward pass —
+# and NOT modest ones. A 2x or 3x slowdown passes this test today. That is the price of
+# enforcing a laptop-derived figure on an unmeasured runner, and the fix is to tighten the
+# number once a real runner has produced one, not to set a bound the runner cannot meet:
+# **the first green CI run of this lane replaces it** with a CI-derived figure (K9); the
+# run records `measured_ms` into the CI step's `--junitxml` precisely so that figure is
+# recoverable from a green run rather than only from a failing one.
+#
+# MANUAL REFERENCE CHECK — NEVER ASSERTED (team plan → Corpus, Q21; M13). The tight
+# Apple-Silicon reference is ten percent, i.e. `measured <= THROUGHPUT_BASELINE_MS * 1.10`.
+# The local measurement above misses it by a wide margin, which is the engine swap and the
+# stubbed embedder in the caveat above showing up in the number — read it that way, by eye,
+# against the `measured_ms` property the test records. That figure lives here as a comment
+# and nothing else: this lane holds exactly ONE enforced pass condition, and an earlier
+# draft's second, undefined "loose ceiling" is the defect that rule was written to close.
+# Never turn it into a second comparison.
+REGRESSION_MULTIPLIER = 10.0
+
+# Corpus identity, carried across from the standalone module. The comparison above is a
+# comparison against a hardcoded historical constant, so it is only valid while its input
+# is unchanged: a mutated corpus must invalidate it loudly rather than silently shift the
+# measurement. Re-verified against the tree on 2026-09-06.
+_INGEST_GLOB_PATTERN = "**/*"  # `ingest_directory`'s own default (archon_search/pipeline.py)
+_BASELINE_CORPUS_FILE_COUNT = 17
+_BASELINE_CORPUS_TOTAL_BYTES = 18380
+_BASELINE_CORPUS_SHA256_16 = "5b5717d98f2ac6e7"
+
+# Timed runs, mirroring the baseline's mechanism exactly (median of 3, one warmed pipeline
+# reused across all runs, each run ingesting into its own fresh collection so none hits a
+# doc-already-exists shortcut). A single noisy run compared against a median-of-3 constant
+# would not be the same measurement.
+_THROUGHPUT_RUNS = 3
+
 
 def _read_own_rss_mib() -> float:
     """Current resident set size of THIS process, in MiB.
@@ -183,17 +279,35 @@ def _build_prose_chunks(count: int) -> list[ChunkInput]:
     ]
 
 
+def _corpus_identity() -> tuple[int, int, str]:
+    """`(file_count, total_bytes, sha256[:16])` over the files `_INGEST_GLOB_PATTERN` matches.
+
+    Byte-for-byte the computation the deleted standalone module used to derive the pins
+    above, so the two are directly comparable.
+    """
+    digest = hashlib.sha256()
+    total_bytes = 0
+    files = sorted(p for p in _CORPUS.glob(_INGEST_GLOB_PATTERN) if p.is_file())
+    for path in files:
+        data = path.read_bytes()
+        digest.update(data)
+        total_bytes += len(data)
+    return len(files), total_bytes, digest.hexdigest()[:16]
+
+
 def _check_host_safety_or_exit(
     current_mib: float, baseline_mib: float, started: float, trace: list[float]
 ) -> None:
     """Abort the whole pytest session via `pytest.exit()` if own-process RSS has crossed
     the host-safety ceiling or the wall-clock cap has been exhausted.
 
-    Shared by both lane tests: a 1,000-chunk real-artifact ingest is exactly as capable of
-    exhausting a host's memory or hanging regardless of which test drives it, so both call
-    this after every batch — not only the `xfail`-marked budget test, whose numeric
-    comparison is the only thing meant to be soft. `pytest.exit()` bypasses `xfail`
-    entirely (see the module docstring), so this is safe to call from either.
+    Shared by all three lane tests: a real-artifact ingest at this scale is exactly as
+    capable of exhausting a host's memory or hanging regardless of which test drives it, so
+    all three call this after every batch — not only the `xfail`-marked budget test, whose
+    numeric comparison is the only thing meant to be soft. `pytest.exit()` bypasses `xfail`
+    entirely (see the module docstring), so this is safe to call from any of them. It stays
+    `pytest.exit()` in the unmarked tests too: host safety is a reason to abandon the whole
+    session, not to fail one test and start the next one on a host already near its limit.
     """
     if current_mib >= _RSS_CEILING_MIB:
         pytest.exit(
@@ -448,4 +562,157 @@ async def test_graph_ner_memory_budget(graph_pipeline, record_property) -> None:
         f"graph NER steady-state RSS grew {growth_mib:.0f} MiB over {len(measured)} prose "
         f"chunks (baseline {baseline_mib:.0f} MiB), exceeding the {_RSS_GROWTH_BUDGET_MIB} "
         f"MiB CPU-configuration budget. RSS trace: {trace}"
+    )
+
+
+@pytest.mark.graph_real_artifact
+@pytest.mark.xdist_group("graph_real_artifact")
+@pytest.mark.asyncio
+async def test_graph_ner_throughput_within_budget(graph_pipeline, record_property) -> None:
+    """S27: total ingest wall time over the committed corpus, one comparison against the
+    moved baseline — `measured <= THROUGHPUT_BASELINE_MS * REGRESSION_MULTIPLIER`.
+
+    **This test blocks.** It carries no `xfail`: with `strict=False` a pass reports XPASS
+    and a failure reports XFAIL, so marking it would leave the comparison unable to fail CI
+    in either direction — zero enforcement rather than a soft signal. The baseline's own
+    provisional nature (a developer-laptop figure captured against the outgoing engine with
+    a real embedder — see the COMPARABILITY CAVEAT beside the constants) is absorbed by
+    `REGRESSION_MULTIPLIER`'s width instead, which is the knob K9's CI re-capture tightens.
+
+    Every check in this body is therefore a plain `assert`, including S27's non-vacuity
+    gating (K13, which is why that gate can live inside this function rather than needing a
+    fourth test): `status == "ok"` plus non-zero chunk, entity and relation counts gate the
+    timing comparison, because a comparison against a degraded, short or empty run measures
+    nothing. Only `_check_host_safety_or_exit` still aborts the session — host safety is
+    shared with the other two tests and is not about this comparison.
+
+    Mirrors the deleted standalone module's measurement mechanism, which is the only thing
+    that makes the comparison meaningful at all: the same `create_pipeline` /
+    `ingest_directory` production entrypoint, the same corpus and glob, warm-up outside the
+    timed window, `time.perf_counter()` around the ingest, and the median of three runs.
+    """
+    file_count, total_bytes, sha16 = _corpus_identity()
+    assert (file_count, total_bytes, sha16) == (
+        _BASELINE_CORPUS_FILE_COUNT,
+        _BASELINE_CORPUS_TOTAL_BYTES,
+        _BASELINE_CORPUS_SHA256_16,
+    ), (
+        f"graph_real_artifact throughput lane: {_CORPUS} no longer matches the corpus "
+        f"THROUGHPUT_BASELINE_MS was measured over — got {file_count} files / "
+        f"{total_bytes} bytes / sha256[:16]={sha16}, pinned "
+        f"{_BASELINE_CORPUS_FILE_COUNT} / {_BASELINE_CORPUS_TOTAL_BYTES} / "
+        f"{_BASELINE_CORPUS_SHA256_16}. A comparison against a frozen historical "
+        "figure is only valid while its input is unchanged; re-capture the baseline "
+        "rather than re-pointing this test."
+    )
+
+    assert graph_pipeline._graph_extractor is not None, (
+        "graph.enabled=True must construct a GraphExtractor"
+    )
+    graph_store = graph_pipeline._graph_store
+    assert graph_store is not None, "graph.enabled=True must construct a GraphStore"
+
+    # The `graph_pipeline` fixture builds the pipeline but connects neither store; the
+    # standalone module connected both before timing, so this does too. These are the only
+    # `connect()` calls in this module — deliberately, since `GraphStore.connect` rebinds
+    # `self._db` without closing the previous handle (`graph_store.py`), so calling it twice
+    # would leak a connection rather than being a harmless no-op.
+    await graph_pipeline.store.connect()
+    await graph_store.connect()
+
+    # Warm-up, OUTSIDE the timed window — the baseline's rule, and the reason its figure is
+    # steady-state throughput rather than one-time model load. Deliberately the SAME
+    # operation the timed runs perform, over the same corpus and glob, into a throwaway
+    # collection: parse, chunk and LanceDB table setup are inside the timed window too, so
+    # warming only the model (as an `extract()` call would) still leaves those one-time
+    # costs in the first measured run whenever this test runs alone.
+    warmup_results = await graph_pipeline.ingest_directory(
+        _CORPUS,
+        "throughput_warmup_col",
+        glob_pattern=_INGEST_GLOB_PATTERN,
+        embedder=graph_pipeline._global_embedder,
+    )
+    warmup_nodes = await graph_store.node_count("throughput_warmup_col", DEFAULT_NAMESPACE)
+    assert warmup_nodes > 0 and all(r.status == "ok" for r in warmup_results), (
+        "graph_real_artifact throughput lane: the warm-up ingest produced no real "
+        "extraction — the artifact did not load, so any timing below would measure a "
+        f"skipped extraction. entity nodes={warmup_nodes}, results="
+        f"{[(r.doc_id, r.status, r.error) for r in warmup_results]}"
+    )
+
+    # ANTHROPIC_API_KEY needs no guard of its own here: `tests/conftest.py` clears it both
+    # session-wide (`_block_anthropic_key_at_session`) and per test
+    # (`_archon_isolated_data_dir`, which does NOT skip that step for this lane), so
+    # `generate_description()` short-circuits and no live LLM call lands in the timed
+    # window. The standalone module asserted it only because it ran outside pytest.
+    baseline_mib = _read_own_rss_mib()
+    started = time.monotonic()
+    trace: list[float] = []
+    elapsed_ms: list[float] = []
+
+    for run_index in range(_THROUGHPUT_RUNS):
+        collection = f"throughput_col_{run_index}"
+        run_started = time.perf_counter()
+        # `asyncio.timeout`, not only the post-ingest `_check_host_safety_or_exit` below:
+        # that helper runs between ingests, so on its own it cannot interrupt a single hung
+        # `ingest_directory`. Both CI workflows size their step budget above this cap
+        # precisely so an overrun is reported here, with the RSS trace, rather than killed
+        # opaquely by the step — which only holds if the cap actually binds mid-ingest.
+        async with asyncio.timeout(_RUN_BUDGET_S):
+            results = await graph_pipeline.ingest_directory(
+                _CORPUS,
+                collection,
+                glob_pattern=_INGEST_GLOB_PATTERN,
+                embedder=graph_pipeline._global_embedder,
+            )
+        elapsed_ms.append((time.perf_counter() - run_started) * 1000)
+
+        # --- S27/K13 non-vacuity gate: a timing figure from a degraded, short or empty
+        # run is meaningless, so these gate the comparison rather than sitting beside it.
+        # `_BASELINE_CORPUS_FILE_COUNT` does double duty and that is deliberate: it pins the
+        # corpus for the comparison above AND is the expected result count, because
+        # `ingest_directory` returns one `IngestResult` per matched file — the same 17 files
+        # in, 17 results out.
+        # `r.warnings` is deliberately NOT part of the gate: `pipeline.py` appends a benign
+        # `backend_threshold_edges` advisory to that same list once the graph grows, and ACL
+        # provenance notes land there too, so a non-empty `warnings` is not evidence of a
+        # degraded run. `status == "ok"` plus the chunk/node/edge counts are.
+        bad = [(r.doc_id, r.status, r.error) for r in results if r.status != "ok"]
+        # A chunker regression that emptied most files would make the ingest FASTER and
+        # still satisfy `node_count > 0` off a single surviving file, so per-file chunk
+        # counts are part of the gate rather than left to the aggregate.
+        empty = [r.doc_id for r in results if r.chunks_created == 0]
+        node_count = await graph_store.node_count(collection, DEFAULT_NAMESPACE)
+        edge_count = await graph_store.edge_count(collection, DEFAULT_NAMESPACE)
+        assert (
+            len(results) == _BASELINE_CORPUS_FILE_COUNT
+            and not bad
+            and not empty
+            and node_count > 0
+            and edge_count > 0
+        ), (
+            f"graph_real_artifact throughput lane: run {run_index} did not measure a "
+            f"real, complete extraction — ingested {len(results)} of "
+            f"{_BASELINE_CORPUS_FILE_COUNT} files, non-ok={bad}, zero-chunk={empty}, "
+            f"entity nodes={node_count}, relations={edge_count}. Timing such a run would "
+            "compare nothing against the baseline."
+        )
+
+        trace.append(round(_read_own_rss_mib(), 1))
+        _check_host_safety_or_exit(trace[-1], baseline_mib, started, trace)
+
+    measured_ms = statistics.median(elapsed_ms)
+    # Into the --junitxml the CI step already writes, so the CI-measured figure that
+    # replaces the provisional multiplier (K9) is recoverable from a green run — captured
+    # stdout is not shown when a test passes. Same accepted `record_property` xunit2
+    # warning as the memory budget test above.
+    record_property("measured_ms", round(measured_ms, 1))
+    record_property("throughput_runs_ms", [round(ms, 1) for ms in elapsed_ms])
+
+    budget_ms = THROUGHPUT_BASELINE_MS * REGRESSION_MULTIPLIER
+    assert measured_ms <= budget_ms, (
+        f"graph NER ingest of {_BASELINE_CORPUS_FILE_COUNT} corpus files took "
+        f"{measured_ms:.1f} ms (median of {elapsed_ms}), over the {budget_ms:.1f} ms budget "
+        f"({THROUGHPUT_BASELINE_MS} ms baseline x {REGRESSION_MULTIPLIER} allowed "
+        f"regression). RSS trace: {trace}"
     )

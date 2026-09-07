@@ -45,11 +45,10 @@ _HISTORICAL_EXACT = frozenset({
     "Documentation/ADRs/12_local_prose_relations_enrichment_narrowed.md",  # ADR may name the engine
 })
 # Guard files that legitimately contain the search literal (this file + BE-16's interim
-# guards + the frozen pre-removal throughput baseline).
+# guards).
 _GUARD_FILES = frozenset({
     "tests/test_removed_engine_repo_guard.py",
     "tests/test_graph_engine_stub.py",
-    "tests/eval/_graph_ner_throughput_baseline.py",
 })
 
 # Self-tightening TEMPORARY allowlist: live files a LATER task still owns. Each still
