@@ -1,6 +1,14 @@
 # Changelog
 
 
+## [26.9.2104] - 2026-09-07
+
+**Release validation and test reliability improvements**
+
+- Pre-flight release checks now run all test lanes (eval, integration, docling, graph_real_artifact) with coverage enforcement, matching the full CI workflow before creating a release tag; prevents broken code from reaching production
+- Docling parse-worker tests now read live worker PIDs directly from `ProcessPoolExecutor._processes` instead of unreliable `ps` grepping, fixing false-negative test failures on GitHub Actions
+
+
 ## [26.9.2101] - 2026-09-07
 
 **Graph NER engine documentation migration, multilingual span validation, and test infrastructure hardening**
