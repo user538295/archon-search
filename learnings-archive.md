@@ -29,3 +29,5 @@
 - **[2026-09-07] guards (compacted from learnings.md)**: dropped clause — `eval/backends.py` edits drift `eval_hash`, so a backend change must regenerate it or the eval gate fails on the hash rather than on a metric.
 
 - **[2026-09-07] smoke/subprocess/container + TypeSpec (compacted from learnings.md)**: dropped clauses — session-scoped fixtures use `tmp_path_factory`, not `tmp_path`; seed a smoke corpus with REAL text, not lorem, or retrieval asserts pass vacuously; TypeSpec reserves `namespace`/`model`/`op` as keywords, so a field of that name needs quoting.
+
+- **[2026-09-07] smoke/container (compacted from learnings.md)**: dropped clause — TypeSpec optional-nullable field syntax is `field?: T | null`; both the `?` and the `| null` are needed, one alone does not compile to an optional nullable.

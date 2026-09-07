@@ -22,8 +22,8 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 
 ## Plan-Making & Agent Process
 - **[2026-09-07] (×177) verify claims/state**: grep-verify every cite AND a reviewer's cited PRECEDENT. Grep the tasks file for a prior spike's Notes first. Repros vs unmodified HEAD (`git worktree add --detach`) — diffing WIP reads own work as drift.
-- **[2026-09-07] (×52) subagents**: final text is DISCARDED; a mid-run API death leaves NOTHING. Nested agents (clean-code-review's fan-out, plain reviewers) can leak results to the GRANDPARENT and return nothing — run the skill inline yourself.
+- **[2026-09-07] (×53) subagents**: final text DISCARDED; API death mid-run leaves NOTHING. Nested agents leak to the GRANDPARENT — run skills inline. Read their scratchpad LOGS before claiming what ran; grep-verify a reviewer's FIX, not its diagnosis.
 - **[2026-09-07] (×12) guards**: allowlist entries must STILL match else empty; new tests IMPORT `_ENGINE_PATTERN`. Deleted allowlisted file → `git rm` + strike BOTH. A cited SCRIPT FILENAME trips the name guard. Unspecified `xfail` cannot fail.
 - **[2026-09-05] (×37) doc close-out**: grep the WHOLE tree (incl. `README.md`, `*.toml.example`) for the old invariant string — per-file scope orphans siblings. Never put a `>` block between table rows. Order: api-ref→catalog→CLAUDE.md→manual.
 - **[2026-08-24] (×3) plan/task authoring**: a fix in the body but not the Decisions table / mermaid / doc-checklist is the top defect — sweep all 8 surfaces + the `.tsp`. `#team` gate → agent-runnable findings; never flip the box.
-- **[2026-09-07] (×10) smoke/subprocess/container + TypeSpec**: `-o addopts=` not `-p no:xdist`; `tmp_path_factory`; pair `ARCHON_SEARCH_CONFIG` with `DATA_DIR`. `ARCHON_SEARCH_API_KEY` must be lowercase HEX else 401. TypeSpec: `field?: T | null`.
+- **[2026-09-07] (×11) smoke/container**: `-o addopts=`; `tmp_path_factory`; pair `ARCHON_SEARCH_CONFIG` with `DATA_DIR`. `ARCHON_SEARCH_API_KEY` must be lowercase HEX else 401. `HF_HUB_OFFLINE=1` blocks fastembed too → ingest FAILS, not degrades.

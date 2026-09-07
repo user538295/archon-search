@@ -557,6 +557,14 @@ def test_graph_enabled_image_degrades_to_code_symbols_only(
     prose extraction degraded to code-symbols-only, carrying exactly one
     sanitized warning.
 
+    ``HF_HUB_OFFLINE=1`` deliberately NOT set. It looks like the tidy way to prove
+    nothing is downloaded, but it is container-global: it also blocks fastembed's
+    own embedder and reranker fetches, so the ingest dies with "Could not load
+    model BAAI/bge-small-en-v1.5 from any source" and the job is FAILED, not the
+    DONE-with-a-degrade this leg exists to prove. The occupied cache path below
+    already fails the checkpoint load on its own, and ``cache_dir.is_file()``
+    proves no artifact landed, so the flag buys nothing and breaks the leg.
+
     No GLiNER checkpoint is provisioned into the container **and none is
     fetched**: the checkpoint cache directory
     (``paths.get_graph_models_dir()``, under the mounted ``/data``) is occupied
@@ -605,10 +613,6 @@ def test_graph_enabled_image_degrades_to_code_symbols_only(
                 "-v", f"{tmp_dir}:/data",
                 "-e", f"ARCHON_SEARCH_API_KEY={SMOKE_API_KEY}",
                 "-e", "ARCHON_SEARCH_CONFIG=/data/archon-search.toml",
-                # Makes "no artifact is fetched" ENFORCED rather than incidental: without
-                # it huggingface_hub may reach the network before it ever fails on the
-                # occupied cache path, turning a fast degrade into a long stall.
-                "-e", "HF_HUB_OFFLINE=1",
                 "-p", f"{host_port}:{CONTAINER_PORT}",
                 cpu_image,
             ]
