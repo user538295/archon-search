@@ -104,9 +104,11 @@ jobs:
         # ends up in another file still runs and is still verified below.
         # The budget must exceed the tests' OWN caps so a real overrun is reported by the
         # test (with its RSS trace) rather than killed opaquely by the step: three tests at
-        # _RUN_BUDGET_S=900s each is 45 minutes of measured loop before model load (T-9
-        # added the throughput test, which shares the same cap via _check_host_safety_or_exit).
-        timeout-minutes: 60
+        # _RUN_BUDGET_S=900s each (non-vacuity, memory, throughput) is 45 minutes, plus
+        # four _SMALL_RUN_BUDGET_S=300s caps added by T-10 — one per determinism child
+        # process, and one on each of the French leg's two awaits — for 65 minutes of
+        # capped work before model loads.
+        timeout-minutes: 70
         run: ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m graph_real_artifact --junitxml=graph-real-artifact-results.xml tests/
 
       - name: Verify the blocking non-vacuity test actually ran

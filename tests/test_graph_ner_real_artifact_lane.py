@@ -1,7 +1,8 @@
-"""The `graph_real_artifact` lane — real GLiNER artifact, no stubs (Task T-8, S26).
+"""The `graph_real_artifact` lane — real GLiNER artifact, no stubs (Tasks T-8/T-9/T-10;
+S1, S26, S27, S28).
 
 This lane exists because every other graph test in the suite runs against a stubbed
-engine, which certifies the fixture rather than the engine. Its three tests load the real
+engine, which certifies the fixture rather than the engine. Its five tests load the real
 multi-hundred-MB artifact, so it is excluded from the default run by the
 `graph_real_artifact` marker (`pyproject.toml` `addopts`, and both CI workflows' unit and
 integration `-m` filters — BE-21) and runs as its own CI step in both `archon-search-pr.yml`
@@ -43,6 +44,22 @@ non-vacuity gate (K13, which is why that gate can live inside the throughput fun
 rather than needing a fourth test). Only the shared `_check_host_safety_or_exit` still
 calls `pytest.exit()` there — that is host safety, not the comparison.
 
+`test_graph_ner_french_spans_with_offsets` (T-10, S1) is not marked either, for the same
+reason: it pins spans the real engine actually produces, so a failure is a real capability
+regression, not a threshold that a slower host can miss.
+
+`test_graph_ner_determinism_across_processes` (T-10, S28) is the one test here that does
+NOT take the shared `graph_pipeline` fixture — it drives two child processes, each of
+which loads its own copy of the engine. It is therefore defined FIRST on purpose: pytest
+runs a module in definition order, and the module-scoped `graph_pipeline` loads the real
+stack lazily on the first `extract()` call, so running this test before any of the others
+keeps the parent process model-free while a child holds ~3.2 GiB. Placed later it would
+put a parent copy and a child copy resident at once — ~6.4 GiB, a genuine OOM on a 7 GiB
+GitHub runner rather than merely a tighter host-safety margin. That placement does not
+weaken the setup-phase argument above: the ordering that matters there is
+`test_graph_ner_lane_non_vacuity` running before `test_graph_ner_memory_budget`, and it
+still does.
+
 **Never `importorskip`.** A missing artifact or a missing `[graph]` extra must fail this
 lane loudly: the whole point is to detect a silent no-op, and skipping on absence is how a
 silent no-op stays invisible.
@@ -58,10 +75,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import statistics
 import subprocess
+import sys
+import tempfile
 import time
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -81,6 +102,9 @@ from archon_search.pipeline import create_pipeline
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 # The committed reference corpus, already in the repo (team plan → Corpus, Q21).
 _CORPUS = _REPO_ROOT / "tests" / "eval" / "corpus" / "docs"
+# The committed French corpus — five first-party documents (team plan → Corpus, Q21),
+# the real-engine half of S1.
+_FR_CORPUS = _REPO_ROOT / "tests" / "eval" / "corpus" / "fr-docs"
 
 # A paragraph shorter than this is mostly headings/list bullets, not extractable prose —
 # excluded so both tests draw from genuinely entity-bearing text.
@@ -143,6 +167,81 @@ _WARMUP_CHUNKS = 16
 # co-occurrence loop, and an assertion that accepted it would pass on co-occurrence alone.
 _TYPED_RELATIONSHIPS = frozenset(
     {RelationshipType.uses, RelationshipType.implements, RelationshipType.depends_on}
+)
+
+# The graph configuration every test in this lane runs under. Shared by the
+# `graph_pipeline` fixture, the French test's direct backend call (which needs the same
+# confidence thresholds the extractor used, and would otherwise re-derive them from a
+# private attribute), and the determinism child process — so no test can silently drift
+# onto different thresholds than the one it is being compared against.
+# `provider=None` keeps the optional LLM enrichment call out of the picture, so anything
+# this lane observes came from the local engine.
+_LANE_GRAPH_CONFIG = GraphConfig(enabled=True, provider=None)
+
+# --- cross-process determinism constants (T-10, S28) --------------------------------
+#
+# Prose chunks each determinism child extracts. Deliberately far below `_MIN_CHUNKS`:
+# S28's claim is about the model's own decoding being reproducible across processes, not
+# about scale — and each child pays its own full model load, so the corpus size here buys
+# nothing but wall time. Enough chunks to yield a graph with many nodes and both edge
+# kinds, which is what makes an id-set comparison discriminating.
+_DETERMINISM_CHUNKS = 64
+
+# Collection the child writes its extraction into before reading it back. No `__` and no
+# leading/trailing `_` — `GraphStore._validate_collection` rejects both.
+_DETERMINISM_COLLECTION = "determinism_col"
+
+# Wall-clock cap for the two SMALL T-10 workloads — each determinism child (one model
+# load, 64 chunks) and the French leg (one model load, ~30 paragraphs). Much tighter than
+# `_RUN_BUDGET_S`, which sizes the 1,000-chunk loops. Both workflows' `timeout-minutes`
+# on the lane step is sized above the sum of every cap in this file, so a real overrun is
+# reported by the test rather than killed opaquely by the step.
+_SMALL_RUN_BUDGET_S = 300
+
+# Prefix on the child's single result line. The child shares stdout with huggingface's
+# own download/progress chatter, so the parent locates the payload by marker rather than
+# assuming it owns the last line.
+_CHILD_RESULT_PREFIX = "GRAPH_LANE_DETERMINISM_JSON:"
+
+# --- French real-engine constants (T-10, S1) ----------------------------------------
+#
+# Recorded from the real pinned checkpoint against `_FR_CORPUS`, chunked by the same
+# `_paragraphs()` split the test below uses, on 2026-09-07 — CPU, macOS arm64, two
+# consecutive runs byte-identical across all 82 returned spans.
+#
+# WHY RE-RECORDED rather than taken from K2's spike output: the plan calls its own
+# examples "illustrative pending the spike" (team plan → Corpus, Q21) and names
+# `Couche de présentation` / `Magasin vectoriel`, neither of which the RESOLVED PyTorch
+# checkpoint returns — the spike gate moved the engine off the ONNX path K2 measured. A
+# pin must be what the shipped engine actually produces, so these are measured against it.
+#
+# `(surface_text, label, start, end)`, where the offsets are into the CHUNK the span was
+# found in. Every one of these is French morphology an English-only engine could not
+# produce — accented compounds, elided articles, French noun-adjective order — which is
+# the whole point: S1 requires spans that discriminate against the outgoing engine, not
+# merely "some entity found". The extractable proper nouns in these documents are
+# overwhelmingly English or language-neutral (LanceDB, MCP, FTS, REST, Python, pip), so a
+# count-only assertion would pass unchanged against an English-only engine.
+#
+# A SUBSET assertion, not an equality one: pinning all 82 spans would fail on any
+# checkpoint revision that legitimately found one more entity, which is not a regression.
+# These six are the highest-confidence French spans in the recorded output (0.581-0.937,
+# against `GraphConfig.ner_confidence`'s 0.5 floor), so the margin is real rather than
+# threshold-adjacent.
+#
+# Matched against the spans pooled across ALL chunks rather than per-paragraph, on
+# purpose: the discriminating content is the surface form and its exact offset, and
+# binding each pin to a paragraph INDEX as well would break the test on any reflow of the
+# corpus without making it harder for an English-only engine to satisfy.
+_FRENCH_SPANS: frozenset[tuple[str, str, int, int]] = frozenset(
+    {
+        ("architecture en couches", "system", 31, 54),
+        ("routeur multi-collection", "system", 3, 27),
+        ("centroïdes de collection pré-calculés", "concept", 141, 178),
+        ("seuil de confiance", "concept", 3, 21),
+        ("variables d'environnement", "concept", 4, 29),
+        ("répertoire personnel", "system", 67, 87),
+    }
 )
 
 # --- throughput constants (T-9, S27) ------------------------------------------------
@@ -245,29 +344,36 @@ def _read_own_rss_mib() -> float:
     return int(rss_kib_text) / 1024
 
 
-def _build_prose_chunks(count: int) -> list[ChunkInput]:
-    """`count` prose chunks drawn from the committed corpus, cycling it as needed.
+def _paragraphs(corpus: Path) -> list[str]:
+    """Extractable prose paragraphs under `corpus`, in stable sorted-file order.
 
-    `symbol_type=None` on every chunk: that is what routes them down the prose
-    extraction path rather than the C3 code-symbol path (`graph_extractor.py`).
-
-    Uses `pytest.exit()`, not `assert`, on a missing/empty corpus: this helper is called
-    from both lane tests, including the `xfail`-marked budget test, where a plain `assert`
-    would be silently absorbed as an expected failure rather than surfacing the real
-    problem (a broken fixture, not an over-budget measurement).
+    Uses `pytest.exit()`, not `assert`, on a missing/empty corpus: this helper feeds the
+    `xfail`-marked budget test, where a plain `assert` would be silently absorbed as an
+    expected failure rather than surfacing the real problem (a broken fixture, not an
+    over-budget measurement).
     """
     paragraphs = [
         block.strip()
-        for path in sorted(_CORPUS.rglob("*.md"))
+        for path in sorted(corpus.rglob("*.md"))
         for block in path.read_text(encoding="utf-8").split("\n\n")
         if len(block.strip()) >= _MIN_PARAGRAPH_CHARS
     ]
     if not paragraphs:
         pytest.exit(
-            f"graph_real_artifact lane: no prose paragraphs found under {_CORPUS} — "
+            f"graph_real_artifact lane: no prose paragraphs found under {corpus} — "
             "corpus missing?",
             returncode=1,
         )
+    return paragraphs
+
+
+def _build_prose_chunks(count: int) -> list[ChunkInput]:
+    """`count` prose chunks drawn from the committed corpus, cycling it as needed.
+
+    `symbol_type=None` on every chunk: that is what routes them down the prose
+    extraction path rather than the C3 code-symbol path (`graph_extractor.py`).
+    """
+    paragraphs = _paragraphs(_CORPUS)
     return [
         ChunkInput(
             chunk_id=f"lane-{index:06d}",
@@ -377,10 +483,8 @@ def _lane_data_dir():
 def graph_pipeline(_lane_data_dir, tmp_path_factory):
     """A real pipeline with the graph enabled, on a throwaway store.
 
-    `graph.enabled=True` is what makes `create_pipeline` construct a `GraphExtractor`
-    (and therefore a real `ProseExtractionBackend`); `graph.provider=None` keeps the
-    optional LLM enrichment call out of the picture, so anything this lane observes came
-    from the local engine.
+    `_LANE_GRAPH_CONFIG.enabled=True` is what makes `create_pipeline` construct a
+    `GraphExtractor` (and therefore a real `ProseExtractionBackend`).
 
     Module-scoped, deliberately: one shared backend for both tests in this file, not one
     each. Each `ProseExtractionBackend` instance loads its own full GLiNER stack (spike:
@@ -393,11 +497,205 @@ def graph_pipeline(_lane_data_dir, tmp_path_factory):
     settled, not less.
     """
     tmp_path = tmp_path_factory.mktemp("graph_real_artifact_db")
-    config = SearchConfig(
-        db_path=str(tmp_path / "db"),
-        graph=GraphConfig(enabled=True, provider=None),
-    )
+    config = SearchConfig(db_path=str(tmp_path / "db"), graph=_LANE_GRAPH_CONFIG)
     return create_pipeline(config)
+
+
+def _determinism_child_main() -> None:
+    """Child-process entry point — runs when this module is executed as a script.
+
+    The parent spawns it twice with `sys.executable`. Two child processes, rather than
+    two `extract()` calls in one, is the whole point of S28: torch's intra-op/inter-op
+    thread counts change CPU reduction ORDER, and two ingests sharing one process share
+    one already-pinned runtime, so they cannot detect a thread-count confound. Those
+    counts are pinned by `ProseExtractionBackend.load()` itself
+    (`_TORCH_INTRA_OP_THREADS` / `_TORCH_INTER_OP_THREADS`), which is the production
+    behaviour this test exercises rather than re-implements — the pin's existence is
+    proved structurally by S42(4) in `tests/test_removed_engine_repo_guard.py`.
+
+    Prints one `_CHILD_RESULT_PREFIX`-marked JSON line; huggingface writes its own
+    chatter to this stdout too, so the parent locates the payload by that marker.
+    """
+    # Imported here, not at module scope: this module is collected on every default run
+    # (see the module-scope note above), and these are only needed by the child, which is
+    # never the collecting process.
+    from archon_search.graph_extractor import GraphExtractor
+    from archon_search.graph_store import GraphStore
+
+    async def _extract_and_persist() -> dict:
+        extractor = GraphExtractor(_LANE_GRAPH_CONFIG)
+        result = await extractor.extract(
+            _build_prose_chunks(_DETERMINISM_CHUNKS), "determinism-doc", _DETERMINISM_COLLECTION
+        )
+        # S28 compares the PERSISTED sets, not the in-memory ones — which is why the
+        # extraction is written to a real GraphStore here and read back out. It matters:
+        # the mentions table is append-only with no upsert key, so persisted mention
+        # counts are a property of the store's own write path, not only the extractor's.
+        with tempfile.TemporaryDirectory() as db_dir:
+            store = GraphStore(db_dir)
+            await store.connect()
+            try:
+                await store.ensure_graph_tables(_DETERMINISM_COLLECTION, ns=DEFAULT_NAMESPACE)
+                await store.write_graph(
+                    _DETERMINISM_COLLECTION, result.nodes, result.edges, DEFAULT_NAMESPACE
+                )
+                await store.write_mentions(
+                    _DETERMINISM_COLLECTION, result.mentions, DEFAULT_NAMESPACE
+                )
+                nodes = await store.get_all_nodes(_DETERMINISM_COLLECTION, DEFAULT_NAMESPACE)
+                edges = await store.get_all_edges(_DETERMINISM_COLLECTION, DEFAULT_NAMESPACE)
+                mentions = await store.get_all_mentions(
+                    _DETERMINISM_COLLECTION, ns=DEFAULT_NAMESPACE
+                )
+            finally:
+                await store.disconnect()
+        return {
+            "degraded": result.degraded,
+            "warnings": result.warnings,
+            "load_count": extractor.load_count,
+            # Where this child read the checkpoint from. The parent asserts it is inside
+            # the operator's data dir: a child that silently re-downloaded ~1.2 GB past
+            # the CI cache would otherwise still report degraded=False and load_count=1,
+            # which is the exact invisible failure the lane's data-dir assert exists for.
+            "models_dir": str(get_graph_models_dir()),
+            # Sorted id SETS and per-entity mention COUNTS — not full rows. S28 is explicit
+            # that byte-identity is the wrong claim: `pagerank_score` and last-writer-stamped
+            # fields are expected to vary between two independent runs.
+            "node_ids": sorted(node.id for node in nodes),
+            "edge_ids": sorted(edge.id for edge in edges),
+            "typed_edge_count": sum(
+                1 for edge in edges if edge.relationship_type in _TYPED_RELATIONSHIPS
+            ),
+            "mention_counts": dict(
+                sorted(Counter(mention.entity_id for mention in mentions).items())
+            ),
+        }
+
+    print(f"{_CHILD_RESULT_PREFIX}{json.dumps(asyncio.run(_extract_and_persist()))}")
+
+
+def _run_determinism_child(run_index: int) -> dict:
+    """Spawn one child and return its parsed payload.
+
+    `ARCHON_SEARCH_DATA_DIR` is forwarded explicitly for the same reason
+    `_lane_data_dir` restores it: the child must read the populated checkpoint cache
+    rather than re-download ~1.2 GB. `PYTHONPATH` is prepended because running this file
+    as a script puts `tests/` on `sys.path`, not the repo root.
+    """
+    env = {
+        **os.environ,
+        "ARCHON_SEARCH_DATA_DIR": str(_LANE_DATA_DIR),
+        "PYTHONPATH": os.pathsep.join(
+            [str(_REPO_ROOT), *filter(None, [os.environ.get("PYTHONPATH")])]
+        ),
+    }
+    child = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve())],
+        capture_output=True,
+        text=True,
+        timeout=_SMALL_RUN_BUDGET_S,
+        cwd=str(_REPO_ROOT),
+        env=env,
+    )
+    assert child.returncode == 0, (
+        f"graph_real_artifact determinism child {run_index} exited "
+        f"{child.returncode}.\nstdout:\n{child.stdout}\nstderr:\n{child.stderr}"
+    )
+    line = next(
+        (
+            candidate
+            for candidate in child.stdout.splitlines()
+            if candidate.startswith(_CHILD_RESULT_PREFIX)
+        ),
+        None,
+    )
+    assert line is not None, (
+        f"graph_real_artifact determinism child {run_index} produced no "
+        f"{_CHILD_RESULT_PREFIX} line — it exited 0 without extracting anything.\n"
+        f"stdout:\n{child.stdout}\nstderr:\n{child.stderr}"
+    )
+    return json.loads(line[len(_CHILD_RESULT_PREFIX) :])
+
+
+def _assert_child_non_vacuity(payload: dict, run_index: int) -> None:
+    """S26's four non-vacuity asserts, applied to one child's payload.
+
+    S28 requires these of BOTH runs *before* the comparison, so a run against a missing
+    artifact cannot pass by comparing two empty graphs — which is exactly what the id-set
+    equality below would otherwise report as a success.
+    """
+    assert payload["degraded"] is False, (
+        f"determinism child {run_index} degraded — the real artifact did not load or "
+        f"inference raised. warnings={payload['warnings']}"
+    )
+    assert payload["load_count"] == 1, (
+        f"determinism child {run_index} reports load_count="
+        f"{payload['load_count']}, expected exactly one real model construction"
+    )
+    assert payload["models_dir"].startswith(str(_LANE_DATA_DIR)), (
+        f"determinism child {run_index} read models from {payload['models_dir']}, outside "
+        f"ARCHON_SEARCH_DATA_DIR={_LANE_DATA_DIR!r} — it bypassed the artifact cache and "
+        "re-downloaded ~1.2 GB, which no other assert here would reveal"
+    )
+    assert payload["node_ids"], (
+        f"determinism child {run_index} returned zero entity nodes over the committed "
+        "prose corpus — a silent no-op, not a determinism result"
+    )
+    # The PRESENCE anchor the mention-count comparison needs: two empty mention maps
+    # compare equal, so without this the comparison could pass while proving nothing.
+    assert payload["mention_counts"], (
+        f"determinism child {run_index} recorded no mentions despite returning "
+        f"{len(payload['node_ids'])} entity nodes"
+    )
+    assert payload["typed_edge_count"] > 0, (
+        f"determinism child {run_index} extracted no typed "
+        "(uses/implements/depends_on) edge — only co-occurrence `related_to` edges, "
+        "which prove nothing about relation extraction"
+    )
+
+
+@pytest.mark.graph_real_artifact
+@pytest.mark.xdist_group("graph_real_artifact")
+def test_graph_ner_determinism_across_processes(_lane_data_dir, record_property) -> None:
+    """S28: the same corpus extracted in two separate processes yields identical PERSISTED
+    node and edge id sets and identical per-entity mention counts.
+
+    Defined FIRST in this file on purpose, and deliberately NOT taking `graph_pipeline` —
+    see the module docstring: this is the one lane test whose model copy lives in a child
+    process, so it must run before the module-scoped fixture's own copy is resident.
+
+    The children run SEQUENTIALLY, not concurrently, for the same reason.
+    """
+    first = _run_determinism_child(0)
+    second = _run_determinism_child(1)
+
+    _assert_child_non_vacuity(first, 0)
+    _assert_child_non_vacuity(second, 1)
+    record_property("determinism_node_count", len(first["node_ids"]))
+    record_property("determinism_edge_count", len(first["edge_ids"]))
+
+    # Sorted LISTS, so this is multiset equality — strictly stronger than the id-set
+    # equality S28 asks for, and free. The reported difference is therefore a Counter
+    # delta, not a set difference, which would print empty if two runs agreed on the ids
+    # but disagreed on how many times one of them appeared.
+    for kind in ("node_ids", "edge_ids"):
+        assert first[kind] == second[kind], (
+            f"the two processes extracted different {kind} over the same corpus "
+            f"(run 0: {len(first[kind])}, run 1: {len(second[kind])}); "
+            f"only in run 0: {sorted((Counter(first[kind]) - Counter(second[kind])).elements())}; "
+            f"only in run 1: {sorted((Counter(second[kind]) - Counter(first[kind])).elements())}"
+        )
+    # Whole-mapping equality, not a one-directional walk of run 0's keys: an entity the
+    # second run mentioned and the first did not would otherwise go unreported.
+    differing = {
+        entity_id: (first["mention_counts"].get(entity_id), second["mention_counts"].get(entity_id))
+        for entity_id in first["mention_counts"].keys() | second["mention_counts"].keys()
+        if first["mention_counts"].get(entity_id) != second["mention_counts"].get(entity_id)
+    }
+    assert first["mention_counts"] == second["mention_counts"], (
+        "the two processes recorded different per-entity mention counts over the same "
+        f"corpus (entity_id -> (run 0, run 1)): {differing}"
+    )
 
 
 @pytest.mark.graph_real_artifact
@@ -716,3 +1014,124 @@ async def test_graph_ner_throughput_within_budget(graph_pipeline, record_propert
         f"({THROUGHPUT_BASELINE_MS} ms baseline x {REGRESSION_MULTIPLIER} allowed "
         f"regression). RSS trace: {trace}"
     )
+
+
+@pytest.mark.graph_real_artifact
+@pytest.mark.xdist_group("graph_real_artifact")
+@pytest.mark.asyncio
+async def test_graph_ner_french_spans_with_offsets(graph_pipeline) -> None:
+    """S1's real-engine half: French prose yields entity nodes and mentions, and the
+    engine returns specific French-morphology spans at specific character offsets.
+
+    The offsets are the load-bearing part. `GraphMention` carries no offsets — the graph
+    stores incidence, not spans — so the only place the engine's own character offsets are
+    observable is the backend's `ExtractedEntity`, which is why this test reads them
+    through `extractor._backend` rather than only through `extract()`. Constructing a
+    second `ProseExtractionBackend` instead would load a second ~3.2 GiB copy of the
+    stack, which is exactly what the module-scoped `graph_pipeline` fixture exists to
+    avoid; the shared backend is the one `extract()` above just used.
+
+    Every check here is a plain `assert`: this test carries no `xfail`. It pins recorded
+    engine output, not a host-sensitive threshold, so a failure is a real capability
+    regression rather than a slow runner.
+    """
+    extractor = graph_pipeline._graph_extractor
+    assert extractor is not None, "graph.enabled=True must construct a GraphExtractor"
+
+    paragraphs = _paragraphs(_FR_CORPUS)
+    chunks = [
+        ChunkInput(
+            chunk_id=f"fr-{index:06d}",
+            text=paragraph,
+            symbol_type=None,
+            symbol_subtype=None,
+        )
+        for index, paragraph in enumerate(paragraphs)
+    ]
+    # `asyncio.timeout`, mirroring the throughput test: this leg runs no sampling loop, so
+    # without it a hung forward pass would be killed opaquely by the CI step instead of
+    # failing here.
+    async with asyncio.timeout(_SMALL_RUN_BUDGET_S):
+        result = await extractor.extract(chunks, "fr-doc", "graph_real_artifact_french")
+
+    # --- S26's non-vacuity asserts, which S1 requires this leg to be preceded by (K13).
+    assert result.degraded is False, (
+        "prose extraction degraded over the French corpus — the real artifact did not "
+        f"load or inference raised. warnings={result.warnings}"
+    )
+    assert extractor.load_count == 1, (
+        "expected exactly one real model construction for this process, got "
+        f"{extractor.load_count} — the engine's load path did not execute once"
+    )
+    assert result.nodes, (
+        "the real engine returned zero entity nodes over the French corpus — a silent "
+        "no-op: extraction ran, did not degrade, and produced nothing"
+    )
+    assert result.mentions, (
+        "entity nodes were created from the French prose but no mentions were — S1 "
+        "requires both, and salience/co-occurrence derive from the mention rows"
+    )
+    typed_edges = [
+        edge for edge in result.edges if edge.relationship_type in _TYPED_RELATIONSHIPS
+    ]
+    assert typed_edges, (
+        "no typed (uses/implements/depends_on) edge was extracted from the French corpus "
+        "— only co-occurrence `related_to` edges, which prove nothing about relation "
+        f"extraction. edge types seen: "
+        f"{sorted({e.relationship_type.value for e in result.edges})}"
+    )
+
+    # --- The spans themselves, with offsets.
+    async with asyncio.timeout(_SMALL_RUN_BUDGET_S):
+        batch = await extractor._backend.inference(
+            [chunk.text for chunk in chunks],
+            _LANE_GRAPH_CONFIG.ner_confidence,
+            _LANE_GRAPH_CONFIG.relation_confidence,
+        )
+    observed: set[tuple[str, str, int, int]] = set()
+    for paragraph, chunk_extraction in zip(paragraphs, batch.chunks, strict=True):
+        for entity in chunk_extraction.entities:
+            # Real substrings at real offsets, checked for EVERY returned span, not only
+            # the pinned ones: a byte-vs-character offset bug on accented text would
+            # otherwise hide in the spans this test does not name.
+            assert paragraph[entity.start : entity.end] == entity.text, (
+                f"span {entity.text!r} does not sit at its own reported offsets "
+                f"[{entity.start}:{entity.end}] — that slice is "
+                f"{paragraph[entity.start : entity.end]!r}"
+            )
+            observed.add((entity.text, entity.label, entity.start, entity.end))
+
+    missing = _FRENCH_SPANS - observed
+    assert not missing, (
+        f"the real engine no longer returns these recorded French spans: {sorted(missing)}. "
+        f"It returned {len(observed)} spans over {len(paragraphs)} French paragraphs. "
+        "Re-record the pins only after confirming this is an intended checkpoint change, "
+        "not a multilingual regression."
+    )
+
+    # The pinned spans reached the graph as entity NODES. This also cross-checks the two
+    # engine passes above against each other: the spans came from the `inference()` call,
+    # the nodes from the `extract()` call, so a disagreement between them fails here.
+    pinned_texts = {text for text, _label, _start, _end in _FRENCH_SPANS}
+    french_nodes = [node for node in result.nodes if node.entity_name in pinned_texts]
+    unlanded = pinned_texts - {node.entity_name for node in french_nodes}
+    assert not unlanded, (
+        f"French spans the engine returned never became entity nodes: {sorted(unlanded)} "
+        "— the extractor dropped them between decode and graph construction"
+    )
+
+    # ...and as MENTIONS of their own. S1 asks for nodes AND mentions from the French
+    # prose; without naming the French entities here, that clause would be satisfied by
+    # the language-NEUTRAL entities these documents are full of (LanceDB, MCP, REST).
+    unmentioned = {node.id for node in french_nodes} - {m.entity_id for m in result.mentions}
+    assert not unmentioned, (
+        "these French entity nodes have no mention row of their own: "
+        f"{sorted(node.entity_name for node in french_nodes if node.id in unmentioned)}"
+    )
+
+
+if __name__ == "__main__":
+    # Only reachable as `python tests/test_graph_ner_real_artifact_lane.py`, which is how
+    # `_run_determinism_child` spawns the two separate processes S28 requires. Under
+    # pytest this module is imported, never executed, so collection never loads a model.
+    _determinism_child_main()

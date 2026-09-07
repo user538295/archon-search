@@ -691,7 +691,7 @@ flowchart LR
     - Tests
         - #e2e_test — `test_graph_ner_throughput_within_budget` — one comparison, `measured <= THROUGHPUT_BASELINE_MS * REGRESSION_MULTIPLIER`, gated behind the same non-vacuity asserts
         - #manual_test — Apple-Silicon reference check — compare against the tight ten-percent figure kept as a comment beside the constant, deliberately never asserted as a second pass condition
-- [ ] **T-10** — Add the lane's cross-process determinism leg and the real-engine French leg, plus the stubbed language-blind plumbing leg in the default lane #tester-role
+- [x] **T-10** — Add the lane's cross-process determinism leg and the real-engine French leg, plus the stubbed language-blind plumbing leg in the default lane #tester-role
     - — · 8.5h
     - needs T-8 · completes S1, S28
     - Tests

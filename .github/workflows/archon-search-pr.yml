@@ -126,15 +126,16 @@ jobs:
         # GLiNER.from_pretrained past the cache restored above and re-download the model.
         # $HOME/.archon-search is the same path the cache and prefetch steps above use
         # (it is get_data_dir()'s own default, which those two steps rely on).
-        # tests/ (not the single lane file): T-9/T-10 are expected to land in this same
-        # file, but scoping by marker alone (matching the eval/integration steps above)
-        # means a lane test that ends up elsewhere still runs and is still verified below.
+        # tests/ (not the single lane file): T-9 and T-10 both landed in that same file,
+        # but scoping by marker alone (matching the eval/integration steps above) means a
+        # lane test that ends up elsewhere still runs and is still verified below.
         # The budget must exceed the tests' OWN caps so a real overrun is reported by the
         # test (with its RSS trace) rather than killed opaquely by the step: three tests at
-        # _RUN_BUDGET_S=900s each is 45 minutes of measured loop before model load (T-9
-        # added the throughput test, which shares the same cap via _check_host_safety_or_exit
-        # and its own asyncio.timeout around each ingest).
-        timeout-minutes: 60
+        # _RUN_BUDGET_S=900s each (non-vacuity, memory, throughput) is 45 minutes, plus
+        # four _SMALL_RUN_BUDGET_S=300s caps added by T-10 — one per determinism child
+        # process, and one on each of the French leg's two awaits — for 65 minutes of
+        # capped work before model loads.
+        timeout-minutes: 70
         run: ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m graph_real_artifact --junitxml=graph-real-artifact-results.xml tests/
 
       - name: Verify the blocking non-vacuity test actually ran

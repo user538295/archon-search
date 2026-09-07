@@ -22,6 +22,7 @@ Tests cover:
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 
 import pytest
 
@@ -1051,9 +1052,20 @@ def test_same_process_double_ingest_is_id_stable() -> None:
 
     first, second = asyncio.run(_run())
 
+    # PRESENCE anchor: two empty extractions compare equal on every line below, so
+    # without this the whole test passes if the backend returns nothing at all.
+    assert first.nodes and first.edges and first.mentions, (
+        "the fake backend produced no graph — every comparison below would be 0 == 0. "
+        f"nodes={len(first.nodes)} edges={len(first.edges)} mentions={len(first.mentions)}"
+    )
+
     assert {n.id for n in first.nodes} == {n.id for n in second.nodes}
     assert {e.id for e in first.edges} == {e.id for e in second.edges}
-    assert len(first.mentions) == len(second.mentions)
+    # PER-ENTITY counts, which is what S28 says — a bare `len(...) == len(...)` is
+    # satisfied by two runs that mention different entities the same number of times.
+    assert Counter(m.entity_id for m in first.mentions) == Counter(
+        m.entity_id for m in second.mentions
+    )
 
 
 def test_load_count_passthrough_forwards_to_backend() -> None:
