@@ -700,7 +700,7 @@ flowchart LR
         - #e2e_test — `test_e2e_non_latin_spans_through_the_stubbed_engine` — proves the plumbing is language-blind in the default lane
     - Notes
         - **+0.5h added to the estimate (8.0h → 8.5h) for the PyTorch-checkpoint decision (Spike gate — RESOLVED, team plan).** Wording only: "`SessionOptions` thread counts pinned" becomes the torch thread-count APIs pinned in BE-8. The French spans and offsets K2 recorded stay valid — K2h confirmed entity spans on both the ONNX and PyTorch paths for French, and the PyTorch path additionally returns relations, which ONNX did not.
-- [ ] **T-11** — Manual: review Hungarian entity and relation span quality against the real engine #tester-role
+- [x] **T-11** — Manual: review Hungarian entity and relation span quality against the real engine #tester-role
     - — · 4.0h
     - needs T-8 · completes S1
     - Tests

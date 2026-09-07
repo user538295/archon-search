@@ -25,3 +25,5 @@
 
 - **[2026-09-06] 3rd-party wiring (compacted from learnings.md)**: dropped example — the INPUT FORMAT half of the rule was docling `OcrOptions.scale`, which applies per input format (PDF vs image), not globally.
 - **[2026-08-27] CI regex guards** (evicted 2026-09-06, ×1; now enforced by `tests/test_no_fstring_sql.py`): scan width = its kwarg list — positional `.where(f"` alone shipped `where=f"…"`. 7 patterns: +`filter=`/`updates_sql=`/`.add_columns(` (RAW SQL, unlike `updates=`) +`rf`/`F`. Guard only files with callsites.
+
+- **[2026-09-07] guards (compacted from learnings.md)**: dropped clause — `eval/backends.py` edits drift `eval_hash`, so a backend change must regenerate it or the eval gate fails on the hash rather than on a metric.

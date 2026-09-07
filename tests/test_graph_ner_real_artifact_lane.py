@@ -1,5 +1,9 @@
-"""The `graph_real_artifact` lane — real GLiNER artifact, no stubs (Tasks T-8/T-9/T-10;
+"""The `graph_real_artifact` lane — real GLiNER artifact, no stubs (Tasks T-8/T-9/T-10/T-11;
 S1, S26, S27, S28).
+
+S1's Hungarian half is manual, so it has no test here — T-11's recorded review sits at the
+END of this file, under `MANUAL REVIEW — HUNGARIAN SPAN QUALITY`, in the same
+evidence-beside-the-machinery shape as `REGRESSION_MULTIPLIER`'s manual reference check.
 
 This lane exists because every other graph test in the suite runs against a stubbed
 engine, which certifies the fixture rather than the engine. Its five tests load the real
@@ -1169,6 +1173,164 @@ async def test_graph_ner_french_spans_with_offsets(graph_pipeline) -> None:
         "these French entity nodes have no mention row of their own: "
         f"{sorted(node.entity_name for node in french_nodes if node.id in unmentioned)}"
     )
+
+
+# ----------------------------------------------------------------------------------
+# MANUAL REVIEW — HUNGARIAN SPAN QUALITY (T-11; S1's manual half) — NEVER ASSERTED
+# ----------------------------------------------------------------------------------
+# S1's other half. The French leg above is automated because `fr-docs/` is committed;
+# Hungarian is not (team plan → Corpus, Q21: "Hungarian stays manual"), so this is a
+# recorded review, in the shape of `REGRESSION_MULTIPLIER`'s manual reference check —
+# evidence beside the machinery it is about, never a second pass condition.
+#
+# NOT THE FIRST HUNGARIAN REVIEW, AND NOT A DUPLICATE OF IT. The K2h spike ran one
+# (tasks file, K2h Notes, 2026-08-23) and its verdict was also PASS. K2h is superseded as
+# evidence for what SHIPS, because it measured a configuration that no longer exists: it
+# prompted a bare `other` decoy label (since removed as a bug — it absorbed nearly every
+# real span), only three relation labels, and `threshold=0.3` against both an ONNX and a
+# PyTorch path. This review re-runs the question against the shipping configuration —
+# the current label set, the current bare relation prompts, the resolved PyTorch path, and
+# `GraphConfig`'s production defaults (0.5 / 0.75). K2h's own Hungarian spans are
+# consequently not reproducible today (`fastembed könyvtártól` was labelled `other`).
+# K2h is also where the comparison against the OUTGOING engine lives: it ran that engine
+# over the same Hungarian text and recorded it as "systematically garbled-to-near-empty"
+# on both reviewed languages. This review does not re-measure that — the outgoing engine is
+# deleted from the repo and uninstalled here, so re-running it would mean provisioning it
+# in a throwaway environment; that was judged unnecessary given K2h's measurement, not
+# impossible. Naming its model here would also trip S42(1)'s repo-wide guard, which this
+# file is deliberately not allowlisted against.
+#
+# PROVENANCE. Pinned checkpoint `knowledgator/gliner-relex-multi-v1.0` @
+# `e990d9ba6f471b846f7d78bf7e4b4dab11761ada` (`GRAPH_NER_MODEL_NAME` / `_REVISION` in
+# `paths.py` — a revision bump stales this record and it must be re-run), gliner 0.2.28 /
+# torch 2.13.0, macOS 26.6.2 arm64, CPU only, 2026-09-07, at `GraphConfig`'s defaults
+# (ner_confidence 0.5, relation_confidence 0.75). Input: six first-party Hungarian
+# paragraphs written parallel to `fr-docs/` — same subject matter (this project's
+# architecture, ingest, install, reranker, operator flow, troubleshooting) — so the review
+# is comparable to the French leg rather than measuring a different kind of text. Two
+# consecutive runs returned byte-identical spans and scores; that is determinism on one
+# machine and one torch build, and says nothing about a different build.
+#
+# VERDICT — PASS (Spike gate, Finding 3: non-trivial, non-garbled entity AND relation
+# spans). S1's "Then" clause is about the GRAPH, not the raw decode, so it was checked
+# through `GraphExtractor.extract()`, the same call the French leg asserts on — not through
+# `inference()` alone: `degraded=False`, no warnings, `load_count=1`, **21 entity nodes,
+# 23 mentions, 37 edges**, and zero nodes without a mention row of their own. Two of the
+# edges are typed rather than co-occurrence `related_to`: `uses rendszer -> REST API-t`
+# and `uses rendszer -> FastText`. 21 nodes from 23 spans because `rendszer` occurs in
+# three paragraphs and collapses to one node — the backend dedupes relations, never entity
+# spans, so span count and node count are different quantities.
+#
+# All 23 spans, recorded in full so the offset claim below is falsifiable rather than
+# asserted — `¶N` is the paragraph in the reproduction at the bottom, `[start:end]` its
+# offsets into that paragraph. Every one was re-sliced out of its own paragraph and
+# matched its own text, including the accented and multi-word ones, so the accent-heavy
+# input surfaces no offset bug in the path exercised (all six inputs sit far below
+# `GRAPH_NER_TOKEN_WINDOW_WORDS`, so the truncation path is NOT exercised and this says
+# nothing about it). All four prompted entity labels appear; nothing collapsed onto one.
+#
+#   ¶1 system  `rendszer`                 [2:10]    @0.921
+#   ¶1 system  `REST API-t`               [110:120] @0.652   ← accusative suffix retained
+#   ¶1 system  `LanceDB`                  [214:221] @0.602
+#   ¶2 system  `rendszer`                 [28:36]   @0.918
+#   ¶2 system  `FastText`                 [68:76]   @0.870
+#   ¶2 system  `fastembed`                [161:170] @0.804
+#   ¶3 system  `uv csomagkezelő`          [86:101]  @0.664   ← Hungarian noun phrase
+#   ¶3 system  `launchd`                  [129:136] @0.709
+#   ¶3 system  `macOS`                    [159:164] @0.895
+#   ¶3 system  `Linuxon`                  [177:184] @0.776   ← superessive suffix retained
+#   ¶3 system  `systemd`                  [187:194] @0.746
+#   ¶4 system  `kereszt-kódoló modell`    [23:44]   @0.719
+#   ¶4 system  `router`                   [111:117] @0.815
+#   ¶4 concept `gyűjtemények centroidjai` [120:144] @0.834
+#   ¶4 concept `találatokat`              [164:175] @0.590
+#   ¶5 person  `Kovács Péter`             [0:12]    @0.982   ← family-name-first order held
+#   ¶5 concept `gyűjteményeket`           [67:81]   @0.702
+#   ¶5 system  `archon-search`            [91:104]  @0.695
+#   ¶5 event   `indexelést`               [143:153] @0.574
+#   ¶5 system  `rendszer`                 [173:181] @0.915
+#   ¶6 system  `beágyazó modell`          [41:56]   @0.511
+#   ¶6 event   `időtúllépéshez`           [83:97]   @0.514
+#   ¶6 system  `szolgáltatás`             [119:131] @0.542
+#
+# NOTHING HERE IS ASSERTED, WHICH IS WHY THE NEAR-FLOOR SCORES ARE RECORDED RATHER THAN
+# AVOIDED. T-10 dropped a French span pinned at 0.581 against the 0.5 floor because a
+# BLOCKING assert on it was unsafe across architectures. Three spans here sit in the same
+# band (0.511 / 0.514 / 0.542) and one more at 0.574. They are reported, not pinned, so
+# the risk T-10 avoided does not arise; the judgement they support is "the engine returns
+# usable Hungarian spans", which does not turn on those four. Two of them are also weak on
+# their own terms, said plainly: `indexelést` ("indexing") and `időtúllépéshez` ("to a
+# timeout") are common-noun forms typed `event`, a stretch against that label's "a named
+# occurrence" description, and `találatokat` / `gyűjteményeket` are generic common nouns.
+#
+# RELATIONS — THIN, AND DISCLOSED AS THIN. Two relations, both `uses`, both headed by the
+# same generic noun `rendszer`, and 4 of the 6 paragraphs returned ZERO relations
+# (per-paragraph counts: 1, 1, 0, 0, 0, 0). Both are semantically correct and neither is a
+# `related_to` fallback — `related_to` IS prompted to the model
+# (`_RELATION_LABELS`, `prose_extraction_backend.py`), so returning a specific label
+# instead is a real choice by the model, not an artifact of the label list. That is a
+# claim about the decode only; the extractor's co-occurrence loop produces `related_to`
+# edges on a different path this does not speak to. Two relations reads thin in isolation,
+# so it was measured against the language this feature already accepts as passing: the
+# same engine, thresholds and machine over `fr-docs/` returns 82 entities and 5 relations
+# across 31 paragraphs — 2.65 entities and 0.16 relations per paragraph, against
+# Hungarian's 3.83 and 0.33. Hungarian is denser than French on BOTH axes, so sparse
+# relations are a property of this label set on short technical prose, not a Hungarian
+# deficit. The sample is small (6 paragraphs) and was authored by the same agent that ran
+# and judged the review — its subject matter was fixed to match `fr-docs/` to limit that,
+# but it is not an independent corpus and the density comparison is the load-bearing
+# evidence here, not the raw counts.
+#
+# FINDING — one real per-language limitation. It is NOT a Finding-3 failure, so the plan's
+# "record it in Known limitations instead of blocking" disposition (which attaches to a
+# language that FAILS) does not apply. It is recorded here as a passing-language
+# observation, and its destination already exists rather than being hoped for: the team
+# plan's Documentation-update section gives T-14 a row for
+# `220_accessibility_and_internationalization.md` requiring the corpus-language versus
+# interface-language distinction, "with quality varying by language" — this finding is
+# that row's content. The engine returns Hungarian entity names in
+# the INFLECTED surface form it found them in, and that form is what becomes the node —
+# directly observed above: `Linuxon` and `REST API-t` are node names in the `extract()`
+# run, not `Linux` and `REST API`. `make_stable_entity_id` (`graph_types.py:86`) hashes
+# `"{type}:{name}"` lowercased, and `name` is the raw span (`graph_extractor.py`'s
+# `entity_name=entity.text`), so two inflections of one name are two nodes with two
+# separate salience counts. That last step is INFERRED from the ID formula, not observed:
+# no paragraph here contains bare `Linux` alongside `Linuxon`, so the split itself was
+# never seen, only its mechanism. Synonym enrichment (`[graph].enrichment_auto`, default
+# True) may relate such a pair with a `synonym_of` edge at `>= 0.85` cosine, but relating
+# is not merging, so it would not close the split. This is worse for agglutinative
+# languages than for French or English; it is not a regression, since an English-only
+# engine returns nothing at all for this text.
+#
+# RE-RUNNING IT. There is nothing to run under pytest. Construct a
+# `ProseExtractionBackend`, `await load()` FIRST (`inference()` raises otherwise), then
+# `await inference(paragraphs, 0.5, 0.75)`; for the node/mention half use
+# `GraphExtractor(GraphConfig(enabled=True, provider=None)).extract(...)`. Pass the six
+# paragraphs as six separate texts, not one joined string — offsets are per-paragraph.
+# **Rebuild each paragraph by joining its wrapped continuation lines with a single
+# space**, dropping the `#` and the `N.` marker; that rule was checked, not assumed —
+# reconstructing all six that way reproduces the exact strings this run was given, so
+# every offset above holds. A reflow that breaks the rule breaks the offsets.
+#
+#   1. A rendszer réteges architektúrát követ, amely világosan elválasztja a
+#      felelősségeket: a megjelenítési réteg a REST API-t és az MCP felületet tartalmazza,
+#      az üzleti réteg a keresési folyamatot, az adatréteg pedig a LanceDB vektortárolót
+#      és az FTS indexet.
+#   2. A dokumentum betöltésekor a rendszer először elemzi a fájlt, majd a FastText
+#      segítségével felismeri a domináns nyelvet, ezután darabokra bontja a szöveget, és a
+#      fastembed könyvtárral sűrű vektorokat készít belőle.
+#   3. A telepítési útmutató szerint a Python 3.12 verzió szükséges, a függőségeket pedig
+#      az uv csomagkezelő telepíti. A szolgáltatás a launchd segítségével indul el macOS
+#      rendszeren, Linuxon a systemd felügyeli.
+#   4. Az újrarangsorolót egy kereszt-kódoló modell valósítja meg, amely a hibrid keresés
+#      eredményeit rendezi újra. A router a gyűjtemények centroidjai alapján előszűri a
+#      találatokat, mielőtt a keresési folyamat lefutna.
+#   5. Kovács Péter üzemeltetőként a konfigurációs fájlban állította be a gyűjteményeket,
+#      majd az archon-search parancssori eszközzel indította el az indexelést. A művelet
+#      során a rendszer naplózta a haladást.
+#   6. A hibaelhárítási útmutató leírja, hogy a beágyazó modell letöltése lassú hálózaton
+#      időtúllépéshez vezethet. Ilyenkor a szolgáltatás 503-as választ ad, amíg a modell
+#      be nem töltődik a memóriába.
 
 
 if __name__ == "__main__":
