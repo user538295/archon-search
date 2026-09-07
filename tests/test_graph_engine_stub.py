@@ -95,6 +95,10 @@ def test_no_test_file_names_the_removed_engine() -> None:
     _ALLOWLIST = {
         "tests/test_graph_engine_stub.py",
         "tests/test_removed_engine_repo_guard.py",
+        # T-13's container legs assert the engine's ABSENCE from the image, so they must
+        # name it — in the probe, the log-scan literals, and the task-mandated test name
+        # ``test_cpu_image_starts_and_serves_ready_without_spacy``.
+        "tests/test_docker_smoke.py",
     }
     _DATA_PREFIX = "tests/eval/corpus/"
     pattern = re.compile(r"spacy|en_core_web_sm|_LABEL_TO_ENTITY_TYPE", re.IGNORECASE)

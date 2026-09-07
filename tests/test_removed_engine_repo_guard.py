@@ -49,6 +49,10 @@ _HISTORICAL_EXACT = frozenset({
 _GUARD_FILES = frozenset({
     "tests/test_removed_engine_repo_guard.py",
     "tests/test_graph_engine_stub.py",
+    # T-13's container legs assert the engine's ABSENCE from the image, so they must name
+    # it — in the probe, in the log-scan literals, and in the task-mandated test name
+    # ``test_cpu_image_starts_and_serves_ready_without_spacy``.
+    "tests/test_docker_smoke.py",
 })
 
 # Self-tightening TEMPORARY allowlist: live files a LATER task still owns. Each still
