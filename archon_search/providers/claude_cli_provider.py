@@ -33,6 +33,8 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _logger = logging.getLogger(__name__)
 
 _CLAUDE_BIN = "claude"
+_MAX_ATTEMPTS = 2  # 1 retry — absorbs a transient non-zero exit under session contention
+_RETRY_BACKOFF_SECONDS = 0.5
 
 _HYDE_PROMPT_TEMPLATE = """\
 Write a short passage that would directly answer the following question.
@@ -91,8 +93,12 @@ class ClaudeCLIQueryExpansionProvider:
     async def _run(self, prompt: str, query: str, timeout_seconds: float, label: str) -> str | None:
         """Run ``claude -p`` and return cleaned stdout, or ``None`` on any failure.
 
-        Never raises: timeout kills the subprocess; non-zero exit and spawn
-        errors log a fingerprinted warning and return ``None``.
+        Never raises: timeout kills the subprocess; spawn errors return ``None``
+        immediately. A non-zero exit is retried once after a short backoff — a
+        `claude` CLI invocation nested inside (or concurrent with) another active
+        Claude Code session can transiently exit 1 under contention rather than
+        time out, and a single retry absorbs that without materially slowing the
+        common case.
         """
         fp = _query_fingerprint(query)
         argv = [
@@ -103,47 +109,58 @@ class ClaudeCLIQueryExpansionProvider:
             "text",
             *self._model_args(),
         ]
-        proc: asyncio.subprocess.Process | None = None
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *argv,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout_seconds
-            )
-        except asyncio.TimeoutError:
-            if proc is not None:
-                proc.kill()
-                with contextlib.suppress(Exception):
-                    await proc.wait()
-            _logger.warning(
-                "ClaudeCLIQueryExpansionProvider: %s call timed out after %.1fs (fp=%s)",
-                label,
-                timeout_seconds,
-                fp,
-            )
-            return None
-        except Exception:  # noqa: BLE001
-            _logger.warning(
-                "ClaudeCLIQueryExpansionProvider: error running claude CLI for %s (fp=%s)",
-                label,
-                fp,
-            )
-            return None
+        last_returncode: int | None = None
+        last_stderr = b""
+        for attempt in range(_MAX_ATTEMPTS):
+            if attempt > 0:
+                await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+            proc: asyncio.subprocess.Process | None = None
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *argv,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout_seconds
+                )
+            except asyncio.TimeoutError:
+                if proc is not None:
+                    proc.kill()
+                    with contextlib.suppress(Exception):
+                        await proc.wait()
+                _logger.warning(
+                    "ClaudeCLIQueryExpansionProvider: %s call timed out after %.1fs (fp=%s)",
+                    label,
+                    timeout_seconds,
+                    fp,
+                )
+                return None
+            except Exception:  # noqa: BLE001
+                _logger.warning(
+                    "ClaudeCLIQueryExpansionProvider: error running claude CLI for %s (fp=%s)",
+                    label,
+                    fp,
+                )
+                return None
 
-        if proc.returncode != 0:
-            _logger.warning(
-                "ClaudeCLIQueryExpansionProvider: claude CLI exited %s for %s (fp=%s)",
-                proc.returncode,
-                label,
-                fp,
-            )
-            return None
+            if proc.returncode == 0:
+                return _ANSI_RE.sub("", stdout.decode("utf-8", errors="replace"))
 
-        return _ANSI_RE.sub("", stdout.decode("utf-8", errors="replace"))
+            last_returncode = proc.returncode
+            last_stderr = stderr
+
+        _logger.warning(
+            "ClaudeCLIQueryExpansionProvider: claude CLI exited %s for %s after %d attempt(s) "
+            "(fp=%s, stderr=%s)",
+            last_returncode,
+            label,
+            _MAX_ATTEMPTS,
+            fp,
+            last_stderr.decode("utf-8", errors="replace").strip()[:200],
+        )
+        return None
 
     async def generate_hypothetical_doc(
         self,

@@ -102,6 +102,21 @@ async def test_generate_nonzero_exit_returns_none(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
+async def test_generate_retries_once_after_nonzero_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A transient non-zero exit (e.g. session contention) is retried once and can recover."""
+    _available(monkeypatch)
+    spy = AsyncMock(side_effect=[_mock_proc(b"", returncode=1), _mock_proc(b"recovered answer")])
+    monkeypatch.setattr(ccp.asyncio, "create_subprocess_exec", spy)
+    monkeypatch.setattr(ccp.asyncio, "sleep", AsyncMock())
+
+    provider = ClaudeCLIQueryExpansionProvider(model="haiku")
+    result = await provider.generate_hypothetical_doc("query")
+
+    assert result == "recovered answer"
+    assert spy.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_generate_spawn_error_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """create_subprocess_exec raising (e.g. FileNotFoundError) → None, no raise."""
     _available(monkeypatch)

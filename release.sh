@@ -97,30 +97,34 @@ check_git_cliff() {
 check_git_cliff
 
 if [ -z "${RELEASE_SH_TEST_MODE:-}" ]; then
-    # Mirrors archon-search-release.yml's `test` job step for step (same markers, same
-    # --cov-append/--no-cov split, same coverage enforcement at the end) so a lane that
-    # would fail the publish gate fails here instead, before the tag exists.
-    echo "Running every archon-search-release.yml test lane before release (this takes a while)..."
+    # Lanes 1-5 mirror archon-search-release.yml's `test` job step for step (same
+    # markers, same --cov-append/--no-cov split, same coverage enforcement at the end)
+    # so a lane that would fail the publish gate fails here instead, before the tag
+    # exists. Lanes 6-11 run ONLY here, never in CI: benchmark/smoke need a local
+    # server, docker needs a local daemon, live_benchmark/live_eval/live need real
+    # model weights or a logged-in `claude` CLI that a CI runner doesn't have — this
+    # is the full local pre-tag gate, CI's job stays a subset of it.
+    echo "Running every excluded pytest marker as a local pre-tag gate (this takes a while)..."
     _suite_start=$SECONDS
     rm -f .coverage
 
-    echo "[1/5] Default suite (coverage, no fail-under yet)..."
+    echo "[1/11] Default suite (coverage, no fail-under yet)..."
     uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append -n0 \
         -m "not live and not eval and not benchmark and not integration and not live_eval and not docling and not graph_real_artifact" \
         || bail "default suite failed — fix all failures before releasing"
 
-    echo "[2/5] Eval slice (thresholds, runxfail)..."
+    echo "[2/11] Eval slice (thresholds, runxfail)..."
     uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append --runxfail \
         -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/ \
         || bail "eval slice failed — fix all failures before releasing"
 
-    echo "[3/5] Integration suite (disk-backed basetemp)..."
+    echo "[3/11] Integration suite (disk-backed basetemp)..."
     mkdir -p /var/tmp/archon-search-it
     uv run pytest --basetemp=/var/tmp/archon-search-it -o addopts= --strict-markers --strict-config --cov=archon_search --cov-append \
         -m "integration and not eval and not docling and not graph_real_artifact" tests/ \
         || bail "integration suite failed — fix all failures before releasing"
 
-    echo "[4/5] Docling parser lane (real OCR — minutes)..."
+    echo "[4/11] Docling parser lane (real OCR — minutes)..."
     uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m docling --junitxml=docling-results.xml tests/ \
         || bail "docling lane failed — fix all failures before releasing"
     uv run python -c "
@@ -134,7 +138,7 @@ assert not skipped, f'docling testcases skipped, no real OCR exercised - {skippe
 " || bail "docling lane ran but its non-vacuity check failed"
     rm -f docling-results.xml
 
-    echo "[5/5] Graph real-artifact lane (real GLiNER checkpoint)..."
+    echo "[5/11] Graph real-artifact lane (real GLiNER checkpoint)..."
     _prefetch_ok=false
     for attempt in 1 2 3; do
         uv run python -c "
@@ -160,6 +164,50 @@ assert len(c) == 1, f'expected exactly one test_graph_ner_lane_non_vacuity testc
 assert c[0].find('skipped') is None, 'test_graph_ner_lane_non_vacuity was skipped — the real-artifact guard did not execute'
 " || bail "graph real-artifact lane ran but its non-vacuity check failed"
     rm -f graph-real-artifact-results.xml
+
+    echo "[6/11] Benchmark lane (routing latency + wildcard scope)..."
+    _bench_owns_server=false
+    if ! curl -sf http://127.0.0.1:8765/health >/dev/null 2>&1; then
+        ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run archon-search serve &
+        _bench_pid=$!
+        _bench_owns_server=true
+        for _attempt in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8765/health >/dev/null 2>&1 && break
+            kill -0 "$_bench_pid" 2>/dev/null || break  # server process died/exited — stop waiting
+            sleep 1
+        done
+    fi
+    _bench_rc=0
+    uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m benchmark tests/ || _bench_rc=$?
+    if [ "$_bench_owns_server" = true ]; then
+        kill "$_bench_pid" 2>/dev/null || true
+        wait "$_bench_pid" 2>/dev/null || true
+    fi
+    [ "$_bench_rc" -eq 0 ] || bail "benchmark lane failed — fix all failures before releasing"
+
+    echo "[7/11] Docker image smoke lane (real CPU image build — ~5 min)..."
+    ARCHON_SEARCH_RUN_DOCKER_SMOKE=1 uv run pytest tests/test_docker_smoke.py \
+        --no-cov -o addopts= --strict-markers --strict-config -n0 -m docker \
+        || bail "docker smoke lane failed — fix all failures before releasing"
+
+    echo "[8/11] Smoke suite (real archon-search serve subprocess per test)..."
+    uv run pytest tests/smoke/ -o addopts= --strict-markers --strict-config --no-cov -n0 \
+        || bail "smoke suite failed — fix all failures before releasing"
+
+    echo "[9/11] Live benchmark lane (real fastembed weights)..."
+    uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 \
+        -m live_benchmark tests/eval/live_benchmark/ \
+        || bail "live benchmark lane failed — fix all failures before releasing"
+
+    echo "[10/11] Live eval lane (real fastembed + real LLM — Anthropic key, else 'claude -p' CLI)..."
+    uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 \
+        -m live_eval tests/eval/live/ \
+        || bail "live eval lane failed — fix all failures before releasing"
+
+    echo "[11/11] Live llama.cpp lane (skips gracefully without a local llama-server)..."
+    uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 \
+        -m "live and not live_eval and not live_benchmark" tests/integration/test_llama_cpp_e2e.py \
+        || bail "live llama.cpp lane failed — fix all failures before releasing"
 
     echo "Enforcing coverage >= 85% across default+eval+integration lanes..."
     uv run coverage report --fail-under=85 || bail "coverage below 85% — fix before releasing"
