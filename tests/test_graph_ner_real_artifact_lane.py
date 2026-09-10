@@ -273,14 +273,14 @@ _FRENCH_SPANS: frozenset[tuple[str, str, int, int]] = frozenset(
 # PROVENANCE of the baseline — figure, corpus, machine, provider, date, as captured (K9):
 #   figure    25929.6 ms — the median of three CI runs (25946.3 / 25929.6 / 25780.1 ms),
 #             taken from the FIRST CI run of this lane, which failed the prior
-#             laptop-derived 13353.0 ms budget (1335.3 ms spaCy-era baseline x 10.0) by
+#             laptop-derived 13353.0 ms budget (1335.3 ms prior-engine-era baseline x 10.0) by
 #             ~2x. That figure is exactly what this constant replaces, per the plan below
 #             it was written under. A DURATION, not a rate: LOWER IS BETTER, which is what
 #             makes the `measured <= BASELINE * MULTIPLIER` direction below correct.
 #   corpus    tests/eval/corpus/docs/ — 17 files, 18380 bytes, sha256[:16] 5b5717d98f2ac6e7,
 #             ingested with the `**/*` glob. Pinned below and re-checked before timing.
 #   machine   GitHub Actions Linux runner (archon-search-pr.yml) — the actual target
-#             runner, closing the machine gap the prior spaCy-era figure only estimated.
+#             runner, closing the machine gap the prior engine-era figure only estimated.
 #   provider  fastembed's own default provider selection (`SearchConfig.providers == []`),
 #             graph enabled with `graph.provider=None` so no LLM enrichment call ran, and
 #             ANTHROPIC_API_KEY unset so no description-generation call was timed. NER runs
