@@ -1,6 +1,13 @@
 # Changelog
 
 
+## [26.9.2111] - 2026-09-10
+
+**Improved NER test baseline accuracy**
+
+- Recaptured graph NER throughput baselines from actual CI measurements after switching to the GLiNER extraction engine. The new baseline (measured at ~25930ms median on CI) enables a tighter 2.0x regression multiplier instead of the previous 10.0x estimate, improving test calibration. Fixed baseline comments to comply with removed-engine validation checks.
+
+
 ## [26.9.2108] - 2026-09-10
 
 **Full release lane gating, Docker resilience, live test fixes**
