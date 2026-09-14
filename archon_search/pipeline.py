@@ -391,7 +391,12 @@ class SearchPipeline:
     def embedder_is_warm(self) -> bool:
         return self._global_embedder.is_warm
 
-    async def warmup_models(self, embedder: Embedder | None = None) -> None:
+    async def warmup_models(
+        self,
+        embedder: Embedder | None = None,
+        *,
+        reranker_timeout: float | None = None,
+    ) -> bool:
         """Build the lazy ONNX models now, off any request-timeout budget (S184).
 
         Both ML backends load their weights on first use, inside the callers'
@@ -399,6 +404,14 @@ class SearchPipeline:
         first search into a 504. Callers must invoke this *before* entering that
         budget. Pass the embedder actually serving the request; omit it on
         fan-out paths, which resolve per-collection embedders themselves.
+
+        *reranker_timeout* bounds the reranker warm-up only (S286). Callers that
+        cannot afford an unbounded wait pass one and act on the return value:
+        ``False`` means the cross-encoder is still cold and the caller should
+        search with ``rerank=False`` rather than block on the build a second
+        time from inside ``rerank_candidates``. Abandoning the wait does not
+        abandon the build — it runs in a worker thread and warms the backend for
+        later requests.
 
         Never raises: a failed warm-up logs a WARNING and the search proceeds
         with a cold model rather than failing outright.
@@ -408,11 +421,23 @@ class SearchPipeline:
                 await embedder.warmup()
             except Exception:
                 logger.warning("warm-up: embedder failed; first search will pay the init cost", exc_info=True)
-        if self._reranker is not None:
-            try:
+        if self._reranker is None:
+            return True
+        try:
+            if reranker_timeout is None:
                 await self._reranker.warmup()
-            except Exception:
-                logger.warning("warm-up: reranker failed; first search will pay the init cost", exc_info=True)
+            else:
+                await asyncio.wait_for(self._reranker.warmup(), timeout=reranker_timeout)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "warm-up: reranker still cold after %ss; this search skips reranking",
+                reranker_timeout,
+            )
+            return self._reranker.is_warm
+        except Exception:
+            logger.warning("warm-up: reranker failed; first search will pay the init cost", exc_info=True)
+            return self._reranker.is_warm
+        return True
 
     # ------------------------------------------------------------------
     # Ingest
@@ -1030,7 +1055,11 @@ class SearchPipeline:
         rag_fusion_config: "RAGFusionConfig | None" = None,
         graph_mode: str | None = None,
         scope_filter: str | None = None,
+        rerank: bool = True,
     ) -> SearchPipelineResult:
+        """*rerank=False* skips the cross-encoder stage and returns the fused
+        vector+FTS ranking — how a caller degrades when the reranker is still
+        cold rather than blocking a request on the ONNX build (S286)."""
         # --- Graph expansion (naive mode) — applied to original query before all other paths ---
         # Expansion is applied to the original query only.  RAG Fusion variants are generated
         # from the original (unexpanded) query.  HyDE uses the original query; when expansion
@@ -1077,7 +1106,7 @@ class SearchPipeline:
                 result = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True, scope_filter=scope_filter,
+                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank,
                 )
                 result.graph_expansion_applied = graph_expansion_applied
                 return result
@@ -1095,7 +1124,7 @@ class SearchPipeline:
                 fallback = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True, scope_filter=scope_filter,
+                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank,
                 )
                 fallback.rag_fusion_warning = "RAG Fusion timed out"
                 fallback.graph_expansion_applied = graph_expansion_applied
@@ -1108,7 +1137,7 @@ class SearchPipeline:
                 fallback = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True, scope_filter=scope_filter,
+                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank,
                 )
                 fallback.rag_fusion_warning = "RAG Fusion expansion failed"
                 fallback.graph_expansion_applied = graph_expansion_applied
@@ -1128,7 +1157,7 @@ class SearchPipeline:
                 fallback = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True, scope_filter=scope_filter,
+                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank,
                 )
                 fallback.rag_fusion_warning = "RAG Fusion expansion failed"
                 fallback.graph_expansion_applied = graph_expansion_applied
@@ -1163,7 +1192,7 @@ class SearchPipeline:
                 result = await self._search_standard(
                     effective_query, collection, namespace, embedder=embedder,
                     filters=filters, query_vector=None,
-                    rag_fusion_attempted=True, scope_filter=scope_filter,
+                    rag_fusion_attempted=True, scope_filter=scope_filter, rerank=rerank,
                 )
                 result.graph_expansion_applied = graph_expansion_applied
                 return result
@@ -1191,7 +1220,7 @@ class SearchPipeline:
             fused, acl_filtered = apply_acl_filter(fused, lambda c: c.acl, namespace)
 
             # 9. Rerank on fused set using the original query.
-            if self._reranker is not None:
+            if self._reranker is not None and rerank:
                 fused = await self._reranker.rerank_candidates(
                     query, fused, top_k=self._top_k_return
                 )
@@ -1218,7 +1247,7 @@ class SearchPipeline:
         result = await self._search_standard(
             effective_query, collection, namespace, embedder=embedder,
             filters=filters, query_vector=effective_query_vector,
-            scope_filter=scope_filter,
+            scope_filter=scope_filter, rerank=rerank,
         )
         result.graph_expansion_applied = graph_expansion_applied
         return result
@@ -1691,6 +1720,7 @@ class SearchPipeline:
         query_vector: list[float] | None = None,
         rag_fusion_attempted: bool = False,
         scope_filter: str | None = None,
+        rerank: bool = True,
     ) -> SearchPipelineResult:
         """Standard single-query search path (no RAG Fusion)."""
         vector = list(query_vector) if query_vector is not None else await embedder.embed_one(query)
@@ -1725,7 +1755,7 @@ class SearchPipeline:
                     filter_flags,
                     acl_denied,
                 )
-        if self._reranker is not None:
+        if self._reranker is not None and rerank:
             reranked = await self._reranker.rerank_candidates(query, candidates, top_k=self._top_k_return)
             results = [self._candidate_to_search_result(c) for c in reranked]
         else:

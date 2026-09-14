@@ -47,6 +47,16 @@ _SEARCH_TIMEOUT_SECONDS = 30.0
 # the next request is likely to hit a warm cache.
 _EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS = 30.0
 
+# Upper bound on how long a single POST /search request waits for the cross-encoder
+# to finish its cold ONNX build before answering without reranking (S286). Deliberately
+# short, not a client-read-timeout budget: a request already this deep into a cold path
+# means an ingest job upstream (bounded by routes_jobs._INGEST_WARMUP_WAIT_SECONDS) or
+# the lifespan warm-up already spent up to their own ceilings on this same build and it
+# is still not done, so a further multi-second wait here buys little. The build keeps
+# running in its worker thread regardless — this request degrades to the fused
+# vector+FTS ranking, and later requests get the full reranked pipeline back.
+_RERANKER_WARMUP_WAIT_SECONDS = 0.5
+
 _VALID_ACL_SOURCES = frozenset({"frontmatter", "sidecar", "collection_default"})
 
 _HYDE_EXPANSION_FAILED_WARNING = "HyDE expansion failed"
@@ -360,17 +370,19 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 embedder = pipeline._global_embedder
                 active_model = config.embedding_model
             # Outside the wait_for below by design (S184): a cold ONNX build must not
-            # consume the search budget. The cost is that it is also unbounded — a
-            # request that pays the build returns nothing until it finishes rather
-            # than degrading to a 504. S281 removed the post-ingest exposure (ingest
-            # jobs now warm the models before reporting DONE); a first search against
-            # a pre-existing collection after a restart, issued without waiting for
-            # /ready, still pays it. Tracked by S278/S286/S288/S299/S302. (S283 was a
-            # distinct bug, not this gap: Reranker._warmup_failed latched a single
-            # transient warm-up failure permanently, silently no-opping this call and
-            # the S281 ingest gate alike for the rest of the process — fixed in
-            # reranker.py so a failed attempt is retried, not latched.)
-            await pipeline.warmup_models(embedder)
+            # consume the search budget. The embedder half stays unbounded — search
+            # cannot answer at all without it. The reranker half is bounded (S286):
+            # search *can* answer without it, so rather than block past a client's
+            # read timeout (the reported status=0 body=None) this request degrades to
+            # the fused vector+FTS ranking and the build finishes in the background.
+            # The same cold-model root cause is reported by S278/S288/S299/S302.
+            # (S283 was a distinct bug, not this gap: Reranker._warmup_failed latched a
+            # single transient warm-up failure permanently, silently no-opping this
+            # call and the S281 ingest gate alike for the rest of the process — fixed
+            # in reranker.py so a failed attempt is retried, not latched.)
+            rerank = await pipeline.warmup_models(
+                embedder, reranker_timeout=_RERANKER_WARMUP_WAIT_SECONDS
+            )
             result = await asyncio.wait_for(
                 pipeline.search(
                     body.query,
@@ -384,6 +396,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                     rag_fusion_config=config.rag_fusion,
                     graph_mode=body.graph_mode,
                     scope_filter=body.scope_filter,
+                    rerank=rerank,
                 ),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
