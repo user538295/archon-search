@@ -21,7 +21,7 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 - **[2026-09-15] (×10) 3rd-party wiring**: verify params AND DICT KEYS on the REAL lib; a stub inventing keys masks the bug. fastembed `list_supported_models()` keys the name `"model"`, not `"name"`. GLiNER `relations` no-op off-RelEx (0.75 → 0 edges).
 
 ## Plan-Making & Agent Process
-- **[2026-09-14] (×187) verify claims/state**: grep-verify every cite AND a reviewer's cited PRECEDENT. Grep the tasks file for a prior spike's Notes. Repro vs unmodified HEAD (`git worktree --detach`). Re-grep after bulk `replace` — it hits twins.
+- **[2026-09-14] (×188) verify claims/state**: grep-verify every cite AND cited PRECEDENTs. Grep the tasks file for a spike's Notes. Repro vs the ticket's `Version:` tag, not only HEAD (`git worktree`). Re-grep after bulk `replace` — hits twins.
 - **[2026-09-07] (×55) subagents**: final text DISCARDED; API death mid-run leaves NOTHING; nested leak to GRANDPARENT. Non-general-purpose lacks SendMessage: idle_notification carries no content — pull result from subagents/agent-<name>-*.jsonl.
 - **[2026-09-07] (×14) guards**: allowlist entries must STILL match else empty; new tests IMPORT `_ENGINE_PATTERN`. Deleted allowlisted file → `git rm` + strike BOTH. A cited SCRIPT FILENAME trips the name guard. Unspecified `xfail` cannot fail.
 - **[2026-09-14] (×46) doc close-out**: grep the WHOLE tree (incl. `README.md`, `*.toml.example`) for the old invariant string — per-file scope orphans siblings. Never put a `>` block between table rows. Order: api-ref→catalog→CLAUDE.md→manual.
