@@ -365,7 +365,11 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             # than degrading to a 504. S281 removed the post-ingest exposure (ingest
             # jobs now warm the models before reporting DONE); a first search against
             # a pre-existing collection after a restart, issued without waiting for
-            # /ready, still pays it. Tracked by S278/S283/S286/S288/S299/S302.
+            # /ready, still pays it. Tracked by S278/S286/S288/S299/S302. (S283 was a
+            # distinct bug, not this gap: Reranker._warmup_failed latched a single
+            # transient warm-up failure permanently, silently no-opping this call and
+            # the S281 ingest gate alike for the rest of the process — fixed in
+            # reranker.py so a failed attempt is retried, not latched.)
             await pipeline.warmup_models(embedder)
             result = await asyncio.wait_for(
                 pipeline.search(

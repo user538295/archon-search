@@ -612,6 +612,49 @@ def test_reranker_is_warm_propagates_backend_exception() -> None:
         _ = reranker.is_warm
 
 
+@pytest.mark.asyncio
+async def test_warmup_retries_after_a_failed_attempt() -> None:
+    """S283: a failed warmup() must not permanently latch — the next call retries.
+
+    ``Reranker._warmup_failed`` used to gate ``warmup()`` itself, so one
+    transient failure (HF 429, network blip, unwritable cache) disarmed every
+    later warm-up for the life of the process. It must instead reflect only
+    the outcome of the most recent attempt.
+    """
+
+    class _FailOnceBackend:
+        is_warm: bool = False
+
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+            self.call_count += 1
+            if self.call_count == 1:
+                raise RuntimeError("transient failure")
+            self.is_warm = True
+            return [0.5] * len(pairs)
+
+    backend = _FailOnceBackend()
+    reranker = Reranker(backend)
+
+    with pytest.raises(RuntimeError, match="transient failure"):
+        await reranker.warmup()
+    assert reranker._warmup_failed is True
+    assert backend.call_count == 1
+    assert reranker.is_warm is False
+
+    # A second call must retry (not silently no-op) and succeed this time.
+    await reranker.warmup()
+    assert backend.call_count == 2
+    assert reranker.is_warm is True
+    assert reranker._warmup_failed is False
+
+    # Now warm: a third call must be a true no-op (no further predict calls).
+    await reranker.warmup()
+    assert backend.call_count == 2
+
+
 def test_reranker_caches_models_under_the_archon_data_dir() -> None:
     """predict() must construct TextCrossEncoder with cache_dir=str(get_models_dir())."""
     from unittest.mock import MagicMock, patch

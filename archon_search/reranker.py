@@ -77,21 +77,28 @@ class Reranker:
         budget, otherwise the one-off load consumes the whole budget and an
         otherwise valid search fails with 504 (S184).
 
-        Idempotent: no-op once warm or after a permanent failure.
+        Idempotent: no-op once warm. A failed attempt is retried by the next
+        caller rather than latched permanently (S283) — a transient failure
+        (an HF 429, a network blip, an unwritable cache) must not silently
+        disarm every later warm-up for the life of the process, pushing the
+        cold build onto a request path with no timeout budget of its own.
+        ``_warmup_failed`` reflects only the outcome of the most recent
+        attempt; it is diagnostic, not a skip condition.
         Single-flight: concurrent cold callers wait on a lock; only one load runs.
         Bounded by ``_WARMUP_TIMEOUT_SECONDS`` so a hung model download cannot
         pin a request forever.
         """
-        if self._backend.is_warm or self._warmup_failed:
+        if self._backend.is_warm:
             return
         async with self._warmup_lock:
-            if self._backend.is_warm or self._warmup_failed:
+            if self._backend.is_warm:
                 return
             try:
                 await asyncio.wait_for(
                     asyncio.to_thread(self._backend.predict, [_WARMUP_PAIR]),
                     timeout=_WARMUP_TIMEOUT_SECONDS,
                 )
+                self._warmup_failed = False
             except Exception:
                 self._warmup_failed = True
                 raise
