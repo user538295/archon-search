@@ -78,6 +78,15 @@ class ModelValidationError(ValueError):
     """Raised when the embedding model dimension cannot be determined."""
 
 
+# Wire-safe detail every surface (REST, MCP) maps an unknown/unreachable-model
+# ModelValidationError to. Never interpolate the caught backend exception into
+# this message — it can embed internals (cache paths, HF error bodies, stack
+# text); str(exc) is fine in a logger.warning call, never in a response body.
+_MODEL_LOAD_FAILED_DETAIL = (
+    "could not load embedding model; verify the model name and ensure it is reachable."
+)
+
+
 @dataclass
 class ModelValidationResult:
     """Outcome of :func:`validate_models_async`.
@@ -586,7 +595,8 @@ async def validate_embedding_model(
     try:
         models = TextEmbedding.list_supported_models()
         for descriptor in models:
-            if descriptor.get("name") == model_name:
+            # fastembed keys the model identifier under "model" (NOT "name").
+            if descriptor.get("model") == model_name:
                 return int(descriptor["dim"])
     except AttributeError:
         # Older fastembed without list_supported_models — fall through
@@ -610,8 +620,9 @@ async def validate_embedding_model(
     except Exception as exc:
         # An unknown/unsupported model name makes the backend raise (fastembed
         # raises ValueError). Surface it as ModelValidationError so callers can
-        # map it to 422 rather than letting it escape as an unhandled 500.
-        raise ModelValidationError(
-            f"could not load embedding model {model_name!r}: {exc}"
-        ) from exc
+        # map it to 422 rather than letting it escape as an unhandled 500. The
+        # backend exception is logged (may embed cache paths, HF error bodies)
+        # but never placed on the wire — see _MODEL_LOAD_FAILED_DETAIL above.
+        logger.warning("failed to load embedding model %r: %s", model_name, exc)
+        raise ModelValidationError(_MODEL_LOAD_FAILED_DETAIL) from exc
     return embedder.embedding_dim

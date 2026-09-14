@@ -18,7 +18,7 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 - **[2026-08-20] (×12) job-spawning route**: guard→404→create→`transition({QUEUED},RUNNING)` BEFORE `create_task`→track + `add_done_callback`. 409 via persisted `meta.<job>_job_id`, cleared BEFORE `job_store.update(DONE/FAILED)`.
 - **[2026-08-03] (×9) LanceDB quirks**: `.limit()` is a scan limit, not sort-then-limit. `merge_insert(["c1","c2"])` for composite keys; `when_matched_update_all()` replaces the whole row. Missing table → `ValueError`. `db.close()` is sync.
 - **[2026-09-06] (×31) install/wizard**: unprinted doc option → fix the CODE. A pinned prompt admits ONE wording. `is_multilingual=False` re-resolves `prof`. CliRunner echoes input() PROMPTS, not answers. Wizard WARNINGs reach stderr via `lastResort`.
-- **[2026-09-07] (×9) 3rd-party wiring**: verify params per INPUT FORMAT AND per CHECKPOINT on the REAL model. GLiNER `relations` no-op off-RelEx; default `relation_confidence` 0.75 > a short corpus's best 0.67 → 0 typed edges; probe raw scores.
+- **[2026-09-15] (×10) 3rd-party wiring**: verify params AND DICT KEYS on the REAL lib; a stub inventing keys masks the bug. fastembed `list_supported_models()` keys the name `"model"`, not `"name"`. GLiNER `relations` no-op off-RelEx (0.75 → 0 edges).
 
 ## Plan-Making & Agent Process
 - **[2026-09-14] (×187) verify claims/state**: grep-verify every cite AND a reviewer's cited PRECEDENT. Grep the tasks file for a prior spike's Notes. Repro vs unmodified HEAD (`git worktree --detach`). Re-grep after bulk `replace` — it hits twins.

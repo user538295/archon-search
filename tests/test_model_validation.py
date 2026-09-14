@@ -22,7 +22,8 @@ from archon_search.model_validation import (
 async def test_validate_known_model_returns_dim():
     """If the model is in list_supported_models, return its dim directly."""
     with patch("archon_search.model_validation.TextEmbedding") as mock_te:
-        mock_te.list_supported_models.return_value = [{"name": "model-X", "dim": 384}]
+        # Real fastembed descriptors key the model identifier under "model".
+        mock_te.list_supported_models.return_value = [{"model": "model-X", "dim": 384}]
         result = await validate_embedding_model("model-X")
     assert result == 384
 
