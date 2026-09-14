@@ -113,6 +113,7 @@ class Reranker:
 
         for candidate, score in zip(candidates, scores):
             candidate.score = score
+            candidate.reranker_score = score
 
         return sorted(candidates, key=lambda c: c.score, reverse=True)[:top_k]
 

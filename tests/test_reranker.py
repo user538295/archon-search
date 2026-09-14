@@ -112,6 +112,34 @@ async def test_reranker_score_mutation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_S279_rerank_populates_reranker_score_on_every_result() -> None:
+    """S279: rerank() must record its cross-encoder score in ``reranker_score``.
+
+    ``rerank()`` overwrites ``score`` with the backend's value but left
+    ``reranker_score`` at its ``None`` default, so a ``SearchResult`` it
+    returned claimed no reranker had run. This pins that method's own
+    contract only — the production ``/search`` path reranks via
+    ``rerank_candidates`` and derives the wire field from
+    ``ScoredSearchCandidate.score_breakdown`` (see
+    ``SearchPipeline._candidate_to_search_result``), covered by
+    ``tests/integration/test_s343_reranker_score_in_search.py``.
+    """
+    backend = _MockRerankerBackend(scores=[0.77, 0.33])
+    reranker = Reranker(backend)
+    candidates = _make_candidates(2)
+
+    result = await reranker.rerank("q", candidates, top_k=2)
+
+    by_doc = {r.doc_id: r for r in result}
+    for doc_id, expected in (("doc0", 0.77), ("doc1", 0.33)):
+        assert by_doc[doc_id].reranker_score is not None, (
+            f"{doc_id} has reranker_score=None after rerank() ran "
+            f"(score={by_doc[doc_id].score})"
+        )
+        assert by_doc[doc_id].reranker_score == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
 async def test_make_reranker_returns_reranker() -> None:
     """Factory creates a working Reranker that exercises the lazy import path."""
     r = make_reranker("BAAI/bge-reranker-v2-m3", providers=[])
