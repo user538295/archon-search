@@ -20,7 +20,12 @@ from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, Excl
 from archon_search.acl import apply_acl_filter, resolve_acl
 from archon_search.observability import record_stage
 from archon_search.filters import SearchFilters
-from archon_search.constants import DEFAULT_NAMESPACE, _INGEST_CHUNK_BATCH_SIZE
+from archon_search.constants import (
+    DEFAULT_NAMESPACE,
+    INLINE_CHUNK_METADATA_KEY,
+    INLINE_CHUNK_METADATA_VALUE,
+    _INGEST_CHUNK_BATCH_SIZE,
+)
 from archon_search.collection_meta import CollectionMeta
 from archon_search.description_generator import MAX_SAMPLE_CHUNKS, _should_regenerate, generate_description
 from archon_search.chunker import ASTChunker, DocumentChunker
@@ -210,6 +215,18 @@ _BINARY_EXTENSIONS = frozenset(
 # with `---` by coincidence and must not be parsed for front matter.
 _FRONT_MATTER_EXTENSIONS = frozenset({".md", ".txt", ".rst", ".html"})
 _MAX_LOCAL_EXPLAIN_COMMUNITY_CANDIDATES = 200
+
+
+def _doc_id_for(source_path: Path | str) -> str:
+    """Derive a document's ``doc_id`` from its source path.
+
+    Single source for the derivation every writer and deleter shares — ``ingest_file``,
+    ``ingest_documents`` and ``delete_by_source_path`` (and sync/watcher/maintenance
+    through it). The path is resolved first, non-strictly: a path that does not exist
+    normalizes fine, and two spellings of the same document must not produce two
+    doc_ids, or the chunks one writes become chunks the other can never delete.
+    """
+    return hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
 
 
 def _fuse_rag_fusion_results(
@@ -513,7 +530,7 @@ class SearchPipeline:
         chunk_ttl_seconds: int | None = None,
         chunk_scopes: list[str] | None = None,
     ) -> IngestResult:
-        doc_id = hashlib.sha256(str(path.resolve()).encode()).hexdigest()
+        doc_id = _doc_id_for(path)
 
         # Skip .acl sidecar files — they are metadata, not indexable content
         if path.suffix == ".acl" or path.name.endswith(".acl"):
@@ -548,6 +565,55 @@ class SearchPipeline:
         except ParseError as e:
             return IngestResult(doc_id=doc_id, chunks_created=0, status="error", error=str(e), code="parse_error")
 
+        return await self._ingest_text(
+            markdown,
+            path,
+            collection,
+            doc_id,
+            rebuild_fts=rebuild_fts,
+            _vector_collector=_vector_collector,
+            _chunk_collector=_chunk_collector,
+            embedder=embedder,
+            namespace=namespace,
+            ingested_by=ingested_by,
+            collection_root=collection_root,
+            chunk_ttl_seconds=chunk_ttl_seconds,
+            chunk_scopes=chunk_scopes,
+        )
+
+    async def _ingest_text(
+        self,
+        markdown: str,
+        path: Path,
+        collection: str,
+        doc_id: str,
+        *,
+        rebuild_fts: bool = True,
+        _vector_collector: list[list[float]] | None = None,
+        _chunk_collector: list[str] | None = None,
+        embedder: Embedder,
+        namespace: str = DEFAULT_NAMESPACE,
+        ingested_by: IngestedBy = "cli",
+        collection_root: Path | None = None,
+        chunk_ttl_seconds: int | None = None,
+        chunk_scopes: list[str] | None = None,
+        disk_backed: bool = True,
+    ) -> IngestResult:
+        """Enrich, chunk, embed, persist and graph-index already-materialised text.
+
+        The whole post-parse half of ``ingest_file``, split out so the two ingest
+        modes of ``POST /ingest`` share one implementation: ``ingest_file`` reads
+        ``path`` off disk and calls this, while ``ingest_documents`` passes the
+        client-supplied text directly. ``path`` is provenance only here — it names
+        the document (source_path, file type, ACL sidecar lookup) and need not
+        exist on disk.
+
+        ``disk_backed=False`` says ``path`` names no file on this host (the inline
+        mode, S293). It turns off the ``.acl`` sidecar probe — ``path`` is untrusted
+        client input there, so reading beside it would apply a stranger's ACL and
+        leak whether an arbitrary server path exists — and marks the chunks so the
+        maintenance orphan sweep does not read the missing file as a deleted one.
+        """
         # Extract front matter (text files only; binary files skipped to avoid false positives)
         is_text_type = path.suffix.lower() in _FRONT_MATTER_EXTENSIONS
         if is_text_type:
@@ -557,7 +623,7 @@ class SearchPipeline:
             _acl = None
 
         # Resolve effective ACL for this document (G15 BE-4)
-        acl_result = resolve_acl(path, _acl)
+        acl_result = resolve_acl(path, _acl, allow_sidecar=disk_backed)
         resolved_acl, acl_warnings = acl_result.acl, acl_result.warnings
         # Derive provenance triple for every ChunkRecord (G15 C4 / C5)
         # synthesis: 'collection_default' when resolve_acl found no rule at all
@@ -697,6 +763,8 @@ class SearchPipeline:
             record.acl_source = _acl_source
             record.acl_sidecar_path = _acl_sidecar_path
             record.acl_warning = list(_provenance_warnings)
+            if not disk_backed:
+                record.metadata[INLINE_CHUNK_METADATA_KEY] = INLINE_CHUNK_METADATA_VALUE
 
         # Collect chunk texts if requested (before batching)
         if _chunk_collector is not None:
@@ -1013,14 +1081,9 @@ class SearchPipeline:
         results: list[IngestResult] = []
         total = len(files)
 
-        # E2a BE-3: resolve effective TTL once for the batch to avoid N identical meta
-        # reads inside ingest_file. If a per-request TTL is given it always wins over
-        # the collection default; otherwise look up the default once here and pass the
-        # resolved value as chunk_ttl_seconds so ingest_file skips its own meta fetch.
-        _effective_batch_ttl = chunk_ttl_seconds
-        if chunk_ttl_seconds is None:
-            _batch_meta = await self.store.get_collection_meta(collection, namespace=namespace)
-            _effective_batch_ttl = _batch_meta.default_ttl_seconds if _batch_meta is not None else None
+        effective_batch_ttl = await self._resolve_batch_ttl(
+            collection, chunk_ttl_seconds, namespace=namespace
+        )
 
         for done_count, file_path in enumerate(files, start=1):
             result = await self.ingest_file(
@@ -1031,7 +1094,7 @@ class SearchPipeline:
                 namespace=namespace,
                 collection_root=collection_root,
                 ingested_by=ingested_by,
-                chunk_ttl_seconds=_effective_batch_ttl,
+                chunk_ttl_seconds=effective_batch_ttl,
                 chunk_scopes=chunk_scopes,
             )
             results.append(result)
@@ -1042,6 +1105,45 @@ class SearchPipeline:
                 if inspect.isawaitable(ret):
                     await ret
 
+        await self._finalize_batch_ingest(
+            collection,
+            results,
+            namespace=namespace,
+            rebuild_fts=rebuild_fts,
+            force_regenerate_description=force_regenerate_description,
+        )
+
+        return results
+
+    async def _resolve_batch_ttl(
+        self, collection: str, chunk_ttl_seconds: int | None, *, namespace: str
+    ) -> int | None:
+        """Resolve the effective chunk TTL once for a whole batch (E2a BE-3).
+
+        A per-request TTL always wins over the collection default; otherwise the
+        default is read once here and passed down as ``chunk_ttl_seconds``, so the
+        per-document ingest skips N identical metadata fetches.
+        """
+        if chunk_ttl_seconds is not None:
+            return chunk_ttl_seconds
+        meta = await self.store.get_collection_meta(collection, namespace=namespace)
+        return meta.default_ttl_seconds if meta is not None else None
+
+    async def _finalize_batch_ingest(
+        self,
+        collection: str,
+        results: list[IngestResult],
+        *,
+        namespace: str,
+        rebuild_fts: bool = True,
+        force_regenerate_description: bool = False,
+    ) -> None:
+        """Rebuild FTS and refresh collection metadata once after a batch ingest.
+
+        Shared by ``ingest_directory`` and ``ingest_documents`` so a batch pays the
+        FTS optimize and the description/centroid recompute once, not per document.
+        No-op when no document in the batch was ingested successfully.
+        """
         # Optimize (or rebuild) FTS once if at least one successful ingest
         if rebuild_fts and any(r.status == "ok" for r in results):
             if self.store.supports_incremental_fts_delete:
@@ -1090,6 +1192,74 @@ class SearchPipeline:
             if any(r.needs_recompute for r in results):
                 await self.recompute_collection_meta(collection, self._global_embedder, namespace=namespace)
 
+    async def ingest_documents(
+        self,
+        documents: list[dict[str, Any]],
+        collection: str,
+        *,
+        embedder: Embedder,
+        namespace: str = DEFAULT_NAMESPACE,
+        ingested_by: IngestedBy = "http",
+        chunk_ttl_seconds: int | None = None,
+        chunk_scopes: list[str] | None = None,
+    ) -> list[IngestResult]:
+        """Ingest documents whose text is supplied inline, not read from disk.
+
+        The ``documents`` mode of ``POST /ingest`` — the only ingest mode available
+        to a network client, which cannot place files on the server host. Each item
+        is ``{"text": str, "source_path": str}``; ``source_path`` is the document's
+        logical identity (it need not exist on disk) and seeds the ``doc_id``, so
+        re-ingesting the same ``source_path`` replaces that document's chunks.
+
+        Everything after the file read is the path-based ingest: ``_ingest_text``
+        enriches, chunks, embeds, persists and graph-indexes each document, then
+        ``_finalize_batch_ingest`` rebuilds FTS and refreshes collection metadata
+        once for the batch. It runs with ``disk_backed=False``, so no ``.acl``
+        sidecar is read beside the client-supplied path and the chunks are marked
+        as having no backing file for the maintenance orphan sweep.
+        """
+        if not documents:
+            return []
+
+        effective_batch_ttl = await self._resolve_batch_ttl(
+            collection, chunk_ttl_seconds, namespace=namespace
+        )
+
+        results: list[IngestResult] = []
+        for document in documents:
+            raw_source_path = str(document.get("source_path") or "").strip()
+            text = document.get("text") or ""
+            if not raw_source_path or not text:
+                # The HTTP boundary rejects these with 422/400, so this guards direct
+                # library callers only; the code is deliberately not "parse_error",
+                # which belongs to a genuine ParseError on a real document.
+                results.append(IngestResult(
+                    doc_id="",
+                    chunks_created=0,
+                    status="error",
+                    error="document requires a non-empty 'text' and 'source_path'",
+                    code="invalid_document",
+                ))
+                continue
+            # Resolve once: _ingest_text stores ``str(path)`` as the chunk source_path,
+            # and the doc_id must come from the same normalized spelling or nothing can
+            # ever delete these chunks again.
+            path = Path(raw_source_path).resolve()
+            results.append(await self._ingest_text(
+                text,
+                path,
+                collection,
+                _doc_id_for(path),
+                rebuild_fts=False,
+                disk_backed=False,
+                embedder=embedder,
+                namespace=namespace,
+                ingested_by=ingested_by,
+                chunk_ttl_seconds=effective_batch_ttl,
+                chunk_scopes=chunk_scopes,
+            ))
+
+        await self._finalize_batch_ingest(collection, results, namespace=namespace)
         return results
 
     # ------------------------------------------------------------------
@@ -3523,7 +3693,7 @@ class SearchPipeline:
         skip_fts_optimize: bool = False,
     ) -> int:
         """Delete a source file and its graph rows (sync/watcher path)."""
-        doc_id = hashlib.sha256(str(Path(source_path).resolve()).encode()).hexdigest()
+        doc_id = _doc_id_for(source_path)
         deleted = await self.store.delete_document(
             collection, doc_id, namespace=namespace, skip_fts_optimize=skip_fts_optimize
         )

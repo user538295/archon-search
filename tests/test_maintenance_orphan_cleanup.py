@@ -9,6 +9,7 @@ archon_search/jobs/maintenance_loop.py.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from pathlib import Path
@@ -18,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search.config import MaintenanceConfig
+from archon_search.constants import INLINE_CHUNK_METADATA_KEY, INLINE_CHUNK_METADATA_VALUE
 from archon_search.jobs.maintenance_loop import MaintenanceLoop
 
 
@@ -554,3 +556,29 @@ async def test_orphan_cleanup_real_store(
     finally:
         gc.collect()
         await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_orphan_cleanup_keeps_inline_ingested_chunks(tmp_path: Path) -> None:
+    """S293: a document ingested inline has no backing file, so it is never an orphan.
+
+    ``POST /ingest`` with a ``documents`` payload writes chunks whose ``source_path``
+    is a logical identity that need not exist on disk. Without the marker check the
+    very next maintenance pass silently destroys every such document.
+    """
+    never_on_disk = tmp_path / "inline-only.md"
+
+    chunk = _make_chunk(str(never_on_disk), doc_id="inline1", chunk_id="inline1-000001")
+    chunk["metadata"] = json.dumps({INLINE_CHUNK_METADATA_KEY: INLINE_CHUNK_METADATA_VALUE})
+
+    ss = AsyncMock()
+    ss.list_chunks_raw = MagicMock(return_value=_async_iter([chunk]))
+    ss.delete_by_source_path = AsyncMock()
+    ss.lock_for = MagicMock(return_value=asyncio.Lock())
+    ss.optimize_fts = AsyncMock()
+
+    loop = _make_loop(tmp_path, search_store=ss)
+    await loop._run_orphan_cleanup("docs", "default")
+
+    ss.delete_by_source_path.assert_not_called()
+    assert loop._current_health["orphans_removed_last_run"] == 0

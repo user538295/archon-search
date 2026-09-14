@@ -182,6 +182,12 @@ The same operations are available over HTTP for programmatic use (all require a 
 - `POST /collections/{name}/reindex` (202) / `.../reindex-metadata` (202) / `.../migrate` (202).
 - `POST /ingest` (202), `POST /sync`, `GET /jobs/{id}`, `DELETE /jobs/{id}` — job lifecycle.
 
+`POST /ingest` takes either `path` (a file or directory **on the server host**) or `documents` — a list of `{"text": str, "source_path": str}` items whose content is sent inline. `documents` is the mode to use from a remote client, which cannot place files on the server: `source_path` is the document's logical identity and need not exist on disk, and it seeds the `doc_id`, so re-posting the same `source_path` replaces that document's chunks. Both fields are required — an item missing either, or with the wrong type, is rejected with `422` before the job is created.
+
+Two rules constrain `source_path`. It must be **absolute and free of `..` segments**, the same check `path` gets (`400`, `"documents[i].source_path is unsafe: <reason>"`), and it is stored in its resolved form. And it is treated strictly as a name, never as a file: no `.acl` sidecar is read beside it, so an inline document's permissions come from its front-matter `_acl` key or the collection default only. Inline documents are also exempt from the maintenance orphan sweep — they have no file on disk to go missing.
+
+`max_file_mb` does apply, per document: a `text` whose UTF-8 length exceeds the limit is rejected with the same `413` a single oversized file gets, before the job is created.
+
 See `archon_search/server/routes_collections.py` and `routes_jobs.py`, and [`../Architecture/600_api_reference_or_public_interface.md`](../Architecture/600_api_reference_or_public_interface.md) (the live `GET /openapi.json` is authoritative) for full request/response shapes.
 
 ## MCP tools

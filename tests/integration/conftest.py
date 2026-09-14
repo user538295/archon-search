@@ -227,11 +227,9 @@ def ingest_doc(
 ) -> str:
     """POST /ingest with inline documents, poll until done. Returns job_id.
 
-    NOTE: ``SearchPipeline`` does not implement ``ingest_documents``. The route
-    handler logs a warning and marks the job DONE without writing any data.
-    Use ``ingest_file_via_path`` instead when you need real data in the store.
-    This helper is retained for tests that exercise the /ingest path validation
-    (auth, path-safety) rather than actual data ingestion.
+    The ``documents`` payload is really ingested (``SearchPipeline.ingest_documents``):
+    ``path`` here is the document's logical source path and need not exist on disk,
+    but the route requires it to be absolute and ``..``-free (400 otherwise).
     """
     headers = {"Authorization": f"Bearer {api_key}"}
     if extra_headers:

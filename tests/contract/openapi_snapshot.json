@@ -1961,6 +1961,25 @@
         "title": "IndexingStateResponse",
         "type": "object"
       },
+      "IngestDocument": {
+        "description": "One document whose text is sent inline rather than read from the server host.\n\n``source_path`` is the document's logical identity: it must be an absolute,\ntraversal-free path but need not name a file on the server, and it seeds the\ndocument id, so re-posting the same ``source_path`` replaces that document.",
+        "properties": {
+          "source_path": {
+            "title": "Source Path",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "source_path"
+        ],
+        "title": "IngestDocument",
+        "type": "object"
+      },
       "IngestRequest": {
         "properties": {
           "chunk_scopes": {
@@ -1996,8 +2015,7 @@
             "anyOf": [
               {
                 "items": {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/IngestDocument"
                 },
                 "type": "array"
               },

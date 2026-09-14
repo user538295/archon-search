@@ -291,7 +291,9 @@ def apply_acl_filter(
     return passing, dropped
 
 
-def resolve_acl(doc_path: Path, front_matter_acl: Any) -> AclResolutionResult:
+def resolve_acl(
+    doc_path: Path, front_matter_acl: Any, *, allow_sidecar: bool = True
+) -> AclResolutionResult:
     """Resolve the effective ACL for a document.
 
     Precedence: front-matter _acl key > sidecar file.
@@ -300,6 +302,11 @@ def resolve_acl(doc_path: Path, front_matter_acl: Any) -> AclResolutionResult:
         doc_path: path to the document.
         front_matter_acl: value of the _acl key from front-matter, or None if
             the key was absent.
+        allow_sidecar: whether ``doc_path`` names a real file whose ``.acl``
+            sidecar may be read. ``False`` for inline-ingested documents (S293),
+            whose ``doc_path`` is a client-supplied logical identity — probing the
+            server filesystem there would apply a stranger's ACL to the document
+            and leak whether an arbitrary server path exists.
 
     Returns:
         An ``AclResolutionResult`` with:
@@ -314,7 +321,7 @@ def resolve_acl(doc_path: Path, front_matter_acl: Any) -> AclResolutionResult:
     if front_matter_acl is not None:
         acl, parse_warnings = parse_acl_value(front_matter_acl, str(doc_path))
         warnings = list(parse_warnings)
-        if sidecar.exists():
+        if allow_sidecar and sidecar.exists():
             shadow_msg = (
                 f"Both front-matter _acl and sidecar {sidecar} exist for {doc_path}; "
                 "front-matter takes precedence"
@@ -332,6 +339,9 @@ def resolve_acl(doc_path: Path, front_matter_acl: Any) -> AclResolutionResult:
             sidecar_path=None,
             warnings=warnings,
         )
+
+    if not allow_sidecar:
+        return AclResolutionResult(acl=None, source=None, sidecar_path=None, warnings=[])
 
     acl, source, sidecar_path, sidecar_warnings = read_acl_sidecar(doc_path)
     return AclResolutionResult(

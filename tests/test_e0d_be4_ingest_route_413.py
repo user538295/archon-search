@@ -2,7 +2,8 @@
 
 Tests for the synchronous HTTP 413 size guard in the POST /ingest route handler.
 The pre-check fires only for single-file paths, before job_store.create().
-Directory paths and `documents` payloads skip the check entirely.
+Directory paths skip the check entirely. Inline `documents` payloads get their own
+per-document 413 (S293) — pinned in tests/test_s293_ingest_documents_boundary.py.
 """
 from __future__ import annotations
 
@@ -140,7 +141,8 @@ def test_ingest_route_202_directory_path_no_413(tmp_path: Path) -> None:
 
 
 def test_ingest_route_202_documents_payload_no_413(tmp_path: Path) -> None:
-    """body.documents payload (no path) → 202 (no size check)."""
+    """body.documents payload (no path) → 202: no *file* is sized, and the inline
+    per-document cap (S293) leaves a document under the limit alone."""
     client, job_store = _make_client(tmp_path, max_file_mb=1)
 
     response = client.post(

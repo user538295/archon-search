@@ -51,10 +51,22 @@ _SCOPES_MAX_ITEMS: int = 100
 _SCOPE_MAX_LEN: int = 255
 
 
+class IngestDocument(BaseModel):
+    """One document whose text is sent inline rather than read from the server host.
+
+    ``source_path`` is the document's logical identity: it must be an absolute,
+    traversal-free path but need not name a file on the server, and it seeds the
+    document id, so re-posting the same ``source_path`` replaces that document.
+    """
+
+    text: str
+    source_path: str
+
+
 class IngestRequest(BaseModel):
     collection: str
     path: str | None = None
-    documents: list[dict[str, Any]] | None = None
+    documents: list[IngestDocument] | None = None
     ingested_by: str = "http"
     # E2a BE-4: optional per-request TTL and scope tags forwarded to the pipeline.
     chunk_ttl_seconds: int | None = None
@@ -121,7 +133,10 @@ async def _dispatch_ingest(
     pipeline: Any,
     config: Any,
 ) -> tuple[list[str], list[dict]]:
-    """Resolve per-collection embedder and dispatch to pipeline.ingest_file / ingest_directory.
+    """Resolve per-collection embedder and dispatch to the pipeline ingest for this body.
+
+    Three targets: ``ingest_file`` and ``ingest_directory`` for a ``path`` body,
+    ``ingest_documents`` for an inline ``documents`` body.
 
     Returns a tuple of:
     - warnings: flat list of warning strings from all IngestResult objects
@@ -181,12 +196,22 @@ async def _dispatch_ingest(
                     )
             raise FileNotFoundError(f"path does not exist or is not a file/directory: {body.path}")
     elif body.documents is not None:
-        if hasattr(pipeline, "ingest_documents"):
-            await pipeline.ingest_documents(
-                body.documents, body.collection, embedder=embedder, namespace=namespace, ingested_by=body.ingested_by
-            )
-        else:
-            logger.warning("pipeline has no ingest_documents method; skipping documents ingest for collection %s", body.collection)
+        results = await pipeline.ingest_documents(
+            [{"text": d.text, "source_path": d.source_path} for d in body.documents],
+            body.collection,
+            embedder=embedder,
+            namespace=namespace,
+            ingested_by=body.ingested_by,
+            chunk_ttl_seconds=body.chunk_ttl_seconds,
+            chunk_scopes=body.chunk_scopes,
+        )
+        warnings = [w for r in results for w in r.warnings]
+        file_results = [
+            {"doc_id": r.doc_id, "status": r.status, "code": r.code}
+            for r in results
+            if r.code is not None
+        ]
+        return warnings, file_results
     return [], []
 
 
@@ -548,6 +573,17 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
             body.path = str(validate_ingest_path(body.path))
         except PathUnsafeError as e:
             raise HTTPException(status_code=400, detail=f"path is unsafe: {e.reason}")
+    # S293: `documents[].source_path` is client input that reaches the same pipeline,
+    # so it gets the same path-safety rule as `body.path`.
+    if body.documents is not None:
+        for index, document in enumerate(body.documents):
+            try:
+                document.source_path = str(validate_ingest_path(document.source_path))
+            except PathUnsafeError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"documents[{index}].source_path is unsafe: {e.reason}",
+                )
     ns = request.state.namespace
 
     # Synchronous 413 pre-check — only for single-file paths, before job creation.
@@ -570,6 +606,25 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
                 raise HTTPException(
                     status_code=413, detail={"code": err.code, "message": err.message}
                 )
+
+    # S293: the same operator cap for the inline mode — `max_file_mb` is per document
+    # here, since one inline document is what one file is in the path mode. Without it
+    # a single authenticated request pins arbitrary memory in the chunker and embedder.
+    if body.documents is not None:
+        documents_config: SearchConfig | None = getattr(request.app.state, "config", None)
+        max_inline_mb: int = documents_config.ingest.max_file_mb if documents_config else 0
+        if max_inline_mb > 0:
+            limit_bytes = max_inline_mb * 1024 * 1024
+            for document in body.documents:
+                size_bytes = len(document.text.encode("utf-8"))
+                if size_bytes > limit_bytes:
+                    err = IngestError(
+                        file_size_mb=math.ceil(size_bytes / (1024 * 1024)),
+                        limit_mb=max_inline_mb,
+                    )
+                    raise HTTPException(
+                        status_code=413, detail={"code": err.code, "message": err.message}
+                    )
 
     try:
         job = store.create(namespace=ns, collection=body.collection, path=body.path or "")

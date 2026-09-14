@@ -61,6 +61,15 @@ _INGEST_CHUNK_BATCH_SIZE: Final[int] = 512
 # the first conversion's model load), i.e. ~0.4 s per file amortised.
 DEFAULT_DOCLING_MAX_TASKS_PER_CHILD: Final[int] = 25
 
+# S293: chunk-metadata marker for a document ingested inline (`POST /ingest` with a
+# `documents` payload). Its source_path is a logical identity naming no file on the
+# server, so the maintenance orphan sweep must not read "file missing" as "file
+# deleted" and destroy the document. Absence means disk-backed — correct for every
+# row written before the inline mode existed, so no schema migration is needed.
+# The value is a string because `store.parse_metadata` coerces every value to `str`.
+INLINE_CHUNK_METADATA_KEY: Final[str] = "_inline"
+INLINE_CHUNK_METADATA_VALUE: Final[str] = "true"
+
 _NAMESPACE_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}")
 
 

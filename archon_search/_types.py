@@ -28,7 +28,7 @@ def normalize_iso_utc(dt: datetime | str) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 IngestedBy = Literal["cli", "http", "watcher", "reindex"]
-IngestErrorCode = Literal["file_too_large", "parse_error"]
+IngestErrorCode = Literal["file_too_large", "parse_error", "invalid_document"]
 """Canonical call-site identity for ingest writes.
 
 Four members only. The pre-A1 sentinel ``"archon-search-cli"`` is

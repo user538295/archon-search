@@ -8,6 +8,31 @@
 
 ## Changelog
 
+### [next release] — S293: the `documents` mode of `POST /ingest` now really ingests; `source_path` is validated, capped, and sandboxed (2026-09-14)
+
+**Surface**: `POST /ingest` request body and `GET /jobs/{id}` result; `SearchPipeline.ingest_documents` (library); `IngestResult.code`.
+
+**The same request now writes data where it wrote none.** `POST /ingest` with a `documents` payload previously reached a `hasattr(pipeline, "ingest_documents")` check that was always false: the route logged a warning, wrote nothing, and moved the job to `DONE`. The mode is now implemented. A client that has been sending `documents` and reading `202`/`DONE` as success was silently storing nothing and now stores chunks — re-check your collection sizes, your `max_file_mb`, and any de-duplication assumptions before upgrading. Consequently `GET /jobs/{id}` → `result.warnings` and `result.file_results` become non-empty for `documents` jobs, where they were always empty.
+
+**Breaking for REST consumers** — three new rejections, all before the job is created:
+
+1. **`documents[]` items are typed.** The field was `list[dict[str, Any]]` and accepted anything; it is now `list[IngestDocument]` with `text: str` and `source_path: str` both required. A missing, extra-typed, or wrongly-typed field returns `422`. `IngestDocument` is published in `GET /openapi.json`. This replaces a failure mode where a malformed item raised inside the job and the raw exception text was written to the job's `error` field.
+2. **`documents[].source_path` gets the same path-safety rule as `body.path`.** It must be absolute, `..`-free, NUL-free and non-blank, or the route returns `400` with `detail = "documents[i].source_path is unsafe: <reason>"` naming the offending index. It is stored resolved, which is also what makes the document deletable: `doc_id` is `sha256(str(Path(source_path).resolve()))` — the single derivation shared with `ingest_file` and `delete_by_source_path`.
+3. **`[ingest].max_file_mb` applies per inline document.** When `max_file_mb > 0`, a `documents[i].text` whose UTF-8 byte length exceeds the limit returns the same `413` (`{"detail": {"code": "file_too_large", "message": ...}}`) a single oversized file gets. Strictly greater-than, same as the file boundary. Unchanged at the default `max_file_mb = 0`.
+
+**Behaviour changes with no new status code**:
+
+- **No `.acl` sidecar is read for an inline document.** `source_path` names no file the client placed on the server, so probing `<source_path>.acl` would apply an unrelated file's ACL to the document and disclose whether an arbitrary server path exists. An inline document's ACL now comes from its front-matter `_acl` key or the collection default only. Path-mode ingest is unchanged.
+- **The maintenance orphan sweep no longer deletes inline documents.** `MaintenanceLoop._run_orphan_cleanup` removes every chunk whose `source_path` is absent from disk, and `[maintenance].orphan_cleanup` defaults to `true` — so without this, the first `POST /maintenance/trigger` after an inline ingest destroyed it. Inline chunks are now marked in their `metadata` (key `_inline`) and skipped by the sweep. **The mark is per chunk and carries no schema change** (`STORE_SCHEMA_VERSION` is untouched, no migration to run); an absent key means disk-backed, which is correct for every row written before this release.
+
+**Additive** (breaking only for strict-schema validators with `extra="forbid"`): `IngestResult.code` gains `"invalid_document"`, for an item missing `text` or `source_path`. Reachable only by direct callers of `SearchPipeline.ingest_documents` — over HTTP those items are rejected with `422`/`400`. Previously such items reported `"parse_error"`, which is now reserved for a genuine `ParseError` on a real document.
+
+**Migration**: send `documents` items with both `text` and `source_path`; make `source_path` an absolute, `..`-free path (it still need not name a real file). Add `400`, `413` and `422` handling to any client that assumed `documents` requests always returned `202`. If you consume `IngestResult.code`, add `"invalid_document"` to your stub. No operator action and no data migration are required on upgrade.
+
+**Announced in**: this release. No prior deprecation — the mode never worked, so there is no behaviour anyone could have depended on other than the silent no-op.
+
+---
+
 ### [next release] — graph NER model unavailability no longer fails ingest; `provider_warnings` gains a graph-NER category (2026-08-19)
 
 **Surface**: `POST /ingest` (and directory/MCP ingest); `GET /status` → `model_validation.provider_warnings`; `GET /ready` → `checks.models`.
@@ -532,7 +557,7 @@ opt-out, set `[logging] log_file = ""` directly in `archon-search.toml`.
 
 **Breaking changes**:
 
-1. **`POST /ingest` now returns HTTP 413 when a single-file path exceeds `[ingest].max_file_mb`** — when `max_file_mb > 0` is configured and a single-file path in the request body exceeds the limit, the route returns `413 Request Entity Too Large` with `{"detail": {"code": "file_too_large", "message": "File size X MB exceeds the configured limit of Y MB (\`[ingest].max_file_mb\`). Raise the limit in \`archon-search.toml\` or split the file."}}` BEFORE any job is created. The `detail` is the structured `{code, message}` object used by the rest of the API's structured errors. Clients that assume `POST /ingest` always returns `202` or `400`/`503` must add handling for `413`. The 413 only fires when `max_file_mb > 0` (opt-in); the default (`max_file_mb = 0`) is unchanged — all ingest submissions return `202`. Directory paths and `documents`-payload requests are never checked at the route level (413 does not apply).
+1. **`POST /ingest` now returns HTTP 413 when a single-file path exceeds `[ingest].max_file_mb`** — when `max_file_mb > 0` is configured and a single-file path in the request body exceeds the limit, the route returns `413 Request Entity Too Large` with `{"detail": {"code": "file_too_large", "message": "File size X MB exceeds the configured limit of Y MB (\`[ingest].max_file_mb\`). Raise the limit in \`archon-search.toml\` or split the file."}}` BEFORE any job is created. The `detail` is the structured `{code, message}` object used by the rest of the API's structured errors. Clients that assume `POST /ingest` always returns `202` or `400`/`503` must add handling for `413`. The 413 only fires when `max_file_mb > 0` (opt-in); the default (`max_file_mb = 0`) is unchanged — all ingest submissions return `202`. Directory paths are never checked at the route level (413 does not apply). `documents`-payload requests were not checked either when this entry was written; the S293 entry above supersedes that — they are now checked per document, in the same release.
 
 **Additive changes** (non-breaking for tolerant JSON consumers; breaking for strict-schema validators with `extra="forbid"`):
 
@@ -1061,7 +1086,7 @@ A1 is the **last** untyped MCP shape break before C7 wraps responses in Pydantic
 - MCP `ingest_file` and `ingest_directory` previously accepted paths containing `..` segments, empty strings, whitespace-only strings, NUL bytes, and non-absolute paths, and silently followed/resolved them. They now reject those inputs and return `McpErrorResponse(error=..., code="path_unsafe")` with an LLM-readable reason.
 - HTTP `POST /collections` and `POST /jobs/ingest` gain a new `400` response (`ErrorDetail`, `detail` prefixed `"path is unsafe:"`) for the same input classes — additive (the `400` was not previously in the OpenAPI schema).
 
-**Migration**: callers must pass absolute paths without `..` traversal. `path: null` (documents-only) ingest on `POST /jobs/ingest` is unaffected. Symlinks and absolute-path scope are intentionally NOT validated (deferred to a future `allowed_dirs` feature).
+**Migration**: callers must pass absolute paths without `..` traversal. `path: null` (documents-only) ingest on `POST /jobs/ingest` was unaffected when this entry was written; the S293 entry above supersedes that — every `documents[].source_path` now gets the same check, in the same release. Symlinks and absolute-path scope are intentionally NOT validated (deferred to a future `allowed_dirs` feature).
 
 **Announced in**: this release. No prior deprecation — the silent-acceptance behaviour was never documented as stable.
 

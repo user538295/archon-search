@@ -32,8 +32,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from archon_search._durable_io import atomic_write_json
-from archon_search.constants import INGEST_LOCK_TIMEOUT_S
-from archon_search.store import FTSIndexNotFoundError
+from archon_search.constants import (
+    INGEST_LOCK_TIMEOUT_S,
+    INLINE_CHUNK_METADATA_KEY,
+    INLINE_CHUNK_METADATA_VALUE,
+)
+from archon_search.store import FTSIndexNotFoundError, parse_metadata
 from archon_search.types import (
     IngestJob,
     JobStatus,
@@ -250,8 +254,10 @@ class MaintenanceLoop:
 
         Algorithm:
         1. Iterate all chunks via ``store.list_chunks_raw(collection, namespace)``.
-        2. Group by unique ``source_path``, skipping URLs (http:// or https://) and
-           empty paths (handles multi-chunk and multi-doc-id files).
+        2. Group by unique ``source_path``, skipping URLs (http:// or https://),
+           empty paths, and inline-ingested chunks — those carry no backing file, so
+           "path missing" is their normal state, not a deletion (S293). (Handles
+           multi-chunk and multi-doc-id files.)
         3. For each unique file path that no longer exists on disk, call
            ``store.delete_by_source_path(source_path, skip_fts_optimize=True)``.
            Errors on individual paths are logged as WARNING; the loop continues.
@@ -291,6 +297,15 @@ class MaintenanceLoop:
                     collection,
                     source_path,
                 )
+                continue
+
+            # S293: a document ingested inline (POST /ingest with a `documents`
+            # payload) has no backing file — its source_path is a logical identity.
+            # A missing file there is not a deleted file, it is the normal state.
+            if (
+                parse_metadata(chunk.get("metadata") or "").get(INLINE_CHUNK_METADATA_KEY)
+                == INLINE_CHUNK_METADATA_VALUE
+            ):
                 continue
 
             source_paths_seen.add(source_path)
