@@ -577,10 +577,15 @@ def create_app(
                 # forever — /ready would answer 503 for the process lifetime
                 # with no diagnostic and no recovery.
                 async with asyncio.timeout(_EAGER_WARMUP_TIMEOUT_SECONDS):
-                    await embedder_cache.preload(model_names)
-                    # preload() already warmed every embedder; only the equally lazy
-                    # cross-encoder is still cold (S184).
+                    # The cross-encoder goes first (S279): it is a single small model
+                    # that every search pays for on the request path, whereas preload()
+                    # may build several large embedders. Warming it last let a slow
+                    # embedder fetch (e.g. the "max" profile's ~1.3 GB
+                    # BAAI/bge-large-en-v1.5) consume the whole budget, so the reranker
+                    # stayed cold and the first search paid its 91 s ONNX build inline.
                     await app.state.pipeline.warmup_models()
+                    # Only the equally lazy embedders are still cold (S184).
+                    await embedder_cache.preload(model_names)
                 # Startup returning no longer implies warm-up finished, so this
                 # is the only signal an operator has that it completed at all.
                 logger.info(
