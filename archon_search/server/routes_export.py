@@ -44,6 +44,10 @@ from archon_search.types import ExportJob, ImportJob, JobStatus
 
 logger = logging.getLogger(__name__)
 
+# Sanitized detail for a caught archive-open exception whose message may embed internals
+# (tarfile/gzip error text can reflect the archive's own byte content).
+INVALID_ARCHIVE_DETAIL = "archive could not be opened: invalid or corrupt tar.gz"
+
 router = APIRouter()
 
 _ERROR_400_401_404 = {
@@ -464,14 +468,24 @@ async def import_collection(
     ns: str = request.state.namespace
     config: SearchConfig = request.app.state.config
 
-    # Step 1: Validate the archive path is within the allowed data directory
+    # Step 1: Validate the archive path is within the allowed data directory, or
+    # within the configured [backup].output_dir — the backup job writes archives
+    # straight to that directory and it may legitimately sit off-tree (see
+    # Documentation/OperatorGuide/40_backup_restore_disaster_recovery.md), so an
+    # archive this product wrote itself must remain restorable.
+    allowed_dirs = [get_data_dir()]
+    if config.backup.output_dir:
+        allowed_dirs.append(Path(config.backup.output_dir))
     try:
-        validate_export_path(body.path, [get_data_dir()])
+        validated_path = validate_export_path(body.path, allowed_dirs)
     except PathUnsafeError as exc:
         return JSONResponse({"error": "path_unsafe", "reason": exc.reason}, status_code=400)
 
-    # Step 2: Verify archive file exists
-    archive_path = Path(body.path)
+    # Step 2: Verify archive file exists. Use the resolved, already-validated Path
+    # returned by validate_export_path() above — not a fresh Path(body.path) — so every
+    # later filesystem operation acts on the exact path that was checked against
+    # allowed_dirs.
+    archive_path = validated_path
     if not archive_path.exists():
         return JSONResponse(
             {"error": "archive_not_found", "detail": f"Archive not found: {body.path}"},
@@ -488,8 +502,11 @@ async def import_collection(
             status_code=422,
         )
     except Exception as exc:  # noqa: BLE001
+        # Full original is logged server-side; the wire detail is a fixed, sanitized
+        # message — tarfile/gzip errors can embed the archive's own byte content.
+        logger.warning("import archive %s could not be opened: %s", archive_path, exc, exc_info=exc)
         return JSONResponse(
-            {"error": "invalid_archive", "detail": str(exc)},
+            {"error": "invalid_archive", "detail": INVALID_ARCHIVE_DETAIL},
             status_code=422,
         )
 
@@ -543,7 +560,7 @@ async def import_collection(
     # Step 7: Create the import job (status=QUEUED)
     job = store.create_import(
         collection=name,
-        archive_path=body.path,
+        archive_path=str(archive_path),
         force_overwrite=body.force_overwrite,
         ignore_schema_version=body.ignore_schema_version,
         on_error=body.on_error,

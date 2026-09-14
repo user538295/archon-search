@@ -17,6 +17,7 @@ from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION
 from archon_search.jobs.store import JobStore
 from archon_search.paths import get_data_dir
 from archon_search.server.app import create_app
+from archon_search.server.routes_export import INVALID_ARCHIVE_DETAIL
 from archon_search.types import JobStatus
 
 
@@ -271,6 +272,33 @@ def test_post_import_path_outside_allowed(
 
 
 @pytest.mark.integration
+def test_post_import_path_outside_configured_backup_output_dir(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    auth_headers: dict[str, str],
+) -> None:
+    """S291: widening the allow-list to [backup].output_dir must not allow anything else.
+
+    With an off-tree ``[backup].output_dir`` configured, a path that is inside neither
+    ``get_data_dir()`` nor that backup root is still rejected with 400 ``path_unsafe``.
+    """
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.backup.output_dir = str(tmp_path / "offsite" / "backups")
+    app = create_app(config, tmp_store)
+    app.state.search_store = _make_mock_search_store(collection_meta=None)
+
+    c = TestClient(app, headers=auth_headers)
+    response = c.post(
+        "/collections/my-collection/import",
+        json={"path": str(tmp_path / "elsewhere" / "evil.tar.gz")},
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["error"] == "path_unsafe"
+    assert response.json()["reason"] == "outside_allowed_dirs"
+
+
+@pytest.mark.integration
 def test_post_import_archive_not_found(
     tmp_path: Path,
     tmp_store: JobStore,
@@ -290,6 +318,87 @@ def test_post_import_archive_not_found(
     )
     assert response.status_code == 422
     assert response.json()["error"] == "archive_not_found"
+
+
+@pytest.mark.integration
+def test_post_import_corrupt_archive_sanitizes_wire_detail(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    auth_headers: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A corrupt archive returns a sanitized 422 detail; the raw exception is logged, not echoed.
+
+    Regression for the CLAUDE.md invariant: never put str(exc) in a wire-facing detail
+    for a caught exception whose message can embed internals (here: tarfile/gzip
+    internals derived from the archive's own bytes).
+    """
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    app = create_app(config, tmp_store)
+    app.state.search_store = _make_mock_search_store(collection_meta=None)
+
+    corrupt = get_data_dir() / "exports" / "corrupt.tar.gz"
+    corrupt.parent.mkdir(parents=True, exist_ok=True)
+    corrupt.write_bytes(b"not a real gzip archive")
+
+    c = TestClient(app, headers=auth_headers)
+    with caplog.at_level("WARNING", logger="archon_search.server.routes_export"):
+        response = c.post(
+            "/collections/my-collection/import",
+            json={"path": str(corrupt)},
+        )
+    assert response.status_code == 422, response.text
+    body = response.json()
+    assert body["error"] == "invalid_archive"
+    # The wire detail must be a fixed, sanitized message — never the raw exception text.
+    assert body["detail"] == INVALID_ARCHIVE_DETAIL
+    assert "gzip" not in body["detail"].lower()
+    # The real exception is still logged server-side for diagnosis.
+    assert any("corrupt" in record.getMessage().lower() for record in caplog.records) or any(
+        record.exc_info for record in caplog.records
+    )
+
+
+@pytest.mark.integration
+def test_post_import_uses_validated_resolved_path_not_raw_body_path(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The route must operate on the path returned by validate_export_path, not on raw body.path.
+
+    Regression: previously the handler re-derived ``Path(body.path)`` after validation
+    instead of reusing the already-resolved, already-checked Path — a TOCTOU-shaped
+    inconsistency between the path that was validated and the path that was opened.
+    """
+    real_archive = _make_valid_archive(tmp_path / "real-exports" / "test_import_resolved")
+    # A path that does NOT exist on disk — if the handler used this raw value instead of
+    # the validated return value, the request would fail with 422 archive_not_found.
+    nonexistent_raw_path = tmp_path / "does-not-exist-raw" / "phantom.tar.gz"
+
+    def _fake_validate_export_path(raw: str, allowed_base_dirs: list[Path]) -> Path:
+        assert raw == str(nonexistent_raw_path)
+        return real_archive
+
+    monkeypatch.setattr(
+        "archon_search.server.routes_export.validate_export_path",
+        _fake_validate_export_path,
+    )
+
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = _DEFAULT_EMBEDDING_MODEL
+    app = create_app(config, tmp_store)
+    app.state.search_store = _make_mock_search_store(collection_meta=None)
+
+    c = TestClient(app, headers=auth_headers)
+    response = c.post(
+        "/collections/my-collection/import",
+        json={"path": str(nonexistent_raw_path)},
+    )
+    assert response.status_code == 202, response.text
 
 
 @pytest.mark.integration

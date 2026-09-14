@@ -39,10 +39,13 @@ filesystem after import.
 
 ### Constraints to know before you start
 
-- **Server-local paths only.** Both the export output directory and the import source
-  path must resolve **inside the server's data directory** (`$ARCHON_SEARCH_DATA_DIR`,
-  default `~/.archon-search/`). Paths outside it are rejected with `400`. There is no
-  multipart upload — the operator running the server needs disk access.
+- **Server-local paths only.** The export output directory must resolve **inside the
+  server's data directory** (`$ARCHON_SEARCH_DATA_DIR`, default `~/.archon-search/`); the
+  REST/CLI import source path may also resolve inside the configured
+  `[backup].output_dir`, so a scheduled-backup archive written to an off-tree backup root
+  stays restorable (the MCP `import_collection` tool does not widen this). Paths
+  outside those are rejected with `400`. There is no multipart upload — the operator
+  running the server needs disk access.
 - **One collection per job.** To move several collections, run several jobs.
 - **Embedding-model match is mandatory.** Import rejects with `422` if the archive's
   `active_embedding_model` differs from the target server's configured model. This check
@@ -160,9 +163,15 @@ The MCP surface mirrors REST with two non-blocking tools that return the QUEUED 
   default (`<data_dir>/exports`).
 - `import_collection(collection, path, force_overwrite=False, ignore_schema_version=False, on_error="fail")`
 
-Both apply the same path-safety, embedding-model, and schema-version checks as REST and
-return a structured error (`code` = `path_unsafe`, `not_found`, `collection_exists`,
+Both apply the same embedding-model and schema-version checks as REST and return a
+structured error (`code` = `path_unsafe`, `not_found`, `collection_exists`,
 `embedding_model_mismatch`, …) on rejection. Poll `GET /jobs/{job_id}` for progress.
+
+Path safety differs in one respect: `import_collection` accepts archives inside the data
+directory **only**. The `[backup].output_dir` allowance described under
+[Constraints](#constraints-to-know-before-you-start) is REST-only — restore an off-tree
+backup archive with `POST /collections/{name}/import` (or the `archon-search import` CLI,
+which calls it).
 
 ## Tracking a job
 
