@@ -269,7 +269,9 @@ _EXPECTED_PREEXISTING_UNINDEXED = 65
 _PREEXISTING_UNINDEXED_HEADINGS = frozenset({
     '[next release] — graph NER model unavailability no longer fails ingest; `provider_warnings` gains a graph-NER category (2026-08-19)',
     '[next release] — the startup collection sync is suppressed after an unclean, mid-ingest death; `StartupSyncResult` gains `"suppressed"` and `/ready` `checks.sync` gains `"warn"` (2026-08-19)',
-    '[next release] — `GET /ready` returns 503 while eager model warm-up or the startup collection sync is pending (2026-08-14)',
+    # Reworded in place for S279: warm-up is no longer eager-only, so the heading dropped
+    # "eager". Still an unindexed pre-existing heading — only its text moved.
+    '[next release] — `GET /ready` returns 503 while model warm-up or the startup collection sync is pending (2026-08-14, revised 2026-09-14 for S279)',
     '[next release] — `EmbedderNotReadyError` now maps to a uniform, sanitized 503 across every route surface (2026-08-14)',
     '[next release] — `DELETE /collections/{name}` returns 503 while an ingest job is active (2026-08-07)',
     '[next release] — `[search].fanout_leg_trim` and `fanout_timeout_seconds` are now enforced on the server (2026-08-07)',

@@ -4077,7 +4077,7 @@
         "type": "object"
       },
       "WarmupResult": {
-        "description": "Eager model warm-up progress, mirrored onto ``app.state.warmup_result``.\n\nSet by the lifespan's eager warm-up task: ``PENDING`` before the task\nstarts, ``DONE``/``FAILED`` once it finishes. ``None`` (not a member of\nthis enum) means eager warm-up was never run, i.e.\n``eager_load_embedders = false``.",
+        "description": "Model warm-up progress, mirrored onto ``app.state.warmup_result``.\n\nSet by the lifespan's warm-up task, which runs on every startup (S279):\n``PENDING`` before the task starts, ``DONE``/``FAILED`` once it finishes.\n``None`` (not a member of this enum) means the lifespan has not run yet.\n``eager_load_embedders`` only widens the task's scope from the default\nembedder to every per-collection model.",
         "enum": [
           "pending",
           "done",

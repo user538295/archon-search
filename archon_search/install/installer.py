@@ -97,10 +97,12 @@ _GRAPH_SECTION = "graph"
 def _compute_svc_timeout(eager_load: bool, total_bytes: int) -> int:
     """Return the service-ready wait timeout in seconds.
 
-    With eager_load_embedders=True the server runs ONNX reconstruction before
-    accepting requests; that can take several minutes for large models.  Scale
-    to ~100ms per MB of the planned-download total, capped at 10 minutes.
-    Without eager load the default 60 s is sufficient.
+    The warm-up task now runs on every startup; eager_load_embedders only
+    widens its scope to every distinct per-collection model, which can take
+    several minutes for large models.  Scale to ~100ms per MB of the
+    planned-download total, capped at 10 minutes. With eager load off, only
+    the default embedder and reranker are warmed, so the default 60 s wait
+    is sufficient.
     # ponytail: linear scale is fine; a smarter heuristic adds no value here
     """
     if not eager_load:

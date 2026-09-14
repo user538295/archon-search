@@ -40,12 +40,13 @@ class CheckStatus(str, Enum):
 
 
 class WarmupResult(str, Enum):
-    """Eager model warm-up progress, mirrored onto ``app.state.warmup_result``.
+    """Model warm-up progress, mirrored onto ``app.state.warmup_result``.
 
-    Set by the lifespan's eager warm-up task: ``PENDING`` before the task
-    starts, ``DONE``/``FAILED`` once it finishes. ``None`` (not a member of
-    this enum) means eager warm-up was never run, i.e.
-    ``eager_load_embedders = false``.
+    Set by the lifespan's warm-up task, which runs on every startup (S279):
+    ``PENDING`` before the task starts, ``DONE``/``FAILED`` once it finishes.
+    ``None`` (not a member of this enum) means the lifespan has not run yet.
+    ``eager_load_embedders`` only widens the task's scope from the default
+    embedder to every per-collection model.
     """
 
     PENDING = "pending"
@@ -479,8 +480,8 @@ class StatusResponse(BaseModel):
     # E2g BE-11 — code parser (tree-sitter) soft-degrade status (additive, nullable);
     # null when graph.enabled=false
     code_parsers: CodeParsersStatusDetail | None = None
-    # Eager model warm-up progress; null when eager_load_embedders=false (no
-    # warm-up was ever run).
+    # Model warm-up progress; null only before the lifespan has started the
+    # warm-up task (it runs on every startup — S279).
     warmup_result: WarmupResult | None = None
     # Startup collection-sync progress; null when no collections are configured
     # (no startup sync was ever run). Mirrors warmup_result above — see

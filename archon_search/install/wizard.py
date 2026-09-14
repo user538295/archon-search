@@ -728,9 +728,10 @@ def _prompt_optional_features(
     # --- eager_load_embedders ---
     print(
         "\nEager embedder loading:\n"
-        "  Pre-loads the embedding model and reranker at server startup instead of on the first query.\n"
-        "  Eliminates first-query latency (~5-15s on first search without this).\n"
-        "  Default: disabled."
+        "  The server always pre-loads the default embedding model and the reranker at startup,\n"
+        "  and reports /ready as 503 until that finishes — no query ever pays the cold-load cost.\n"
+        "  This option widens that warm-up to every per-collection embedding model as well,\n"
+        "  at the cost of a longer startup. Default: disabled."
     )
     if eager_load is not None:
         _eager_load_val = eager_load
@@ -738,7 +739,7 @@ def _prompt_optional_features(
         _eager_load_val = False
     else:
         _eager_load_val = _ask_yn(
-            "Pre-load embedding models at startup (eliminates first-query latency)? [y/N]: "
+            "Also pre-load every per-collection embedding model at startup? [y/N]: "
         )
 
     # --- routing_strategy ---

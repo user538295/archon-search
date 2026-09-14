@@ -279,15 +279,23 @@ If you answer `y`, archon-search appends one JSON line per search request to dai
 
 ```
 Eager embedder loading:
-  Pre-loads the embedding model and reranker at server startup instead of on the first query.
-  Eliminates first-query latency (~5-15s on first search without this).
-  Default: disabled.
-Pre-load embedding models at startup (eliminates first-query latency)? [y/N]:
+  The server always pre-loads the default embedding model and the reranker at startup,
+  and reports /ready as 503 until that finishes — no query ever pays the cold-load cost.
+  This option widens that warm-up to every per-collection embedding model as well,
+  at the cost of a longer startup. Default: disabled.
+Also pre-load every per-collection embedding model at startup? [y/N]:
 ```
 
 **Default**: No.
 
-By default, the embedding model and the cross-encoder reranker are loaded lazily on the first search request, which causes a ~5–15 second delay for that request. If you answer `y`, both are loaded when the server starts instead. The load runs as a background task, so the server still starts accepting connections immediately; a query that arrives before the warm-up finishes still pays the lazy load. Recommended for automated workflows or production use where predictable latency matters.
+Model warm-up is **not** optional and this answer does not turn it off. On every start the server
+loads `[database].embedding_model` and the cross-encoder reranker in a background task, and
+`GET /ready` answers `503` with `checks.models: "pending"` until that finishes — so a client that
+waits for readiness never pays the ~5–15 s (much longer for the `max` profile's models) cold-load
+cost on its first search. Answering `y` only widens the *scope* of that same warm-up to every
+distinct per-collection `active_embedding_model`, so a collection pinned to a non-default model is
+warm too; the trade-off is a longer window before the server reports ready, and the models must fit
+within `[database].embedder_cache_size`. Recommended when collections pin their own models.
 
 #### 5f. Routing strategy
 

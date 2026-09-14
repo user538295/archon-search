@@ -40,20 +40,20 @@ def job_store(tmp_path: Path) -> JobStore:
 
 
 def wait_for_warmup(app: FastAPI, timeout: float = 10.0) -> None:
-    """Block the calling thread until the backgrounded eager warm-up has finished.
+    """Block the calling thread until the backgrounded model warm-up has finished.
 
-    ``eager_load_embedders`` hands warm-up to ``asyncio.create_task`` so lifespan
-    startup returns immediately (uvicorn binds the port only afterwards), which
-    means its effects are not observable the moment ``TestClient.__enter__``
-    returns. The task runs on the TestClient portal thread's loop, so it cannot be
-    awaited from here — poll it instead.
+    The lifespan hands warm-up to ``asyncio.create_task`` so lifespan startup
+    returns immediately (uvicorn binds the port only afterwards), which means its
+    effects are not observable the moment ``TestClient.__enter__`` returns. The
+    task runs on the TestClient portal thread's loop, so it cannot be awaited from
+    here — poll it instead.
     """
     import time  # noqa: PLC0415
 
     task = getattr(app.state, "_warmup_task", None)
     assert task is not None, (
-        "eager warm-up task was never created — eager_load_embedders is off, or the "
-        "asyncio.create_task() call was removed from the lifespan"
+        "warm-up task was never created — the asyncio.create_task() call was "
+        "removed from the lifespan"
     )
     deadline = time.monotonic() + timeout
     while not task.done() and time.monotonic() < deadline:
@@ -392,24 +392,39 @@ async def test_embedder_cache_in_app_state(config: SearchConfig, job_store: JobS
 
 
 @pytest.mark.asyncio
-async def test_eager_load_embedders_false_does_not_preload(tmp_path: Path, job_store: JobStore) -> None:
-    """eager_load_embedders=False: cached_models() is empty after startup."""
-    from unittest.mock import AsyncMock, patch
+async def test_eager_load_embedders_false_preloads_only_the_default_model(
+    tmp_path: Path, job_store: JobStore
+) -> None:
+    """eager_load_embedders=False: only the global default model is warmed (S279).
+
+    Warm-up itself is unconditional — ``/ready`` may not report ready while the
+    models a search needs are still cold. The flag only widens its *scope*: with
+    it off, a collection's pinned model is left for lazy loading; with it on,
+    every per-collection model is preloaded too
+    (``test_eager_load_embedders_true_preloads_collection_models``).
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
     from starlette.testclient import TestClient
+    from archon_search.collection_meta import CollectionMeta
     from archon_search.store import SearchStore
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
     cfg.eager_load_embedders = False
 
+    pinned_meta = MagicMock(spec=CollectionMeta)
+    pinned_meta.active_embedding_model = "model-X"
+
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
         patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
+        patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[pinned_meta])),
     ):
         app = create_app(cfg, job_store)
         with TestClient(app):
-            assert app.state.embedder_cache.cached_models() == []
+            wait_for_warmup(app)
+            assert app.state.embedder_cache.cached_models() == [cfg.embedding_model]
 
 
 @pytest.mark.asyncio
@@ -686,7 +701,7 @@ def test_eager_warmup_failure_is_contained_and_logged(
 
     task = app.state._warmup_task
     assert task.exception() is None, "warm-up exception escaped the task instead of being logged"
-    assert "eager model warm-up failed" in caplog.text
+    assert "model warm-up failed" in caplog.text
     assert "onnx exploded" in caplog.text
 
 
@@ -732,8 +747,8 @@ async def test_eager_warmup_cancelled_on_shutdown_is_logged(
             assert not task.done(), "warm-up should still be parked at this point"
 
     assert task.cancelled(), "shutdown must cancel the warm-up task, not leave it running"
-    assert "eager model warm-up cancelled during shutdown" in caplog.text
-    assert "eager model warm-up failed" not in caplog.text, (
+    assert "model warm-up cancelled during shutdown" in caplog.text
+    assert "model warm-up failed" not in caplog.text, (
         "cancellation must not be reported through the generic failure branch"
     )
 

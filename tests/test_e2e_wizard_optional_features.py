@@ -313,7 +313,7 @@ _DOCUMENTED_PROMPT_ORDER = [
     "Keep reranker enabled? [Y/n]: ",
     "Auto-watch directories and re-index on file changes? [y/N]: ",
     "Enable local query telemetry? [y/N]: ",
-    "Pre-load embedding models at startup (eliminates first-query latency)? [y/N]: ",
+    "Also pre-load every per-collection embedding model at startup? [y/N]: ",
     "Routing strategy (centroid/hybrid) [centroid]: ",
     "Log format (text/json) [text]: ",
     "    anthropic  - Anthropic API (needs ANTHROPIC_API_KEY)",
@@ -374,7 +374,9 @@ def test_wizard_prompts_appear_in_documented_order(runner: CliRunner, tmp_path: 
 # `Documentation/UserManual/20_wizard.md` section "5e. Eager load" — note that
 # `10_installation.md`'s `--eager-load` row describes the CLI flag, not this
 # prompt, and deliberately says "and the reranker" instead.
-_STEP5E_EAGER_LOAD_PHRASE = "Pre-load embedding models at startup"
+# Reworded for S279: warm-up now runs on every startup, so the prompt no longer
+# claims to be what pre-loads models — it only widens the warm-up's scope.
+_STEP5E_EAGER_LOAD_PHRASE = "Also pre-load every per-collection embedding model at startup"
 
 
 @pytest.mark.integration
@@ -399,7 +401,7 @@ def test_step5e_eager_load_prompt_wording(runner: CliRunner, tmp_path: Path) -> 
     step5e_lines = [
         line
         for line in result.output.splitlines()
-        if "at startup (eliminates first-query latency)?" in line
+        if "per-collection embedding model at startup?" in line
     ]
     assert len(step5e_lines) == 1, (
         f"Expected exactly one Step 5e eager-load prompt, got {step5e_lines!r}\n"

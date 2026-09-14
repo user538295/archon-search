@@ -16,20 +16,22 @@ router = APIRouter()
 
 
 def _warmup_pending(request: Request) -> bool:
-    """True while eager model warm-up is still running.
+    """True while model warm-up is still running.
 
     ``model_validation`` only probes that the models are *resolvable* (seconds);
-    eager warm-up builds the ONNX weights (minutes). Only the latter means the
+    warm-up builds the ONNX weights (minutes). Only the latter means the
     first real search would block, so it is the one signal that gates readiness.
-    The ``getattr`` guards keep the endpoint resilient to app factories that set
-    neither attribute.
+
+    This must NOT be conditioned on ``config.eager_load_embedders`` (S279): that
+    flag only widens warm-up's scope from the default embedder to every
+    per-collection model, and gating on it left ``/ready`` blind for every
+    deployment that did not opt in — reporting ``ready: true`` while the first
+    search still paid the full cold cross-encoder build. ``warmup_result`` is
+    ``None`` unless the lifespan actually started a warm-up task, so the
+    ``getattr`` guard alone keeps the endpoint resilient to app factories that
+    never set it.
     """
-    config = getattr(request.app.state, "config", None)
-    return (
-        config is not None
-        and getattr(config, "eager_load_embedders", False)
-        and getattr(request.app.state, "warmup_result", None) == WarmupResult.PENDING
-    )
+    return getattr(request.app.state, "warmup_result", None) == WarmupResult.PENDING
 
 
 def _startup_sync_pending(request: Request) -> bool:
@@ -85,7 +87,7 @@ def _model_check_status(request: Request, warmup_pending: bool) -> CheckStatus:
     The ``getattr`` guard keeps the endpoint resilient to app factories that never
     set ``app.state.model_validation``.
 
-    Eager warm-up outranks everything: while it is pending the models are not
+    Warm-up outranks everything: while it is pending the models are not
     usable yet no matter what ``model_validation`` already concluded.
     ``warmup_pending`` is a required argument — the caller evaluates
     ``_warmup_pending`` exactly once per request and passes the result in, so
@@ -93,7 +95,7 @@ def _model_check_status(request: Request, warmup_pending: bool) -> CheckStatus:
     a warm-up finishing between them would yield ``models: pending`` with
     ``ready: true``.
 
-    A *failed* eager warm-up also outranks ``model_validation``: mirrors
+    A *failed* warm-up also outranks ``model_validation``: mirrors
     ``_sync_check_status``, which gained an equivalent ``FAIL`` state for a
     failed startup sync — without it, a failed warm-up is indistinguishable
     from a healthy one once ``model_validation``'s cheap resolvability probe
@@ -130,9 +132,9 @@ async def ready(request: Request) -> JSONResponse:
     warmup_pending = _warmup_pending(request)
     models_status = _model_check_status(request, warmup_pending)
     sync_pending = _startup_sync_pending(request)
-    # Readiness gates on storage, eager warm-up and the startup sync. A failed/warned
+    # Readiness gates on storage, model warm-up and the startup sync. A failed/warned
     # model_validation stays informational (the lazy-load contract means a search can
-    # still succeed), but a pending eager warm-up means the first search would block
+    # still succeed), but a pending warm-up means the first search would block
     # on ONNX construction, and a running startup sync means the index is still being
     # (re)built — a load balancer must not route real traffic here in either case.
     ready_flag = storage_ok and not warmup_pending and not sync_pending

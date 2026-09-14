@@ -126,7 +126,7 @@ def _install_options(f: click.decorators.FC) -> click.decorators.FC:
 @click.option("--code/--no-code", default=None, help="Install tree-sitter code enrichment packages")
 @click.option("--watch/--no-watch", default=None, help="Enable filesystem watcher for auto-reindex")
 @click.option("--telemetry/--no-telemetry", default=None, help="Enable local query telemetry")
-@click.option("--eager-load/--no-eager-load", default=None, help="Pre-load embedding models and the reranker at startup")
+@click.option("--eager-load/--no-eager-load", default=None, help="Widen startup warm-up (which always covers the default embedder and the reranker) to every per-collection embedding model")
 @click.option("--no-reranker", is_flag=True, default=False, help="Disable reranker (lower latency, less precision)")
 @click.option("--routing-strategy", type=click.Choice(["centroid", "hybrid"]), default=None, help="Routing strategy")
 @click.option("--log-format", type=click.Choice(["text", "json"]), default=None, help="Log format")

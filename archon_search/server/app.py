@@ -89,7 +89,7 @@ from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger(__name__)
 
-# Terminal ceiling for the eager model warm-up task. A cold cache legitimately
+# Terminal ceiling for the model warm-up task. A cold cache legitimately
 # takes minutes (ONNX build + download), but an unbounded await would pin
 # ``app.state.warmup_result`` at "pending" — and ``GET /ready`` at 503 — forever.
 _EAGER_WARMUP_TIMEOUT_SECONDS: float = 600.0
@@ -545,7 +545,7 @@ def create_app(
                 )
                 app.state.graph_store = None
 
-        # Startup: create embedder cache and optionally preload models
+        # Startup: create embedder cache and warm the models the first search needs.
         embedder_cache = EmbedderCache(config.embedder_cache_size, providers=config.providers or None)
         app.state.embedder_cache = embedder_cache
         if config.eager_load_embedders:
@@ -561,42 +561,51 @@ def create_app(
                     len(distinct_models),
                     config.embedder_cache_size,
                 )
+        else:
+            # Warm-up runs for every deployment, not just eager_load_embedders ones
+            # (S279): the cross-encoder and the default embedder are built lazily on
+            # the first search, so a heavyweight profile (e.g. "max", where the cold
+            # ONNX build of BAAI/bge-reranker-base measured 91 s) blocks that request
+            # past any client read timeout — the caller sees no response at all.
+            # ``eager_load_embedders`` still decides the *scope*: every per-collection
+            # model when on, only the global default when off.
+            distinct_models = {config.embedding_model}
 
-            async def _run_eager_warmup(model_names: list[str]) -> None:
-                try:
-                    # A wedged model load must not leave warmup_result "pending"
-                    # forever — /ready would answer 503 for the process lifetime
-                    # with no diagnostic and no recovery.
-                    async with asyncio.timeout(_EAGER_WARMUP_TIMEOUT_SECONDS):
-                        await embedder_cache.preload(model_names)
-                        # preload() already warmed every embedder; only the equally lazy
-                        # cross-encoder is still cold (S184).
-                        await app.state.pipeline.warmup_models()
-                    # Startup returning no longer implies warm-up finished, so this
-                    # is the only signal an operator has that it completed at all.
-                    logger.info(
-                        "eager model warm-up complete (%d embedding models + reranker)",
-                        len(model_names),
-                    )
-                    app.state.warmup_result = WarmupResult.DONE
-                except asyncio.CancelledError:
-                    logger.info("eager model warm-up cancelled during shutdown")
-                    app.state.warmup_result = WarmupResult.FAILED
-                    raise
-                except BaseException as exc:  # noqa: BLE001 — never let the task escape
-                    logger.warning("eager model warm-up failed: %s", exc, exc_info=True)
-                    app.state.warmup_result = WarmupResult.FAILED
+        async def _run_model_warmup(model_names: list[str]) -> None:
+            try:
+                # A wedged model load must not leave warmup_result "pending"
+                # forever — /ready would answer 503 for the process lifetime
+                # with no diagnostic and no recovery.
+                async with asyncio.timeout(_EAGER_WARMUP_TIMEOUT_SECONDS):
+                    await embedder_cache.preload(model_names)
+                    # preload() already warmed every embedder; only the equally lazy
+                    # cross-encoder is still cold (S184).
+                    await app.state.pipeline.warmup_models()
+                # Startup returning no longer implies warm-up finished, so this
+                # is the only signal an operator has that it completed at all.
+                logger.info(
+                    "model warm-up complete (%d embedding models + reranker)",
+                    len(model_names),
+                )
+                app.state.warmup_result = WarmupResult.DONE
+            except asyncio.CancelledError:
+                logger.info("model warm-up cancelled during shutdown")
+                app.state.warmup_result = WarmupResult.FAILED
+                raise
+            except BaseException as exc:  # noqa: BLE001 — never let the task escape
+                logger.warning("model warm-up failed: %s", exc, exc_info=True)
+                app.state.warmup_result = WarmupResult.FAILED
 
-            # Warm-up must never be awaited here: uvicorn binds the listening socket
-            # only after lifespan startup returns, so a cold model cache (3-5 min)
-            # would keep the port closed for the whole window. ``warmup_result`` is
-            # set to "pending" BEFORE the task starts so /ready never reports models
-            # as ready during the gap between startup returning and the task running.
-            app.state.warmup_result = WarmupResult.PENDING
-            warmup_task = asyncio.create_task(_run_eager_warmup(list(distinct_models)))
-            app.state._warmup_task = warmup_task
-            app.state._background_tasks.add(warmup_task)
-            warmup_task.add_done_callback(app.state._background_tasks.discard)
+        # Warm-up must never be awaited here: uvicorn binds the listening socket
+        # only after lifespan startup returns, so a cold model cache (3-5 min)
+        # would keep the port closed for the whole window. ``warmup_result`` is
+        # set to "pending" BEFORE the task starts so /ready never reports models
+        # as ready during the gap between startup returning and the task running.
+        app.state.warmup_result = WarmupResult.PENDING
+        warmup_task = asyncio.create_task(_run_model_warmup(list(distinct_models)))
+        app.state._warmup_task = warmup_task
+        app.state._background_tasks.add(warmup_task)
+        warmup_task.add_done_callback(app.state._background_tasks.discard)
 
         # All startup migrations complete before the lifespan context yields control to the request loop
 
@@ -957,7 +966,7 @@ def create_app(
             #   cancelled — drain_and_stop() cancels writer._task internally, so
             #   cancelling app.state._background_tasks first would leave
             #   queue.join() unsatisfiable and every buffered entry would be lost.
-            # - background tasks (startup sync, eager warm-up, model validation)
+            # - background tasks (startup sync, model warm-up, model validation)
             #   must be cancelled and drained BEFORE the stores disconnect, or an
             #   in-flight task keeps calling into a closed store.
             # Draining telemetry first, then cancelling the rest, then
@@ -1035,8 +1044,8 @@ def create_app(
     app.state.job_store = job_store
     app.state.config_path = Path(config_path) if config_path is not None else None
     app.state._background_tasks: set = set()
-    # Set to a Task by the lifespan only when eager_load_embedders is on; the None
-    # default keeps the attribute readable on every path.
+    # Set to a Task by the lifespan's model warm-up; the None default keeps the
+    # attribute readable before the lifespan has run.
     app.state._warmup_task = None
     # Set to a Task by the lifespan only when at least one collection is configured;
     # the None default keeps the attribute readable on every path.
@@ -1055,7 +1064,7 @@ def create_app(
     # default keeps the attribute readable on every path.
     app.state._startup_sync_failed = False
     # Warm-up progress for /ready and /status: set to "pending"/"done"/"failed" by
-    # the lifespan when eager_load_embedders is on; None means no warm-up was run.
+    # the lifespan on every startup; None means the lifespan has not run yet.
     app.state.warmup_result = None
     # Startup-sync progress for GET /status: set to "pending"/"done"/"failed" by the
     # lifespan when at least one collection is configured; None means no startup

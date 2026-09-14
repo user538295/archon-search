@@ -38,6 +38,25 @@ from archon_search.jobs.store import JobStore
 
 pytestmark = pytest.mark.xdist_group("c1_bugs")
 
+#: Ceiling for waiting out the lifespan's model warm-up task. It runs on every
+#: startup (S279), so a test that pins ``app.state.warmup_result`` by hand has to
+#: wait for the task to settle first or the task overwrites the pinned value.
+_WARMUP_SETTLE_TIMEOUT_SECONDS = 10.0
+
+
+def _wait_for_warmup_to_settle(app) -> None:  # type: ignore[no-untyped-def]
+    """Block until the lifespan warm-up task has left the ``pending`` state.
+
+    ``TestClient`` drives the app's event loop on a portal thread, so sleeping
+    here lets the warm-up task make progress.
+    """
+    import time  # noqa: PLC0415
+
+    deadline = time.monotonic() + _WARMUP_SETTLE_TIMEOUT_SECONDS
+    while app.state.warmup_result == "pending" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert app.state.warmup_result != "pending", "lifespan warm-up never settled"
+
 
 @pytest.fixture
 def job_store(tmp_path: Path) -> JobStore:
@@ -1284,6 +1303,10 @@ async def test_startup_sync_with_per_collection_errors_sets_startup_sync_failed(
             sync_task = app.state._startup_sync_task
             assert sync_task is not None, "startup sync task never spawned"
             await asyncio.wait_for(sync_task, timeout=30.0)
+            # The lifespan also warms the models on every startup (S279) and a
+            # pending warm-up legitimately holds /ready at 503 — wait it out so the
+            # assertions below see the startup-sync state in isolation.
+            await asyncio.wait_for(app.state._warmup_task, timeout=30.0)
 
             assert app.state._startup_sync_failed is True, (
                 "a startup sync that returned per-collection errors left "
@@ -1601,6 +1624,7 @@ def test_status_surfaces_warmup_result(tmp_path: Path, monkeypatch: pytest.Monke
     from tests.integration.conftest import make_real_app  # noqa: PLC0415
 
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
+        _wait_for_warmup_to_settle(client.app)
         client.app.state.warmup_result = "pending"
         resp = client.get("/status", headers={"Authorization": f"Bearer {api_key}"})
 
@@ -1624,6 +1648,7 @@ def test_status_surfaces_warmup_result_terminal_states(
     from tests.integration.conftest import make_real_app  # noqa: PLC0415
 
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
+        _wait_for_warmup_to_settle(client.app)
         client.app.state.warmup_result = value
         resp = client.get("/status", headers={"Authorization": f"Bearer {api_key}"})
 

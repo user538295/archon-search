@@ -69,7 +69,7 @@ Vector store location, models, chunking, and provider/GPU wiring.
 | `multilingual` | `false` | Per-document language detection (requires `archon-search[multilingual]` + `lid.176.ftz`). |
 | `language_detection_confidence_threshold` | `0.7` | Minimum fasttext confidence in `(0.0, 1.0]`; below it → `language="unknown"`. |
 | `embedder_cache_size` | `3` | LRU cache of embedder instances (≥1). |
-| `eager_load_embedders` | `false` | Pre-warm models at startup — the embedder cache (the default `embedding_model` plus every per-collection `active_embedding_model`) and the reranker cross-encoder — to remove first-query latency. |
+| `eager_load_embedders` | `false` | Widens the startup model warm-up's **scope**. Warm-up itself always runs: at `false` it loads the default `embedding_model` plus the reranker cross-encoder; at `true` it additionally loads every per-collection `active_embedding_model`. `GET /ready` reports `503`/`checks.models: "pending"` until it finishes, either way. |
 
 ### `[search]`
 
