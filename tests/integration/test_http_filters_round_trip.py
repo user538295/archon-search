@@ -379,3 +379,104 @@ def test_language_filter_http_response_returns_matching_lang_only(
         assert en_path not in result_paths, (
             "English document must not appear when language filter is 'fr'"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test 5 (S305) — full RFC 3339 datetime bounds are accepted and applied
+# ---------------------------------------------------------------------------
+
+def test_full_rfc3339_datetime_indexed_bounds_are_accepted_and_applied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S305 — ``indexed_after``/``indexed_before`` accept a full RFC 3339 datetime.
+
+    Distinct from the date-only coercion path (``_coerce_date_string`` in
+    ``archon_search/filters.py`` only rewrites the 10-char ``YYYY-MM-DD`` form):
+    a string carrying a time component stays a ``datetime`` and must still reach
+    ``build_where()`` as an ``indexed_at`` bound.  Asserted end-to-end over HTTP:
+
+    - past ``indexed_after`` / future ``indexed_before`` → the full baseline;
+    - future ``indexed_after`` / past ``indexed_before`` → ``[]`` (proving the
+      timestamp is really applied rather than silently ignored);
+    - second-level boundaries around a real chunk's ``indexed_at`` (proving
+      time-of-day granularity, not just date granularity).
+    """
+    from datetime import timedelta
+
+    from archon_search._types import normalize_iso_utc
+
+    col = "test-rfc3339-datetime-bounds"
+    past = "2020-01-01T00:00:00Z"
+    future = "2099-01-01T00:00:00Z"
+
+    for idx in range(3):
+        (tmp_path / f"rfc3339_doc_{idx}.md").write_text(
+            f"# Chronicle {idx}\n\nTimestamped chronicle body number {idx}.\n" * 4
+        )
+
+    def _post(client, api_key, filters: dict | None):
+        body: dict = {"collection": col, "query": "chronicle", "top_k": 10}
+        if filters is not None:
+            body["filters"] = filters
+        return client.post(
+            "/search", json=body, headers={"Authorization": f"Bearer {api_key}"}
+        )
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        for idx in range(3):
+            ingest_file_via_path(
+                client, col, str(tmp_path / f"rfc3339_doc_{idx}.md"), api_key=api_key
+            )
+
+        baseline = _post(client, api_key, None)
+        assert baseline.status_code == 200, f"baseline search failed: {baseline.text}"
+        baseline_items = baseline.json()["results"]
+        assert baseline_items, "baseline search must return results"
+        baseline_count = len(baseline_items)
+
+        # Full RFC 3339 datetimes must be accepted (200, never 422) and, when the
+        # bound cannot exclude anything, must pass every baseline result through.
+        for name, value in (("indexed_after", past), ("indexed_before", future)):
+            resp = _post(client, api_key, {name: value})
+            assert resp.status_code == 200, (
+                f"{name}={value!r} must be accepted, got {resp.status_code}: {resp.text}"
+            )
+            assert len(resp.json()["results"]) == baseline_count, (
+                f"{name}={value!r} must not drop results: "
+                f"{len(resp.json()['results'])} != baseline {baseline_count}"
+            )
+
+        # The opposite bounds exclude everything — this is what proves the
+        # timestamp is parsed and applied rather than silently no-op'd.
+        for name, value in (("indexed_after", future), ("indexed_before", past)):
+            resp = _post(client, api_key, {name: value})
+            assert resp.status_code == 200, (
+                f"{name}={value!r} must be accepted, got {resp.status_code}: {resp.text}"
+            )
+            assert resp.json()["results"] == [], (
+                f"{name}={value!r} must exclude every result, got "
+                f"{len(resp.json()['results'])}"
+            )
+
+        # Second-level boundary around a real chunk timestamp: date granularity
+        # alone would collapse both of these to the same day and fail one side.
+        newest = max(
+            datetime.fromisoformat(item["indexed_at"].replace("Z", "+00:00"))
+            for item in baseline_items
+        )
+        before_newest = normalize_iso_utc(newest - timedelta(seconds=1))
+        after_newest = normalize_iso_utc(newest + timedelta(seconds=1))
+
+        resp = _post(client, api_key, {"indexed_after": before_newest})
+        assert resp.status_code == 200, f"T-1s search failed: {resp.text}"
+        assert resp.json()["results"], (
+            f"indexed_after={before_newest!r} (1 s before the newest chunk) must "
+            "return at least that chunk"
+        )
+
+        resp = _post(client, api_key, {"indexed_after": after_newest})
+        assert resp.status_code == 200, f"T+1s search failed: {resp.text}"
+        assert resp.json()["results"] == [], (
+            f"indexed_after={after_newest!r} (1 s after the newest chunk) must "
+            f"exclude every result, got {len(resp.json()['results'])}"
+        )
