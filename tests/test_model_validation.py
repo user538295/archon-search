@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -713,3 +714,37 @@ async def test_probe_failure_does_not_block_boot(caplog: pytest.LogCaptureFixtur
     assert isinstance(result, ModelValidationResult)
     assert result.llama_cpp_ok is False
     assert "llama-server unreachable" in caplog.text
+
+
+def test_validate_providers_shared_probes_the_archon_models_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S278: both startup probes must read/write ``get_models_dir()``.
+
+    ``ModelEmbedder``/``ModelReranker``/``install.prewarm`` all pass an explicit
+    ``cache_dir`` derived from ``get_models_dir()`` (BE-26). ``validate_providers_shared``
+    does not, so the startup probe downloads the profile's weights into fastembed's
+    default cache while the pipeline's own models still see an empty
+    ``$ARCHON_SEARCH_DATA_DIR/models`` — ``/ready`` reports ``models: ok`` and the
+    first ``POST /search`` then pays the balanced profile's full ~330 MB download
+    inside the request, so the client gets no response at all.
+    """
+    from archon_search.paths import get_models_dir
+    from archon_search.profiles import get_profile
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    balanced = get_profile("balanced", multilingual=False)
+    expected_cache_dir = str(get_models_dir())
+
+    te, _unused_ce, avail = _patch_probes()
+    ce_instance = MagicMock()
+    ce_instance.rerank.return_value = iter([0.0])
+    ce_cls = MagicMock(return_value=ce_instance)
+
+    with patch("archon_search.model_validation.TextEmbedding", te), \
+         patch("fastembed.rerank.cross_encoder.TextCrossEncoder", ce_cls), \
+         patch("archon_search.model_validation._available_providers", return_value=avail):
+        validate_providers_shared(["CPUExecutionProvider"], balanced.embedder, balanced.reranker)
+
+    assert te.call_args.kwargs.get("cache_dir") == expected_cache_dir
+    assert ce_cls.call_args.kwargs.get("cache_dir") == expected_cache_dir

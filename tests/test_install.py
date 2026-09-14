@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from archon_search.paths import get_models_dir
 from archon_search.platform.types import GpuType
 
 pytestmark = pytest.mark.xdist_group("install")
@@ -1060,7 +1061,9 @@ class TestValidateProviders:
 
         assert result is True
         # `providers or None`: empty list coerced to None for fastembed default.
-        te.assert_called_once_with(installer.cfg.embedding_model, providers=None)
+        te.assert_called_once_with(
+            installer.cfg.embedding_model, providers=None, cache_dir=str(get_models_dir())
+        )
 
     def test_validate_providers_returns_true_on_success(self, tmp_path: Path) -> None:
         """All GPU providers available and both probes succeed → True."""
@@ -1140,7 +1143,9 @@ class TestValidateProviders:
             result = installer.validate_providers(providers)
 
         assert result is True
-        te.assert_called_once_with(installer.cfg.embedding_model, providers=providers)
+        te.assert_called_once_with(
+            installer.cfg.embedding_model, providers=providers, cache_dir=str(get_models_dir())
+        )
 
     def test_validate_providers_uses_configured_embedding_model(self, tmp_path: Path) -> None:
         """validate_providers uses self.cfg.embedding_model, not a hardcoded string."""
@@ -1155,7 +1160,11 @@ class TestValidateProviders:
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is True
-        te.assert_called_once_with("custom/model-v2", providers=["CUDAExecutionProvider"])
+        te.assert_called_once_with(
+            "custom/model-v2",
+            providers=["CUDAExecutionProvider"],
+            cache_dir=str(get_models_dir()),
+        )
 
     def test_validate_providers_returns_false_when_fastembed_not_installed(self, tmp_path: Path) -> None:
         """fastembed import failure inside the probe → False, no exception propagated."""

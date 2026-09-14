@@ -19,6 +19,7 @@ import httpx
 from fastembed import TextEmbedding
 
 from archon_search.embedder import make_embedder
+from archon_search.paths import get_models_dir
 
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
@@ -369,7 +370,7 @@ def _load_cross_encoder(model_name: str, providers: list[str] | None) -> Any:
     """Instantiate a fastembed ``TextCrossEncoder`` (reranker probe entry point)."""
     from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: PLC0415
 
-    return TextCrossEncoder(model_name, providers=providers)
+    return TextCrossEncoder(model_name, providers=providers, cache_dir=str(get_models_dir()))
 
 
 def validate_providers_shared(
@@ -414,12 +415,19 @@ def validate_providers_shared(
     # Embedder probe (skipped when caller already confirmed warm via "" model).
     # `providers or None`: an empty list (SearchConfig default) becomes None so
     # fastembed selects its own CPU default — matching the empty `non_cpu` gate above.
+    # `cache_dir` (S278): both probes MUST warm the same cache the runtime
+    # ModelEmbedder/ModelReranker read from, or /ready reports models ok while the first
+    # search still pays a full cold download inline.
     if embedding_model == "":
         embedder_ok = True
     else:
         embedder_ok = True
         try:
-            model = TextEmbedding(embedding_model, providers=providers or None)
+            model = TextEmbedding(
+                embedding_model,
+                providers=providers or None,
+                cache_dir=str(get_models_dir()),
+            )
             list(model.embed(["archon search validation probe"]))
         except Exception as exc:  # never raises
             embedder_ok = False
