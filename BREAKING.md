@@ -74,6 +74,26 @@ This replaces the previous behaviour, which was strictly worse: the request bloc
 
 ---
 
+### [next release] — a cold query embedder now degrades `/search`, MCP `search` and `/v1` to the FTS leg alone instead of blocking (2026-09-14, S290)
+
+**Surface**: `POST /search`, the MCP `search` tool, `POST /v1/chat/completions` — single-collection **and** fan-out branches of all three.
+
+**Behaviour-only change — no schema field was added, removed or retyped, so `GET /openapi.json` needs no regeneration.** Every affected response field (`score`, `rag_fusion_applied`, `graph_expansion_applied`, `hyde_applied`, `expansion_used`, `expansion_warning`) already had its current type; only the *circumstances* under which they take a given value have widened.
+
+**What changed:** the embedder leg of the same pre-budget warm-up is now bounded too, at 0.5 s (`server/_search_budget.EMBEDDER_WARMUP_WAIT_SECONDS`), alongside the reranker leg above. When the embedder is still building when that bound expires, the request runs with no query vector at all: the store skips its vector leg and fuses the FTS leg alone. The previous behaviour rested on the premise that a search without a query vector cannot be answered — wrong for a hybrid store, which still has BM25.
+
+Consequences for clients during a cold window (typically the first searches after a restart, before `GET /ready` returns 200):
+
+- **The result ordering and the result set differ.** Degraded responses are ranked by the FTS leg alone, so a chunk that only ever matched semantically is absent, and the fused ranking behind `score` is computed over that one leg (the cross-encoder still reruns on top of it when it is warm). Anything that snapshots an exact result order or asserts a semantic-only match is transiently affected.
+- **`rag_fusion_applied` and `graph_expansion_applied` come back `false` even when the request asked for them** (and `expansion_used` with them). Both features exist to produce something to embed, so they are skipped in that mode; a `graph_mode` that passes the route's `422` validation is accepted and then not applied.
+- **`hyde: true` comes back `hyde_applied: false`** during the same window, with the usual `expansion_warning: "HyDE expansion failed"`. Generating a HyDE vector ends in embedding the hypothesis through the very embedder that is still cold, and that happens *before* the request enters any budget — so running it would park the connection for the whole build, which is the defect this entry is about. Only an already-computed `query_vector` cancels the degrade, since it needs no embedding at all — and none of these three surfaces accepts one on the wire, so during a cold window nothing a client can send avoids it.
+
+All three conditions are transient: the build continues in its worker thread, so later requests get the full hybrid pipeline back with no config change. This replaces the previous behaviour, in which the request blocked for the whole cold ONNX build *outside* any timeout budget and the client recorded no response at all (`status 0`) rather than a slow one.
+
+**Migration:** tolerant clients need no change. Clients that pin an exact result ordering, or that treat `rag_fusion_applied` / `graph_expansion_applied` / `hyde_applied` / `expansion_used` as an echo of what they requested rather than a report of what ran, should either accept the degraded case or gate their traffic on `GET /ready` returning 200 (S279).
+
+---
+
 ### [next release] — `GET /ready` returns 503 while model warm-up or the startup collection sync is pending (2026-08-14, revised 2026-09-14 for S279)
 
 **What changed:** `ready: bool` (and the HTTP status) on `GET /ready` was previously storage-only — see the D6 entry below, which explicitly promised it would stay that way. It now gates on **three** independent conditions: `SearchStore.ping()` succeeding, no model warm-up outstanding, and no lifespan startup collection sync still running.

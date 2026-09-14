@@ -12,6 +12,10 @@ _WARMUP_TEXT = "warmup"
 _WARMUP_TIMEOUT_SECONDS = 300.0
 
 
+class EmbedderWarmupTimeout(Exception):
+    """The warm-up build outran ``_WARMUP_TIMEOUT_SECONDS`` (the wait stopped, not the build)."""
+
+
 @runtime_checkable
 class EmbedderBackend(Protocol):
     model_name: str
@@ -56,8 +60,15 @@ class Embedder:
     def __init__(self, backend: EmbedderBackend) -> None:
         self._backend = backend
         self._embedding_dim: int | None = None
-        self._warmup_lock = asyncio.Lock()
         self._warmup_failed = False
+        # In-flight build, shared by every concurrent caller (see warmup()), plus
+        # the lock guarding it and the loop both belong to. All three are bound
+        # to one event loop and recreated together when the loop changes: an
+        # asyncio.Lock left held by a task in a since-closed loop would deadlock
+        # every later warmup().
+        self._warmup_loop: asyncio.AbstractEventLoop | None = None
+        self._warmup_lock: asyncio.Lock | None = None
+        self._warmup_task: asyncio.Task[None] | None = None
 
     @property
     def model_name(self) -> str:
@@ -80,29 +91,85 @@ class Embedder:
             )
         return self._embedding_dim
 
+    def _acquire_warmup_lock(self) -> asyncio.Lock:
+        """Return the lock for the running loop, rebinding warm-up state if it changed."""
+        loop = asyncio.get_running_loop()
+        if self._warmup_lock is None or self._warmup_loop is not loop:
+            stale = self._warmup_task
+            if stale is not None and not stale.done():
+                stale.cancel()
+            self._warmup_task = None
+            self._warmup_lock = asyncio.Lock()
+            self._warmup_loop = loop
+        return self._warmup_lock
+
+    async def _run_warmup(self) -> None:
+        """Force the backend to build its model. Never cancelled by a caller."""
+        build = asyncio.ensure_future(self.embed([_WARMUP_TEXT]))
+        try:
+            await asyncio.wait_for(build, timeout=_WARMUP_TIMEOUT_SECONDS)
+            self._warmup_failed = False
+        except asyncio.TimeoutError as exc:
+            self._warmup_failed = True
+            # Since 3.11 asyncio.TimeoutError *is* the builtin TimeoutError, so a
+            # socket ETIMEDOUT raised inside the build arrives here looking exactly
+            # like the ceiling expiring. Only the ceiling cancels the build.
+            if not build.cancelled():
+                raise
+            raise EmbedderWarmupTimeout(
+                f"embedder warm-up exceeded {_WARMUP_TIMEOUT_SECONDS}s"
+            ) from exc
+        except Exception:
+            self._warmup_failed = True
+            raise
+
     async def warmup(self) -> None:
         """Load the backend's ONNX model now, off the request path.
 
         ``ModelEmbedder`` constructs its ONNX model on the *first* ``encode``
         call. Callers must run this outside any request timeout budget,
         otherwise the one-off load consumes the whole budget and an otherwise
-        valid search fails with 504 (S184).
+        valid search fails with 504 (S184). Contract:
 
-        Idempotent: no-op once warm or after a permanent failure.
-        Single-flight: concurrent cold callers wait on a lock; only one load runs.
-        Bounded by ``_WARMUP_TIMEOUT_SECONDS`` so a hung model download cannot
-        pin a request forever.
+        - Idempotent, and a no-op once warm.
+        - Single-flight: one shared task does the build; callers only
+          ``await asyncio.shield`` it, so a caller that bounds its own wait and
+          gives up cancels nothing but that wait. The build keeps running, warms
+          the backend for later requests, and later callers join it instead of
+          each starting another ``to_thread`` encode that would queue behind the
+          one ONNX build on ``ModelEmbedder._lock`` — a pinned executor thread
+          per concurrent cold request (S290).
+        - Not latched on failure (S283): ``_warmup_failed`` records only the most
+          recent attempt and is diagnostic; the next caller retries with a fresh
+          task, since a settled task is never re-awaited.
+        - Raises ``EmbedderWarmupTimeout`` if the build outruns
+          ``_WARMUP_TIMEOUT_SECONDS``. That stops the *waiting*, not the build:
+          ``asyncio.to_thread`` workers are not cancellable, so the thread runs
+          to completion (and, being non-daemon, delays executor shutdown).
         """
-        if self._backend.is_warm or self._warmup_failed:
+        if self._backend.is_warm:
             return
-        async with self._warmup_lock:
-            if self._backend.is_warm or self._warmup_failed:
+        async with self._acquire_warmup_lock():
+            if self._backend.is_warm:
                 return
-            try:
-                await asyncio.wait_for(self.embed([_WARMUP_TEXT]), timeout=_WARMUP_TIMEOUT_SECONDS)
-            except Exception:
-                self._warmup_failed = True
-                raise
+            task = self._warmup_task
+            if task is None or task.done():
+                task = asyncio.ensure_future(self._run_warmup())
+                task.add_done_callback(self._on_warmup_done)
+                self._warmup_task = task
+        await asyncio.shield(task)
+
+    def _on_warmup_done(self, task: asyncio.Task[None]) -> None:
+        """Drop the settled task and swallow its result so asyncio stays quiet.
+
+        A build whose every waiter was cancelled has no one left to retrieve its
+        exception; retrieving it here avoids a spurious "Task exception was
+        never retrieved" warning.
+        """
+        if self._warmup_task is task:
+            self._warmup_task = None
+        if not task.cancelled():
+            task.exception()
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """Encode texts in a thread pool; lazily initialises embedding_dim."""

@@ -496,7 +496,10 @@ class TestShimWarmupParity:
     """The ``/v1`` shim runs the same bounded warm-up as REST and MCP (S288)."""
 
     def test_fanout_bounds_warmup_and_reranks(self, tmp_path, monkeypatch):
-        from archon_search.server._search_budget import RERANKER_WARMUP_WAIT_SECONDS
+        from archon_search.server._search_budget import (
+            EMBEDDER_WARMUP_WAIT_SECONDS,
+            RERANKER_WARMUP_WAIT_SECONDS,
+        )
 
         app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
         app.state.pipeline.search_many = AsyncMock(
@@ -514,13 +517,20 @@ class TestShimWarmupParity:
         # The lifespan's own unbounded warm-up also lands on this stub, so match
         # the request-path call by its bound rather than by await count.
         assert (
-            call(None, reranker_timeout=RERANKER_WARMUP_WAIT_SECONDS)
+            call(
+                None,
+                reranker_timeout=RERANKER_WARMUP_WAIT_SECONDS,
+                embedder_timeout=EMBEDDER_WARMUP_WAIT_SECONDS,
+            )
             in app.state.pipeline.warmup_models.await_args_list
         ), app.state.pipeline.warmup_models.await_args_list
         assert app.state.pipeline.search_many.await_args.kwargs["rerank"] is True
 
     def test_direct_bounds_warmup_and_reranks(self, tmp_path, monkeypatch):
-        from archon_search.server._search_budget import RERANKER_WARMUP_WAIT_SECONDS
+        from archon_search.server._search_budget import (
+            EMBEDDER_WARMUP_WAIT_SECONDS,
+            RERANKER_WARMUP_WAIT_SECONDS,
+        )
 
         app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
         app.state.pipeline.get_collection_meta = AsyncMock(
@@ -541,7 +551,10 @@ class TestShimWarmupParity:
         # The lifespan's own unbounded warm-up also lands on this stub, so match
         # the request-path call by its bound rather than by await count.
         assert any(
-            c.kwargs == {"reranker_timeout": RERANKER_WARMUP_WAIT_SECONDS}
+            c.kwargs == {
+                "reranker_timeout": RERANKER_WARMUP_WAIT_SECONDS,
+                "embedder_timeout": EMBEDDER_WARMUP_WAIT_SECONDS,
+            }
             for c in app.state.pipeline.warmup_models.await_args_list
         ), app.state.pipeline.warmup_models.await_args_list
         assert app.state.pipeline.search.await_args.kwargs["rerank"] is True

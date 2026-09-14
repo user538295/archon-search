@@ -24,7 +24,10 @@ from archon_search.constants import DEFAULT_NAMESPACE, _INGEST_CHUNK_BATCH_SIZE
 from archon_search.collection_meta import CollectionMeta
 from archon_search.description_generator import MAX_SAMPLE_CHUNKS, _should_regenerate, generate_description
 from archon_search.chunker import ASTChunker, DocumentChunker
-from archon_search.embedder import Embedder, EmbedderBackend, ModelEmbedder
+from archon_search.embedder import (
+    _WARMUP_TIMEOUT_SECONDS as _EMBEDDER_BUILD_TIMEOUT_SECONDS,
+)
+from archon_search.embedder import Embedder, EmbedderBackend, EmbedderWarmupTimeout, ModelEmbedder
 from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher
 from archon_search.defref_extractor import DEFREF_SUPPORTED_EXTENSIONS
 from archon_search.enricher import MarkdownEnricher, is_docling_source, source_subtype_for
@@ -404,6 +407,7 @@ class SearchPipeline:
         embedder: Embedder | None = None,
         *,
         reranker_timeout: float | None = None,
+        embedder_timeout: float | None = None,
     ) -> bool:
         """Build the lazy ONNX models now, off any request-timeout budget (S184).
 
@@ -416,8 +420,13 @@ class SearchPipeline:
         ``self._global_embedder`` — leaving it cold there would burn the whole
         fan-out budget on the embedder build (S288).
 
-        The embedder leg is deliberately unbounded: no search can be answered
-        without a query vector, so there is nothing to degrade to.
+        *embedder_timeout* bounds the embedder warm-up (S290); without one the
+        wait is unbounded, which is right for the lifespan/ingest warm-ups but
+        parks a request for the whole cold ONNX build. Giving up on the wait does
+        not abandon the build — it runs on in its worker thread — and the caller
+        checks :attr:`embedder_is_warm` (or the embedder it passed) to decide:
+        a still-cold embedder means the search must run ``fts_only=True`` rather
+        than block on ``embed_one`` for the rest of the build.
 
         *reranker_timeout* bounds the reranker warm-up only (S286). Callers that
         cannot afford an unbounded wait pass one and act on the return value:
@@ -432,7 +441,30 @@ class SearchPipeline:
         """
         target_embedder = embedder if embedder is not None else self._global_embedder
         try:
-            await target_embedder.warmup()
+            if embedder_timeout is None:
+                await target_embedder.warmup()
+            else:
+                await asyncio.wait_for(target_embedder.warmup(), timeout=embedder_timeout)
+        except EmbedderWarmupTimeout:
+            # The build itself (model download / ONNX session) outran its own
+            # limit — distinct from this caller merely giving up on waiting.
+            logger.warning(
+                "warm-up: embedder build exceeded its own %ss limit; this search runs FTS-only",
+                _EMBEDDER_BUILD_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            if embedder_timeout is None:
+                # An unbounded wait cannot time out, so this is not the caller
+                # giving up: since 3.11 asyncio.TimeoutError *is* the builtin
+                # TimeoutError (an OSError), so a socket ETIMEDOUT from a model
+                # download lands here too.
+                logger.warning("warm-up: embedder failed; first search will pay the init cost", exc_info=True)
+            else:
+                logger.warning(
+                    "warm-up: embedder still cold after waiting %ss; this search runs FTS-only "
+                    "(the build continues in the background)",
+                    embedder_timeout,
+                )
         except Exception:
             logger.warning("warm-up: embedder failed; first search will pay the init cost", exc_info=True)
         if self._reranker is None:
@@ -1079,16 +1111,32 @@ class SearchPipeline:
         graph_mode: str | None = None,
         scope_filter: str | None = None,
         rerank: bool = True,
+        fts_only: bool = False,
     ) -> SearchPipelineResult:
         """*rerank=False* skips the cross-encoder stage and returns the fused
         vector+FTS ranking — how a caller degrades when the reranker is still
-        cold rather than blocking a request on the ONNX build (S286)."""
+        cold rather than blocking a request on the ONNX build (S286).
+
+        *fts_only=True* is the same degrade one stage earlier: the query is never
+        embedded, so the ranking comes from the FTS leg alone. Callers pass it
+        when the embedder is still cold and waiting for its build would park the
+        request past the client's read timeout (S290). RAG Fusion and graph modes
+        both need to embed, so they are skipped in that mode; an already-computed
+        *query_vector* removes the need to embed and cancels the degrade. HyDE
+        does not reach that case during a cold window — generating its vector
+        would itself use the cold embedder, so the routes skip it upstream."""
         # --- Graph expansion (naive mode) — applied to original query before all other paths ---
         # Expansion is applied to the original query only.  RAG Fusion variants are generated
         # from the original (unexpanded) query.  HyDE uses the original query; when expansion
         # is active the expanded text is used for both FTS and vector embedding.
         effective_query = query
         graph_expansion_applied = False
+        # S290 degrade: with no vector and no way to get one in time, only the FTS
+        # leg can run — so drop the paths that exist solely to embed something.
+        fts_only = fts_only and query_vector is None
+        if fts_only:
+            rag_fusion = False
+            graph_mode = None
         if graph_mode == "ppr":
             return await self._search_ppr_mode(
                 collection, query, namespace,
@@ -1274,7 +1322,7 @@ class SearchPipeline:
         result = await self._search_standard(
             effective_query, collection, namespace, embedder=embedder,
             filters=filters, query_vector=effective_query_vector,
-            scope_filter=scope_filter, rerank=rerank,
+            scope_filter=scope_filter, rerank=rerank, fts_only=fts_only,
         )
         result.graph_expansion_applied = graph_expansion_applied
         return result
@@ -1753,9 +1801,19 @@ class SearchPipeline:
         rag_fusion_attempted: bool = False,
         scope_filter: str | None = None,
         rerank: bool = True,
+        fts_only: bool = False,
     ) -> SearchPipelineResult:
-        """Standard single-query search path (no RAG Fusion)."""
-        vector = list(query_vector) if query_vector is not None else await embedder.embed_one(query)
+        """Standard single-query search path (no RAG Fusion).
+
+        *fts_only=True* leaves the vector ``None``, which makes the store skip its
+        vector leg — the degraded ranking used when the embedder is still cold (S290).
+        """
+        if query_vector is not None:
+            vector: list[float] | None = list(query_vector)
+        elif fts_only:
+            vector = None
+        else:
+            vector = await embedder.embed_one(query)
         # Exact scope_filter is pushed to the store as a SQL predicate via build_where.
         # Wildcard (ending '*') is skipped at the SQL level and applied Python-side below.
         store_scope = scope_filter if scope_filter and not scope_filter.endswith("*") else None
@@ -2697,6 +2755,7 @@ class SearchPipeline:
         scope_filter: str | None = None,
         *,
         rerank: bool = True,
+        fts_only: bool = False,
     ) -> SearchPipelineResult:
         """Embed the query once, fan out hybrid retrieval across ``collections`` in
         parallel, merge with provenance, run a single global rerank pass, and return a
@@ -2708,11 +2767,21 @@ class SearchPipeline:
         ``explain()``, which raises ``ExplainMultiCollectionNoRerankError`` instead:
         per-collection RRF scores are not globally comparable, so an explanation built
         on them would be misleading, while a search degrades to a merely imperfect
-        ordering that is still worth returning."""
+        ordering that is still worth returning.
+
+        ``fts_only=True`` degrades one stage earlier: the query is never embedded and
+        every leg fuses its FTS results alone, for a caller whose embedder is still
+        cold (S290).  RAG Fusion and graph expansion exist only to embed something, so
+        they are skipped in that mode; an already-computed ``query_vector`` cancels it."""
         # One binding for every rerank call site below, so a future site cannot forget
         # the flag: `None` means "do not rerank", exactly as a pipeline built without a
         # reranker does.
         reranker = self._reranker if rerank else None
+        # S290 degrade — see the docstring.
+        fts_only = fts_only and query_vector is None
+        if fts_only:
+            rag_fusion = False
+            graph_mode = None
         # Step 1: metadata lookup, validation, namespace + model partitioning.
         try:
             all_meta = await self.get_all_collections_meta(namespace)
@@ -3242,8 +3311,14 @@ class SearchPipeline:
             )
 
         # --- Standard path ---
-        # Step 1: embed exactly once (or use caller-provided vector for HyDE).
-        vector = list(query_vector) if query_vector is not None else await self._global_embedder.embed_one(query)
+        # Step 1: embed exactly once (or use caller-provided vector for HyDE; or skip
+        # embedding altogether when degraded to FTS-only).
+        if query_vector is not None:
+            vector: list[float] | None = list(query_vector)
+        elif fts_only:
+            vector = None
+        else:
+            vector = await self._global_embedder.embed_one(query)
 
         # Step 3: fan-out + per-leg trim + merge + ACL.
         candidate_depth = max(self._top_k_retrieve * 3, 20)

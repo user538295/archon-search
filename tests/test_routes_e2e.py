@@ -269,7 +269,15 @@ def _make_ingest_client(
     tmp_path: Path,
     pipeline_fn=None,
 ) -> tuple[TestClient, "FastAPI"]:  # type: ignore[name-defined]
-    """Create a TestClient with optional injected pipeline function."""
+    """Create a TestClient with optional injected pipeline function.
+
+    Used as a context manager by the job-lifecycle tests below: without one,
+    ``TestClient`` spins up a fresh portal *per request*, so the background
+    ingest task has only until that request's own event loop is torn down to
+    finish — it is then cancelled mid-await and the job lands on ``CANCELLED``.
+    The polling loops here assume the task survives across requests, which only
+    a single long-lived portal gives them.
+    """
     config = SearchConfig()
     config.db_path = str(tmp_path / "search")
     job_store = JobStore(path=tmp_path / "jobs.json")
@@ -286,24 +294,24 @@ def _make_ingest_client(
 def test_H3_6_ingest_job_transitions_pending_to_done(tmp_path: Path) -> None:
     client, app = _make_ingest_client(tmp_path)
 
-    response = client.post("/ingest", json={"collection": "docs", "path": str(tmp_path)})
-    assert response.status_code == 202
-    data = response.json()
-    job_id = data["job_id"]
-    assert data["status"] == JobStatus.PENDING.value
+    # One portal for the whole test: the background task must outlive the POST.
+    with client:
+        response = client.post("/ingest", json={"collection": "docs", "path": str(tmp_path)})
+        assert response.status_code == 202
+        data = response.json()
+        job_id = data["job_id"]
+        assert data["status"] == JobStatus.PENDING.value
 
-    # TestClient runs the event loop synchronously; background task runs to completion
-    # before the client context exits. Poll until terminal.
-    for _ in range(20):
-        get_resp = client.get(f"/jobs/{job_id}")
-        assert get_resp.status_code == 200
-        status = get_resp.json()["status"]
-        if status in (JobStatus.DONE.value, JobStatus.FAILED.value, JobStatus.FAILED_EXPIRED.value, JobStatus.CANCELLED.value):
-            break
-        import time
-        time.sleep(0.05)
+        for _ in range(20):
+            get_resp = client.get(f"/jobs/{job_id}")
+            assert get_resp.status_code == 200
+            status = get_resp.json()["status"]
+            if status in (JobStatus.DONE.value, JobStatus.FAILED.value, JobStatus.FAILED_EXPIRED.value, JobStatus.CANCELLED.value):
+                break
+            import time
+            time.sleep(0.05)
 
-    final = client.get(f"/jobs/{job_id}").json()
+        final = client.get(f"/jobs/{job_id}").json()
     assert final["status"] == JobStatus.DONE.value
 
 

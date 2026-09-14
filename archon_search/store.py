@@ -2309,7 +2309,7 @@ class SearchStore:
     async def hybrid_search_with_trace(
         self,
         collection: str,
-        query_vector: list[float],
+        query_vector: list[float] | None,
         query_text: str,
         candidate_depth: int,
         filters: "SearchFilters | None" = None,
@@ -2319,8 +2319,9 @@ class SearchStore:
 
         Used both for eval/debug observability and as the production search backend
         for the RAG Fusion path (Task 2.2, C5).  The *filters* parameter applies
-        the same field-predicate logic as :meth:`hybrid_search`.  The optional
-        *scope_filter* restricts results to chunks whose ``scopes`` list contains
+        the same field-predicate logic as :meth:`hybrid_search`.  A ``None``
+        *query_vector* skips the vector leg and fuses the FTS leg alone (S290).
+        The optional *scope_filter* restricts results to chunks whose ``scopes`` list contains
         the given value (exact match); unscoped chunks (``scopes IS NULL``) always
         pass through as shared/global.  Wildcard suffixes (``"user:*"``) are not
         applied at the SQL level — the caller must post-filter.
@@ -3083,7 +3084,7 @@ class SearchStore:
 async def _hybrid_search_with_trace(
     store: SearchStore,
     collection: str,
-    query_vector: list[float],
+    query_vector: list[float] | None,
     query_text: str,
     candidate_depth: int,
     filters: "SearchFilters | None" = None,
@@ -3102,7 +3103,9 @@ async def _hybrid_search_with_trace(
     Args:
         store: A connected :class:`SearchStore` instance.
         collection: Collection name (validated by the store).
-        query_vector: Embedding vector for vector search.
+        query_vector: Embedding vector for vector search, or ``None`` to skip the
+            vector leg entirely and fuse the FTS leg alone (the degraded ranking a
+            caller falls back to when no query vector can be produced in time — S290).
         query_text: Text query for FTS search.
         candidate_depth: Maximum number of raw candidates to fetch from each
             search leg (analogous to ``fetch`` in :meth:`SearchStore.hybrid_search`).
@@ -3123,19 +3126,22 @@ async def _hybrid_search_with_trace(
 
     pred = build_where(filters, scope_filter)
 
-    with record_stage("vector"):
-        vec_q = table.vector_search(query_vector)
-        if pred:
-            vec_q = vec_q.where(pred)
-        vec_rows: list[dict[str, Any]] = await vec_q.limit(candidate_depth).to_list()
-        # Map chunk_id → (rank, raw_distance | None)
-        vec_rank: dict[str, int] = {}
-        vec_raw: dict[str, float | None] = {}
-        for i, row in enumerate(vec_rows):
-            cid = row["chunk_id"]
-            vec_rank[cid] = i
-            raw = row.get("_distance")
-            vec_raw[cid] = float(raw) if raw is not None else None
+    # --- Vector search (skipped entirely when the caller has no query vector) ---
+    vec_rows: list[dict[str, Any]] = []
+    # Map chunk_id → (rank, raw_distance | None)
+    vec_rank: dict[str, int] = {}
+    vec_raw: dict[str, float | None] = {}
+    if query_vector is not None:
+        with record_stage("vector"):
+            vec_q = table.vector_search(query_vector)
+            if pred:
+                vec_q = vec_q.where(pred)
+            vec_rows = await vec_q.limit(candidate_depth).to_list()
+            for i, row in enumerate(vec_rows):
+                cid = row["chunk_id"]
+                vec_rank[cid] = i
+                raw = row.get("_distance")
+                vec_raw[cid] = float(raw) if raw is not None else None
 
     # --- FTS search (degrades gracefully when no index); record only on success ---
     fts_rows: list[dict[str, Any]] = []

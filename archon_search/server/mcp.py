@@ -5,6 +5,7 @@ import asyncio
 import logging
 import time
 from contextlib import ExitStack
+from functools import partial
 from pathlib import Path
 from time import monotonic
 from collections.abc import Callable
@@ -47,6 +48,7 @@ from archon_search.server.routes_search import _HYDE_EXPANSION_FAILED_WARNING
 from archon_search.server._search_budget import (
     SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
     SearchBudgetExceeded,
+    hyde_may_embed,
     run_within_budget,
     warmup_for_search,
 )
@@ -367,7 +369,10 @@ def create_app(
                 from archon_search.config import HyDEConfig  # noqa: PLC0415
                 _hyde_config = HyDEConfig()
             try:
-                hyde_vector, hyde_applied = await resolve_hyde_vector(query, hyde, hyde_generator, _hyde_config)
+                hyde_vector, hyde_applied = await resolve_hyde_vector(
+                    query, hyde, hyde_generator, _hyde_config,
+                    may_embed=partial(hyde_may_embed, pipeline),
+                )
             except RuntimeError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
             # HyDE failure: requested but returned no vector
@@ -428,10 +433,10 @@ def create_app(
             else:
                 _multi_filters = None
             # Same warm-up as the REST fan-out route: the global embedder (which
-            # search_many embeds with) unbounded, the shared reranker bounded, so a
-            # cold cross-encoder cannot block this tool call for its whole ONNX
-            # build — it degrades to the fused ranking instead (S288).
-            _rerank = await warmup_for_search(pipeline)
+            # search_many embeds with) and the shared reranker, both bounded, so no
+            # cold ONNX build can block this tool call for its whole duration — it
+            # degrades to the fused ranking (S288) or the FTS leg alone (S290).
+            _warmup = await warmup_for_search(pipeline)
             try:
                 # search_many's own _fanout_timeout_seconds bounds the per-collection
                 # leg gathers only — the meta lookup, embed_one, graph-store calls and
@@ -445,7 +450,8 @@ def create_app(
                         filters=_multi_filters,
                         graph_mode=graph_mode,
                         scope_filter=scope_filter,
-                        rerank=_rerank,
+                        rerank=_warmup.rerank,
+                        fts_only=_warmup.fts_only,
                     ),
                     timeout=_SEARCH_TIMEOUT_SECONDS,
                 )
@@ -532,10 +538,12 @@ def create_app(
             if _col_meta is None:
                 return McpErrorResponse(error=f"collection {_col!r} not found", code="not_found")
             _search_embedder = await _resolve_embedder(pipeline, embedder_cache, _col, config, namespace=ns, meta=_col_meta)
-            # Outside the budget below by design (S184/S288): a cold cross-encoder built
-            # inside rerank_candidates would park this tool call for the whole ONNX
-            # build. rerank=False degrades to the fused vector+FTS ranking instead.
-            _rerank = await warmup_for_search(pipeline, _search_embedder)
+            # Outside the budget below by design (S184/S288/S290): a cold cross-encoder
+            # built inside rerank_candidates — or a cold embedder built inside
+            # embed_one — would park this tool call for the whole ONNX build.
+            # rerank=False degrades to the fused vector+FTS ranking, fts_only=True to
+            # the FTS leg alone.
+            _warmup = await warmup_for_search(pipeline, _search_embedder)
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
@@ -547,7 +555,8 @@ def create_app(
                         rag_fusion_config=_rf_config,
                         graph_mode=graph_mode,
                         scope_filter=scope_filter,
-                        rerank=_rerank,
+                        rerank=_warmup.rerank,
+                        fts_only=_warmup.fts_only,
                     ),
                     timeout=_SEARCH_TIMEOUT_SECONDS,
                 )

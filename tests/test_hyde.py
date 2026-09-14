@@ -552,3 +552,75 @@ async def test_resolve_hyde_vector_generate_returns_none() -> None:
     result = await resolve_hyde_vector("query", True, generator, config)
 
     assert result == (None, False)
+
+
+# ---------------------------------------------------------------------------
+# C1-I-1 — the may_embed gate (S290)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_hyde_vector_skips_generation_when_may_embed_is_false() -> None:
+    """A cold embedder must skip HyDE outright, not embed the hypothesis (S290).
+
+    ``HyDEGenerator.generate`` ends in ``embed_one`` on the pipeline's global
+    embedder, and it runs *before* the search enters any budget — so on a cold
+    embedder it would park the connection for the whole ONNX build.
+    """
+    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
+
+    config = _make_config(enabled=True)
+    generator = MagicMock(spec=HyDEGenerator)
+    generator.generate = AsyncMock(return_value=[0.1, 0.2])
+
+    result = await resolve_hyde_vector(
+        "query", True, generator, config, may_embed=AsyncMock(return_value=False)
+    )
+
+    assert result == (None, False)
+    generator.generate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resolve_hyde_vector_generates_normally_when_may_embed_is_true() -> None:
+    """A warm embedder leaves the HyDE path exactly as it was."""
+    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
+
+    vector = [0.1, 0.2, 0.3, 0.4]
+    config = _make_config(enabled=True)
+    generator = MagicMock(spec=HyDEGenerator)
+    generator.generate = AsyncMock(return_value=vector)
+
+    result = await resolve_hyde_vector(
+        "query", True, generator, config, may_embed=AsyncMock(return_value=True)
+    )
+
+    assert result == (vector, True)
+    generator.generate.assert_awaited_once_with("query")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("hyde", "with_generator", "enabled"),
+    [(False, True, True), (True, False, True), (True, True, False)],
+)
+async def test_resolve_hyde_vector_does_not_warm_when_hyde_cannot_run(
+    hyde: bool, with_generator: bool, enabled: bool
+) -> None:
+    """``may_embed`` is a warm-up; the cheap guards must short-circuit ahead of it.
+
+    ``hyde=False`` is the default of every search request, so paying a bounded
+    embedder warm-up there would put the S290 cost back on the common path.
+    """
+    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
+
+    config = _make_config(enabled=enabled)
+    generator = MagicMock(spec=HyDEGenerator) if with_generator else None
+    if generator is not None:
+        generator.generate = AsyncMock(return_value=[0.1, 0.2])
+    may_embed = AsyncMock(return_value=True)
+
+    result = await resolve_hyde_vector("query", hyde, generator, config, may_embed=may_embed)
+
+    assert result == (None, False)
+    may_embed.assert_not_awaited()

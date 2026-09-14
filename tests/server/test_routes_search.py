@@ -870,7 +870,10 @@ def test_search_handler_multi_collection_calls_search_many(tmp_path: Path) -> No
 
 def test_search_handler_single_collection_bounds_warmup_and_reranks(tmp_path: Path) -> None:
     """The single-collection branch bounds the warm-up and threads its flag through."""
-    from archon_search.server._search_budget import RERANKER_WARMUP_WAIT_SECONDS
+    from archon_search.server._search_budget import (
+        EMBEDDER_WARMUP_WAIT_SECONDS,
+        RERANKER_WARMUP_WAIT_SECONDS,
+    )
 
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(results=[_make_search_result(1)])
@@ -880,7 +883,8 @@ def test_search_handler_single_collection_bounds_warmup_and_reranks(tmp_path: Pa
     assert response.status_code == 200, response.text
     app.state.pipeline.warmup_models.assert_awaited_once()
     assert app.state.pipeline.warmup_models.await_args.kwargs == {
-        "reranker_timeout": RERANKER_WARMUP_WAIT_SECONDS
+        "reranker_timeout": RERANKER_WARMUP_WAIT_SECONDS,
+        "embedder_timeout": EMBEDDER_WARMUP_WAIT_SECONDS,
     }
     assert app.state.pipeline.search.await_args.kwargs["rerank"] is True
 
@@ -907,7 +911,10 @@ def test_search_handler_fanout_bounds_warmup_and_reranks(tmp_path: Path) -> None
     reaches ``search_many``. Without these assertions deleting the warm-up
     entirely leaves every other fan-out test green.
     """
-    from archon_search.server._search_budget import RERANKER_WARMUP_WAIT_SECONDS
+    from archon_search.server._search_budget import (
+        EMBEDDER_WARMUP_WAIT_SECONDS,
+        RERANKER_WARMUP_WAIT_SECONDS,
+    )
 
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_multi_pipeline_mock(
@@ -918,7 +925,9 @@ def test_search_handler_fanout_bounds_warmup_and_reranks(tmp_path: Path) -> None
 
     assert response.status_code == 200, response.text
     app.state.pipeline.warmup_models.assert_awaited_once_with(
-        None, reranker_timeout=RERANKER_WARMUP_WAIT_SECONDS
+        None,
+        reranker_timeout=RERANKER_WARMUP_WAIT_SECONDS,
+        embedder_timeout=EMBEDDER_WARMUP_WAIT_SECONDS,
     )
     assert app.state.pipeline.search_many.await_args.kwargs["rerank"] is True
 
@@ -1123,6 +1132,51 @@ def test_search_hyde_fallback_passes_none(tmp_path: Path) -> None:
     assert response.json()["hyde_applied"] is False
     call_kwargs = app.state.pipeline.search.call_args.kwargs
     assert call_kwargs["query_vector"] is None
+
+
+def _make_hyde_app(tmp_path: Path, *, embedder_is_warm: bool) -> tuple:
+    """App wired for a real ``resolve_hyde_vector`` call, with a tracked generator."""
+    from archon_search.hyde import HyDEGenerator
+
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=[_make_search_result(1)])
+    app.state.pipeline.embedder_is_warm = embedder_is_warm
+    app.state.config.hyde.enabled = True
+    generator = MagicMock(spec=HyDEGenerator)
+    generator.generate = AsyncMock(return_value=[0.1, 0.2, 0.3])
+    app.state.hyde_generator = generator
+    return app, client, generator
+
+
+def test_search_hyde_is_skipped_while_the_embedder_is_cold(tmp_path: Path) -> None:
+    """C1-I-1 (S290): a cold embedder must not reach ``HyDEGenerator.generate``.
+
+    ``generate`` ends in ``embed_one`` on the pipeline's global embedder and runs
+    before the search enters any budget, so on a cold embedder it parks the
+    connection for the whole ONNX build — the very defect S290 is about. The
+    request must still answer, reporting the standard HyDE-failure warning.
+    """
+    app, client, generator = _make_hyde_app(tmp_path, embedder_is_warm=False)
+
+    response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
+
+    assert response.status_code == 200, response.text
+    generator.generate.assert_not_awaited()
+    data = response.json()
+    assert data["hyde_applied"] is False
+    assert data["expansion_warning"] == "HyDE expansion failed"
+    assert app.state.pipeline.search.await_args.kwargs["query_vector"] is None
+
+
+def test_search_hyde_still_runs_once_the_embedder_is_warm(tmp_path: Path) -> None:
+    """The gate is warmth-conditional — a warm embedder keeps HyDE fully enabled."""
+    app, client, generator = _make_hyde_app(tmp_path, embedder_is_warm=True)
+
+    response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
+
+    assert response.status_code == 200, response.text
+    generator.generate.assert_awaited_once()
+    assert response.json()["hyde_applied"] is True
 
 
 def test_search_hyde_package_not_installed_returns_422(tmp_path: Path) -> None:

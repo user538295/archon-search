@@ -224,16 +224,20 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
             )
 
         # Same warm-up as the REST fan-out route: the global embedder (which
-        # search_many embeds with) unbounded, the shared reranker bounded, so a cold
-        # cross-encoder cannot block this request for its whole ONNX build (S288).
-        rerank = await warmup_for_search(pipeline)
+        # search_many embeds with) and the shared reranker, both bounded, so no cold
+        # ONNX build can block this request for its whole duration — it degrades to
+        # the fused ranking (S288) or the FTS leg alone (S290).
+        warmup = await warmup_for_search(pipeline)
 
         try:
             # search_many's own _fanout_timeout_seconds bounds the per-collection leg
             # gathers only — the meta lookup, embed_one and the global rerank pass sit
             # outside it, so the whole call gets the same budget as the direct path.
             result = await run_within_budget(
-                pipeline.search_many(query, col_names, namespace=ns, rerank=rerank),
+                pipeline.search_many(
+                    query, col_names, namespace=ns,
+                    rerank=warmup.rerank, fts_only=warmup.fts_only,
+                ),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
         except CollectionNotFoundError as exc:
@@ -282,10 +286,11 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
             )
 
         embedder = await _resolve_embedder(meta)
-        # Outside the budget below by design (S184/S288): a cold cross-encoder built
-        # inside rerank_candidates would park this request for the whole ONNX build.
-        # rerank=False degrades to the fused vector+FTS ranking instead.
-        rerank = await warmup_for_search(pipeline, embedder)
+        # Outside the budget below by design (S184/S288/S290): a cold cross-encoder
+        # built inside rerank_candidates — or a cold embedder built inside embed_one —
+        # would park this request for the whole ONNX build. rerank=False degrades to
+        # the fused vector+FTS ranking, fts_only=True to the FTS leg alone.
+        warmup = await warmup_for_search(pipeline, embedder)
 
         try:
             # run_within_budget, not a bare asyncio.wait_for: since 3.11
@@ -295,7 +300,10 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
             # budget overrun raises SearchBudgetExceeded — matching the fan-out
             # branch above and both REST/MCP single-collection paths.
             result = await run_within_budget(
-                pipeline.search(query, collection, namespace=ns, embedder=embedder, rerank=rerank),
+                pipeline.search(
+                    query, collection, namespace=ns, embedder=embedder,
+                    rerank=warmup.rerank, fts_only=warmup.fts_only,
+                ),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
         except SearchBudgetExceeded:

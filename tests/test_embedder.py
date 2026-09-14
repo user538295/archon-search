@@ -1,13 +1,19 @@
 """packages/archon-search/tests/test_embedder.py — unit tests for Embedder (fastembed backend)."""
 from __future__ import annotations
 
+import asyncio
 import threading
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
-from archon_search.embedder import Embedder, EmbedderBackend, make_embedder
+from archon_search.embedder import (
+    Embedder,
+    EmbedderBackend,
+    EmbedderWarmupTimeout,
+    make_embedder,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -400,3 +406,178 @@ def test_embedder_caches_models_under_the_archon_data_dir() -> None:
         me.encode(["hello"])
 
     assert mock_te.call_args.kwargs["cache_dir"] == str(get_models_dir())
+
+
+# ---------------------------------------------------------------------------
+# C1-I-3 — single-flight warm-up (shared task + asyncio.shield), S290
+#
+# Mirrors ``tests/test_reranker.py``'s S288 block. Before this, ``warmup()``
+# held an ``asyncio.Lock`` across the build, so a caller that bounded its wait
+# cancelled the build itself: every later cold request then started another
+# ``to_thread`` encode that blocked on ``ModelEmbedder._lock`` — one pinned
+# executor thread per concurrent request — and the cancelled attempt never
+# reached the ``_embedding_dim`` assignment.
+# ---------------------------------------------------------------------------
+
+
+class _BlockingEmbedderBackend:
+    """Backend whose ``encode`` parks on a threading.Event until released."""
+
+    model_name: str = "blocking-embedder"
+
+    def __init__(self, *, hang: bool = False) -> None:
+        self.is_warm = False
+        self.build_count = 0
+        self.hang = hang
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def encode(self, texts: list[str]) -> list[list[float]]:
+        self.build_count += 1
+        self.started.set()
+        self.release.wait(timeout=30.0 if self.hang else 5.0)
+        self.is_warm = True
+        return [[0.1] * 4 for _ in texts]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_cold_embedder_warmups_trigger_exactly_one_build() -> None:
+    """N concurrent cold ``warmup()`` callers share one backend build."""
+    backend = _BlockingEmbedderBackend()
+    embedder = Embedder(backend)  # type: ignore[arg-type]
+
+    waiters = [asyncio.create_task(embedder.warmup()) for _ in range(8)]
+    await asyncio.to_thread(backend.started.wait, 5.0)
+    backend.release.set()
+    await asyncio.gather(*waiters)
+
+    assert backend.build_count == 1, (
+        f"expected exactly one shared build, got {backend.build_count}"
+    )
+    assert embedder.is_warm is True
+
+
+@pytest.mark.asyncio
+async def test_abandoned_embedder_waiter_does_not_cancel_the_shared_build() -> None:
+    """A caller that gives up on waiting must not kill the build (S290).
+
+    This is what the bounded ``warmup_for_search`` wait does on every cold
+    request: it must cancel only the wait, leave the build running, and let a
+    later caller join it rather than start a second ONNX build.
+    """
+    backend = _BlockingEmbedderBackend()
+    embedder = Embedder(backend)  # type: ignore[arg-type]
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(embedder.warmup(), timeout=0.01)
+    await asyncio.to_thread(backend.started.wait, 5.0)
+    assert backend.build_count == 1
+    assert embedder._warmup_task is not None, "the abandoned wait cancelled the build"
+
+    joiner = asyncio.create_task(embedder.warmup())
+    await asyncio.sleep(0)
+    backend.release.set()
+    await joiner
+
+    assert backend.build_count == 1, (
+        f"the second caller started a duplicate build ({backend.build_count} total)"
+    )
+    assert embedder.is_warm is True
+
+
+@pytest.mark.asyncio
+async def test_shared_build_caches_the_embedding_dim_for_an_abandoned_waiter() -> None:
+    """The surviving build still reaches the ``_embedding_dim`` assignment.
+
+    A cancelled ``warmup()`` never returned from ``embed()``, so the dimension
+    stayed uncached and the next caller to need it raised RuntimeError.
+    """
+    backend = _BlockingEmbedderBackend()
+    embedder = Embedder(backend)  # type: ignore[arg-type]
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(embedder.warmup(), timeout=0.01)
+    await asyncio.to_thread(backend.started.wait, 5.0)
+    backend.release.set()
+    await embedder.warmup()
+
+    assert embedder.embedding_dim == 4
+
+
+@pytest.mark.asyncio
+async def test_embedder_warmup_is_a_noop_once_warm() -> None:
+    """Idempotent: a warm backend is never rebuilt."""
+    backend = _BlockingEmbedderBackend()
+    backend.release.set()
+    embedder = Embedder(backend)  # type: ignore[arg-type]
+
+    await embedder.warmup()
+    await embedder.warmup()
+
+    assert backend.build_count == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_embedder_warmup_is_retried_by_the_next_caller() -> None:
+    """S283 semantics: ``_warmup_failed`` records the last attempt, it does not latch.
+
+    It previously gated ``warmup()`` itself, so one transient failure (HF 429,
+    network blip, unwritable cache) disarmed every later warm-up for the life of
+    the process — and, since S290, pinned every later search to its FTS leg.
+    """
+
+    class _FailOnceBackend:
+        model_name: str = "fail-once"
+
+        def __init__(self) -> None:
+            self.is_warm = False
+            self.build_count = 0
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            self.build_count += 1
+            if self.build_count == 1:
+                raise RuntimeError("transient failure")
+            self.is_warm = True
+            return [[0.1] * 4 for _ in texts]
+
+    backend = _FailOnceBackend()
+    embedder = Embedder(backend)  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="transient failure"):
+        await embedder.warmup()
+    assert embedder._warmup_failed is True
+    assert embedder.is_warm is False
+
+    await embedder.warmup()
+
+    assert backend.build_count == 2, "the failed warm-up was not retried"
+    assert embedder.is_warm is True
+    assert embedder._warmup_failed is False
+
+
+@pytest.mark.asyncio
+async def test_embedder_warmup_raises_embedderwarmuptimeout_not_asyncio_timeouterror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An over-long build raises ``EmbedderWarmupTimeout``, a plain ``Exception``.
+
+    It must NOT be an ``asyncio.TimeoutError``: since 3.11 that is the builtin
+    ``TimeoutError`` (an ``OSError``), which callers use to mean "I gave up
+    waiting" — a different condition from "the build blew its own ceiling", and
+    one ``warmup_models`` must report differently (C1-I-2).
+    """
+    import archon_search.embedder as embedder_module
+
+    monkeypatch.setattr(embedder_module, "_WARMUP_TIMEOUT_SECONDS", 0.01)
+    backend = _BlockingEmbedderBackend(hang=True)
+    embedder = Embedder(backend)  # type: ignore[arg-type]
+
+    try:
+        with pytest.raises(EmbedderWarmupTimeout):
+            await embedder.warmup()
+    finally:
+        backend.release.set()
+
+    assert not issubclass(EmbedderWarmupTimeout, asyncio.TimeoutError)
+    assert not issubclass(EmbedderWarmupTimeout, OSError)
+    assert embedder._warmup_failed is True

@@ -16,6 +16,8 @@ import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from archon_search.embedder import Embedder
     from archon_search.query_expansion_protocol import QueryExpansionProvider
 
@@ -136,6 +138,8 @@ async def resolve_hyde_vector(
     hyde: bool,
     generator: "HyDEGenerator | None",
     config: HyDEConfig,
+    *,
+    may_embed: "Callable[[], Awaitable[bool]] | None" = None,
 ) -> tuple[list[float] | None, bool]:
     """Resolve a HyDE query vector.
 
@@ -145,11 +149,25 @@ async def resolve_hyde_vector(
     - ``hyde`` is ``False``
     - ``generator`` is ``None``
     - ``config.enabled`` is ``False`` (operator kill switch)
+    - ``may_embed`` is supplied and reports ``False``
     - generation fails for any reason
 
     ``hyde_applied`` is ``True`` only when a non-None vector is returned.
+
+    *may_embed* is the caller's injection point for "can an embedding be
+    afforded right now?".  It is awaited only once the cheap guards above have
+    passed, so the default ``hyde=False`` request never pays for it.
     """
     if not hyde or generator is None or not config.enabled:
+        return (None, False)
+
+    # ``generator.generate`` ends in ``embed_one`` on the caller's embedder, and
+    # the search call sites resolve HyDE *before* entering any request budget —
+    # so with that embedder still building its ONNX model, generating here would
+    # park the connection for the whole build (S290).  Skipping HyDE reports
+    # ``hyde_applied=False``, which the caller already surfaces as the standard
+    # HyDE-failure warning.
+    if may_embed is not None and not await may_embed():
         return (None, False)
 
     vector = await generator.generate(query)

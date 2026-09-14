@@ -399,12 +399,17 @@ async def test_mcp_search_fanout_bounds_warmup_and_reranks() -> None:
     *possible*; nothing asserted it happens, so removing the warm-up left them
     all green while restoring the S288 hang.
     """
-    from archon_search.server._search_budget import RERANKER_WARMUP_WAIT_SECONDS
+    from archon_search.server._search_budget import (
+        EMBEDDER_WARMUP_WAIT_SECONDS,
+        RERANKER_WARMUP_WAIT_SECONDS,
+    )
 
     pipeline, _result = await _call_mcp_search_multi(collections=["a", "b"])
 
     pipeline.warmup_models.assert_awaited_once_with(
-        None, reranker_timeout=RERANKER_WARMUP_WAIT_SECONDS
+        None,
+        reranker_timeout=RERANKER_WARMUP_WAIT_SECONDS,
+        embedder_timeout=EMBEDDER_WARMUP_WAIT_SECONDS,
     )
     assert pipeline.search_many.await_args.kwargs["rerank"] is True
 
@@ -412,15 +417,71 @@ async def test_mcp_search_fanout_bounds_warmup_and_reranks() -> None:
 @pytest.mark.asyncio
 async def test_mcp_search_single_collection_bounds_warmup_and_reranks() -> None:
     """MCP single-collection path bounds the warm-up and threads its flag through."""
-    from archon_search.server._search_budget import RERANKER_WARMUP_WAIT_SECONDS
+    from archon_search.server._search_budget import (
+        EMBEDDER_WARMUP_WAIT_SECONDS,
+        RERANKER_WARMUP_WAIT_SECONDS,
+    )
 
     pipeline, _result = await _call_mcp_search_multi(collection="a")
 
     pipeline.warmup_models.assert_awaited_once()
     assert pipeline.warmup_models.await_args.kwargs == {
-        "reranker_timeout": RERANKER_WARMUP_WAIT_SECONDS
+        "reranker_timeout": RERANKER_WARMUP_WAIT_SECONDS,
+        "embedder_timeout": EMBEDDER_WARMUP_WAIT_SECONDS,
     }
     assert pipeline.search.await_args.kwargs["rerank"] is True
+
+
+async def _call_mcp_search_hyde(*, embedder_is_warm: bool):
+    """Invoke the MCP search tool with ``hyde=True`` and a real resolve_hyde_vector."""
+    from archon_search.config import SearchConfig
+    from archon_search.hyde import HyDEGenerator
+
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    pipeline.warmup_models = AsyncMock(return_value=True)
+    pipeline.embedder_is_warm = embedder_is_warm
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
+
+    config = SearchConfig()
+    config.hyde.enabled = True
+    generator = MagicMock(spec=HyDEGenerator)
+    generator.generate = AsyncMock(return_value=[0.1, 0.2, 0.3])
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(
+            pipeline, "default", writer=None, config=config, hyde_generator=generator
+        )
+        result = await app.tools["search"](query="hello", collection="col", hyde=True)
+    return pipeline, generator, result
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_hyde_is_skipped_while_the_embedder_is_cold() -> None:
+    """C1-I-1 (S290): MCP parity — a cold embedder must not reach ``generate``.
+
+    ``HyDEGenerator.generate`` ends in ``embed_one`` on the pipeline's global
+    embedder, outside any request budget, so a cold one would park the MCP call
+    for the whole ONNX build.
+    """
+    pipeline, generator, result = await _call_mcp_search_hyde(embedder_is_warm=False)
+
+    generator.generate.assert_not_awaited()
+    assert result["expansion_used"] is False
+    assert result["expansion_warning"] == "HyDE expansion failed"
+    assert pipeline.search.await_args.kwargs["query_vector"] is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_hyde_still_runs_once_the_embedder_is_warm() -> None:
+    """A warm embedder keeps the MCP HyDE path exactly as it was."""
+    _pipeline, generator, result = await _call_mcp_search_hyde(embedder_is_warm=True)
+
+    generator.generate.assert_awaited_once()
+    assert result["expansion_used"] is True
+    assert result["expansion_warning"] is None
 
 
 @pytest.mark.asyncio
