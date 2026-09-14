@@ -836,8 +836,9 @@ def create_app(
                 # Startup: create filesystem watcher when watch=True.
                 # The WatcherManager fires a callback when files change in a
                 # collection's source directory; the callback calls
-                # collection_sync.sync_collection(), which passes
-                # ingested_by="watcher" to the pipeline (S276).
+                # collection_sync.sync_collection(), which tags the resulting
+                # chunks ingested_by="watcher" unless it detects a genuine
+                # reindex trigger, in which case it uses "reindex" (S276).
                 if config.watch:
                     try:
                         from archon_search.watcher import WatcherManager  # noqa: PLC0415

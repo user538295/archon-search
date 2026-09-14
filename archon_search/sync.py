@@ -337,7 +337,25 @@ class SearchCollectionSync:
             result = await self._apply_collection_changes(
                 collection_name, source_path, new_f, changed_f, deleted_p, file_mtimes,
                 meta=meta, namespace=_col_ns,
-                ingested_by="reindex" if force_reindex else "watcher",
+                # `force_reindex` fires whenever `indexed_chunk_size is None`, which covers
+                # two different states that must NOT be labeled the same way:
+                #   1. `cp` exists but is mid-flight (IN_PROGRESS/PENDING) — e.g. the startup
+                #      sync for this collection hasn't finished yet and the watcher raced it
+                #      (S276). Not a genuine reindex: keep "watcher" regardless of chunk_count.
+                #   2. `cp is None` — the collection was never tracked by the state store (e.g.
+                #      ingested once via HTTP/MCP) and already holds chunks (`meta.chunk_count
+                #      > 0`). This mirrors the `chunk_count > 0` fallback `sync()` Step 7 uses
+                #      for the exact same "no recorded prior size" case (S483/6bfecf64) — a
+                #      full re-chunk of pre-existing content is a genuine reindex.
+                # A real chunk-size/embedding-model change on an already-DONE collection always
+                # carries a recorded `indexed_chunk_size`, so it is covered by the first arm.
+                ingested_by="reindex" if (
+                    force_reindex
+                    and (
+                        indexed_chunk_size is not None
+                        or (cp is None and meta is not None and meta.chunk_count > 0)
+                    )
+                ) else "watcher",
             )
             if result is not None:
                 logger.warning(

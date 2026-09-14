@@ -324,12 +324,19 @@ Note: step `H` (`_do_update_meta_on_add`) runs inside `store.ingest_chunks()` on
 
 ### Reindex semantics
 
-`sync.py` records `indexed_chunk_size` on the **per-collection** checkpoint (one value per collection in `state.collections`, see `sync.py:228, 275`), not per document. When the current configured `chunk_size` differs from the stored `indexed_chunk_size` and the value is non-zero:
+`sync.py` records `indexed_chunk_size` on the **per-collection** checkpoint (one value per collection in `state.collections`, written by `_ingest_collection` / `_apply_collection_changes`), not per document. When the current configured `chunk_size` differs from the stored `indexed_chunk_size` and the value is non-zero:
 
-- If `[database].auto_reindex_on_chunk_size_change = true` (default) → `force_full_reindex = True` is set and `_check_collection_changes` returns every eligible file as "to add", so the **entire collection** is re-chunked, re-embedded, and replaces the existing chunks (`sync.py:402–409`, `:425–426`).
-- If `false` → no reindex is triggered; a collection-scoped warning is logged (`"Chunk size mismatch for '%s' …"`) and the collection is left as-is until a manual `archon search reindex` is run (`sync.py:411–416`).
+- If `[database].auto_reindex_on_chunk_size_change = true` (default) → `force_full_reindex = True` is set and `_check_collection_changes` returns every eligible file as "to add", so the **entire collection** is re-chunked, re-embedded, and replaces the existing chunks (`sync.py:457–465`, `:481–482`).
+- If `false` → no reindex is triggered; a collection-scoped warning is logged (`"Chunk size mismatch for '%s' …"`) and the collection is left as-is until a manual `archon search reindex` is run (`sync.py:466–472`).
 
-The same `force_full_reindex` path is taken when the configured embedding model differs from the indexed one (`sync.py:391–398`); the doc-level "no reindex for embedding-model changes" claim refers only to automatic per-file reindexing — at the collection level the next sync rebuilds everything. A manual `collection reindex` is still exposed as a job-returning route (see `routes_collections.py::reindex`, returns `202` + job id).
+`force_full_reindex` is **also** set when `indexed_chunk_size is None` — no completed sync-state entry exists — again only if `auto_reindex_on_chunk_size_change = true` (`sync.py:454–456`). `indexed_chunk_size is None` covers two different states, and the two call sites label them differently on purpose:
+
+- **`sync()` Step 7** only ever sees collections with no incomplete state entry (mid-flight ones are diverted to Step 6.5's resume path first), so `indexed_chunk_size is None` there always means "no state entry at all" — e.g. the collection was ingested once via HTTP/MCP and is only now coming under sync's control. If the collection already holds chunks (`chunk_count > 0`), rebuilding it is a genuine reindex (S483); if it has none, it is a first-time add. Guard: `indexed_chunk_size is not None or chunk_count > 0` (`sync.py:266–269`).
+- **`sync_collection()`** (the watcher path) can also see a collection whose state entry exists but is mid-flight (`IN_PROGRESS`/`PENDING` — the startup sync for it hasn't finished yet, S276). That is not a reindex regardless of `chunk_count`, so it must stay `ingested_by = "watcher"`. Only when there is no state entry at all (`cp is None`) does the same `chunk_count > 0` case from `sync()` apply and label the rebuild `"reindex"`. Guard: `indexed_chunk_size is not None or (cp is None and chunk_count > 0)` (`sync.py:348–351`).
+
+A real chunk-size or embedding-model change on an already-`DONE` collection always carries a recorded `indexed_chunk_size`, so both guards' first arm (`indexed_chunk_size is not None`) covers it identically at both call sites.
+
+The same `force_full_reindex` path is taken when the configured embedding model differs from the indexed one (`sync.py:441–448`); the doc-level "no reindex for embedding-model changes" claim refers only to automatic per-file reindexing — at the collection level the next sync rebuilds everything. A manual `collection reindex` is still exposed as a job-returning route (see `routes_collections.py::reindex`, returns `202` + job id).
 
 ## Telemetry persistence
 

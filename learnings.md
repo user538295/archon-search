@@ -21,9 +21,9 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 - **[2026-09-07] (×9) 3rd-party wiring**: verify params per INPUT FORMAT AND per CHECKPOINT on the REAL model. GLiNER `relations` no-op off-RelEx; default `relation_confidence` 0.75 > a short corpus's best 0.67 → 0 typed edges; probe raw scores.
 
 ## Plan-Making & Agent Process
-- **[2026-09-07] (×180) verify claims/state**: grep-verify every cite AND a reviewer's cited PRECEDENT. Grep the tasks file for a prior spike's Notes first. Repros vs unmodified HEAD (`git worktree add --detach`) — diffing WIP reads own work as drift.
+- **[2026-09-14] (×181) verify claims/state**: grep-verify every cite AND a reviewer's cited PRECEDENT. Grep the tasks file for a prior spike's Notes first. Repros vs unmodified HEAD (`git worktree add --detach`) — diffing WIP reads own work as drift.
 - **[2026-09-07] (×55) subagents**: final text DISCARDED; API death mid-run leaves NOTHING; nested leak to GRANDPARENT. Non-general-purpose lacks SendMessage: idle_notification carries no content — pull result from subagents/agent-<name>-*.jsonl.
 - **[2026-09-07] (×14) guards**: allowlist entries must STILL match else empty; new tests IMPORT `_ENGINE_PATTERN`. Deleted allowlisted file → `git rm` + strike BOTH. A cited SCRIPT FILENAME trips the name guard. Unspecified `xfail` cannot fail.
-- **[2026-09-07] (×39) doc close-out**: grep the WHOLE tree (incl. `README.md`, `*.toml.example`) for the old invariant string — per-file scope orphans siblings. Never put a `>` block between table rows. Order: api-ref→catalog→CLAUDE.md→manual.
+- **[2026-09-14] (×40) doc close-out**: grep the WHOLE tree (incl. `README.md`, `*.toml.example`) for the old invariant string — per-file scope orphans siblings. Never put a `>` block between table rows. Order: api-ref→catalog→CLAUDE.md→manual.
 - **[2026-08-24] (×3) plan/task authoring**: a fix in the body but not the Decisions table / mermaid / doc-checklist is the top defect — sweep all 8 surfaces + the `.tsp`. `#team` gate → agent-runnable findings; never flip the box.
 - **[2026-09-07] (×14) smoke/container**: `-o addopts=`; pair `ARCHON_SEARCH_CONFIG` with `DATA_DIR`; API key lowercase HEX else 401. A throwaway `DATA_DIR` re-downloads EVERY model cache → symlink `models/` at `~/.archon-search/models`.

@@ -199,6 +199,8 @@ For MCP client setup and the complete tool reference, see [`../DeveloperGuide/05
 
 When `[collections].watch = true`, the server starts a watchdog observer (`archon_search/watcher.py`) on each collection's source directory. Create/modify/delete events trigger an incremental ingest through `pipeline.ingest_file()` (so the `max_file_mb` guard applies automatically). The watcher does **not** delete a collection when its source directory is deleted — use `collection remove` for that.
 
+Chunks written by the watcher carry `ingested_by = "watcher"`. The one exception is a **genuine** collection-wide reindex triggered from inside a watcher-driven sync — a chunk-size or embedding-model change against a collection that already has a recorded `indexed_chunk_size` — where the rewritten chunks carry `ingested_by = "reindex"` instead. A collection with no completed sync-state entry yet (for example a file created during the boot window, before the startup sync finishes) is **not** a reindex: those chunks stay `"watcher"`.
+
 ## Reindex triggers
 
 A collection is reindexed automatically when:

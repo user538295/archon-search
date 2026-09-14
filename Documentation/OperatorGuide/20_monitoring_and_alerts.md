@@ -66,7 +66,7 @@ The authenticated `GET /status` carries a `readiness` sub-object (`ReadinessDeta
 - `embedder_warm` / `reranker_warm` (bool; side-effect-free)
 - `jobs.pending` / `jobs.running` (queue-depth counts)
 - `collections_indexing` / `collections_failed` (counts derived from indexing state)
-- `watcher` — `{running: false}` until a live watcher is wired into the server; when present, `{running: true, watching: [...]}`. Note: the per-collection `watching` flag (`= config.watch`) reflects configured intent and can read `true` while `readiness.watcher.running` is `false`. This is expected, not a bug.
+- `watcher` — `{running: false}` when no `WatcherManager` was started (no collection has `watch = true`, or startup failed); otherwise `{running: true, watching: [...]}` (`server/readiness.py`). Note: the per-collection `watching` flag (`= config.watch`) reflects configured intent and can read `true` while `readiness.watcher.running` is `false`. This is expected, not a bug.
 
 ## Provider and model validation surface
 

@@ -643,9 +643,9 @@ class TestSearchCollectionSync:
         (initial ingest via HTTP/job) must use ingested_by='reindex'.
 
         With no state entry, file_mtimes is empty so every file is classified as new and the
-        whole collection is rebuilt; indexed_chunk_size also falls back to 0, which
-        short-circuits the chunk-size guard in _check_collection_changes, leaving
-        force_reindex False. Before the fix those rebuilt chunks were labelled 'watcher'.
+        whole collection is rebuilt; indexed_chunk_size also comes back None (prior size
+        unknown), which trips the chunk-size guard in _check_collection_changes and sets
+        force_reindex True. Before the fix those rebuilt chunks were labelled 'watcher'.
         """
         syncer, resolved, captured_ingested_by = self._make_no_state_syncer(
             tmp_path, chunk_count=3, auto_reindex=True,
