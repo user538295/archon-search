@@ -31,6 +31,7 @@ from archon_search.pipeline import (
 from archon_search.rag_fusion import RAGFusionDependencyError
 from archon_search.server.schemas import AclGateSchema, ErrorDetail, ExcludedCollectionSchema
 from archon_search.server._search_budget import (
+    EMBEDDER_WARMUP_WAIT_SECONDS,
     SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
     SearchBudgetExceeded,
     hyde_may_embed,
@@ -42,15 +43,23 @@ from archon_search.observability import bind_stage_recorder, correlation_id as _
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 
 # Upper bound on how long a single POST /search request waits on
-# embedder_cache.get_or_load() before giving up with a fast 503. The cache's
-# own internal dedup wait (_LOAD_WAIT_TIMEOUT_SECONDS in embedder_cache.py) is
-# 120s — tuned for the cache's own waiter/loader handoff, not one HTTP
-# request's patience. Bounding it here separately means a cold-start request
-# fails fast with a Retry-After hint instead of holding the connection for up
-# to 120s; a concurrent loader for the same model (if this request is only a
-# dedup waiter, not the loader) keeps running in the background regardless, so
-# the next request is likely to hit a warm cache.
-_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS = 30.0
+# embedder_cache.get_or_load() before degrading to the FTS leg alone.
+#
+# What can be slow here is NOT the ONNX build: make_embedder() only constructs a
+# lazy backend (embedder.py) and the weights are built on the first encode(), one
+# stage later in warmup_for_search. This wait is the cache's *handoff* — queueing
+# behind a saturated asyncio.to_thread executor, or blocking as a deduplicated
+# waiter behind another caller's in-flight load, whose own bound
+# (_LOAD_WAIT_TIMEOUT_SECONDS in embedder_cache.py) is 120s, tuned for the
+# waiter/loader handoff rather than one HTTP request's patience.
+#
+# Bound here by the same S290 ceiling the later warmup_for_search stage uses,
+# because both answer the same question: how long a search may sit on an
+# unavailable embedder before answering without a query vector (S299 — waiting
+# 30s and then 503ing is the very cold-connection parking the S290 policy exists
+# to prevent). The load itself is shielded, so it keeps running and populates the
+# cache for later requests.
+_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS = EMBEDDER_WARMUP_WAIT_SECONDS
 
 _VALID_ACL_SOURCES = frozenset({"frontmatter", "sidecar", "collection_default"})
 
@@ -59,6 +68,20 @@ _HYDE_EXPANSION_FAILED_WARNING = "HyDE expansion failed"
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _discard_abandoned_load(task: "asyncio.Future[object]") -> None:
+    """Consume the outcome of an embedder load this request stopped waiting for.
+
+    The load is shielded so it keeps running and caches its embedder for later
+    requests; retrieving its exception here is what stops a failed one from being
+    reported as a never-retrieved task exception at GC time.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning("search: abandoned embedder load failed — %s", exc)
 
 
 class SearchRequest(BaseModel):
@@ -370,21 +393,50 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         try:
             embedder_cache = getattr(request.app.state, "embedder_cache", None)
             active_model = resolve_active_model(meta, config)
+            embedder_cold = False
             if embedder_cache is not None:
+                load = asyncio.ensure_future(embedder_cache.get_or_load(active_model))
                 try:
                     embedder = await asyncio.wait_for(
-                        embedder_cache.get_or_load(active_model),
-                        timeout=_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS,
+                        asyncio.shield(load), timeout=_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS
                     )
                 except asyncio.TimeoutError:
-                    # The cache's own dedup wait (120s) is deliberately longer
-                    # than one HTTP request should hold a connection for — map
-                    # to the same retryable 503 as EmbedderNotReadyError below,
-                    # rather than parking this request for up to 120s.
-                    raise EmbedderNotReadyError(
-                        f"get_or_load({active_model!r}) exceeded the "
-                        f"{_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS}s HTTP-facing wait bound"
-                    ) from None
+                    if load.done():
+                        # Not this bound expiring: since 3.11 asyncio.TimeoutError *is*
+                        # the builtin TimeoutError (an OSError), so a TimeoutError the
+                        # load itself raised lands here too. Re-raise it with its own
+                        # status mapping rather than reporting a failed load as a
+                        # merely-unavailable one and answering 200. shield has already
+                        # retrieved it, so no done-callback is needed.
+                        raise
+                    # S299/S290: the per-request embedder is not available in time.
+                    # Degrade to the FTS leg exactly as warmup_for_search does below,
+                    # instead of parking the connection and then 503ing — the FTS index
+                    # is built at ingest, so the collection is answerable without a
+                    # query vector. shield keeps the load running (cancelling it would
+                    # throw away work another request is already waiting on), so it
+                    # still populates the cache for later requests; the embedder below
+                    # is a placeholder that fts_only guarantees is never embedded with.
+                    # A cache-level EmbedderNotReadyError — a load wedged past the
+                    # cache's own 120s dedup wait, not a merely slow one — still
+                    # propagates to the 503 handler below.
+                    embedder_cold = True
+                    embedder = pipeline._global_embedder
+                    load.add_done_callback(_discard_abandoned_load)
+                    logger.warning(
+                        "search: embedder %r unavailable after %ss (cache load still in "
+                        "flight) — serving this request FTS-only while it completes",
+                        active_model,
+                        _EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS,
+                    )
+                except BaseException:
+                    # Anything else that unwinds this await — most commonly the
+                    # CancelledError of a disconnecting client — leaves the shielded
+                    # load running with nobody left to read its outcome, which asyncio
+                    # reports as a never-retrieved task exception at GC time.
+                    if not load.done():
+                        load.add_done_callback(_discard_abandoned_load)
+                    raise
             else:
                 logger.warning("search: embedder_cache absent from app.state — falling back to global embedder")
                 embedder = pipeline._global_embedder
@@ -419,7 +471,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                     graph_mode=body.graph_mode,
                     scope_filter=body.scope_filter,
                     rerank=warmup.rerank,
-                    fts_only=warmup.fts_only,
+                    fts_only=warmup.fts_only or embedder_cold,
                 ),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
