@@ -24,6 +24,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import threading
+import time
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -35,6 +36,7 @@ from click.testing import CliRunner
 from archon_search.config import SearchConfig
 from archon_search.jobs.model import JobStatus
 from archon_search.jobs.store import JobStore
+from archon_search.server.schemas import WarmupResult
 
 pytestmark = pytest.mark.xdist_group("c1_bugs")
 
@@ -823,7 +825,7 @@ def test_embedder_not_ready_error_returns_503_on_wire(tmp_path: Path) -> None:
     pipeline.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
-    pipeline.warmup_models = AsyncMock()
+    pipeline.warmup_models = AsyncMock(return_value=True)
     app.state.pipeline = pipeline
 
     cache = MagicMock()
@@ -1967,6 +1969,25 @@ def test_sequential_add_second_does_not_report_starting_up_when_probe_non_usable
 # ingest, unattended. See
 # Documentation/Backlog/2026-08-19-020-startup-sync-crash-loop-brief.md.
 # --------------------------------------------------------------------------- #
+def _wait_for_model_warmup(client) -> None:
+    """Block until the lifespan's background model warm-up task has settled.
+
+    ``/ready`` gates on ``checks.models``, and the warm-up deliberately runs as a
+    background task (lifespan startup never awaits slow work) — so a request
+    issued immediately after ``make_real_app`` returns can legitimately observe
+    ``models: "pending"`` and a 503. Tests that assert on some *other* readiness
+    signal must therefore let the warm-up settle first, otherwise they are
+    asserting on a race: adding one more ``await`` inside ``warmup_models`` is
+    enough to flip them.
+    """
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if getattr(client.app.state, "warmup_result", None) != WarmupResult.PENDING:
+            return
+        time.sleep(0.01)
+    raise AssertionError("model warm-up did not settle within 10s")
+
+
 def _seed_crashed_ingest_jobs_file(path: Path) -> None:
     """Write a jobs file whose ingest job is still RUNNING — an unclean death.
 
@@ -2325,6 +2346,7 @@ def test_status_surfaces_suppressed_sync_result(
     ) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
         resp = client.get("/status", headers=headers)
+        _wait_for_model_warmup(client)
         ready = client.get("/ready")
 
     assert resp.status_code == 200, resp.text
@@ -2356,6 +2378,7 @@ def test_ready_warns_but_stays_200_when_startup_sync_suppressed(
         monkeypatch,
         toml_content='[collections]\ncollections = ["docs"]\n',
     ) as (client, _cfg, _api_key):
+        _wait_for_model_warmup(client)
         resp = client.get("/ready")
 
     body = resp.json()

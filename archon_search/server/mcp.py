@@ -44,6 +44,12 @@ from archon_search.server.routes_explain import (
     RoutingExplain,
 )
 from archon_search.server.routes_search import _HYDE_EXPANSION_FAILED_WARNING
+from archon_search.server._search_budget import (
+    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
+    SearchBudgetExceeded,
+    run_within_budget,
+    warmup_for_search,
+)
 from archon_search.store import StoreBusyError
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
@@ -421,15 +427,27 @@ def create_app(
                     return McpErrorResponse(error=str(exc), code="validation_error")
             else:
                 _multi_filters = None
+            # Same warm-up as the REST fan-out route: the global embedder (which
+            # search_many embeds with) unbounded, the shared reranker bounded, so a
+            # cold cross-encoder cannot block this tool call for its whole ONNX
+            # build — it degrades to the fused ranking instead (S288).
+            _rerank = await warmup_for_search(pipeline)
             try:
-                result_obj = await pipeline.search_many(
-                    query, deduped, namespace=ns, query_vector=hyde_vector,
-                    rag_fusion=rag_fusion,
-                    rag_fusion_generator=rag_fusion_generator,
-                    rag_fusion_config=_rf_config,
-                    filters=_multi_filters,
-                    graph_mode=graph_mode,
-                    scope_filter=scope_filter,
+                # search_many's own _fanout_timeout_seconds bounds the per-collection
+                # leg gathers only — the meta lookup, embed_one, graph-store calls and
+                # the global rerank pass sit outside it, so bound the whole call.
+                result_obj = await run_within_budget(
+                    pipeline.search_many(
+                        query, deduped, namespace=ns, query_vector=hyde_vector,
+                        rag_fusion=rag_fusion,
+                        rag_fusion_generator=rag_fusion_generator,
+                        rag_fusion_config=_rf_config,
+                        filters=_multi_filters,
+                        graph_mode=graph_mode,
+                        scope_filter=scope_filter,
+                        rerank=_rerank,
+                    ),
+                    timeout=_SEARCH_TIMEOUT_SECONDS,
                 )
             except RAGFusionDependencyError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
@@ -437,7 +455,11 @@ def create_app(
                 return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
             except CollectionNotFoundError:
                 return McpErrorResponse(error="collection not found", code="not_found")
-            except FanoutTimeoutError:
+            except (FanoutTimeoutError, SearchBudgetExceeded):
+                logger.error(
+                    "search pipeline timed out",
+                    extra={"event_type": "search_timeout", "collections": list(deduped)},
+                )
                 return McpErrorResponse(error="search timed out", code="timeout")
             except MetadataLookupError:
                 # Transient infrastructure error (store unavailable); mirror REST's
@@ -510,16 +532,24 @@ def create_app(
             if _col_meta is None:
                 return McpErrorResponse(error=f"collection {_col!r} not found", code="not_found")
             _search_embedder = await _resolve_embedder(pipeline, embedder_cache, _col, config, namespace=ns, meta=_col_meta)
+            # Outside the budget below by design (S184/S288): a cold cross-encoder built
+            # inside rerank_candidates would park this tool call for the whole ONNX
+            # build. rerank=False degrades to the fused vector+FTS ranking instead.
+            _rerank = await warmup_for_search(pipeline, _search_embedder)
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
-                result_obj = await pipeline.search(
-                    query, _col, ns, embedder=_search_embedder, filters=filters, query_vector=hyde_vector,
-                    rag_fusion=rag_fusion,
-                    rag_fusion_generator=rag_fusion_generator,
-                    rag_fusion_config=_rf_config,
-                    graph_mode=graph_mode,
-                    scope_filter=scope_filter,
+                result_obj = await run_within_budget(
+                    pipeline.search(
+                        query, _col, ns, embedder=_search_embedder, filters=filters, query_vector=hyde_vector,
+                        rag_fusion=rag_fusion,
+                        rag_fusion_generator=rag_fusion_generator,
+                        rag_fusion_config=_rf_config,
+                        graph_mode=graph_mode,
+                        scope_filter=scope_filter,
+                        rerank=_rerank,
+                    ),
+                    timeout=_SEARCH_TIMEOUT_SECONDS,
                 )
                 if recorder is not None:
                     recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -583,6 +613,15 @@ def create_app(
             # The model is still loading (or its load is wedged) — retryable.
             logger.warning("search: embedder not ready — %s", exc)
             return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
+        except SearchBudgetExceeded:
+            # Not asyncio.TimeoutError: since 3.11 that is the builtin TimeoutError (an
+            # OSError), so catching it here would also swallow a socket ETIMEDOUT from
+            # the store and report it as a timeout instead of an internal error.
+            logger.error(
+                "search pipeline timed out",
+                extra={"event_type": "search_timeout", "collection": _col},
+            )
+            return McpErrorResponse(error="search timed out", code="timeout")
         except Exception as exc:
             if writer is not None:
                 try:

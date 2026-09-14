@@ -28,6 +28,7 @@ def _make_pipeline() -> MagicMock:
     from archon_search.pipeline import SearchPipelineResult
 
     pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
     return pipeline
 

@@ -155,7 +155,7 @@ def test_search_writes_filter_flags_to_jsonl(tmp_path: Path) -> None:
     pipeline.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="docs", namespace="default")
     )
-    pipeline.warmup_models = AsyncMock()
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     app = create_app(config, job_store)
     key = os.environ.get("ARCHON_SEARCH_API_KEY", "")

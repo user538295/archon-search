@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -69,7 +69,7 @@ def _make_stub_app(
         metas.append(m)
 
     stub_pipeline = MagicMock()
-    stub_pipeline.warmup_models = AsyncMock()
+    stub_pipeline.warmup_models = AsyncMock(return_value=True)
     stub_pipeline.get_all_collections_meta = AsyncMock(return_value=metas)
     app.state.pipeline = stub_pipeline
 
@@ -457,12 +457,26 @@ class TestUnrecognizedModelReturns404:
 
 class TestDirectSearchTimeoutReturnsOpenAI504:
     def test_direct_search_timeout_returns_openai_504(self, tmp_path, monkeypatch):
-        """asyncio.TimeoutError from pipeline.search → 504 with OpenAI error shape."""
+        """A search that outruns the request budget → 504 with OpenAI error shape.
+
+        The stub sleeps past a shortened ``_SEARCH_TIMEOUT_SECONDS`` rather than
+        raising ``asyncio.TimeoutError`` directly: only a real budget overrun
+        produces the ``SearchBudgetExceeded`` the handler maps to 504. A
+        ``TimeoutError`` raised *by the pipeline* is an ``OSError`` from the
+        store and keeps its own 503/500 mapping.
+        """
+        import archon_search.server.routes_openai_shim as shim_module
+
+        monkeypatch.setattr(shim_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
         app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
 
         meta = _make_collection_meta("col")
         app.state.pipeline.get_collection_meta = AsyncMock(return_value=meta)
-        app.state.pipeline.search = AsyncMock(side_effect=asyncio.TimeoutError())
+
+        async def _never_finishes(*_args, **_kwargs):
+            await asyncio.sleep(60)
+
+        app.state.pipeline.search = _never_finishes
 
         with TestClient(app, raise_server_exceptions=False) as client:
             resp = client.post(
@@ -476,6 +490,78 @@ class TestDirectSearchTimeoutReturnsOpenAI504:
         assert "error" in body
         assert body["error"]["message"] == "Request timeout."
         assert body["error"]["type"] == "server_error"
+
+
+class TestShimWarmupParity:
+    """The ``/v1`` shim runs the same bounded warm-up as REST and MCP (S288)."""
+
+    def test_fanout_bounds_warmup_and_reranks(self, tmp_path, monkeypatch):
+        from archon_search.server._search_budget import RERANKER_WARMUP_WAIT_SECONDS
+
+        app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
+        app.state.pipeline.search_many = AsyncMock(
+            return_value=_make_pipeline_result()
+        )
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.post(
+                "/v1/chat/completions",
+                json=_chat_body("archon-search", "query"),
+                headers=_auth_headers(),
+            )
+
+        assert resp.status_code == 200, resp.text
+        # The lifespan's own unbounded warm-up also lands on this stub, so match
+        # the request-path call by its bound rather than by await count.
+        assert (
+            call(None, reranker_timeout=RERANKER_WARMUP_WAIT_SECONDS)
+            in app.state.pipeline.warmup_models.await_args_list
+        ), app.state.pipeline.warmup_models.await_args_list
+        assert app.state.pipeline.search_many.await_args.kwargs["rerank"] is True
+
+    def test_direct_bounds_warmup_and_reranks(self, tmp_path, monkeypatch):
+        from archon_search.server._search_budget import RERANKER_WARMUP_WAIT_SECONDS
+
+        app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
+        app.state.pipeline.get_collection_meta = AsyncMock(
+            return_value=_make_collection_meta("col")
+        )
+        app.state.pipeline.search = AsyncMock(
+            return_value=_make_pipeline_result()
+        )
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.post(
+                "/v1/chat/completions",
+                json=_chat_body("archon-search/col", "query"),
+                headers=_auth_headers(),
+            )
+
+        assert resp.status_code == 200, resp.text
+        # The lifespan's own unbounded warm-up also lands on this stub, so match
+        # the request-path call by its bound rather than by await count.
+        assert any(
+            c.kwargs == {"reranker_timeout": RERANKER_WARMUP_WAIT_SECONDS}
+            for c in app.state.pipeline.warmup_models.await_args_list
+        ), app.state.pipeline.warmup_models.await_args_list
+        assert app.state.pipeline.search.await_args.kwargs["rerank"] is True
+
+    def test_degrades_when_reranker_stays_cold(self, tmp_path, monkeypatch):
+        app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
+        app.state.pipeline.warmup_models = AsyncMock(return_value=False)
+        app.state.pipeline.search_many = AsyncMock(
+            return_value=_make_pipeline_result()
+        )
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.post(
+                "/v1/chat/completions",
+                json=_chat_body("archon-search", "query"),
+                headers=_auth_headers(),
+            )
+
+        assert resp.status_code == 200, resp.text
+        assert app.state.pipeline.search_many.await_args.kwargs["rerank"] is False
 
 
 class TestFanoutTimeoutReturnsOpenAI504:

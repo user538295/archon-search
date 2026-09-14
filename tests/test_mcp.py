@@ -387,6 +387,7 @@ def _make_hyde_pipeline_mock(search_result=None, search_many_result=None, swc_re
     pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
     pipeline.search = AsyncMock(return_value=search_result)
     pipeline.search_many = AsyncMock(return_value=search_many_result)
+    pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.search_with_context = AsyncMock(return_value=swc_result)
     pipeline.explain = AsyncMock(return_value=explain_result)
     pipeline.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="col1"))
@@ -636,6 +637,7 @@ def _make_rag_fusion_pipeline_mock(
     pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
     pipeline.search = AsyncMock(return_value=search_result)
     pipeline.search_many = AsyncMock(return_value=search_many_result)
+    pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.search_with_context = AsyncMock(return_value=swc_result)
     pipeline.explain = AsyncMock(return_value=explain_result)
     pipeline.get_collection_meta = AsyncMock(return_value=CollectionMeta(name="col1"))
@@ -894,6 +896,7 @@ def _make_search_pipeline_with_result(result=None, acl_filtered=False, excluded=
             excluded_collections=excluded,
         )
     )
+    pipeline.warmup_models = AsyncMock(return_value=True)
     return pipeline
 
 
@@ -949,6 +952,7 @@ def test_search_multi_collection_returns_mcp_search_response_shape() -> None:
             excluded_collections=[],
         )
     )
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     import importlib
     import archon_search.server.mcp as mcp_mod

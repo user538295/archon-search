@@ -87,6 +87,7 @@ async def test_mcp_search_calls_embedder_cache_get_or_load() -> None:
     meta = _make_collection_meta("model-X")
     pipeline.get_collection_meta = AsyncMock(return_value=meta)
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     cache, resolved = _make_embedder_cache("model-X")
     app = _make_mcp_app(pipeline, embedder_cache=cache)
@@ -105,6 +106,7 @@ async def test_mcp_search_passes_resolved_embedder_to_pipeline() -> None:
     meta = _make_collection_meta("model-X")
     pipeline.get_collection_meta = AsyncMock(return_value=meta)
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     cache, resolved = _make_embedder_cache("model-X")
     app = _make_mcp_app(pipeline, embedder_cache=cache)
@@ -128,6 +130,7 @@ async def test_mcp_search_empty_active_model_falls_back_to_global() -> None:
     meta = _make_collection_meta("")  # empty → fall back to global
     pipeline.get_collection_meta = AsyncMock(return_value=meta)
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     cache, _ = _make_embedder_cache("global-model")
     app = _make_mcp_app(pipeline, config=config, embedder_cache=cache)

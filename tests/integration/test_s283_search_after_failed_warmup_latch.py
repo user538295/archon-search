@@ -49,6 +49,7 @@ deterministic and weight-free; the ratio, not the absolute number, is the point.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 
@@ -120,8 +121,30 @@ def _install_transient_then_cold_cross_encoder(monkeypatch: pytest.MonkeyPatch) 
     base = module.TextCrossEncoder
     attempts = {"n": 0}
 
+    def _built_by_the_reranker() -> bool:
+        """True when this construction is the warm-up build, not the startup probe.
+
+        ``model_validation._load_cross_encoder`` imports the same symbol from the
+        same module for its resolvability probe, and it runs as a sibling
+        background task. Counting *its* construction as attempt 1 would hand the
+        transient failure to the probe and leave the warm-up succeeding — the
+        exact opposite of what this test sets up. Which task wins the race is
+        decided by how many awaits precede the reranker build inside
+        ``warmup_models``, so keying off the caller rather than a global counter
+        is what makes this deterministic.
+        """
+        frame = sys._getframe()
+        while frame is not None:
+            if frame.f_code.co_filename.endswith(f"archon_search{os.sep}reranker.py"):
+                return True
+            frame = frame.f_back
+        return False
+
     class _TransientThenColdTextCrossEncoder(base):  # type: ignore[misc, valid-type]
         def __init__(self, *args: object, **kwargs: object) -> None:
+            if not _built_by_the_reranker():
+                super().__init__(*args, **kwargs)
+                return
             attempts["n"] += 1
             if attempts["n"] == 1:
                 raise _TransientCrossEncoderFailure("cross-encoder download failed (transient)")

@@ -40,7 +40,7 @@ def _make_search_app(
 
     if pipeline_mock is None:
         pipeline_mock = MagicMock()
-        pipeline_mock.warmup_models = AsyncMock()
+        pipeline_mock.warmup_models = AsyncMock(return_value=True)
         pipeline_mock.get_collection_meta = AsyncMock(
             return_value=CollectionMeta(name="col", namespace=DEFAULT_NAMESPACE)
         )
@@ -230,21 +230,34 @@ async def test_concurrent_requests_have_distinct_ids(caplog: pytest.LogCaptureFi
     assert id_b in ids_in_logs, f"id_b {id_b!r} not found in log correlation_ids: {ids_in_logs}"
 
 
-def test_search_emits_partial_stage_timings_on_timeout(caplog: pytest.LogCaptureFixture) -> None:
-    """On asyncio.TimeoutError from pipeline.search, stage_timings log record is still emitted
-    with at least the 'total' key (and any stages completed before the timeout)."""
+def test_search_emits_partial_stage_timings_on_timeout(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a search-budget overrun, the stage_timings record is still emitted
+    with at least the 'total' key (and any stages completed before the timeout).
 
-    async def _search_with_embed_then_timeout(*args: object, **kwargs: object) -> SearchPipelineResult:
+    The stub blocks past a shortened ``_SEARCH_TIMEOUT_SECONDS`` rather than
+    raising ``asyncio.TimeoutError`` itself: only a genuine overrun produces the
+    ``SearchBudgetExceeded`` the handler maps to 504 (S288). A ``TimeoutError``
+    raised *by the pipeline* is an ``OSError`` from the store and keeps its own
+    500 mapping.
+    """
+    import archon_search.server.routes_search as routes_search_module
+
+    monkeypatch.setattr(routes_search_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
+
+    async def _search_with_embed_then_hang(*args: object, **kwargs: object) -> SearchPipelineResult:
         with record_stage("embed"):
             pass
-        raise asyncio.TimeoutError
+        await asyncio.sleep(60)
+        raise AssertionError("unreachable")
 
     pipeline_mock = MagicMock()
-    pipeline_mock.warmup_models = AsyncMock()
+    pipeline_mock.warmup_models = AsyncMock(return_value=True)
     pipeline_mock.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace=DEFAULT_NAMESPACE)
     )
-    pipeline_mock.search = AsyncMock(side_effect=_search_with_embed_then_timeout)
+    pipeline_mock.search = AsyncMock(side_effect=_search_with_embed_then_hang)
 
     app = _make_search_app(timings_enabled=True, pipeline_mock=pipeline_mock)
     with caplog.at_level(logging.INFO, logger="archon_search"):

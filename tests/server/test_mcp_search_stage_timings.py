@@ -74,6 +74,7 @@ def _make_search_pipeline() -> MagicMock:
         return SearchPipelineResult(results=[], acl_filtered=False)
 
     pipeline.search = AsyncMock(side_effect=_search)
+    pipeline.warmup_models = AsyncMock(return_value=True)
     return pipeline
 
 

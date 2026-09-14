@@ -92,6 +92,7 @@ def _make_explain_result() -> Any:
 def _make_search_pipeline() -> Any:
     """Return a mock pipeline suitable for search/search_with_context calls."""
     pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline._global_embedder = MagicMock()
     pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
     # get_collection_meta must return a non-None mock so the namespace gate passes
@@ -537,6 +538,7 @@ def test_mcp_search_multi_collection_scope_filter_forwarded() -> None:
     # Multi-collection path calls pipeline.search_many, not pipeline.search
     mock_search_result = _make_search_result()
     pipeline.search_many = AsyncMock(return_value=mock_search_result)
+    pipeline.warmup_models = AsyncMock(return_value=True)
     app = _make_mcp_app(pipeline)
     tool_fn = app.tools["search"]
 

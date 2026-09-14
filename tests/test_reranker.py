@@ -1,6 +1,7 @@
 """packages/archon-search/tests/test_reranker.py — unit tests for Reranker (fastembed backend)."""
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import threading
 
@@ -8,7 +9,14 @@ import pytest
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import SearchResult
-from archon_search.reranker import ModelReranker, Reranker, RerankerBackend, make_reranker
+import archon_search.reranker as reranker_module
+from archon_search.reranker import (
+    ModelReranker,
+    Reranker,
+    RerankerBackend,
+    RerankerWarmupTimeout,
+    make_reranker,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -668,3 +676,157 @@ def test_reranker_caches_models_under_the_archon_data_dir() -> None:
         mr.predict([("query", "doc")])
 
     assert mock_tce.call_args.kwargs["cache_dir"] == str(get_models_dir())
+
+
+# ---------------------------------------------------------------------------
+# C2-T-1 — single-flight warm-up (shared task + asyncio.shield), S288
+# ---------------------------------------------------------------------------
+
+
+class _BlockingBackend:
+    """Backend whose ``predict`` parks on a threading.Event until released."""
+
+    def __init__(self, *, fail: bool = False, hang: bool = False) -> None:
+        self.is_warm = False
+        self.build_count = 0
+        self.fail = fail
+        self.hang = hang
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+        self.build_count += 1
+        self.started.set()
+        if not self.hang:
+            self.release.wait(timeout=5.0)
+        else:
+            self.release.wait(timeout=30.0)
+        if self.fail:
+            raise RuntimeError("build failed")
+        self.is_warm = True
+        return [0.5] * len(pairs)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_cold_warmups_trigger_exactly_one_build() -> None:
+    """N concurrent cold ``warmup()`` callers share one backend build (S288).
+
+    Without the shared task each fan-out request would start its own ONNX
+    build — the thundering herd the single-flight rewrite exists to prevent.
+    """
+    backend = _BlockingBackend()
+    reranker = Reranker(backend)  # type: ignore[arg-type]
+
+    waiters = [asyncio.create_task(reranker.warmup()) for _ in range(8)]
+    await asyncio.to_thread(backend.started.wait, 5.0)
+    backend.release.set()
+    await asyncio.gather(*waiters)
+
+    assert backend.build_count == 1, (
+        f"expected exactly one shared build, got {backend.build_count}"
+    )
+    assert reranker.is_warm is True
+
+
+@pytest.mark.asyncio
+async def test_abandoned_waiter_does_not_cancel_the_shared_build() -> None:
+    """A caller that gives up on waiting must not kill the build (S288).
+
+    ``warmup()`` awaits ``asyncio.shield(task)``, so ``wait_for`` cancels only
+    the *wait*. A later caller joins the same task rather than starting a
+    second ONNX build, and the backend still ends warm.
+    """
+    backend = _BlockingBackend()
+    reranker = Reranker(backend)  # type: ignore[arg-type]
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(reranker.warmup(), timeout=0.01)
+    await asyncio.to_thread(backend.started.wait, 5.0)
+    assert backend.build_count == 1
+    assert reranker._warmup_task is not None, "the abandoned wait cancelled the build"
+
+    joiner = asyncio.create_task(reranker.warmup())
+    await asyncio.sleep(0)
+    backend.release.set()
+    await joiner
+
+    assert backend.build_count == 1, (
+        f"the second caller started a duplicate build ({backend.build_count} total)"
+    )
+    assert reranker.is_warm is True
+
+
+@pytest.mark.asyncio
+async def test_failed_shared_build_is_retried_by_the_next_caller() -> None:
+    """S283 with a second caller already joined: a failed shared task is retried.
+
+    Both waiters must see the failure, and the settled task must be dropped so
+    the next ``warmup()`` starts a fresh build instead of re-awaiting a task
+    that will only ever re-raise.
+    """
+
+    class _FailThenSucceed:
+        def __init__(self) -> None:
+            self.is_warm = False
+            self.build_count = 0
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+            self.build_count += 1
+            self.started.set()
+            self.release.wait(timeout=5.0)
+            if self.build_count == 1:
+                raise RuntimeError("transient build failure")
+            self.is_warm = True
+            return [0.5] * len(pairs)
+
+    backend = _FailThenSucceed()
+    reranker = Reranker(backend)  # type: ignore[arg-type]
+
+    first = asyncio.create_task(reranker.warmup())
+    await asyncio.to_thread(backend.started.wait, 5.0)
+    second = asyncio.create_task(reranker.warmup())
+    await asyncio.sleep(0)
+    backend.release.set()
+
+    results = await asyncio.gather(first, second, return_exceptions=True)
+    assert all(isinstance(r, RuntimeError) for r in results), results
+    assert backend.build_count == 1
+    assert reranker._warmup_failed is True
+
+    backend.release.clear()
+    backend.started.clear()
+    retry = asyncio.create_task(reranker.warmup())
+    await asyncio.to_thread(backend.started.wait, 5.0)
+    backend.release.set()
+    await retry
+
+    assert backend.build_count == 2, "the failed shared task was not retried"
+    assert reranker.is_warm is True
+    assert reranker._warmup_failed is False
+
+
+@pytest.mark.asyncio
+async def test_warmup_raises_rerankerwarmuptimeout_not_asyncio_timeouterror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An over-long build raises ``RerankerWarmupTimeout``, a plain ``Exception``.
+
+    It must NOT be an ``asyncio.TimeoutError``: since 3.11 that is the builtin
+    ``TimeoutError`` (an ``OSError``), which callers use to mean "I gave up
+    waiting", a different condition from "the build itself blew its ceiling".
+    """
+    monkeypatch.setattr(reranker_module, "_WARMUP_TIMEOUT_SECONDS", 0.01)
+    backend = _BlockingBackend(hang=True)
+    reranker = Reranker(backend)  # type: ignore[arg-type]
+
+    try:
+        with pytest.raises(RerankerWarmupTimeout):
+            await reranker.warmup()
+    finally:
+        backend.release.set()
+
+    assert not issubclass(RerankerWarmupTimeout, asyncio.TimeoutError)
+    assert not issubclass(RerankerWarmupTimeout, OSError)
+    assert reranker._warmup_failed is True

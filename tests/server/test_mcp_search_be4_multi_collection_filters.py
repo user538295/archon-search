@@ -65,6 +65,7 @@ def _make_pipeline(*, result: SearchPipelineResult | None = None) -> Any:
     pipeline.search_many = AsyncMock(
         return_value=result or SearchPipelineResult(results=[], acl_filtered=False)
     )
+    pipeline.warmup_models = AsyncMock(return_value=True)
     return pipeline
 
 

@@ -120,6 +120,7 @@ async def test_search_tool_uses_resolved_namespace() -> None:
     pipeline = MagicMock()
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(return_value=_make_search_result())
+    pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline._global_embedder = MagicMock()
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
@@ -892,6 +893,7 @@ async def test_search_tool_multi_collection_uses_resolved_namespace() -> None:
     pipeline.search_many = AsyncMock(
         return_value=SearchPipelineResult(results=[], acl_filtered=False)
     )
+    pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline._global_embedder = MagicMock()
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):

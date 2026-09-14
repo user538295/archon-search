@@ -16,6 +16,10 @@ _WARMUP_PAIR = ("warmup", "warmup")
 _WARMUP_TIMEOUT_SECONDS = 300.0
 
 
+class RerankerWarmupTimeout(Exception):
+    """The warm-up build outran ``_WARMUP_TIMEOUT_SECONDS`` (the wait stopped, not the build)."""
+
+
 @runtime_checkable
 class RerankerBackend(Protocol):
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]: ...
@@ -62,46 +66,96 @@ class Reranker:
 
     def __init__(self, backend: RerankerBackend) -> None:
         self._backend = backend
-        self._warmup_lock = asyncio.Lock()
         self._warmup_failed = False
+        # In-flight build, shared by every concurrent caller (see warmup()), plus
+        # the lock guarding it and the loop both belong to. All three are bound
+        # to one event loop and recreated together when the loop changes: an
+        # asyncio.Lock left held by a task in a since-closed loop would deadlock
+        # every later warmup().
+        self._warmup_loop: asyncio.AbstractEventLoop | None = None
+        self._warmup_lock: asyncio.Lock | None = None
+        self._warmup_task: asyncio.Task[None] | None = None
 
     @property
     def is_warm(self) -> bool:
         return self._backend.is_warm
 
+    def _acquire_warmup_lock(self) -> asyncio.Lock:
+        """Return the lock for the running loop, rebinding warm-up state if it changed."""
+        loop = asyncio.get_running_loop()
+        if self._warmup_lock is None or self._warmup_loop is not loop:
+            stale = self._warmup_task
+            if stale is not None and not stale.done():
+                stale.cancel()
+            self._warmup_task = None
+            self._warmup_lock = asyncio.Lock()
+            self._warmup_loop = loop
+        return self._warmup_lock
+
+    async def _run_warmup(self) -> None:
+        """Force the backend to build its model. Never cancelled by a caller."""
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(self._backend.predict, [_WARMUP_PAIR]),
+                timeout=_WARMUP_TIMEOUT_SECONDS,
+            )
+            self._warmup_failed = False
+        except asyncio.TimeoutError as exc:
+            self._warmup_failed = True
+            raise RerankerWarmupTimeout(
+                f"reranker warm-up exceeded {_WARMUP_TIMEOUT_SECONDS}s"
+            ) from exc
+        except Exception:
+            self._warmup_failed = True
+            raise
+
     async def warmup(self) -> None:
         """Build the backend's model now, off the request path.
 
         ``ModelReranker`` constructs its ONNX cross-encoder on the *first*
-        ``predict`` call. Callers must run this outside any request timeout
-        budget, otherwise the one-off load consumes the whole budget and an
-        otherwise valid search fails with 504 (S184).
+        ``predict`` call, so callers must run this outside any request timeout
+        budget (S184). Contract:
 
-        Idempotent: no-op once warm. A failed attempt is retried by the next
-        caller rather than latched permanently (S283) — a transient failure
-        (an HF 429, a network blip, an unwritable cache) must not silently
-        disarm every later warm-up for the life of the process, pushing the
-        cold build onto a request path with no timeout budget of its own.
-        ``_warmup_failed`` reflects only the outcome of the most recent
-        attempt; it is diagnostic, not a skip condition.
-        Single-flight: concurrent cold callers wait on a lock; only one load runs.
-        Bounded by ``_WARMUP_TIMEOUT_SECONDS`` so a hung model download cannot
-        pin a request forever.
+        - Idempotent, and a no-op once warm.
+        - Single-flight: one shared task does the build; callers only
+          ``await asyncio.shield`` it, so a caller that bounds its own wait and
+          gives up cancels nothing but that wait. The build keeps running, warms
+          the backend for later requests, and later callers join it instead of
+          starting a second ONNX build (S288 fan-out thundering herd).
+        - Not latched on failure (S283): ``_warmup_failed`` records only the most
+          recent attempt and is diagnostic; the next caller retries with a fresh
+          task, since a settled task is never re-awaited.
+        - Raises ``RerankerWarmupTimeout`` if the build outruns
+          ``_WARMUP_TIMEOUT_SECONDS``. That stops the *waiting*, not the build:
+          ``asyncio.to_thread`` workers are not cancellable, so the thread runs
+          to completion (and, being non-daemon, delays executor shutdown).
+
+        See ``Documentation/Architecture/140_error_handling_strategy.md`` for how
+        the caller degrades when this returns cold.
         """
         if self._backend.is_warm:
             return
-        async with self._warmup_lock:
+        async with self._acquire_warmup_lock():
             if self._backend.is_warm:
                 return
-            try:
-                await asyncio.wait_for(
-                    asyncio.to_thread(self._backend.predict, [_WARMUP_PAIR]),
-                    timeout=_WARMUP_TIMEOUT_SECONDS,
-                )
-                self._warmup_failed = False
-            except Exception:
-                self._warmup_failed = True
-                raise
+            task = self._warmup_task
+            if task is None or task.done():
+                task = asyncio.ensure_future(self._run_warmup())
+                task.add_done_callback(self._on_warmup_done)
+                self._warmup_task = task
+        await asyncio.shield(task)
+
+    def _on_warmup_done(self, task: asyncio.Task[None]) -> None:
+        """Drop the settled task and swallow its result so asyncio stays quiet.
+
+        A build whose every waiter was cancelled has no one left to retrieve its
+        exception; retrieving it here avoids a spurious "Task exception was
+        never retrieved" warning.
+        """
+        if self._warmup_task is task:
+            self._warmup_task = None
+        if not task.cancelled():
+            task.exception()
 
     async def rerank(
         self, query: str, candidates: list[SearchResult], top_k: int
@@ -156,8 +210,16 @@ class Reranker:
             )
             traced.append(dataclasses.replace(candidate, score_breakdown=new_breakdown))
 
-        # Stable sort by reranker_score descending (Python sort is stable → equal scores keep input order)
-        traced.sort(key=lambda c: c.score_breakdown.reranker_score if c.score_breakdown.reranker_score is not None else 0.0, reverse=True)
+        # Stable sort by reranker_score descending (Python sort is stable → equal scores keep input order).
+        # Deliberately NOT tie-broken on chunk_id: that reorders the equal-score
+        # block away from the retrieval order the fusion stage produced, which
+        # measurably regresses the eval gate (tests/eval/test_eval_baseline_unchanged.py).
+        traced.sort(
+            key=lambda c: c.score_breakdown.reranker_score
+            if c.score_breakdown.reranker_score is not None
+            else 0.0,
+            reverse=True,
+        )
         return traced[:top_k]
 
     async def _rerank_with_trace(

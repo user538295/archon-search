@@ -195,6 +195,7 @@ def test_create_mcp_http_app_accepts_managed_key(tmp_path, monkeypatch):
     from archon_search.embedder_cache import EmbedderCache
 
     pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
 
     # Build the MCP Starlette app with key_store wired in

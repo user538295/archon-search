@@ -77,6 +77,7 @@ def _make_pipeline(
             graph_expansion_applied=graph_expansion_applied,
         )
     )
+    pipeline.warmup_models = AsyncMock(return_value=True)
     return pipeline
 
 

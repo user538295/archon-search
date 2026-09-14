@@ -14,6 +14,7 @@ from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.model_validation import ModelValidationResult
 from archon_search.server.app import create_app
+from archon_search.server.schemas import WarmupResult
 
 
 def _make_config(tmp_path: Path) -> SearchConfig:
@@ -113,6 +114,15 @@ def test_startup_warning_logged_llama_cpp_unreachable(
             deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline and app.state.model_validation is None:
                 time.sleep(0.05)
+            # /ready gates on the background model warm-up too, and that task is
+            # deliberately not awaited by the lifespan — wait for it to settle, or
+            # this asserts on a race rather than on the probe failure.
+            deadline = time.monotonic() + 10.0
+            while (
+                time.monotonic() < deadline
+                and getattr(app.state, "warmup_result", None) == WarmupResult.PENDING
+            ):
+                time.sleep(0.01)
             # Boot completed normally — /ready is reachable despite the probe failure.
             assert client.get("/ready").status_code == 200
 

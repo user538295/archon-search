@@ -29,7 +29,15 @@ from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher
 from archon_search.defref_extractor import DEFREF_SUPPORTED_EXTENSIONS
 from archon_search.enricher import MarkdownEnricher, is_docling_source, source_subtype_for
 from archon_search.parser import DocumentParser, ParseError
-from archon_search.reranker import ModelReranker, Reranker, RerankerBackend
+from archon_search.reranker import (
+    _WARMUP_TIMEOUT_SECONDS as _RERANKER_BUILD_TIMEOUT_SECONDS,
+)
+from archon_search.reranker import (
+    ModelReranker,
+    Reranker,
+    RerankerBackend,
+    RerankerWarmupTimeout,
+)
 from archon_search.store import STORE_SCHEMA_VERSION, SearchStore, StoreBusyError, elementwise_sum, parse_metadata, normalize_ingested_by
 from archon_search.store_filters import GLOB_OVERFETCH_FACTOR
 from archon_search.graph_types import ChunkInput, GraphNode
@@ -402,8 +410,14 @@ class SearchPipeline:
         Both ML backends load their weights on first use, inside the callers'
         ``asyncio.wait_for`` budget — so an uninitialised model turned a valid
         first search into a 504. Callers must invoke this *before* entering that
-        budget. Pass the embedder actually serving the request; omit it on
-        fan-out paths, which resolve per-collection embedders themselves.
+        budget. Pass the embedder actually serving the request; when *embedder*
+        is omitted the pipeline's global embedder is warmed instead, because the
+        fan-out paths (:meth:`search_many`) embed the query through
+        ``self._global_embedder`` — leaving it cold there would burn the whole
+        fan-out budget on the embedder build (S288).
+
+        The embedder leg is deliberately unbounded: no search can be answered
+        without a query vector, so there is nothing to degrade to.
 
         *reranker_timeout* bounds the reranker warm-up only (S286). Callers that
         cannot afford an unbounded wait pass one and act on the return value:
@@ -416,11 +430,11 @@ class SearchPipeline:
         Never raises: a failed warm-up logs a WARNING and the search proceeds
         with a cold model rather than failing outright.
         """
-        if embedder is not None:
-            try:
-                await embedder.warmup()
-            except Exception:
-                logger.warning("warm-up: embedder failed; first search will pay the init cost", exc_info=True)
+        target_embedder = embedder if embedder is not None else self._global_embedder
+        try:
+            await target_embedder.warmup()
+        except Exception:
+            logger.warning("warm-up: embedder failed; first search will pay the init cost", exc_info=True)
         if self._reranker is None:
             return True
         try:
@@ -428,9 +442,18 @@ class SearchPipeline:
                 await self._reranker.warmup()
             else:
                 await asyncio.wait_for(self._reranker.warmup(), timeout=reranker_timeout)
+        except RerankerWarmupTimeout:
+            # The build itself (model download / ONNX session) outran its own
+            # limit — distinct from this caller merely giving up on waiting.
+            logger.warning(
+                "warm-up: reranker build exceeded its own %ss limit; this search skips reranking",
+                _RERANKER_BUILD_TIMEOUT_SECONDS,
+            )
+            return self._reranker.is_warm
         except asyncio.TimeoutError:
             logger.warning(
-                "warm-up: reranker still cold after %ss; this search skips reranking",
+                "warm-up: reranker still cold after waiting %ss; this search skips reranking "
+                "(the build continues in the background)",
                 reranker_timeout,
             )
             return self._reranker.is_warm
@@ -1071,15 +1094,19 @@ class SearchPipeline:
                 collection, query, namespace,
                 filters=filters,
                 scope_filter=scope_filter,
+                rerank=rerank,
             )
         if graph_mode in ("local", "global"):
             return await self._search_graph_mode(  # type: ignore[return-value]
                 graph_mode, collection, query, namespace,
                 filters=filters,
                 scope_filter=scope_filter,
+                rerank=rerank,
             )
         if graph_mode == "naive" and self._graph_expander is not None:
-            expanded_text = await self._search_graph_mode("naive", collection, query, namespace, scope_filter=scope_filter)
+            expanded_text = await self._search_graph_mode(
+                "naive", collection, query, namespace, scope_filter=scope_filter, rerank=rerank,
+            )
             if isinstance(expanded_text, str) and expanded_text != query:
                 graph_expansion_applied = True
                 effective_query = expanded_text
@@ -1261,6 +1288,7 @@ class SearchPipeline:
         *,
         filters: "SearchFilters | None" = None,
         scope_filter: str | None = None,
+        rerank: bool = True,
     ) -> "SearchPipelineResult | str":
         """Dispatch for graph retrieval modes.
 
@@ -1278,7 +1306,7 @@ class SearchPipeline:
             return expanded.expanded_text if expanded.expansion_applied else query
 
         if graph_mode == "local":
-            return await self._search_local_mode(query, collection, namespace, filters=filters)
+            return await self._search_local_mode(query, collection, namespace, filters=filters, rerank=rerank)
 
 
         if graph_mode == "global":
@@ -1288,7 +1316,7 @@ class SearchPipeline:
                     "falling back to standard search (collection=%r)", collection,
                 )
                 return await self._search_standard(
-                    query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                    query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
                 )
             communities = await self._graph_store.list_community_representatives(collection, ns=namespace)
             if not communities:
@@ -1307,7 +1335,7 @@ class SearchPipeline:
                     "falling back to standard search", collection,
                 )
                 return await self._search_standard(
-                    query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                    query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
                 )
 
             candidates = [_row_to_community_candidate(r, collection) for r in rows]
@@ -1319,13 +1347,15 @@ class SearchPipeline:
                     "falling back to standard search", collection,
                 )
                 return await self._search_standard(
-                    query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                    query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
                 )
 
-            if self._reranker is not None:
+            if rerank and self._reranker is not None:
                 candidates = await self._reranker.rerank_candidates(query, candidates, top_k=self._top_k_return)
             else:
-                candidates = sorted(candidates, key=lambda c: c.score_breakdown.rrf_score or 0.0, reverse=True)[:self._top_k_return]
+                candidates = sorted(
+                    candidates, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
+                )[:self._top_k_return]
 
             return SearchPipelineResult(
                 results=[self._candidate_to_search_result(c) for c in candidates],
@@ -1336,7 +1366,7 @@ class SearchPipeline:
         # Unknown mode — log and fall through to standard
         logger.warning("_search_graph_mode: unknown graph_mode=%r; falling back", graph_mode)
         return await self._search_standard(
-            query, collection, namespace, embedder=self._global_embedder, filters=filters,
+            query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
         )
 
     async def _search_ppr_mode(
@@ -1347,6 +1377,7 @@ class SearchPipeline:
         *,
         filters: "SearchFilters | None" = None,
         scope_filter: "str | None" = None,
+        rerank: bool = True,
     ) -> SearchPipelineResult:
         """Personalized PageRank retrieval mode (E2h BE-6).
 
@@ -1371,7 +1402,7 @@ class SearchPipeline:
         if self._ppr_walker is None or self._graph_store is None:
             logger.debug("_search_ppr_mode: no ppr_walker/graph_store; falling back (fp=%s)", fp)
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
             result.ppr_entities_matched = 0
             return result
@@ -1390,7 +1421,7 @@ class SearchPipeline:
                 collection, fp, exc_info=True,
             )
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
             result.ppr_entities_matched = 0
             return result
@@ -1399,7 +1430,7 @@ class SearchPipeline:
         if ppr_result.entities_matched == 0:
             logger.debug("_search_ppr_mode: no entities matched (fp=%s); falling back", fp)
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
             result.ppr_entities_matched = 0
             return result
@@ -1414,7 +1445,7 @@ class SearchPipeline:
                 collection, fp,
             )
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
             result.ppr_entities_matched = entities_matched
             return result
@@ -1437,7 +1468,7 @@ class SearchPipeline:
                 collection, fp,
             )
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
             result.ppr_entities_matched = entities_matched
             return result
@@ -1469,13 +1500,13 @@ class SearchPipeline:
         acl_filtered = acl_filtered_ppr or acl_filtered_hybrid
 
         # S7: rerank merged set; return top-k.
-        if self._reranker is not None:
+        if rerank and self._reranker is not None:
             final_candidates = await self._reranker.rerank_candidates(
                 query, merged, top_k=self._top_k_return
             )
         else:
             final_candidates = sorted(
-                merged, key=lambda c: c.score_breakdown.rrf_score or 0.0, reverse=True
+                merged, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
             )[:self._top_k_return]
 
         return SearchPipelineResult(
@@ -1492,6 +1523,7 @@ class SearchPipeline:
         namespace: str = DEFAULT_NAMESPACE,
         *,
         filters: "SearchFilters | None" = None,
+        rerank: bool = True,
     ) -> SearchPipelineResult:
         """Single-collection path for graph_mode='local' (BE-7a).
 
@@ -1523,14 +1555,14 @@ class SearchPipeline:
         if not ngrams:
             logger.debug("_search_local_mode: empty query (fp=%s); falling back", fp)
             return await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
 
         # Step 2: entity matching.
         if self._graph_store is None:
             logger.debug("_search_local_mode: no graph_store; falling back (fp=%s)", fp)
             return await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
 
         try:
@@ -1541,14 +1573,14 @@ class SearchPipeline:
                 collection, fp, exc_info=True,
             )
             return await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
 
         if not matched_nodes:
             # S10: no entities recognised in query → standard hybrid search.
             logger.debug("_search_local_mode: no graph entities matched query (fp=%s)", fp)
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
             result.graph_expansion_applied = False
             return result
@@ -1562,7 +1594,7 @@ class SearchPipeline:
                 collection, fp, exc_info=True,
             )
             return await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
 
         if not table_exists:
@@ -1582,7 +1614,7 @@ class SearchPipeline:
                 collection, fp, exc_info=True,
             )
             return await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
 
         if not communities:
@@ -1598,7 +1630,7 @@ class SearchPipeline:
             else:
                 effective_query = query
             std_result = await self._search_standard(
-                effective_query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                effective_query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
             return SearchPipelineResult(
                 results=std_result.results,
@@ -1618,7 +1650,7 @@ class SearchPipeline:
                 collection, fp,
             )
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
             result.graph_expansion_applied = False
             return result
@@ -1638,7 +1670,7 @@ class SearchPipeline:
                 collection, fp,
             )
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
             result.graph_expansion_applied = False
             return result
@@ -1662,7 +1694,7 @@ class SearchPipeline:
                 collection, fp,
             )
             result = await self._search_standard(
-                query, collection, namespace, embedder=self._global_embedder, filters=filters,
+                query, collection, namespace, embedder=self._global_embedder, filters=filters, rerank=rerank,
             )
             result.graph_expansion_applied = False
             return result
@@ -1694,13 +1726,13 @@ class SearchPipeline:
         acl_filtered = acl_filtered_comm or acl_filtered_hybrid
 
         # Step 10: rerank merged set; return top-k.
-        if self._reranker is not None:
+        if rerank and self._reranker is not None:
             final_candidates = await self._reranker.rerank_candidates(
                 query, merged, top_k=self._top_k_return
             )
         else:
             final_candidates = sorted(
-                merged, key=lambda c: c.score_breakdown.rrf_score or 0.0, reverse=True
+                merged, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
             )[:self._top_k_return]
 
         return SearchPipelineResult(
@@ -2663,10 +2695,24 @@ class SearchPipeline:
         filters: SearchFilters | None = None,
         graph_mode: str | None = None,
         scope_filter: str | None = None,
+        *,
+        rerank: bool = True,
     ) -> SearchPipelineResult:
         """Embed the query once, fan out hybrid retrieval across ``collections`` in
         parallel, merge with provenance, run a single global rerank pass, and return a
-        unified result."""
+        unified result.
+
+        ``rerank=False`` skips every rerank pass and returns the fused RRF ranking —
+        callers pass it when the cross-encoder is still cold and blocking on its build
+        would exceed the request budget (S288).  Deliberately asymmetric with
+        ``explain()``, which raises ``ExplainMultiCollectionNoRerankError`` instead:
+        per-collection RRF scores are not globally comparable, so an explanation built
+        on them would be misleading, while a search degrades to a merely imperfect
+        ordering that is still worth returning."""
+        # One binding for every rerank call site below, so a future site cannot forget
+        # the flag: `None` means "do not rerank", exactly as a pipeline built without a
+        # reranker does.
+        reranker = self._reranker if rerank else None
         # Step 1: metadata lookup, validation, namespace + model partitioning.
         try:
             all_meta = await self.get_all_collections_meta(namespace)
@@ -2752,14 +2798,14 @@ class SearchPipeline:
                     query, std_vector, collections_in_scope, namespace, candidate_depth, filters=filters,
                     scope_filter=scope_filter,
                 )
-                if self._reranker is not None:
+                if reranker is not None:
                     t0 = monotonic()
-                    std_ranked = await self._reranker.rerank_candidates(
+                    std_ranked = await reranker.rerank_candidates(
                         query, std_merged, top_k=self._top_k_return
                     )
                     std_rerank_ms = (monotonic() - t0) * 1000.0
                 else:
-                    std_merged.sort(key=lambda c: -c.score_breakdown.rrf_score)
+                    std_merged.sort(key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id))
                     std_ranked = std_merged[:self._top_k_return]
                     std_rerank_ms = 0.0
                 return SearchPipelineResult(
@@ -2835,14 +2881,14 @@ class SearchPipeline:
             merged, acl_filtered = apply_acl_filter(merged, lambda c: c.acl, namespace)
 
             # Step F: Rerank on merged set using original query.
-            if self._reranker is not None:
+            if reranker is not None:
                 t0 = monotonic()
-                ranked = await self._reranker.rerank_candidates(
+                ranked = await reranker.rerank_candidates(
                     query, merged, top_k=self._top_k_return
                 )
                 rerank_time_ms = (monotonic() - t0) * 1000.0
             else:
-                merged.sort(key=lambda c: -c.score_breakdown.rrf_score)
+                merged.sort(key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id))
                 ranked = merged[:self._top_k_return]
                 rerank_time_ms = 0.0
 
@@ -2932,12 +2978,12 @@ class SearchPipeline:
 
             all_cands, acl_filtered = apply_acl_filter(all_cands, lambda c: c.acl, namespace)
 
-            if self._reranker is not None:
+            if reranker is not None:
                 t0 = monotonic()
-                ranked = await self._reranker.rerank_candidates(query, all_cands, top_k=self._top_k_return)
+                ranked = await reranker.rerank_candidates(query, all_cands, top_k=self._top_k_return)
                 rerank_time_ms = (monotonic() - t0) * 1000.0
             else:
-                all_cands.sort(key=lambda c: -c.score_breakdown.rrf_score)
+                all_cands.sort(key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id))
                 ranked = all_cands[:self._top_k_return]
                 rerank_time_ms = 0.0
 
@@ -2982,10 +3028,12 @@ class SearchPipeline:
                     "search_many global mode: all candidates empty/filtered; falling through to standard path"
                 )
             else:
-                if self._reranker is not None:
-                    all_candidates = await self._reranker.rerank_candidates(query, all_candidates, top_k=self._top_k_return)
+                if reranker is not None:
+                    all_candidates = await reranker.rerank_candidates(query, all_candidates, top_k=self._top_k_return)
                 else:
-                    all_candidates = sorted(all_candidates, key=lambda c: c.score_breakdown.rrf_score or 0.0, reverse=True)[:self._top_k_return]
+                    all_candidates = sorted(
+                        all_candidates, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
+                    )[:self._top_k_return]
                 return SearchPipelineResult(
                     results=[self._candidate_to_search_result(c) for c in all_candidates],
                     acl_filtered=acl_filtered,
@@ -3137,7 +3185,7 @@ class SearchPipeline:
 
                 # Trim to prevent one collection from dominating the reranker input.
                 merged_leg = sorted(
-                    merged_leg, key=lambda c: c.score_breakdown.rrf_score or 0.0, reverse=True
+                    merged_leg, key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id)
                 )[:trim]
                 return merged_leg, True
 
@@ -3170,15 +3218,14 @@ class SearchPipeline:
                 all_local_candidates, lambda c: c.acl, namespace
             )
 
-            if self._reranker is not None:
-                local_ranked = await self._reranker.rerank_candidates(
+            if reranker is not None:
+                local_ranked = await reranker.rerank_candidates(
                     query, all_local_candidates, top_k=self._top_k_return
                 )
             else:
                 local_ranked = sorted(
                     all_local_candidates,
-                    key=lambda c: c.score_breakdown.rrf_score or 0.0,
-                    reverse=True,
+                    key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id),
                 )[:self._top_k_return]
 
             return SearchPipelineResult(
@@ -3208,12 +3255,12 @@ class SearchPipeline:
         )
 
         # Step 7: single global rerank pass.
-        if self._reranker is not None:
+        if reranker is not None:
             t0 = monotonic()
-            ranked = await self._reranker.rerank_candidates(query, merged, top_k=self._top_k_return)
+            ranked = await reranker.rerank_candidates(query, merged, top_k=self._top_k_return)
             rerank_time_ms = (monotonic() - t0) * 1000.0
         else:
-            merged.sort(key=lambda c: -c.score_breakdown.rrf_score)
+            merged.sort(key=lambda c: (-c.score_breakdown.rrf_score, c.chunk_id))
             ranked = merged[:self._top_k_return]
             rerank_time_ms = 0.0
 

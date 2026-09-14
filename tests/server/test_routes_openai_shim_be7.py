@@ -65,7 +65,7 @@ def _make_stub_app(
         metas.append(m)
 
     stub_pipeline = MagicMock()
-    stub_pipeline.warmup_models = AsyncMock()
+    stub_pipeline.warmup_models = AsyncMock(return_value=True)
     stub_pipeline.get_all_collections_meta = AsyncMock(return_value=metas)
     app.state.pipeline = stub_pipeline
 
@@ -332,13 +332,26 @@ class TestStreamCitationsInline:
 
 class TestStreamDirectTimeoutReturns504:
     def test_stream_direct_timeout_returns_504(self, tmp_path, monkeypatch):
-        """Direct path: asyncio.TimeoutError with stream=True → JSON 504, not broken SSE."""
+        """Direct path: a budget overrun with stream=True → JSON 504, not broken SSE.
+
+        The stub sleeps past a shortened ``_SEARCH_TIMEOUT_SECONDS`` rather than
+        raising ``asyncio.TimeoutError`` directly — only a real overrun raises the
+        ``SearchBudgetExceeded`` the handler maps to 504.
+        """
         import asyncio
+
+        import archon_search.server.routes_openai_shim as shim_module
+
+        monkeypatch.setattr(shim_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
         app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
 
         meta = _make_collection_meta("col")
         app.state.pipeline.get_collection_meta = AsyncMock(return_value=meta)
-        app.state.pipeline.search = AsyncMock(side_effect=asyncio.TimeoutError())
+
+        async def _never_finishes(*_args, **_kwargs):
+            await asyncio.sleep(60)
+
+        app.state.pipeline.search = _never_finishes
 
         with TestClient(app, raise_server_exceptions=False) as client:
             resp = client.post(

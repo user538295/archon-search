@@ -107,6 +107,7 @@ def _make_pipeline_with_search_many_raising(exc: Exception) -> MagicMock:
     """Return a mock pipeline whose search_many raises exc."""
     pipeline = MagicMock()
     pipeline.search_many = AsyncMock(side_effect=exc)
+    pipeline.warmup_models = AsyncMock(return_value=True)
     # _global_embedder is accessed internally; stub it out
     embedder = MagicMock()
     embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
@@ -328,6 +329,7 @@ async def test_mcp_search_rag_fusion_dependency_absent_returns_error() -> None:
             "Install archon-search[rag-fusion] to use RAG Fusion"
         )
     )
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     app = _make_mcp_app(pipeline)
 

@@ -78,6 +78,7 @@ async def _call_mcp_search(pipeline_result: SearchPipelineResult, include_metada
     pipeline = MagicMock()
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(return_value=pipeline_result)
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     with __import__("unittest.mock", fromlist=["patch"]).patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         from archon_search.server import mcp as mcp_module
@@ -149,6 +150,7 @@ async def test_mcp_search_forwards_filters_to_pipeline() -> None:
     pipeline = MagicMock()
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(return_value=pipeline_result)
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
@@ -216,6 +218,7 @@ async def test_mcp_search_invalid_filter_surfaces_validator_error() -> None:
 
     pipeline = MagicMock()
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
@@ -295,6 +298,7 @@ async def test_mcp_search_tool_input_schema_is_superset_of_search_filters() -> N
 
     pipeline = MagicMock()
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    pipeline.warmup_models = AsyncMock(return_value=True)
     from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
     pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
 
@@ -327,6 +331,7 @@ async def _call_mcp_search_multi(
     collections: list[str] | None = None,
     search_many_return: SearchPipelineResult | None = None,
     search_many_raises: Exception | None = None,
+    rerank_available: bool = True,
 ):
     """Invoke the MCP search tool with a pipeline whose search_many is mocked."""
     pipeline = MagicMock()
@@ -337,6 +342,8 @@ async def _call_mcp_search_multi(
         pipeline.search_many = AsyncMock(
             return_value=search_many_return or SearchPipelineResult(results=[], acl_filtered=False)
         )
+    pipeline.warmup_models = AsyncMock(return_value=rerank_available)
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         from archon_search.server import mcp as mcp_module
@@ -382,6 +389,48 @@ async def test_mcp_search_deduplicates_collections() -> None:
     pipeline.search_many.assert_awaited_once()
     passed = pipeline.search_many.await_args.args[1]
     assert passed == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_fanout_bounds_warmup_and_reranks() -> None:
+    """MCP fan-out has REST parity: bounded warm-up, flag threaded to search_many.
+
+    The ``warmup_models`` stubs the other MCP tests carry only make the call
+    *possible*; nothing asserted it happens, so removing the warm-up left them
+    all green while restoring the S288 hang.
+    """
+    from archon_search.server._search_budget import RERANKER_WARMUP_WAIT_SECONDS
+
+    pipeline, _result = await _call_mcp_search_multi(collections=["a", "b"])
+
+    pipeline.warmup_models.assert_awaited_once_with(
+        None, reranker_timeout=RERANKER_WARMUP_WAIT_SECONDS
+    )
+    assert pipeline.search_many.await_args.kwargs["rerank"] is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_single_collection_bounds_warmup_and_reranks() -> None:
+    """MCP single-collection path bounds the warm-up and threads its flag through."""
+    from archon_search.server._search_budget import RERANKER_WARMUP_WAIT_SECONDS
+
+    pipeline, _result = await _call_mcp_search_multi(collection="a")
+
+    pipeline.warmup_models.assert_awaited_once()
+    assert pipeline.warmup_models.await_args.kwargs == {
+        "reranker_timeout": RERANKER_WARMUP_WAIT_SECONDS
+    }
+    assert pipeline.search.await_args.kwargs["rerank"] is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_degrades_when_reranker_stays_cold() -> None:
+    """A cold cross-encoder reaches both MCP branches as ``rerank=False`` (S288)."""
+    fanout_pipeline, _ = await _call_mcp_search_multi(collections=["a"], rerank_available=False)
+    assert fanout_pipeline.search_many.await_args.kwargs["rerank"] is False
+
+    direct_pipeline, _ = await _call_mcp_search_multi(collection="a", rerank_available=False)
+    assert direct_pipeline.search.await_args.kwargs["rerank"] is False
 
 
 @pytest.mark.asyncio
@@ -462,6 +511,7 @@ async def test_mcp_search_multi_emits_search_multi_telemetry() -> None:
             excluded_collections=[ExcludedCollection(name="c", reason="embedding_model_mismatch")],
         )
     )
+    pipeline.warmup_models = AsyncMock(return_value=True)
     writer = MagicMock()
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
@@ -491,6 +541,7 @@ async def test_search_tool_language_param_described() -> None:
 
     pipeline = MagicMock()
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     real_app = mcp_module.create_app(pipeline, "default", writer=None)
     tools_list = await real_app.list_tools()
@@ -534,6 +585,7 @@ async def test_mcp_search_invalid_language_returns_error() -> None:
 
     pipeline = MagicMock()
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
@@ -558,6 +610,7 @@ async def test_mcp_search_language_with_collections_is_now_accepted() -> None:
 
     pipeline = MagicMock()
     pipeline.search_many = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
@@ -589,6 +642,7 @@ async def test_mcp_search_tool_returns_expansion_fields_on_hyde_failure() -> Non
     pipeline.search = AsyncMock(
         return_value=SearchPipelineResult(results=[], acl_filtered=False)
     )
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
         "archon_search.server.mcp.resolve_hyde_vector",
@@ -614,6 +668,7 @@ async def test_mcp_search_tool_expansion_used_true_on_hyde_success() -> None:
     pipeline.search = AsyncMock(
         return_value=SearchPipelineResult(results=[], acl_filtered=False)
     )
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     fake_vector = np.ones(384, dtype=np.float32)
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
@@ -639,6 +694,7 @@ async def test_mcp_search_tool_no_expansion_by_default() -> None:
     pipeline.search = AsyncMock(
         return_value=SearchPipelineResult(results=[], acl_filtered=False)
     )
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)
@@ -659,6 +715,7 @@ async def test_mcp_search_multi_collection_expansion_warning_on_hyde_failure() -
     pipeline.search_many = AsyncMock(
         return_value=SearchPipelineResult(results=[], acl_filtered=False)
     )
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
         "archon_search.server.mcp.resolve_hyde_vector",
@@ -684,6 +741,7 @@ async def test_mcp_search_multi_collection_expansion_used_true_on_rag_fusion_suc
             results=[], acl_filtered=False, rag_fusion_applied=True, rag_fusion_queries_used=2
         )
     )
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         fake_app = mcp_module.create_app(pipeline, "default", writer=None)

@@ -103,6 +103,7 @@ def _make_pipeline_mock_with_result(graph_expansion_applied: bool = False):
     pipeline = MagicMock()
     pipeline.search = AsyncMock(return_value=result_obj)
     pipeline.search_many = AsyncMock(return_value=result_obj)
+    pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock(
         namespace="default",
         name="col1",
@@ -212,6 +213,7 @@ def test_mcp_search_communities_not_built_returns_error() -> None:
     from archon_search.pipeline import GraphCommunitiesNotBuiltError
 
     pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.search = AsyncMock(side_effect=GraphCommunitiesNotBuiltError("col1"))
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock(
         namespace="default",
@@ -395,6 +397,7 @@ def test_mcp_search_many_communities_not_built_returns_error() -> None:
 
     pipeline = MagicMock()
     pipeline.search_many = AsyncMock(side_effect=GraphCommunitiesNotBuiltError("col1"))
+    pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock(
         namespace="default",
         name="col1",

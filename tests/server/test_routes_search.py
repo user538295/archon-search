@@ -64,7 +64,7 @@ def _make_pipeline_mock(
     from archon_search.collection_meta import CollectionMeta
 
     pipeline = MagicMock()
-    pipeline.warmup_models = AsyncMock()
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     if meta_raises is not None:
         pipeline.get_collection_meta = AsyncMock(side_effect=meta_raises)
@@ -843,7 +843,7 @@ def _make_multi_pipeline_mock(
     search_many_raises: Exception | None = None,
 ) -> MagicMock:
     pipeline = MagicMock()
-    pipeline.warmup_models = AsyncMock()
+    pipeline.warmup_models = AsyncMock(return_value=True)
     if search_many_raises is not None:
         pipeline.search_many = AsyncMock(side_effect=search_many_raises)
     else:
@@ -866,6 +866,75 @@ def test_search_handler_multi_collection_calls_search_many(tmp_path: Path) -> No
     app.state.pipeline.search_many.assert_called_once()
     # The multi-collection branch must NOT run the single-collection meta pre-check.
     app.state.pipeline.get_collection_meta.assert_not_called()
+
+
+def test_search_handler_single_collection_bounds_warmup_and_reranks(tmp_path: Path) -> None:
+    """The single-collection branch bounds the warm-up and threads its flag through."""
+    from archon_search.server._search_budget import RERANKER_WARMUP_WAIT_SECONDS
+
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=[_make_search_result(1)])
+
+    response = client.post("/search", json={"collection": "col", "query": "q"})
+
+    assert response.status_code == 200, response.text
+    app.state.pipeline.warmup_models.assert_awaited_once()
+    assert app.state.pipeline.warmup_models.await_args.kwargs == {
+        "reranker_timeout": RERANKER_WARMUP_WAIT_SECONDS
+    }
+    assert app.state.pipeline.search.await_args.kwargs["rerank"] is True
+
+
+def test_search_handler_single_collection_degrades_when_reranker_stays_cold(
+    tmp_path: Path,
+) -> None:
+    """A cold cross-encoder must reach ``search`` as ``rerank=False`` (S286)."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=[_make_search_result(1)])
+    app.state.pipeline.warmup_models = AsyncMock(return_value=False)
+
+    response = client.post("/search", json={"collection": "col", "query": "q"})
+
+    assert response.status_code == 200, response.text
+    assert app.state.pipeline.search.await_args.kwargs["rerank"] is False
+
+
+def test_search_handler_fanout_bounds_warmup_and_reranks(tmp_path: Path) -> None:
+    """The fan-out branch must warm both models under a bound, then rerank (S288).
+
+    Pins what the warm-up stubs elsewhere only make possible: the call is
+    actually awaited, its reranker leg is bounded, and the resulting flag
+    reaches ``search_many``. Without these assertions deleting the warm-up
+    entirely leaves every other fan-out test green.
+    """
+    from archon_search.server._search_budget import RERANKER_WARMUP_WAIT_SECONDS
+
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_multi_pipeline_mock(
+        search_many_return=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+
+    response = client.post("/search", json={"collections": ["a", "b"], "query": "q"})
+
+    assert response.status_code == 200, response.text
+    app.state.pipeline.warmup_models.assert_awaited_once_with(
+        None, reranker_timeout=RERANKER_WARMUP_WAIT_SECONDS
+    )
+    assert app.state.pipeline.search_many.await_args.kwargs["rerank"] is True
+
+
+def test_search_handler_fanout_degrades_when_reranker_stays_cold(tmp_path: Path) -> None:
+    """A cold cross-encoder must reach ``search_many`` as ``rerank=False``."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_multi_pipeline_mock(
+        search_many_return=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+    app.state.pipeline.warmup_models = AsyncMock(return_value=False)
+
+    response = client.post("/search", json={"collections": ["a", "b"], "query": "q"})
+
+    assert response.status_code == 200, response.text
+    assert app.state.pipeline.search_many.await_args.kwargs["rerank"] is False
 
 
 def test_search_handler_missing_collection_returns_404(tmp_path: Path) -> None:
@@ -1141,6 +1210,7 @@ def test_search_rag_fusion_true_skips_hyde(tmp_path: Path) -> None:
             results=results, acl_filtered=False, rag_fusion_applied=True, rag_fusion_queries_used=2
         )
     )
+    pipeline_mock.warmup_models = AsyncMock(return_value=True)
     app.state.pipeline = pipeline_mock
 
     with patch(
@@ -1175,6 +1245,7 @@ def test_search_rag_fusion_requested_but_disabled_hyde_still_applies(tmp_path: P
             results=results, acl_filtered=False, rag_fusion_applied=False, rag_fusion_queries_used=0
         )
     )
+    pipeline_mock.warmup_models = AsyncMock(return_value=True)
     app.state.pipeline = pipeline_mock
 
     with patch(
@@ -1205,6 +1276,7 @@ def test_search_rag_fusion_true_passes_to_pipeline(tmp_path: Path) -> None:
             results=results, acl_filtered=False, rag_fusion_applied=True, rag_fusion_queries_used=2, rag_fusion_attempted=True
         )
     )
+    pipeline_mock.warmup_models = AsyncMock(return_value=True)
     app.state.pipeline = pipeline_mock
 
     with patch("archon_search.server.routes_search.resolve_hyde_vector", new=AsyncMock(return_value=(None, False))):
@@ -1246,6 +1318,7 @@ def test_search_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> 
     app, client = _make_app(tmp_path)
     pipeline_mock = _make_pipeline_mock()
     pipeline_mock.search = AsyncMock(side_effect=RAGFusionDependencyError("Install archon-search[rag_fusion]"))
+    pipeline_mock.warmup_models = AsyncMock(return_value=True)
     app.state.pipeline = pipeline_mock
 
     with patch("archon_search.server.routes_search.resolve_hyde_vector", new=AsyncMock(return_value=(None, False))):

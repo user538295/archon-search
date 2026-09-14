@@ -29,12 +29,15 @@ from archon_search.pipeline import (
 )
 from archon_search.rag_fusion import RAGFusionDependencyError
 from archon_search.server.schemas import AclGateSchema, ErrorDetail, ExcludedCollectionSchema
+from archon_search.server._search_budget import (
+    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
+    SearchBudgetExceeded,
+    run_within_budget,
+    warmup_for_search,
+)
 from archon_search.server._validators import validate_scope_filter as _check_scope_filter
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
-
-# TODO: make configurable via config.py (see /route for parity)
-_SEARCH_TIMEOUT_SECONDS = 30.0
 
 # Upper bound on how long a single POST /search request waits on
 # embedder_cache.get_or_load() before giving up with a fast 503. The cache's
@@ -46,16 +49,6 @@ _SEARCH_TIMEOUT_SECONDS = 30.0
 # dedup waiter, not the loader) keeps running in the background regardless, so
 # the next request is likely to hit a warm cache.
 _EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS = 30.0
-
-# Upper bound on how long a single POST /search request waits for the cross-encoder
-# to finish its cold ONNX build before answering without reranking (S286). Deliberately
-# short, not a client-read-timeout budget: a request already this deep into a cold path
-# means an ingest job upstream (bounded by routes_jobs._INGEST_WARMUP_WAIT_SECONDS) or
-# the lifespan warm-up already spent up to their own ceilings on this same build and it
-# is still not done, so a further multi-second wait here buys little. The build keeps
-# running in its worker thread regardless — this request degrades to the fused
-# vector+FTS ranking, and later requests get the full reranked pipeline back.
-_RERANKER_WARMUP_WAIT_SECONDS = 0.5
 
 _VALID_ACL_SOURCES = frozenset({"frontmatter", "sidecar", "collection_default"})
 
@@ -248,21 +241,32 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         hyde_expansion_warning = _HYDE_EXPANSION_FAILED_WARNING if (body.hyde and not hyde_applied) else None
 
     if body.collections is not None:
-        # Fan-out resolves its own per-collection embedders, but the reranker is
-        # shared and lazy — warm it outside the fan-out budget (S184).
-        await pipeline.warmup_models()
+        # Warm both lazy models outside the fan-out budget (S184). With no embedder
+        # argument warmup_models warms the pipeline's global embedder — the one
+        # search_many embeds with — unbounded, since search cannot answer without a
+        # query vector. The reranker leg is bounded so a cold cross-encoder cannot
+        # stall the request; rerank=False degrades to the fused RRF ranking (S288).
+        rerank = await warmup_for_search(pipeline)
         try:
-            result = await pipeline.search_many(
-                body.query,
-                body.collections,
-                namespace=ns,
-                query_vector=hyde_vector,
-                rag_fusion=body.rag_fusion,
-                rag_fusion_generator=rag_fusion_gen,
-                rag_fusion_config=config.rag_fusion,
-                filters=body.filters,
-                graph_mode=body.graph_mode,
-                scope_filter=body.scope_filter,
+            # search_many's own _fanout_timeout_seconds bounds the per-collection leg
+            # gathers only; the meta lookup, embed_one, graph-store calls and the
+            # global rerank pass sit outside it, so the whole call gets the same
+            # overall budget as the single-collection path below.
+            result = await run_within_budget(
+                pipeline.search_many(
+                    body.query,
+                    body.collections,
+                    namespace=ns,
+                    query_vector=hyde_vector,
+                    rag_fusion=body.rag_fusion,
+                    rag_fusion_generator=rag_fusion_gen,
+                    rag_fusion_config=config.rag_fusion,
+                    filters=body.filters,
+                    graph_mode=body.graph_mode,
+                    scope_filter=body.scope_filter,
+                    rerank=rerank,
+                ),
+                timeout=_SEARCH_TIMEOUT_SECONDS,
             )
         except RAGFusionDependencyError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=422)
@@ -277,7 +281,17 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"},
                 status_code=503,
             )
-        except FanoutTimeoutError:
+        except (FanoutTimeoutError, SearchBudgetExceeded):
+            # SearchBudgetExceeded, not asyncio.TimeoutError: since 3.11 the latter is
+            # the builtin TimeoutError (an OSError), so catching it here would also
+            # swallow a socket ETIMEDOUT from the store and mis-map it to a 504.
+            logger.error(
+                "search pipeline timed out",
+                extra={
+                    "event_type": "search_timeout",
+                    "collections": list(body.collections),
+                },
+            )
             raise HTTPException(status_code=504, detail="Search timed out")
         schemas = [SearchResultSchema.from_result(r, include_acl_gate=body.acl_context) for r in result.results]
         if writer is not None:
@@ -370,20 +384,22 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 embedder = pipeline._global_embedder
                 active_model = config.embedding_model
             # Outside the wait_for below by design (S184): a cold ONNX build must not
-            # consume the search budget. The embedder half stays unbounded — search
-            # cannot answer at all without it. The reranker half is bounded (S286):
-            # search *can* answer without it, so rather than block past a client's
-            # read timeout (the reported status=0 body=None) this request degrades to
-            # the fused vector+FTS ranking and the build finishes in the background.
+            # consume the search budget. The embedder leg stays unbounded — search
+            # cannot answer at all without it — while the reranker leg is bounded and
+            # degrades to the fused ranking; see _search_budget.warmup_for_search.
             # The same cold-model root cause is reported by S278/S288/S299/S302.
             # (S283 was a distinct bug, not this gap: Reranker._warmup_failed latched a
             # single transient warm-up failure permanently, silently no-opping this
             # call and the S281 ingest gate alike for the rest of the process — fixed
             # in reranker.py so a failed attempt is retried, not latched.)
-            rerank = await pipeline.warmup_models(
-                embedder, reranker_timeout=_RERANKER_WARMUP_WAIT_SECONDS
-            )
-            result = await asyncio.wait_for(
+            rerank = await warmup_for_search(pipeline, embedder)
+            # run_within_budget, not a bare asyncio.wait_for: since 3.11
+            # asyncio.TimeoutError *is* the builtin TimeoutError (an OSError), so a
+            # socket ETIMEDOUT raised inside the store would otherwise be caught by
+            # the handler below and mis-mapped to a 504. Only a genuine budget
+            # overrun raises SearchBudgetExceeded — everything else keeps its own
+            # status mapping, exactly like the fan-out branch above.
+            result = await run_within_budget(
                 pipeline.search(
                     body.query,
                     body.collection,
@@ -477,7 +493,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             return JSONResponse(
                 {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
             )
-        except asyncio.TimeoutError:
+        except SearchBudgetExceeded:
             _emit_timings()
             if writer is not None:
                 try:
@@ -494,7 +510,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                     logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
             logger.error(
                 "search pipeline timed out",
-                extra={"event_type": "search_timeout"},
+                extra={"event_type": "search_timeout", "collection": body.collection},
             )
             raise HTTPException(status_code=504, detail="Search timed out")
         except Exception as exc:

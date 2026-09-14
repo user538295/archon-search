@@ -87,7 +87,7 @@ def _make_stub_app(
     metas = [_make_collection_meta(n) for n in (collections or [])]
     stub = MagicMock()
     stub.get_all_collections_meta = AsyncMock(return_value=metas)
-    stub.warmup_models = AsyncMock()
+    stub.warmup_models = AsyncMock(return_value=True)
     app.state.pipeline = stub
 
     return app

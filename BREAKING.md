@@ -53,6 +53,27 @@ This is degraded-but-ready, not an outage: no task exists, so `_startup_sync_pen
 
 **Migration:** Clients that decode `sync_result` into a closed enum must accept `"suppressed"` as a fourth value, and probes that treat any non-`"ok"` `checks.sync` as a failure must accept `"warn"` (it answers 200). Automation that assumed a restart always re-syncs the corpus must either poll `GET /status` for `sync_result == "suppressed"` and issue `POST /sync`, or ensure jobs are terminal before shutdown (a clean shutdown leaves no `RUNNING` job, so nothing is suppressed) — and must be aware that, once suppressed, the corpus stays stale across every subsequent restart until that `POST /sync` runs, not just the next one. Automation that reads `GET /jobs` must tolerate the startup `SyncJob` it did not submit, on any boot where the sync actually ran — filter on `kind`/`created_at` rather than assuming every job is client-originated. Automation that alerts on `readiness.jobs.running > 0` at startup as a queue-depth signal must special-case the startup sync's own `SyncJob`, e.g. by excluding `kind=sync` jobs younger than the process uptime. Clients that call `DELETE /jobs/{id}` unconditionally (rather than only on jobs they themselves submitted) must handle `409` for the one job they never submitted — the startup sync.
 
+### [next release] — a cold cross-encoder now degrades `/search`, MCP `search` and `/v1` to the RRF-fused ranking instead of blocking; fan-out gains a 30 s budget (2026-09-14, S286/S288)
+
+**Surface**: `POST /search`, the MCP `search` tool, `POST /v1/chat/completions` — single-collection **and** fan-out branches of all three.
+
+**Behaviour-only change — no schema field was added, removed or retyped, so `GET /openapi.json` needs no regeneration.** `reranker_score` was already `float | null` on the wire and `score` was already `float`; only the *circumstances* under which `reranker_score` is `null` have widened.
+
+**What changed:** All six search call sites now warm the lazy ONNX models *before* entering the request budget, with the reranker leg bounded at 0.5 s (`server/_search_budget.RERANKER_WARMUP_WAIT_SECONDS`). When the cross-encoder is still building when that bound expires, the request is answered with `rerank=False` instead of waiting for the build.
+
+Two consequences for clients of a **reranker-configured** deployment, during a cold window (typically the first searches after a restart, before `GET /ready` returns 200):
+
+- **`reranker_score` can be `null` on every result.** It previously meant only "this deployment has no reranker". Clients that treated a non-null `reranker_score` as guaranteed on a reranker-configured deployment — or that branch on it to decide whether reranking is enabled at all — must now treat it as nullable unconditionally. The condition is transient: once the build lands, later requests get the full reranked pipeline back with no config change.
+- **The result ordering differs.** Degraded responses are ordered by the fused RRF score, `(-rrf_score, chunk_id)` — deterministic, but not the cross-encoder ordering. `score` carries that RRF score. Anything that snapshots an exact result order (golden-file tests, cached top-k) may see a different order for the same query during that window.
+
+This replaces the previous behaviour, which was strictly worse: the request blocked for the whole ONNX build (measured: 91 s for `BAAI/bge-reranker-base` on the `max` profile) *outside* any timeout budget, so a real client read-timed-out and recorded no response at all rather than a slow one.
+
+**Also:** the fan-out (`collections` / the `archon-search` catch-all model) is now wrapped in the same overall ~30 s request budget the single-collection path already had, so an over-long fan-out returns `504` (`{"detail": "Search timed out"}` on REST, `{"error": "search timed out", "code": "timeout"}` on MCP, OpenAI-shaped `504 Request timeout.` on `/v1`) instead of running unbounded. `search_many`'s own fan-out timeout bounds only the per-collection leg gathers, so it never covered the meta lookup, the query embed or the global rerank pass. Conversely, a `TimeoutError` raised *inside* the pipeline (e.g. a socket `ETIMEDOUT` from the store) is no longer mis-mapped to `504` — it keeps its own `500`/`503` mapping.
+
+**Migration:** tolerant clients need no change. Clients that assert `reranker_score is not None`, or that pin an exact result ordering, should either accept the nullable/RRF-ordered case or gate their traffic on `GET /ready` returning 200 (which already waits for the lifespan warm-up, S279). Clients that treat any `504` as "the store is down" should note the fan-out can now produce one.
+
+---
+
 ### [next release] — `GET /ready` returns 503 while model warm-up or the startup collection sync is pending (2026-08-14, revised 2026-09-14 for S279)
 
 **What changed:** `ready: bool` (and the HTTP status) on `GET /ready` was previously storage-only — see the D6 entry below, which explicitly promised it would stay that way. It now gates on **three** independent conditions: `SearchStore.ping()` succeeding, no model warm-up outstanding, and no lifespan startup collection sync still running.

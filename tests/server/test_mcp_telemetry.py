@@ -69,6 +69,7 @@ def _make_pipeline(
 ) -> MagicMock:
     pipeline = MagicMock()
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
+    pipeline.warmup_models = AsyncMock(return_value=True)
     if raises is not None:
         pipeline.search = AsyncMock(side_effect=raises)
     else:
@@ -326,6 +327,7 @@ async def test_mcp_search_acl_filtered_propagated() -> None:
     pipeline.search = AsyncMock(
         return_value=SearchPipelineResult(results=[], acl_filtered=True)
     )
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         from archon_search.server import mcp as mcp_module

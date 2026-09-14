@@ -71,6 +71,7 @@ async def test_search_error_returns_structured_error() -> None:
     pipeline = MagicMock()
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(side_effect=RuntimeError("boom"))
+    pipeline.warmup_models = AsyncMock(return_value=True)
     app = _make_app(pipeline)
     result = await app.tools["search"](query="q", collection=None)
     assert isinstance(result, dict)

@@ -17,7 +17,6 @@ Design:
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -36,6 +35,12 @@ from starlette.responses import Response, StreamingResponse
 
 from archon_search.config import resolve_active_model
 from archon_search.pipeline import CollectionNotFoundError, FanoutTimeoutError, MetadataLookupError
+from archon_search.server._search_budget import (
+    SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
+    SearchBudgetExceeded,
+    run_within_budget,
+    warmup_for_search,
+)
 from archon_search.server.schemas_openai import (
     ChatCompletionChoice,
     ChatCompletionChunk,
@@ -56,9 +61,6 @@ router = APIRouter()
 
 # The catch-all model ID — returned regardless of how many collections exist.
 _CATCH_ALL_MODEL_ID = "archon-search"
-
-# Mirror routes_search.py — single-collection search timeout in seconds.
-_SEARCH_TIMEOUT_SECONDS = 30.0
 
 
 # ---------------------------------------------------------------------------
@@ -221,12 +223,30 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
                 omitted,
             )
 
+        # Same warm-up as the REST fan-out route: the global embedder (which
+        # search_many embeds with) unbounded, the shared reranker bounded, so a cold
+        # cross-encoder cannot block this request for its whole ONNX build (S288).
+        rerank = await warmup_for_search(pipeline)
+
         try:
-            result = await pipeline.search_many(query, col_names, namespace=ns)
+            # search_many's own _fanout_timeout_seconds bounds the per-collection leg
+            # gathers only — the meta lookup, embed_one and the global rerank pass sit
+            # outside it, so the whole call gets the same budget as the direct path.
+            result = await run_within_budget(
+                pipeline.search_many(query, col_names, namespace=ns, rerank=rerank),
+                timeout=_SEARCH_TIMEOUT_SECONDS,
+            )
         except CollectionNotFoundError as exc:
             logger.warning("chat_completions: collection not found during fanout: %s", exc)
             return _openai_error(404, "Collection not found.", "invalid_request_error")
-        except FanoutTimeoutError:
+        except (FanoutTimeoutError, SearchBudgetExceeded):
+            # SearchBudgetExceeded, not asyncio.TimeoutError: since 3.11 the latter is
+            # the builtin TimeoutError (an OSError), so catching it here would also
+            # swallow a socket ETIMEDOUT from the store and mis-map it to a 504.
+            logger.error(
+                "chat_completions: search timed out",
+                extra={"event_type": "search_timeout", "collections": list(col_names)},
+            )
             return _openai_error(504, "Request timeout.", "server_error")
         except MetadataLookupError as exc:
             logger.error("chat_completions: metadata lookup failed during search: %s", exc)
@@ -262,14 +282,27 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
             )
 
         embedder = await _resolve_embedder(meta)
-        await pipeline.warmup_models(embedder)
+        # Outside the budget below by design (S184/S288): a cold cross-encoder built
+        # inside rerank_candidates would park this request for the whole ONNX build.
+        # rerank=False degrades to the fused vector+FTS ranking instead.
+        rerank = await warmup_for_search(pipeline, embedder)
 
         try:
-            result = await asyncio.wait_for(
-                pipeline.search(query, collection, namespace=ns, embedder=embedder),
+            # run_within_budget, not a bare asyncio.wait_for: since 3.11
+            # asyncio.TimeoutError *is* the builtin TimeoutError (an OSError), so a
+            # socket ETIMEDOUT raised inside the store would otherwise be mis-mapped
+            # to a 504 instead of the 500 its own handler gives it. Only a genuine
+            # budget overrun raises SearchBudgetExceeded — matching the fan-out
+            # branch above and both REST/MCP single-collection paths.
+            result = await run_within_budget(
+                pipeline.search(query, collection, namespace=ns, embedder=embedder, rerank=rerank),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
-        except asyncio.TimeoutError:
+        except SearchBudgetExceeded:
+            logger.error(
+                "chat_completions: search timed out",
+                extra={"event_type": "search_timeout", "collection": collection},
+            )
             return _openai_error(504, "Request timeout.", "server_error")
         except Exception as exc:
             logger.error("chat_completions: search failed for collection %r: %s", collection, exc, exc_info=True)

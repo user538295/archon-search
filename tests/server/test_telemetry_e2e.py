@@ -131,6 +131,7 @@ def _make_ok_pipeline(results: list[SearchResult]) -> MagicMock:
     from archon_search.pipeline import SearchPipelineResult
 
     pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=results, acl_filtered=False))
     swc_items = [{"result": r, "context_before": [], "context_after": []} for r in results]
     from archon_search.pipeline import SearchWithContextResult
@@ -143,6 +144,7 @@ def _make_ok_pipeline(results: list[SearchResult]) -> MagicMock:
 
 def _make_error_pipeline(exc: Exception) -> MagicMock:
     pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.search = AsyncMock(side_effect=exc)
     pipeline.search_with_context = AsyncMock(side_effect=exc)
     return pipeline
@@ -153,6 +155,7 @@ def _make_search_error_pipeline(exc: Exception) -> MagicMock:
     from archon_search.collection_meta import CollectionMeta
 
     pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline.get_collection_meta = AsyncMock(
         return_value=CollectionMeta(name="col", namespace="default")
     )
