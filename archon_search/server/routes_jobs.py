@@ -190,6 +190,42 @@ async def _dispatch_ingest(
     return [], []
 
 
+#: Ceiling on the pre-DONE model warm-up wait in an ingest task (S281). Generous
+#: enough for a cold cross-encoder ONNX build (the "max" profile measured 91 s),
+#: bounded so a wedged model download cannot pin an ingest job forever.
+_INGEST_WARMUP_WAIT_SECONDS = 180.0
+
+
+async def _await_models_warm(pipeline: Any, job_id: str) -> None:
+    """Block until the lazy ONNX models are built, before an ingest reports DONE.
+
+    An ingest job's terminal ``DONE`` is the completion signal clients act on —
+    ``archon-search collection add --wait`` polls exactly this, then searches.
+    Ingest only ever touches the *embedder*, so ``DONE`` used to be emitted while
+    the cross-encoder was still cold; the next ``POST /search`` then awaited
+    ``Reranker._warmup_lock`` outside ``_SEARCH_TIMEOUT_SECONDS`` and produced no
+    response inside any normal client read budget (S281). Absorbing that wait
+    here — off the request path, where ``/ready`` already puts it for probe-aware
+    clients (S279) — makes a completed ingest mean what it says.
+
+    Never fails the job: ``warmup_models`` already swallows model errors, and a
+    timeout only means the first search pays the build cost, which is the old
+    behaviour. The content is ingested either way.
+    """
+    if pipeline is None:
+        return
+    try:
+        await asyncio.wait_for(pipeline.warmup_models(), timeout=_INGEST_WARMUP_WAIT_SECONDS)
+    except Exception:  # noqa: BLE001 — CancelledError is a BaseException and still propagates
+        logger.warning(
+            "ingest job %s: model warm-up did not finish within %.0fs; the first search "
+            "on this collection will pay the model build cost",
+            job_id,
+            _INGEST_WARMUP_WAIT_SECONDS,
+            exc_info=True,
+        )
+
+
 async def _default_ingest_task(
     job_id: str,
     store: JobStore,
@@ -211,6 +247,7 @@ async def _default_ingest_task(
             ingest_warnings, ingest_file_results = await _dispatch_ingest(body, namespace, search_store, embedder_cache, pipeline, config)
         else:
             await _run_pipeline(job_id, store, body, pipeline_fn, namespace=namespace)
+        await _await_models_warm(pipeline, job_id)
         # Check for cancellation before marking DONE
         job = store.get(job_id)
         if job and job.status == JobStatus.CANCELLING:
@@ -277,6 +314,7 @@ async def _default_ingest_task_with_lock(
             await _run_pipeline(
                 job_id, store, body, pipeline_fn, namespace=namespace, locked_by_caller=True
             )
+        await _await_models_warm(pipeline, job_id)
         job = store.get(job_id)
         if job and job.status == JobStatus.CANCELLING:
             store.update(job_id, status=JobStatus.CANCELLED)

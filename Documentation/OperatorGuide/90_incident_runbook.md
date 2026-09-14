@@ -83,12 +83,13 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 
 ### Search returns HTTP 500 / 503 / 504
 
-**Symptoms**: `POST /search` returns 500, 503, or 504 instead of results.
+**Symptoms**: `POST /search` returns 500, 503, or 504 instead of results — or returns nothing at all and the client times out.
 
 **Diagnosis** (log strings and telemetry statuses verified against `server/routes_search.py`):
 
 - **HTTP 500** — a pipeline stage failed (embedder, store query, or reranker). The server logs at ERROR with `event_type="search_pipeline_failure"` and message `search pipeline failed: <ExceptionClass>` (full traceback attached). Telemetry entry: `endpoint="search"`, `status="internal_error"`.
 - **HTTP 504** — the pipeline call timed out (>30 s). ERROR record with `event_type="search_timeout"`, message `search pipeline timed out`. Telemetry entry: `status="timeout"`. A cold cross-encoder is **not** a cause: since S184 the handler warms the reranker before the timer starts, so a 504 means the search itself was slow (store contention, an oversized candidate pool, CPU pressure) rather than a one-off model load.
+- **No response at all** (client-side timeout, "connection failed", `status 0`) — not in the 500/503/504 family, and the most likely cold-start symptom. The warm-up above sits *outside* the timer, so a request that triggers the ONNX build is unbounded: it returns nothing until the build completes instead of degrading to a `504`. Since **S281** an ingest job waits for warm-up before reporting `DONE`, so `collection add --wait` / `ingest --wait` no longer hand back a server that hangs on the next search; the exposure that remains is the **first search against a pre-existing collection after a restart**, issued without waiting for `GET /ready` to return `200`. Confirm with `GET /ready` (`checks.models: "pending"`) and the absence of any `search pipeline failed` / `search pipeline timed out` record; the fix is to gate clients on `/ready`, not to raise the client timeout.
 - **HTTP 503** — collection metadata could not be reached (body `{"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"}`). ERROR message `search: meta lookup failed for collection ...`. **No telemetry entry is emitted** — triage as a store connectivity issue (see LanceDB lock contention above).
 - **HTTP 200 + `results: []`** — success, no matches. Not a failure.
 

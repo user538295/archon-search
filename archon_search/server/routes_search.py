@@ -359,6 +359,13 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 logger.warning("search: embedder_cache absent from app.state — falling back to global embedder")
                 embedder = pipeline._global_embedder
                 active_model = config.embedding_model
+            # Outside the wait_for below by design (S184): a cold ONNX build must not
+            # consume the search budget. The cost is that it is also unbounded — a
+            # request that pays the build returns nothing until it finishes rather
+            # than degrading to a 504. S281 removed the post-ingest exposure (ingest
+            # jobs now warm the models before reporting DONE); a first search against
+            # a pre-existing collection after a restart, issued without waiting for
+            # /ready, still pays it. Tracked by S278/S283/S286/S288/S299/S302.
             await pipeline.warmup_models(embedder)
             result = await asyncio.wait_for(
                 pipeline.search(
