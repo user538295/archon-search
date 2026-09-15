@@ -9,6 +9,16 @@ roles: [frontend, backend, tester]
 architecture: clean
 ---
 
+> **⚠️ Stale reference (2026-09-15):** this plan predates the
+> 2026-09 graph-extraction migration from spaCy to GLiNER (see
+> `Documentation/Completed/2026-08-19-035-multilingual-graph-ner-brief.md`).
+> Every mention of a "spaCy-only fallback" or "spaCy NER" below
+> describes the pre-migration pipeline. `graph_extractor.py` now hard-requires
+> GLiNER (`ensure_graph_engine_importable`) and has no spaCy code path
+> at all. Re-validate the enrichment call-site design against the
+> current GLiNER-based extractor before implementing any part of this
+> plan.
+
 # llama-cpp-local-provider · llama.cpp Local Provider — Team Plan
 
 **How to read this file**
@@ -24,7 +34,7 @@ architecture: clean
 
 ## Background
 
-archon-search already supports four LLM providers (`anthropic`, `openai`, `ollama`, `claude_cli`) for HyDE and RAG Fusion query expansion, selected per-feature via `[hyde]`/`[rag_fusion]` config and dispatched by `_build_query_expansion_provider` in `server/app.py`. Knowledge-graph enrichment (community summarisation, typed relationship labelling) has a protocol (`LLMEnrichmentClientProtocol`) and one concrete client (`AnthropicEnrichmentClient`), but **that client is orphaned** — no factory constructs it, and both call sites (`CommunityBuilder._generate_llm_summary`, `GraphExtractor.extract`) are stubs that raise `NotImplementedError` or fall back to spaCy-only. `AnthropicEnrichmentClient` has a 528-line, 20-test suite (`tests/test_e2i_be0_llm_enrichment_client.py`); what is untested is the **wiring** — the factory, injection into `CommunityBuilder._generate_llm_summary`, and injection into `GraphExtractor`. There is no `llama_cpp` provider today.
+archon-search already supports four LLM providers (`anthropic`, `openai`, `ollama`, `claude_cli`) for HyDE and RAG Fusion query expansion, selected per-feature via `[hyde]`/`[rag_fusion]` config and dispatched by `_build_query_expansion_provider` in `server/app.py`. Knowledge-graph enrichment (community summarisation, typed relationship labelling) has a protocol (`LLMEnrichmentClientProtocol`) and one concrete client (`AnthropicEnrichmentClient`), but **that client is orphaned** — no factory constructs it, and both call sites (`CommunityBuilder._generate_llm_summary`, `GraphExtractor.extract`) are stubs that raise `NotImplementedError` or (pre-GLiNER-migration) fell back to spaCy-only — `GraphExtractor` now has no fallback path at all, since GLiNER is a hard requirement. `AnthropicEnrichmentClient` has a 528-line, 20-test suite (`tests/test_e2i_be0_llm_enrichment_client.py`); what is untested is the **wiring** — the factory, injection into `CommunityBuilder._generate_llm_summary`, and injection into `GraphExtractor`. There is no `llama_cpp` provider today.
 
 ---
 
