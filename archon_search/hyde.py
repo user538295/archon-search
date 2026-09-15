@@ -162,9 +162,10 @@ async def resolve_hyde_vector(
         return (None, False)
 
     # ``generator.generate`` ends in ``embed_one`` on the caller's embedder, and
-    # the search call sites resolve HyDE *before* entering any request budget —
-    # so with that embedder still building its ONNX model, generating here would
-    # park the connection for the whole build (S290).  Skipping HyDE reports
+    # the search call sites resolve HyDE *before* the bounded warm-up that would
+    # build it — so with that embedder still building its ONNX model, generating
+    # here would burn the caller's whole budget on the build (S290, bounded by
+    # ``_search_budget.resolve_hyde_within_budget`` since S582).  Skipping reports
     # ``hyde_applied=False``, which the caller already surfaces as the standard
     # HyDE-failure warning.
     if may_embed is not None and not await may_embed():

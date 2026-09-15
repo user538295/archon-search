@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 import types
 from datetime import datetime, timezone
 from typing import Any
@@ -482,6 +483,42 @@ async def test_mcp_search_hyde_still_runs_once_the_embedder_is_warm() -> None:
     generator.generate.assert_awaited_once()
     assert result["expansion_used"] is True
     assert result["expansion_warning"] is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_bounds_hyde_by_the_search_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S582: an LLM provider that never answers must not park the MCP call.
+
+    ``[hyde].timeout_seconds`` is unclamped and unrelated to the server budget, so
+    without the ``resolve_hyde_within_budget`` wrap the tool waits out the provider.
+    """
+    import archon_search.server.mcp as mcp_module
+
+    async def _never_answers(*_args: Any, **_kwargs: Any) -> tuple[list[float] | None, bool]:
+        await asyncio.sleep(30)
+        raise AssertionError("the HyDE call was not cancelled by the search budget")
+
+    pipeline = MagicMock()
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
+    pipeline.search = AsyncMock(
+        return_value=SearchPipelineResult(results=[], acl_filtered=False)
+    )
+    pipeline.warmup_models = AsyncMock(return_value=True)
+
+    monkeypatch.setattr(mcp_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
+        "archon_search.server.mcp.resolve_hyde_vector", new=_never_answers
+    ):
+        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+        started = time.monotonic()
+        result = await fake_app.tools["search"](query="hello", collection="col", hyde=True)
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 5.0, f"the MCP search tool waited {elapsed:.1f}s on the HyDE call"
+    assert result["expansion_used"] is False
+    assert result["expansion_warning"] == "HyDE expansion failed"
 
 
 @pytest.mark.asyncio

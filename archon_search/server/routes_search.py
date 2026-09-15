@@ -35,6 +35,7 @@ from archon_search.server._search_budget import (
     SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
     SearchBudgetExceeded,
     hyde_may_embed,
+    resolve_hyde_within_budget,
     run_within_budget,
     warmup_for_search,
 )
@@ -259,9 +260,16 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     else:
         generator = getattr(request.app.state, "hyde_generator", None)
         try:
-            hyde_vector, hyde_applied = await resolve_hyde_vector(
-                body.query, body.hyde, generator, config.hyde,
-                may_embed=partial(hyde_may_embed, pipeline),
+            # Bounded by the same budget as the search legs below (S582): the
+            # provider's own [hyde].timeout_seconds is unclamped, so an accepting
+            # but silent LLM server would otherwise park the request outside any
+            # server-side budget.
+            hyde_vector, hyde_applied = await resolve_hyde_within_budget(
+                resolve_hyde_vector(
+                    body.query, body.hyde, generator, config.hyde,
+                    may_embed=partial(hyde_may_embed, pipeline),
+                ),
+                timeout=_SEARCH_TIMEOUT_SECONDS,
             )
         except RuntimeError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=422)

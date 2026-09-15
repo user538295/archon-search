@@ -17,6 +17,7 @@ from archon_search.server._search_budget import (
     SEARCH_TIMEOUT_SECONDS,
     SearchBudgetExceeded,
     hyde_may_embed,
+    resolve_hyde_within_budget,
     run_within_budget,
     warmup_for_search,
 )
@@ -213,3 +214,70 @@ async def test_search_budget_exceeded_is_not_an_oserror() -> None:
     """Handlers catch it deliberately; it must not alias the builtin family."""
     assert not issubclass(SearchBudgetExceeded, OSError)
     assert not issubclass(SearchBudgetExceeded, asyncio.TimeoutError)
+
+
+# ---------------------------------------------------------------------------
+# resolve_hyde_within_budget — S582
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_hyde_within_budget_returns_the_resolved_vector() -> None:
+    """A HyDE call that finishes in time is passed through untouched."""
+
+    async def _resolved() -> tuple[list[float] | None, bool]:
+        return ([0.1, 0.2], True)
+
+    assert await resolve_hyde_within_budget(_resolved(), timeout=5.0) == ([0.1, 0.2], True)
+
+
+@pytest.mark.asyncio
+async def test_resolve_hyde_within_budget_cancels_and_degrades_on_overrun(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unresponsive LLM server is cancelled, not waited out (S582)."""
+    observed: list[str] = []
+
+    async def _silent_provider() -> tuple[list[float] | None, bool]:
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            observed.append("cancelled")
+            raise
+        return ([0.1], True)  # pragma: no cover - unreachable, the sleep is cancelled
+
+    with caplog.at_level("WARNING", logger="archon_search.server._search_budget"):
+        result = await resolve_hyde_within_budget(_silent_provider(), timeout=0.01)
+
+    assert result == (None, False)
+    assert observed == ["cancelled"]
+    assert "HyDE generation exceeded" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_resolve_hyde_within_budget_propagates_a_runtimeerror() -> None:
+    """The missing-provider-package ``RuntimeError`` still reaches the 422 mapping."""
+
+    async def _missing_package() -> tuple[list[float] | None, bool]:
+        raise RuntimeError("hyde provider 'openai' requires the openai package")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await resolve_hyde_within_budget(_missing_package(), timeout=5.0)
+    assert "requires the openai package" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_resolve_hyde_inner_builtin_timeouterror_is_not_a_budget_overrun() -> None:
+    """A ``TimeoutError`` raised *by* the HyDE call keeps its own mapping.
+
+    Mirrors ``test_inner_builtin_timeouterror_is_not_converted_to_a_budget_overrun``:
+    swallowing it into ``(None, False)`` would hide a provider-side socket error
+    behind the silent HyDE-failure degrade.
+    """
+
+    async def _raises() -> tuple[list[float] | None, bool]:
+        raise TimeoutError("ETIMEDOUT from the provider socket")
+
+    with pytest.raises(TimeoutError) as excinfo:
+        await resolve_hyde_within_budget(_raises(), timeout=5.0)
+    assert str(excinfo.value) == "ETIMEDOUT from the provider socket"

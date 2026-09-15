@@ -235,7 +235,7 @@ The response sets `hyde_applied: true` when HyDE was used, or `false` on fallbac
 
 ### Fallback behaviour
 
-HyDE never degrades availability. It falls back silently (`hyde_applied: false`) when: `[hyde] enabled = false`; the required API key is absent (WARNING logged once); the provider call times out (`timeout_seconds`) or errors; or the per-process rate limit is exhausted. The one non-silent case is `[hyde] enabled = true` with the provider package uninstalled — the server refuses to start with a `ConfigError` naming the missing package (see `160_troubleshooting.md`). The rate limit is per-process: with N workers the effective call rate is up to `N × max_requests_per_minute`.
+HyDE never degrades availability. It falls back silently (`hyde_applied: false`) when: `[hyde] enabled = false`; the required API key is absent (WARNING logged once); the provider call times out (`timeout_seconds`) or errors; or the per-process rate limit is exhausted. On `/search` (REST and the MCP `search` tool) the whole expansion is additionally bounded by the server's ~30 s search budget (S582), so a provider that accepts the connection but never answers can no longer hold the request open for the full `timeout_seconds` — it falls back the same way. The one non-silent case is `[hyde] enabled = true` with the provider package uninstalled — the server refuses to start with a `ConfigError` naming the missing package (see `160_troubleshooting.md`). The rate limit is per-process: with N workers the effective call rate is up to `N × max_requests_per_minute`.
 
 ## RAG Fusion multi-query recall (C5)
 

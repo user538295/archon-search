@@ -10,12 +10,15 @@ it at the edge.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
 
 if TYPE_CHECKING:
     from archon_search.embedder import Embedder
     from archon_search.pipeline import SearchPipeline
+
+_logger = logging.getLogger(__name__)
 
 # TODO: make configurable via config.py (see /route for parity)
 SEARCH_TIMEOUT_SECONDS = 30.0
@@ -131,3 +134,33 @@ async def run_within_budget(
         if task.cancelled():
             raise SearchBudgetExceeded from None
         raise
+
+
+async def resolve_hyde_within_budget(
+    coro: Coroutine[Any, Any, tuple[list[float] | None, bool]],
+    *,
+    timeout: float = SEARCH_TIMEOUT_SECONDS,
+) -> tuple[list[float] | None, bool]:
+    """Await a ``resolve_hyde_vector`` call under the search budget (S582).
+
+    ``hyde_may_embed`` bounds only the *embedder* leg of HyDE.  The generation leg
+    is an LLM call whose ceiling is ``[hyde].timeout_seconds``, which config
+    validation accepts unclamped and unrelated to this budget — so a llama-server
+    that accepts the connection but never answers parks the request for that whole
+    duration, past the client's read timeout (``status=0``/``body=None``), exactly
+    the S278/S288/S290 out-of-budget-wait family.  Bounding it here caps the wait at
+    the server's own budget instead.
+
+    On overrun the call is cancelled and ``(None, False)`` is returned: the caller
+    already surfaces that as its standard HyDE-failure warning and the search runs
+    on the plain query.  Everything the coroutine itself raises — notably the
+    ``RuntimeError`` for a missing provider package — propagates unchanged.
+    """
+    try:
+        return await run_within_budget(coro, timeout=timeout)
+    except SearchBudgetExceeded:
+        _logger.warning(
+            "HyDE generation exceeded the %.1fs search budget; searching without it",
+            timeout,
+        )
+        return (None, False)
