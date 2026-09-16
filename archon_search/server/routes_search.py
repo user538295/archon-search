@@ -96,6 +96,13 @@ class SearchRequest(BaseModel):
     graph_mode: Literal["naive", "local", "global", "ppr"] | None = None
     scope_filter: str | None = None
     acl_context: bool = False
+    # Response-shaping flag, accepted top-level to mirror the MCP search tool
+    # (server/mcp.py) and real REST clients; OR-ed with filters.include_metadata.
+    include_metadata: bool = False
+
+    @property
+    def wants_metadata(self) -> bool:
+        return self.include_metadata or (self.filters is not None and self.filters.include_metadata)
 
     @field_validator("collection")
     @classmethod
@@ -331,6 +338,9 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             )
             raise HTTPException(status_code=504, detail="Search timed out")
         schemas = [SearchResultSchema.from_result(r, include_acl_gate=body.acl_context) for r in result.results]
+        if not body.wants_metadata:
+            for schema in schemas:
+                schema.metadata = {}
         if writer is not None:
             try:
                 excluded_count = len(result.excluded_collections)
@@ -483,14 +493,15 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 ),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
-            include_metadata = body.filters is not None and body.filters.include_metadata
             schemas = [SearchResultSchema.from_result(r, include_acl_gate=body.acl_context) for r in result.results]
-            if not include_metadata:
+            if not body.wants_metadata:
                 for schema in schemas:
                     schema.metadata = {}
             if writer is not None:
                 try:
                     flags = FilterFlags.from_search_filters(body.filters) if body.filters is not None else FilterFlags()
+                    if body.include_metadata and not flags.include_metadata:
+                        flags = flags.model_copy(update={"include_metadata": True})
                     writer.enqueue(
                         TelemetryEntry.from_search_tool_result(
                             endpoint="search",

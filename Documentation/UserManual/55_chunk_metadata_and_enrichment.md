@@ -79,8 +79,9 @@ These same code fields feed the code graph — see
 ### In `/search` results
 
 Core fields are always on each result. The `metadata` dict (which holds the enrichment keys)
-is returned **only when you ask for it** — set `filters.include_metadata = true`, otherwise the
-server blanks `metadata` to keep payloads small (`routes_search.py`).
+is returned **only when you ask for it** — set `filters.include_metadata = true` (or the
+top-level `include_metadata: true` request field, mirroring the MCP search tool; the two are
+OR-ed), otherwise the server blanks `metadata` to keep payloads small (`routes_search.py`).
 
 ```bash
 curl -s http://127.0.0.1:8765/search \

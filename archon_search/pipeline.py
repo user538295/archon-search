@@ -33,7 +33,7 @@ from archon_search.embedder import (
     _WARMUP_TIMEOUT_SECONDS as _EMBEDDER_BUILD_TIMEOUT_SECONDS,
 )
 from archon_search.embedder import Embedder, EmbedderBackend, EmbedderWarmupTimeout, ModelEmbedder
-from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher
+from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher, missing_code_parser_extensions
 from archon_search.defref_extractor import DEFREF_SUPPORTED_EXTENSIONS
 from archon_search.enricher import MarkdownEnricher, is_docling_source, source_subtype_for
 from archon_search.parser import DocumentParser, ParseError
@@ -664,6 +664,16 @@ class SearchPipeline:
             scope_table = enricher.prepare(markdown, suffix, path, collection_root)
             heading_table = None
             page_table = None
+            # When the `[code]` tree-sitter grammar for this extension is not
+            # installed, prepare() records it (via _get_grammar) and enrichment is
+            # skipped — no `_symbol_type` metadata is emitted. Surface a per-file
+            # warning so ingest callers see why code-aware metadata is absent.
+            # Plain string append only — auxiliary-write style, never raises.
+            if suffix in missing_code_parser_extensions():
+                acl_warnings.append(
+                    f"code-aware enrichment skipped for {path.name}: the [code] parser "
+                    f"grammar for {suffix} is not installed, so _symbol_type metadata is absent"
+                )
         else:
             enricher = MarkdownEnricher()
             subtype = source_subtype_for(path.suffix)

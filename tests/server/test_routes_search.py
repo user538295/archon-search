@@ -565,7 +565,9 @@ def test_post_search_metadata_suppressed_by_default(tmp_path: Path) -> None:
     response = client.post("/search", json={"collection": "col", "query": "q"})
 
     assert response.status_code == 200
-    for r in response.json()["results"]:
+    suppressed = response.json()["results"]
+    assert len(suppressed) == 3
+    for r in suppressed:
         assert r["metadata"] == {}, f"metadata not suppressed: {r['metadata']}"
 
 
@@ -590,6 +592,86 @@ def test_post_search_include_metadata_true_passes_through(tmp_path: Path) -> Non
     assert response.status_code == 200
     data = response.json()
     assert data["results"][0]["metadata"] == {"author": "alice"}
+
+
+def test_post_search_top_level_include_metadata_true_passes_through(tmp_path: Path) -> None:
+    """Top-level include_metadata=True with NO filters → metadata present in response (S274)."""
+    result = SearchResult(
+        doc_id="a" * 64,
+        chunk_id="a" * 64 + "-000001",
+        text="some text",
+        score=0.9,
+        source_path="/tmp/doc.md",
+        metadata={"author": "alice"},
+    )
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_pipeline_mock(results=[result])
+
+    response = client.post(
+        "/search",
+        json={"collection": "col", "query": "q", "include_metadata": True},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["results"][0]["metadata"] == {"author": "alice"}
+
+
+def test_post_search_multi_collection_metadata_suppressed_by_default(tmp_path: Path) -> None:
+    """Multi-collection fan-out with no include_metadata → metadata stripped on every result (S274)."""
+    results = [
+        SearchResult(
+            doc_id="a" * 64,
+            chunk_id="a" * 64 + f"-{i:06d}",
+            text=f"text {i}",
+            score=0.9 - i * 0.1,
+            source_path="/tmp/doc.md",
+            metadata={"k": f"v{i}"},
+        )
+        for i in range(3)
+    ]
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_multi_pipeline_mock(
+        search_many_return=SearchPipelineResult(results=results, acl_filtered=False)
+    )
+
+    response = client.post("/search", json={"collections": ["a", "b"], "query": "q"})
+
+    assert response.status_code == 200, response.text
+    suppressed = response.json()["results"]
+    assert len(suppressed) == 3
+    for r in suppressed:
+        assert r["metadata"] == {}, f"metadata not suppressed: {r['metadata']}"
+
+
+def test_post_search_multi_collection_top_level_include_metadata_passes_through(tmp_path: Path) -> None:
+    """Multi-collection fan-out with top-level include_metadata=True → metadata present (S274)."""
+    results = [
+        SearchResult(
+            doc_id="a" * 64,
+            chunk_id="a" * 64 + f"-{i:06d}",
+            text=f"text {i}",
+            score=0.9 - i * 0.1,
+            source_path="/tmp/doc.md",
+            metadata={"k": f"v{i}"},
+        )
+        for i in range(3)
+    ]
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_multi_pipeline_mock(
+        search_many_return=SearchPipelineResult(results=results, acl_filtered=False)
+    )
+
+    response = client.post(
+        "/search",
+        json={"collections": ["a", "b"], "query": "q", "include_metadata": True},
+    )
+
+    assert response.status_code == 200, response.text
+    schemas = response.json()["results"]
+    assert len(schemas) == 3
+    for i, r in enumerate(schemas):
+        assert r["metadata"] == {"k": f"v{i}"}
 
 
 def test_post_search_unknown_collection_returns_404_not_422(tmp_path: Path) -> None:

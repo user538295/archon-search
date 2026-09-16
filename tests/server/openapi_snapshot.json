@@ -3320,6 +3320,11 @@
             "title": "Hyde",
             "type": "boolean"
           },
+          "include_metadata": {
+            "default": false,
+            "title": "Include Metadata",
+            "type": "boolean"
+          },
           "query": {
             "title": "Query",
             "type": "string"

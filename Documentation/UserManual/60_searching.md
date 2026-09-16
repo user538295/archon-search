@@ -40,6 +40,7 @@ Key request fields (see `GET /openapi.json` for the exhaustive schema):
 | `graph_mode` | `"naive"\|"local"\|"global"\|"ppr"\|null` | Graph-aware retrieval — documented in [`65_graph_search.md`](./65_graph_search.md). |
 | `scope_filter` | `string \| null` | Restrict to matching scope tags (exact, or trailing-`*` prefix). See [`130_ttl_and_scoping.md`](./130_ttl_and_scoping.md). |
 | `acl_context` | `bool` | Attach a per-result `acl_gate` — see [Permission-aware snippets](#permission-aware-snippets-acl_context--g15). |
+| `include_metadata` | `bool` | **S274** — top-level twin of `filters.include_metadata` (mirrors the MCP `search` kwarg); OR-ed with the nested flag, so either one `true` returns the stored `metadata` dict. Default `false`. See [Filtering results](#filtering-results-a2--c2). |
 
 Response (`SearchResponse`) carries `results[]` plus signal fields (`acl_filtered`, `hyde_applied`, `rag_fusion_applied`, `graph_expansion_applied`, `expansion_used`, `expansion_warning`, `applied_filters`, `excluded_collections`, `embedding_model`). Each result includes `doc_id`, `chunk_id`, `text`, `score`, `source_path`, `file_type`, `language`, and `collection`.
 

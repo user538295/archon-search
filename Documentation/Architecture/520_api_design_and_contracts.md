@@ -53,7 +53,7 @@ When adding capability, prefer this order:
 
 When a behaviour exists on both surfaces, divergence in shape between them is a contract bug. Example, currently logged in `BREAKING.md` under `[next release]` (unreleased at time of writing): the MCP `search` tool was changed from returning a bare list to returning `{"results": [...], "acl_filtered": bool}` so that the MCP response carries the same ACL-filter signal already available on REST.
 
-**A2 filter parity**: A2 added `SearchFilters` as a shared model across both surfaces. REST receives it as `SearchRequest.filters` (a nested object); MCP receives the same fields as individual tool kwargs (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language`, `include_metadata`) that are assembled into a `SearchFilters` instance inside the tool handler. The parity contract is verified by `tests/server/test_mcp_search.py`.
+**A2 filter parity**: A2 added `SearchFilters` as a shared model across both surfaces. REST receives it as `SearchRequest.filters` (a nested object); MCP receives the same fields as individual tool kwargs (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language`, `include_metadata`) that are assembled into a `SearchFilters` instance inside the tool handler. The parity contract is verified by `tests/server/test_mcp_search.py`. **S274**: because MCP took `include_metadata` as a flat kwarg while REST only read it nested under `SearchRequest.filters`, REST now also accepts a top-level `SearchRequest.include_metadata` (OR-ed with the nested flag) to restore that parity.
 
 ## Schema Discipline
 
