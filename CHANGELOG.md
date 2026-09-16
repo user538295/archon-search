@@ -1,6 +1,27 @@
 # Changelog
 
 
+## [26.9.2139] - 2026-09-16
+
+**HyDE budget bounding + embedding model validation fix + cold-embedder FTS fallback**
+
+**Search reliability**
+
+- `resolve_hyde_within_budget()` in `_search_budget.py` now wraps HyDE expansion within the request budget, canceling generation if it exceeds the deadline and degrading gracefully rather than hanging. Wired into `/search` and the MCP `search` tool, following the same fallback contract as `warmup_for_search`.
+- `/search` now gracefully degrades to FTS ranking when the query embedder is still loading (cold-cache handoff or executor saturation), instead of blocking for 30s and returning 503. Reduced `_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS` from 30s to 0.5s to align with the warm-up stage.
+
+**Model validation**
+
+- Fixed `validate_embedding_model` registry lookup key: was searching under `"name"` instead of fastembed's actual `"model"` key, causing `PATCH /collections/{name}` to timeout and wrongly 422 valid models like `BAAI/bge-base-en-v1.5` instead of queuing them for reindexing.
+- Sanitized model-load failure messages in wire-facing error details to avoid leaking backend internals; exceptions are logged separately.
+
+**Documentation and regression coverage**
+
+- Archived 24 resolved bug tickets and corrected stale spaCy references, which the project replaced with GLiNER for entity/relation extraction.
+- Added regression gates to detect if shipped documentation ever ties reranker behavior to 503/504 status codes in `/search` or `/explain` — tests fail immediately if any doc makes those claims.
+- Closed coverage gaps with permanent regression tests covering `top_k` behavior, `acl_context` gating, multi-collection fan-out with filters, full RFC3339 datetime bounds on `indexed_after`/`indexed_before`, language filter acceptance, and zero-match prefix and glob filters.
+
+
 ## [26.9.2111] - 2026-09-10
 
 **Improved NER test baseline accuracy**
