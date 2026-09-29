@@ -204,6 +204,118 @@ def test_run_reinstall_different_profile_no_force_returns_1(tmp_path: Path) -> N
 
 
 # ---------------------------------------------------------------------------
+# Test 4a-i: interactive reinstall, different profile, user confirms rebuild
+# ---------------------------------------------------------------------------
+
+# All optional-feature flags are pre-answered so the ONLY input() call left in an
+# interactive run is the new reindex-confirmation prompt.
+_PREANSWERED_FEATURES = dict(
+    install_code=False,
+    disable_reranker=False,
+    enable_watch=False,
+    enable_telemetry=False,
+    eager_load=False,
+    routing_strategy="centroid",
+    log_format="text",
+)
+
+
+def test_run_interactive_guard_confirm_yes_reindexes(tmp_path: Path) -> None:
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    from archon_search.install import _profile_toml
+    from archon_search.config import load_config
+    config_path.write_text(_profile_toml("minimal", False))
+    existing_db_path = Path(load_config(config_path).db_path).expanduser()
+    existing_db_path.mkdir(parents=True, exist_ok=True)  # simulate an existing index on disk
+
+    rmtree_mock = MagicMock()
+    input_mock = MagicMock(return_value="yes")
+    load_service_mock = MagicMock(return_value=0)
+    with (
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._remove_legacy_service"),
+        patch("archon_search.install.installer._prewarm_models"),
+        patch("archon_search.install.installer._check_disk_space"),
+        patch("archon_search.install.shutil.rmtree", rmtree_mock),
+        patch("archon_search.install.installer.get_search_service", return_value=MagicMock()),
+        patch("builtins.input", input_mock),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(BaseInstaller, "validate_providers", return_value=False),
+        patch.object(RealInstaller, "configure_providers"),
+        patch.object(RealInstaller, "write_service_file"),
+        patch.object(RealInstaller, "load_service", load_service_mock),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=False,
+            profile="balanced",  # different embedder — trips the guard
+            multilingual=False,
+            skip_preload=True,
+            **_PREANSWERED_FEATURES,
+        )
+
+    assert rc == 0
+    # The guard prompt fired exactly once, and the inner force-reinstall confirmation
+    # is suppressed because we already confirmed interactively at the guard.
+    guard_prompts = [c for c in input_mock.call_args_list if c.args and "Rebuild the index now?" in c.args[0]]
+    inner_prompts = [c for c in input_mock.call_args_list if c.args and "Type 'yes' to confirm" in c.args[0]]
+    assert len(guard_prompts) == 1
+    assert inner_prompts == []
+    assert "bge-base-en-v1.5" in config_path.read_text()
+    rmtree_mock.assert_called_once_with(existing_db_path)
+
+
+# ---------------------------------------------------------------------------
+# Test 4a-ii: interactive reinstall, different profile, user declines rebuild
+# ---------------------------------------------------------------------------
+
+
+def test_run_interactive_guard_decline_keeps_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+
+    from archon_search.install import _profile_toml
+    config_path.write_text(_profile_toml("minimal", False))
+
+    rmtree_mock = MagicMock()
+    input_mock = MagicMock(return_value="no")
+    load_service_mock = MagicMock(return_value=0)
+    with (
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._remove_legacy_service"),
+        patch("archon_search.install.installer._prewarm_models"),
+        patch("archon_search.install.installer._check_disk_space"),
+        patch("archon_search.install.shutil.rmtree", rmtree_mock),
+        patch("builtins.input", input_mock),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(RealInstaller, "configure_providers"),
+        patch.object(RealInstaller, "load_service", load_service_mock),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
+    ):
+        installer = create_installer(config_file=str(config_path))
+        rc = installer.run(
+            non_interactive=False,
+            profile="balanced",
+            multilingual=False,
+            skip_preload=True,
+            **_PREANSWERED_FEATURES,
+        )
+
+    # Clean abort: nothing deleted, config unchanged, service untouched.
+    assert rc == 0
+    rmtree_mock.assert_not_called()
+    load_service_mock.assert_not_called()
+    assert "bge-small-en-v1.5" in config_path.read_text()
+
+
+# ---------------------------------------------------------------------------
 # Test 4b: reinstall different profile with --dry-run does NOT return 1
 # ---------------------------------------------------------------------------
 

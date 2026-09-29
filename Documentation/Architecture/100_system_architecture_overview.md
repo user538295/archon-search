@@ -179,7 +179,7 @@ The install flow (`archon_search/install/`, orchestrated by `installer.py`):
 1. Prompts for or validates the profile and multilingual flag.
 2. Applies a Jina CC-BY-NC-4.0 license gate for multilingual `balanced`/`max` (those profiles use `jinaai/jina-reranker-v2-base-multilingual`).
 3. **C2**: When `multilingual=True`, prompts for CC-BY-SA 3.0 fasttext license acceptance (or checks `--accept-fasttext-license`) and downloads `lid.176.ftz` to `~/.archon-search/models/`.
-4. Detects reinstall with a mismatched profile; raises `NeedsForceDeleteError` when embedder or chunk_size differs; the caller requires `--force --delete-db` to proceed.
+4. Detects reinstall with a mismatched profile; raises `NeedsForceDeleteError` when embedder or chunk_size differs. The caller prompts an interactive run to confirm rebuilding the index; a `--non-interactive` run exits non-zero and prints the exact `--force --delete-db` command.
 5. Writes profile config (`[database].profile`, `embedding_model`, `reranker_model`, `multilingual`, `chunk_size`) to `archon-search.toml`.
 6. Checks available disk space against the planned-download byte total (the profile plus every selected extra), requiring twice that total free.
 7. Pre-warms model weights (before service registration).

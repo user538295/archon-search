@@ -225,14 +225,18 @@ def _check_reinstall_guard(
     """Raise NeedsForceDeleteError when switching model or chunk_size would invalidate the index.
 
     A reranker-only change is safe and does NOT trigger the guard.
-    The new_profile_name and new_multilingual parameters are accepted for future extensibility.
+    new_profile_name and new_multilingual are woven into the suggested re-run command so
+    the message hands the operator an exact, copy-pasteable line rather than bare flags.
     """
     if existing_cfg.embedding_model == new_profile.embedder and existing_cfg.chunk_size == new_profile.chunk_size:
         return
+    ml_flag = "--multilingual" if new_multilingual else "--no-multilingual"
+    command = f"archon-search wizard --profile {new_profile_name} {ml_flag} --force --delete-db"
     raise NeedsForceDeleteError(
-        f"Existing index uses {existing_cfg.embedding_model} (chunk_size={existing_cfg.chunk_size}). "
-        f"Switching to {new_profile.embedder} (chunk_size={new_profile.chunk_size}) requires re-indexing all documents. "
-        "Run with --force --delete-db to proceed."
+        f"Switching to {new_profile.embedder} (chunk_size={new_profile.chunk_size}) requires "
+        f"rebuilding the index; the existing index ({existing_cfg.embedding_model}, "
+        f"chunk_size={existing_cfg.chunk_size}) and its data will be deleted. To proceed, run:\n"
+        f"  {command}"
     )
 
 

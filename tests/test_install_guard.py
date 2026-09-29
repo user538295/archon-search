@@ -37,8 +37,25 @@ def test_guard_different_embedder_raises() -> None:
     minimal = ENGLISH_PROFILES["minimal"]
     max_profile = ENGLISH_PROFILES["max"]
     cfg = _make_cfg(minimal.embedder, minimal.chunk_size)
-    with pytest.raises(NeedsForceDeleteError, match="requires re-indexing all documents"):
+    with pytest.raises(NeedsForceDeleteError) as exc_info:
         _check_reinstall_guard(cfg, max_profile, "max", False)
+    msg = str(exc_info.value)
+    assert "rebuilding the index" in msg
+    # The message must hand the operator the exact, runnable command — not bare flags.
+    assert "archon-search wizard --profile max --no-multilingual --force --delete-db" in msg
+
+
+# ---------------------------------------------------------------------------
+# 2b. Multilingual switch → message carries the --multilingual command
+# ---------------------------------------------------------------------------
+
+def test_guard_message_includes_exact_multilingual_command() -> None:
+    ml_minimal = MULTILINGUAL_PROFILES["minimal"]
+    ml_max = MULTILINGUAL_PROFILES["max"]
+    cfg = _make_cfg(ml_minimal.embedder, ml_minimal.chunk_size)
+    with pytest.raises(NeedsForceDeleteError) as exc_info:
+        _check_reinstall_guard(cfg, ml_max, "max", True)
+    assert "archon-search wizard --profile max --multilingual --force --delete-db" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

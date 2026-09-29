@@ -59,7 +59,7 @@ Will your corpus include non-English documents? [y/N]:
 
 **What it means**: If you answer `y`, the wizard selects multilingual model variants for every profile. Multilingual models support documents in many languages and enable the `language=<code>` filter on searches. They are larger and somewhat slower than their English counterparts.
 
-If you are unsure, answer `n`. You can always reinstall with `--multilingual` later (but this requires `--force --delete-db` to re-index all your documents, since it changes the embedding model).
+If you are unsure, answer `n`. You can always reinstall with `--multilingual` later; because that changes the embedding model, the wizard rebuilds the index — an interactive run prompts you to confirm, or pass `--force --delete-db` non-interactively.
 
 If you pass `--multilingual` or `--no-multilingual` on the command line, this prompt is skipped entirely.
 
@@ -888,23 +888,25 @@ Your indexed data is **preserved**. Changing optional features (telemetry, watch
 
 The overwrite detection compares wizard-written keys only (`[database]` profile fields and optional-feature keys). Keys in `[server]` and other sections are never compared. If a config was written by an older version of the wizard, the detection may produce a false positive — answer `y` to overwrite safely.
 
-### Different profile (requires `--force --delete-db`)
+### Different profile (rebuilds the index)
 
-If you try to re-run with a different profile that uses a different embedding model or chunk size, the wizard aborts:
+Re-running with a different profile that uses a different embedding model or chunk size requires rebuilding the index, because the existing vectors are incompatible with the new model.
+
+In **interactive** mode the wizard does not dead-end — it explains the change and asks you to confirm:
 
 ```
-Existing index uses BAAI/bge-small-en-v1.5 (chunk_size=512).
-Switching to BAAI/bge-large-en-v1.5 (chunk_size=1024) requires re-indexing all documents.
-Run with --force --delete-db to proceed.
+Switching to BAAI/bge-large-en-v1.5 (chunk_size=1024) changes the embedding model and requires rebuilding the index. The existing index (BAAI/bge-small-en-v1.5, chunk_size=512) and its data will be permanently deleted.
+Rebuild the index now? Type 'yes' to proceed:
 ```
 
-To proceed:
+Type `yes` to rebuild (the wizard deletes the old index, writes the new profile, and restarts the service). Anything else aborts cleanly, leaving your configuration and index unchanged.
 
-```bash
-archon-search wizard --profile max --force --delete-db
+In **`--non-interactive`** mode the wizard exits with a non-zero status and prints the exact command to re-run (automation needs an explicit failure signal, not an interactive prompt):
+
 ```
-
-In interactive mode, you are asked to type `yes` to confirm deletion of all indexed data. In `--non-interactive` mode the confirmation is skipped.
+Switching to BAAI/bge-large-en-v1.5 (chunk_size=1024) requires rebuilding the index; the existing index (BAAI/bge-small-en-v1.5, chunk_size=512) and its data will be deleted. To proceed, run:
+  archon-search wizard --profile max --no-multilingual --force --delete-db
+```
 
 **This permanently deletes your vector index.** Re-index your documents after the wizard completes using `archon-search ingest`.
 

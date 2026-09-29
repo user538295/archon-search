@@ -686,6 +686,7 @@ class BaseInstaller(ABC):
 
             # Step 5: reinstall check
             db_path = Path(self.cfg.db_path).expanduser()
+            reindex_confirmed = False
             if config_path.exists():
                 existing_cfg = load_config(config_path)
                 db_path = Path(existing_cfg.db_path).expanduser()
@@ -694,9 +695,30 @@ class BaseInstaller(ABC):
                 except NeedsForceDeleteError as exc:
                     if self.dry_run:
                         print(f"[dry-run] Warning: {exc} (proceeding in dry-run mode; pass --force --delete-db to apply)")
-                    elif not (force and delete_db):
+                    elif force and delete_db:
+                        pass  # Branch A below performs the rebuild
+                    elif non_interactive:
+                        # Automation needs the failure signal plus a copy-pasteable command.
                         print(str(exc))
                         return 1
+                    else:
+                        # Interactive: offer to rebuild the index now instead of dead-ending.
+                        print(
+                            f"Switching to {prof.embedder} (chunk_size={prof.chunk_size}) changes the "
+                            f"embedding model and requires rebuilding the index. The existing index "
+                            f"({existing_cfg.embedding_model}, chunk_size={existing_cfg.chunk_size}) and "
+                            "its data will be permanently deleted."
+                        )
+                        try:
+                            response = input("Rebuild the index now? Type 'yes' to proceed: ")
+                        except EOFError:
+                            response = ""
+                        if response != "yes":
+                            print("Aborted. Existing configuration and index kept unchanged.")
+                            return 0
+                        force = True
+                        delete_db = True
+                        reindex_confirmed = True
 
                 # db_path migration note: warn when --db-path differs from existing config
                 if _db_path_override is not None:
@@ -716,7 +738,7 @@ class BaseInstaller(ABC):
                 try:
                     _execute_force_reinstall(
                         config_path, db_path, prof, profile_name, is_multilingual,
-                        non_interactive, dry_run=self.dry_run, features=features
+                        non_interactive or reindex_confirmed, dry_run=self.dry_run, features=features
                     )
                 except SystemExit as e:
                     return int(e.code) if e.code is not None else 1
