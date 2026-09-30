@@ -89,7 +89,24 @@ SMOKE_OPT_IN_ENV = "ARCHON_SEARCH_RUN_DOCKER_SMOKE"
 
 
 def _docker_available() -> bool:
-    return shutil.which("docker") is not None
+    """A running daemon, not merely the CLI binary. ``shutil.which`` alone is a
+    false positive: Docker Desktop can be installed (``docker`` on PATH) but
+    stopped, in which case every ``docker build`` errors instead of skipping.
+    ``docker info`` is the cheapest call that actually touches the daemon."""
+    if shutil.which("docker") is None:
+        return False
+    try:
+        return (
+            subprocess.run(
+                ["docker", "info"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            ).returncode
+            == 0
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def _smoke_opted_in() -> bool:

@@ -65,6 +65,30 @@ bail() {
     exit 1
 }
 
+# Ensure the Docker daemon is reachable before the docker smoke lane. `docker`
+# being on PATH does NOT imply a running daemon (Docker Desktop can be
+# installed but stopped), so we probe with `docker info` and, if that fails,
+# start the daemon and wait for it to accept connections.
+ensure_docker_running() {
+    command -v docker >/dev/null 2>&1 || bail "docker CLI not found in PATH — install Docker and re-run"
+    if docker info >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "Docker daemon not running — starting it..."
+    case "$(uname -s)" in
+        Darwin) open -a Docker >/dev/null 2>&1 || bail "could not launch Docker Desktop (open -a Docker failed) — start Docker manually and re-run" ;;
+        Linux)  sudo systemctl start docker >/dev/null 2>&1 || bail "could not start docker via systemctl — start the daemon manually and re-run" ;;
+        *)      bail "docker daemon not running and auto-start is unsupported on $(uname -s) — start it manually and re-run" ;;
+    esac
+    local waited=0
+    until docker info >/dev/null 2>&1; do
+        [ "$waited" -ge 120 ] && bail "docker daemon did not become ready within 120s — start it manually and re-run"
+        sleep 3
+        waited=$((waited + 3))
+    done
+    echo "Docker daemon is ready."
+}
+
 # 1. Pre-flight checks
 branch="$(git rev-parse --abbrev-ref HEAD)"
 [ "$branch" = "main" ] || bail "must be on branch 'main' (currently on '$branch')"
@@ -186,6 +210,7 @@ assert c[0].find('skipped') is None, 'test_graph_ner_lane_non_vacuity was skippe
     [ "$_bench_rc" -eq 0 ] || bail "benchmark lane failed — fix all failures before releasing"
 
     echo "[7/11] Docker image smoke lane (real CPU image build — ~5 min)..."
+    ensure_docker_running
     ARCHON_SEARCH_RUN_DOCKER_SMOKE=1 uv run pytest tests/test_docker_smoke.py \
         --no-cov -o addopts= --strict-markers --strict-config -n0 -m docker \
         || bail "docker smoke lane failed — fix all failures before releasing"
