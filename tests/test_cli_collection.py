@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -12,6 +13,24 @@ from click.testing import CliRunner
 
 from archon_search.cli.collection import collection
 from archon_search.store import _FIXED_WIDTH_TS_RE
+
+
+@contextmanager
+def _server_reported_stopped():
+    """Force ``_server_connect_fail_msg`` to resolve to the "not running" message.
+
+    The helper probes ``{base_url}/ready`` via ``_helpers.httpx.get`` and, on probe
+    failure for the default local URL, consults the local service manager. Both
+    must be isolated from any real archon-search server/service on the test host,
+    or the message becomes "starting up" whenever a real instance is loading.
+    """
+    stopped = MagicMock()
+    stopped.status.return_value.running = False
+    with (
+        patch("archon_search.cli._helpers.httpx.get", side_effect=httpx.ConnectError("refused")),
+        patch("archon_search.cli._helpers._get_service", return_value=stopped),
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +334,7 @@ def test_migrate_cli_connection_error_exits_1() -> None:
     """Connection failure prints error and exits with code 1."""
     runner = CliRunner()
 
-    with patch("archon_search.cli.collection.httpx.get", side_effect=httpx.ConnectError("Connection refused")):
+    with _server_reported_stopped(), patch("archon_search.cli.collection.httpx.get", side_effect=httpx.ConnectError("Connection refused")):
         result = runner.invoke(collection, ["migrate", "mycol", "--api-key", "test-key"])
 
     assert result.exit_code == 1
@@ -384,7 +403,7 @@ def test_migrate_cli_apply_connection_error_exits_1() -> None:
     """--apply with connection failure prints error and exits 1."""
     runner = CliRunner()
 
-    with patch("archon_search.cli.collection.httpx.post", side_effect=httpx.ConnectError("Connection refused")):
+    with _server_reported_stopped(), patch("archon_search.cli.collection.httpx.post", side_effect=httpx.ConnectError("Connection refused")):
         result = runner.invoke(collection, ["migrate", "mycol", "--apply", "--api-key", "test-key"])
 
     assert result.exit_code == 1
@@ -682,7 +701,7 @@ def test_add_server_not_running_exits_1() -> None:
     """ConnectError → human-readable error, exit 1."""
     runner = CliRunner()
 
-    with patch(
+    with _server_reported_stopped(), patch(
         "archon_search.cli.collection.httpx.post",
         side_effect=httpx.ConnectError("Connection refused"),
     ):
@@ -1039,7 +1058,7 @@ def test_info_proxies_get_to_server(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_info_server_not_running_exits_1() -> None:
     """info exits 1 with a 'not running' message when server is unreachable (brief 350)."""
-    with patch("archon_search.cli.collection.httpx.get", side_effect=httpx.ConnectError("refused")):
+    with _server_reported_stopped(), patch("archon_search.cli.collection.httpx.get", side_effect=httpx.ConnectError("refused")):
         runner = CliRunner()
         result = runner.invoke(collection, ["info", "mycol"])
 
