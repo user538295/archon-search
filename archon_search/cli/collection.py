@@ -9,6 +9,7 @@ import httpx
 
 from archon_search.cli._helpers import _CONNECT_FAIL, _poll_job, _server_connect_fail_msg
 from archon_search.key_manager import load_key
+from archon_search.paths import get_data_dir
 
 _DEFAULT_API_URL = "http://localhost:8765"
 
@@ -74,8 +75,18 @@ def list_cmd(api_url: str, api_key: str | None) -> None:
     if not collections:
         click.echo("No collections found.")
     else:
+        any_empty = False
         for c in collections:
-            click.echo(f"{c['name']}  docs={c.get('doc_count', 0)}  chunks={c.get('chunk_count', 0)}")
+            doc_count = c.get("doc_count", 0)
+            any_empty = any_empty or doc_count == 0
+            click.echo(f"{c['name']}  docs={doc_count}  chunks={c.get('chunk_count', 0)}")
+        if any_empty:
+            log_path = get_data_dir() / "logs" / "archon-search.log"
+            click.echo(
+                "\nSome collections show docs=0. If ingestion failed, run "
+                "'archon-search jobs list' (then 'archon-search jobs status <id>') "
+                f"and check the server log at {log_path}."
+            )
 
 
 @collection.command("add")

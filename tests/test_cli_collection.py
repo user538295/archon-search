@@ -923,6 +923,49 @@ def test_list_cmd_empty_returns_no_collections_message() -> None:
     assert "No collections found." in result.output
 
 
+# ---------------------------------------------------------------------------
+# S284: list output hints where to look when a collection has no docs
+# ---------------------------------------------------------------------------
+
+
+def test_list_cmd_empty_collection_hints_jobs_and_log_path() -> None:
+    """S284: a collection with doc_count == 0 triggers a hint mentioning
+    `jobs list` and the server log path so users know where to find the reason."""
+    collections_data = [
+        {"name": "failed-col", "doc_count": 0, "chunk_count": 0, "namespace": "default", "status": "ready", "path": "/data/failed-col", "active_embedding_model": "", "needs_reindex": False},
+    ]
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = collections_data
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=mock_resp):
+        runner = CliRunner()
+        result = runner.invoke(collection, ["list", "--api-key", "testkey"])
+
+    assert result.exit_code == 0, result.output
+    assert "jobs list" in result.output
+    assert "archon-search.log" in result.output
+
+
+def test_list_cmd_all_collections_have_docs_no_hint() -> None:
+    """S284: the hint is conditional — it must NOT appear when every collection
+    has docs > 0."""
+    collections_data = [
+        {"name": "good-col", "doc_count": 3, "chunk_count": 12, "namespace": "default", "status": "ready", "path": "/data/good-col", "active_embedding_model": "", "needs_reindex": False},
+    ]
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = collections_data
+
+    with patch("archon_search.cli.collection.httpx.get", return_value=mock_resp):
+        runner = CliRunner()
+        result = runner.invoke(collection, ["list", "--api-key", "testkey"])
+
+    assert result.exit_code == 0, result.output
+    assert "jobs list" not in result.output
+    assert "archon-search.log" not in result.output
+
+
 def test_info_not_found_exits_1_via_http() -> None:
     """info exits 1 with 'not found' when server returns 404 (HTTP proxy path)."""
     mock_resp = MagicMock()

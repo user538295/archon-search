@@ -112,6 +112,8 @@ Output (no `--wait`): `Sync job submitted: <job_id>. Track progress with: archon
 
 Proxies `GET /collections/`. Prints one line per collection: `<name>  docs=<n>  chunks=<n>` (or `No collections found.`).
 
+When any listed collection shows `docs=0`, the command prints a hint pointing to `archon-search jobs list` (then `archon-search jobs status <id>`) and the server log at `~/.archon-search/logs/archon-search.log` (or the equivalent path under `ARCHON_SEARCH_DATA_DIR`) so a failed ingest can be diagnosed. The path is best-effort: the CLI cannot read the server's config, so it will differ if the server sets a custom `[logging].log_file` or has file logging disabled.
+
 ### `archon-search collection add <path>`
 
 Registers the path as a collection and enqueues an ingest job. The server writes the path to `archon-search.toml` server-side (`_maybe_save_config`) — the CLI writes no TOML. The command returns immediately with a job ID (never freezes the terminal, even for large directories).
