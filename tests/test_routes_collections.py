@@ -5221,3 +5221,58 @@ def test_nonexistent_path_behavior_documented() -> None:
         "S284: the 'collection add' doc section must describe the behavior "
         "when the path does not exist (FAILED job)"
     )
+
+
+# ---------------------------------------------------------------------------
+# S630 — config-only collection: listed but unaddressable (list vs info/remove)
+# ---------------------------------------------------------------------------
+
+
+def test_s630_config_only_collection_listed_but_info_and_remove_404(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """S630: a collection registered in config but with NO meta-store row is shown
+    by GET /collections/ yet GET /collections/{name} and DELETE /collections/{name}
+    return 404. The list and the info/remove surfaces must agree; today they don't.
+    """
+    src = tmp_path / "s630-docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    app = create_app(cfg, tmp_store)
+
+    # Config path registered, but NO meta row anywhere (default namespace).
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.get_collection_meta = AsyncMock(return_value=None)
+    mock_store.count_chunks = AsyncMock(return_value=0)
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    app.state.search_store = mock_store
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    name = path_to_collection_name(str(src))
+
+    # GET /collections/ lists the config-only collection.
+    list_resp = c.get("/collections/")
+    assert list_resp.status_code == 200
+    listed_names = [e["name"] for e in list_resp.json()]
+    assert name in listed_names, f"S630: {name!r} must be listed, got {listed_names}"
+
+    # But GET /collections/{name} and DELETE /collections/{name} must NOT 404 for a
+    # listed collection. Today they do — this is the S630 bug.
+    info_resp = c.get(f"/collections/{name}")
+    assert info_resp.status_code != 404, (
+        "S630: a listed collection must be addressable via GET /collections/{name}, "
+        f"but got 404 for {name!r}"
+    )
+
+    remove_resp = c.delete(f"/collections/{name}")
+    assert remove_resp.status_code != 404, (
+        "S630: a listed collection must be addressable via DELETE /collections/{name}, "
+        f"but got 404 for {name!r}"
+    )

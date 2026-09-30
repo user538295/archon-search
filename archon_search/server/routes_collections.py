@@ -305,10 +305,18 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
     # A collection is visible (and removable) if it has a meta row in this
     # namespace — which a single-file `POST /ingest` writes even without adding
     # a config path. When the store is absent, fall back to config membership.
+    meta = None
     if search_store is not None:
         meta = await search_store.get_collection_meta(name, namespace=ns)
         if meta is None:
-            raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+            # Mirror list_collections: a config-only path is visible only in the
+            # default namespace AND only when it has no meta row in ANY namespace.
+            config_only_visible = False
+            if ns == DEFAULT_NAMESPACE and name in path_to_name:
+                all_meta = await search_store.get_all_collections_meta()
+                config_only_visible = not any(m.name == name for m in all_meta)
+            if not config_only_visible:
+                raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
     elif name not in path_to_name:
         raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
@@ -330,6 +338,23 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
                 "'pinned_collections' in config before deleting."
             ),
         )
+
+    # Config-only collection (no meta row): nothing exists in the store to drop.
+    # Pop the config registration and return without acquiring the lock or
+    # touching store data (drop_collection/delete_collection_meta would fail).
+    if meta is None:
+        if in_collections:
+            config.collections = [
+                p for p in config.collections
+                if str(Path(p).expanduser().resolve()) != resolved
+            ]
+        if in_pinned:
+            config.pinned_collections = [
+                p for p in config.pinned_collections
+                if str(Path(p).expanduser().resolve()) != resolved
+            ]
+        _maybe_save_config(config, request)
+        return DeleteResponse(name=name, deleted=True)
 
     # Refuse if a base IngestJob is actively writing to this collection.
     #
@@ -443,7 +468,14 @@ async def get_collection_info(name: str, request: Request) -> CollectionDetail:
     if search_store is not None:
         meta = await search_store.get_collection_meta(name, namespace=ns)
         if meta is None:
-            raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
+            # Mirror list_collections: a config-only path is visible only in the
+            # default namespace AND only when it has no meta row in ANY namespace.
+            config_only_visible = False
+            if ns == DEFAULT_NAMESPACE and name in path_to_name:
+                all_meta = await search_store.get_all_collections_meta()
+                config_only_visible = not any(m.name == name for m in all_meta)
+            if not config_only_visible:
+                raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
     elif name not in path_to_name:
         raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
