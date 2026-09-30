@@ -309,7 +309,7 @@ def _execute_force_reinstall(
         tmp = config_path.with_suffix(".toml.tmp")
         tmp.unlink(missing_ok=True)
         try:
-            _write_profile_config(config_path, profile, profile_name, multilingual, features=features)
+            _write_profile_config(config_path, profile, profile_name, multilingual, features=features, clear_collections=True)
         except Exception:
             print(
                 f"Install failed after database deletion. Your previous config has been preserved at "

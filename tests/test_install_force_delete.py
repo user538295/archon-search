@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import tomlkit
 
 from archon_search.install import _execute_force_reinstall
 from archon_search.profiles import get_profile
@@ -433,3 +434,48 @@ def test_force_reinstall_no_config_no_backup(tmp_path):
     assert not bak.exists(), "No backup should be created when config does not exist"
     mock_rmtree.assert_called_once()
     mock_write.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# S38: --force --delete-db must clear stale collection registrations
+# ---------------------------------------------------------------------------
+
+def test_force_reinstall_clears_collection_registrations(tmp_path):
+    """S38: after a --force --delete-db reinstall, the store is wiped, so the
+    surviving config must NOT carry phantom [collections] registrations.
+
+    Drives the real _write_profile_config (only the service + rmtree are mocked)
+    and asserts the observable on-disk outcome: collections/pinned_collections
+    are emptied to match the now-empty store. Fix seam: the force-delete path
+    (_execute_force_reinstall / _write_profile_config) must clear these arrays.
+    """
+    config_path = _make_config(
+        tmp_path,
+        content=(
+            "[database]\ndb_path = \"/some/path\"\n\n"
+            "[collections]\n"
+            "pinned_collections = [\"docs\", \"api\"]\n"
+            "collections = [\"docs\", \"api\", \"notes\"]\n"
+            "watch = []\n"
+        ),
+    )
+    db_path = _make_db(tmp_path)
+    profile, profile_name = _profile_and_name()
+
+    with (
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.shutil.rmtree"),
+    ):
+        mock_svc.return_value.stop.return_value = None
+        _execute_force_reinstall(
+            config_path=config_path,
+            db_path=db_path,
+            profile=profile,
+            profile_name=profile_name,
+            multilingual=False,
+            non_interactive=True,
+        )
+
+    doc = tomlkit.parse(config_path.read_text())
+    assert list(doc["collections"]["collections"]) == []
+    assert list(doc["collections"]["pinned_collections"]) == []

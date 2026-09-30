@@ -565,7 +565,7 @@ All flags for the `wizard` command (verified against `archon_search/cli/install_
 | `--multilingual` / `--no-multilingual` | Not set (interactive) | `--multilingual`: use multilingual model stack. `--no-multilingual`: force English models explicitly. Both skip the "non-English documents?" prompt. |
 | `--skip-preload` | False | Skip the heavy embedder/reranker weight pre-download; those download on first query instead. The small `lid.176.ftz` language-detection model for multilingual profiles is still downloaded (it is required for the server to start). |
 | `--force` | False | Force reinstall of an existing install. **Must be combined with `--delete-db`.** |
-| `--delete-db` | False | Delete the existing database on reinstall. All indexed data will be lost. Use only with `--force`. |
+| `--delete-db` | False | Delete the existing database on reinstall. All indexed data will be lost, and the `[collections]` registrations (`collections` and `pinned_collections`) are cleared so `collection list` no longer shows phantom entries for the wiped store (`watch` is left untouched). Use only with `--force`. |
 | `--accept-jina-license` | False | Pre-accept the Jina CC-BY-NC-4.0 license for multilingual Balanced/Max profiles. |
 | `--accept-fasttext-license` | False | Pre-accept the fasttext CC-BY-SA 3.0 license for multilingual installs. |
 | `--dry-run` | False | Print every action the wizard would take without executing any of them. |
@@ -796,7 +796,7 @@ collections = []           # Static collection list (name + source path)
 pinned_collections = []    # Collections always searched, bypassing the router
 ```
 
-Collections are normally managed through the HTTP API or the `archon-search ingest` CLI command. The wizard does not configure them.
+Collections are normally managed through the HTTP API or the `archon-search ingest` CLI command. The wizard does not configure them — the one exception is `--force --delete-db`, which clears `collections` and `pinned_collections` (but not `watch`) because it wipes the database they point to.
 
 ### Graph search
 

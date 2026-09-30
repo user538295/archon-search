@@ -65,6 +65,7 @@ def _write_profile_config(
     profile_name: str,
     multilingual: bool,
     features: WizardFeatures | None = None,
+    clear_collections: bool = False,
 ) -> None:
     if config_path.exists():
         doc = tomlkit.parse(config_path.read_text())
@@ -83,6 +84,12 @@ def _write_profile_config(
 
     if features is not None:
         _apply_wizard_features_to_toml(doc, features)
+
+    if clear_collections:
+        if "collections" not in doc:
+            doc.add("collections", tomlkit.table())
+        doc["collections"]["collections"] = []
+        doc["collections"]["pinned_collections"] = []
 
     tmp = config_path.with_suffix(config_path.suffix + ".tmp")
     tmp.unlink(missing_ok=True)
