@@ -8,6 +8,8 @@ from click.testing import CliRunner
 
 from archon_search.cli.jobs_cmd import _clean, jobs
 
+from _cli_server_stub import server_reported_stopped
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -223,7 +225,7 @@ class TestJobsStatusConnectionErrors:
 
         runner = CliRunner()
 
-        with patch("httpx.get", side_effect=_httpx.ConnectError("refused")):
+        with server_reported_stopped(), patch("httpx.get", side_effect=_httpx.ConnectError("refused")):
             result = runner.invoke(
                 jobs, ["status", "job-abc-123", "--api-key", "test-key"]
             )
@@ -394,7 +396,7 @@ class TestJobsList:
         """httpx.ConnectError → server-not-running message, exit 1."""
         import httpx as _httpx
         runner = CliRunner()
-        with patch("httpx.get", side_effect=_httpx.ConnectError("refused")):
+        with server_reported_stopped(), patch("httpx.get", side_effect=_httpx.ConnectError("refused")):
             result = runner.invoke(jobs, ["list", "--api-key", "test-key"])
         assert result.exit_code == 1
         assert "not running" in result.output.lower() or "start it first" in result.output.lower()
@@ -657,7 +659,7 @@ class TestJobsShow:
         """jobs show non-wait ConnectError → friendly message + exit 1."""
         import httpx as _httpx
         runner = CliRunner()
-        with patch("archon_search.cli.jobs_cmd.httpx.get", side_effect=_httpx.ConnectError("refused")):
+        with server_reported_stopped(), patch("archon_search.cli.jobs_cmd.httpx.get", side_effect=_httpx.ConnectError("refused")):
             result = runner.invoke(jobs, ["show", "job-abc-123", "--api-key", "test-key"])
         assert result.exit_code == 1
         assert "not running" in result.output.lower() or "start it first" in result.output.lower()

@@ -10,6 +10,7 @@ import httpx
 from click.testing import CliRunner
 
 from archon_search.cli.sync import sync
+from _cli_server_stub import server_reported_stopped
 
 
 def _make_resp(status_code: int, json_body: dict | None = None, text: str = "") -> MagicMock:
@@ -91,7 +92,7 @@ def test_sync_server_not_running() -> None:
     """httpx.ConnectError → 'archon-search serve is not running. Start it first.', exit 1."""
     runner = CliRunner()
 
-    with patch("httpx.post", side_effect=httpx.ConnectError("Connection refused")):
+    with server_reported_stopped(), patch("httpx.post", side_effect=httpx.ConnectError("Connection refused")):
         result = runner.invoke(
             sync,
             ["--api-url", "http://localhost:8765", "--api-key", "testkey"],
@@ -113,7 +114,7 @@ def test_sync_server_not_running_error_goes_to_stderr() -> None:
     This test confirms the message content and exit code are correct.
     """
     runner = CliRunner()
-    with patch("httpx.post", side_effect=httpx.ConnectError("refused")):
+    with server_reported_stopped(), patch("httpx.post", side_effect=httpx.ConnectError("refused")):
         result = runner.invoke(
             sync,
             ["--api-url", "http://localhost:8765", "--api-key", "testkey"],

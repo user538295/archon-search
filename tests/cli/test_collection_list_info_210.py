@@ -23,6 +23,7 @@ from click.testing import CliRunner
 
 import archon_search.cli.collection as collection_mod
 from archon_search.cli.collection import collection
+from _cli_server_stub import server_reported_stopped
 
 
 # ---------------------------------------------------------------------------
@@ -62,13 +63,11 @@ def test_list_cmd_empty() -> None:
 
 def test_list_cmd_server_not_running() -> None:
     # Isolate the managed-service fallback: on the default local URL a failed /ready
-    # probe consults _get_service().status(); pin it not-running so the assertion is
-    # hermetic regardless of xdist worker state (matches test_status.py's convention).
-    not_running = MagicMock()
-    not_running.status.return_value.running = False
+    # probe consults _get_service().status(); server_reported_stopped() pins both the
+    # probe and the service not-running so the assertion is hermetic regardless of host state.
     with (
+        server_reported_stopped(),
         patch("archon_search.cli.collection.httpx.get", side_effect=httpx.ConnectError("refused")),
-        patch("archon_search.cli._helpers._get_service", return_value=not_running),
     ):
         result = CliRunner().invoke(collection, ["list", "--api-key", "testkey"])
 
@@ -132,11 +131,9 @@ def test_info_proxies_to_server() -> None:
 
 def test_info_server_not_running() -> None:
     """brief 350: info exits 1 with 'not running' when server is unreachable."""
-    not_running = MagicMock()
-    not_running.status.return_value.running = False
     with (
+        server_reported_stopped(),
         patch("archon_search.cli.collection.httpx.get", side_effect=httpx.ConnectError("refused")),
-        patch("archon_search.cli._helpers._get_service", return_value=not_running),
     ):
         result = CliRunner().invoke(collection, ["info", "my-col"])
 

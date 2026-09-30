@@ -17,6 +17,8 @@ from click.testing import CliRunner
 
 from archon_search.cli.maintenance_cmd import maintenance_cmd
 
+from _cli_server_stub import server_reported_stopped
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -418,6 +420,7 @@ def test_maintenance_run_connection_error(tmp_path: Path) -> None:
     """httpx.ConnectError on POST → friendly message on stderr, exit 0 (not a program error)."""
     runner = CliRunner()
     with (
+        server_reported_stopped(),
         patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
         patch(
             "archon_search.cli.maintenance_cmd.httpx.post",
@@ -435,6 +438,7 @@ def test_maintenance_run_wait_server_not_running(tmp_path: Path) -> None:
     """--wait: ConnectError on pre-flight GET → friendly message on stderr, exit 0."""
     runner = CliRunner()
     with (
+        server_reported_stopped(),
         patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
         patch(
             "archon_search.cli.maintenance_cmd.httpx.get",
@@ -452,6 +456,7 @@ def test_maintenance_run_wait_post_connect_error(tmp_path: Path) -> None:
     """--wait: pre-flight GET succeeds, but POST raises ConnectError → friendly message on stderr, exit 0."""
     runner = CliRunner()
     with (
+        server_reported_stopped(),
         patch("archon_search.cli.maintenance_cmd.get_data_dir", return_value=tmp_path),
         patch(
             "archon_search.cli.maintenance_cmd.httpx.get",

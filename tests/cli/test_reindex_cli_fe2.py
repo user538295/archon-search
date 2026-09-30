@@ -19,6 +19,7 @@ import pytest
 from click.testing import CliRunner
 
 from archon_search.cli.collection import collection
+from _cli_server_stub import server_reported_stopped
 
 
 def _mock_response(status_code: int, body: dict | None = None, text: str = "") -> MagicMock:
@@ -143,7 +144,7 @@ def test_reindex_server_not_running() -> None:
     """ConnectError → 'archon-search serve is not running. Start it first.', exit 1."""
     runner = CliRunner()
 
-    with patch(
+    with server_reported_stopped(), patch(
         "archon_search.cli.collection.httpx.post",
         side_effect=httpx.ConnectError("Connection refused"),
     ):

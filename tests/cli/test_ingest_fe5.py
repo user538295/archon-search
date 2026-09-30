@@ -16,6 +16,7 @@ import pytest
 from click.testing import CliRunner
 
 from archon_search.cli.ingest import ingest
+from _cli_server_stub import server_reported_stopped
 
 
 def _mock_response(status_code: int, body: dict | None = None, text: str = "") -> MagicMock:
@@ -158,7 +159,7 @@ def test_ingest_server_not_running(tmp_path: Path) -> None:
     test_file = tmp_path / "docs.md"
     test_file.write_text("some content")
 
-    with patch(
+    with server_reported_stopped(), patch(
         "archon_search.cli.ingest.httpx.post",
         side_effect=httpx.ConnectError("Connection refused"),
     ):

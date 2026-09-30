@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 
 from archon_search.cli.export_cmd import export_cmd, import_cmd
+from _cli_server_stub import server_reported_stopped
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +314,7 @@ def test_export_server_not_running() -> None:
     import httpx as _httpx
 
     runner = CliRunner()
-    with patch("archon_search.cli.export_cmd.httpx.post", side_effect=_httpx.ConnectError("refused")):
+    with server_reported_stopped(), patch("archon_search.cli.export_cmd.httpx.post", side_effect=_httpx.ConnectError("refused")):
         result = runner.invoke(export_cmd, ["my-collection", "--api-key", "deadbeef"])
 
     assert result.exit_code == 1
@@ -325,7 +326,7 @@ def test_import_server_not_running() -> None:
     import httpx as _httpx
 
     runner = CliRunner()
-    with patch("archon_search.cli.export_cmd.httpx.post", side_effect=_httpx.ConnectError("refused")):
+    with server_reported_stopped(), patch("archon_search.cli.export_cmd.httpx.post", side_effect=_httpx.ConnectError("refused")):
         result = runner.invoke(
             import_cmd,
             ["my-collection", "/data/exports/archive.tar.gz", "--api-key", "deadbeef"],

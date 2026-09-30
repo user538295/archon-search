@@ -30,6 +30,7 @@ import pytest
 from click.testing import CliRunner
 
 from archon_search.cli.graph_cmd import graph_cmd
+from _cli_server_stub import server_reported_stopped
 
 
 def _response(status_code: int, json_body: dict, text: str = "") -> MagicMock:
@@ -92,7 +93,7 @@ def test_cli_connect_error_prints_server_not_running() -> None:
     """A mocked httpx.ConnectError yields exactly the server-not-running message, non-zero exit (S4)."""
     runner = CliRunner()
 
-    with patch(
+    with server_reported_stopped(), patch(
         "archon_search.cli.graph_cmd.httpx.post",
         side_effect=httpx.ConnectError("connection refused"),
     ):
