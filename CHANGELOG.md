@@ -1,6 +1,28 @@
 # Changelog
 
 
+## [26.10.2150] - 2026-10-03
+
+**Collection consistency + interactive profile rebuilds + search metadata fixes**
+
+**Collections**
+- Config-only collections (in `[collections]` but missing from the store) now respond to GET/DELETE operations and can be removed, fixing inconsistency with the list API
+- `--force --delete-db` reinstalls now clear collection registrations, preventing phantom collections from lingering after the store is wiped
+- `collection list` now hints at the `jobs list`/`jobs status` and server log paths when collections are empty, helping operators diagnose ingestion failures
+
+**Installation**
+- Profile switches with different embedding models or chunk sizes now offer interactive index rebuild instead of requiring manual `--force --delete-db`, eliminating dead-end wizard flows
+- Reinstall guard messages now provide the exact `archon-search wizard` command to run, replacing bare flags
+
+**Search**
+- POST `/search` now honors the top-level `include_metadata` flag (was only checking the nested `filters.include_metadata`), fixing symbol metadata stripping for code-aware clients
+- Ingest jobs now warn when tree-sitter code grammars are missing for file extensions, clarifying why `_symbol_type` metadata wasn't enriched
+
+**Infrastructure & Tests**
+- Release smoke tests now probe `docker info` to verify daemon reachability, preventing spurious failures when Docker is installed but not running
+- CLI tests now use shared server stubs for deterministic isolation from live instances, eliminating flaky assertions against the service manager
+
+
 ## [26.9.2139] - 2026-09-16
 
 **HyDE budget bounding + embedding model validation fix + cold-embedder FTS fallback**
