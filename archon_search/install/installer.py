@@ -810,11 +810,12 @@ class BaseInstaller(ABC):
             elif gpu == GpuType.CUDA:
                 self.configure_providers(gpu=gpu)
                 provider_labels = ["CUDA"]
-                # CUDA torch swap (wizard-cuda-torch-upgrade): only on linux/x86_64
-                # — the sole platform S269 pins torch to the CPU-only build, so the
-                # only one where "replace the CPU build with CUDA" is well-defined.
-                # _install_cuda_torch is best-effort: a failed swap warns and keeps
-                # the working CPU build, never failing the install.
+                # CUDA torch swap (wizard-cuda-torch-upgrade): only on linux/x86_64,
+                # the only platform where S269 pins `uv sync` checkouts to +cpu and
+                # the only platform the cu126 swap targets. It reinstalls the installed
+                # torch version as its +cu126 build (whether the installed build is
+                # +cpu or PyPI's CUDA build). Best-effort: a failed swap warns and
+                # keeps the installed build, never failing the install.
                 if sys.platform.startswith("linux") and platform.machine() == "x86_64":
                     _install_cuda_torch(dry_run=self.dry_run)
             else:

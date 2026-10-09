@@ -80,7 +80,7 @@ def _install_extra(package: str, label: str, dry_run: bool = False) -> None:
 # still shipping the S269-pinned torch/torchvision cp312 wheels, so it has the
 # widest NVIDIA-driver compatibility (cu129/cu130 demand much newer drivers).
 # Verified against download.pytorch.org/whl/cu126/{torch,torchvision}/ on
-# 2026-08-02. Only used on linux/x86_64 (the sole platform S269 pins to +cpu).
+# 2026-08-02. Only used on linux/x86_64 (see the gating in installer.py).
 _CUDA_TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu126"
 # The local-version tag ("cu126") for the pinned CUDA build — parsed from the
 # index URL so the two stay coupled by construction.
@@ -88,13 +88,15 @@ _CUDA_LOCAL_TAG = _CUDA_TORCH_INDEX_URL.rsplit("/", 1)[-1]
 
 
 def _install_cuda_torch(dry_run: bool = False) -> None:
-    """Best-effort swap of the CPU-only torch build for the CUDA build.
+    """Best-effort reinstall of torch/torchvision as the CUDA build.
 
-    Replaces the S269 CPU-only torch/torchvision with the CUDA build of the SAME
-    public version so docling's PDF/OCR parsing runs on an NVIDIA GPU. The
-    version is derived from the already-installed build (``importlib.metadata``,
-    stripping the local tag) and re-pinned to the exact CUDA local build, e.g.
-    ``torch==2.13.0+cu126``.
+    Reinstalls torch/torchvision as the ``+cu126`` build of the SAME public
+    version that is installed, so docling's PDF/OCR parsing runs on an NVIDIA
+    GPU. The installed build is ``+cpu`` for a ``uv sync`` checkout (S269 pin,
+    linux/x86_64 only) or a CPU-only install, and PyPI's CUDA build for a plain
+    pip / ``uv tool`` install on Linux. The version is derived from the
+    installed build (``importlib.metadata``, stripping the local tag) and
+    re-pinned to the exact CUDA local build, e.g. ``torch==2.13.0+cu126``.
 
     The local ``+cu126`` tag is REQUIRED: a bare public specifier ``==2.13.0``
     is satisfied by the installed ``2.13.0+cpu`` (PEP 440 ignores the local label
@@ -104,7 +106,7 @@ def _install_cuda_torch(dry_run: bool = False) -> None:
     for any transitive dependency the CUDA build needs.
 
     Best-effort: on any failure (torch not installed, both uv and pip fail) it
-    logs a warning to stderr and returns, leaving the working CPU build in place.
+    logs a warning to stderr and returns, leaving any installed build in place.
     Prints ``[DRY RUN] Would install CUDA torch from {index}`` and returns early
     when *dry_run* is True.
     """
@@ -118,7 +120,7 @@ def _install_cuda_torch(dry_run: bool = False) -> None:
     except importlib.metadata.PackageNotFoundError as exc:
         print(
             f"Warning: cannot determine installed torch/torchvision version; "
-            f"keeping the CPU build: {exc}",
+            f"skipping the CUDA swap: {exc}",
             file=sys.stderr,
         )
         return
@@ -136,7 +138,7 @@ def _install_cuda_torch(dry_run: bool = False) -> None:
         )
     except InstallError as exc:
         print(
-            f"Warning: CUDA torch install failed; keeping the CPU build: {exc}",
+            f"Warning: CUDA torch install failed; keeping the installed build: {exc}",
             file=sys.stderr,
         )
         return

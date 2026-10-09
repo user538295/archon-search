@@ -121,12 +121,7 @@ Immediately after profile selection, the wizard detects your GPU hardware and co
   ```
   Default: Yes. Press Enter to enable CUDA. Type `n` to use CPU only.
 
-  On a **Linux x86_64** host, confirming CUDA also replaces the default CPU-only
-  PyTorch build with the matching CUDA build, so PDF and image-OCR parsing
-  (docling) runs on the GPU as well. This step is best-effort: if the CUDA
-  download fails, the wizard keeps the working CPU build and the install still
-  succeeds. It does not run on other platforms (Windows and ARM are out of
-  scope; the default install pins CPU-only torch on Linux x86_64 only).
+  On a **Linux x86_64** host, confirming CUDA also reinstalls PyTorch (torch and torchvision) as the CUDA 12.6 (`+cu126`) build of the installed version, so PDF and image-OCR parsing (docling) runs on the GPU as well. Which build it replaces depends on how you installed (see [`10_installation.md`](./10_installation.md#linux-install-the-cpu-only-pytorch-build)). This step is best-effort: if the CUDA download fails, the wizard keeps the installed build and the install still succeeds. It does not run on other platforms (Windows and ARM are out of scope).
 
   The wizard detects an NVIDIA GPU by running `nvidia-smi` and, when you confirm, writes `providers = ["CUDAExecutionProvider"]`. A native `pip`/`uv` install, however, ships the CPU `onnxruntime` that fastembed depends on, which has no CUDA provider (fastembed 0.9.0 has no `[gpu]` extra). Without `onnxruntime-gpu` in the same environment, Step 8 and the service drop the unavailable CUDA provider and load the models on CPU: the install still succeeds, stderr shows one `configured ONNX providers not available: CUDAExecutionProvider — loading models on CPUExecutionProvider instead …` warning, and `GET /ready` reports `checks.models: "warn"` until the config or the runtime changes. Answer `n` here or pass `--disable-gpu` to write CPU and avoid the warning, or replace `onnxruntime` with `onnxruntime-gpu` in that environment first to run on the GPU — the `:gpu` Docker image does exactly that: it uninstalls `onnxruntime`, then installs `onnxruntime-gpu` (see [Image variants](./140_running_with_docker.md#image-variants)).
 

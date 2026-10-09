@@ -37,6 +37,38 @@ Verify:
 archon-search --version
 ```
 
+### Linux: install the CPU-only PyTorch build
+
+On Linux, the commands above install the CUDA build of PyTorch. PyTorch is a core dependency: docling's PDF and image-OCR parsing runs on it. PyPI's Linux `torch` wheel is the CUDA build, and it pulls in `triton` and 18 `nvidia-*`/`cuda-*` packages on x86_64 and arm64 alike. The CUDA wheel and those packages take about 4.4 GB more disk than the CPU-only build, for GPU code that a host without an NVIDIA GPU never runs. Measured with torch 2.14.1 on 2026-10-09, a `uv tool install` for Linux x86_64 took 6.6 GB on disk, against 2.2 GB with the CPU-only build. PyPI's macOS and Windows `torch` wheels are CPU-only already.
+
+On a Linux host without an NVIDIA GPU, install the CPU-only build instead:
+
+```bash
+# pip — add PyTorch's CPU wheel index next to PyPI
+pip install --extra-index-url https://download.pytorch.org/whl/cpu archon-search
+
+# uv — `--torch-backend` is a preview option in uv
+uv tool install --torch-backend cpu archon-search
+```
+
+Both install `torch==<version>+cpu` and `torchvision==<version>+cpu` and no `nvidia-*` or `cuda-*` package. pip takes the highest version from either index, and `<version>+cpu` sorts above PyPI's plain `<version>` (PEP 440 local version), so the CPU-only build wins whenever PyTorch's CPU index carries the same release as PyPI. The pip command adapts PyTorch's selector command, which installs torch alone with `--index-url`, to `--extra-index-url`, so archon-search and its other dependencies still come from PyPI. After a pip install, check the build in the same environment: `python -c "import torch; print(torch.__version__)"` must print a version ending in `+cpu`.
+
+Put any extras in the same command (`"archon-search[graph,code]"`). To upgrade, repeat the command with `--upgrade` and list the same extras as the original install — `uv tool install --upgrade` without them removes the extras installed earlier:
+
+```bash
+pip install --upgrade --extra-index-url https://download.pytorch.org/whl/cpu "archon-search[graph,code]"
+uv tool install --upgrade --torch-backend cpu "archon-search[graph,code]"
+```
+
+Do not use `uv tool upgrade archon-search` for this install: it has no `--torch-backend` option and ignores `UV_TORCH_BACKEND` (uv 0.12.23), so it replaces the CPU-only build with PyPI's CUDA build as soon as a newer `torch` is out. Sources: PyTorch's [install selector](https://pytorch.org/get-started/locally/) (Linux, Pip, CPU), uv's [PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/) and the [`uv tool install` reference](https://docs.astral.sh/uv/reference/cli/#uv-tool-install). The guide still says `--torch-backend` works only in the `uv pip` interface; the CLI reference lists it for `uv tool install`, and uv 0.12.23 accepts it there.
+
+To switch an existing CUDA install to the CPU-only build:
+
+- **uv:** run the same `uv tool install --upgrade --torch-backend cpu "archon-search[graph,code]"` command, with your extras. It converts the install in place and removes the `nvidia-*`/`cuda-*` packages.
+- **pip:** create a new virtual environment and run the CPU-only `pip install` command there. In the existing environment the command changes nothing, because the installed CUDA torch already satisfies the requirement. Forcing a torch reinstall or upgrade there replaces torch but leaves the `nvidia-*`/`cuda-*` packages behind, because pip does not remove dependencies that are no longer required.
+
+The CPU-only pin in this repository's `pyproject.toml` (`[tool.uv.sources]`, Linux x86_64 only) does not reach these installs. It is uv project configuration, not part of the published wheel's metadata ([uv docs](https://docs.astral.sh/uv/concepts/projects/dependencies/#dependency-sources): "Sources are only respected by uv"), so only `uv sync` in a checkout applies it. The `:latest` Docker image installs the CPU-only build through its own pip configuration — see [`140_running_with_docker.md`](./140_running_with_docker.md).
+
 ## Install from a checkout
 
 For local development or to track `main` directly:
@@ -89,7 +121,7 @@ providers = ["CUDAExecutionProvider"]
 
 The CLI's GPU autodetection (`archon_search/platform/runtime.py:detect_gpu_type`) currently only reports the available accelerator type — it does not auto-populate `providers`. You must set this manually.
 
-**PDF / image-OCR acceleration (PyTorch).** The `providers` setting above only covers embedding and reranking (ONNX Runtime). PDF and image-OCR parsing (docling) runs on PyTorch, which is installed **CPU-only by default** — the default install pins the `+cpu` torch build on Linux x86_64 so no NVIDIA CUDA runtime is pulled in. To run docling on an NVIDIA GPU, answer **Yes** to the wizard's "enable CUDA acceleration?" prompt on a Linux x86_64 host: the wizard then replaces the CPU torch build with the matching CUDA build (best-effort — it keeps the CPU build if the download fails). There is no manual TOML setting for this; it is driven by the wizard's GPU confirmation.
+**PDF / image-OCR acceleration (PyTorch).** The `providers` setting above only covers embedding and reranking (ONNX Runtime). PDF and image-OCR parsing (docling) runs on PyTorch. Which PyTorch build you have depends on how you installed (see [Linux: install the CPU-only PyTorch build](#linux-install-the-cpu-only-pytorch-build)). To run docling on an NVIDIA GPU, answer **Yes** to the wizard's "enable CUDA acceleration?" prompt on a Linux x86_64 host. The wizard then reinstalls torch and torchvision as the CUDA 12.6 (`+cu126`) build of the installed version. This step is best-effort: it keeps the installed build if the download fails. There is no manual TOML setting for this; it is driven by the wizard's GPU confirmation.
 
 ## Install profiles (C0)
 

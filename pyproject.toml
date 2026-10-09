@@ -180,21 +180,25 @@ package = true
 # shared transformers version instead of splitting per-platform.
 constraint-dependencies = ["transformers>=4.51.3,<5.14.0"]
 
-# PyTorch CPU wheel index (S269). On linux/amd64 the default PyPI `torch` wheel
-# declares ~18 nvidia-*/cuda* dependencies gated on `sys_platform == 'linux'`,
-# dragging the multi-GB CUDA runtime into the CPU-only `:latest` container that
-# can never execute it. Routing torch/torchvision through this index resolves
-# the `+cpu` local build (which declares zero nvidia/cuda deps). `explicit = true`
-# means the index is used only for the packages that opt into it below.
+# PyTorch CPU wheel index (S269). On Linux the default PyPI `torch` wheel
+# declares ~18 nvidia-*/cuda* dependencies gated on Linux — the multi-GB CUDA
+# runtime a CPU-only host can never execute. Routing torch/torchvision through
+# this index resolves the `+cpu` local build (which declares zero nvidia/cuda
+# deps). `explicit = true` means the index is used only for the packages that
+# opt into it below. This index and [tool.uv.sources] are uv project settings,
+# not wheel metadata: they bind `uv lock` / `uv sync` only. `pip install` and
+# `uv tool install` of the published wheel still get PyPI's CUDA torch on Linux
+# (UserManual/10_installation.md documents the CPU-only install), and the
+# `:latest` CPU image gets `+cpu` from the /etc/pip.conf its Dockerfile bakes.
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.uv.sources]
-# Scope the CPU-index pin to linux/amd64 only — the sole platform whose PyPI
-# torch wheel pulls nvidia/cuda. macOS (arm64) and Windows torch on PyPI is
-# already CPU-only, and whl/cpu serves no macOS +cpu wheel, so pinning them
-# there would break resolution. linux/arm64 keeps PyPI too (narrowest scope).
+# Scope the CPU-index pin to linux/amd64 only. PyPI's linux/arm64 torch pulls
+# nvidia/cuda too (see the uv.lock markers) but keeps PyPI here (narrowest
+# scope). macOS (arm64) and Windows torch on PyPI are already CPU-only, so
+# pinning them gains nothing.
 torch = { index = "pytorch-cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }
 torchvision = { index = "pytorch-cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }

@@ -83,6 +83,10 @@ Symptoms: `archon-search collection list` shows no growth in `chunks=`, `GET /st
 - Port already in use — change `[server].port` (or set `ARCHON_SEARCH_PORT`). #Unverified
 - Write failure on `db_path` or `log_file` parent — the installer's `mkdir(parents=True, exist_ok=True)` does not raise if a parent already exists under another user; the failure surfaces later when the server tries to write inside a directory it cannot access. Verify the running user can write to any custom location.
 
+## Symptom: Linux install pulls `nvidia-*`/`cuda-*` packages on a CPU-only host
+
+A plain `pip install archon-search` or `uv tool install archon-search` on Linux installs PyPI's CUDA build of PyTorch, which pulls in `triton` and 18 `nvidia-*`/`cuda-*` packages, several GB of disk. A host without an NVIDIA GPU never uses those packages. Install (or switch to) the CPU-only build as described in [Linux: install the CPU-only PyTorch build](./10_installation.md#linux-install-the-cpu-only-pytorch-build).
+
 ## Symptom: graph search returns 422 — communities not built
 
 `POST /search` with `graph_mode=local` or `graph_mode=global` returns HTTP **422** with `{"detail": {"code": "graph_communities_not_built", "message": "<collection>"}}`. The pipeline raised `GraphCommunitiesNotBuiltError`: the collection's Leiden communities have not been built, and `local`/`global` retrieval requires them.

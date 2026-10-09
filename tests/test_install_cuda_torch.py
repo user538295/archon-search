@@ -69,22 +69,31 @@ class TestInstallCudaTorch:
         captured = capsys.readouterr()
         assert f"[DRY RUN] Would install CUDA torch from {_CUDA_TORCH_INDEX_URL}" in captured.out
 
-    def test_pins_exact_local_cuda_build_not_bare_public_version(self):
+    @pytest.mark.parametrize(
+        ("installed", "expected_torch", "expected_vision", "bare_torch"),
+        [
+            ({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"}, "torch==2.13.0+cu126", "torchvision==0.28.0+cu126", "torch==2.13.0"),
+            ({"torch": "2.14.1", "torchvision": "0.29.1"}, "torch==2.14.1+cu126", "torchvision==0.29.1+cu126", "torch==2.14.1"),
+        ],
+        ids=["cpu-local-tag", "pypi-no-local-tag"],
+    )
+    def test_pins_exact_local_cuda_build_not_bare_public_version(self, installed, expected_torch, expected_vision, bare_torch):
         """The swap MUST pin the local +cu126 build, not the bare public version.
 
         A bare ``torch==2.13.0`` is satisfied by the installed ``2.13.0+cpu``
-        (PEP 440 ignores the local label), so pip/uv would skip the reinstall and
-        the swap would be a silent no-op. The command must carry the local tag.
+        (PEP 440 ignores the local label) or by PyPI's plain ``2.14.1`` CUDA
+        build, so pip/uv would skip the reinstall and the swap would be a silent
+        no-op. The command must carry the local tag, whatever build is installed.
         """
-        with patch(_VERSION, side_effect=_versions({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"})):
+        with patch(_VERSION, side_effect=_versions(installed)):
             with patch(_RUN, return_value=MagicMock(returncode=0)) as mock_run:
                 _install_cuda_torch()
         assert mock_run.call_count == 1
         cmd = mock_run.call_args_list[0][0][0]
-        assert "torch==2.13.0+cu126" in cmd
-        assert "torchvision==0.28.0+cu126" in cmd
+        assert expected_torch in cmd
+        assert expected_vision in cmd
         # a bare public specifier would be a silent no-op — it must NOT be an arg
-        assert "torch==2.13.0" not in cmd
+        assert bare_torch not in cmd
         # PyPI stays available for transitive deps (extra-index, not index)
         assert "--extra-index-url" in cmd
         assert _CUDA_TORCH_INDEX_URL in cmd
@@ -112,23 +121,23 @@ class TestInstallCudaTorch:
         assert mock_run.call_count == 2
         assert mock_run.call_args_list[1][0][0][1:4] == ["-m", "pip", "install"]
 
-    def test_uv_permission_error_then_pip_fails_keeps_cpu(self, capsys):
+    def test_uv_permission_error_then_pip_fails_keeps_installed_build(self, capsys):
         """uv OSError + pip failure is still best-effort: warn, do NOT raise."""
         pip_err = subprocess.CalledProcessError(1, "pip", stderr=b"no wheel")
         with patch(_VERSION, side_effect=_versions({"torch": "2.13.0+cpu", "torchvision": "0.28.0+cpu"})):
             with patch(_RUN, side_effect=[PermissionError("uv not executable"), pip_err]):
                 _install_cuda_torch()  # must NOT raise
-        assert "keeping the CPU build" in capsys.readouterr().err
+        assert "keeping the installed build" in capsys.readouterr().err
 
-    def test_missing_torch_metadata_warns_and_keeps_cpu(self, capsys):
+    def test_missing_torch_metadata_warns_and_skips(self, capsys):
         """torch not installed → warn to stderr, no subprocess, no raise."""
         with patch(_VERSION, side_effect=importlib.metadata.PackageNotFoundError("torch")):
             with patch(_RUN) as mock_run:
                 _install_cuda_torch()  # must NOT raise
             mock_run.assert_not_called()
-        assert "keeping the CPU build" in capsys.readouterr().err
+        assert "skipping the CUDA swap" in capsys.readouterr().err
 
-    def test_both_uv_and_pip_fail_warns_and_keeps_cpu(self, capsys):
+    def test_both_uv_and_pip_fail_warns_and_keeps_installed_build(self, capsys):
         """Both uv and pip failing is best-effort: warn to stderr, do NOT raise."""
         uv_err = subprocess.CalledProcessError(1, "uv", stderr=b"uv error")
         pip_err = subprocess.CalledProcessError(1, "pip", stderr=b"cuda wheel not found")
@@ -136,7 +145,7 @@ class TestInstallCudaTorch:
             with patch(_RUN, side_effect=[uv_err, pip_err]):
                 _install_cuda_torch()  # must NOT raise
         err = capsys.readouterr().err
-        assert "CUDA torch install failed; keeping the CPU build" in err
+        assert "CUDA torch install failed; keeping the installed build" in err
         assert "cuda wheel not found" in err  # the cause is surfaced
 
 
@@ -210,7 +219,7 @@ def test_cuda_swap_runs_on_linux_x86_64(tmp_path: Path) -> None:
 
 
 def test_cuda_swap_skipped_on_windows_amd64(tmp_path: Path) -> None:
-    """Windows (win32/AMD64) is out of scope — S269 does not pin CPU torch there."""
+    """Windows (win32/AMD64) is out of scope — the CUDA swap targets linux/x86_64 only."""
     swap = MagicMock()
     rc = _run_cuda_install(
         tmp_path, gpu=GpuType.CUDA, machine="AMD64", platform_sys="win32", cuda_swap=swap
@@ -228,7 +237,7 @@ def test_cuda_swap_skipped_on_linux_arm(tmp_path: Path) -> None:
 
 
 def test_cuda_swap_skipped_on_macos_x86(tmp_path: Path) -> None:
-    """x86_64 but non-linux (macOS) → no swap: S269 pins CPU torch on linux only."""
+    """x86_64 but non-linux (macOS) → no swap: the CUDA swap targets linux/x86_64 only."""
     swap = MagicMock()
     rc = _run_cuda_install(
         tmp_path, gpu=GpuType.CUDA, machine="x86_64", platform_sys="darwin", cuda_swap=swap
@@ -285,11 +294,11 @@ def test_cuda_swap_dry_run_narrates_and_does_not_install(tmp_path: Path) -> None
     swap.assert_called_once_with(dry_run=True)
 
 
-def test_real_swap_failure_keeps_cpu_and_install_succeeds(tmp_path: Path, capsys) -> None:
+def test_real_swap_failure_keeps_installed_build_and_install_succeeds(tmp_path: Path, capsys) -> None:
     """End-to-end: real gate + real _install_cuda_torch, only subprocess failing.
 
     Exercises the whole path together (no mock seam): a real install failure must
-    warn, keep the CPU build, and let the install finish rc==0.
+    warn, keep the installed build, and let the install finish rc==0.
     """
     uv_err = subprocess.CalledProcessError(1, "uv", stderr=b"uv error")
     pip_err = subprocess.CalledProcessError(1, "pip", stderr=b"cuda wheel download failed")
@@ -299,4 +308,4 @@ def test_real_swap_failure_keeps_cpu_and_install_succeeds(tmp_path: Path, capsys
     ):
         rc = _run_cuda_install(tmp_path, gpu=GpuType.CUDA, machine="x86_64", cuda_swap=None)
     assert rc == 0  # a failed GPU upgrade never fails the install
-    assert "keeping the CPU build" in capsys.readouterr().err
+    assert "keeping the installed build" in capsys.readouterr().err
