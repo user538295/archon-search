@@ -18,7 +18,7 @@ This document captures the local development loop and the conventions that contr
 
 ## Dependency Management with `uv`
 
-`pyproject.toml` is the single source of truth. Runtime dependencies live under `[project].dependencies`; development tools live under `[dependency-groups].dev` (currently only `pytest`, `pytest-asyncio`, and `pytest-cov` — no linter or type-checker is declared as a dev dependency). `[tool.uv].package = true` tells `uv` to treat this repo as an installable project.
+`pyproject.toml` is the single source of truth. Runtime dependencies live under `[project].dependencies`; development tools live under `[dependency-groups].dev` (pytest and its plugins, test-only libraries, and a self-reference that pulls every feature extra — no linter or type-checker is declared as a dev dependency). The dev group includes `httpx2` because `starlette.testclient` (FastAPI's `TestClient`) prefers it and, since Starlette 1.3.0, emits `StarletteDeprecationWarning` when it falls back to `httpx`; runtime code (CLI, providers) keeps using `httpx`. Consequence for tests: `TestClient` responses and errors are `httpx2` types, so never `isinstance`-check or `except` them with `httpx` classes. `[tool.uv].package = true` tells `uv` to treat this repo as an installable project.
 
 ```bash
 # Bootstrap a fresh checkout (creates .venv, installs runtime + dev deps).
@@ -108,7 +108,7 @@ For details on the marker layout, the eval harness, and how the 85% floor is enf
 
 ### Warning-Free Codebase
 
-- Resolve all warnings — Python `DeprecationWarning`, `RuntimeWarning`, and library-emitted deprecations. (Ruff and mypy are not configured as merge gates in this repo: no `[tool.ruff]` or `[tool.mypy]` sections exist in `pyproject.toml`, and neither is a declared dev dependency. If a contributor runs them locally, the warning-free expectation extends there too. #Unverified — no CI step enforces a warning-free run.)
+- Resolve all warnings — Python `DeprecationWarning`, `RuntimeWarning`, and library-emitted deprecations. (Ruff and mypy are not configured as merge gates in this repo: no `[tool.ruff]` or `[tool.mypy]` sections exist in `pyproject.toml`, and neither is a declared dev dependency. If a contributor runs them locally, the warning-free expectation extends there too.) By config, every `StarletteDeprecationWarning` is escalated to an error (`[tool.pytest.ini_options].filterwarnings` — the whole category on purpose, which among other things makes a missing `httpx2` fail test collection); no other warning category fails the run.
 - If a warning is genuinely unavoidable (e.g. an upstream bug), silence it at the narrowest possible scope and add a comment explaining why.
 
 ### No Backward Compatibility
@@ -127,7 +127,7 @@ For details on the marker layout, the eval harness, and how the 85% floor is enf
 2. **Commit messages explain the why.** The diff explains the what. Use the imperative mood ("add", "fix", "refactor"), 1–2 sentences in the body when the change isn't self-evident.
 3. **Surgical scope.** Every changed line should trace directly to the stated task. Do not "improve" adjacent code, reformat unrelated files, or refactor things that aren't broken.
 4. **Clean up your own orphans.** Imports, variables, and helpers that your changes made unused get removed in the same commit. Pre-existing dead code stays unless the task asks for it.
-5. **Tests pass, coverage holds, warnings stay at zero.** A PR that breaks any of the three is not ready. (Tests + coverage are enforced by `pytest` addopts and CI; the warnings-at-zero rule is a project convention — no CI step currently fails the build on warnings. #Unverified)
+5. **Tests pass, coverage holds, warnings stay at zero.** A PR that breaks any of the three is not ready. (Tests + coverage are enforced by `pytest` addopts and CI. Warnings-at-zero is a project convention; only `StarletteDeprecationWarning` is enforced, via `filterwarnings` in `pyproject.toml` — see Warning-Free Codebase above.)
 6. **REST/MCP changes update `BREAKING.md`.** If the change alters request/response shapes, endpoint paths, MCP tool signatures, or auth behaviour, add a `BREAKING.md` entry in the same PR.
 
 ## Related Documents

@@ -75,6 +75,9 @@ dev = [
     # Pull all feature extras into the default `uv sync` so no test skips for a
     # missing optional dep (uv 0.11 has no config to auto-install extras).
     "archon-search[multilingual,hyde,rag_fusion,ollama,openai-provider,graph,code]",
+    # FastAPI/Starlette TestClient backend (starlette.testclient imports httpx2 first and
+    # warns on the httpx fallback). Runtime code keeps using httpx.
+    "httpx2>=2.0.0",
 ]
 
 [build-system]
@@ -138,6 +141,10 @@ norecursedirs = [
 # model-loading paths each worker holds ~2 GB (fastembed/onnxruntime/torch); stacked runs
 # OOM-crashed the 48 GB machine on 2026-07-05 (Jetsam + WindowServer watchdog kill).
 addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-fail-under=85 -n 8 --dist=loadgroup --thresholds-path tests/eval/thresholds.toml -m \"not live_benchmark and not smoke and not live_eval and not docling and not graph_real_artifact\""  # -n 8 (raised from 4, 2026-07-20): default suite stubs fastembed → measured ~0.3GB/worker, memory-safe on 14-core/48GB. NEVER -n auto (=14 → 2GB/worker on real-model lanes OOM'd 2026-07-05). See CLAUDE.md testing policy.
+# Every StarletteDeprecationWarning is an error (warning-free policy, deliberately the whole
+# category: resolve Starlette deprecations, don't accumulate them). Among others this fails
+# collection if the httpx2 dev dependency is missing (starlette.testclient httpx fallback).
+filterwarnings = ["error::starlette.exceptions.StarletteDeprecationWarning"]
 markers = [
     "benchmark: latency benchmark — serialized via xdist_group('benchmark'); server-dependent tests auto-skip when server is unreachable",
     "integration: integration tests requiring live infrastructure",
