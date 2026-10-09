@@ -4,10 +4,9 @@ Tests cover:
 - configure_reranker_providers writes empty list to TOML
 - validate_embedder_only calls validate_providers_shared with empty reranker_model
 - Wizard split logic: combined fails, embedder-only passes → split config
-- Wizard: both fail → CPU fallback, no split
+- Wizard: both fail → CPU fallback, providers = [] written, no split
 - Wizard: combined passes → no split (existing behaviour)
 - Summary shows split text "CoreML — text search; CPU — result ranking"
-- FE-1 skips re-probe when split_coreml=True
 """
 from __future__ import annotations
 
@@ -216,10 +215,8 @@ class TestWizardCoreMlSplitLogic:
         installer = create_installer(config_file=str(toml_file))
 
         with patch.object(installer, "validate_providers", return_value=True):
-            labels, gpu_prov, split = installer._probe_and_configure_coreml(GpuType.METAL)
+            labels = installer._probe_and_configure_coreml(GpuType.METAL, toml_file)
 
-        assert split is False
-        assert gpu_prov == "CoreMLExecutionProvider"
         assert labels == ["CoreML (Apple Silicon)"]
         doc = tomlkit.parse(toml_file.read_text())
         assert "reranker_providers" not in doc.get("database", {})
@@ -236,17 +233,15 @@ class TestWizardCoreMlSplitLogic:
 
         with patch.object(installer, "validate_providers", return_value=False):
             with patch.object(installer, "validate_embedder_only", return_value=True):
-                labels, gpu_prov, split = installer._probe_and_configure_coreml(GpuType.METAL)
+                labels = installer._probe_and_configure_coreml(GpuType.METAL, toml_file)
 
-        assert split is True
-        assert gpu_prov == "CoreMLExecutionProvider"
         assert "CPU — result ranking" in labels[0]
         doc = tomlkit.parse(toml_file.read_text())
         assert doc["database"]["providers"] == ["CoreMLExecutionProvider"]
         assert doc["database"]["reranker_providers"] == []
 
-    def test_both_fail_no_split_written(self, tmp_path: Path) -> None:
-        """When both probes fail, no provider config is written."""
+    def test_both_fail_writes_cpu_providers_no_split(self, tmp_path: Path) -> None:
+        """When both probes fail, CPU is written (providers = []) and no split config."""
         from archon_search.platform.types import GpuType
 
         toml_file = _make_toml(tmp_path)
@@ -254,13 +249,11 @@ class TestWizardCoreMlSplitLogic:
 
         with patch.object(installer, "validate_providers", return_value=False):
             with patch.object(installer, "validate_embedder_only", return_value=False):
-                labels, gpu_prov, split = installer._probe_and_configure_coreml(GpuType.METAL)
+                labels = installer._probe_and_configure_coreml(GpuType.METAL, toml_file)
 
-        assert split is False
-        assert gpu_prov is None
         assert labels == []
         doc = tomlkit.parse(toml_file.read_text())
-        assert "providers" not in doc.get("database", {})
+        assert doc["database"]["providers"] == []
         assert "reranker_providers" not in doc.get("database", {})
 
     def test_combined_passes_clears_stale_split_config(self, tmp_path: Path) -> None:
@@ -275,15 +268,14 @@ class TestWizardCoreMlSplitLogic:
 
         with patch.object(installer, "validate_providers", return_value=True), \
              patch.object(installer, "validate_embedder_only") as mock_embedder_only:
-            _, _, split = installer._probe_and_configure_coreml(GpuType.METAL)
+            installer._probe_and_configure_coreml(GpuType.METAL, toml_file)
 
-        assert split is False
         mock_embedder_only.assert_not_called()
         doc = tomlkit.parse(toml_file.read_text())
         assert "reranker_providers" not in doc.get("database", {})
 
     def test_split_summary_label_in_rendered_output(self, tmp_path: Path) -> None:
-        """When split_coreml=True, the rendered install summary contains the split label."""
+        """The split provider label renders in the install summary."""
         from archon_search.install import _render_summary
         from archon_search.profiles import InstallProfile
 
@@ -298,39 +290,7 @@ class TestWizardCoreMlSplitLogic:
             metal_ms=15,
             memory_gb=0.5,
         )
-        # providers list from _probe_and_configure_coreml when split_coreml=True
+        # the provider labels _probe_and_configure_coreml returns for the split config
         providers = ["CoreML — text search; CPU — result ranking"]
         summary = _render_summary("minimal", prof, False, providers)
         assert "CoreML — text search; CPU — result ranking" in summary
-
-    def test_fe1_reprobe_skipped_when_split_coreml(self, tmp_path: Path) -> None:
-        """_fe1_reprobe must NOT call validate_providers when split_coreml=True."""
-        from archon_search.profiles import InstallProfile
-
-        toml_file = _make_toml(tmp_path)
-        installer = create_installer(config_file=str(toml_file))
-        prof = InstallProfile(
-            name="test", embedder="e", reranker="r", chunk_size=512,
-            download_mb=0, quality_stars="", cpu_ms=0, metal_ms=0, memory_gb=0,
-        )
-
-        with patch.object(installer, "validate_providers", return_value=True) as mock_probe:
-            installer._fe1_reprobe("CoreMLExecutionProvider", prof, split_coreml=True)
-
-        mock_probe.assert_not_called()
-
-    def test_fe1_reprobe_runs_when_not_split(self, tmp_path: Path) -> None:
-        """_fe1_reprobe must call validate_providers when split_coreml=False."""
-        from archon_search.profiles import InstallProfile
-
-        toml_file = _make_toml(tmp_path)
-        installer = create_installer(config_file=str(toml_file))
-        prof = InstallProfile(
-            name="test", embedder="e", reranker="r", chunk_size=512,
-            download_mb=0, quality_stars="", cpu_ms=0, metal_ms=0, memory_gb=0,
-        )
-
-        with patch.object(installer, "validate_providers", return_value=True) as mock_probe:
-            installer._fe1_reprobe("CoreMLExecutionProvider", prof, split_coreml=False)
-
-        mock_probe.assert_called_once_with(["CoreMLExecutionProvider"])

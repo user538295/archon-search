@@ -126,7 +126,7 @@ The setup flow uses two separate commands:
 archon-search wizard
 ```
 
-The wizard prompts you to choose a profile, answer questions about optional features, and then downloads models and starts the service. To skip all prompts:
+The wizard prompts you to choose a profile, answer questions about optional features, and then downloads models, test-loads them, and starts the service. An embedding model that downloads but cannot be loaded stops the install with exit code `1` and a message naming the model and the cause; a reranker that cannot load only warns (see [`20_wizard.md` Step 8](./20_wizard.md#step-8--model-download)). To skip all prompts:
 
 ```bash
 # Non-interactive English minimal install (fastest, no license required)
@@ -145,7 +145,7 @@ Key `wizard` flags (verified against `archon_search/cli/install_cmd.py`):
 | --- | --- |
 | `--profile {minimal,balanced,max}` | Select the install profile (skips interactive prompt). |
 | `--multilingual / --no-multilingual` | Use (or force off) the multilingual model stack for the chosen profile. |
-| `--skip-preload` | Skip pre-warming the heavy embedder/reranker weights after install (they download on first use). For multilingual profiles the small `lid.176.ftz` language-detection model is still downloaded — it is required for the server to start. |
+| `--skip-preload` | Skip pre-warming the heavy embedder/reranker weights after install (they download on first use), including the load check, so a model that cannot load is not caught at install time. For multilingual profiles the small `lid.176.ftz` language-detection model is still downloaded — it is required for the server to start. |
 | `--force` | Overwrite an existing install. Required when changing profiles. |
 | `--delete-db` | Also delete the database when reinstalling (`--force` required). Use with caution — this removes all indexed data. |
 | `--accept-jina-license` | Accept the Jina CC-BY-NC-4.0 license non-interactively (required for multilingual `balanced`/`max`). |

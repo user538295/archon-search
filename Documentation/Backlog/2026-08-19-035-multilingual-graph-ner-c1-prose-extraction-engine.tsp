@@ -290,14 +290,15 @@ interface ProseExtractionBackend {
 /// the wizard offers it (Q7) without disturbing the shared instance the rest of the process
 /// will load later. That caller is now the graph provider-validation probe (C5) — a
 /// `model_validation.py`-resident check mirroring the shape of the embedder/reranker's own
-/// post-download reprobe (`installer.py:247-261`, `_fe1_reprobe`) rather than riding a
+/// post-download reprobe (`_fe1_reprobe`, since removed: the wizard's pre-warm now loads both
+/// models itself — see ADR 14) rather than riding a
 /// smoke-load `ArtifactProvisioner` no longer performs.
 ///
 /// AS SHIPPED THIS FACTORY DOES NOT EXIST — no symbol named `ProvisioningBackendFactory` or
 /// `for_providers` is in the tree. The construction need it was invented for evaporated with
 /// its second caller: stage 2 of the device probe does NOT build a backend under a candidate
 /// device. It rides the optional pre-warm instead, which loads the checkpoint through
-/// `GLiNER.from_pretrained` directly and reports `model.device.type` (`prewarm.py:178-212`,
+/// `GLiNER.from_pretrained` directly and reports `model.device.type` (`prewarm.py:237-271`,
 /// graded by `device_probe.probe_device_validation` — see C5). The shared instance is never
 /// disturbed because pre-warm never touches it: it runs in the wizard process, not as a
 /// second instance inside the server. Retained here as the logical record of a construction

@@ -66,6 +66,7 @@ from .prewarm import (
     _execute_force_reinstall,
     _planned_total_bytes,
     _prewarm_models,
+    _prewarm_timeout,
 )
 from .provisioning import BYTES_PER_MB, GPU_EXECUTION_PROVIDER, TORCH_DEVICE_CPU
 from .render import _print_next_steps, _render_provision_failure, _render_summary
@@ -238,39 +239,23 @@ class BaseInstaller(ABC):
             logger.warning("validate_embedder_only: %s", warning)
         return embedder_ok
 
-    def _probe_and_configure_coreml(
-        self, gpu: "GpuType"
-    ) -> "tuple[list[str], str | None, bool]":
-        """Probe CoreML, write config, return (provider_labels, gpu_provider, split_coreml)."""
+    def _probe_and_configure_coreml(self, gpu: "GpuType", config_path: Path) -> list[str]:
+        """Probe CoreML, write the providers it settles on, return the summary's provider labels."""
         if self.validate_providers(["CoreMLExecutionProvider"]):
             self.configure_providers(gpu=gpu)
             self.clear_reranker_providers()  # self-heal: clear stale split config
-            return ["CoreML (Apple Silicon)"], "CoreMLExecutionProvider", False
+            return ["CoreML (Apple Silicon)"]
         elif self.validate_embedder_only(["CoreMLExecutionProvider"]):
             # Split: embedder on CoreML, reranker on CPU
             self.configure_providers(gpu=gpu)
             self.configure_reranker_providers([])
-            return ["CoreML — text search; CPU — result ranking"], "CoreMLExecutionProvider", True
+            return ["CoreML — text search; CPU — result ranking"]
         else:
             logger.warning("CoreML validation failed — falling back to CPU")
             print("Warning: CoreML validation failed — falling back to CPU.")
-            return [], None, False
-
-    def _fe1_reprobe(self, gpu_provider: "str | None", prof: "InstallProfile", split_coreml: bool) -> None:
-        """Re-validate GPU provider after model download (FE-1). No-op in split mode."""
-        if gpu_provider is not None and prof.reranker is not None and not split_coreml:
-            if not self.validate_providers([gpu_provider]):
-                logger.warning(
-                    "Model validation under provider %s failed after "
-                    "download — the reranker (%r) will fall back to "
-                    "CPU at runtime.",
-                    gpu_provider,
-                    prof.reranker,
-                )
-                print(
-                    f"Warning: model validation failed under {gpu_provider} — "
-                    "the reranker will fall back to CPU."
-                )
+            # A re-run keeps the previous [database].providers, so CPU must be written.
+            self.write_gpu_providers_disabled(config_path)
+            return []
 
     async def _bootstrap_collections(self) -> None:
         """Sync configured collections into the search store."""
@@ -450,8 +435,7 @@ class BaseInstaller(ABC):
 
     @abstractmethod
     def preload_models(
-        self, prof: object, gpu_provider: str | None, split_coreml: bool,
-        install_graph_extra: bool = False, graph_providers: list[str] | None = None,
+        self, prof: InstallProfile, install_graph_extra: bool = False, graph_providers: list[str] | None = None,
     ) -> str | None: ...
 
     @abstractmethod
@@ -805,25 +789,15 @@ class BaseInstaller(ABC):
                     return 1
 
             # Step 9: GPU provider configuration (detection + user confirm already done in Step 2b)
-            providers: list[str] = []
-            # ONNX provider string configured for the Metal/CoreML GPU path, or
-            # None otherwise. Drives the post-prewarm reranker re-validation in
-            # Step 14 (FE-1). CUDA install-time validation is out of scope (D6
-            # plan, "Out of Scope"), so the CUDA branch deliberately leaves this
-            # None — no post-prewarm probe runs for CUDA.
-            gpu_provider: str | None = None
-            split_coreml: bool = False
+            provider_labels: list[str] = []
             if not enable_gpu:
                 # User declined GPU — write providers = [] explicitly to override any previous setting
-                gpu_config_path = Path(self.config_file) if self.config_file else get_default_config_path()
-                self.write_gpu_providers_disabled(gpu_config_path)
+                self.write_gpu_providers_disabled(config_path)
             elif not self.dry_run and gpu == GpuType.METAL:
-                providers, gpu_provider, split_coreml = self._probe_and_configure_coreml(gpu)
+                provider_labels = self._probe_and_configure_coreml(gpu, config_path)
             elif gpu == GpuType.CUDA:
                 self.configure_providers(gpu=gpu)
-                providers = ["CUDA"]
-                # CUDA post-prewarm validation is out of scope (D6); leave
-                # gpu_provider None so the FE-1 block does not probe CUDA.
+                provider_labels = ["CUDA"]
                 # CUDA torch swap (wizard-cuda-torch-upgrade): only on linux/x86_64
                 # — the sole platform S269 pins torch to the CPU-only build, so the
                 # only one where "replace the CPU build with CUDA" is well-defined.
@@ -833,6 +807,13 @@ class BaseInstaller(ABC):
                     _install_cuda_torch(dry_run=self.dry_run)
             else:
                 self.configure_providers(gpu=gpu)
+            if not self.dry_run:
+                # Step 9 rewrote [database].providers / reranker_providers after Step 8b
+                # loaded the config. Step 14's pre-warm reads self.cfg, and no step before
+                # it rewrites the [database] model or provider keys again (the flag
+                # reverts below touch [graph], [hyde], [rag_fusion] and
+                # [database].multilingual only).
+                self.cfg = cfg = load_config(config_path)
 
             # Step 9b: graph execution-provider candidates + the free stage-1
             # availability pre-check (FE-5 / S31). Runs before any bytes move and
@@ -868,7 +849,7 @@ class BaseInstaller(ABC):
             # Step 12: summary display
             from archon_search import key_manager as _key_manager
             print(_render_summary(
-                profile_name, prof, is_multilingual, providers, features,
+                profile_name, prof, is_multilingual, provider_labels, features,
                 db_path=str(Path(cfg.db_path).expanduser()),
                 host=features.host if features.host is not None else cfg.host,
                 port=features.port if features.port is not None else cfg.port,
@@ -950,23 +931,19 @@ class BaseInstaller(ABC):
                 except OSError as exc:
                     print(f"Warning: could not create .secrets.env: {exc}", file=sys.stderr)
 
-            # Before Step 14b: write custom server key if provided
-            if server_key is not None:
-                self.write_server_key(server_key)
-
             # Step 14: pre-warm
             graph_prewarm_device: str | None = None
             if not skip_preload:
                 try:
                     graph_prewarm_device = self.preload_models(
-                        prof, gpu_provider, split_coreml,
+                        prof,
                         install_graph_extra=features.install_graph_extra,
                         graph_providers=graph_candidates,
                     )
                 except InstallError as exc:
                     # Real-only: dry never raises, so this rollback runs only when
-                    # a real download fails.
-                    print(f"Model download failed: {exc}", file=sys.stderr)
+                    # a real embedder download or load fails.
+                    print(f"Model pre-warm failed: {exc}", file=sys.stderr)
                     if branch == "fresh":
                         config_path.unlink(missing_ok=True)
                         config_path.with_suffix(".toml.bak").unlink(missing_ok=True)
@@ -976,6 +953,11 @@ class BaseInstaller(ABC):
                             shutil.copy2(bak, config_path)
                     # branch == "force": leave backup, new config stays
                     return 1
+
+            # After Step 14: write the custom server key only once pre-warm has passed,
+            # so a failed install leaves the key file as it was.
+            if server_key is not None:
+                self.write_server_key(server_key)
 
             # Step 14b: settle [graph].providers from the two-stage probe (FE-5).
             # After pre-warm because stage 2 rides it. Auxiliary — a failure here
@@ -1019,7 +1001,7 @@ class BaseInstaller(ABC):
             # Step 17: completion message
             if not self.dry_run:
                 if server_key is not None:
-                    # Key was already written at step 14b — report it directly so
+                    # Key was already written after Step 14 — report it directly so
                     # load_or_generate_key() doesn't overwrite the key file via persist_key.
                     _api_key = server_key
                     _key_source = f"file: {get_key_file()}"
@@ -1207,10 +1189,9 @@ class DryRunInstaller(BaseInstaller):
         print(f"[dry-run] Would write server key to {get_key_file()}.")
 
     def preload_models(
-        self, prof: object, gpu_provider: str | None, split_coreml: bool,
-        install_graph_extra: bool = False, graph_providers: list[str] | None = None,
+        self, prof: InstallProfile, install_graph_extra: bool = False, graph_providers: list[str] | None = None,
     ) -> str | None:
-        print(f"[DRY RUN] Would download models (~{prof.download_mb} MB).")
+        print(f"[DRY RUN] Would download and load models (~{prof.download_mb} MB).")
         if install_graph_extra:
             print("[DRY RUN] Would pre-warm graph NER model.")
         return None
@@ -1430,15 +1411,15 @@ class RealInstaller(BaseInstaller):
         print("Server key updated. Restart the service to apply: archon-search restart.")
 
     def preload_models(
-        self, prof: object, gpu_provider: str | None, split_coreml: bool,
-        install_graph_extra: bool = False, graph_providers: list[str] | None = None,
+        self, prof: InstallProfile, install_graph_extra: bool = False, graph_providers: list[str] | None = None,
     ) -> str | None:
-        print("[4/5] Downloading models...")
-        graph_device = _prewarm_models(
-            prof, install_graph_extra=install_graph_extra, graph_providers=graph_providers
+        print("[4/5] Downloading and loading models...")
+        # self.cfg carries the [database] model and provider keys the service starts
+        # with: run() reloads it after Step 9 rewrites the providers.
+        return _prewarm_models(
+            self.cfg, _prewarm_timeout(prof),
+            install_graph_extra=install_graph_extra, graph_providers=graph_providers,
         )
-        self._fe1_reprobe(gpu_provider, prof, split_coreml)
-        return graph_device
 
     def register_and_start(self) -> int:
         print("[5/5] Starting search service...")

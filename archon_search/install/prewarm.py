@@ -1,14 +1,16 @@
-"""Disk-space guard, model pre-warm downloader, and reinstall guards."""
+"""Disk-space guard, model pre-warm (download, then load), and reinstall guards."""
 from __future__ import annotations
 
 import logging
 import shutil
 import sys
-import threading
+import time
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 
-from archon_search.config import SearchConfig
+from archon_search.config import SearchConfig, resolve_reranker_providers
+from archon_search.embedder import ModelEmbedder
 from archon_search.paths import (
     GRAPH_NER_MODEL_NAME,
     GRAPH_NER_MODEL_REVISION,
@@ -18,6 +20,7 @@ from archon_search.paths import (
 )
 from archon_search.platform.runtime import get_search_service
 from archon_search.profiles import InstallProfile
+from archon_search.reranker import ModelReranker
 from archon_search.torch_device import resolve_torch_device
 
 from .config_writer import WizardFeatures, _write_profile_config
@@ -77,98 +80,154 @@ def _check_disk_space(
 
 
 # ---------------------------------------------------------------------------
-# Model pre-warm downloader (Task C0-2.3)
+# Model pre-warm: download, then load (Task C0-2.3, S671)
 # ---------------------------------------------------------------------------
+
+# Fixed, trivial probe input: one inference proves the ONNX session runs, not just builds.
+_PROBE_TEXT = "archon search pre-warm probe"
+
 
 def _prewarm_timeout(profile: InstallProfile) -> int:
     estimated_bytes = profile.download_mb * 1_000_000
     return min(1800, max(300, estimated_bytes // 100_000))
 
 
+class _PrewarmFailure(Exception):
+    """A model failed to download or load; the caller decides whether that is fatal."""
+
+
+def _prewarm_model(
+    role: str, model_name: str, download: Callable[[], object], load: Callable[[], object]
+) -> None:
+    """Run *download*, then *load*; raise _PrewarmFailure naming the phase that failed.
+
+    *download* constructs the fastembed class with ``lazy_load=True``: the registry
+    lookup and the file download, but no ONNX session (fastembed 0.9.0
+    ``text/onnx_embedding.py:310-318``). *load* runs the service's own backend
+    (``ModelEmbedder.encode`` / ``ModelReranker.predict``), so the session is built
+    exactly as the server builds it, and one inference runs on it. Both models are
+    locals of the callables, so they are released when this returns.
+    """
+    try:
+        download()
+    except Exception as exc:
+        cause = str(exc) or type(exc).__name__
+        raise _PrewarmFailure(
+            f"Could not resolve or download the {role} model {model_name!r}: {cause}"
+        ) from exc
+    try:
+        load()
+    except Exception as exc:
+        cause = str(exc) or type(exc).__name__
+        raise _PrewarmFailure(
+            f"The {role} model {model_name!r} was downloaded but cannot be loaded: {cause}"
+        ) from exc
+
+
 def _prewarm_models(
-    profile: InstallProfile,
-    timeout: int | None = None,
+    cfg: SearchConfig,
+    timeout: float,
     install_graph_extra: bool = False,
     graph_providers: list[str] | None = None,
 ) -> str | None:
-    """Download embedder (and optionally reranker, and optionally graph NER) model
-    files to the fastembed / graph-model cache.
+    """Download and load the configured embedder (and reranker, and optionally the
+    graph NER model) so a model that cannot load fails the install, not the first ingest.
 
-    Uses a threading.Timer for cross-platform timeout (signal.alarm is POSIX-only).
+    The embedder and reranker come from *cfg* — the config the service starts with —
+    and load through the service's own backends under its providers
+    (``[database].providers``, and ``resolve_reranker_providers`` for the reranker).
+    Each is loaded, probed with one inference and released before the next, so peak
+    memory is one model.
+
+    Failure policy: an embedder failure raises InstallError (the service cannot embed
+    without it). A reranker failure only warns (S202). The graph NER model is
+    non-fatal too (``_prewarm_graph_model``).
+
+    *timeout* (seconds; the caller passes ``_prewarm_timeout(profile)``) sets a
+    deadline that is checked between models: it cannot interrupt a running download
+    or load, but once it has passed, the models not yet started are skipped.
     fastembed/HF progress is printed to stderr — not suppressed. When
     ``install_graph_extra`` is set, the graph NER model (Task BE-8) is pre-warmed
-    inside the same timeout window as the embedder/reranker, non-fatally, placed
-    on the device ``graph_providers`` resolves to (Task FE-5).
+    inside the same deadline as the embedder/reranker, placed on the device
+    ``graph_providers`` resolves to (Task FE-5).
 
     Returns the graph NER pre-warm's resolved torch device (Task BE-14's stage-2
     device probe rides this), or ``None`` if the graph pre-warm did not run (not
-    requested, or skipped after a timeout) or ran and failed.
+    requested, or skipped after the deadline) or ran and failed.
     """
-    graph_device: str | None = None
-    import fastembed  # noqa: PLC0415 — lazy; not installed at import time
-    TextEmbedding = fastembed.TextEmbedding  # noqa: N806
-    try:
-        TextCrossEncoder = fastembed.TextCrossEncoder  # noqa: N806
-    except AttributeError:
-        from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: PLC0415
+    # Lazy: fastembed is not installed at import time. Same import paths as the
+    # runtime backends (embedder.py, reranker.py).
+    from fastembed import TextEmbedding  # noqa: PLC0415
+    from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: PLC0415
 
-    if timeout is None:
-        timeout = _prewarm_timeout(profile)
-
-    cancelled = threading.Event()
-    timer = threading.Timer(timeout, cancelled.set)
-    timer.start()
-
-    try:
+    cache_dir = str(get_models_dir())
+    deadline = time.monotonic() + timeout
+    # Some multilingual embedders (e.g. intfloat/multilingual-e5-large)
+    # emit a UserWarning about switching to mean pooling on __init__.
+    # Mean pooling is the correct behavior for these models; the warning
+    # is not actionable, so suppress it narrowly at this prewarm site.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", category=UserWarning, message=".*mean pooling.*"
+        )
         try:
-            # Some multilingual embedders (e.g. intfloat/multilingual-e5-large)
-            # emit a UserWarning about switching to mean pooling on __init__.
-            # Mean pooling is the correct behavior for these models; the warning
-            # is not actionable, so suppress it narrowly at this prewarm site.
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore", category=UserWarning, message=".*mean pooling.*"
-                )
-                TextEmbedding(profile.embedder, lazy_load=True, cache_dir=str(get_models_dir()))
-        except Exception as exc:
-            raise InstallError(f"Failed to pre-warm embedder model {profile.embedder!r}: {exc}") from exc
+            _prewarm_model(
+                "embedder",
+                cfg.embedding_model,
+                download=lambda: TextEmbedding(cfg.embedding_model, cache_dir=cache_dir, lazy_load=True),
+                load=lambda: ModelEmbedder(cfg.embedding_model, providers=cfg.providers).encode(
+                    [_PROBE_TEXT]
+                ),
+            )
+        except _PrewarmFailure as exc:
+            raise InstallError(str(exc)) from exc
 
-        if cancelled.is_set():
-            timer.cancel()
+    def _prewarm_reranker() -> None:
+        try:
+            _prewarm_model(
+                "reranker",
+                cfg.reranker_model,
+                download=lambda: TextCrossEncoder(cfg.reranker_model, cache_dir=cache_dir, lazy_load=True),
+                load=lambda: ModelReranker(
+                    cfg.reranker_model, providers=resolve_reranker_providers(cfg)
+                ).predict([(_PROBE_TEXT, _PROBE_TEXT)]),
+            )
+        except _PrewarmFailure as exc:
+            # Non-fatal (S202): a CoreML ONNX error or transient download hiccup
+            # must not abort the wizard; the service still searches. str(exc), not
+            # exc: a LogRecord holding the exception would keep the failed model's
+            # frames — and the model — alive.
             logger.warning(
-                "Model pre-warm timed out after %ss. Service will start without cached model files,"
-                " same as default behavior.",
+                "%s — the install continues, but /search skips reranking and /explain with"
+                " rerank fails until the model loads. See 'Model pre-warm fails' in the"
+                " wizard troubleshooting.",
+                str(exc),
+            )
+
+    # The models after the embedder, in order; only the graph step returns a value.
+    steps: list[tuple[str, Callable[[], str | None]]] = []
+    if cfg.reranker_model:
+        steps.append(("reranker", _prewarm_reranker))
+    if install_graph_extra:
+        steps.append(("graph NER", lambda: _prewarm_graph_model(graph_providers)))
+
+    device: str | None = None
+    for index, (_name, step) in enumerate(steps):
+        if time.monotonic() >= deadline:
+            skipped = [name for name, _step in steps[index:]]
+            models = " and ".join(skipped) + (" model" if len(skipped) == 1 else " models")
+            pronoun = "it" if len(skipped) == 1 else "them"
+            logger.warning(
+                "Model pre-warm timed out after %ss with the embedder ready — skipping the %s;"
+                " the service downloads %s when it starts or first uses %s.",
                 timeout,
+                models,
+                pronoun,
+                pronoun,
             )
             return None
-
-        if profile.reranker is not None:
-            try:
-                TextCrossEncoder(profile.reranker, lazy_load=True, cache_dir=str(get_models_dir()))
-            except Exception as exc:
-                # Non-fatal: a CoreML ONNX error or transient download hiccup must
-                # not abort the wizard.  The reranker will download on first search.
-                logger.warning(
-                    "Failed to pre-warm reranker model %r: %s — "
-                    "the model will be downloaded on first search.",
-                    profile.reranker, exc,
-                )
-
-        if install_graph_extra:
-            if cancelled.is_set():
-                logger.warning(
-                    "Model pre-warm timed out after %ss — skipping graph NER model "
-                    "pre-warm. It will be downloaded on first use.",
-                    timeout,
-                )
-            else:
-                graph_device = _prewarm_graph_model(graph_providers)
-
-        timer.cancel()
-    except InstallError:
-        timer.cancel()
-        raise
-    return graph_device
+        device = step()
+    return device
 
 
 # ---------------------------------------------------------------------------
@@ -178,9 +237,9 @@ def _prewarm_models(
 def _prewarm_graph_model(providers: list[str] | None = None) -> str | None:
     """Pre-warm the graph NER/RelEx model (gliner.GLiNER).
 
-    Mirrors the reranker's non-fatal branch above (:124-134): a failure here
-    must never abort the wizard — the model downloads on first use instead,
-    same as the embedder and reranker. Uses the same cache_dir as the runtime
+    Mirrors the reranker's non-fatal branch in ``_prewarm_models``: a failure
+    here must never abort the wizard — the model downloads on first use
+    instead. Uses the same cache_dir as the runtime
     lazy-load in ProseExtractionBackend.load() (get_graph_models_dir()), so
     pre-warm and first use share one on-disk cache rather than two.
 

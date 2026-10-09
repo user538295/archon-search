@@ -335,15 +335,15 @@ def test_prewarm_graph_model_places_the_model_on_the_resolved_device() -> None:
 
 
 def test_prewarm_models_forwards_graph_providers() -> None:
+    from archon_search.config import SearchConfig
     from archon_search.install import prewarm
-    from archon_search.profiles import get_profile
+    from tests.test_install_prewarm import _fastembed_cls, _fastembed_modules
 
     graph_mock = MagicMock(return_value=TORCH_DEVICE_MPS)
     with patch.object(prewarm, "_prewarm_graph_model", graph_mock), \
-         patch.dict("sys.modules", {"fastembed": MagicMock()}):
+         patch.dict("sys.modules", _fastembed_modules(_fastembed_cls(), _fastembed_cls())):
         device = prewarm._prewarm_models(
-            get_profile("minimal", False), timeout=300,
-            install_graph_extra=True, graph_providers=[_COREML],
+            SearchConfig(), 300.0, install_graph_extra=True, graph_providers=[_COREML],
         )
 
     graph_mock.assert_called_once_with([_COREML])

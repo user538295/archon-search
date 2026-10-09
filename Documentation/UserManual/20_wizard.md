@@ -128,6 +128,8 @@ Immediately after profile selection, the wizard detects your GPU hardware and co
   succeeds. It does not run on other platforms (Windows and ARM are out of
   scope; the default install pins CPU-only torch on Linux x86_64 only).
 
+  The wizard detects an NVIDIA GPU by running `nvidia-smi` and, when you confirm, writes `providers = ["CUDAExecutionProvider"]`. A native `pip`/`uv` install, however, ships the CPU `onnxruntime` that fastembed depends on, which has no CUDA provider (fastembed 0.9.0 has no `[gpu]` extra). Without `onnxruntime-gpu` in the same environment, Step 8 cannot load the embedder under CUDA (`Provider CUDAExecutionProvider is not available`) and the install exits `1`. Answer `n` here or pass `--disable-gpu` to install on CPU, or replace `onnxruntime` with `onnxruntime-gpu` in that environment first — the `:gpu` Docker image does exactly that: it uninstalls `onnxruntime`, then installs `onnxruntime-gpu` (see [Image variants](./140_running_with_docker.md#image-variants)).
+
 - **No GPU detected:** No prompt is shown; CPU is used automatically.
 
 If Metal is selected but CoreML validation fails (e.g., the installed ONNX Runtime build does not support it), the wizard tries a split-provider probe: it checks whether the **embedder** works under CoreML even if the combined probe failed. If the embedder passes but the reranker does not:
@@ -136,7 +138,7 @@ If Metal is selected but CoreML validation fails (e.g., the installed ONNX Runti
 - `reranker_providers = []` is also written, forcing the reranker to CPU.
 - The install summary shows `CoreML — text search; CPU — result ranking`.
 
-If both probes fail, the wizard falls back to CPU entirely:
+If both probes fail, the wizard falls back to CPU entirely and writes `providers = []`, replacing a CoreML entry an earlier run wrote:
 ```
 Warning: CoreML validation failed — falling back to CPU.
 ```
@@ -445,7 +447,7 @@ Which provider for graph enrichment? (anthropic/openai/ollama/llama_cpp) [anthro
 
 ### Step 6 — Summary screen
 
-Before downloading anything, the wizard prints a summary of what it is about to install:
+Before the model download step (Step 8), the wizard prints a summary of what it is about to install. On Apple Silicon with GPU acceleration on, the CoreML check from Step 3 has already run by then, and it downloads and loads the embedder and reranker to test them:
 
 ```
   Installing: Balanced · English
@@ -458,8 +460,9 @@ Before downloading anything, the wizard prints a summary of what it is about to 
   API key:    abcdefgh…nopqrstu  (full key: /Users/you/.archon-search/.search.env)
   Download:   ~330 MB
 
-  Note: Model files are downloaded now. ONNX session initialization happens in the
-  server process on first query — expect ~5–15s latency on first search.
+  Note: Models are downloaded and test-loaded before the service starts (unless
+  --skip-preload); an embedder that cannot load stops the install. The server
+  loads them again at startup.
 
   Optional features:
     • Code enrichment (tree-sitter)
@@ -496,10 +499,26 @@ If you chose a **multilingual** profile, the wizard also installs the `archon-se
 ### Step 8 — Model download
 
 ```
-[4/5] Downloading models...
+[4/5] Downloading and loading models...
 ```
 
-The wizard downloads the embedding model and (if applicable) the reranker model weights to the fastembed/HuggingFace cache. For multilingual installs, `lid.176.ftz` is also downloaded to `~/.archon-search/models/`.
+The wizard downloads the configured embedding model and (if one is configured) the reranker model weights to the fastembed cache under `<data-dir>/models/`, then **loads each one and runs a single test inference**, exactly as the server will: same model, same `[database].providers` (the reranker uses `[database].reranker_providers` when it is set), same cache directory. Each model is released before the next one loads, so this step holds one model at a time. On a re-run, a service still running from the earlier install keeps its own models loaded meanwhile — it is replaced only in Step 9 (a `--force --delete-db` reinstall stops it earlier) — so this step's peak memory is that service plus one model. The Step 3 CoreML check on Apple Silicon is different: it loads the embedder and reranker together. A reranker you disabled (`--no-reranker`, or `n` at "Keep reranker enabled?") is neither downloaded nor loaded. For multilingual installs, `lid.176.ftz` is also downloaded to `~/.archon-search/models/`.
+
+Loading here is what catches a model whose files download but cannot run — a corrupt file, or weights the installed onnxruntime rejects — at install time instead of at your first ingest. The message names the model, the phase that failed (`Could not resolve or download …` or `… was downloaded but cannot be loaded`), and the underlying error; see [Model pre-warm fails](#model-pre-warm-fails-was-downloaded-but-cannot-be-loaded) for the fixes:
+
+- **Embedder failure — the install stops.** The server cannot embed without it. The wizard prints the cause, does not start the service, exits `1`, and rolls the config back: a fresh install removes the config and `.bak` it wrote, a re-run restores the previous config from its `.bak`, and a `--force --delete-db` reinstall keeps the new config and its `.bak`:
+
+  ```
+  Model pre-warm failed: The embedder model 'BAAI/bge-small-en-v1.5' was downloaded but cannot be loaded: [ONNXRuntimeError] : 7 : INVALID_PROTOBUF : Load model from <data-dir>/models/.../model_optimized.onnx failed:Protobuf parsing failed.
+  ```
+
+- **Reranker failure — a warning, and the install continues.** While the reranker cannot load, `/search` runs without reranking, but `/explain` with reranking on (its default) fails with HTTP 500.
+
+  ```
+  The reranker model 'Xenova/ms-marco-MiniLM-L-6-v2' was downloaded but cannot be loaded: <reason> — the install continues, but /search skips reranking and /explain with rerank fails until the model loads. See 'Model pre-warm fails' in the wizard troubleshooting.
+  ```
+
+If the pre-warm runs past its time limit (5 to 30 minutes, scaled to the profile's download size), the models not yet started are skipped once the embedder is ready, and one warning names them — for example `Model pre-warm timed out after <N>s with the embedder ready — skipping the reranker and graph NER models; the service downloads them when it starts or first uses them.` (or `the reranker model` / `the graph NER model` … `it` when only one is left) — so they are not load-checked at install time. The limit is checked between models: a download or load already running is never interrupted, and when no model remains, nothing is logged.
 
 If you enabled the graph (Step 5a), the prose extraction checkpoint is pre-warmed at the end of this step, into `<data-dir>/models/graph/`. This is the ~1218 MB download quoted in Step 5a and it dominates the step's wall time. A failure is non-fatal and logged, not fatal to the install — the model downloads on first graph ingest instead.
 
@@ -517,9 +536,9 @@ The accelerator is the default here: a bare Enter accepts it, `n` steps down to 
   so [graph].providers is not written.
 ```
 
-Depending on your chosen profile and connection speed this can take from a few seconds (Minimal) to several minutes (Max). Progress is printed to the terminal by fastembed.
+Depending on your chosen profile and connection speed this can take from a few seconds (Minimal) to several minutes (Max). Progress is printed to the terminal by fastembed. Loading adds each model's session build time on top of the download.
 
-To skip this step and download the heavy weights on the first search request instead, pass `--skip-preload`. Note: for multilingual profiles the small `lid.176.ftz` language-detection model is **always** downloaded, even with `--skip-preload` — it is a required ~1 MB runtime asset without which the server cannot start, so it is never deferred. If that download fails, the wizard reverts to English-only mode so the server still boots.
+To skip this step and download the heavy weights on the first search request instead, pass `--skip-preload`. This also skips the load check above, so a model that cannot load surfaces only when the server tries to use it. Note: for multilingual profiles the small `lid.176.ftz` language-detection model is **always** downloaded, even with `--skip-preload` — it is a required ~1 MB runtime asset without which the server cannot start, so it is never deferred. If that download fails, the wizard reverts to English-only mode so the server still boots.
 
 > **Note — readiness timeout:** The length of the readiness window in Step 9 is controlled by the *eager embedder loading* setting (Step 5e), not by `--skip-preload`. When eager loading is **disabled** (the default), the window is a flat 60 seconds regardless of model size. When eager loading is **enabled**, the window scales with model size (approximately 100 ms per MB, never below 60 seconds, capped at 10 minutes). On a slow or heavily loaded machine the wizard may print "Search service did not become ready within N seconds" and exit non-zero; this is load-sensitive, not a permanent failure. Run `archon-search status` immediately after to check whether the service recovered on its own.
 
@@ -563,7 +582,7 @@ All flags for the `wizard` command (verified against `archon_search/cli/install_
 |---|---|---|
 | `--profile {minimal,balanced,max}` | Interactive | Select the install profile, skipping the interactive prompt. |
 | `--multilingual` / `--no-multilingual` | Not set (interactive) | `--multilingual`: use multilingual model stack. `--no-multilingual`: force English models explicitly. Both skip the "non-English documents?" prompt. |
-| `--skip-preload` | False | Skip the heavy embedder/reranker weight pre-download; those download on first query instead. The small `lid.176.ftz` language-detection model for multilingual profiles is still downloaded (it is required for the server to start). |
+| `--skip-preload` | False | Skip the heavy embedder/reranker weight pre-download and the load check that follows it (Step 8); those download on first query instead, and a model that cannot load is not caught at install time. The small `lid.176.ftz` language-detection model for multilingual profiles is still downloaded (it is required for the server to start). |
 | `--force` | False | Force reinstall of an existing install. **Must be combined with `--delete-db`.** |
 | `--delete-db` | False | Delete the existing database on reinstall. All indexed data will be lost, and the `[collections]` registrations (`collections` and `pinned_collections`) are cleared so `collection list` no longer shows phantom entries for the wiped store (`watch` is left untouched). Use only with `--force`. |
 | `--accept-jina-license` | False | Pre-accept the Jina CC-BY-NC-4.0 license for multilingual Balanced/Max profiles. |
@@ -591,7 +610,7 @@ All flags for the `wizard` command (verified against `archon_search/cli/install_
 | `--enable-hyde` | False (flag) | Enable HyDE (Hypothetical Document Embeddings) query expansion. Provider defaults to `"anthropic"` but can be changed by setting `[hyde].provider` in `archon-search.toml` (supported values: `"anthropic"`, `"openai"`, `"ollama"`, `"claude_cli"`, `"llama_cpp"`). For Anthropic or OpenAI, the corresponding API key must be set; for Ollama or llama.cpp, no API key is needed and query text stays on-host; for Claude CLI, `claude` must be on PATH and logged in (no API key). See [`60_searching.md`](./60_searching.md). |
 | `--enable-rag-fusion` | False (flag) | Enable RAG Fusion multi-query expansion. Same provider options and privacy considerations as `--enable-hyde`; provider controlled by `[rag_fusion].provider` in config. See [`60_searching.md`](./60_searching.md). |
 | **Tier 2 security** | | |
-| `--server-key HEX_KEY` | Not set | Set a custom Bearer token for the server. Must be a lowercase hex string of at least 32 characters (e.g., generated with `python -c "import secrets; print(secrets.token_hex(32))"`). Writes `ARCHON_SEARCH_API_KEY=<key>` to `~/.archon-search/.search.env` (mode 600). A shell-history warning and restart note are always printed. If `ARCHON_SEARCH_API_KEY` env var is set, it takes priority over the file; an additional warning is printed in that case. |
+| `--server-key HEX_KEY` | Not set | Set a custom Bearer token for the server. Must be a lowercase hex string of at least 32 characters (e.g., generated with `python -c "import secrets; print(secrets.token_hex(32))"`). Writes `ARCHON_SEARCH_API_KEY=<key>` to `~/.archon-search/.search.env` (mode 600), after the Step 8 model pre-warm: an install that fails before then leaves the key file unchanged. A shell-history warning and restart note are printed when the key is written. If `ARCHON_SEARCH_API_KEY` env var is set, it takes priority over the file; an additional warning is printed in that case. |
 
 **Note on `--force` and `--delete-db`:** These flags must always be used together. `--force` alone is rejected with an error. This requirement exists because changing profiles requires a different embedding model, which invalidates the existing vector index. Deleting the database is irreversible.
 
@@ -963,7 +982,7 @@ tail -50 ~/.archon-search/logs/archon-search.log
 On timeout the wizard also prints the last import-time error it found in the service log (`Last service-log error: ...`), if any. Common causes:
 - An import-time crash such as `ModuleNotFoundError` / `ImportError` on the *first* launch is usually a fresh-install race, not a packaging gap — the environment was still being written when the service started. The wizard already tolerates one supervisor restart, so check whether the service recovered on its own before doing anything: `archon-search status` and `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/health`. If it is healthy, no repair is needed.
 - Another process is using port 8765. Change `[server].port` in `archon-search.toml` and re-run `archon-search install`.
-- Model weights failed to download or are corrupt. Re-run the wizard without `--skip-preload`.
+- Model weights failed to download or are corrupt. Re-run the wizard without `--skip-preload`; if pre-warm reports the model cannot be loaded, see [Model pre-warm fails](#model-pre-warm-fails-was-downloaded-but-cannot-be-loaded).
 - Insufficient disk space. Check with `df -h ~/.archon-search`.
 
 ### The wizard says another install is running
@@ -986,6 +1005,20 @@ Then re-run the wizard.
 If model download fails partway through, re-run the wizard. The wizard validates the config and model state before downloading; already-downloaded files are not re-downloaded.
 
 For large profiles (Max), downloads can take 10–30 minutes on slow connections. Use `--skip-preload` to defer the download to first query time if the timeout is a problem.
+
+### Model pre-warm fails: "was downloaded but cannot be loaded"
+
+```
+Model pre-warm failed: The embedder model '<model>' was downloaded but cannot be loaded: <onnxruntime error>
+```
+
+The files arrived but onnxruntime cannot build a session from them, so the wizard stopped before starting a service whose every ingest would fail (Step 8). The same text without the `Model pre-warm failed:` prefix, ending in `— the install continues, but /search skips reranking and /explain with rerank fails until the model loads. …`, is the non-fatal reranker variant: the service is already running, and the fixes below apply to it too.
+
+- **A damaged file** (for example `Protobuf parsing failed`): the onnxruntime error names the file it tried to load, under `<data-dir>/models/models--…/`. That path is a link: it can resolve into the cache's shared store `<data-dir>/models/blobs/`, which a re-download re-links rather than replaces — so moving only the `models--…` directory to the trash does not repair it. Resolve the path first with `readlink -f '<path>'` or, where your `readlink` has no `-f`, `python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' '<path>'`; move both the file it prints and the `models--…` directory to the trash, then re-run the wizard; the model is downloaded again. The cache check only compares file sizes, so a same-size corruption is not repaired by re-running alone.
+- **`External data path escapes model directory`**: the model keeps its weights in a separate `model.onnx_data` file that the cache stored in a different directory than `model.onnx` (among the shipped profiles, `intfloat/multilingual-e5-large`). fastembed 0.9.0 or later repairs this on load by hard-linking both files side by side, so check that the wizard runs with fastembed 0.9.0 or later, and that `<data-dir>` is writable on a filesystem that supports hard links (move it with `ARCHON_SEARCH_DATA_DIR` if not). Otherwise move the model's `models--<repo>` directory to the trash and re-run the wizard with `HF_HUB_DISABLE_SHARED_BLOBS=1` set, so the pre-warm downloads it again in the flat per-repo layout. Details: [the incident runbook](../OperatorGuide/90_incident_runbook.md#ingest-fails-with-external-data-path-escapes-model-directory).
+- **An execution-provider error** (for example `Provider CUDAExecutionProvider is not available`, or CoreML rejecting the model): the model is fine, but the GPU provider written to `[database].providers` cannot run it. Re-run the wizard with `--disable-gpu` to install on CPU. `--disable-gpu` writes only `[database].providers`: if you set `[database].reranker_providers` by hand and it names the failing provider, remove that line as well.
+- **The model still cannot be loaded on CPU after a fresh download**: the installed onnxruntime cannot run it at all. Pick another profile until it is fixed, and include the full message when you report it.
+- **`Could not resolve or download …` instead of `… cannot be loaded`**: the download phase failed, before any load was tried — see [Model download fails or times out](#model-download-fails-or-times-out).
 
 ### Service install is not supported (Windows)
 

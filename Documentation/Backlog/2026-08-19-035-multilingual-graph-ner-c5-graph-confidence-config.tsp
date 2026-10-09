@@ -75,7 +75,7 @@ enum ProviderProbeStage {
   ///
   /// AS SHIPPED (BE-14, `archon_search/install/device_probe.py`) stage 2 DOES ride the
   /// optional pre-warm, and neither that factory nor a dedicated reprobe exists. The shape is:
-  /// `_prewarm_graph_model` (`prewarm.py:178-212`) loads the checkpoint, places it via
+  /// `_prewarm_graph_model` (`prewarm.py:237-271`) loads the checkpoint, places it via
   /// `resolve_torch_device(providers)` and returns the device the model actually landed on,
   /// or `null` on any failure — pre-warm stays non-fatal. `probe_device_validation(providers,
   /// prewarmResolvedDevice)` then grades that one value into a three-state
@@ -86,7 +86,7 @@ enum ProviderProbeStage {
   /// The hazard the draft named — a skipped or failed pre-warm silently making an untested
   /// accelerator look validated — is closed by that third state rather than by a dedicated
   /// call: a configured non-CPU device with nothing back from pre-warm grades as a FAILURE,
-  /// not as `not_validated`. And `installer.py:962-970` settles `[graph].providers` only when
+  /// not as `not_validated`. And `installer.py:968-977` settles `[graph].providers` only when
   /// `graph_extra_ready and not skip_preload`, so a run with no pre-warm at all leaves the
   /// field untouched rather than clobbering a hand-set list. Settling is auxiliary: any
   /// exception there is caught, logged sanitized, and leaves the field unchanged (CPU).

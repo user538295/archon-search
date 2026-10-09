@@ -107,8 +107,9 @@ def _render_summary(
         lines.append(f"  Download:   ~{total_bytes // BYTES_PER_MB} MB")
     lines += [
         "",
-        "  Note: Model files are downloaded now. ONNX session initialization happens in the",
-        "  server process on first query — expect ~5–15s latency on first search.",
+        "  Note: Models are downloaded and test-loaded before the service starts (unless",
+        "  --skip-preload); an embedder that cannot load stops the install. The server",
+        "  loads them again at startup.",
     ]
     if features is not None:
         feature_bullets: list[str] = []

@@ -8,6 +8,25 @@
 
 ## Changelog
 
+### [next release] — wizard: an embedder that cannot load now fails the install (exit 1); pre-warm failure prefix renamed (2026-10-09)
+
+**Surface**: `archon-search wizard` exit code, stdout and stderr.
+
+**What changed:** The wizard's model pre-warm only downloaded the embedder and reranker (fastembed `lazy_load=True`), so a model whose files downloaded but could not load passed it: the wizard exited `0` and started a service whose every ingest failed (S671). Pre-warm now also loads each model through the service's own backend, under the service's providers, and runs one inference (ADR 14). An embedder that fails to download or load exits `1`, does not start the service, and rolls the config back (a fresh install removes the config and `.bak` it wrote; a re-run restores the previous config from its `.bak`; a `--force --delete-db` reinstall keeps the new config). A reranker failure still only warns. In detail:
+
+- **stderr prefix**: `Model download failed: <cause>` → `Model pre-warm failed: <cause>`.
+- **Failure wording** names the phase: `Could not resolve or download the <role> model '<name>': <cause>` or `The <role> model '<name>' was downloaded but cannot be loaded: <cause>` (was `Failed to pre-warm embedder model '<name>': <cause>`, and `Failed to pre-warm reranker model '<name>': <cause> — the model will be downloaded on first search.` for the reranker). The timeout warning now reads `Model pre-warm timed out after <N>s with the embedder ready — skipping the <models>; …`, where `<models>` names only the models not yet started (`reranker model`, `graph NER model`, or `reranker and graph NER models`).
+- **Progress label** (stdout): `[4/5] Downloading models...` → `[4/5] Downloading and loading models...`; with `--dry-run`, `[DRY RUN] Would download models (~<N> MB).` → `[DRY RUN] Would download and load models (~<N> MB).`.
+- **Removed**: the post-download CoreML re-check and its `Warning: model validation failed under <provider> — the reranker will fall back to CPU.` line; pre-warm loads both models under the written providers instead.
+- **Native NVIDIA installs without `onnxruntime-gpu` now fail at install**: the wizard detects NVIDIA via `nvidia-smi` and, on a yes (the default answer), writes `providers = ["CUDAExecutionProvider"]`; a native `pip`/`uv` install ships the CPU `onnxruntime`, which has no CUDA provider, so pre-warm cannot load the embedder under it and the install exits `1` where it previously exited `0`. This is every native NVIDIA install that accepted CUDA without `onnxruntime-gpu` in the same environment; such installs were already unable to embed at runtime (`Provider CUDAExecutionProvider is not available`).
+- **CoreML fallback writes CPU**: when both CoreML checks fail, the wizard now writes `[database].providers = []` instead of keeping a CoreML entry a previous run wrote.
+
+**Migration**: scripts that match `Model download failed:` must match `Model pre-warm failed:`. On a host whose onnxruntime lacks the configured GPU provider, re-run with `--disable-gpu` (or, on NVIDIA, replace `onnxruntime` with `onnxruntime-gpu` in the install's environment first). No config or data migration is required.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — S293: the `documents` mode of `POST /ingest` now really ingests; `source_path` is validated, capped, and sandboxed (2026-09-14)
 
 **Surface**: `POST /ingest` request body and `GET /jobs/{id}` result; `SearchPipeline.ingest_documents` (library); `IngestResult.code`.

@@ -107,7 +107,7 @@ def _install_options(f: click.decorators.FC) -> click.decorators.FC:
     for decorator in reversed([
         click.option("--profile", type=click.Choice(["minimal", "balanced", "max"]), default=None, help="Install profile"),
         click.option("--multilingual/--no-multilingual", default=None, help="Use multilingual models (--no-multilingual forces English)"),
-        click.option("--skip-preload", is_flag=True, default=False, help="Skip model pre-download"),
+        click.option("--skip-preload", is_flag=True, default=False, help="Skip model pre-download and load check"),
         click.option("--force", is_flag=True, default=False, help="Force reinstall"),
         click.option("--delete-db", is_flag=True, default=False, help="Delete database on reinstall"),
         click.option("--dry-run", is_flag=True, default=False, help="Print actions without executing"),

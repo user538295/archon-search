@@ -179,7 +179,7 @@ def _run_cuda_install(
         patch.object(BaseInstaller, "detect_gpu", return_value=gpu),
         patch.object(BaseInstaller, "validate_providers", return_value=False),
         patch.object(target, "configure_providers"),
-        patch.object(target, "_probe_and_configure_coreml", return_value=([], None, False)),
+        patch.object(target, "_probe_and_configure_coreml", return_value=[]),
         patch.object(target, "write_gpu_providers_disabled"),
         patch.object(target, "write_service_file"),
         patch.object(target, "load_service", return_value=0),
