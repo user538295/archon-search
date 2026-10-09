@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import sys
 import types
-import warnings
 import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -22,7 +21,7 @@ from archon_search.install import (
     _prewarm_timeout,
 )
 from archon_search.paths import get_models_dir
-from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES, InstallProfile
+from archon_search.profiles import ENGLISH_PROFILES, InstallProfile
 from archon_search.reranker import ModelReranker
 
 _COREML = "CoreMLExecutionProvider"
@@ -242,49 +241,6 @@ def test_prewarm_releases_each_model_before_the_next_one_loads():
     # embedder download, embedder load, reranker download, reranker load, graph model
     assert alive_at_each_build == [0, 0, 0, 0, 0]
     assert all(ref() is None for ref in built)
-
-
-# ---------------------------------------------------------------------------
-# _prewarm_models — fastembed mean-pooling UserWarning suppression (Bug B)
-# ---------------------------------------------------------------------------
-
-def _warning_embedder(message: str) -> MagicMock:
-    """A TextEmbedding class whose constructor emits *message* as a UserWarning."""
-    inner = _fastembed_cls()
-
-    def _construct(*args: Any, **kwargs: Any) -> _FakeModel:
-        warnings.warn(message, UserWarning, stacklevel=2)
-        return inner(*args, **kwargs)
-
-    return MagicMock(side_effect=_construct)
-
-
-def test_prewarm_suppresses_mean_pooling_userwarning():
-    """The mean-pooling UserWarning fired by TextEmbedding.__init__ must not surface."""
-    profile = MULTILINGUAL_PROFILES["minimal"]
-    mock_te = _warning_embedder("This model does not have CLS token; switching to mean pooling.")
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        with patch.dict(sys.modules, _fastembed_modules(mock_te, _fastembed_cls())):
-            _prewarm_models(_cfg_for(profile), _TIMEOUT_S)
-
-    assert mock_te.call_count == 2
-    mean_pooling = [w for w in caught if "mean pooling" in str(w.message)]
-    assert mean_pooling == [], "mean-pooling UserWarning leaked to wizard output"
-
-
-def test_prewarm_does_not_suppress_unrelated_userwarning():
-    """The filter is narrow: an unrelated UserWarning must still surface."""
-    profile = MULTILINGUAL_PROFILES["minimal"]
-    mock_te = _warning_embedder("some other actionable warning")
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        with patch.dict(sys.modules, _fastembed_modules(mock_te, _fastembed_cls())):
-            _prewarm_models(_cfg_for(profile), _TIMEOUT_S)
-
-    assert any("some other actionable warning" in str(w.message) for w in caught)
 
 
 # ---------------------------------------------------------------------------

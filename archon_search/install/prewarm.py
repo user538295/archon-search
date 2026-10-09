@@ -5,7 +5,6 @@ import logging
 import shutil
 import sys
 import time
-import warnings
 from collections.abc import Callable
 from pathlib import Path
 
@@ -162,25 +161,17 @@ def _prewarm_models(
 
     cache_dir = str(get_models_dir())
     deadline = time.monotonic() + timeout
-    # Some multilingual embedders (e.g. intfloat/multilingual-e5-large)
-    # emit a UserWarning about switching to mean pooling on __init__.
-    # Mean pooling is the correct behavior for these models; the warning
-    # is not actionable, so suppress it narrowly at this prewarm site.
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", category=UserWarning, message=".*mean pooling.*"
+    try:
+        _prewarm_model(
+            "embedder",
+            cfg.embedding_model,
+            download=lambda: TextEmbedding(cfg.embedding_model, cache_dir=cache_dir, lazy_load=True),
+            load=lambda: ModelEmbedder(cfg.embedding_model, providers=cfg.providers).encode(
+                [_PROBE_TEXT]
+            ),
         )
-        try:
-            _prewarm_model(
-                "embedder",
-                cfg.embedding_model,
-                download=lambda: TextEmbedding(cfg.embedding_model, cache_dir=cache_dir, lazy_load=True),
-                load=lambda: ModelEmbedder(cfg.embedding_model, providers=cfg.providers).encode(
-                    [_PROBE_TEXT]
-                ),
-            )
-        except _PrewarmFailure as exc:
-            raise InstallError(str(exc)) from exc
+    except _PrewarmFailure as exc:
+        raise InstallError(str(exc)) from exc
 
     def _prewarm_reranker() -> None:
         try:
