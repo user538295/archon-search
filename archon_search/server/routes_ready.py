@@ -98,11 +98,14 @@ def _model_check_status(request: Request, warmup_pending: bool) -> CheckStatus:
 
     A *failed* warm-up also outranks ``model_validation``: mirrors
     ``_sync_check_status``, which gained an equivalent ``FAIL`` state for a
-    failed startup sync — without it, a failed warm-up is indistinguishable
-    from a healthy one once ``model_validation``'s cheap resolvability probe
-    (seconds) reports OK, because that probe never proves the ONNX weights
-    were actually built (minutes). This does NOT gate ``ready`` — see the
-    docstring on ``ready()`` — only the diagnostic.
+    failed startup sync. The warm-up task (``server/warmup.py``) sets
+    ``WarmupResult.FAILED`` when it raised or timed out, *or* when it finished with
+    any model it covered failing to load or warm (S632 — the WARNING log names them).
+    Without this branch such a failure is indistinguishable from a healthy warm-up once
+    ``model_validation``'s cheap resolvability probe (seconds) reports OK,
+    because that probe never proves the ONNX weights were actually built
+    (minutes). This does NOT gate ``ready`` — see the comment in ``ready()`` —
+    only the diagnostic.
     """
     if warmup_pending:
         return CheckStatus.PENDING
@@ -134,10 +137,12 @@ async def ready(request: Request) -> JSONResponse:
     models_status = _model_check_status(request, warmup_pending)
     sync_pending = _startup_sync_pending(request)
     # Readiness gates on storage, model warm-up and the startup sync. A failed/warned
-    # model_validation stays informational (the lazy-load contract means a search can
-    # still succeed), but a pending warm-up means the first search would block
-    # on ONNX construction, and a running startup sync means the index is still being
-    # (re)built — a load balancer must not route real traffic here in either case.
+    # model_validation stays informational: search still answers, degraded — FTS-only
+    # while the query embedder is cold, unreranked while the cross-encoder is
+    # (``_search_budget.warmup_for_search``). A pending warm-up, though, means the
+    # first search would block on ONNX construction, and a running startup sync means
+    # the index is still being (re)built — a load balancer must not route real
+    # traffic here in either case.
     ready_flag = storage_ok and not warmup_pending and not sync_pending
     body = ReadinessResponse(
         ready=ready_flag,

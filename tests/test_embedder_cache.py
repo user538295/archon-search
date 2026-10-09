@@ -247,6 +247,110 @@ async def test_preload_load_failure_logs_load_message(caplog: pytest.LogCaptureF
 
 
 @pytest.mark.asyncio
+async def test_preload_returns_no_failures_when_every_model_loads_and_warms() -> None:
+    """S632: a clean preload reports nothing failed."""
+    cache = EmbedderCache(max_size=3)
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: _mock_embedder(n)):
+        failed = await cache.preload(["model-A", "model-B"])
+
+    assert failed == []
+
+
+@pytest.mark.asyncio
+async def test_preload_returns_every_failed_model_in_request_order() -> None:
+    """S632: preload names each model whose load or warm-up embed() failed, in request order.
+
+    Covers all three failure shapes — a model that never loaded, a cold model whose
+    warm-up failed (evicted), and a warm model whose embed() still raised (kept cached,
+    but its warm-up did not succeed). The healthy model is not named.
+    """
+    cache = EmbedderCache(max_size=4)
+    cold = _mock_embedder("cold-model", is_warm=False)
+    cold.embed = AsyncMock(side_effect=RuntimeError("warm-up failed"))
+    warm_but_broken = _mock_embedder("warm-broken-model", is_warm=True)
+    warm_but_broken.embed = AsyncMock(side_effect=RuntimeError("inference blew up after load"))
+    embedders = {
+        "good-model": _mock_embedder("good-model"),
+        "cold-model": cold,
+        "warm-broken-model": warm_but_broken,
+    }
+
+    def _make(name: str, providers: list[str] | None = None) -> MagicMock:
+        if name == "missing-model":
+            raise ValueError("unknown model")
+        return embedders[name]
+
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=_make):
+        failed = await cache.preload(["warm-broken-model", "good-model", "missing-model", "cold-model"])
+
+    assert failed == ["warm-broken-model", "missing-model", "cold-model"]
+
+
+@pytest.mark.asyncio
+async def test_preload_does_not_report_a_model_the_lru_evicted_after_it_warmed() -> None:
+    """S632: preloading more models than the cache holds is not a warm-up failure.
+
+    The LRU pushes an earlier model out once the cache is full, but it loaded and its
+    warm-up embed() succeeded — preload reports the outcome of the work, not the cache
+    state left behind.
+    """
+    cache = EmbedderCache(max_size=1)
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: _mock_embedder(n)):
+        failed = await cache.preload(["model-A", "model-B"])
+
+    assert failed == []
+    assert len(cache.cached_models()) == 1
+
+
+@pytest.mark.asyncio
+async def test_cold_models_is_empty_when_every_requested_model_is_cached_warm() -> None:
+    """S632: a cache holding every requested model warm reports nothing cold."""
+    cache = EmbedderCache(max_size=3)
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: _mock_embedder(n)):
+        await cache.preload(["model-A", "model-B"])
+
+    assert cache.cold_models(["model-A", "model-B"]) == []
+
+
+@pytest.mark.asyncio
+async def test_cold_models_names_uncached_and_cached_but_cold_models_in_request_order() -> None:
+    """S632: a model is cold when it is not cached at all or cached with no backend built.
+
+    That is the state ``preload`` leaves behind for a model that failed to load (never
+    cached) or failed its warm-up embed() before the backend loaded (evicted). A warm-up
+    cut short by its timeout never gets ``preload``'s outcome, so it reads this state
+    back to name the models still cold. Warm models are not named.
+    """
+    cache = EmbedderCache(max_size=3)
+    embedders = {
+        "warm-model": _mock_embedder("warm-model", is_warm=True),
+        "cold-model": _mock_embedder("cold-model", is_warm=False),
+    }
+    with patch("archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: embedders[n]):
+        await cache.get_or_load("warm-model")
+        await cache.get_or_load("cold-model")
+
+    assert cache.cold_models(["missing-model", "warm-model", "cold-model"]) == ["missing-model", "cold-model"]
+
+
+@pytest.mark.asyncio
+async def test_cold_models_is_a_pure_query() -> None:
+    """Asking which models are cold must not load them or touch the LRU order."""
+    cache = EmbedderCache(max_size=3)
+    with patch(
+        "archon_search.embedder_cache.make_embedder", side_effect=lambda n, providers=None: _mock_embedder(n)
+    ) as mock_make:
+        await cache.get_or_load("model-A")
+        await cache.get_or_load("model-B")
+        mock_make.reset_mock()
+
+        cache.cold_models(["model-A", "model-C"])
+
+    mock_make.assert_not_called()
+    assert cache.cached_models() == ["model-A", "model-B"]
+
+
+@pytest.mark.asyncio
 async def test_get_or_load_forwards_configured_providers() -> None:
     """The ONNX execution providers reach make_embedder — the hot search path uses the GPU too."""
     cache = EmbedderCache(max_size=3, providers=["CoreMLExecutionProvider"])

@@ -12,7 +12,7 @@ client's read timeout expired.
 
 Root cause. Steps 1 and 2 exercise only the *embedder*; nothing on the ingest or
 metadata path ever touches the cross-encoder. The cross-encoder is built by the
-background startup warm-up (``server/app.py`` ``_run_model_warmup``), which holds
+background startup warm-up (``server/warmup.py`` ``run_model_warmup``), which holds
 ``Reranker._warmup_lock`` for the whole cold ONNX build. The search route then
 awaits that same lock at ``server/routes_search.py`` ::
 

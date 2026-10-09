@@ -58,7 +58,7 @@ def wait_for_warmup(app: FastAPI, timeout: float = 10.0) -> None:
     deadline = time.monotonic() + timeout
     while not task.done() and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert task.done(), "eager warm-up task did not finish within the timeout"
+    assert task.done(), "model warm-up task did not finish within the timeout"
 
 
 def test_create_app_returns_fastapi_instance(config: SearchConfig, job_store: JobStore) -> None:
@@ -450,8 +450,9 @@ async def test_eager_load_embedders_true_preloads_collection_models(tmp_path: Pa
 
     preloaded: list[list[str]] = []
 
-    async def fake_preload(self: EmbedderCache, model_names: list[str]) -> None:
+    async def fake_preload(self: EmbedderCache, model_names: list[str]) -> list[str]:
         preloaded.append(model_names)
+        return []
 
     with (
         patch.object(SearchStore, "connect", new=AsyncMock()),
@@ -534,7 +535,7 @@ async def test_eager_load_warns_when_models_exceed_cache_size(
         patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
         patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[fake_meta])),
-        patch.object(EmbedderCache, "preload", new=AsyncMock()),
+        patch.object(EmbedderCache, "preload", new=AsyncMock(return_value=[])),
         caplog.at_level(logging.WARNING, logger="archon_search.server.app"),
     ):
         app = create_app(cfg, job_store)
@@ -569,7 +570,7 @@ async def test_eager_load_does_not_warn_when_models_exactly_fill_cache(
         patch.object(SearchStore, "_run_startup_migrations", new=AsyncMock()),
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
         patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[fake_meta])),
-        patch.object(EmbedderCache, "preload", new=AsyncMock()),
+        patch.object(EmbedderCache, "preload", new=AsyncMock(return_value=[])),
         caplog.at_level(logging.WARNING, logger="archon_search.server.app"),
     ):
         app = create_app(cfg, job_store)
@@ -588,7 +589,7 @@ async def test_warmup_does_not_block_lifespan_startup(tmp_path: Path, job_store:
     second in which the port is closed and clients get ``ConnectError``. Warm-up
     takes 3-5 minutes on a cold model cache.
 
-    Oracle: both eager warm-up calls (``EmbedderCache.preload`` and
+    Oracle: both model warm-up calls (``EmbedderCache.preload`` and
     ``SearchPipeline.warmup_models``) are replaced with coroutines that park on an
     event this test controls. Startup must still complete while they are parked —
     i.e. warm-up has to be handed to ``asyncio.create_task`` rather than awaited.
@@ -609,9 +610,10 @@ async def test_warmup_does_not_block_lifespan_startup(tmp_path: Path, job_store:
     release = asyncio.Event()
     warmup_started = asyncio.Event()
 
-    async def parked_preload(self: EmbedderCache, model_names: list[str]) -> None:
+    async def parked_preload(self: EmbedderCache, model_names: list[str]) -> list[str]:
         warmup_started.set()
         await release.wait()
+        return []
 
     async def parked_warmup_models(self: SearchPipeline, embedder: object | None = None) -> None:
         warmup_started.set()
@@ -691,7 +693,7 @@ def test_eager_warmup_failure_is_contained_and_logged(
         patch.object(
             EmbedderCache, "preload", new=AsyncMock(side_effect=RuntimeError("onnx exploded"))
         ),
-        caplog.at_level(logging.WARNING, logger="archon_search.server.app"),
+        caplog.at_level(logging.WARNING, logger="archon_search.server.warmup"),
     ):
         app = create_app(cfg, job_store)
         with TestClient(app) as client:
@@ -720,6 +722,7 @@ async def test_eager_warmup_cancelled_on_shutdown_is_logged(
     from unittest.mock import AsyncMock, patch  # noqa: PLC0415
 
     from archon_search.embedder_cache import EmbedderCache  # noqa: PLC0415
+    from archon_search.server.schemas import WarmupResult  # noqa: PLC0415
     from archon_search.store import SearchStore  # noqa: PLC0415
 
     cfg = SearchConfig()
@@ -738,7 +741,7 @@ async def test_eager_warmup_cancelled_on_shutdown_is_logged(
         patch.object(SearchStore, "disconnect", new=AsyncMock()),
         patch.object(SearchStore, "get_all_collections_meta", new=AsyncMock(return_value=[])),
         patch.object(EmbedderCache, "preload", new=never_finishes),
-        caplog.at_level(logging.INFO, logger="archon_search.server.app"),
+        caplog.at_level(logging.INFO, logger="archon_search.server.warmup"),
     ):
         app = create_app(cfg, job_store)
         async with app.router.lifespan_context(app):
@@ -747,6 +750,9 @@ async def test_eager_warmup_cancelled_on_shutdown_is_logged(
             assert not task.done(), "warm-up should still be parked at this point"
 
     assert task.cancelled(), "shutdown must cancel the warm-up task, not leave it running"
+    assert app.state.warmup_result == WarmupResult.FAILED, (
+        "a cancelled warm-up never finishes, so it must not be left reading 'pending'"
+    )
     assert "model warm-up cancelled during shutdown" in caplog.text
     assert "model warm-up failed" not in caplog.text, (
         "cancellation must not be reported through the generic failure branch"

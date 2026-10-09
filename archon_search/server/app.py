@@ -53,6 +53,7 @@ from archon_search.reranker import ModelReranker, Reranker
 from archon_search.server.middleware_auth import APIKeyMiddleware, _EXEMPT_PATHS
 from archon_search.server.middleware_context import RequestContextMiddleware
 from archon_search.server.schemas import StartupSyncResult, WarmupResult
+from archon_search.server.warmup import run_model_warmup
 from archon_search.graph_store import check_and_warn_legacy_graph_tables
 from archon_search.store import SearchStore
 from archon_search.sync_suppression import (
@@ -89,22 +90,17 @@ from archon_search.telemetry.writer import TelemetryWriter
 
 logger = logging.getLogger(__name__)
 
-# Terminal ceiling for the model warm-up task. A cold cache legitimately
-# takes minutes (ONNX build + download), but an unbounded await would pin
-# ``app.state.warmup_result`` at "pending" — and ``GET /ready`` at 503 — forever.
-_EAGER_WARMUP_TIMEOUT_SECONDS: float = 600.0
-
 # Terminal ceiling for the startup collection sync. A full corpus (re)index is
-# legitimately slower than a model load, so this is set well above
-# _EAGER_WARMUP_TIMEOUT_SECONDS. Docker's HEALTHCHECK (Dockerfile) uses
-# --start-period=600s --interval=15s --retries=3 against /ready, i.e. ~645s of
-# grace before the container is marked unhealthy; an unbounded sync exceeding
-# that boot-loops under an orchestrator that restarts unhealthy containers
-# (the sync restarts from the top every time, never converging on a large
-# corpus). Bounding the sync here and marking ``sync: "fail"`` (which does NOT
-# gate /ready — see _sync_check_status in routes_ready.py) breaks that loop:
-# the container reports healthy and the operator still sees the failure on
-# /ready and in the log.
+# legitimately slower than a model load, so this is set well above the warm-up
+# ceiling (``_WARMUP_TASK_TIMEOUT_SECONDS`` in server/warmup.py). Docker's
+# HEALTHCHECK (Dockerfile) uses --start-period=600s --interval=15s --retries=3
+# against /ready, i.e. ~645s of grace before the container is marked unhealthy;
+# an unbounded sync exceeding that boot-loops under an orchestrator that
+# restarts unhealthy containers (the sync restarts from the top every time,
+# never converging on a large corpus). Bounding the sync here and marking
+# ``sync: "fail"`` (which does NOT gate /ready — see _sync_check_status in
+# routes_ready.py) breaks that loop: the container reports healthy and the
+# operator still sees the failure on /ready and in the log.
 _STARTUP_SYNC_TIMEOUT_SECONDS: float = 1800.0
 
 # Sanitized, wire-facing ``error`` values for the SyncJob that backs the startup
@@ -571,43 +567,21 @@ def create_app(
             # model when on, only the global default when off.
             distinct_models = {config.embedding_model}
 
-        async def _run_model_warmup(model_names: list[str]) -> None:
-            try:
-                # A wedged model load must not leave warmup_result "pending"
-                # forever — /ready would answer 503 for the process lifetime
-                # with no diagnostic and no recovery.
-                async with asyncio.timeout(_EAGER_WARMUP_TIMEOUT_SECONDS):
-                    # The cross-encoder goes first (S279): it is a single small model
-                    # that every search pays for on the request path, whereas preload()
-                    # may build several large embedders. Warming it last let a slow
-                    # embedder fetch (e.g. the "max" profile's ~1.3 GB
-                    # BAAI/bge-large-en-v1.5) consume the whole budget, so the reranker
-                    # stayed cold and the first search paid its 91 s ONNX build inline.
-                    await app.state.pipeline.warmup_models()
-                    # Only the equally lazy embedders are still cold (S184).
-                    await embedder_cache.preload(model_names)
-                # Startup returning no longer implies warm-up finished, so this
-                # is the only signal an operator has that it completed at all.
-                logger.info(
-                    "model warm-up complete (%d embedding models + reranker)",
-                    len(model_names),
-                )
-                app.state.warmup_result = WarmupResult.DONE
-            except asyncio.CancelledError:
-                logger.info("model warm-up cancelled during shutdown")
-                app.state.warmup_result = WarmupResult.FAILED
-                raise
-            except BaseException as exc:  # noqa: BLE001 — never let the task escape
-                logger.warning("model warm-up failed: %s", exc, exc_info=True)
-                app.state.warmup_result = WarmupResult.FAILED
-
         # Warm-up must never be awaited here: uvicorn binds the listening socket
         # only after lifespan startup returns, so a cold model cache (3-5 min)
         # would keep the port closed for the whole window. ``warmup_result`` is
         # set to "pending" BEFORE the task starts so /ready never reports models
         # as ready during the gap between startup returning and the task running.
         app.state.warmup_result = WarmupResult.PENDING
-        warmup_task = asyncio.create_task(_run_model_warmup(list(distinct_models)))
+        warmup_task = asyncio.create_task(
+            run_model_warmup(
+                set_result=functools.partial(setattr, app.state, "warmup_result"),
+                pipeline=app.state.pipeline,
+                embedder_cache=embedder_cache,
+                config=config,
+                model_names=sorted(distinct_models),
+            )
+        )
         app.state._warmup_task = warmup_task
         app.state._background_tasks.add(warmup_task)
         warmup_task.add_done_callback(app.state._background_tasks.discard)

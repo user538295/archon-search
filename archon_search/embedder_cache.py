@@ -150,8 +150,15 @@ class EmbedderCache:
                 ev.set()  # wake waiters so they retry rather than deadlock
         return embedder
 
-    async def preload(self, model_names: list[str]) -> None:
+    async def preload(self, model_names: list[str]) -> list[str]:
         """Load and warm up models concurrently; log and skip any that fail.
+
+        Returns the names in *model_names* whose load or warm-up ``embed()`` failed,
+        in that order (``[]`` when every model warmed). This is an intentional
+        command-with-outcome, like ``asyncio.gather`` returning its results: the
+        outcome cannot be read back from cache state afterwards, because LRU eviction
+        can push out a model that warmed fine and an embedder whose warm-up ``embed()``
+        raised can still be cached warm. Never raises for a failing model.
 
         Caching an Embedder is not enough: make_embedder builds a lazy backend
         whose ONNX weights are only constructed on the first encode(). The
@@ -165,12 +172,12 @@ class EmbedderCache:
         and evicting it would only throw that work away.
         """
 
-        async def _load_and_warm(model: str) -> None:
+        async def _load_and_warm(model: str) -> bool:
             try:
                 embedder = await self.get_or_load(model)
             except Exception as exc:  # noqa: BLE001 — one bad model must not abort the rest
                 logger.warning("EmbedderCache.preload: failed to load %r — %s", model, exc)
-                return
+                return False
             try:
                 await embedder.embed(["warmup"])
             except Exception as exc:  # noqa: BLE001 — same: never fail startup
@@ -187,8 +194,27 @@ class EmbedderCache:
                     "; evicting from cache" if evicted else "",
                     exc,
                 )
+                return False
+            return True
 
-        await asyncio.gather(*[_load_and_warm(m) for m in model_names])
+        warmed = await asyncio.gather(*[_load_and_warm(m) for m in model_names])
+        return [model for model, ok in zip(model_names, warmed, strict=True) if not ok]
+
+    def cold_models(self, model_names: list[str]) -> list[str]:
+        """Return the names in *model_names* with no warm embedder cached, in that order.
+
+        A model is cold when it is not cached — never loaded, failed to load, evicted
+        by ``preload`` after a failed warm-up, or pushed out by LRU eviction — or when
+        it is cached but its lazy backend was never built. A pure query: nothing is
+        loaded and the LRU order is untouched. A state probe, not an outcome: use it
+        only where ``preload``'s return value is unavailable (a warm-up cut short by
+        its timeout), since a model the LRU pushed out after warming reads as cold.
+        """
+        return [
+            model
+            for model in model_names
+            if (embedder := self._cache.get(model)) is None or not embedder.is_warm
+        ]
 
     def cached_models(self) -> list[str]:
         """Return the list of currently cached model names (LRU order, oldest first)."""

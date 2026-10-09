@@ -9,7 +9,7 @@ C1-I-2   the lifespan ``finally`` disconnects the stores before cancelling tasks
 C1-I-3   ``_server_connect_fail_msg(base_url=...)`` never consults the service manager
 C1-I-4   ``EmbedderCache.get_or_load`` leaves ``_loading`` poisoned after a waiter timeout
 C1-I-5   that timeout raises a bare ``RuntimeError`` (no not-ready exception type)
-C1-I-6   eager warm-up has no terminal timeout and does not mark cancellation as failed
+C1-I-6   model warm-up has no terminal timeout and does not mark cancellation as failed
 C1-I-7   ``GET /ready`` ignores the still-running startup sync task
 C1-I-8   CLI connect-failure paths must not touch the network (probe must be patchable)
 C1-I-9   nine CLI modules import ``_SERVER_NOT_RUNNING_MSG`` and never use it
@@ -184,7 +184,7 @@ async def test_background_tasks_cancelled_before_store_disconnect(
 
     The lifespan ``finally`` block awaits ``search_store.disconnect()`` first and
     only then cancels ``app.state._background_tasks``. Any in-flight task (the
-    startup sync, eager warm-up, model validation) therefore keeps issuing
+    startup sync, model warm-up, model validation) therefore keeps issuing
     LanceDB calls against a store that is already closed.
 
     Oracle: ``SearchStore.disconnect`` records the not-yet-done background tasks
@@ -903,32 +903,32 @@ def test_embedder_not_ready_error_returns_503_from_explain(tmp_path: Path) -> No
 
 
 # --------------------------------------------------------------------------- #
-# C1-I-6a — eager warm-up has no terminal timeout
+# C1-I-6a — model warm-up has no terminal timeout
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_eager_warmup_has_terminal_timeout(
     tmp_path: Path, job_store: JobStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A wedged eager warm-up must terminate and mark itself failed.
+    """A wedged model warm-up must terminate and mark itself failed.
 
-    ``_run_eager_warmup`` awaits ``embedder_cache.preload`` with no
-    ``asyncio.wait_for``. If model loading hangs (wedged ONNX init, stalled
+    ``run_model_warmup`` once awaited ``embedder_cache.preload`` with no
+    bound. If model loading hangs (wedged ONNX init, stalled
     download), ``app.state.warmup_result`` stays ``"pending"`` forever and
     ``GET /ready`` answers 503 for the entire lifetime of the process with no
     diagnostic and no recovery.
 
     The bound must live in a module-level constant (house style, cf.
     ``routes_search._SEARCH_TIMEOUT_SECONDS``) so this test can dial it down —
-    the loop below rebinds every numeric ``*TIMEOUT*`` constant in ``app.py``.
+    the loop below rebinds every numeric ``*TIMEOUT*`` constant in ``server/warmup.py``.
     """
     from archon_search.embedder_cache import EmbedderCache  # noqa: PLC0415
-    from archon_search.server import app as app_module  # noqa: PLC0415
+    from archon_search.server import warmup as warmup_module  # noqa: PLC0415
     from archon_search.server.app import create_app  # noqa: PLC0415
     from archon_search.store import SearchStore  # noqa: PLC0415
 
-    for name in dir(app_module):
-        if "TIMEOUT" in name.upper() and isinstance(getattr(app_module, name), (int, float)):
-            monkeypatch.setattr(app_module, name, 0.1)
+    for name in dir(warmup_module):
+        if "TIMEOUT" in name.upper() and isinstance(getattr(warmup_module, name), (int, float)):
+            monkeypatch.setattr(warmup_module, name, 0.1)
 
     cfg = SearchConfig()
     cfg.db_path = str(tmp_path / "search")
@@ -971,10 +971,10 @@ async def test_eager_warmup_has_terminal_timeout(
             await lifespan_task
 
     assert result == "failed", (
-        "eager warm-up hung with no terminal timeout: app.state.warmup_result is "
+        "model warm-up hung with no terminal timeout: app.state.warmup_result is "
         f"{result!r}, so /ready answers 503 forever with no diagnostic. "
-        "_run_eager_warmup must bound preload()/warmup_models() with "
-        "asyncio.wait_for(..., timeout=<module constant>) and record 'failed'"
+        "run_model_warmup must bound preload()/warmup_models() with "
+        "asyncio.timeout(<module constant>) and record 'failed'"
     )
 
 
@@ -983,12 +983,12 @@ async def test_eager_warmup_has_terminal_timeout(
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_eager_warmup_cancelled_sets_failed(tmp_path: Path, job_store: JobStore) -> None:
-    """A cancelled eager warm-up must leave ``warmup_result`` terminal.
+    """A cancelled model warm-up must leave ``warmup_result`` terminal.
 
-    ``_run_eager_warmup``'s ``except asyncio.CancelledError`` branch logs and
-    re-raises without touching ``app.state.warmup_result``, which therefore stays
-    ``"pending"`` — ``/ready`` and any operator reading it are told the warm-up is
-    still progressing when it will never run again.
+    ``run_model_warmup``'s ``except asyncio.CancelledError`` branch logged and
+    re-raised without touching ``app.state.warmup_result``, which therefore stayed
+    ``"pending"`` — ``/ready`` and any operator reading it were told the warm-up was
+    still progressing when it would never run again.
     """
     from archon_search.embedder_cache import EmbedderCache  # noqa: PLC0415
     from archon_search.server.app import create_app  # noqa: PLC0415
@@ -1034,7 +1034,7 @@ async def test_eager_warmup_cancelled_sets_failed(tmp_path: Path, job_store: Job
             await lifespan_task
 
     assert result == "failed", (
-        "eager warm-up was cancelled but app.state.warmup_result is still "
+        "model warm-up was cancelled but app.state.warmup_result is still "
         f"{result!r} — the CancelledError branch re-raises without recording a "
         "terminal outcome, so /ready reports a warm-up that will never complete"
     )
@@ -1338,7 +1338,7 @@ async def test_startup_sync_with_per_collection_errors_sets_startup_sync_failed(
 
 # --------------------------------------------------------------------------- #
 # C6-4 — the startup sync must have a terminal timeout, mirroring the eager
-# warm-up bound (_EAGER_WARMUP_TIMEOUT_SECONDS); otherwise /ready gates on it forever
+# warm-up bound (_WARMUP_TASK_TIMEOUT_SECONDS); otherwise /ready gates on it forever
 # and Docker's HEALTHCHECK boot-loops an unhealthy container.
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
@@ -1356,8 +1356,8 @@ async def test_startup_sync_has_terminal_timeout(
     from the top on every restart and never converges on a large corpus.
 
     The bound must live in a module-level constant (house style, cf.
-    ``_EAGER_WARMUP_TIMEOUT_SECONDS``) so this test can dial it down — the loop below
-    rebinds every numeric ``*TIMEOUT*`` constant in ``app.py``.
+    ``_WARMUP_TASK_TIMEOUT_SECONDS`` in ``server/warmup.py``) so this test can dial
+    it down — the loop below rebinds every numeric ``*TIMEOUT*`` constant in ``app.py``.
     """
     from archon_search.server import app as app_module  # noqa: PLC0415
     from archon_search.server.app import create_app  # noqa: PLC0415
@@ -1406,6 +1406,10 @@ async def test_startup_sync_has_terminal_timeout(
                     break
                 await asyncio.sleep(0.01)
             startup_sync_failed = app.state._startup_sync_failed
+            # The lifespan also warms the models on every startup (S279) and a
+            # pending warm-up legitimately holds /ready at 503 — wait it out so the
+            # readiness assertion below sees the startup-sync state in isolation.
+            await asyncio.wait_for(app.state._warmup_task, timeout=30.0)
             sync_result = app.state.sync_result
 
             # /ready must never gate on this failure — 200 with checks.sync='fail'.
@@ -1827,7 +1831,7 @@ def test_connect_fail_msg_recognizes_sync_pending_as_starting_up() -> None:
     read as "starting up", not "not running".
 
     During the startup sync the server answers 503 with a healthy models check
-    (eager warm-up already finished or is disabled) and a pending sync check.
+    (model warm-up already finished or is disabled) and a pending sync check.
     The old condition only inspected ``checks.models``, so it fell through to
     "archon-search serve is not running. Start it first" about a server that is
     up and mid-startup.
