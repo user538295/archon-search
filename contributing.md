@@ -81,7 +81,7 @@ The test pyramid, marker semantics, parallelism configuration, and the role of t
 ## Pull requests
 
 - Keep the PR scoped to one logical change; commits inside should map 1:1 to tasks.
-- CI must be green: the default unit run, the eval gate, and any other workflow in [`.github/workflows/archon-search-pr.yml`](.github/workflows/archon-search-pr.yml).
+- CI must be green: the default unit run, the eval gate, and any other workflow in [`.github/workflows/archon-search-pr.yml`](.github/workflows/archon-search-pr.yml). A PR touching `pyproject.toml` or `uv.lock` also runs [`.github/workflows/archon-search-unlocked-deps.yml`](.github/workflows/archon-search-unlocked-deps.yml) — the suite against the newest dependency versions end users install; fix a red run with a bound in `[project] dependencies`, not in `[tool.uv]` or `uv.lock`.
 - A PR that changes a REST or MCP surface must include the corresponding `BREAKING.md` entry.
 - Include a short "why" in the description. The "what" is the diff.
 

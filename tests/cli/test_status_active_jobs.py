@@ -196,15 +196,13 @@ def test_fetch_active_job_counts_returns_none_on_non_int_total() -> None:
 
 def test_print_active_jobs_no_output_when_zero(runner: CliRunner) -> None:
     with patch("archon_search.cli.status._fetch_active_job_counts", return_value=(0, 0)):
-        with runner.isolated_filesystem():
-            from click.testing import CliRunner as _CR
-            from click import command, pass_context
+        from click import command
 
-            @command()
-            def _cmd():  # type: ignore[no-untyped-def]
-                status_mod._print_active_jobs("http://localhost:8765", None)
+        @command()
+        def _cmd() -> None:
+            status_mod._print_active_jobs("http://localhost:8765", None)
 
-            result = _CR().invoke(_cmd)
+        result = runner.invoke(_cmd)
     assert "Jobs:" not in result.output
 
 

@@ -3,12 +3,14 @@
 #
 # What this script does:
 #   1. Pre-flight: working tree clean, on `main`, in sync with origin/main,
-#      git-cliff >= 2.4 is available, then every lane archon-search-release.yml's
-#      `test` job gates publish on — default suite, eval slice, integration
-#      suite, docling parser lane (real OCR), graph_real_artifact lane (real
-#      GLiNER checkpoint) — followed by the same coverage >= 85% enforcement.
-#      A lane broken on `main` therefore fails HERE, before the tag is even
-#      created, instead of only after it is already pushed to origin.
+#      git-cliff >= 2.4 is available, then every lane archon-search-release.yml
+#      gates publish on — the `test` job's default suite, eval slice,
+#      integration suite, docling parser lane (real OCR), graph_real_artifact
+#      lane (real GLiNER checkpoint), followed by the same coverage >= 85%
+#      enforcement, and the `unlocked-deps` job's unlocked-dependency lane
+#      (scripts/test-unlocked-deps.sh). A lane broken on `main` therefore fails
+#      HERE, before the tag is even created, instead of only after it is
+#      already pushed to origin.
 #   2. Compute the provisional CalVer tag: YY.M.<git-rev-list-count-HEAD + 1>
 #      (the +1 accounts for the CHANGELOG.md commit added in step 4).
 #   3. Confirm the tag is new (locally + on origin).
@@ -20,7 +22,7 @@
 #   6. `git tag $TAG` + `git push origin $TAG`.
 #
 # After the push, GitHub Actions runs `archon-search-release.yml` which:
-#   - runs the eval gate,
+#   - runs the eval gate and the unlocked-dependency lane,
 #   - builds the wheel with `hatch build` (hatch-vcs reads the tag),
 #   - publishes to PyPI via OIDC,
 #   - creates a GitHub Release from the CHANGELOG.md section (github-release job).
@@ -46,7 +48,7 @@ for arg in "$@"; do
         -y|--yes) ASSUME_YES=1 ;;
         --dry-run) DRY_RUN=1 ;;
         -h|--help)
-            sed -n '2,30p' "$0"
+            sed -n '2,32p' "$0"
             exit 0
             ;;
         *)
@@ -121,34 +123,35 @@ check_git_cliff() {
 check_git_cliff
 
 if [ -z "${RELEASE_SH_TEST_MODE:-}" ]; then
-    # Lanes 1-5 mirror archon-search-release.yml's `test` job step for step (same
-    # markers, same --cov-append/--no-cov split, same coverage enforcement at the end)
+    # Lanes 1-6 mirror the jobs archon-search-release.yml gates publish on — 1-5 the
+    # `test` job step for step (same markers, same --cov-append/--no-cov split, same
+    # coverage enforcement at the end), 6 the `unlocked-deps` job (the same script) —
     # so a lane that would fail the publish gate fails here instead, before the tag
-    # exists. Lanes 6-11 run ONLY here, never in CI: benchmark/smoke need a local
+    # exists. Lanes 7-12 run ONLY here, never in CI: benchmark/smoke need a local
     # server, docker needs a local daemon, live_benchmark/live_eval/live need real
     # model weights or a logged-in `claude` CLI that a CI runner doesn't have — this
-    # is the full local pre-tag gate, CI's job stays a subset of it.
+    # is the full local pre-tag gate, CI's jobs stay a subset of it.
     echo "Running every excluded pytest marker as a local pre-tag gate (this takes a while)..."
     _suite_start=$SECONDS
     rm -f .coverage
 
-    echo "[1/11] Default suite (coverage, no fail-under yet)..."
+    echo "[1/12] Default suite (coverage, no fail-under yet)..."
     uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append -n0 \
         -m "not live and not eval and not benchmark and not integration and not live_eval and not docling and not graph_real_artifact" \
         || bail "default suite failed — fix all failures before releasing"
 
-    echo "[2/11] Eval slice (thresholds, runxfail)..."
+    echo "[2/12] Eval slice (thresholds, runxfail)..."
     uv run pytest -o addopts= --strict-markers --strict-config --cov=archon_search --cov-report=term-missing --cov-append --runxfail \
         -m eval --thresholds-path tests/eval/thresholds.toml tests/eval/ \
         || bail "eval slice failed — fix all failures before releasing"
 
-    echo "[3/11] Integration suite (disk-backed basetemp)..."
+    echo "[3/12] Integration suite (disk-backed basetemp)..."
     mkdir -p /var/tmp/archon-search-it
     uv run pytest --basetemp=/var/tmp/archon-search-it -o addopts= --strict-markers --strict-config --cov=archon_search --cov-append \
         -m "integration and not eval and not docling and not graph_real_artifact" tests/ \
         || bail "integration suite failed — fix all failures before releasing"
 
-    echo "[4/11] Docling parser lane (real OCR — minutes)..."
+    echo "[4/12] Docling parser lane (real OCR — minutes)..."
     uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m docling --junitxml=docling-results.xml tests/ \
         || bail "docling lane failed — fix all failures before releasing"
     uv run python -c "
@@ -162,7 +165,7 @@ assert not skipped, f'docling testcases skipped, no real OCR exercised - {skippe
 " || bail "docling lane ran but its non-vacuity check failed"
     rm -f docling-results.xml
 
-    echo "[5/11] Graph real-artifact lane (real GLiNER checkpoint)..."
+    echo "[5/12] Graph real-artifact lane (real GLiNER checkpoint)..."
     _prefetch_ok=false
     for attempt in 1 2 3; do
         uv run python -c "
@@ -189,7 +192,11 @@ assert c[0].find('skipped') is None, 'test_graph_ner_lane_non_vacuity was skippe
 " || bail "graph real-artifact lane ran but its non-vacuity check failed"
     rm -f graph-real-artifact-results.xml
 
-    echo "[6/11] Benchmark lane (routing latency + wildcard scope)..."
+    echo "[6/12] Unlocked-dependency lane (newest deps as users install them, uv.lock ignored)..."
+    bash scripts/test-unlocked-deps.sh \
+        || bail "unlocked-dependency lane failed — users installing this release would hit it; fix before releasing"
+
+    echo "[7/12] Benchmark lane (routing latency + wildcard scope)..."
     _bench_owns_server=false
     if ! curl -sf http://127.0.0.1:8765/health >/dev/null 2>&1; then
         ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run archon-search serve &
@@ -209,27 +216,27 @@ assert c[0].find('skipped') is None, 'test_graph_ner_lane_non_vacuity was skippe
     fi
     [ "$_bench_rc" -eq 0 ] || bail "benchmark lane failed — fix all failures before releasing"
 
-    echo "[7/11] Docker image smoke lane (real CPU image build — ~5 min)..."
+    echo "[8/12] Docker image smoke lane (real CPU image build — ~5 min)..."
     ensure_docker_running
     ARCHON_SEARCH_RUN_DOCKER_SMOKE=1 uv run pytest tests/test_docker_smoke.py \
         --no-cov -o addopts= --strict-markers --strict-config -n0 -m docker \
         || bail "docker smoke lane failed — fix all failures before releasing"
 
-    echo "[8/11] Smoke suite (real archon-search serve subprocess per test)..."
+    echo "[9/12] Smoke suite (real archon-search serve subprocess per test)..."
     uv run pytest tests/smoke/ -o addopts= --strict-markers --strict-config --no-cov -n0 \
         || bail "smoke suite failed — fix all failures before releasing"
 
-    echo "[9/11] Live benchmark lane (real fastembed weights)..."
+    echo "[10/12] Live benchmark lane (real fastembed weights)..."
     uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 \
         -m live_benchmark tests/eval/live_benchmark/ \
         || bail "live benchmark lane failed — fix all failures before releasing"
 
-    echo "[10/11] Live eval lane (real fastembed + real LLM — Anthropic key, else 'claude -p' CLI)..."
+    echo "[11/12] Live eval lane (real fastembed + real LLM — Anthropic key, else 'claude -p' CLI)..."
     uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 \
         -m live_eval tests/eval/live/ \
         || bail "live eval lane failed — fix all failures before releasing"
 
-    echo "[11/11] Live llama.cpp lane (skips gracefully without a local llama-server)..."
+    echo "[12/12] Live llama.cpp lane (skips gracefully without a local llama-server)..."
     uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 \
         -m "live and not live_eval and not live_benchmark" tests/integration/test_llama_cpp_e2e.py \
         || bail "live llama.cpp lane failed — fix all failures before releasing"

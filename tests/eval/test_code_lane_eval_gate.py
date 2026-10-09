@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -748,12 +749,13 @@ def test_e2e_codeDefrefEvalGate_subprocess() -> None:
     """Subprocess e2e: run the two non-vacuity gates in a fresh process (T-2).
 
     Runs:
-        uv run pytest tests/eval/test_code_lane_eval_gate.py \\
+        python -m pytest tests/eval/test_code_lane_eval_gate.py \\
             -k 'test_codeChunkingRecall_nonVacuous or test_codeDefrefRecall_nonVacuous'
             -m 'not live_benchmark' -p no:xdist -o addopts= --no-cov \\
             --thresholds-path tests/eval/thresholds.toml
 
-    as a blocking subprocess (timeout=300s) from the project root. Asserts
+    as a blocking subprocess (timeout=300s) from the project root, with the parent's
+    interpreter (``sys.executable``) so the child sees the same installed packages. Asserts
     that exactly 2 tests passed (not skipped, not failed): specifically
     ``test_codeChunkingRecall_nonVacuous`` and ``test_codeDefrefRecall_nonVacuous``.
 
@@ -770,8 +772,8 @@ def test_e2e_codeDefrefEvalGate_subprocess() -> None:
     try:
         result = subprocess.run(
             [
-                "uv",
-                "run",
+                sys.executable,
+                "-m",
                 "pytest",
                 _THIS_MODULE,
                 "-m",
@@ -795,7 +797,7 @@ def test_e2e_codeDefrefEvalGate_subprocess() -> None:
     except subprocess.TimeoutExpired:
         pytest.fail(
             f"Subprocess pytest run timed out after 300s.\n"
-            f"Command: uv run pytest {_THIS_MODULE} -k '{_K_EXPR}'"
+            f"Command: python -m pytest {_THIS_MODULE} -k '{_K_EXPR}'"
         )
     combined_output = result.stdout + result.stderr
     # Guard: verify the child did NOT spawn xdist workers (which would stack on the parent's

@@ -63,10 +63,10 @@ def _run_wizard(
 ) -> Result:
     """Invoke wizard via CliRunner on a clean tmp_path.
 
-    Patches _acquire_install_lock, _prewarm_models, _check_disk_space, and
-    heavy SearchInstaller methods so tests run without real model downloads
-    or service operations.  load_or_generate_key is always patched to avoid
-    touching real key files on disk.
+    Patches _acquire_install_lock, _prewarm_models, _check_disk_space, the extras
+    installers, and heavy SearchInstaller methods so tests run without real model
+    downloads, package installs or service operations.  load_or_generate_key is
+    always patched to avoid touching real key files on disk.
 
     Callers that need env var isolation (e.g., ANTHROPIC_API_KEY) must call
     monkeypatch.setenv() in the test function itself before invoking this helper.
@@ -98,6 +98,14 @@ def _run_wizard(
         "_remove_legacy_service": MagicMock(),
         "_acquire_install_lock": _noop_install_lock,
         "load_or_generate_key": MagicMock(return_value=_mock_key),
+        # The extras installers run `uv pip install --python sys.executable ...` for real,
+        # which re-resolves the running test environment (and needs the network).
+        "_install_code_extra": MagicMock(),
+        "_install_graph_extra": MagicMock(),
+        "_install_multilingual_extra": MagicMock(),
+        # Returns the sections that failed to install; [] keeps the caller's revert quiet.
+        "_install_query_expansion_extras": MagicMock(return_value=[]),
+        "_install_cuda_torch": MagicMock(),
     }
 
     with patch.multiple("archon_search.install.installer", **install_patches):

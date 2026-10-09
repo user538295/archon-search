@@ -71,7 +71,7 @@ exit {exit_code}
     stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def _setup_repo(tmp_path: Path) -> Path:
+def _setup_repo(tmp_path: Path, *, unlocked_lane_exit: int = 0) -> Path:
     """
     Set up a minimal git repo that passes all pre-flight checks preceding
     check_git_cliff:
@@ -81,6 +81,10 @@ def _setup_repo(tmp_path: Path) -> Path:
 
     Copies release.sh into the worker repo so the script's BASH_SOURCE[0]-based
     REPO_ROOT resolves to the temp repo, not the real project directory.
+
+    The unlocked-dependency lane is a script, not a `uv` call, so the uv stub cannot
+    stand in for it: a stub scripts/test-unlocked-deps.sh exiting `unlocked_lane_exit`
+    does.
 
     Returns the path to the worker repo.
     """
@@ -109,12 +113,22 @@ def _setup_repo(tmp_path: Path) -> Path:
     dest_release_sh = worker / "release.sh"
     shutil.copy2(RELEASE_SH, dest_release_sh)
 
-    # Initial commit (includes release.sh and CHANGELOG.md so tree is clean after commit)
+    # Stub of the unlocked-dependency lane (release.sh runs `bash scripts/test-unlocked-deps.sh`)
+    lane_stub = worker / "scripts" / "test-unlocked-deps.sh"
+    lane_stub.parent.mkdir()
+    lane_stub.write_text(f"#!/usr/bin/env bash\nexit {unlocked_lane_exit}\n")
+
+    # Initial commit (includes release.sh, CHANGELOG.md and the lane stub so tree is clean after commit)
     readme = worker / "README.md"
     readme.write_text("hello\n")
     changelog = worker / "CHANGELOG.md"
     changelog.write_text(CHANGELOG_STUB)
-    subprocess.run(["git", "add", "README.md", "release.sh", "CHANGELOG.md"], check=True, capture_output=True, cwd=worker)
+    subprocess.run(
+        ["git", "add", "README.md", "release.sh", "CHANGELOG.md", "scripts/test-unlocked-deps.sh"],
+        check=True,
+        capture_output=True,
+        cwd=worker,
+    )
     subprocess.run(
         ["git", "commit", "-m", "initial commit"],
         check=True,
@@ -239,6 +253,39 @@ def test_valid_git_cliff_version_passes_preflight(valid_repo, tmp_path):
         f"Expected '[dry-run]' in stdout — script did not reach post-preflight output.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
+
+
+def test_failing_unlocked_lane_bails_before_tagging(tmp_path):
+    """A red unlocked-dependency lane stops release.sh before anything is tagged or pushed.
+
+    The release workflow's publish and docker jobs need the same lane, so a tag cut past
+    a red lane would sit on origin without a PyPI release.
+    """
+    worker = _setup_repo(tmp_path, unlocked_lane_exit=1)
+    stub_bin = tmp_path / "stub_bin"
+    stub_bin.mkdir()
+    _make_stub_git_cliff(stub_bin, "git-cliff 2.4.0")
+    _add_uv_pytest_stub(stub_bin)
+
+    original_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    result = _run_release_sh(
+        ["-y"],
+        # An exported RELEASE_SH_TEST_MODE would skip every lane, lane 6 included.
+        env_overrides={"PATH": f"{stub_bin}:{original_path}", "RELEASE_SH_TEST_MODE": ""},
+        repo_path=worker,
+    )
+
+    assert result.returncode != 0, (
+        f"Expected non-zero exit.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "unlocked-dependency lane failed" in result.stderr, (
+        f"Expected the unlocked lane's bail message.\nstderr: {result.stderr}"
+    )
+    for ref_listing in (["git", "tag"], ["git", "ls-remote", "--tags", "origin"]):
+        listed = subprocess.run(ref_listing, capture_output=True, text=True, cwd=worker, check=True)
+        assert listed.stdout == "", f"{' '.join(ref_listing)} lists tags: {listed.stdout}"
+    log = subprocess.run(["git", "log", "--format=%s"], capture_output=True, text=True, cwd=worker, check=True)
+    assert log.stdout == "initial commit\n", f"release.sh committed past the red lane: {log.stdout}"
 
 
 class TestProvisionalTag:

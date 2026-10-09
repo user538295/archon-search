@@ -1113,8 +1113,13 @@ async def test_migrate_namespace_rows_backfilled(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_migrate_namespace_add_columns_duplicate_raises_runtime_error(tmp_path: Path) -> None:
-    """Verify the real LanceDB exception for duplicate add_columns matches our handler."""
+async def test_migrate_namespace_add_columns_duplicate_error_matches_handler(tmp_path: Path) -> None:
+    """Verify the real LanceDB exception for duplicate add_columns matches our handler.
+
+    The migration handlers catch any ``Exception`` and match on "already exists" in its
+    message, so the message is the contract. The class is lancedb's choice —
+    ``RuntimeError`` in 0.36.0, ``ValueError`` in 0.40.0 — and both are accepted.
+    """
     import pyarrow as pa
 
     store = SearchStore(tmp_path / "db")
@@ -1123,7 +1128,7 @@ async def test_migrate_namespace_add_columns_duplicate_raises_runtime_error(tmp_
         db = store._require_connected()
         schema = pa.schema([pa.field("name", pa.utf8()), pa.field("namespace", pa.utf8())])
         table = await db.create_table("_archon_verify_exc", schema=schema)
-        with pytest.raises(RuntimeError) as exc_info:
+        with pytest.raises((RuntimeError, ValueError)) as exc_info:
             await table.add_columns({"namespace": "'default'"})
         assert "already exists" in str(exc_info.value).lower()
     finally:

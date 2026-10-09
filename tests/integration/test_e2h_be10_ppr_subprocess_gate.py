@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,9 @@ _PPR_EVAL_MODULE = "tests/eval/test_ppr_eval_gate.py"
 
 def _run_ppr_gate(k_expr: str, *, timeout: int = 300) -> None:
     """Run a single PPR eval gate test in a child process and assert it passes.
+
+    The child runs on the parent's interpreter (``sys.executable``), so it sees the same
+    installed packages.
 
     Asserts:
     - No xdist workers were spawned in the child (OOM guard).
@@ -40,8 +44,8 @@ def _run_ppr_gate(k_expr: str, *, timeout: int = 300) -> None:
     try:
         result = subprocess.run(
             [
-                "uv",
-                "run",
+                sys.executable,
+                "-m",
                 "pytest",
                 _PPR_EVAL_MODULE,
                 "-m",
@@ -65,7 +69,7 @@ def _run_ppr_gate(k_expr: str, *, timeout: int = 300) -> None:
     except subprocess.TimeoutExpired:
         pytest.fail(
             f"Subprocess pytest run timed out after {timeout}s.\n"
-            f"Command: uv run pytest {_PPR_EVAL_MODULE} -k '{k_expr}'"
+            f"Command: python -m pytest {_PPR_EVAL_MODULE} -k '{k_expr}'"
         )
     combined_output = result.stdout + result.stderr
     # Guard: verify the child did NOT spawn xdist workers (which would stack on the parent's
@@ -101,7 +105,7 @@ def test_e2h_pprBridgeRecall_subprocessGate() -> None:
     """Subprocess e2e: run the PPR bridge recall gate in a fresh process (S12).
 
     Runs:
-        uv run pytest tests/eval/test_ppr_eval_gate.py \\
+        python -m pytest tests/eval/test_ppr_eval_gate.py \\
             -k 'test_pprEvalGate_nonVacuous_pprOutperformsNoGraph'
             -m 'not live_benchmark' -p no:xdist -o addopts= --no-cov \\
             --thresholds-path tests/eval/thresholds.toml
@@ -120,7 +124,7 @@ def test_e2h_pprNegativeControl_subprocessGate() -> None:
     """Subprocess e2e: run the PPR negative control gate in a fresh process (S13).
 
     Runs:
-        uv run pytest tests/eval/test_ppr_eval_gate.py \\
+        python -m pytest tests/eval/test_ppr_eval_gate.py \\
             -k 'test_pprNegativeControlGate_nonVacuous_independentFromNaiveBucket'
             -m 'not live_benchmark' -p no:xdist -o addopts= --no-cov \\
             --thresholds-path tests/eval/thresholds.toml

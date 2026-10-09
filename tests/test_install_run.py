@@ -239,6 +239,8 @@ def test_run_interactive_guard_confirm_yes_reindexes(tmp_path: Path) -> None:
         patch("archon_search.install.installer._remove_legacy_service"),
         patch("archon_search.install.installer._prewarm_models"),
         patch("archon_search.install.installer._check_disk_space"),
+        # Otherwise a real `uv pip install` of the [hyde] extra re-resolves the test environment.
+        patch("archon_search.install.installer._install_query_expansion_extras", return_value=[]),
         patch("archon_search.install.shutil.rmtree", rmtree_mock),
         patch("archon_search.install.installer.get_search_service", return_value=MagicMock()),
         patch("builtins.input", input_mock),
@@ -1046,6 +1048,8 @@ def test_run_multilingual_flag_skips_prompt(tmp_path: Path) -> None:
         patch("archon_search.install.installer._remove_legacy_service"),
         patch("archon_search.install.installer._prewarm_models"),
         patch("archon_search.install.installer._check_disk_space"),
+        # Otherwise a real `uv pip install` of [multilingual] re-resolves the test environment.
+        patch("archon_search.install.installer._install_multilingual_extra"),
         patch("archon_search.install.installer._prompt_multilingual", prompt_multilingual_mock),
         patch("archon_search.install.installer._prompt_optional_features", return_value=MagicMock(
             install_code_extra=False, install_graph_extra=False, disable_reranker=False,

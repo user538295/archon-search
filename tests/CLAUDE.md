@@ -29,6 +29,12 @@ uv run pytest -m docling --no-cov                                     # `-m` fil
 ARCHON_SEARCH_DATA_DIR="$HOME/.archon-search" uv run pytest -o addopts= --strict-markers --strict-config --no-cov -n0 -m graph_real_artifact  # real GLiNER checkpoint must be pre-downloaded there
 ```
 
+The unlocked-dependency lane re-runs the default suite and the docling/graph lanes in a throwaway venv with the newest dependency versions end users install (`uv.lock` ignored). It fails if a test changes that venv, and a child `uv run` would silently test `uv.lock`'s versions instead — so never let a test run a real package install or `uv run`; spawn a child pytest as `sys.executable -m pytest`:
+
+```bash
+bash scripts/test-unlocked-deps.sh            # install + suite + docling + graph; or one step by name
+```
+
 The smoke lane's server subprocesses run on a throwaway `ARCHON_SEARCH_DATA_DIR`, but `_link_model_cache`
 (`tests/smoke/conftest.py`) symlinks their `models/` at the persistent `~/.archon-search/models` — every
 cache in the tree derives from that one env var (`paths.py`), so without the link each run would

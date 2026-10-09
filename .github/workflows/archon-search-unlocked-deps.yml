@@ -1,0 +1,81 @@
+name: archon-search unlocked deps
+
+# Transitive-drift guard. End users never install uv.lock: `pip install archon-search`,
+# `uv tool install archon-search` and the Dockerfile's `pip install .` resolve the newest
+# versions the published metadata allows, while every other workflow runs `uv sync --dev`
+# against the lock. S671 reached users through that gap (the lock pinned huggingface_hub
+# 1.26.0, user installs resolved 1.33). This lane installs the way users do and runs the
+# lanes archon-search-release.yml's `test` job gates publish on — the steps live in
+# scripts/test-unlocked-deps.sh, which release.sh runs too.
+#
+# Triggers:
+#   - workflow_call: the release workflow's `unlocked-deps` job, which publish and docker
+#     both `needs:` — a release is not published if its newest-deps install fails its own gate.
+#   - schedule: drift lands upstream without any commit here, so a nightly run surfaces
+#     it before the next release or user does.
+#   - pull_request on the dependency declarations (and this lane's own files): proves a
+#     bound change before merge. Not on every PR — upstream drift is not caused by a PR.
+#   - workflow_dispatch: re-check by hand (e.g. after a pyproject.toml fix).
+
+on:
+  workflow_call:
+  schedule:
+    - cron: "17 4 * * *"  # daily, 04:17 UTC (off the top of the hour)
+  pull_request:
+    paths:
+      - pyproject.toml
+      - uv.lock
+      - scripts/test-unlocked-deps.sh
+      - .github/workflows/archon-search-unlocked-deps.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unlocked-deps:
+    runs-on: ubuntu-latest
+    # Every step is capped: 20 install + 60 suite + 45 docling + 160 graph = 285 min. The
+    # docling and graph caps are the release workflow's own step budgets; a healthy run
+    # takes a fraction of this (locally ~10 min for all four steps).
+    timeout-minutes: 300
+    env:
+      # Disk-backed (/tmp is tmpfs on GitHub-hosted runners): the crash-injection
+      # integration tests in the default suite skip on tmpfs.
+      ARCHON_UNLOCKED_DIR: /var/tmp/archon-search-unlocked
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          # hatch-vcs needs the full history to compute the version of the local build
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+
+      - name: Unlocked install (uv.lock ignored) + versions that differ from the lock
+        timeout-minutes: 20
+        run: bash scripts/test-unlocked-deps.sh install
+
+      - name: Run full default suite (integration + eval, coverage fail-under 85)
+        # pyproject's `-n 8`: the default suite stubs fastembed (~0.3 GB/worker, ~2.4 GB in
+        # all), which fits every GitHub-hosted ubuntu runner; fewer vCPUs only slow it down.
+        timeout-minutes: 60
+        run: bash scripts/test-unlocked-deps.sh suite
+
+      - name: Run docling parser lane (+ non-vacuity check)
+        timeout-minutes: 45
+        run: bash scripts/test-unlocked-deps.sh docling
+
+      - name: Run graph real-artifact lane (prefetch + lane + non-vacuity check)
+        # 30 min prefetch + 130 min lane: the release workflow's two step budgets. The
+        # ~1.2 GB checkpoint is fetched cold every run, as in the release workflow: no
+        # actions/cache step, so this lane never spends the repo's 10 GB cache budget the
+        # PR gate's model caches depend on.
+        timeout-minutes: 160
+        run: bash scripts/test-unlocked-deps.sh graph

@@ -158,11 +158,20 @@ jobs:
         run: uv run coverage report --fail-under=85
 
   # ---------------------------------------------------------------------------
+  # Job 1b — unlocked-dependency gate (runs in parallel with Job 1)
+  # PyPI and Docker users resolve the newest dependency versions, not uv.lock, so
+  # the release must also pass its gate as THEY will install it (S671). Steps:
+  # archon-search-unlocked-deps.yml / scripts/test-unlocked-deps.sh.
+  # ---------------------------------------------------------------------------
+  unlocked-deps:
+    uses: ./.github/workflows/archon-search-unlocked-deps.yml
+
+  # ---------------------------------------------------------------------------
   # Job 2 — build + publish to PyPI (OIDC, no stored secrets)
   # The tag was created and pushed by release.sh before this workflow ran.
   # ---------------------------------------------------------------------------
   publish:
-    needs: test
+    needs: [test, unlocked-deps]
     runs-on: ubuntu-latest
     permissions:
       # Required to mint the OIDC token for PyPI's trusted publisher.
@@ -240,10 +249,12 @@ jobs:
   #          onnxruntime-gpu — fastembed 0.8.0 does not ship a `[gpu]` extra)
   #
   # The Dockerfile uses `COPY .` so the image always contains the exact source
-  # at the tagged commit. `needs: test` (not `needs: publish`) — the image is
-  # built from the local working tree, never from PyPI, so the eval/test gate
-  # is the only prerequisite. Using `needs: publish` would force docker builds
-  # to wait for the PyPI publish which is irrelevant to the image content.
+  # at the tagged commit. `needs: [test, unlocked-deps]` (not `needs: publish`) —
+  # the image is built from the local working tree, never from PyPI, so the two
+  # test gates are the only prerequisites; the Dockerfile's `pip install .`
+  # resolves the newest dependency versions, which is what `unlocked-deps` tests.
+  # Using `needs: publish` would force docker builds to wait for the PyPI publish,
+  # which is irrelevant to the image content.
   #
   # The `--build-arg GIT_COMMIT=${{ github.sha }}` is propagated into
   # `LABEL org.opencontainers.image.revision` (see Dockerfile) so operators can
@@ -265,7 +276,7 @@ jobs:
   # working image was produced.
   # ---------------------------------------------------------------------------
   docker:
-    needs: test
+    needs: [test, unlocked-deps]
     runs-on: ubuntu-latest
     # Only run on actual tag pushes — never on workflow_dispatch from a branch.
     # Parallels the `github-release` job's gate so the same release contract
