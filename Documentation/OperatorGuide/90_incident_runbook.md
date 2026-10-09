@@ -118,6 +118,17 @@ Underlying causes typically logged in `archon-search.log`: parser failure on a s
 
 - **Two graph conditions deliberately do NOT appear in `provider_warnings`.** (1) A **failed checkpoint load** — the model artifact is fetched lazily on first ingest, and a load failure latches per process and degrades each document; the startup probe checks package importability only, so grep the server log for `"prose extraction backend failed to load"` instead. (2) An **execution-provider step-down** — the wizard's two-stage device probe validates `[graph].providers` against the pre-warmed model at *provision* time; when the accelerator was configured but the pre-warm landed on CPU (or never ran), it logs `"Graph accelerator not validated (...) — writing [graph].providers = [] (CPU)"` to stderr and settles on CPU without prompting. Nothing re-checks that at load time, so a step-down that first appears later (driver removed, runtime swapped) is invisible until you re-run `archon-search wizard`. There is no `provider_notes` field any more, and nothing replaced it: every entry in `provider_warnings` is operator-actionable by construction, because `checks.models` grades that field alone.
 
+### Ingest fails with "External data path escapes model directory"
+
+**Symptoms**: every ingest job for a collection goes `FAILED` within milliseconds, with an `error` starting `[ONNXRuntimeError] : 1 : FAIL : External data path validation failed ... External data path escapes model directory`; `collection list` shows `docs=0`. Only models that ship their weights in a separate `model.onnx_data` file are affected — among the shipped profiles, `intfloat/multilingual-e5-large` (`max` + multilingual).
+
+**Cause**: `huggingface_hub` ≥ 1.32 stores large files in a shared `<data-dir>/models/blobs/<2-hex>/` store, so `model.onnx` and `model.onnx_data` resolve into different directories, and `onnxruntime` ≥ 1.24 refuses external data outside the model's directory. archon-search requires `fastembed>=0.9.0`, which fixes this by hard-linking both files side by side under `models--<repo>/onnx_snapshots/<revision>/` on load (no extra disk space). An install that still fails is either running an older fastembed or cannot create hard links.
+
+**Triage**:
+
+- Confirm the fastembed version in the interpreter the server uses (for a `uv tool install`, the tool's venv): `python -c 'import fastembed; print(fastembed.__version__)'` must print `0.9.0` or later. If not, upgrade archon-search and restart — an existing cache is repaired on the next load, no re-download needed.
+- If the version is current, grep the log for fastembed's `"Could not link the files of"` warning: the models directory is read-only or on a filesystem without hard-link support. Move the data directory (`ARCHON_SEARCH_DATA_DIR`) to a writable filesystem that supports hard links, or delete the model's `models--<repo>` directory and restart with `HF_HUB_DISABLE_SHARED_BLOBS=1` set for the server process so it is re-downloaded in the flat per-repo layout.
+
 ### Graph search failures
 
 Graph search (`graph_mode`) requires `[graph].enabled = true`. See [60_graph_operations.md](60_graph_operations.md) for building and maintaining graphs.

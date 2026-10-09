@@ -54,7 +54,7 @@ The CPU / GPU variant is chosen at **build time** via the `BASE_IMAGE` build-arg
 | Tag | Base image | Use when |
 | --- | --- | --- |
 | `:latest`, `:<version>` | `python:3.12-slim` | Any host without an NVIDIA GPU. CPU inference only. |
-| `:gpu`, `:<version>-gpu` | `nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04` | NVIDIA host with the container toolkit installed. Uses `onnxruntime-gpu` instead of CPU `onnxruntime` (fastembed 0.8.0 ships no `[gpu]` extra, so the GPU image swaps it manually). |
+| `:gpu`, `:<version>-gpu` | `nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04` | NVIDIA host with the container toolkit installed. Uses `onnxruntime-gpu` instead of CPU `onnxruntime` (fastembed 0.9.0 ships no `[gpu]` extra, so the GPU image swaps it manually). |
 
 The `:latest` CPU image ships the **CPU-only** PyTorch build (`torch==<ver>+cpu`,
 pinned via the PyTorch CPU wheel index): PDF and image-OCR parsing (docling)

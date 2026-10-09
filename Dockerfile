@@ -10,7 +10,7 @@
 #
 # The CPU base ships Python 3.12 already; the NVIDIA CUDA base ships only the
 # CUDA runtime and is Ubuntu-based, so we conditionally install Python 3.12
-# from deadsnakes when the base does not provide it. fastembed 0.8.0 does
+# from deadsnakes when the base does not provide it. fastembed 0.9.0 does
 # not publish a `[gpu]` extra, so the GPU branch swaps the default CPU
 # `onnxruntime` for `onnxruntime-gpu` after the base archon-search install.
 
@@ -99,7 +99,7 @@ RUN set -eux; \
 # both smaller and avoids pulling uv into the runtime layer.
 #
 # For the GPU variant the project's CPU `onnxruntime` is swapped for
-# `onnxruntime-gpu` after the base install. fastembed 0.8.0 does not ship
+# `onnxruntime-gpu` after the base install. fastembed 0.9.0 does not ship
 # a `[gpu]` extra (verified against the package metadata) so this is the
 # documented manual-swap path.
 RUN set -eux; \
