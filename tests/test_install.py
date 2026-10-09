@@ -1025,6 +1025,7 @@ class TestRunUninstall:
 
 
 _MV = "archon_search.model_validation"
+_AVAILABLE_PROVIDERS = "archon_search.onnx_providers._available_providers"
 
 
 def _ok_embedder() -> MagicMock:
@@ -1044,10 +1045,10 @@ def _ok_cross_encoder() -> MagicMock:
 class TestValidateProviders:
     """Body-behaviour tests for the refactored ``validate_providers`` (BE-7).
 
-    The method now delegates to ``validate_providers_shared`` in
-    ``model_validation.py``, so these tests patch that module's seams
-    (``TextEmbedding``, ``_load_cross_encoder``, ``_available_providers``)
-    rather than ``sys.modules`` directly.
+    The method checks requested accelerators against ``onnx_providers`` and then
+    delegates to ``validate_providers_shared`` in ``model_validation.py``, so these
+    tests patch those modules' seams (``TextEmbedding``, ``_load_cross_encoder``,
+    ``onnx_providers._available_providers``) rather than ``sys.modules`` directly.
     """
 
     def test_validate_providers_returns_true_on_empty_list(self, tmp_path: Path) -> None:
@@ -1072,7 +1073,7 @@ class TestValidateProviders:
 
         with patch(f"{_MV}.TextEmbedding", te), \
              patch(f"{_MV}._load_cross_encoder", ce), \
-             patch(f"{_MV}._available_providers",
+             patch(_AVAILABLE_PROVIDERS,
                    return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
@@ -1085,7 +1086,7 @@ class TestValidateProviders:
 
         with patch(f"{_MV}.TextEmbedding", te), \
              patch(f"{_MV}._load_cross_encoder", _ok_cross_encoder()), \
-             patch(f"{_MV}._available_providers",
+             patch(_AVAILABLE_PROVIDERS,
                    return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
@@ -1100,32 +1101,36 @@ class TestValidateProviders:
 
         with patch(f"{_MV}.TextEmbedding", te), \
              patch(f"{_MV}._load_cross_encoder", _ok_cross_encoder()), \
-             patch(f"{_MV}._available_providers",
+             patch(_AVAILABLE_PROVIDERS,
                    return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is False
 
     def test_validate_providers_returns_false_when_provider_not_in_available(self, tmp_path: Path) -> None:
-        """GPU provider not in available providers → False, no model probed."""
+        """GPU provider not in available providers → False, no model probed.
+
+        S635: the runtime would load on CPU, but an accelerator the host lacks is not a
+        validated accelerator, so the wizard must not write it.
+        """
         installer = _make_installer(tmp_path)
         te, ce = _ok_embedder(), _ok_cross_encoder()
 
         with patch(f"{_MV}.TextEmbedding", te), \
              patch(f"{_MV}._load_cross_encoder", ce), \
-             patch(f"{_MV}._available_providers", return_value=["CPUExecutionProvider"]):
+             patch(_AVAILABLE_PROVIDERS, return_value=["CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is False
-        # Pre-flight gate failed → neither model instantiated.
+        # Unavailable accelerator → nothing to validate → neither model instantiated.
         te.assert_not_called()
         ce.assert_not_called()
 
     def test_validate_providers_returns_false_when_onnxruntime_not_installed(self, tmp_path: Path) -> None:
-        """onnxruntime query raises → provider gate fails → False."""
+        """onnxruntime query raises → availability unknown → False."""
         installer = _make_installer(tmp_path)
 
-        with patch(f"{_MV}._available_providers", side_effect=ImportError("no onnxruntime")):
+        with patch(_AVAILABLE_PROVIDERS, side_effect=ImportError("no onnxruntime")):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is False
@@ -1138,7 +1143,7 @@ class TestValidateProviders:
 
         with patch(f"{_MV}.TextEmbedding", te), \
              patch(f"{_MV}._load_cross_encoder", ce), \
-             patch(f"{_MV}._available_providers",
+             patch(_AVAILABLE_PROVIDERS,
                    return_value=["CoreMLExecutionProvider", "CPUExecutionProvider"]):
             result = installer.validate_providers(providers)
 
@@ -1155,7 +1160,7 @@ class TestValidateProviders:
 
         with patch(f"{_MV}.TextEmbedding", te), \
              patch(f"{_MV}._load_cross_encoder", ce), \
-             patch(f"{_MV}._available_providers",
+             patch(_AVAILABLE_PROVIDERS,
                    return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
@@ -1173,7 +1178,7 @@ class TestValidateProviders:
 
         with patch(f"{_MV}.TextEmbedding", te), \
              patch(f"{_MV}._load_cross_encoder", _ok_cross_encoder()), \
-             patch(f"{_MV}._available_providers",
+             patch(_AVAILABLE_PROVIDERS,
                    return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
@@ -1187,7 +1192,7 @@ class TestValidateProviders:
 
         with patch(f"{_MV}.TextEmbedding", te), \
              patch(f"{_MV}._load_cross_encoder", ce), \
-             patch(f"{_MV}._available_providers", avail):
+             patch(_AVAILABLE_PROVIDERS, avail):
             result = installer.validate_providers(["CPUExecutionProvider"])
 
         assert result is True
@@ -1252,10 +1257,13 @@ class TestValidateProviders:
         installer = _make_installer(tmp_path)
 
         with patch(f"{_MV}.validate_providers_shared",
-                   side_effect=RuntimeError("contract broken")):
+                   side_effect=RuntimeError("contract broken")) as mock_shared, \
+             patch(_AVAILABLE_PROVIDERS,
+                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is False
+        mock_shared.assert_called_once()
 
     def test_validate_providers_reranker_fails_embedder_ok(self, tmp_path: Path) -> None:
         """Reranker probe fails while embedder passes → False (S6)."""
@@ -1288,31 +1296,51 @@ class TestValidateProviders:
         installer = _make_installer(tmp_path)
 
         with patch(f"{_MV}.validate_providers_shared",
-                   return_value=(False, False, ["configured ONNX providers not available: X"])):
+                   return_value=(False, False, ["embedder probe failed: boom"])) as mock_shared, \
+             patch(_AVAILABLE_PROVIDERS,
+                   return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
             with caplog.at_level("WARNING"):
-                result = installer.validate_providers(["X"])
+                result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is False
-        assert any("not available: X" in r.message for r in caplog.records)
+        mock_shared.assert_called_once()
+        assert any(
+            r.levelname == "WARNING" and "embedder probe failed: boom" in r.message
+            for r in caplog.records
+        )
 
     def test_wizard_validate_providers_returns_false_on_bad_provider(self, tmp_path: Path) -> None:
         """Integration: an unavailable provider → False without raising.
 
-        Exercises the real ``validate_providers_shared`` provider gate (only the
-        host onnxruntime query is stubbed) so the wizard's end-to-end fallback
-        path is covered, not just the delegation seam.
+        Exercises the real availability check (only the host onnxruntime query is
+        stubbed) so the wizard's end-to-end fallback path is covered, not just the
+        delegation seam.
         """
         installer = _make_installer(tmp_path)
         te, ce = _ok_embedder(), _ok_cross_encoder()
 
         with patch(f"{_MV}.TextEmbedding", te), \
              patch(f"{_MV}._load_cross_encoder", ce), \
-             patch(f"{_MV}._available_providers", return_value=["CPUExecutionProvider"]):
+             patch(_AVAILABLE_PROVIDERS, return_value=["CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
         assert result is False
         te.assert_not_called()
         ce.assert_not_called()
+
+    def test_validate_embedder_only_returns_false_on_unavailable_provider(
+        self, tmp_path: Path
+    ) -> None:
+        """S635: the embedder-only probe rejects an unavailable accelerator too, unprobed."""
+        installer = _make_installer(tmp_path)
+        te = _ok_embedder()
+
+        with patch(f"{_MV}.TextEmbedding", te), \
+             patch(_AVAILABLE_PROVIDERS, return_value=["CPUExecutionProvider"]):
+            result = installer.validate_embedder_only(["CoreMLExecutionProvider"])
+
+        assert result is False
+        te.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1657,7 +1685,7 @@ class TestRunServiceReadiness:
         """Querying available providers raises → provider gate fails → False."""
         installer = _make_installer(tmp_path)
 
-        with patch("archon_search.model_validation._available_providers",
+        with patch(_AVAILABLE_PROVIDERS,
                    side_effect=RuntimeError("ort internal error")):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 
@@ -1669,7 +1697,7 @@ class TestRunServiceReadiness:
         installer = _make_installer(tmp_path)
 
         with caplog.at_level(logging.WARNING, logger="archon"), \
-             patch("archon_search.model_validation._available_providers",
+             patch(_AVAILABLE_PROVIDERS,
                    return_value=["CPUExecutionProvider"]):
             result = installer.validate_providers(["CUDAExecutionProvider"])
 

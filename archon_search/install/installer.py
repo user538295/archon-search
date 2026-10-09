@@ -195,49 +195,61 @@ class BaseInstaller(ABC):
     def validate_providers(self, providers: list[str]) -> bool:
         """Check that all non-CPU providers are available and both models load.
 
-        Delegates to :func:`validate_providers_shared` (C3) so the wizard and the
+        A requested provider the installed onnxruntime lacks returns False without
+        probing: the runtime would load on CPU instead (S635), but an unavailable
+        accelerator is not a validated one, so the wizard must not write it. Otherwise
+        delegates to :func:`validate_providers_shared` (C3) so the wizard and the
         background startup check probe identically. Returns True only if BOTH the
         embedder and the reranker pass under *providers*; a disabled reranker
         (``reranker_model == ""``) reports ``reranker_ok = True`` with no probe.
 
         Never raises — caller handles fallback. The whole body is guarded so that
-        a broken lazy import (``model_validation`` imports ``fastembed`` at module
-        scope) or a future contract breach in ``validate_providers_shared`` yields
-        ``False`` rather than crashing the install wizard.
+        a failed onnxruntime query, a broken lazy import (``model_validation``
+        imports ``fastembed`` at module scope) or a future contract breach in
+        ``validate_providers_shared`` yields ``False`` rather than crashing the
+        install wizard.
         """
-        try:
-            # Lazy import — model_validation imports fastembed/onnxruntime at
-            # module scope; importing it here keeps that cost off CLI startup.
-            from archon_search.model_validation import validate_providers_shared
-
-            embedder_ok, reranker_ok, warnings = validate_providers_shared(
-                providers,
-                self.cfg.embedding_model,
-                self.cfg.reranker_model,
-            )
-        except Exception as exc:
-            logger.warning("validate_providers: provider validation failed: %s", exc)
-            return False
-        for warning in warnings:
-            logger.warning("validate_providers: %s", warning)
-        return embedder_ok and reranker_ok
+        probed = self._probe_providers("validate_providers", providers, self.cfg.reranker_model)
+        return probed is not None and all(probed)
 
     def validate_embedder_only(self, providers: list[str]) -> bool:
         """Like validate_providers but only probes the embedder (reranker_model="")."""
-        try:
-            from archon_search.model_validation import validate_providers_shared
+        probed = self._probe_providers("validate_embedder_only", providers, "")
+        return probed is not None and probed[0]
 
-            embedder_ok, _, warnings = validate_providers_shared(
+    def _probe_providers(
+        self, caller: str, providers: list[str], reranker_model: str
+    ) -> tuple[bool, bool] | None:
+        """``(embedder_ok, reranker_ok)`` under *providers*, or None when unvalidated.
+
+        None — logged as a WARNING prefixed with *caller* — when a requested provider
+        is missing from onnxruntime, or when anything fails before a probe result
+        exists. Probe warnings are logged the same way.
+        """
+        try:
+            # Lazy imports — model_validation imports fastembed/onnxruntime at
+            # module scope; importing it here keeps that cost off CLI startup.
+            from archon_search.model_validation import validate_providers_shared
+            from archon_search.onnx_providers import (
+                missing_providers_message,
+                unavailable_onnx_providers,
+            )
+
+            unavailable = unavailable_onnx_providers(providers)
+            if unavailable:
+                logger.warning("%s: %s", caller, missing_providers_message(unavailable))
+                return None
+            embedder_ok, reranker_ok, warnings = validate_providers_shared(
                 providers,
                 self.cfg.embedding_model,
-                "",  # disabled reranker → always ok
+                reranker_model,
             )
         except Exception as exc:
-            logger.warning("validate_embedder_only: %s", exc)
-            return False
+            logger.warning("%s: provider validation failed: %s", caller, exc)
+            return None
         for warning in warnings:
-            logger.warning("validate_embedder_only: %s", warning)
-        return embedder_ok
+            logger.warning("%s: %s", caller, warning)
+        return embedder_ok, reranker_ok
 
     def _probe_and_configure_coreml(self, gpu: "GpuType", config_path: Path) -> list[str]:
         """Probe CoreML, write the providers it settles on, return the summary's provider labels."""

@@ -26,6 +26,9 @@ from archon_search.profiles import ENGLISH_PROFILES, MULTILINGUAL_PROFILES, Inst
 from archon_search.reranker import ModelReranker
 
 _COREML = "CoreMLExecutionProvider"
+# A host whose onnxruntime has CoreML: [database].providers reaches fastembed unchanged.
+_COREML_HOST = [_COREML, "CPUExecutionProvider"]
+_AVAILABLE_PROVIDERS = "archon_search.onnx_providers._available_providers"
 _TIMEOUT_S = 300.0
 # The onnxruntime error S671 hit: the files downloaded, but no session could be built.
 _LOAD_ERROR = (
@@ -155,9 +158,13 @@ def test_prewarm_downloads_then_loads_embedder_exactly_as_the_runtime_does(provi
     cfg = _cfg_for(profile, providers=providers, reranker_model="")
     runtime_te, prewarm_te = _fastembed_cls(), _fastembed_cls()
 
-    with patch.dict(sys.modules, _fastembed_modules(runtime_te, _fastembed_cls())):
+    with patch.dict(sys.modules, _fastembed_modules(runtime_te, _fastembed_cls())), patch(
+        _AVAILABLE_PROVIDERS, return_value=_COREML_HOST
+    ):
         ModelEmbedder(cfg.embedding_model, providers=cfg.providers).encode(["warmup"])
-    with patch.dict(sys.modules, _fastembed_modules(prewarm_te, _fastembed_cls())):
+    with patch.dict(sys.modules, _fastembed_modules(prewarm_te, _fastembed_cls())), patch(
+        _AVAILABLE_PROVIDERS, return_value=_COREML_HOST
+    ):
         _prewarm_models(cfg, _TIMEOUT_S)
 
     assert runtime_te.call_args.kwargs["providers"] == (providers or None)
@@ -181,11 +188,15 @@ def test_prewarm_downloads_then_loads_reranker_exactly_as_the_runtime_does(
     cfg = _cfg_for(profile, providers=[_COREML], reranker_providers=reranker_providers)
     runtime_tce, prewarm_tce = _fastembed_cls(), _fastembed_cls()
 
-    with patch.dict(sys.modules, _fastembed_modules(_fastembed_cls(), runtime_tce)):
+    with patch.dict(sys.modules, _fastembed_modules(_fastembed_cls(), runtime_tce)), patch(
+        _AVAILABLE_PROVIDERS, return_value=_COREML_HOST
+    ):
         ModelReranker(cfg.reranker_model, providers=resolve_reranker_providers(cfg)).predict(
             [("warmup", "warmup")]
         )
-    with patch.dict(sys.modules, _fastembed_modules(_fastembed_cls(), prewarm_tce)):
+    with patch.dict(sys.modules, _fastembed_modules(_fastembed_cls(), prewarm_tce)), patch(
+        _AVAILABLE_PROVIDERS, return_value=_COREML_HOST
+    ):
         _prewarm_models(cfg, _TIMEOUT_S)
 
     assert runtime_tce.call_args.kwargs["providers"] == expected

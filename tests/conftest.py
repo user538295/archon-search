@@ -211,6 +211,19 @@ def _archon_isolated_data_dir(
 
 
 @pytest.fixture(autouse=True)
+def _fresh_onnx_fallback_warnings() -> None:
+    """Start every test as a fresh process would: no ONNX provider fallback warned yet.
+
+    The S635 fallback WARNING is latched once per process per configured list, so a
+    test that triggers it would otherwise silence the same warning in later tests on
+    the same xdist worker.
+    """
+    from archon_search.onnx_providers import reset_fallback_warnings
+
+    reset_fallback_warnings()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_archon_logging() -> Generator[None, None, None]:
     """Isolate the `archon_search` logger's state per test.
 

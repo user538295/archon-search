@@ -19,6 +19,11 @@ import httpx
 from fastembed import TextEmbedding
 
 from archon_search.embedder import make_embedder
+from archon_search.onnx_providers import (
+    missing_providers_message,
+    select_onnx_providers,
+    unavailable_onnx_providers,
+)
 from archon_search.paths import get_models_dir
 
 if TYPE_CHECKING:
@@ -364,17 +369,6 @@ async def _probe_extraction_model(
     return []
 
 
-def _available_providers() -> list[str]:
-    """Return the ONNX execution providers available on this host.
-
-    Isolated behind a helper so tests can patch it without importing
-    onnxruntime (which is not installed on all systems).
-    """
-    import onnxruntime  # noqa: PLC0415 — lazy, optional dependency
-
-    return list(onnxruntime.get_available_providers())
-
-
 def _load_cross_encoder(model_name: str, providers: list[str] | None) -> Any:
     """Instantiate a fastembed ``TextCrossEncoder`` (reranker probe entry point)."""
     from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: PLC0415
@@ -394,36 +388,34 @@ def validate_providers_shared(
 
     Returns ``(embedder_ok, reranker_ok, warnings)``:
 
-    - Non-CPU providers are checked against ``onnxruntime.get_available_providers()``
-      first. A missing provider is a pre-flight gate: it fails BOTH probes
-      (``embedder_ok = reranker_ok = False``) without instantiating either model.
+    - Both models are probed on the providers the runtime backends would load them
+      on (:func:`~archon_search.onnx_providers.select_onnx_providers`): a configured
+      provider the installed onnxruntime lacks is dropped (CPU when none remain) and
+      reported as the warning ``configured ONNX providers not available: <names>``
+      (S635) — so a successful probe yields ``(True, True, [that warning])``.
+    - If onnxruntime cannot be queried for its providers, neither model is probed:
+      ``embedder_ok = False`` and ``reranker_ok = False`` (``True`` when the reranker
+      is disabled) with a ``could not query ONNX providers`` warning.
     - ``reranker_model == ""`` disables the reranker: ``reranker_ok = True`` with
-      no probe attempted, even when the provider gate fails for the embedder.
+      no probe attempted.
     - ``embedding_model == ""`` skips the embedder probe and reports
       ``embedder_ok = True`` (caller has confirmed it is already warm).
     """
     warnings: list[str] = []
     reranker_disabled = reranker_model == ""
 
-    # Pre-flight provider gate (applies to both models when not disabled).
-    non_cpu = [p for p in providers if "CPU" not in p]
-    if non_cpu:
-        try:
-            available = _available_providers()
-        except Exception as exc:  # never raises
-            warnings.append(f"could not query ONNX providers: {exc}")
-            return False, (True if reranker_disabled else False), warnings
-        missing = [p for p in non_cpu if p not in available]
-        if missing:
-            warnings.append(
-                "configured ONNX providers not available: " + ", ".join(missing)
-            )
-            # Disabled reranker still wins: nothing to probe → reranker_ok True.
-            return False, (True if reranker_disabled else False), warnings
+    try:
+        selection = select_onnx_providers(providers)
+    except Exception as exc:  # never raises
+        warnings.append(f"could not query ONNX providers: {exc}")
+        return False, reranker_disabled, warnings
+    if selection.unavailable:
+        warnings.append(missing_providers_message(selection.unavailable))
+    # `None` for an unset list (SearchConfig default) leaves the device to fastembed,
+    # exactly as the runtime ModelEmbedder/ModelReranker do.
+    load_providers = selection.providers
 
     # Embedder probe (skipped when caller already confirmed warm via "" model).
-    # `providers or None`: an empty list (SearchConfig default) becomes None so
-    # fastembed selects its own CPU default — matching the empty `non_cpu` gate above.
     # `cache_dir` (S278): both probes MUST warm the same cache the runtime
     # ModelEmbedder/ModelReranker read from, or /ready reports models ok while the first
     # search still pays a full cold download inline.
@@ -434,7 +426,7 @@ def validate_providers_shared(
         try:
             model = TextEmbedding(
                 embedding_model,
-                providers=providers or None,
+                providers=load_providers,
                 cache_dir=str(get_models_dir()),
             )
             list(model.embed(["archon search validation probe"]))
@@ -448,7 +440,7 @@ def validate_providers_shared(
     else:
         reranker_ok = True
         try:
-            ce = _load_cross_encoder(reranker_model, providers or None)
+            ce = _load_cross_encoder(reranker_model, load_providers)
             list(ce.rerank("archon search query", ["archon search document"]))
         except Exception as exc:  # never raises
             reranker_ok = False
@@ -545,7 +537,8 @@ async def validate_models_async(
                     timeout=_remaining,
                 )
                 reranker_ok = reranker_ok_actual
-                warnings = warnings + split_warns
+                # Both lists dropping the same provider would repeat its warning.
+                warnings = list(dict.fromkeys(warnings + split_warns))
             except asyncio.TimeoutError:
                 reranker_ok = False
                 warnings = warnings + [f"reranker split-provider validation timed out after {_remaining:.1f}s"]
@@ -560,12 +553,15 @@ async def validate_models_async(
     result = _result(embedder_ok, reranker_ok, warnings)
 
     # Stale-config advisory: CoreML set, no split written, reranker enabled, AND
-    # CoreML actually failed for the reranker (distinguishes stale from both-pass)
+    # CoreML actually failed for the reranker (distinguishes stale from both-pass).
+    # CoreML missing from onnxruntime means the reranker ran on CPU (S635), so its
+    # failure says nothing about CoreML.
     if (
         "CoreMLExecutionProvider" in config.providers
         and config.reranker_providers is None
         and config.reranker_model != ""
         and not reranker_ok
+        and _coreml_available()
     ):
         logger.warning(
             "providers=[CoreMLExecutionProvider] is set but reranker_providers is absent "
@@ -574,6 +570,15 @@ async def validate_models_async(
         )
 
     return result
+
+
+def _coreml_available() -> bool:
+    """True when the installed onnxruntime has CoreML; False when it lacks it or the
+    query fails (then nothing is known about CoreML, so nothing can be advised)."""
+    try:
+        return not unavailable_onnx_providers(["CoreMLExecutionProvider"])
+    except Exception:  # noqa: BLE001 — advisory only; validation already reported the failure
+        return False
 
 
 async def validate_embedding_model(

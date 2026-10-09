@@ -28,9 +28,10 @@ class CheckStatus(str, Enum):
 
     ``PENDING`` and ``WARN`` (D6 C2) are additive values used by the model
     validation check: ``PENDING`` while background validation has not yet
-    completed, ``WARN`` when a model loaded via provider fallback (e.g. CPU
-    instead of GPU). See contract C2 in
-    ``Documentation/Backlog/D6-provider-validation-team-plan.md``.
+    completed, ``WARN`` when both models loaded but validation reported warnings —
+    e.g. a configured ONNX provider the installed onnxruntime lacks, so the models
+    loaded on the remaining providers or CPU (S635). See contract C2 in
+    ``Documentation/Completed/D6-provider-validation-team-plan.md``.
     """
 
     OK = "ok"

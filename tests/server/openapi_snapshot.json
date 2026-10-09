@@ -163,7 +163,7 @@
         "type": "object"
       },
       "CheckStatus": {
-        "description": "Check result for readiness probes.\n\n``PENDING`` and ``WARN`` (D6 C2) are additive values used by the model\nvalidation check: ``PENDING`` while background validation has not yet\ncompleted, ``WARN`` when a model loaded via provider fallback (e.g. CPU\ninstead of GPU). See contract C2 in\n``Documentation/Backlog/D6-provider-validation-team-plan.md``.",
+        "description": "Check result for readiness probes.\n\n``PENDING`` and ``WARN`` (D6 C2) are additive values used by the model\nvalidation check: ``PENDING`` while background validation has not yet\ncompleted, ``WARN`` when both models loaded but validation reported warnings \u2014\ne.g. a configured ONNX provider the installed onnxruntime lacks, so the models\nloaded on the remaining providers or CPU (S635). See contract C2 in\n``Documentation/Completed/D6-provider-validation-team-plan.md``.",
         "enum": [
           "ok",
           "fail",

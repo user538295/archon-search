@@ -85,7 +85,7 @@ providers = ["CUDAExecutionProvider"]
 # providers = []
 ```
 
-`providers` is a plain list passed to ONNX Runtime. Behavior on a provider name that the locally installed ONNX Runtime build does not support depends on that build (typically a warning, possible fallback, or an error).
+`providers` is the list of ONNX Runtime execution providers to load the models with, in order. A provider the locally installed ONNX Runtime build does not offer — for example `CUDAExecutionProvider` without `onnxruntime-gpu`, which a native `pip`/`uv` install does not include — is dropped: the models load on the remaining providers, or on CPU when none remain, the log carries one `configured ONNX providers not available: …` warning, and `GET /ready` reports `checks.models: "warn"` (`archon_search/onnx_providers.py`). Install the matching onnxruntime build to use the accelerator.
 
 The CLI's GPU autodetection (`archon_search/platform/runtime.py:detect_gpu_type`) currently only reports the available accelerator type — it does not auto-populate `providers`. You must set this manually.
 

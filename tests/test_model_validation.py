@@ -17,6 +17,8 @@ from archon_search.model_validation import (
     validate_providers_shared,
 )
 
+_AVAILABLE_PROVIDERS = "archon_search.onnx_providers._available_providers"
+
 
 @pytest.mark.asyncio
 async def test_validate_known_model_returns_dim():
@@ -110,7 +112,7 @@ def test_validate_providers_shared_both_ok():
     te, ce, avail = _patch_probes()
     with patch("archon_search.model_validation.TextEmbedding", te), \
          patch("archon_search.model_validation._load_cross_encoder", ce), \
-         patch("archon_search.model_validation._available_providers", return_value=avail):
+         patch(_AVAILABLE_PROVIDERS, return_value=avail):
         emb_ok, rer_ok, warnings = validate_providers_shared(
             ["CPUExecutionProvider"], "emb-model", "rer-model"
         )
@@ -123,7 +125,7 @@ def test_validate_providers_shared_reranker_disabled():
     te, ce, avail = _patch_probes()
     with patch("archon_search.model_validation.TextEmbedding", te), \
          patch("archon_search.model_validation._load_cross_encoder", ce), \
-         patch("archon_search.model_validation._available_providers", return_value=avail):
+         patch(_AVAILABLE_PROVIDERS, return_value=avail):
         emb_ok, rer_ok, warnings = validate_providers_shared(
             ["CPUExecutionProvider"], "emb-model", ""
         )
@@ -136,7 +138,7 @@ def test_validate_providers_shared_embedder_fails():
     te, ce, avail = _patch_probes(embedder_exc=RuntimeError("boom"))
     with patch("archon_search.model_validation.TextEmbedding", te), \
          patch("archon_search.model_validation._load_cross_encoder", ce), \
-         patch("archon_search.model_validation._available_providers", return_value=avail):
+         patch(_AVAILABLE_PROVIDERS, return_value=avail):
         emb_ok, rer_ok, warnings = validate_providers_shared(
             ["CPUExecutionProvider"], "emb-model", "rer-model"
         )
@@ -149,7 +151,7 @@ def test_validate_providers_shared_reranker_fails():
     te, ce, avail = _patch_probes(reranker_exc=RuntimeError("rerank-boom"))
     with patch("archon_search.model_validation.TextEmbedding", te), \
          patch("archon_search.model_validation._load_cross_encoder", ce), \
-         patch("archon_search.model_validation._available_providers", return_value=avail):
+         patch(_AVAILABLE_PROVIDERS, return_value=avail):
         emb_ok, rer_ok, warnings = validate_providers_shared(
             ["CPUExecutionProvider"], "emb-model", "rer-model"
         )
@@ -158,34 +160,54 @@ def test_validate_providers_shared_reranker_fails():
     assert any("rerank-boom" in w or "reranker" in w.lower() for w in warnings)
 
 
-def test_validate_providers_shared_provider_unavailable_gates_both():
-    """Non-CPU provider missing → both ok=False, warning names the provider."""
+def test_validate_providers_shared_provider_unavailable_probes_both_on_cpu():
+    """S635: non-CPU provider missing → both probes run on CPU, ok, one warning names it."""
     te, ce, avail = _patch_probes(available=["CPUExecutionProvider"])
     with patch("archon_search.model_validation.TextEmbedding", te), \
          patch("archon_search.model_validation._load_cross_encoder", ce), \
-         patch("archon_search.model_validation._available_providers", return_value=avail):
+         patch(_AVAILABLE_PROVIDERS, return_value=avail):
         emb_ok, rer_ok, warnings = validate_providers_shared(
             ["CoreMLExecutionProvider"], "emb-model", "rer-model"
         )
-    assert emb_ok is False
-    assert rer_ok is False
-    assert any("CoreMLExecutionProvider" in w for w in warnings)
-    # Probes must not run once the provider gate fails.
-    te.assert_not_called()
-    ce.assert_not_called()
+    assert emb_ok is True
+    assert rer_ok is True
+    assert warnings == ["configured ONNX providers not available: CoreMLExecutionProvider"]
+    # Both models are probed on the providers the host has — never the missing one.
+    assert te.call_args.kwargs["providers"] == ["CPUExecutionProvider"]
+    assert ce.call_args.args[1] == ["CPUExecutionProvider"]
 
 
-def test_validate_providers_shared_provider_unavailable_reranker_disabled():
-    """S7 ∩ S8: provider missing + reranker disabled → emb_ok=False, rer_ok=True."""
-    te, ce, avail = _patch_probes(available=["CPUExecutionProvider"])
+def test_validate_providers_shared_provider_unavailable_probe_failure_still_reported():
+    """S635: the CPU fallback probe failing is a probe failure, reported after the warning."""
+    te, ce, avail = _patch_probes(
+        embedder_exc=RuntimeError("emb-boom"), available=["CPUExecutionProvider"]
+    )
     with patch("archon_search.model_validation.TextEmbedding", te), \
          patch("archon_search.model_validation._load_cross_encoder", ce), \
-         patch("archon_search.model_validation._available_providers", return_value=avail):
+         patch(_AVAILABLE_PROVIDERS, return_value=avail):
         emb_ok, rer_ok, warnings = validate_providers_shared(
-            ["CoreMLExecutionProvider"], "emb-model", ""
+            ["CUDAExecutionProvider", "CPUExecutionProvider"], "emb-model", "rer-model"
         )
     assert emb_ok is False
     assert rer_ok is True
+    assert warnings == [
+        "configured ONNX providers not available: CUDAExecutionProvider",
+        "embedder probe failed: emb-boom",
+    ], "the unavailable-provider warning must precede the probe failure"
+
+
+def test_validate_providers_shared_provider_unavailable_reranker_disabled():
+    """S7 ∩ S8: provider missing + reranker disabled → embedder probed on CPU, reranker skipped."""
+    te, ce, avail = _patch_probes(available=["CPUExecutionProvider"])
+    with patch("archon_search.model_validation.TextEmbedding", te), \
+         patch("archon_search.model_validation._load_cross_encoder", ce), \
+         patch(_AVAILABLE_PROVIDERS, return_value=avail):
+        emb_ok, rer_ok, warnings = validate_providers_shared(
+            ["CoreMLExecutionProvider"], "emb-model", ""
+        )
+    assert emb_ok is True
+    assert rer_ok is True
+    assert warnings == ["configured ONNX providers not available: CoreMLExecutionProvider"]
     ce.assert_not_called()
 
 
@@ -194,7 +216,7 @@ def test_validate_providers_shared_embedder_empty_skips_probe():
     te, ce, avail = _patch_probes()
     with patch("archon_search.model_validation.TextEmbedding", te), \
          patch("archon_search.model_validation._load_cross_encoder", ce), \
-         patch("archon_search.model_validation._available_providers", return_value=avail):
+         patch(_AVAILABLE_PROVIDERS, return_value=avail):
         emb_ok, rer_ok, warnings = validate_providers_shared(
             ["CPUExecutionProvider"], "", "rer-model"
         )
@@ -210,7 +232,7 @@ def test_validate_providers_shared_both_probes_fail():
     )
     with patch("archon_search.model_validation.TextEmbedding", te), \
          patch("archon_search.model_validation._load_cross_encoder", ce), \
-         patch("archon_search.model_validation._available_providers", return_value=avail):
+         patch(_AVAILABLE_PROVIDERS, return_value=avail):
         emb_ok, rer_ok, warnings = validate_providers_shared(
             ["CPUExecutionProvider"], "emb-model", "rer-model"
         )
@@ -224,7 +246,7 @@ def test_validate_providers_shared_empty_providers_default_path():
     te, ce, avail = _patch_probes()
     with patch("archon_search.model_validation.TextEmbedding", te) as te_p, \
          patch("archon_search.model_validation._load_cross_encoder", ce) as ce_p, \
-         patch("archon_search.model_validation._available_providers", return_value=avail) as avail_p:
+         patch(_AVAILABLE_PROVIDERS, return_value=avail) as avail_p:
         emb_ok, rer_ok, warnings = validate_providers_shared([], "emb-model", "rer-model")
     assert emb_ok is True
     assert rer_ok is True
@@ -239,7 +261,7 @@ def test_validate_providers_shared_empty_providers_default_path():
 def test_validate_providers_shared_never_raises():
     """Any internal failure (even querying providers) → returns, does not raise."""
     with patch(
-        "archon_search.model_validation._available_providers",
+        _AVAILABLE_PROVIDERS,
         side_effect=RuntimeError("onnx exploded"),
     ):
         emb_ok, rer_ok, warnings = validate_providers_shared(
@@ -427,6 +449,8 @@ async def test_stale_coreml_config_warning_fires(caplog: pytest.LogCaptureFixtur
     with patch(
         "archon_search.model_validation.validate_providers_shared",
         return_value=(True, False, ["reranker probe failed"]),
+    ), patch(
+        _AVAILABLE_PROVIDERS, return_value=["CoreMLExecutionProvider", "CPUExecutionProvider"]
     ):
         with caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
             await validate_models_async(_coreml_cfg(), timeout_seconds=5)
@@ -468,6 +492,99 @@ async def test_stale_coreml_warning_no_fire_when_reranker_disabled(
             )
 
     assert "split configuration" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stale_coreml_warning_no_fire_when_coreml_unavailable_on_host(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """S635: CoreML absent from onnxruntime → the reranker runs on CPU, so its result says
+    nothing about CoreML: no split-config advice, only the missing-provider warning."""
+    import logging
+
+    te, ce, _ = _patch_probes()
+    with patch("archon_search.model_validation.TextEmbedding", te), \
+         patch("archon_search.model_validation._load_cross_encoder", ce), \
+         patch(_AVAILABLE_PROVIDERS, return_value=["CPUExecutionProvider"]):
+        with caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+            result = await validate_models_async(_coreml_cfg(), timeout_seconds=5)
+
+    assert (result.embedder_ok, result.reranker_ok) == (True, True)
+    assert "configured ONNX providers not available: CoreMLExecutionProvider" in (
+        result.provider_warnings
+    )
+    assert "split configuration" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stale_coreml_warning_no_fire_when_cpu_fallback_reranker_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """S635: CoreML absent from onnxruntime and the CPU-fallback reranker fails → the
+    failure is not CoreML's, so no split-config advice; the probe failure is reported."""
+    import logging
+
+    te, ce, _ = _patch_probes(reranker_exc=RuntimeError("rer-boom"))
+    with patch("archon_search.model_validation.TextEmbedding", te), \
+         patch("archon_search.model_validation._load_cross_encoder", ce), \
+         patch(_AVAILABLE_PROVIDERS, return_value=["CPUExecutionProvider"]):
+        with caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+            result = await validate_models_async(_coreml_cfg(), timeout_seconds=5)
+
+    assert result.reranker_ok is False
+    assert any("rer-boom" in w for w in result.provider_warnings)
+    assert "split configuration" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_split_config_reports_a_provider_missing_from_both_lists_once() -> None:
+    """S635: providers and reranker_providers dropping the same provider → one warning."""
+    te, ce, _ = _patch_probes()
+    with patch("archon_search.model_validation.TextEmbedding", te), \
+         patch("archon_search.model_validation._load_cross_encoder", ce), \
+         patch(_AVAILABLE_PROVIDERS, return_value=["CPUExecutionProvider"]):
+        result = await validate_models_async(
+            _coreml_cfg(reranker_providers=["CoreMLExecutionProvider"]), timeout_seconds=5
+        )
+
+    assert (result.embedder_ok, result.reranker_ok) == (True, True)
+    assert result.provider_warnings.count(
+        "configured ONNX providers not available: CoreMLExecutionProvider"
+    ) == 1, result.provider_warnings
+
+
+@pytest.mark.asyncio
+async def test_reranker_only_provider_missing_loads_reranker_with_warning() -> None:
+    """S635: only [database].reranker_providers names a missing provider → the reranker
+    still loads on CPU and the warning is reported."""
+    te, ce, _ = _patch_probes()
+    cfg = _coreml_cfg(providers=[], reranker_providers=["CUDAExecutionProvider"])
+    with patch("archon_search.model_validation.TextEmbedding", te), \
+         patch("archon_search.model_validation._load_cross_encoder", ce), \
+         patch(_AVAILABLE_PROVIDERS, return_value=["CPUExecutionProvider"]):
+        result = await validate_models_async(cfg, timeout_seconds=5)
+
+    assert (result.embedder_ok, result.reranker_ok) == (True, True)
+    assert "configured ONNX providers not available: CUDAExecutionProvider" in (
+        result.provider_warnings
+    )
+    assert ce.call_args.args[1] == ["CPUExecutionProvider"]
+
+
+def test_validate_providers_shared_query_failure_with_reranker_disabled() -> None:
+    """onnxruntime query fails, reranker disabled → embedder unvalidated, reranker ok."""
+    te, ce, _ = _patch_probes()
+    with patch("archon_search.model_validation.TextEmbedding", te), \
+         patch("archon_search.model_validation._load_cross_encoder", ce), \
+         patch(_AVAILABLE_PROVIDERS, side_effect=RuntimeError("onnx exploded")):
+        emb_ok, rer_ok, warnings = validate_providers_shared(
+            ["CUDAExecutionProvider"], "emb-model", ""
+        )
+
+    assert (emb_ok, rer_ok) == (False, True)
+    assert warnings == ["could not query ONNX providers: onnx exploded"]
+    te.assert_not_called()
+    ce.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -744,7 +861,7 @@ def test_validate_providers_shared_probes_the_archon_models_cache(
 
     with patch("archon_search.model_validation.TextEmbedding", te), \
          patch("fastembed.rerank.cross_encoder.TextCrossEncoder", ce_cls), \
-         patch("archon_search.model_validation._available_providers", return_value=avail):
+         patch(_AVAILABLE_PROVIDERS, return_value=avail):
         validate_providers_shared(["CPUExecutionProvider"], balanced.embedder, balanced.reranker)
 
     assert te.call_args.kwargs.get("cache_dir") == expected_cache_dir

@@ -199,6 +199,7 @@ A background probe (`model_validation.py`) loads the embedder and reranker and r
 1. `fail` / `embedder_ok=false` — the embedding model failed to load: check the log for download errors, disk space, and that `[database].embedding_model` names a valid model.
 2. A timeout warning — raise `[database].validation_timeout_seconds` (default 60) if first-run downloads are slow.
 3. `reranker_model = ""` disables the reranker; the probe then reports `reranker_ok=true` with nothing to load — expected, not a fault.
+4. `warn` with `provider_warnings` containing `configured ONNX providers not available: <names>` (`embedder_ok=true`, `reranker_ok=true`) — the installed onnxruntime build lacks a provider named in `[database].providers` or `[database].reranker_providers` (for example `CUDAExecutionProvider` with the CPU-only `onnxruntime` package). Not a load failure: the models loaded on the remaining providers, or on CPU when none remained, and the server log carries one `configured ONNX providers not available: <names> — loading models on <providers> instead …` WARNING per distinct provider list. Search works, on the slower device. To clear it, either install the onnxruntime build for that accelerator in the same environment (`onnxruntime-gpu` in place of `onnxruntime` for CUDA), or remove the provider from `[database].providers` / `reranker_providers` (re-running the wizard with `--disable-gpu` writes CPU to `[database].providers` only), then restart.
 
 ## Symptom: import fails — schema-version or model mismatch, corrupt lines
 

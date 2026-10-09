@@ -9,6 +9,7 @@ from typing import Any, Protocol, runtime_checkable
 from archon_search._diagnostics import ScoredSearchCandidate
 from archon_search._types import SearchResult
 from archon_search.observability import record_stage
+from archon_search.onnx_providers import select_onnx_providers
 from archon_search.paths import get_models_dir
 
 # Trivial (query, document) pair used only to force a cold backend to load.
@@ -29,11 +30,16 @@ class RerankerBackend(Protocol):
 
 
 class ModelReranker:
-    """Lazy-loading fastembed TextCrossEncoder backend."""
+    """Lazy-loading fastembed TextCrossEncoder backend.
+
+    *providers* is the configured ONNX provider list; at load time it is narrowed to
+    the providers the installed onnxruntime has (``onnx_providers.select_onnx_providers``:
+    falls back to CPU with a WARNING instead of failing the load).
+    """
 
     def __init__(self, model_name: str, providers: list[str] | None = None) -> None:
         self._model_name = model_name
-        self._providers = providers or None  # None = CPU default in fastembed
+        self._providers = providers or None  # None = fastembed's default device
         self._model: Any = None  # loaded on first predict()
         self._lock = threading.Lock()
 
@@ -47,7 +53,7 @@ class ModelReranker:
 
                     self._model = TextCrossEncoder(
                         self._model_name,
-                        providers=self._providers,
+                        providers=select_onnx_providers(self._providers).providers,
                         cache_dir=str(get_models_dir()),
                     )
         # TextCrossEncoder.rerank(query, documents) → Iterable[float]

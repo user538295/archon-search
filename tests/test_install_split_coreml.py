@@ -5,6 +5,7 @@ Tests cover:
 - validate_embedder_only calls validate_providers_shared with empty reranker_model
 - Wizard split logic: combined fails, embedder-only passes → split config
 - Wizard: both fail → CPU fallback, providers = [] written, no split
+- Wizard: CoreML absent from onnxruntime → CPU written, never the unvalidated accelerator
 - Wizard: combined passes → no split (existing behaviour)
 - Summary shows split text "CoreML — text search; CPU — result ranking"
 """
@@ -12,12 +13,16 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import tomlkit
 
 from archon_search.install import create_installer
+
+_AVAILABLE_PROVIDERS = "archon_search.onnx_providers._available_providers"
+# A host whose onnxruntime has CoreML, so the probe — not availability — decides.
+_COREML_HOST = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
 
 
 def _make_toml(tmp_path: Path) -> Path:
@@ -142,7 +147,7 @@ class TestValidateEmbedderOnly:
         with patch(
             "archon_search.install.BaseInstaller.validate_embedder_only",
             wraps=installer.validate_embedder_only,
-        ):
+        ), patch(_AVAILABLE_PROVIDERS, return_value=_COREML_HOST):
             with patch(
                 "archon_search.model_validation.validate_providers_shared",
                 return_value=(True, True, []),
@@ -164,7 +169,7 @@ class TestValidateEmbedderOnly:
         with patch(
             "archon_search.model_validation.validate_providers_shared",
             return_value=(False, True, ["embedder probe failed"]),
-        ):
+        ), patch(_AVAILABLE_PROVIDERS, return_value=_COREML_HOST):
             result = installer.validate_embedder_only(["CoreMLExecutionProvider"])
 
         assert result is False
@@ -178,7 +183,7 @@ class TestValidateEmbedderOnly:
         with patch(
             "archon_search.model_validation.validate_providers_shared",
             side_effect=RuntimeError("boom"),
-        ):
+        ), patch(_AVAILABLE_PROVIDERS, return_value=_COREML_HOST):
             with caplog.at_level(logging.WARNING):
                 result = installer.validate_embedder_only(["CoreMLExecutionProvider"])
 
@@ -255,6 +260,27 @@ class TestWizardCoreMlSplitLogic:
         doc = tomlkit.parse(toml_file.read_text())
         assert doc["database"]["providers"] == []
         assert "reranker_providers" not in doc.get("database", {})
+
+    def test_coreml_unavailable_in_onnxruntime_writes_cpu(self, tmp_path: Path) -> None:
+        """S635: models would load on CPU under a CoreML config on this host, but an
+        unavailable accelerator is not a validated one — CPU is written, no CoreML label."""
+        from archon_search.platform.types import GpuType
+
+        toml_file = _make_toml(tmp_path)
+        installer = create_installer(config_file=str(toml_file))
+        te, ce = MagicMock(), MagicMock()
+
+        with patch("archon_search.model_validation.TextEmbedding", te), \
+             patch("archon_search.model_validation._load_cross_encoder", ce), \
+             patch(_AVAILABLE_PROVIDERS, return_value=["CPUExecutionProvider"]):
+            labels = installer._probe_and_configure_coreml(GpuType.METAL, toml_file)
+
+        assert labels == []
+        doc = tomlkit.parse(toml_file.read_text())
+        assert doc["database"]["providers"] == []
+        assert "reranker_providers" not in doc.get("database", {})
+        te.assert_not_called()
+        ce.assert_not_called()
 
     def test_combined_passes_clears_stale_split_config(self, tmp_path: Path) -> None:
         """Re-run after upgrade: combined probe now passes → stale reranker_providers=[] is removed.

@@ -79,9 +79,10 @@ def _model_check_status(request: Request, warmup_pending: bool) -> CheckStatus:
     """Map ``app.state.model_validation`` to a ``CheckStatus`` for ``checks.models``.
 
     Priority is strict (D6 BE-6): FAIL (either model could not load) > WARN (both
-    loaded but a provider fallback warning was emitted) > OK (both loaded, no
-    warnings). The check is ``PENDING`` when the background task has not produced a
-    result yet — either ``app.state.model_validation`` is ``None``, or a result
+    loaded but a warning was emitted — e.g. a configured ONNX provider missing from
+    onnxruntime, so they loaded on the remaining providers or CPU, S635) > OK (both
+    loaded, no warnings). The check is ``PENDING`` when the background task has not
+    produced a result yet — either ``app.state.model_validation`` is ``None``, or a result
     exists but a probe flag is still unset (``None``). Each branch asserts its
     condition positively so a partially-populated result can never read as OK/WARN.
     The ``getattr`` guard keeps the endpoint resilient to app factories that never
