@@ -87,11 +87,11 @@ class TestWizardFeaturesDefaults:
         assert f.install_code_extra is False
         assert f.install_multilingual_extra is False
         assert f.disable_reranker is False
-        assert f.enable_watch is False
-        assert f.enable_telemetry is False
-        assert f.eager_load_embedders is False
-        # None sentinel = "accepted default" → key omitted from the written TOML (S561).
-        # An explicitly-chosen value (CLI flag or interactive answer) is a str and is written.
+        # None sentinel = "never answered" → key omitted from the written TOML (S553/S556/S557,
+        # S561). An explicit value (CLI flag or interactive answer) is written, even if default.
+        assert f.enable_watch is None
+        assert f.enable_telemetry is None
+        assert f.eager_load_embedders is None
         assert f.routing_strategy is None
         assert f.log_format is None
 
@@ -332,6 +332,23 @@ class TestPromptOptionalFeatures:
                 profile=self._profile_with_reranker,
             )
         assert features == WizardFeatures()
+        assert features.enable_watch is None
+        assert features.enable_telemetry is None
+        assert features.eager_load_embedders is None
+
+    def test_non_interactive_explicit_no_flags_are_false_not_none(self) -> None:
+        """S553/S556/S557: explicit --no-watch/--no-telemetry/--no-eager-load yield False (written)."""
+        with patch("builtins.input", side_effect=AssertionError("should not prompt")):
+            features = _prompt_optional_features(
+                non_interactive=True,
+                profile=self._profile_with_reranker,
+                enable_watch=False,
+                enable_telemetry=False,
+                eager_load=False,
+            )
+        assert features.enable_watch is False
+        assert features.enable_telemetry is False
+        assert features.eager_load_embedders is False
 
     def test_flag_overrides_respected(self) -> None:
         """Non-None flag values are used directly without prompting."""
@@ -450,9 +467,15 @@ class TestPromptOptionalFeatures:
                 non_interactive=False,
                 profile=self._profile_with_reranker,
             )
-        # routing_strategy/log_format come back as the concrete prompt defaults (not the
-        # None sentinel): this is the interactive path, where _ask_choice always yields a str.
-        assert features == WizardFeatures(routing_strategy="centroid", log_format="text")
+        # The five optional keys come back as the concrete prompt defaults (not the None
+        # sentinel): this is the interactive path, where _ask_yn/_ask_choice always yield a value.
+        assert features == WizardFeatures(
+            enable_watch=False,
+            enable_telemetry=False,
+            eager_load_embedders=False,
+            routing_strategy="centroid",
+            log_format="text",
+        )
 
     def test_invalid_log_format_retries(self) -> None:
         """First 'bad' then 'json' → log_format='json'."""
@@ -570,6 +593,29 @@ class TestPromptOptionalFeatures:
         assert features.disable_reranker is True, (
             "'n' at [Y/n] prompt must disable the reranker"
         )
+
+    def test_interactive_n_answers_bool_features_false(self) -> None:
+        """An explicit interactive 'n' to watch / telemetry / eager-load is an answer → False.
+
+        False is written to config — not the None "never answered" sentinel (S553/S556/S557).
+        Non-default anchors on both sides (reranker 'n', routing 'hybrid', log 'json') fail the
+        test if any of the three bool prompts is skipped or consumes the wrong answer.
+        """
+        # code=n, reranker=n, watch=n, telemetry=n, eager=n, routing=hybrid, log=json
+        responses = iter(["n", "n", "n", "n", "n", "hybrid", "json"])
+        with patch("builtins.input", side_effect=responses):
+            features = _prompt_optional_features(
+                non_interactive=False,
+                profile=self._profile_with_reranker,
+                enable_hyde=False,
+                enable_rag_fusion=False,
+            )
+        assert features.disable_reranker is True
+        assert features.enable_watch is False
+        assert features.enable_telemetry is False
+        assert features.eager_load_embedders is False
+        assert features.routing_strategy == "hybrid"
+        assert features.log_format == "json"
 
     def test_ask_yn_empty_input_default_false_leaves_code_disabled(self) -> None:
         """Pressing Enter at [y/N] prompt (default=False) keeps the feature disabled.

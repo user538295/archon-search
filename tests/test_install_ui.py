@@ -157,6 +157,22 @@ def test_render_summary_all_defaults():
     assert "Optional features" not in output
 
 
+def test_render_summary_explicit_false_bools_show_no_bullets():
+    """S553/S556/S557: explicit --no-watch / --no-telemetry / --no-eager-load show no bullet."""
+    profile = get_profile("minimal", multilingual=False)
+    output = _render_summary(
+        "minimal",
+        profile,
+        multilingual=False,
+        providers=[],
+        features=WizardFeatures(enable_watch=False, enable_telemetry=False, eager_load_embedders=False),
+    )
+    assert "Watch directories (auto-reindex)" not in output
+    assert "Telemetry enabled" not in output
+    assert "Eager load models at startup" not in output
+    assert "Optional features" not in output
+
+
 def test_render_summary_with_code_and_telemetry():
     """WizardFeatures with install_code_extra and enable_telemetry contains both labels."""
     profile = get_profile("minimal", multilingual=False)

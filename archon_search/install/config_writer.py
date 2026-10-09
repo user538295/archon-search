@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from operator import attrgetter
 from pathlib import Path
 
 import tomlkit
@@ -26,11 +27,12 @@ class WizardFeatures:
     install_graph_extra: bool = False
     install_multilingual_extra: bool = False
     disable_reranker: bool = False
-    enable_watch: bool = False
-    enable_telemetry: bool = False
-    eager_load_embedders: bool = False
-    # None = accepted default (key omitted from config); str = explicitly chosen (key written),
-    # even when the chosen value equals the config default. Plain defaults cannot express this.
+    # None = never answered (key omitted from config); a value = explicitly chosen (key written),
+    # even when it equals the config default (e.g. `--no-watch`, `--routing-strategy centroid`).
+    # Plain defaults cannot tell "explicitly asked for the default" from "never answered".
+    enable_watch: bool | None = None
+    enable_telemetry: bool | None = None
+    eager_load_embedders: bool | None = None
     routing_strategy: str | None = None
     log_format: str | None = None
     # C15 Tier 1 deployment flags
@@ -57,6 +59,17 @@ class WizardFeatures:
     graph_extraction_model: str = ""
     graph_llama_cpp_base_url: str = ""        # empty = use config default
     graph_ollama_base_url: str = ""           # empty = use config default
+
+
+# Tri-state optional keys shared by the writer and the hand-edit detector:
+# (TOML section, TOML key, WizardFeatures field, dotted SearchConfig attribute holding the default).
+_OPTIONAL_KEYS: tuple[tuple[str, str, str, str], ...] = (
+    ("database", "eager_load_embedders", "eager_load_embedders", "eager_load_embedders"),
+    ("collections", "watch", "enable_watch", "watch"),
+    ("telemetry", "enabled", "enable_telemetry", "telemetry.enabled"),
+    ("routing", "routing_strategy", "routing_strategy", "routing_strategy"),
+    ("logging", "format", "log_format", "log_format"),
+)
 
 
 def _write_profile_config(
@@ -155,16 +168,14 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
     """Write WizardFeatures fields to *doc* in-place.
 
     Only the operator's actual choices are written (20_wizard.md §"Only the
-    choices you actually made are written"). For the ``bool`` fields, "a choice"
-    means a non-default value: when the value matches its default the key is
-    removed from the doc if it was previously set (re-run safe: a re-run that
-    returns to the default removes the key the prior run wrote).
-    ``routing_strategy`` and ``log_format`` are ``str | None`` instead, because a
-    bare default cannot distinguish "explicitly asked for the default" from
-    "never answered": ``None`` means unanswered (key removed), and any string —
-    including one equal to the config default — is written.
-    ``disable_reranker`` stays conditional — re-run
-    safety there is provided by the profile writer, which writes the profile's
+    choices you actually made are written"). ``enable_watch``,
+    ``enable_telemetry``, ``eager_load_embedders``, ``routing_strategy`` and
+    ``log_format`` are optional because a bare default cannot distinguish
+    "explicitly asked for the default" from "never answered": ``None`` means
+    unanswered — the key is removed if a prior run wrote it (re-run safe) — and
+    any value, including ``False`` or one equal to the config default, is
+    written. ``disable_reranker`` stays conditional — re-run safety there is
+    provided by the profile writer, which writes the profile's
     ``reranker_model`` default *before* calling this function. Missing sections
     are created via tomlkit.table(). ``install_code_extra`` itself is
     intentionally NOT written — it controls a subprocess install, not a config
@@ -181,15 +192,8 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         if name not in doc:
             doc.add(name, tomlkit.table())
 
-    def _set_or_remove(section: str, key: str, value: object, default: object) -> None:
-        _ensure_section(section)  # section must exist before the elif key-lookup below
-        if value != default:
-            doc[section][key] = value
-        elif key in doc[section]:
-            del doc[section][key]
-
-    def _set_optional(section: str, key: str, value: str | None) -> None:
-        """None = unanswered (key removed); any string is written, even if it equals the default."""
+    def _set_optional(section: str, key: str, value: bool | str | None) -> None:
+        """None = unanswered (key removed); any value is written, even if it equals the default."""
         _ensure_section(section)  # section must exist before the elif key-lookup below
         if value is not None:
             doc[section][key] = value
@@ -200,13 +204,8 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         _ensure_section("database")
         doc["database"]["reranker_model"] = ""  # stays conditional — profile writer pre-fills the default
 
-    _set_or_remove("database", "eager_load_embedders", features.eager_load_embedders, False)
-    _set_or_remove("collections", "watch", features.enable_watch, False)
-    _set_or_remove("telemetry", "enabled", features.enable_telemetry, False)
-    # routing_strategy / log_format use a None sentinel for "accepted default" so an
-    # explicitly-passed flag is written even when it equals the default value.
-    _set_optional("routing", "routing_strategy", features.routing_strategy)
-    _set_optional("logging", "format", features.log_format)
+    for section, key, field, _ in _OPTIONAL_KEYS:
+        _set_optional(section, key, getattr(features, field))
 
     # C15 Tier 1 deployment flags
     if features.host is not None:
@@ -230,10 +229,13 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         doc["database"]["top_k_return"] = features.top_k
         doc["database"]["top_k_retrieve"] = max(15, 3 * features.top_k)
 
-    if features.telemetry_retention_days is not None and features.enable_telemetry:
+    # Unanswered (None) and explicit-off (False) both drop retention_days: it only
+    # applies while telemetry is explicitly on.
+    telemetry_on = bool(features.enable_telemetry)
+    if features.telemetry_retention_days is not None and telemetry_on:
         _ensure_section("telemetry")
         doc["telemetry"]["retention_days"] = features.telemetry_retention_days
-    elif not features.enable_telemetry and "telemetry" in doc and "retention_days" in doc["telemetry"]:
+    elif not telemetry_on and "telemetry" in doc and "retention_days" in doc["telemetry"]:
         del doc["telemetry"]["retention_days"]
 
     # C15 Tier 2 AI query expansion flags (G10 BE-8: provider/model/base_url)
@@ -320,11 +322,12 @@ def _detect_config_hand_edits(
     prev_profile_name: str,
     prev_multilingual: bool,
 ) -> bool:
-    """Return True if the on-disk config has values that differ from wizard defaults.
+    """Return True if a wizard-written key on disk differs from its baseline value.
 
     Compares only wizard-written keys (union of _write_profile_config and
-    _apply_wizard_features_to_toml output). Returns True (always warn) if
-    prev_profile_name is not a recognized profile name.
+    _apply_wizard_features_to_toml output): profile keys against the profile's
+    values, optional-feature keys against ``SearchConfig()`` defaults. Returns
+    True (always warn) if prev_profile_name is not a recognized profile name.
     """
     # Unknown profile — always warn
     try:
@@ -349,37 +352,16 @@ def _detect_config_hand_edits(
     if db.get("multilingual") != prev_multilingual:
         return True
 
-    # Compare optional-feature keys against WizardFeatures() static defaults
-    # Absent key = static default in effect — NOT a hand-edit.
-    # Only a key that is PRESENT and DIFFERENT from the static default counts.
-    defaults = WizardFeatures()
-    # routing_strategy/log_format hold the None sentinel on WizardFeatures, so the real
-    # default values come from SearchConfig (the single source of truth for both keys).
+    # Compare optional-feature keys against SearchConfig() defaults (the single source
+    # of truth — WizardFeatures holds the None "never answered" sentinel for these).
+    # Absent key = config default in effect — NOT a hand-edit. Only a key that is
+    # PRESENT and DIFFERENT from the default counts, so a wizard-written explicit
+    # default (e.g. `--no-watch`) is not a hand edit.
     config_defaults = SearchConfig()
-
-    # eager_load_embedders (in [database])
-    if "eager_load_embedders" in db and db["eager_load_embedders"] != defaults.eager_load_embedders:
-        return True
-
-    # collections.watch
-    collections = doc.get("collections", {})
-    if "watch" in collections and collections["watch"] != defaults.enable_watch:
-        return True
-
-    # telemetry.enabled
-    telemetry = doc.get("telemetry", {})
-    if "enabled" in telemetry and telemetry["enabled"] != defaults.enable_telemetry:
-        return True
-
-    # routing.routing_strategy
-    routing = doc.get("routing", {})
-    if "routing_strategy" in routing and routing["routing_strategy"] != config_defaults.routing_strategy:
-        return True
-
-    # logging.format
-    logging_section = doc.get("logging", {})
-    if "format" in logging_section and logging_section["format"] != config_defaults.log_format:
-        return True
+    for section_name, key, _, default_attr in _OPTIONAL_KEYS:
+        section = doc.get(section_name, {})
+        if key in section and section[key] != attrgetter(default_attr)(config_defaults):
+            return True
 
     return False
 

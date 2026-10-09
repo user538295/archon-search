@@ -65,7 +65,7 @@ class TestDetectConfigHandEdits:
         assert result is True
 
     def test_detect_absent_telemetry_not_hand_edit(self, tmp_path: Path) -> None:
-        """[telemetry].enabled absent in config → not a hand edit (static default in effect)."""
+        """[telemetry].enabled absent in config → not a hand edit (config default in effect)."""
         from archon_search.install import _detect_config_hand_edits
 
         config_path = tmp_path / "archon-search.toml"
@@ -77,22 +77,6 @@ class TestDetectConfigHandEdits:
 
         result = _detect_config_hand_edits(config_path, "balanced", False)
         assert result is False
-
-    def test_detect_present_telemetry_true_is_hand_edit(self, tmp_path: Path) -> None:
-        """[telemetry].enabled = true present, but WizardFeatures default is False → hand edit."""
-        from archon_search.install import _detect_config_hand_edits
-
-        config_path = tmp_path / "archon-search.toml"
-        _write_wizard_config(config_path, "balanced", False)
-
-        doc = tomlkit.parse(config_path.read_text())
-        if "telemetry" not in doc:
-            doc.add("telemetry", tomlkit.table())
-        doc["telemetry"]["enabled"] = True
-        config_path.write_text(tomlkit.dumps(doc))
-
-        result = _detect_config_hand_edits(config_path, "balanced", False)
-        assert result is True
 
     def test_detect_unknown_profile_always_warns(self, tmp_path: Path) -> None:
         """prev_profile_name not a recognized profile → returns True (always warn)."""
@@ -158,22 +142,6 @@ class TestDetectConfigHandEdits:
 
         doc = tomlkit.parse(config_path.read_text())
         doc["database"]["reranker_model"] = "some/custom-reranker"
-        config_path.write_text(tomlkit.dumps(doc))
-
-        result = _detect_config_hand_edits(config_path, "balanced", False)
-        assert result is True
-
-    def test_detect_present_watch_true_is_hand_edit(self, tmp_path: Path) -> None:
-        """[collections].watch = true present, WizardFeatures default is False → hand edit."""
-        from archon_search.install import _detect_config_hand_edits
-
-        config_path = tmp_path / "archon-search.toml"
-        _write_wizard_config(config_path, "balanced", False)
-
-        doc = tomlkit.parse(config_path.read_text())
-        if "collections" not in doc:
-            doc.add("collections", tomlkit.table())
-        doc["collections"]["watch"] = True
         config_path.write_text(tomlkit.dumps(doc))
 
         result = _detect_config_hand_edits(config_path, "balanced", False)
@@ -245,19 +213,39 @@ class TestDetectConfigHandEdits:
         result = _detect_config_hand_edits(config_path, "balanced", False)
         assert result is False
 
-    def test_detect_present_eager_load_true_is_hand_edit(self, tmp_path: Path) -> None:
-        """[database].eager_load_embedders = true → hand edit (default is False)."""
+    def test_detect_wizard_written_explicit_false_is_not_hand_edit(self, tmp_path: Path) -> None:
+        """S553/S556/S557: `--no-eager-load --no-watch --no-telemetry` write `false`; those
+        present-but-default keys must NOT be reported as a hand edit on re-run."""
+        from archon_search.install import _detect_config_hand_edits
+
+        config_path = tmp_path / "archon-search.toml"
+        features = WizardFeatures(eager_load_embedders=False, enable_watch=False, enable_telemetry=False)
+        _write_wizard_config(config_path, "balanced", False, features=features)
+        doc = tomlkit.parse(config_path.read_text())
+        assert doc["database"]["eager_load_embedders"] is False
+        assert doc["collections"]["watch"] is False
+        assert doc["telemetry"]["enabled"] is False
+
+        result = _detect_config_hand_edits(config_path, "balanced", False)
+        assert result is False
+
+    @pytest.mark.parametrize(
+        ("section", "key"),
+        [("database", "eager_load_embedders"), ("collections", "watch"), ("telemetry", "enabled")],
+    )
+    def test_detect_present_bool_true_is_hand_edit(self, tmp_path: Path, section: str, key: str) -> None:
+        """A present `true` for each wizard bool key differs from the SearchConfig default → hand edit."""
         from archon_search.install import _detect_config_hand_edits
 
         config_path = tmp_path / "archon-search.toml"
         _write_wizard_config(config_path, "balanced", False)
-
         doc = tomlkit.parse(config_path.read_text())
-        doc["database"]["eager_load_embedders"] = True
+        if section not in doc:
+            doc.add(section, tomlkit.table())
+        doc[section][key] = True
         config_path.write_text(tomlkit.dumps(doc))
 
-        result = _detect_config_hand_edits(config_path, "balanced", False)
-        assert result is True
+        assert _detect_config_hand_edits(config_path, "balanced", False) is True
 
     def test_detect_missing_database_section_returns_true(self, tmp_path: Path) -> None:
         """Config with no [database] section → hand edit detected (all wizard keys absent/None)."""
@@ -272,10 +260,10 @@ class TestDetectConfigHandEdits:
     def test_detect_wizard_non_default_feature_triggers_warning(self, tmp_path: Path) -> None:
         """Config written by wizard WITH non-default features triggers detection.
 
-        _detect_config_hand_edits compares against WizardFeatures() static defaults.
-        A config with non-default wizard features (e.g. telemetry enabled) appears as
-        a hand-edit. This is the documented accepted trade-off: wizard-selected
-        non-default features trigger the overwrite warning on re-run.
+        _detect_config_hand_edits compares optional-feature keys against SearchConfig()
+        defaults. A config with non-default wizard features (e.g. telemetry enabled) appears
+        as a hand-edit. This is the documented accepted trade-off (20_wizard.md §"Same
+        profile"): wizard-selected non-default features trigger the overwrite warning on re-run.
         """
         from archon_search.install import _detect_config_hand_edits
 

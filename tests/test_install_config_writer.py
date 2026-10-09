@@ -219,16 +219,16 @@ class TestApplyWizardFeaturesToToml:
     def _empty_doc(self) -> tomlkit.TOMLDocument:
         return tomlkit.document()
 
-    def test_apply_defaults_creates_mandatory_sections_but_omits_default_keys(self) -> None:
-        """WizardFeatures() creates mandatory sections but omits default-valued keys (S561)."""
+    def test_apply_defaults_creates_mandatory_sections_but_omits_unanswered_keys(self) -> None:
+        """WizardFeatures() creates mandatory sections but omits never-answered keys (S561)."""
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = self._empty_doc()
         _apply_wizard_features_to_toml(doc, WizardFeatures())
-        # hyde/rag_fusion always write their enabled key (not via _set_or_remove)
+        # hyde/rag_fusion always write their enabled key (no None sentinel)
         assert doc["hyde"]["enabled"] is False
         assert doc["rag_fusion"]["enabled"] is False
-        # default-valued keys are NOT written (20_wizard.md §"Only the choices you actually made are written")
+        # never-answered (None) keys are NOT written (20_wizard.md §"Only the choices you actually made are written")
         assert "eager_load_embedders" not in doc.get("database", {})
         assert "watch" not in doc.get("collections", {})
         assert "enabled" not in doc.get("telemetry", {})
@@ -430,10 +430,51 @@ class TestApplyWizardFeaturesToToml:
 
         doc = self._empty_doc()
         _apply_wizard_features_to_toml(
+            doc, WizardFeatures(enable_telemetry=None, telemetry_retention_days=7)
+        )
+        assert "telemetry" in doc
+        assert "retention_days" not in doc["telemetry"]
+
+    def test_apply_telemetry_retention_with_telemetry_explicitly_disabled_skipped(self) -> None:
+        """S556: enable_telemetry=False (--no-telemetry) writes enabled=false but no retention_days."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = self._empty_doc()
+        _apply_wizard_features_to_toml(
             doc, WizardFeatures(enable_telemetry=False, telemetry_retention_days=7)
         )
-        if "telemetry" in doc:
-            assert "retention_days" not in doc["telemetry"]
+        assert doc["telemetry"]["enabled"] is False
+        assert "retention_days" not in doc["telemetry"]
+
+    def test_rerun_telemetry_explicitly_disabled_removes_prior_retention_days(self) -> None:
+        """A prior `enabled = true, retention_days = 7` re-run with `--no-telemetry` writes
+        enabled = false and drops the stale retention_days."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.parse("[telemetry]\nenabled = true\nretention_days = 7\n")
+        _apply_wizard_features_to_toml(doc, WizardFeatures(enable_telemetry=False))
+        assert doc["telemetry"]["enabled"] is False
+        assert "retention_days" not in doc["telemetry"]
+
+    def test_rerun_telemetry_unanswered_removes_prior_enabled_and_retention_days(self) -> None:
+        """A prior `enabled = true, retention_days = 7` re-run that leaves telemetry
+        unanswered removes both keys."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.parse("[telemetry]\nenabled = true\nretention_days = 7\n")
+        _apply_wizard_features_to_toml(doc, WizardFeatures())
+        assert "enabled" not in doc["telemetry"]
+        assert "retention_days" not in doc["telemetry"]
+
+    def test_rerun_telemetry_enabled_without_retention_keeps_prior_retention_days(self) -> None:
+        """A prior `enabled = true, retention_days = 7` re-run with `--telemetry` but no
+        retention value keeps enabled = true and the prior retention_days."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.parse("[telemetry]\nenabled = true\nretention_days = 7\n")
+        _apply_wizard_features_to_toml(doc, WizardFeatures(enable_telemetry=True))
+        assert doc["telemetry"]["enabled"] is True
+        assert doc["telemetry"]["retention_days"] == 7
 
     def test_apply_enable_hyde(self) -> None:
         """enable_hyde=True writes doc['hyde']['enabled'] = True."""
@@ -650,7 +691,7 @@ class TestApplyWizardFeaturesFE2LlamaCppAndGraph:
 
 
 class TestApplyWizardFeaturesElseBranches:
-    """S561: keys equal to their default are REMOVED (not written) — 20_wizard.md §"Only the choices you actually made are written"."""
+    """S561/S553/S556/S557: unanswered (None) keys are REMOVED (not written); explicit answers are written — 20_wizard.md §"Only the choices you actually made are written"."""
 
     def _enabled_doc(self) -> tomlkit.TOMLDocument:
         from archon_search.install import _apply_wizard_features_to_toml
@@ -687,25 +728,38 @@ class TestApplyWizardFeaturesElseBranches:
         assert "routing_strategy" not in doc.get("routing", {})
         assert "format" not in doc.get("logging", {})
 
-    def test_eager_load_default_not_written(self) -> None:
+    def test_explicit_false_eager_load_is_written(self) -> None:
+        """S553: an explicit `--no-eager-load` (False) IS written, unlike the None sentinel."""
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = tomlkit.document()
         _apply_wizard_features_to_toml(doc, WizardFeatures(eager_load_embedders=False))
-        assert "eager_load_embedders" not in doc.get("database", {})
+        assert doc["database"]["eager_load_embedders"] is False
 
-    def test_watch_default_not_written(self) -> None:
+    def test_explicit_false_watch_is_written(self) -> None:
+        """S557: an explicit `--no-watch` (False) IS written, unlike the None sentinel."""
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = tomlkit.document()
         _apply_wizard_features_to_toml(doc, WizardFeatures(enable_watch=False))
-        assert "watch" not in doc.get("collections", {})
+        assert doc["collections"]["watch"] is False
 
-    def test_telemetry_default_not_written(self) -> None:
+    def test_rerun_unanswered_removes_previously_written_false(self) -> None:
+        """A re-run that leaves the three bool keys unanswered removes a prior explicit false."""
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = tomlkit.document()
-        _apply_wizard_features_to_toml(doc, WizardFeatures(enable_telemetry=False))
+        _apply_wizard_features_to_toml(
+            doc,
+            WizardFeatures(eager_load_embedders=False, enable_watch=False, enable_telemetry=False),
+        )
+        assert doc["database"]["eager_load_embedders"] is False
+        assert doc["collections"]["watch"] is False
+        assert doc["telemetry"]["enabled"] is False
+
+        _apply_wizard_features_to_toml(doc, WizardFeatures())
+        assert "eager_load_embedders" not in doc.get("database", {})
+        assert "watch" not in doc.get("collections", {})
         assert "enabled" not in doc.get("telemetry", {})
 
     def test_default_routing_strategy_not_written(self) -> None:
@@ -970,29 +1024,23 @@ class TestRevertMultilingualFlag:
 
 
 # ---------------------------------------------------------------------------
-# WizardFeatures ↔ SearchConfig default parity guard
+# Omitted wizard key ↔ SearchConfig default guard
 # ---------------------------------------------------------------------------
 
 
-def test_wizard_features_defaults_match_search_config() -> None:
-    """Guard that WizardFeatures defaults stay in sync with SearchConfig defaults.
+def test_omitted_wizard_keys_fall_back_to_documented_search_config_defaults() -> None:
+    """Guard that the defaults behind omitted wizard keys are the ones the docs promise.
 
-    _set_or_remove deletes keys when value == default, trusting that the
-    SearchConfig default will apply. If these diverge, a deletion silently
-    activates a different default. See S561 and C1-I-5.
+    Every optional-feature key the wizard omits (None sentinel = never answered —
+    pinned in tests/test_install_wizard_features.py::TestWizardFeaturesDefaults)
+    falls back to its SearchConfig default. If those defaults change, an omitted
+    key silently activates a different behaviour. See S553/S556/S557, S561, C1-I-5.
     """
     from archon_search.config import SearchConfig
-    from archon_search.install import WizardFeatures
 
-    wf = WizardFeatures()
     cfg = SearchConfig()
-    assert wf.eager_load_embedders == cfg.eager_load_embedders
-    assert wf.enable_watch == cfg.watch
-    assert wf.enable_telemetry == cfg.telemetry.enabled
-    # routing_strategy and log_format carry a None sentinel meaning "accepted default,
-    # omit the key" — they are deliberately NOT the config default string, so the
-    # equality guard above does not apply. Pin both sides instead.
-    assert wf.routing_strategy is None, "None sentinel = accepted default (omitted from config)"
-    assert wf.log_format is None, "None sentinel = accepted default (omitted from config)"
+    assert cfg.eager_load_embedders is False
+    assert cfg.watch is False
+    assert cfg.telemetry.enabled is False
     assert cfg.routing_strategy == "centroid"
     assert cfg.log_format == "text"

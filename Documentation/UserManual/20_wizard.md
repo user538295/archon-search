@@ -261,7 +261,7 @@ Auto-watch directories and re-index on file changes? [y/N]:
 
 **Default**: No.
 
-If you answer `y`, archon-search monitors your collection source directories with a watchdog and automatically re-indexes files when they are created, modified, or deleted. Useful for corpora that change frequently (e.g., a notes folder, a code repository).
+If you answer `y`, archon-search monitors your collection source directories with a watchdog and automatically re-indexes files when they are created, modified, or deleted. Useful for corpora that change frequently (e.g., a notes folder, a code repository). Either way the answer is recorded — `[collections].watch` is written to the config as `true` or `false`, including when you press Enter to keep the default. Only a `--non-interactive` run without `--watch`/`--no-watch` leaves the key out.
 
 #### 5d. Telemetry
 
@@ -275,7 +275,7 @@ Enable local query telemetry? [y/N]:
 
 **Default**: No.
 
-If you answer `y`, archon-search appends one JSON line per search request to daily files under `~/.archon-search/search-logs/`. Only structural metadata is recorded — collection names, latency, result counts — **raw query text is never written**. Files older than 30 days are pruned automatically. Telemetry is entirely local; no data is sent anywhere. See [`120_telemetry.md`](./120_telemetry.md) for the full telemetry surface.
+If you answer `y`, archon-search appends one JSON line per search request to daily files under `~/.archon-search/search-logs/`. Only structural metadata is recorded — collection names, latency, result counts — **raw query text is never written**. Files older than 30 days are pruned automatically. Telemetry is entirely local; no data is sent anywhere. See [`120_telemetry.md`](./120_telemetry.md) for the full telemetry surface. Either way the answer is recorded — `[telemetry].enabled` is written to the config as `true` or `false`, including when you press Enter to keep the default. Only a `--non-interactive` run without `--telemetry`/`--no-telemetry` leaves the key out.
 
 #### 5e. Eager load
 
@@ -290,14 +290,7 @@ Also pre-load every per-collection embedding model at startup? [y/N]:
 
 **Default**: No.
 
-Model warm-up is **not** optional and this answer does not turn it off. On every start the server
-loads `[database].embedding_model` and the cross-encoder reranker in a background task, and
-`GET /ready` answers `503` with `checks.models: "pending"` until that finishes — so a client that
-waits for readiness never pays the ~5–15 s (much longer for the `max` profile's models) cold-load
-cost on its first search. Answering `y` only widens the *scope* of that same warm-up to every
-distinct per-collection `active_embedding_model`, so a collection pinned to a non-default model is
-warm too; the trade-off is a longer window before the server reports ready, and the models must fit
-within `[database].embedder_cache_size`. Recommended when collections pin their own models.
+Model warm-up is **not** optional and this answer does not turn it off. On every start the server loads `[database].embedding_model` and the cross-encoder reranker in a background task, and `GET /ready` answers `503` with `checks.models: "pending"` until that finishes — so a client that waits for readiness never pays the ~5–15 s (much longer for the `max` profile's models) cold-load cost on its first search. Answering `y` only widens the *scope* of that same warm-up to every distinct per-collection `active_embedding_model`, so a collection pinned to a non-default model is warm too; the trade-off is a longer window before the server reports ready, and the models must fit within `[database].embedder_cache_size`. Recommended when collections pin their own models. Either way the answer is recorded — `[database].eager_load_embedders` is written to the config as `true` or `false`, including when you press Enter to keep the default. Only a `--non-interactive` run without `--eager-load`/`--no-eager-load` leaves the key out.
 
 #### 5f. Routing strategy
 
@@ -591,9 +584,9 @@ All flags for the `wizard` command (verified against `archon_search/cli/install_
 | `--non-interactive` | False | Skip all interactive prompts and use defaults. Combine with feature flags for full automation. |
 | `--config PATH` | `~/.archon-search/archon-search.toml` | Use a non-default config file path. |
 | `--code / --no-code` | Not set (interactive) | Install (`--code`) or skip (`--no-code`) tree-sitter code enrichment packages. |
-| `--watch / --no-watch` | Not set (interactive) | Enable (`--watch`) or disable (`--no-watch`) the filesystem watcher. |
-| `--telemetry / --no-telemetry` | Not set (interactive) | Enable (`--telemetry`) or disable (`--no-telemetry`) local query telemetry. |
-| `--eager-load / --no-eager-load` | Not set (interactive) | Enable (`--eager-load`) or disable (`--no-eager-load`) model pre-loading at startup. |
+| `--watch / --no-watch` | Not set (interactive) | Enable (`--watch`) or disable (`--no-watch`) the filesystem watcher. Either flag writes `[collections].watch` (`true`/`false`), skipping the interactive prompt. |
+| `--telemetry / --no-telemetry` | Not set (interactive) | Enable (`--telemetry`) or disable (`--no-telemetry`) local query telemetry. Either flag writes `[telemetry].enabled` (`true`/`false`), skipping the interactive prompt. |
+| `--eager-load / --no-eager-load` | Not set (interactive) | Widen startup warm-up — which always covers the default embedder and the reranker, with `/ready` held at `503` until it finishes — to every per-collection embedding model (`--eager-load`), or keep it at the default embedder and reranker only (`--no-eager-load`). Either flag writes `[database].eager_load_embedders` (`true`/`false`), skipping the interactive prompt. |
 | `--no-reranker` | False | Disable the cross-encoder reranker for lower latency. |
 | `--routing-strategy {centroid,hybrid}` | Not set (interactive) | Set the routing strategy directly, skipping the interactive prompt. |
 | `--log-format {text,json}` | Not set (interactive) | Set the log format directly, skipping the interactive prompt. |
@@ -628,9 +621,9 @@ Pass `--non-interactive` to run the wizard without any prompts. Combined with fe
 | Profile | `minimal` |
 | Code enrichment | Disabled |
 | Reranker | Enabled (profile default) |
-| Filesystem watcher | Disabled |
-| Telemetry | Disabled |
-| Eager load | Disabled |
+| Filesystem watcher | Disabled (key not written — pass `--watch`/`--no-watch` to write it explicitly) |
+| Telemetry | Disabled (key not written — pass `--telemetry`/`--no-telemetry` to write it explicitly) |
+| Eager load | Disabled (key not written — pass `--eager-load`/`--no-eager-load` to write it explicitly) |
 | Routing strategy | `centroid` (key not written — pass `--routing-strategy` to write it explicitly) |
 | Log format | `text` (key not written — pass `--log-format` to write it explicitly) |
 | AI query expansion (HyDE/RAG Fusion) | Skipped (use `--enable-hyde --enable-rag-fusion` to enable; configure provider in TOML or re-run the interactive wizard) |
@@ -748,7 +741,7 @@ The wizard writes to `~/.archon-search/archon-search.toml`. The following table 
 | GPU (CUDA) | `providers` | `["CUDAExecutionProvider"]` |
 | GPU declined | `providers` | `[]` |
 | Reranker disabled (`--no-reranker`) | `reranker_model` | `""` |
-| Eager load | `eager_load_embedders` | `true` |
+| Eager load (interactive answer, or `--eager-load`/`--no-eager-load`) | `eager_load_embedders` | `true` / `false` |
 | `--db-path PATH` | `db_path` | `"~/data/archon-search"` |
 | `--top-k INTEGER` | `top_k_return` | `20` |
 | `--top-k INTEGER` (derived) | `top_k_retrieve` | `60` (= max(15, 3 × top_k)) |
@@ -757,14 +750,14 @@ The wizard writes to `~/.archon-search/archon-search.toml`. The following table 
 
 | Wizard choice / flag | TOML key | Example value |
 |---|---|---|
-| Filesystem watcher enabled | `watch` | `true` |
+| Filesystem watcher (interactive answer, or `--watch`/`--no-watch`) | `watch` | `true` / `false` |
 
 ### `[telemetry]` section
 
 | Wizard choice / flag | TOML key | Example value |
 |---|---|---|
-| Telemetry enabled | `enabled` | `true` |
-| `--telemetry-retention-days` (only when `--telemetry` also passed) | `retention_days` | `90` |
+| Telemetry (interactive answer, or `--telemetry`/`--no-telemetry`) | `enabled` | `true` / `false` |
+| `--telemetry-retention-days` (only with the `--telemetry` flag; otherwise ignored with a warning, even if you answer `y` at the telemetry prompt) | `retention_days` | `90` |
 
 ### `[routing]` section
 
@@ -791,7 +784,7 @@ The wizard writes to `~/.archon-search/archon-search.toml`. The following table 
 |---|---|---|
 | `--enable-rag-fusion` | `enabled` | `true` |
 
-**Only the choices you actually made are written.** A default you never answered — a `--non-interactive` run without the matching flag — is not written to the file. An answer you actually gave *is* written, even when it matches the default: passing an explicit flag (e.g., `--port 8765`, `--routing-strategy centroid`) always writes the key, and so does answering the interactive `routing_strategy` or `log_format` prompt — including pressing Enter to accept the shown default, which counts as an answer. In an interactive run this also applies when stdin closes early (EOF, piped input): the wizard falls back to the shown default and records it as your answer, so `[routing].routing_strategy` and `[logging].format` are still written. All other keys in `archon-search.toml` remain at their defaults.
+**Only the choices you actually made are written.** A default you never answered — a `--non-interactive` run without the matching flag — is not written to the file (for `[collections].watch`, `[telemetry].enabled`, `[database].eager_load_embedders`, `[routing].routing_strategy`, and `[logging].format`, a re-run that leaves the question unanswered also removes the key a prior run wrote). An answer you actually gave *is* written, even when it matches the default: passing an explicit flag (e.g., `--port 8765`, `--routing-strategy centroid`, `--no-watch`) always writes the key, and so does answering the interactive `routing_strategy`, `log_format`, filesystem-watcher, telemetry, or eager-load prompt — including pressing Enter to accept the shown default, which counts as an answer (a declined y/n prompt is written as `false`). In an interactive run this also applies when stdin closes early (EOF, piped input): the wizard falls back to the shown default and records it as your answer, so `[routing].routing_strategy`, `[logging].format`, `[collections].watch`, `[telemetry].enabled`, and `[database].eager_load_embedders` are still written. All other keys in `archon-search.toml` remain at their defaults.
 
 The wizard also backs up your existing config to `~/.archon-search/archon-search.toml.bak` before making any changes.
 
@@ -903,9 +896,9 @@ If you re-run with the same profile and multilingual setting, the wizard:
 4. Downloads any missing model weights.
 5. Re-registers and restarts the service.
 
-Your indexed data is **preserved**. Changing optional features (telemetry, watcher, etc.) without changing the profile is safe.
+Your indexed data is **preserved**. Changing optional features (telemetry, watcher, etc.) without changing the profile is safe for your index, but every re-run rewrites the optional-feature keys from that run's answers alone — see [Changing optional features only](#changing-optional-features-only) before re-running with `--non-interactive`.
 
-The overwrite detection compares wizard-written keys only (`[database]` profile fields and optional-feature keys). Keys in `[server]` and other sections are never compared. If a config was written by an older version of the wizard, the detection may produce a false positive — answer `y` to overwrite safely.
+The overwrite detection compares wizard-written keys only: the `[database]` profile fields against the profile's values, and the optional-feature keys (`[collections].watch`, `[telemetry].enabled`, `[database].eager_load_embedders`, `[routing].routing_strategy`, `[logging].format`) against the built-in config defaults. Keys in `[server]` and other sections are never compared. An absent optional key never counts, and neither does one set to its default (e.g. written by `--no-watch`), but **any optional key set to a non-default value counts as a hand edit — including one the wizard wrote itself.** So after a run that enabled the watcher, telemetry, or eager loading (via `--watch`/`--telemetry`/`--eager-load` or by answering `y`), or chose `hybrid` routing or `json` logs, or disabled the reranker (`--no-reranker` or answering `n` to *Keep reranker enabled?*, which writes `[database].reranker_model = ""` instead of the profile's reranker), the next re-run shows the overwrite warning: answer `y` to continue — pressing Enter aborts — while `--non-interactive` re-runs print the warning and proceed. The same false positive can appear for a config written by an older version of the wizard; answer `y` to overwrite safely.
 
 ### Different profile (rebuilds the index)
 
@@ -931,11 +924,13 @@ Switching to BAAI/bge-large-en-v1.5 (chunk_size=1024) requires rebuilding the in
 
 ### Changing optional features only
 
-To update optional features without changing the profile, re-run the wizard without `--profile`. The interactive prompts will ask the same questions, or you can pass flags to answer them directly:
+To update optional features without changing the profile, re-run the wizard with the same `--profile`. The interactive prompts ask every question again, or you can pass flags to answer them directly.
+
+A re-run does not merge with the previous optional-feature answers: each optional-feature key is rewritten from this run's answers alone. In a `--non-interactive` re-run, every optional-feature question you do not answer with a flag is reset — `[collections].watch`, `[telemetry].enabled` (and `[telemetry].retention_days`), `[database].eager_load_embedders`, `[routing].routing_strategy`, and `[logging].format` are removed from the config, HyDE and RAG Fusion are written as disabled, and a reranker removed with `--no-reranker` is restored to the profile default. The deployment settings are not reset: `--host`, `--port`, `--db-path`, `--log-level`, and `--top-k` write their keys (`[server].host`, `[server].port`, `[database].db_path`, `[logging].level`, `[database].top_k_return`/`top_k_retrieve`) only when you pass the flag, so a re-run without them keeps the previous values. The exceptions keep their previous value: `[graph].enabled = true` from an earlier code-enrichment opt-in is never cleared (declining code enrichment or omitting `--code` does not set it back to `false`); `[graph].provider`, `[graph].extraction_model`, and the graph base URL are written only when you choose a graph-enrichment provider, so a run that does not choose one leaves the previous values in place; and `[telemetry].retention_days` survives any re-run that turns telemetry on without a new retention value — passing `--telemetry` without `--telemetry-retention-days`, or answering `y` at the interactive telemetry prompt (without `--telemetry`, `--telemetry-retention-days` is ignored, so a `y` answer can never replace it). Edit those keys by hand to change them. In an interactive re-run, the watcher, telemetry, eager-load, routing, and log-format prompts offer their built-in default (shown in brackets), not your previous answer, so pressing Enter writes that default. To change one feature and keep the rest, either re-run interactively and answer every prompt again, or pass every flag you want to keep alongside the new one:
 
 ```bash
-# Enable the filesystem watcher without changing anything else
-archon-search wizard --profile minimal --watch --non-interactive
+# Enable the filesystem watcher, keeping telemetry and JSON logs from the previous run
+archon-search wizard --profile minimal --watch --telemetry --log-format json --non-interactive
 ```
 
 ---

@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 import click
 
@@ -29,6 +30,8 @@ from .provisioning import GPU_EXECUTION_PROVIDER
 from .render import _render_profile_table
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 _CHOICE_MAP = {"1": "minimal", "2": "balanced", "3": "max", "": "minimal"}
 
@@ -590,6 +593,21 @@ def _prompt_provider(
     return provider, "", "", ""
 
 
+def _resolve_answer(flag: _T | None, non_interactive: bool, ask: Callable[[], _T]) -> _T | None:
+    """Resolve one optional-feature question whose ``None`` means "never answered".
+
+    An explicit CLI *flag* wins and is always written; a non-interactive run with
+    no flag leaves the question unanswered (``None`` → key omitted from config);
+    otherwise the operator is asked — and any answer, Enter-for-default included,
+    is written.
+    """
+    if flag is not None:
+        return flag
+    if non_interactive:
+        return None
+    return ask()
+
+
 def _prompt_optional_features(
     non_interactive: bool,
     profile: InstallProfile,
@@ -610,13 +628,16 @@ def _prompt_optional_features(
     rag_fusion_llama_cpp_base_url_default: str = LLAMA_CPP_BASE_URL_DEFAULT,
     graph_llama_cpp_base_url_default: str = LLAMA_CPP_BASE_URL_DEFAULT,
 ) -> WizardFeatures:
-    """Ask seven optional-feature questions after profile selection.
+    """Ask the optional-feature questions after profile selection.
 
     Each keyword argument pre-answers its question when not None; None triggers
-    an interactive prompt (or the default in non-interactive mode). The
-    ``*_ollama_base_url_default`` / ``*_llama_cpp_base_url_default`` values
-    pre-fill the Ollama / llama-server base-URL prompts so a re-run keeps the
-    address already saved in config with a single Enter.
+    an interactive prompt. In non-interactive mode an unanswered watch /
+    telemetry / eager-load / routing / log-format question stays None (never
+    answered → key omitted from config); the remaining questions fall back to
+    their default. The ``*_ollama_base_url_default`` /
+    ``*_llama_cpp_base_url_default`` values pre-fill the Ollama / llama-server
+    base-URL prompts so a re-run keeps the address already saved in config with
+    a single Enter.
     """
 
     def _ask_yn(prompt_text: str, default: bool = False) -> bool:
@@ -667,6 +688,7 @@ def _prompt_optional_features(
         "size), fetched on first use, licensed under "
         f"{GRAPH_MODEL_SIZE_ESTIMATE.license}."
     )
+    # Deliberately not _resolve_answer: this answer is not tri-state, so non-interactive falls back to False.
     if install_code is not None:
         _install_code_extra_val = install_code
     elif non_interactive:
@@ -688,6 +710,7 @@ def _prompt_optional_features(
             "  Disabling it reduces latency and RAM but lowers recall quality.\n"
             "  Default: enabled (for profiles that include a reranker)."
         )
+    # Deliberately not _resolve_answer: this answer is not tri-state, so non-interactive falls back to False.
     if profile.reranker is None:
         _disable_reranker_val = False
     elif disable_reranker is not None:
@@ -704,12 +727,11 @@ def _prompt_optional_features(
         "  Uses watchdog. Increases background CPU usage slightly.\n"
         "  Default: disabled."
     )
-    if enable_watch is not None:
-        _enable_watch_val = enable_watch
-    elif non_interactive:
-        _enable_watch_val = False
-    else:
-        _enable_watch_val = _ask_yn("Auto-watch directories and re-index on file changes? [y/N]: ")
+    _enable_watch_val = _resolve_answer(
+        enable_watch,
+        non_interactive,
+        lambda: _ask_yn("Auto-watch directories and re-index on file changes? [y/N]: "),
+    )
 
     # --- enable_telemetry ---
     print(
@@ -718,12 +740,11 @@ def _prompt_optional_features(
         "  ~/.archon-search/search-logs/. No query text is stored. Opt-in.\n"
         "  Default: disabled."
     )
-    if enable_telemetry is not None:
-        _enable_telemetry_val = enable_telemetry
-    elif non_interactive:
-        _enable_telemetry_val = False
-    else:
-        _enable_telemetry_val = _ask_yn("Enable local query telemetry? [y/N]: ")
+    _enable_telemetry_val = _resolve_answer(
+        enable_telemetry,
+        non_interactive,
+        lambda: _ask_yn("Enable local query telemetry? [y/N]: "),
+    )
 
     # --- eager_load_embedders ---
     print(
@@ -733,14 +754,11 @@ def _prompt_optional_features(
         "  This option widens that warm-up to every per-collection embedding model as well,\n"
         "  at the cost of a longer startup. Default: disabled."
     )
-    if eager_load is not None:
-        _eager_load_val = eager_load
-    elif non_interactive:
-        _eager_load_val = False
-    else:
-        _eager_load_val = _ask_yn(
-            "Also pre-load every per-collection embedding model at startup? [y/N]: "
-        )
+    _eager_load_val = _resolve_answer(
+        eager_load,
+        non_interactive,
+        lambda: _ask_yn("Also pre-load every per-collection embedding model at startup? [y/N]: "),
+    )
 
     # --- routing_strategy ---
     print(
@@ -750,16 +768,15 @@ def _prompt_optional_features(
         "  for mixed corpora with distinct topic clusters).\n"
         "  Default: centroid."
     )
-    if routing_strategy is not None:
-        _routing_val = routing_strategy   # explicit CLI flag → always written
-    elif non_interactive:
-        _routing_val = None               # accepted default → key omitted
-    else:
-        _routing_val = _ask_choice(
+    _routing_val = _resolve_answer(
+        routing_strategy,
+        non_interactive,
+        lambda: _ask_choice(
             "Routing strategy (centroid/hybrid) [centroid]: ",
             valid={"centroid", "hybrid"},
             default="centroid",
-        )
+        ),
+    )
 
     # --- log_format ---
     print(
@@ -768,16 +785,15 @@ def _prompt_optional_features(
         "  json: structured JSON logs, suitable for log aggregation pipelines.\n"
         "  Default: text."
     )
-    if log_format is not None:
-        _log_format_val = log_format      # explicit CLI flag → always written
-    elif non_interactive:
-        _log_format_val = None            # accepted default → key omitted
-    else:
-        _log_format_val = _ask_choice(
+    _log_format_val = _resolve_answer(
+        log_format,
+        non_interactive,
+        lambda: _ask_choice(
             "Log format (text/json) [text]: ",
             valid={"text", "json"},
             default="text",
-        )
+        ),
+    )
 
     # --- HyDE / RAG Fusion (C15 Tier 2 / G10 BE-8) ---
     # No API key gate — prompt whenever interactive and not pre-answered.

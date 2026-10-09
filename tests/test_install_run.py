@@ -16,6 +16,7 @@ from archon_search.install import (
     DryRunInstaller,
     InstallError,
     RealInstaller,
+    WizardFeatures,
     create_installer,
 )
 from archon_search.platform.types import GpuType
@@ -1011,14 +1012,7 @@ def test_run_prompts_multilingual_question(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prewarm_models"),
         patch("archon_search.install.installer._check_disk_space"),
         patch("archon_search.install.installer._prompt_multilingual", prompt_multilingual_mock),
-        patch("archon_search.install.installer._prompt_optional_features", return_value=MagicMock(
-            install_code_extra=False, install_graph_extra=False, disable_reranker=False,
-            enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy=None, log_format=None,
-            host=None, port=None, db_path=None, log_level=None,
-            top_k=None, telemetry_retention_days=None, enable_hyde=False, enable_rag_fusion=False,
-            graph_provider="",
-        )),
+        patch("archon_search.install.installer._prompt_optional_features", return_value=WizardFeatures()),
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=True),
         patch("builtins.input", return_value="y"),  # "Proceed?" prompt
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
@@ -1051,14 +1045,7 @@ def test_run_multilingual_flag_skips_prompt(tmp_path: Path) -> None:
         # Otherwise a real `uv pip install` of [multilingual] re-resolves the test environment.
         patch("archon_search.install.installer._install_multilingual_extra"),
         patch("archon_search.install.installer._prompt_multilingual", prompt_multilingual_mock),
-        patch("archon_search.install.installer._prompt_optional_features", return_value=MagicMock(
-            install_code_extra=False, install_graph_extra=False, disable_reranker=False,
-            enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy=None, log_format=None,
-            host=None, port=None, db_path=None, log_level=None,
-            top_k=None, telemetry_retention_days=None, enable_hyde=False, enable_rag_fusion=False,
-            graph_provider="",
-        )),
+        patch("archon_search.install.installer._prompt_optional_features", return_value=WizardFeatures()),
         patch("archon_search.install.installer._prompt_gpu_confirm", return_value=True),
         patch("archon_search.install.installer._prompt_fasttext_license"),
         patch("archon_search.install.installer._download_fasttext_model"),
@@ -1789,14 +1776,7 @@ def test_overwrite_warning_triggers_on_hand_edit(tmp_path: Path) -> None:
         patch("archon_search.install.installer._check_disk_space"),
         patch("archon_search.install.installer._write_profile_config", write_mock),
         patch("archon_search.install.installer._detect_config_hand_edits", return_value=True),
-        patch("archon_search.install.installer._prompt_optional_features", return_value=MagicMock(
-            install_code_extra=False, install_graph_extra=False, disable_reranker=False,
-            enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy=None, log_format=None,
-            # Explicit False: a bare MagicMock returns a truthy attribute, which would
-            # trip the post-write HyDE/RAG Fusion or graph-extra installation code.
-            enable_hyde=False, enable_rag_fusion=False,
-        )),
+        patch("archon_search.install.installer._prompt_optional_features", return_value=WizardFeatures()),
         # input() used for: overwrite prompt ("y") and Proceed? ("y")
         patch("builtins.input", return_value="y"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
@@ -1833,11 +1813,7 @@ def test_overwrite_warning_aborts_on_n(tmp_path: Path) -> None:
         patch("archon_search.install.installer._check_disk_space"),
         patch("archon_search.install.installer._write_profile_config", write_mock),
         patch("archon_search.install.installer._detect_config_hand_edits", return_value=True),
-        patch("archon_search.install.installer._prompt_optional_features", return_value=MagicMock(
-            install_code_extra=False, install_graph_extra=False, disable_reranker=False,
-            enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy=None, log_format=None
-        )),
+        patch("archon_search.install.installer._prompt_optional_features", return_value=WizardFeatures()),
         # "n" causes the overwrite prompt to abort
         patch("builtins.input", return_value="n"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
@@ -1871,11 +1847,7 @@ def test_overwrite_warning_bak_not_created_on_n(tmp_path: Path) -> None:
         patch("archon_search.install.installer._prewarm_models"),
         patch("archon_search.install.installer._check_disk_space"),
         patch("archon_search.install.installer._detect_config_hand_edits", return_value=True),
-        patch("archon_search.install.installer._prompt_optional_features", return_value=MagicMock(
-            install_code_extra=False, install_graph_extra=False, disable_reranker=False,
-            enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy=None, log_format=None
-        )),
+        patch("archon_search.install.installer._prompt_optional_features", return_value=WizardFeatures()),
         patch("builtins.input", return_value="n"),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
         patch.object(BaseInstaller, "validate_providers", return_value=False),
@@ -2096,11 +2068,7 @@ def test_overwrite_eof_on_prompt_aborts(tmp_path: Path, capsys) -> None:
         patch("archon_search.install.installer._check_disk_space"),
         patch("archon_search.install.installer._write_profile_config", write_mock),
         patch("archon_search.install.installer._detect_config_hand_edits", return_value=True),
-        patch("archon_search.install.installer._prompt_optional_features", return_value=MagicMock(
-            install_code_extra=False, install_graph_extra=False, disable_reranker=False,
-            enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-            routing_strategy=None, log_format=None
-        )),
+        patch("archon_search.install.installer._prompt_optional_features", return_value=WizardFeatures()),
         # EOFError on the overwrite prompt (piped/non-tty stdin)
         patch("builtins.input", side_effect=EOFError),
         patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
@@ -2468,19 +2436,10 @@ def test_wizard_runs_no_provider_check_without_metal(tmp_path: Path, gpu: GpuTyp
 def _multilingual_run_patches(config_path: Path, fake_legacy: Path, **overrides: Any):
     """Full patch set for a multilingual run() that never touches real FS/pip.
 
-    Every _install_* / download helper is mocked, and all boolean WizardFeatures
-    fields are set explicitly so a truthy MagicMock attr never spawns a real
-    subprocess.
+    Every _install_* / download helper is mocked, and the wizard answers are a
+    real all-default WizardFeatures, so no feature flag spawns a real subprocess.
     """
-    features = MagicMock(
-        install_code_extra=False, install_graph_extra=False, disable_reranker=False,
-        enable_watch=False, enable_telemetry=False, eager_load_embedders=False,
-        routing_strategy=None, log_format=None,
-        host=None, port=None, db_path=None, log_level=None,
-        top_k=None, telemetry_retention_days=None,
-        enable_hyde=False, enable_rag_fusion=False,
-        graph_provider="",  # falsy — FE-2's [graph] enrichment write is conditional on this
-    )
+    features = WizardFeatures()
     base = {
         "get_default_config_path": MagicMock(return_value=config_path),
         "_legacy_service_path": MagicMock(return_value=fake_legacy),

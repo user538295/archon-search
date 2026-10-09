@@ -89,15 +89,7 @@ providers = ["CUDAExecutionProvider"]
 
 The CLI's GPU autodetection (`archon_search/platform/runtime.py:detect_gpu_type`) currently only reports the available accelerator type — it does not auto-populate `providers`. You must set this manually.
 
-**PDF / image-OCR acceleration (PyTorch).** The `providers` setting above only
-covers embedding and reranking (ONNX Runtime). PDF and image-OCR parsing
-(docling) runs on PyTorch, which is installed **CPU-only by default** — the
-default install pins the `+cpu` torch build on Linux x86_64 so no NVIDIA CUDA
-runtime is pulled in. To run docling on an NVIDIA GPU, answer **Yes** to the
-wizard's "enable CUDA acceleration?" prompt on a Linux x86_64 host: the wizard
-then replaces the CPU torch build with the matching CUDA build (best-effort —
-it keeps the CPU build if the download fails). There is no manual TOML setting
-for this; it is driven by the wizard's GPU confirmation.
+**PDF / image-OCR acceleration (PyTorch).** The `providers` setting above only covers embedding and reranking (ONNX Runtime). PDF and image-OCR parsing (docling) runs on PyTorch, which is installed **CPU-only by default** — the default install pins the `+cpu` torch build on Linux x86_64 so no NVIDIA CUDA runtime is pulled in. To run docling on an NVIDIA GPU, answer **Yes** to the wizard's "enable CUDA acceleration?" prompt on a Linux x86_64 host: the wizard then replaces the CPU torch build with the matching CUDA build (best-effort — it keeps the CPU build if the download fails). There is no manual TOML setting for this; it is driven by the wizard's GPU confirmation.
 
 ## Install profiles (C0)
 
@@ -154,15 +146,15 @@ Key `wizard` flags (verified against `archon_search/cli/install_cmd.py`):
 | `--non-interactive` | Skip all confirmation prompts. |
 | `--config PATH` | Use a non-default config file when computing data/log paths. |
 | `--code / --no-code` | Install tree-sitter code enrichment packages (`archon-search[code]`). Enables symbol extraction for code files. |
-| `--watch / --no-watch` | Enable filesystem watcher: auto-reindex collection source directories on file changes. |
-| `--telemetry / --no-telemetry` | Enable local query telemetry (structural metadata only, no raw query strings). |
-| `--eager-load / --no-eager-load` | Widen startup warm-up — which always covers the default embedder and the reranker, with `/ready` held at `503` until it finishes — to every per-collection embedding model. |
+| `--watch / --no-watch` | Enable filesystem watcher: auto-reindex collection source directories on file changes. Either flag writes `[collections].watch` (`true`/`false`). |
+| `--telemetry / --no-telemetry` | Enable local query telemetry (structural metadata only, no raw query strings). Either flag writes `[telemetry].enabled` (`true`/`false`). |
+| `--eager-load / --no-eager-load` | Widen startup warm-up — which always covers the default embedder and the reranker, with `/ready` held at `503` until it finishes — to every per-collection embedding model (`--eager-load`), or keep it at the default embedder and reranker only (`--no-eager-load`). Either flag writes `[database].eager_load_embedders` (`true`/`false`). |
 | `--no-reranker` | Disable the cross-encoder reranker for lower latency (less precise results). |
 | `--routing-strategy {centroid,hybrid}` | Set routing strategy. `hybrid` blends centroid + description-embedding scores. |
 | `--log-format {text,json}` | Log format. Use `json` for container deployments and log aggregators. |
 | `--disable-gpu` | Force CPU execution; skip Metal/CUDA acceleration even when auto-detected. |
 
-Additional install-time overrides accepted by `wizard` include `--host`, `--port`, `--db-path`, `--log-level`, `--top-k`, `--telemetry-retention-days`, `--enable-hyde`, `--enable-rag-fusion`, and `--server-key` — these write into the installed config. For the full walkthrough of the interactive flow, see [`20_wizard.md`](./20_wizard.md).
+Additional install-time overrides accepted by `wizard` include `--host`, `--port`, `--db-path`, `--log-level`, `--top-k`, `--telemetry-retention-days`, `--enable-hyde`, `--enable-rag-fusion`, and `--server-key` — these write into the installed config. `--telemetry-retention-days` only takes effect together with the `--telemetry` flag; without it the value is dropped with a warning, even if you answer `y` at the telemetry prompt. For the full walkthrough of the interactive flow, see [`20_wizard.md`](./20_wizard.md).
 
 ## Uninstall
 

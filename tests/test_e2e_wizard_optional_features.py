@@ -45,6 +45,9 @@ from archon_search.platform.types import GpuType
 from tests.test_install_fasttext_download import _pin_digest_of
 from tests.test_removed_engine_repo_guard import _ENGINE_PATTERN, _files_naming_engine
 
+# installer.py's non-interactive overwrite warning, printed when a re-run detects hand edits.
+_HAND_EDIT_WARNING = "[warn] Existing config has custom values"
+
 
 @contextmanager
 def _no_anthropic_key() -> Generator[None, None, None]:
@@ -217,11 +220,14 @@ def test_e2e_defaults_produce_clean_config(runner: CliRunner, tmp_path: Path) ->
     assert config_path.exists()
     doc = tomlkit.parse(config_path.read_text())
 
-    # S561: accepted defaults are NOT written — 20_wizard.md §"Only the choices you actually made are written"
+    # S561: never-answered keys are NOT written — 20_wizard.md §"Only the choices you actually made are written".
+    # _default_toml() seeds eager_load_embedders, routing_strategy, watch and logging.format on a
+    # fresh install; only the never-answered (None) path removes them again.
     assert "enabled" not in doc.get("telemetry", {}), "telemetry.enabled should be omitted (default)"
     assert "routing_strategy" not in doc.get("routing", {}), "routing_strategy should be omitted (default centroid)"
     assert "watch" not in doc.get("collections", {}), "watch should be omitted (default false)"
     assert "format" not in doc.get("logging", {}), "logging.format should be omitted (default text)"
+    assert "eager_load_embedders" not in doc["database"], "eager_load_embedders should be omitted (default false)"
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +273,47 @@ def test_e2e_interactive_watch_and_telemetry(runner: CliRunner, tmp_path: Path) 
     doc = tomlkit.parse(config_path.read_text())
     assert doc["collections"]["watch"] is True
     assert doc["telemetry"]["enabled"] is True
+    # An interactive "n" is an answer — written as false, not omitted (S553).
+    assert doc["database"]["eager_load_embedders"] is False
+
+
+@pytest.mark.integration
+def test_e2e_interactive_enter_at_bool_prompts_writes_false(runner: CliRunner, tmp_path: Path) -> None:
+    """Interactive mode: pressing Enter (default N) at watch / telemetry / eager-load is an
+    answer, so each key is written as false (S553/S556/S557, 20_wizard.md §"Only the choices
+    you actually made are written")."""
+    config_path = tmp_path / "archon-search.toml"
+
+    # Same prompt order as test_e2e_interactive_watch_and_telemetry, with Enter at
+    # prompts 4 (watch), 5 (telemetry) and 6 (eager load).
+    stdin_responses = "\n".join(["n", "n", "n", "", "", "", "", "", "n", "n", "y"]) + "\n"
+
+    with _no_anthropic_key():
+        with _patched_wizard():
+            result = runner.invoke(
+                main,
+                [
+                    "wizard",
+                    "--profile", "balanced",
+                    "--config", str(config_path),
+                    "--skip-preload",
+                ],
+                input=stdin_responses,
+            )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    for prompt in (
+        "Auto-watch directories and re-index on file changes? [y/N]: ",
+        "Enable local query telemetry? [y/N]: ",
+        "Also pre-load every per-collection embedding model at startup? [y/N]: ",
+    ):
+        assert prompt in result.output, f"prompt not asked: {prompt!r}"
+    doc = tomlkit.parse(config_path.read_text())
+    # Queue-alignment anchor: answer 3 ("n" to "Keep reranker enabled?") disabled the reranker.
+    assert doc["database"]["reranker_model"] == ""
+    assert doc["collections"]["watch"] is False
+    assert doc["telemetry"]["enabled"] is False
+    assert doc["database"]["eager_load_embedders"] is False
 
 
 @pytest.mark.integration
@@ -1652,7 +1699,7 @@ def test_e2e_rerun_with_hand_edited_config(runner: CliRunner, tmp_path: Path) ->
         f"got {final_doc['database']['embedding_model']}"
     )
     # The overwrite warning message should appear in the second run's output
-    assert "[warn] Existing config has custom values" in result2.output, (
+    assert _HAND_EDIT_WARNING in result2.output, (
         f"Expected overwrite warning in output. Got: {result2.output}"
     )
 
@@ -2172,6 +2219,156 @@ def test_s561_log_format_written_when_explicitly_passed(
     assert log_format == "text", (
         f"log_format should be written when explicitly passed; got {log_format!r}"
     )
+
+
+# (negative flag, positive flag, table, key, summary bullet, id) for the three wizard bool flags.
+_OPTIONAL_BOOL_FLAGS = [
+    ("--no-watch", "--watch", "collections", "watch", "Watch directories (auto-reindex)", "S557-no-watch"),
+    ("--no-telemetry", "--telemetry", "telemetry", "enabled", "Telemetry enabled", "S556-no-telemetry"),
+    (
+        "--no-eager-load", "--eager-load", "database", "eager_load_embedders",
+        "Eager load models at startup", "S553-no-eager-load",
+    ),
+]
+_NEGATIVE_FLAGS_WITH_POSITIVE = [
+    pytest.param(flag, positive, table, key, id=case_id)
+    for flag, positive, table, key, _bullet, case_id in _OPTIONAL_BOOL_FLAGS
+]
+_NEGATIVE_FLAGS = [
+    pytest.param(flag, table, key, id=case_id)
+    for flag, _positive, table, key, _bullet, case_id in _OPTIONAL_BOOL_FLAGS
+]
+_NEGATIVE_BULLET_FLAGS = [
+    pytest.param(flag, bullet, id=case_id)
+    for flag, _positive, _table, _key, bullet, case_id in _OPTIONAL_BOOL_FLAGS
+]
+_POSITIVE_BULLET_FLAGS = [
+    pytest.param(positive, bullet, id=case_id.replace("-no-", "-"))
+    for _flag, positive, _table, _key, bullet, case_id in _OPTIONAL_BOOL_FLAGS
+]
+
+
+def _run_minimal_wizard(runner: CliRunner, config_path: Path, *extra: str) -> Result:
+    with _patched_wizard():
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--config", str(config_path),
+            "--skip-preload",
+            *extra,
+        ])
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    return result
+
+
+def _assert_key_written_false(config_path: Path, table: str, key: str, flag: str) -> None:
+    doc = tomlkit.parse(config_path.read_text())
+    section = doc.get(table, {})
+    assert key in section, (
+        f"[{table}].{key} must be written when {flag} is passed explicitly; key is absent"
+    )
+    assert section[key] is False, f"[{table}].{key} should be false; got {section[key]!r}"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("flag", "table", "key"), _NEGATIVE_FLAGS)
+def test_s553_s556_s557_explicit_no_flag_writes_false_on_fresh_install(
+    runner: CliRunner, tmp_path: Path, flag: str, table: str, key: str
+) -> None:
+    """S553/S556/S557: an explicit --no-X flag writes the key as TOML false even
+    though false is the default (20_wizard.md: "passing an explicit flag ... always
+    writes the key")."""
+    config_path = tmp_path / "archon-search.toml"
+
+    _run_minimal_wizard(runner, config_path, flag)
+
+    _assert_key_written_false(config_path, table, key, flag)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("flag", "positive", "table", "key"), _NEGATIVE_FLAGS_WITH_POSITIVE)
+def test_s553_s556_s557_explicit_no_flag_writes_false_on_rerun(
+    runner: CliRunner, tmp_path: Path, flag: str, positive: str, table: str, key: str
+) -> None:
+    """S553/S556/S557 re-run half: after a run with the positive flag, re-running
+    with --no-X must leave the key present as false, not delete it. The wizard-written
+    true differs from the default, so run 2 reports it as a hand edit — the positive
+    control for the `_HAND_EDIT_WARNING not in` checks below."""
+    config_path = tmp_path / "archon-search.toml"
+
+    _run_minimal_wizard(runner, config_path, positive)
+    assert tomlkit.parse(config_path.read_text())[table][key] is True
+
+    rerun = _run_minimal_wizard(runner, config_path, flag)
+
+    _assert_key_written_false(config_path, table, key, flag)
+    assert _HAND_EDIT_WARNING in rerun.output, rerun.output
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("flag", "table", "key"), _NEGATIVE_FLAGS)
+def test_explicit_no_flag_repeated_on_rerun_stays_false(
+    runner: CliRunner, tmp_path: Path, flag: str, table: str, key: str
+) -> None:
+    """Re-running with the same --no-X keeps the key written as false, and the
+    wizard-written false is not reported as a hand edit (installer.py overwrite warning)."""
+    config_path = tmp_path / "archon-search.toml"
+
+    _run_minimal_wizard(runner, config_path, flag)
+    rerun = _run_minimal_wizard(runner, config_path, flag)
+
+    _assert_key_written_false(config_path, table, key, flag)
+    assert _HAND_EDIT_WARNING not in rerun.output, rerun.output
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("flag", "table", "key"), _NEGATIVE_FLAGS)
+def test_explicit_no_flag_then_rerun_without_flag_removes_key(
+    runner: CliRunner, tmp_path: Path, flag: str, table: str, key: str
+) -> None:
+    """A --non-interactive re-run that omits the flag leaves the question unanswered,
+    so the false written by the earlier --no-X run is removed (20_wizard.md
+    §"Changing optional features only")."""
+    config_path = tmp_path / "archon-search.toml"
+
+    _run_minimal_wizard(runner, config_path, flag)
+    _assert_key_written_false(config_path, table, key, flag)
+
+    rerun = _run_minimal_wizard(runner, config_path)
+
+    section = tomlkit.parse(config_path.read_text()).get(table, {})
+    assert key not in section, f"[{table}].{key} should be removed on an unanswered re-run; got {section[key]!r}"
+    assert _HAND_EDIT_WARNING not in rerun.output, rerun.output
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("flag", "bullet"), _NEGATIVE_BULLET_FLAGS)
+def test_dry_run_negative_flag_shows_no_summary_bullet(
+    runner: CliRunner, tmp_path: Path, flag: str, bullet: str
+) -> None:
+    """S553/S556/S557 Step 1/2: `--dry-run --no-X` shows no summary bullet for X and
+    writes no config file."""
+    config_path = tmp_path / "archon-search.toml"
+
+    result = _run_minimal_wizard(runner, config_path, "--dry-run", flag)
+
+    assert bullet not in result.output, result.output
+    assert not config_path.exists()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("flag", "bullet"), _POSITIVE_BULLET_FLAGS)
+def test_dry_run_positive_flag_shows_summary_bullet(
+    runner: CliRunner, tmp_path: Path, flag: str, bullet: str
+) -> None:
+    """Positive control for the test above: `--dry-run --X` does show the bullet."""
+    config_path = tmp_path / "archon-search.toml"
+
+    result = _run_minimal_wizard(runner, config_path, "--dry-run", flag)
+
+    assert bullet in result.output, result.output
+    assert not config_path.exists()
 
 
 # ---------------------------------------------------------------------------

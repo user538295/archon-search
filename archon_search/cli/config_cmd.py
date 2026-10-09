@@ -53,7 +53,7 @@ def _default_toml() -> str:
 def _effective_toml(path: Path) -> str:
     """Return the file's TOML with every missing default section/key filled in.
 
-    The wizard deliberately omits default-valued keys from the written file, so a
+    The wizard deliberately omits unanswered keys from the written file, so a
     raw echo would show an incomplete config.
     """
     doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.exists() else tomlkit.document()

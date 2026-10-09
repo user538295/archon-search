@@ -1565,10 +1565,8 @@ class TestRunServiceReadiness:
         captured = capsys.readouterr()
         assert "within 60 seconds" in captured.out
 
-    def test_run_calls_wait_for_service_without_explicit_timeout(self, tmp_path: Path) -> None:
-        """run() must call _wait_for_service() with no arguments (uses default timeout)."""
-        from unittest.mock import call
-
+    def test_run_without_eager_load_waits_default_timeout(self, tmp_path: Path) -> None:
+        """run() without --eager-load waits the default _WAIT_FOR_SERVICE_TIMEOUT."""
         installer = _make_installer(tmp_path)
 
         mock_wait = MagicMock(return_value=True)
@@ -1586,6 +1584,37 @@ class TestRunServiceReadiness:
 
         from archon_search.install import _WAIT_FOR_SERVICE_TIMEOUT
         assert mock_wait.call_args.kwargs["timeout"] == _WAIT_FOR_SERVICE_TIMEOUT
+
+    def test_run_with_eager_load_waits_scaled_timeout(self, tmp_path: Path) -> None:
+        """run(eager_load=True) ends with a planned-bytes-scaled wait timeout, not the 60 s default.
+
+        Proves the flag reaches the timeout end-to-end; it does not pin whether the
+        value is read from the reloaded config or from WizardFeatures.
+        """
+        from archon_search.install import _WAIT_FOR_SERVICE_TIMEOUT
+        from archon_search.install.installer import _compute_svc_timeout
+        from archon_search.install.provisioning import BYTES_PER_MB
+
+        planned_bytes = 3000 * BYTES_PER_MB  # large enough to scale past the 60 s floor
+        expected_timeout = _compute_svc_timeout(True, planned_bytes)
+        assert expected_timeout != _WAIT_FOR_SERVICE_TIMEOUT
+        installer = _make_installer(tmp_path)
+
+        mock_wait = MagicMock(return_value=True)
+        with patch.object(installer, "_wait_for_service", mock_wait), \
+             patch("archon_search.install.installer._planned_total_bytes", return_value=planned_bytes), \
+             patch.object(installer, "detect_gpu", return_value="none"), \
+             patch.object(installer, "check_deps", return_value=[]), \
+             patch.object(installer, "install_deps"), \
+             patch.object(installer, "configure_providers"), \
+             patch.object(installer, "create_data_dir"), \
+             patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
+             patch.object(installer, "write_service_file"), \
+             patch.object(installer, "load_service", return_value=0), \
+             patch.object(installer, "_is_service_running", return_value=False):
+            installer.run(non_interactive=True, eager_load=True)
+
+        assert mock_wait.call_args.kwargs["timeout"] == expected_timeout
 
     def test_run_returns_error_code_when_load_service_fails(self, tmp_path: Path) -> None:
         """run() must return the error code from load_service() and not call _wait_for_service."""

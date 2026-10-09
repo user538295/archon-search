@@ -987,7 +987,7 @@ class BaseInstaller(ABC):
             # Step 16: wait for readiness
             if not self.dry_run:
                 _svc_timeout = _compute_svc_timeout(
-                    features.eager_load_embedders, _planned_total_bytes(prof, features)
+                    cfg.eager_load_embedders, _planned_total_bytes(prof, features)
                 )
                 ready = self._wait_for_service(timeout=_svc_timeout, log_offset=_log_offset)
                 if not ready:
