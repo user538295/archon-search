@@ -2,13 +2,13 @@
 
 **Status:** RESOLVED (2026-09-01) — extras are installed today, via a self-referencing
 `dependency-groups` entry rather than the explicit `--extra` flag originally proposed below.
-Residual risk: this is implicit — removing `pyproject.toml:77` would silently reopen the gap,
+Residual risk: this is implicit — removing `pyproject.toml:85` would silently reopen the gap,
 and the "non-skip assertion" follow-up below was never implemented, so no CI guard would catch it.
 
 ## Problem (as originally filed — line numbers below are as originally reported, since corrected in Evidence trail)
 
 `.github/workflows/archon-search-pr.yml` installs deps with `uv sync --dev` only
-(line 32). Neither `[graph]` nor `[code]` (`pyproject.toml:41-58`) is installed,
+(line 32). Neither `[graph]` nor `[code]` (`pyproject.toml:49-66`) is installed,
 so every test gated on those extras silently skips on every CI run via
 `pytest.importorskip("tree_sitter")` / `pytest.importorskip("leidenalg")`.
 
@@ -32,9 +32,9 @@ have the extras installed.
 
 Commit `a15673e2` ("test: install all feature extras so no test skips; fix
 drifted tests", 2026-07-28) changed `pyproject.toml`'s `[dependency-groups].dev`
-list (`pyproject.toml:64-82`) to include a self-referencing extras pull —
+list (`pyproject.toml:72-92`) to include a self-referencing extras pull —
 `"archon-search[multilingual,hyde,rag_fusion,ollama,openai-provider,graph,code]"`
-(`pyproject.toml:77`). Because both `archon-search-pr.yml` and
+(`pyproject.toml:85`). Because both `archon-search-pr.yml` and
 `archon-search-release.yml` install deps via `uv sync --dev`, this
 self-reference now pulls in both `[graph]` and `[code]` on every CI run — not
 via an explicit `--extra graph --extra code` flag as originally proposed below,
@@ -59,15 +59,15 @@ packages — expect CI to get noticeably slower.
 
 Add a non-skip assertion for the graph/code test surface, mirroring the existing
 `Verify benchmark tests ran (not just skipped)` step (`archon-search-pr.yml:84-85`),
-so a regression that removes the `pyproject.toml:77` self-reference fails CI loudly
+so a regression that removes the `pyproject.toml:85` self-reference fails CI loudly
 instead of silently skipping again. This was proposed in the original report and has
 never been implemented.
 
 ## Evidence trail
 
-- `pyproject.toml:41-58` — `[graph]` and `[code]` optional-dependency groups.
-- `pyproject.toml:64-82` — `[dependency-groups].dev`, with the self-referencing
-  extras pull at `pyproject.toml:77`.
+- `pyproject.toml:49-66` — `[graph]` and `[code]` optional-dependency groups.
+- `pyproject.toml:72-92` — `[dependency-groups].dev`, with the self-referencing
+  extras pull at `pyproject.toml:85`.
 - `.github/workflows/archon-search-pr.yml:32-33` — `uv sync --dev` (now pulls
   `[graph]`/`[code]` transitively via the dev-group self-reference above).
 - `.github/workflows/archon-search-release.yml:44-45` — same `uv sync --dev`,

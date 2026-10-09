@@ -17,6 +17,14 @@ dependencies = [
     "httpx>=0.25",
     "chonkie>=0.5.0",
     "docling>=2.80.0",
+    # rapidocr comes from docling (docling-slim[standard]: rapidocr>=3.9.1,<4.0.0). 3.10.0
+    # removed `PP_OCRV6_LANGS` from `rapidocr.utils.model_resolver`, which docling 2.135.0
+    # imports (docling/models/stages/ocr/rapid_ocr_model.py:190), so every RapidOCR image /
+    # scanned-PDF OCR raised ImportError (docling-project/docling#4702). Declared here, in
+    # the wheel metadata, because only that reaches pip / `uv tool install` users. Remove
+    # the cap once the `docling` floor above is a release that no longer imports
+    # PP_OCRV6_LANGS (the unlocked lane, scripts/test-unlocked-deps.sh, proves it).
+    "rapidocr>=3.9.1,<3.10",
     # torch/torchvision are pulled transitively by docling. They are declared
     # here as direct dependencies ONLY so the [tool.uv.sources] CPU-index pin
     # below binds (uv applies sources to declared deps, not transitive-only
