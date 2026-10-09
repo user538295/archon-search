@@ -78,6 +78,9 @@ dev = [
     # FastAPI/Starlette TestClient backend (starlette.testclient imports httpx2 first and
     # warns on the httpx fallback). Runtime code keeps using httpx.
     "httpx2>=2.0.0",
+    # Builds the tiny external-data ONNX model of tests/test_embedder_external_data.py
+    # (S671 regression); onnxruntime has no API to construct a model graph.
+    "onnx>=1.23.2",
 ]
 
 [build-system]
