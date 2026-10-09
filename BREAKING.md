@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — `/mcp`: idle Streamable HTTP sessions expire after 30 minutes (`404`); at most 10 000 concurrent sessions (`503`) (2026-10-10)
+
+**Surface**: the MCP endpoint `/mcp` — Streamable HTTP session lifetime (`Mcp-Session-Id`) and its HTTP status codes.
+
+**What changed:** `pyproject.toml` now requires `mcp>=1.30.0` (the MCP SDK that `fastmcp` serves `/mcp` with), to fix a per-request stream leak (`Documentation/Architecture/530_technical_debt_refactoring_roadmap.md` → DEP-2). mcp 1.30.0 changes the `session_idle_timeout` default from `None` (no expiry) to 1800 s and adds a `max_sessions` parameter defaulting to 10 000 ([python-sdk#3426](https://github.com/modelcontextprotocol/python-sdk/pull/3426)). `fastmcp` does not pass either setting through — neither 3.4.5 (the version `uv.lock` pins) nor 3.4.8 (the latest) accepts them in `FastMCPStreamableHTTPSessionManager.__init__` or passes them where `fastmcp/server/http.py` constructs it — so archon runs with these defaults and cannot change them: (1) a stateful session with no request in flight and no open GET stream for 30 minutes is closed — the next request carrying its `Mcp-Session-Id` gets `404`; before, a session lived until the client sent `DELETE` or the server stopped. (2) While 10 000 sessions are open, a request that would open another gets `503`; existing sessions are unaffected. Installs from PyPI (`pip install archon-search`, `uv tool install`, the Dockerfile's `pip install .`) have resolved mcp 1.30.0 since its release on 2026-09-07; this release makes it the minimum, so the behaviour is certain on every install path, and only `uv sync` checkouts change now (from the locked 1.29.0 to 1.30.0).
+
+**Migration**: a client that keeps an `Mcp-Session-Id` across idle periods longer than 30 minutes must treat `404` on that session as "initialize a new session and retry", as the MCP Streamable HTTP spec requires. Clients that keep the GET stream open (the MCP SDK clients do) are not affected. Treat `503` from `/mcp` as retryable with backoff. No config or data migration is required.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — wizard: fresh-install config files omit never-answered keys; HyDE/RAG Fusion `enabled` written only when answered (2026-10-09)
 
 **Surface**: `archon-search wizard` → the generated `~/.archon-search/archon-search.toml` (fresh install, and `--force --delete-db`).

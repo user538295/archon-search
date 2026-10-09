@@ -38,6 +38,14 @@ dependencies = [
     "pydantic>=2.0",
     "python-json-logger>=2.0,<3",
     "fastmcp>=3.4,<4",
+    # mcp comes from fastmcp (fastmcp-slim 3.4.x: mcp>=1.24.0,<2.0). mcp <=1.29.x closed the
+    # SSE response stream of a Streamable HTTP POST only on error, so every normally answered
+    # POST leaked one unclosed anyio MemoryObjectReceiveStream (ResourceWarning); fixed in 1.30.0
+    # (modelcontextprotocol/python-sdk#3426). Declared here, in the wheel metadata, because
+    # only that reaches pip / `uv tool install` users. Does not over-constrain: every
+    # fastmcp(-slim) 3.4.0–3.4.8 requires mcp>=1.24.0,<2.0, so the floor excludes no fastmcp
+    # release. Remove once the fastmcp floor requires mcp>=1.30.0 itself.
+    "mcp>=1.30.0",
 ]
 
 [project.optional-dependencies]

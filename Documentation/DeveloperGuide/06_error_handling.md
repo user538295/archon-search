@@ -101,6 +101,8 @@ Auth and transport errors at `/mcp` itself surface as standard HTTP responses fr
 
 - `401` from `APIKeyMiddleware` — the MCP session never starts.
 - `400` / `406` from `FastMCP`'s streamable HTTP layer — malformed framing. #Unverified (depends on `fastmcp` library internals, not on code in this repository).
+- `404` from the MCP SDK's session manager — the `Mcp-Session-Id` is unknown or expired. Since `mcp` 1.30.0, a session with no request in flight and no open GET stream for 30 minutes is closed (the MCP SDK's default; `fastmcp` does not let archon change it); initialize a new session and retry. SDK clients that keep the GET stream open do not hit this.
+- `503` from the same session manager — 10 000 sessions are already open and a new one is refused (existing sessions are unaffected). Retry with backoff.
 
 Handle those at the SDK / fetch layer, not inside tool-result parsing.
 
