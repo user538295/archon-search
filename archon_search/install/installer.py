@@ -94,6 +94,13 @@ _STARTUP_CRASH_MARKERS = ("ModuleNotFoundError", "ImportError")
 # TOML sections configure_providers can target.
 _DATABASE_SECTION = "database"
 _GRAPH_SECTION = "graph"
+# Printed after the config write when an explicit --telemetry-retention-days was written
+# while the run's telemetry answer is not "on": the value is kept but inert until telemetry
+# is enabled. {prefix}/{outcome} narrate a real write or a dry-run rehearsal.
+_RETENTION_INERT_WARNING = (
+    "{prefix}Warning: [telemetry].retention_days = {days} {outcome}, but telemetry is not enabled, "
+    "so it has no effect until you enable telemetry (--telemetry, or answer y at the telemetry prompt)."
+)
 
 
 def _compute_svc_timeout(eager_load: bool, total_bytes: int) -> int:
@@ -269,6 +276,18 @@ class BaseInstaller(ABC):
             # A re-run keeps the previous [database].providers, so CPU must be written.
             self.write_gpu_providers_disabled(config_path)
             return []
+
+    def _warn_if_retention_inert(self, features: "WizardFeatures") -> None:
+        """After the config write, warn on stderr that an explicit retention_days is inert
+        because the run's telemetry answer is not "on" (config_writer writes it regardless)."""
+        if features.telemetry_retention_days is not None and not features.enable_telemetry:
+            prefix, outcome = ("[dry-run] ", "would be written") if self.dry_run else ("", "was written")
+            print(
+                _RETENTION_INERT_WARNING.format(
+                    prefix=prefix, days=features.telemetry_retention_days, outcome=outcome
+                ),
+                file=sys.stderr,
+            )
 
     async def _bootstrap_collections(self) -> None:
         """Sync configured collections into the search store."""
@@ -773,6 +792,8 @@ class BaseInstaller(ABC):
                 self.persist_reinstall_config(
                     config_path, prof, profile_name, is_multilingual, features, has_edits
                 )
+
+            self._warn_if_retention_inert(features)
 
             # Every exit from here on — success, abort, failure or exception — records what
             # the wizard left in the config, after any flag revert, so the next re-run tells

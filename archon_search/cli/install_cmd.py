@@ -143,7 +143,8 @@ def _install_options(f: click.decorators.FC) -> click.decorators.FC:
 @click.option("--top-k", type=int, default=None, callback=_validate_top_k, is_eager=False,
               help="Number of results to return per query (default: 5; valid: 1–100)")
 @click.option("--telemetry-retention-days", type=click.IntRange(min=1), default=None,
-              help="Number of days to retain telemetry logs (requires --telemetry)")
+              help="Number of days to retain telemetry logs; written as [telemetry].retention_days "
+                   "and only takes effect while telemetry is enabled")
 @click.option("--enable-hyde", is_flag=True, default=False,
               help="Enable HyDE query expansion")
 @click.option("--enable-rag-fusion", is_flag=True, default=False,
@@ -187,16 +188,6 @@ def wizard(
     graph_providers: list[str] | None,
 ) -> None:
     """Interactive setup wizard: choose a profile, download models, start service."""
-    # Warn if --telemetry-retention-days is given without --telemetry
-    if telemetry_retention_days is not None and not telemetry:
-        click.echo(
-            "Warning: --telemetry-retention-days has no effect because telemetry is not enabled. "
-            "Pass --telemetry to enable it.",
-            err=True,
-        )
-        # Clear retention_days so it is not written to TOML
-        telemetry_retention_days = None
-
     sys.exit(
         create_installer(
             config_file=str(config_path) if config_path else None,

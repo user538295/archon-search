@@ -186,7 +186,7 @@ Key `wizard` flags (verified against `archon_search/cli/install_cmd.py`):
 | `--log-format {text,json}` | Log format. Use `json` for container deployments and log aggregators. |
 | `--disable-gpu` | Force CPU execution; skip Metal/CUDA acceleration even when auto-detected. |
 
-Additional install-time overrides accepted by `wizard` include `--host`, `--port`, `--db-path`, `--log-level`, `--top-k`, `--telemetry-retention-days`, `--enable-hyde`, `--enable-rag-fusion`, and `--server-key` — these write into the installed config. `--telemetry-retention-days` only takes effect together with the `--telemetry` flag; without it the value is dropped with a warning, even if you answer `y` at the telemetry prompt. For the full walkthrough of the interactive flow, see [`20_wizard.md`](./20_wizard.md).
+Additional install-time overrides accepted by `wizard` include `--host`, `--port`, `--db-path`, `--log-level`, `--top-k`, `--telemetry-retention-days`, `--enable-hyde`, `--enable-rag-fusion`, and `--server-key` — these write into the installed config. `--telemetry-retention-days` is always written as `[telemetry].retention_days` but never enables telemetry; while telemetry is not enabled it has no effect, and the wizard prints a warning on stderr. For the full walkthrough of the interactive flow, see [`20_wizard.md`](./20_wizard.md).
 
 ## Uninstall
 

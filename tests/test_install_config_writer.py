@@ -411,18 +411,24 @@ class TestApplyWizardFeaturesToToml:
         )
         assert doc["telemetry"]["retention_days"] == 7
 
-    def test_apply_telemetry_retention_without_telemetry_skipped(self) -> None:
-        """telemetry_retention_days=7 without enable_telemetry does NOT write retention_days."""
+    def test_apply_telemetry_retention_with_telemetry_unanswered_writes_retention_days(self) -> None:
+        """telemetry_retention_days=7 with telemetry unanswered (None) writes retention_days=7
+        and no `enabled` key: an explicit retention value is an answer and is written
+        (20_wizard.md "Only the choices you actually made are written"); telemetry is never
+        turned on implicitly."""
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = self._empty_doc()
         _apply_wizard_features_to_toml(
             doc, WizardFeatures(enable_telemetry=None, telemetry_retention_days=7)
         )
-        assert "telemetry" not in doc
+        assert doc["telemetry"]["retention_days"] == 7
+        assert "enabled" not in doc["telemetry"]
 
-    def test_apply_telemetry_retention_with_telemetry_explicitly_disabled_skipped(self) -> None:
-        """S556: enable_telemetry=False (--no-telemetry) writes enabled=false but no retention_days."""
+    def test_apply_telemetry_retention_with_telemetry_explicitly_disabled_writes_retention_days(self) -> None:
+        """S556: enable_telemetry=False (--no-telemetry) + telemetry_retention_days=7 writes
+        enabled=false and retention_days=7 (20_wizard.md "Only the choices you actually
+        made are written")."""
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = self._empty_doc()
@@ -430,7 +436,7 @@ class TestApplyWizardFeaturesToToml:
             doc, WizardFeatures(enable_telemetry=False, telemetry_retention_days=7)
         )
         assert doc["telemetry"]["enabled"] is False
-        assert "retention_days" not in doc["telemetry"]
+        assert doc["telemetry"]["retention_days"] == 7
 
     def test_rerun_telemetry_explicitly_disabled_removes_prior_retention_days(self) -> None:
         """A prior `enabled = true, retention_days = 7` re-run with `--no-telemetry` writes

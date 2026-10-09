@@ -1903,26 +1903,72 @@ def test_wizard_top_k_101_rejects(runner: CliRunner, tmp_path: Path) -> None:
     )
 
 
+# An explicit --telemetry-retention-days that the run's telemetry answer leaves inert
+# (not "on") is still written, with a stderr warning naming the key (20_wizard.md:
+# "Only the choices you actually made are written ... An answer you actually gave *is* written").
+_RETENTION_DAYS = 30
+_PRIOR_RETENTION_DAYS = 7
+_RETENTION_INERT_WARNING = "telemetry is not enabled"
+_TELEMETRY_PROMPT = "Enable local query telemetry? [y/N]: "
+
+
+def _assert_retention_inert_warning(result: Result) -> None:
+    assert f"retention_days = {_RETENTION_DAYS}" in result.stderr and _RETENTION_INERT_WARNING in result.stderr, (
+        f"expected a stderr warning that [telemetry].retention_days = {_RETENTION_DAYS} has no effect; "
+        f"STDERR:\n{result.stderr}"
+    )
+
+
+def _assert_no_retention_inert_warning(result: Result) -> None:
+    assert _RETENTION_INERT_WARNING not in result.stderr, (
+        f"telemetry is on, so no retention warning is expected; STDERR:\n{result.stderr}"
+    )
+
+
 @pytest.mark.integration
-def test_wizard_telemetry_retention_without_telemetry_warns(runner: CliRunner, tmp_path: Path) -> None:
-    """--telemetry-retention-days 7 without --telemetry prints warning and does NOT write retention_days."""
+def test_wizard_telemetry_retention_without_telemetry_writes_toml_and_warns(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """--telemetry-retention-days alone (non-interactive) is an answer: retention_days is
+    written, telemetry stays unanswered (no `enabled` key, never turned on implicitly), and
+    stderr warns the value has no effect yet (20_wizard.md "Only the choices you actually
+    made are written")."""
     config_path = tmp_path / "archon-search.toml"
     with _patched_wizard():
-        result = runner.invoke(main, _wizard_args(config_path, "--telemetry-retention-days", "7"))
+        result = runner.invoke(
+            main, _wizard_args(config_path, "--telemetry-retention-days", str(_RETENTION_DAYS))
+        )
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
-    # Warning should be in output (stdout or stderr)
-    combined = result.output + (result.stderr or "")
-    assert "telemetry" in combined.lower() and (
-        "no effect" in combined.lower() or "warning" in combined.lower() or "not enabled" in combined.lower()
-    ), f"Warning not found in output: {combined}"
-    # retention_days should NOT be written
-    doc = tomlkit.parse(config_path.read_text())
-    assert "retention_days" not in doc.get("telemetry", {}), "retention_days should not be in TOML"
+    telemetry = _written(config_path).get("telemetry", {})
+    assert telemetry.get("retention_days") == _RETENTION_DAYS, f"[telemetry] written: {telemetry!r}"
+    assert "enabled" not in telemetry, f"telemetry must not be enabled implicitly: {telemetry!r}"
+    _assert_retention_inert_warning(result)
+
+
+@pytest.mark.integration
+def test_wizard_no_telemetry_with_retention_writes_both_and_warns(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """--no-telemetry --telemetry-retention-days N writes enabled = false and
+    retention_days = N (both are answers, 20_wizard.md "Only the choices you actually
+    made are written"), and warns on stderr that the retention has no effect yet."""
+    config_path = tmp_path / "archon-search.toml"
+    with _patched_wizard():
+        result = runner.invoke(
+            main,
+            _wizard_args(config_path, "--no-telemetry", "--telemetry-retention-days", str(_RETENTION_DAYS)),
+        )
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    telemetry = _written(config_path).get("telemetry", {})
+    assert telemetry.get("enabled") is False, f"[telemetry] written: {telemetry!r}"
+    assert telemetry.get("retention_days") == _RETENTION_DAYS, f"[telemetry] written: {telemetry!r}"
+    _assert_retention_inert_warning(result)
 
 
 @pytest.mark.integration
 def test_wizard_telemetry_retention_with_telemetry_writes_toml(runner: CliRunner, tmp_path: Path) -> None:
-    """--telemetry --telemetry-retention-days 7 writes [telemetry].retention_days = 7."""
+    """--telemetry --telemetry-retention-days 7 writes enabled = true and
+    [telemetry].retention_days = 7, with no retention warning (the value takes effect)."""
     config_path = tmp_path / "archon-search.toml"
     with _patched_wizard():
         result = runner.invoke(
@@ -1930,7 +1976,120 @@ def test_wizard_telemetry_retention_with_telemetry_writes_toml(runner: CliRunner
         )
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     doc = tomlkit.parse(config_path.read_text())
+    assert doc["telemetry"]["enabled"] is True
     assert doc["telemetry"]["retention_days"] == 7
+    _assert_no_retention_inert_warning(result)
+
+
+@pytest.mark.integration
+def test_dry_run_retention_without_telemetry_warns_it_would_be_written(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """--dry-run --telemetry-retention-days N writes no config, and the inert-retention
+    warning does not claim the value was written."""
+    config_path = tmp_path / "archon-search.toml"
+
+    result = _run_minimal_wizard(runner, config_path, "--dry-run", "--telemetry-retention-days", str(_RETENTION_DAYS))
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    assert not config_path.exists()
+    _assert_retention_inert_warning(result)
+    assert "was written" not in result.stderr, result.stderr
+    assert "[dry-run] Warning:" in result.stderr and "would be written" in result.stderr, result.stderr
+
+
+@pytest.mark.integration
+def test_aborted_overwrite_prints_no_retention_warning(runner: CliRunner, tmp_path: Path) -> None:
+    """Declining the interactive overwrite confirm aborts before anything is written, so
+    no inert-retention warning claims a retention_days value was written."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual")
+    _set_key(config_path, "collections", "watch", True)
+
+    result = _run_minimal_wizard_interactive(
+        runner, config_path, "--telemetry-retention-days", str(_RETENTION_DAYS),
+        answers={_OVERWRITE_PROMPT: "n"},
+    )
+
+    assert "Installation aborted." in result.output, result.output
+    assert "retention_days" not in _written(config_path).get("telemetry", {})
+    assert _RETENTION_INERT_WARNING not in result.stderr, result.stderr
+
+
+@pytest.mark.integration
+def test_reinstall_guard_abort_prints_no_retention_warning(runner: CliRunner, tmp_path: Path) -> None:
+    """A non-interactive re-run that switches profile without --force --delete-db hits the
+    reinstall guard and exits 1 before the config write, so retention_days is not written
+    and no inert-retention warning is printed."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual")
+    before = config_path.read_text()
+
+    with _patched_wizard():
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "balanced",
+            "--config", str(config_path),
+            "--skip-preload",
+            "--no-multilingual",
+            "--telemetry-retention-days", str(_RETENTION_DAYS),
+        ])
+
+    assert result.exit_code == 1, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    assert "--force --delete-db" in result.output, result.output
+    assert config_path.read_text() == before, config_path.read_text()
+    assert _RETENTION_INERT_WARNING not in result.stderr, result.stderr
+
+
+@pytest.mark.integration
+def test_force_delete_db_retention_without_telemetry_writes_and_warns(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """A non-interactive `--force --delete-db --telemetry-retention-days N` reinstall over an
+    existing config writes retention_days = N through the force branch and warns it is inert."""
+    config_path = tmp_path / "archon-search.toml"
+    db_path = str(tmp_path / "lancedb")
+    _run_minimal_wizard(runner, config_path, "--no-multilingual", "--db-path", db_path)
+
+    result = _run_minimal_wizard(
+        runner, config_path, "--no-multilingual", "--db-path", db_path,
+        "--force", "--delete-db", "--telemetry-retention-days", str(_RETENTION_DAYS),
+    )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    telemetry = _written(config_path).get("telemetry", {})
+    assert telemetry.get("retention_days") == _RETENTION_DAYS, f"[telemetry] written: {telemetry!r}"
+    assert "enabled" not in telemetry, f"telemetry must not be enabled implicitly: {telemetry!r}"
+    _assert_retention_inert_warning(result)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("days", ["0", "-1"])
+def test_wizard_telemetry_retention_below_minimum_rejected(runner: CliRunner, tmp_path: Path, days: str) -> None:
+    """--telemetry-retention-days below 1 is a click usage error (exit 2), mirroring the
+    config validator's `[telemetry].retention_days must be >= 1`; no config is written."""
+    config_path = tmp_path / "archon-search.toml"
+
+    with _patched_wizard():
+        result = runner.invoke(main, _wizard_args(config_path, "--telemetry-retention-days", days))
+
+    assert result.exit_code == 2, f"Exit {result.exit_code}: {result.output}"
+    assert not config_path.exists()
+
+
+@pytest.mark.integration
+def test_wizard_telemetry_retention_minimum_accepted(runner: CliRunner, tmp_path: Path) -> None:
+    """--telemetry-retention-days 1 (the minimum) is accepted and written."""
+    config_path = tmp_path / "archon-search.toml"
+
+    with _patched_wizard():
+        result = runner.invoke(
+            main, _wizard_args(config_path, "--telemetry", "--telemetry-retention-days", "1")
+        )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+    assert _written(config_path)["telemetry"]["retention_days"] == 1
 
 
 @pytest.mark.integration
@@ -2394,6 +2553,7 @@ _WIZARD_WRITTEN_VALUE_FLAGS = [
     pytest.param(("--enable-hyde",), id="enable-hyde"),
     pytest.param(("--enable-rag-fusion",), id="enable-rag-fusion"),
     pytest.param(("--telemetry", "--telemetry-retention-days", "7"), id="telemetry-retention-days"),
+    pytest.param(("--telemetry-retention-days", "7"), id="telemetry-retention-days-alone"),
 ]
 
 # Keys the wizard owns on re-run that a user can hand-add to a no-flag install.
@@ -2471,6 +2631,102 @@ def test_rerun_does_not_flag_wizard_written_value_as_hand_edit_interactive(
     )
     assert "Installation aborted." not in rerun.output, rerun.output
     assert rerun.exit_code == 0, f"Exit {rerun.exit_code}:\nOUT: {rerun.output}"
+
+
+@pytest.mark.integration
+def test_interactive_telemetry_yes_with_retention_writes_retention_days(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Interactive `y` at the telemetry prompt + --telemetry-retention-days N writes
+    enabled = true and retention_days = N, with no retention warning (20_wizard.md
+    "Only the choices you actually made are written")."""
+    config_path = tmp_path / "archon-search.toml"
+
+    result = _run_minimal_wizard_interactive(
+        runner, config_path, "--telemetry-retention-days", str(_RETENTION_DAYS),
+        answers={_TELEMETRY_PROMPT: "y"},
+    )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    telemetry = _written(config_path).get("telemetry", {})
+    assert telemetry.get("enabled") is True, f"[telemetry] written: {telemetry!r}"
+    assert telemetry.get("retention_days") == _RETENTION_DAYS, f"[telemetry] written: {telemetry!r}"
+    _assert_no_retention_inert_warning(result)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("answer", [pytest.param("", id="enter"), pytest.param("n", id="n")])
+def test_interactive_telemetry_declined_with_retention_writes_retention_days_and_warns(
+    runner: CliRunner, tmp_path: Path, answer: str
+) -> None:
+    """Interactive Enter/`n` at the telemetry prompt + --telemetry-retention-days N writes
+    enabled = false and retention_days = N (20_wizard.md "Only the choices you actually
+    made are written"), and warns on stderr that the retention has no effect yet."""
+    config_path = tmp_path / "archon-search.toml"
+
+    result = _run_minimal_wizard_interactive(
+        runner, config_path, "--telemetry-retention-days", str(_RETENTION_DAYS),
+        answers={_TELEMETRY_PROMPT: answer},
+    )
+
+    assert result.exit_code == 0, f"Exit {result.exit_code}:\nOUT: {result.output}"
+    telemetry = _written(config_path).get("telemetry", {})
+    assert telemetry.get("enabled") is False, f"[telemetry] written: {telemetry!r}"
+    assert telemetry.get("retention_days") == _RETENTION_DAYS, f"[telemetry] written: {telemetry!r}"
+    _assert_retention_inert_warning(result)
+
+
+@pytest.mark.integration
+def test_interactive_rerun_telemetry_yes_replaces_retention_days(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Re-run over a `--telemetry --telemetry-retention-days 7` install, answering `y` at
+    the telemetry prompt with --telemetry-retention-days 30: the new answer replaces the
+    old value (20_wizard.md "Only the choices you actually made are written"), and the
+    wizard's own previous values do not trigger the overwrite confirm."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(
+        runner, config_path, "--no-multilingual", "--telemetry",
+        "--telemetry-retention-days", str(_PRIOR_RETENTION_DAYS),
+    )
+
+    rerun = _run_minimal_wizard_interactive(
+        runner, config_path, "--telemetry-retention-days", str(_RETENTION_DAYS),
+        answers={_TELEMETRY_PROMPT: "y"},
+    )
+
+    assert rerun.exit_code == 0, f"Exit {rerun.exit_code}:\nOUT: {rerun.output}"
+    telemetry = _written(config_path).get("telemetry", {})
+    assert telemetry.get("enabled") is True, f"[telemetry] written: {telemetry!r}"
+    assert telemetry.get("retention_days") == _RETENTION_DAYS, f"[telemetry] written: {telemetry!r}"
+    assert _OVERWRITE_PROMPT not in rerun.output, rerun.output
+    _assert_no_retention_inert_warning(rerun)
+
+
+@pytest.mark.integration
+def test_non_interactive_rerun_retention_only_writes_retention_days_and_warns(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Non-interactive re-run over a `--telemetry --telemetry-retention-days 7` install
+    with only --telemetry-retention-days 30: telemetry is unanswered, so `enabled` is
+    removed (documented re-run reset), but the retention answer is written (20_wizard.md
+    "Only the choices you actually made are written") with a stderr warning; the wizard's
+    own previous values are not reported as hand edits."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(
+        runner, config_path, "--no-multilingual", "--telemetry",
+        "--telemetry-retention-days", str(_PRIOR_RETENTION_DAYS),
+    )
+
+    rerun = _run_minimal_wizard(
+        runner, config_path, "--no-multilingual", "--telemetry-retention-days", str(_RETENTION_DAYS)
+    )
+
+    telemetry = _written(config_path).get("telemetry", {})
+    assert "enabled" not in telemetry, f"[telemetry] written: {telemetry!r}"
+    assert telemetry.get("retention_days") == _RETENTION_DAYS, f"[telemetry] written: {telemetry!r}"
+    _assert_retention_inert_warning(rerun)
+    assert _HAND_EDIT_WARNING not in rerun.output, rerun.output
 
 
 @pytest.mark.integration

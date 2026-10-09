@@ -344,13 +344,13 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
         doc["database"]["top_k_return"] = features.top_k
         doc["database"]["top_k_retrieve"] = max(15, 3 * features.top_k)
 
-    # Unanswered (None) and explicit-off (False) both drop retention_days: it only
-    # applies while telemetry is explicitly on.
-    telemetry_on = bool(features.enable_telemetry)
-    if features.telemetry_retention_days is not None and telemetry_on:
+    # An explicit retention_days is an answer and is always written; telemetry is never
+    # enabled implicitly. With no value, telemetry off/unanswered drops the key and
+    # telemetry on keeps an existing one.
+    if features.telemetry_retention_days is not None:
         _ensure_section("telemetry")
         doc["telemetry"]["retention_days"] = features.telemetry_retention_days
-    elif not telemetry_on:
+    elif not features.enable_telemetry:
         _remove_key("telemetry", "retention_days")
 
     # C15 Tier 2 AI query expansion flags (G10 BE-8: provider/model/base_url).
