@@ -80,7 +80,7 @@ Symptoms: `archon-search collection list` shows no growth in `chunks=`, `GET /st
 `archon-search wizard` (or `install`) polls `GET /health` for up to 60 seconds by default (longer when eager embedder loading is enabled — see the readiness-timeout note in the [Wizard guide Step 8](20_wizard.md)). On timeout it prints `Warning: Search service did not become ready within N seconds.` and exits 1. Causes:
 
 - Model weights still downloading on first run — check the log for download progress.
-- Port already in use — change `[server].port` (or set `ARCHON_SEARCH_PORT`). #Unverified
+- Port already in use — set `[server].port` (`archon-search config set server.port N`; a fresh wizard install does not write the key) or set `ARCHON_SEARCH_PORT`. #Unverified
 - Write failure on `db_path` or `log_file` parent — the installer's `mkdir(parents=True, exist_ok=True)` does not raise if a parent already exists under another user; the failure surfaces later when the server tries to write inside a directory it cannot access. Verify the running user can write to any custom location.
 
 ## Symptom: Linux install pulls `nvidia-*`/`cuda-*` packages on a CPU-only host

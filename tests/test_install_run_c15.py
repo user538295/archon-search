@@ -7,7 +7,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon_search.install import DryRunInstaller, RealInstaller, WizardFeatures, create_installer
+from archon_search.install import (
+    DryRunInstaller,
+    RealInstaller,
+    WizardFeatures,
+    _prompt_optional_features,
+    create_installer,
+)
 from archon_search.platform.types import GpuType
 
 pytestmark = pytest.mark.xdist_group("install")
@@ -137,26 +143,39 @@ def test_run_passes_log_level_to_features(tmp_path: Path) -> None:
     assert doc["logging"]["level"] == "DEBUG"
 
 
+# The real prompt runs (non-interactive → no input()) so these prove the run() flag
+# reaches the TOML through _prompt_optional_features, not via a mocked return value.
+_REAL_PROMPT_OPTIONAL_FEATURES = {
+    "archon_search.install.installer._prompt_optional_features": _prompt_optional_features,
+}
+
+
 def test_run_passes_enable_hyde_to_features(tmp_path: Path) -> None:
     """run(enable_hyde=True) → [hyde].enabled = true written to TOML."""
     import tomlkit
 
-    rc, config_path = _run_installer(tmp_path, {"enable_hyde": True})
+    rc, config_path = _run_installer(
+        tmp_path, {"enable_hyde": True}, extra_module_patches=_REAL_PROMPT_OPTIONAL_FEATURES
+    )
 
     assert rc == 0
     doc = tomlkit.parse(config_path.read_text())
     assert doc["hyde"]["enabled"] is True
+    assert "rag_fusion" not in doc, f"unanswered RAG Fusion was written: {doc.get('rag_fusion')!r}"
 
 
 def test_run_passes_enable_rag_fusion_to_features(tmp_path: Path) -> None:
     """run(enable_rag_fusion=True) → [rag_fusion].enabled = true written to TOML."""
     import tomlkit
 
-    rc, config_path = _run_installer(tmp_path, {"enable_rag_fusion": True})
+    rc, config_path = _run_installer(
+        tmp_path, {"enable_rag_fusion": True}, extra_module_patches=_REAL_PROMPT_OPTIONAL_FEATURES
+    )
 
     assert rc == 0
     doc = tomlkit.parse(config_path.read_text())
     assert doc["rag_fusion"]["enabled"] is True
+    assert "hyde" not in doc, f"unanswered HyDE was written: {doc.get('hyde')!r}"
 
 
 def test_run_mixed_provider_partial_failure_reverts_only_failed_section(tmp_path: Path) -> None:
@@ -202,7 +221,7 @@ def test_run_passes_telemetry_retention_days_to_features(tmp_path: Path) -> None
 
 
 def test_run_none_flags_do_not_write_toml(tmp_path: Path) -> None:
-    """run() without host/port flags → server.host stays at template default (127.0.0.1)."""
+    """run() without host/port flags → loopback host written, port left unanswered (omitted)."""
     import tomlkit
 
     rc, config_path = _run_installer(tmp_path, {})
@@ -210,12 +229,11 @@ def test_run_none_flags_do_not_write_toml(tmp_path: Path) -> None:
     assert rc == 0
     assert config_path.exists(), "Config file should be written on fresh install"
     doc = tomlkit.parse(config_path.read_text())
-    # Default TOML has [server] section but host should be the template default, not custom
+    # The loopback host is always written (security default for `serve`); the port was never answered
     assert doc.get("server", {}).get("host") == "127.0.0.1", (
-        "host should be template default '127.0.0.1' when --host not passed"
+        "host should be the loopback default '127.0.0.1' when --host not passed"
     )
-    # No custom port (template default is 8765)
-    assert doc.get("server", {}).get("port") == 8765
+    assert "port" not in doc.get("server", {})
 
 
 # ---------------------------------------------------------------------------

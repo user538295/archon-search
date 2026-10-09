@@ -810,14 +810,12 @@ def _prompt_optional_features(
     _graph_ollama_base_url_val = ""
     _graph_llama_cpp_base_url_val = ""
 
-    if enable_hyde is not None or enable_rag_fusion is not None:
-        # One or both flags pre-answered — use them directly; no provider prompts.
-        _enable_hyde_val = enable_hyde if enable_hyde is not None else False
-        _enable_rag_fusion_val = enable_rag_fusion if enable_rag_fusion is not None else False
-    elif non_interactive:
-        _enable_hyde_val = False
-        _enable_rag_fusion_val = False
-    else:
+    # A pre-answered flag answers only its own feature; the other stays None (never
+    # answered), as do both when nobody can be asked — the config writer then leaves
+    # the key out and drops a stale one. Provider prompts run only when truly interactive.
+    _enable_hyde_val: bool | None = enable_hyde
+    _enable_rag_fusion_val: bool | None = enable_rag_fusion
+    if enable_hyde is None and enable_rag_fusion is None and not non_interactive:
         print(
             "\nAI query expansion (HyDE + RAG Fusion):\n"
             "  HyDE generates hypothetical answers to improve embedding recall.\n"

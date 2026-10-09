@@ -20,6 +20,7 @@ import logging
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -28,7 +29,9 @@ import pytest
 import tomlkit
 from click.testing import CliRunner, Result
 
+from archon_search.cli.config_cmd import _effective_toml
 from archon_search.cli.main import main
+from archon_search.config import load_config
 from archon_search.install import InstallError, RealInstaller
 from archon_search.install.extras import CODE_EXTRA_SIZE_ESTIMATE, GRAPH_MODEL_SIZE_ESTIMATE
 from archon_search.install.licenses import (
@@ -221,8 +224,8 @@ def test_e2e_defaults_produce_clean_config(runner: CliRunner, tmp_path: Path) ->
     doc = tomlkit.parse(config_path.read_text())
 
     # S561: never-answered keys are NOT written — 20_wizard.md §"Only the choices you actually made are written".
-    # _default_toml() seeds eager_load_embedders, routing_strategy, watch and logging.format on a
-    # fresh install; only the never-answered (None) path removes them again.
+    # A fresh install starts from `_fresh_config_doc()` (only the loopback [server].host), so
+    # these never-answered (None) keys must stay absent rather than be seeded with defaults.
     assert "enabled" not in doc.get("telemetry", {}), "telemetry.enabled should be omitted (default)"
     assert "routing_strategy" not in doc.get("routing", {}), "routing_strategy should be omitted (default centroid)"
     assert "watch" not in doc.get("collections", {}), "watch should be omitted (default false)"
@@ -753,9 +756,9 @@ def test_wizard_declinesCode_doesNotWriteGraphEnabled(runner: CliRunner, tmp_pat
 
     Negative case for the C1-I-1 fix: declining code indexing must not
     auto-enable graph, since ``install_graph_extra`` mirrors
-    ``install_code_extra`` and defaults to False. ``_default_toml()`` (the
-    base template) has no ``[graph]`` section at all, so the written config
-    should have no ``[graph]`` section either.
+    ``install_code_extra`` and defaults to False. The fresh-install base
+    (``_fresh_config_doc()``) has no ``[graph]`` section at all, so the written
+    config should have no ``[graph]`` section either.
     """
     config_path = tmp_path / "archon-search.toml"
 
@@ -1709,6 +1712,23 @@ def test_e2e_rerun_with_hand_edited_config(runner: CliRunner, tmp_path: Path) ->
 # ---------------------------------------------------------------------------
 
 
+# The [database] keys the chosen profile answers (installer Step 8, config_writer.py).
+_PROFILE_DATABASE_KEYS = {
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "reranker_model": "Xenova/ms-marco-MiniLM-L-6-v2",
+    "chunk_size": 512,
+    "profile": "minimal",
+    "multilingual": False,
+}
+# Fresh installs keep the loopback bind: without it `serve` (load_config(serve=True),
+# config.py:481) would default to 0.0.0.0 — the one documented non-answer that is written.
+_FRESH_SERVER = {"host": "127.0.0.1"}
+
+
+def _written(config_path: Path) -> dict[str, Any]:
+    return tomlkit.parse(config_path.read_text()).unwrap()
+
+
 def _wizard_args(config_path: Path, *extra: str) -> list[str]:
     """Build a non-interactive wizard invocation with skip-preload."""
     return [
@@ -1723,13 +1743,17 @@ def _wizard_args(config_path: Path, *extra: str) -> list[str]:
 
 @pytest.mark.integration
 def test_wizard_host_writes_toml(runner: CliRunner, tmp_path: Path) -> None:
-    """--host 0.0.0.0 writes [server].host = '0.0.0.0' to TOML."""
+    """--host 0.0.0.0 writes [server].host = '0.0.0.0' to TOML — and, as a fresh install,
+    nothing else beyond the profile's [database] keys (no leaked defaults; the GPU stub
+    detects no GPU, so no providers are written)."""
     config_path = tmp_path / "archon-search.toml"
     with _patched_wizard():
         result = runner.invoke(main, _wizard_args(config_path, "--host", "0.0.0.0"))
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
-    doc = tomlkit.parse(config_path.read_text())
-    assert doc["server"]["host"] == "0.0.0.0"
+    assert _written(config_path) == {
+        "server": {"host": "0.0.0.0"},
+        "database": _PROFILE_DATABASE_KEYS,
+    }
 
 
 @pytest.mark.integration
@@ -1986,15 +2010,19 @@ def test_wizard_enable_rag_fusion_works_without_anthropic_key(runner: CliRunner,
 
 @pytest.mark.integration
 def test_wizard_non_interactive_skips_hyde_prompt_even_with_key(runner: CliRunner, tmp_path: Path) -> None:
-    """--non-interactive with ANTHROPIC_API_KEY set: [hyde] and [rag_fusion] written with enabled=false."""
+    """--non-interactive with ANTHROPIC_API_KEY set: no prompt, so HyDE/RAG Fusion stay unanswered —
+    neither table is written and both resolve to the disabled default."""
     config_path = tmp_path / "archon-search.toml"
     with _patched_wizard():
         with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
             result = runner.invoke(main, _wizard_args(config_path))
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
     doc = tomlkit.parse(config_path.read_text())
-    assert doc["hyde"]["enabled"] is False
-    assert doc["rag_fusion"]["enabled"] is False
+    assert "hyde" not in doc
+    assert "rag_fusion" not in doc
+    cfg = load_config(config_path)
+    assert cfg.hyde.enabled is False
+    assert cfg.rag_fusion.enabled is False
 
 
 @pytest.mark.integration
@@ -2982,6 +3010,7 @@ def test_e2e_two_fasttext_failure_categories_render_differently(
 # wizard.py:962 — the accelerator offer's one wording, so it can be pinned.
 _ACCELERATOR_OFFER = "Graph extraction validated on"
 _CUDA_PROVIDER = "CUDAExecutionProvider"
+_COREML_PROVIDER = "CoreMLExecutionProvider"
 
 # Captured before any test replaces it: `_patched_wizard` mocks `configure_providers`
 # out, and every leg below asserts on the [graph].providers it really writes.
@@ -3151,3 +3180,224 @@ def test_e2e_declining_the_offer_is_what_the_operator_typed(
     assert _ACCELERATOR_OFFER in result.output, f"the offer never appeared: {result.output}"
     written = list(tomlkit.parse(config_path.read_text())["graph"]["providers"])
     assert written == [], f"declining still wrote the accelerator: {written!r}"
+
+
+# ---------------------------------------------------------------------------
+# Fresh install writes only the operator's answers (20_wizard.md:716-784)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("extra", "detected_gpu", "coreml_probe", "gpu_keys"),
+    [
+        pytest.param((), GpuType.NONE, (False, False), {}, id="gpu-detected-none"),
+        pytest.param(("--disable-gpu",), GpuType.NONE, (False, False), {"providers": []}, id="disable-gpu"),
+        pytest.param((), GpuType.CUDA, (False, False), {"providers": [_CUDA_PROVIDER]}, id="gpu-detected-cuda"),
+        pytest.param(
+            (), GpuType.METAL, (True, False), {"providers": [_COREML_PROVIDER]}, id="gpu-detected-metal"
+        ),
+        pytest.param(
+            (),
+            GpuType.METAL,
+            (False, True),
+            {"providers": [_COREML_PROVIDER], "reranker_providers": []},
+            id="gpu-detected-metal-reranker-on-cpu",
+        ),
+    ],
+)
+def test_fresh_install_writes_only_answered_keys(
+    runner: CliRunner,
+    tmp_path: Path,
+    extra: tuple[str, ...],
+    detected_gpu: GpuType,
+    coreml_probe: tuple[bool, bool],
+    gpu_keys: dict[str, Any],
+) -> None:
+    """A fresh `--non-interactive --profile minimal` run with no optional flags writes the
+    profile's [database] answers, the GPU step's providers and the loopback host — and
+    nothing else: no never-answered [server].port, [database].db_path, [routing],
+    [collections], [logging], [telemetry], [hyde] or [rag_fusion] (20_wizard.md:784).
+    The real `configure_providers`/`configure_reranker_providers`/`clear_reranker_providers`
+    run, so a detected GPU's providers are what the GPU step actually writes. Only the
+    model-loading CoreML probes (`coreml_probe` = validate_providers, validate_embedder_only
+    results) and the CUDA torch swap are stubbed, so nothing loads a model or pip-installs."""
+    config_path = tmp_path / "archon-search.toml"
+    full_coreml_ok, embedder_only_coreml_ok = coreml_probe
+
+    with _patched_wizard(_install_cuda_torch=MagicMock()):
+        with patch.multiple(
+            RealInstaller,
+            detect_gpu=MagicMock(return_value=detected_gpu),
+            configure_providers=_REAL_CONFIGURE_PROVIDERS,
+            validate_providers=MagicMock(return_value=full_coreml_ok),
+            validate_embedder_only=MagicMock(return_value=embedder_only_coreml_ok),
+        ):
+            result = runner.invoke(main, _wizard_args(config_path, *extra))
+    assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"
+
+    assert _written(config_path) == {
+        "server": _FRESH_SERVER,
+        "database": {**_PROFILE_DATABASE_KEYS, **gpu_keys},
+    }
+
+
+@pytest.mark.integration
+def test_fresh_non_interactive_install_writes_no_query_expansion_tables(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """With neither --enable-hyde nor --enable-rag-fusion the AI-query-expansion question is
+    never answered, so neither [hyde] nor [rag_fusion] may appear (not even enabled = false)."""
+    config_path = tmp_path / "archon-search.toml"
+
+    _run_minimal_wizard(runner, config_path)
+
+    doc = _written(config_path)
+    assert "hyde" not in doc, f"unanswered HyDE was written: {doc.get('hyde')!r}"
+    assert "rag_fusion" not in doc, f"unanswered RAG Fusion was written: {doc.get('rag_fusion')!r}"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("flag", "answered", "unanswered"),
+    [
+        pytest.param("--enable-hyde", "hyde", "rag_fusion", id="hyde-only"),
+        pytest.param("--enable-rag-fusion", "rag_fusion", "hyde", id="rag-fusion-only"),
+    ],
+)
+def test_single_query_expansion_flag_writes_only_its_own_table(
+    runner: CliRunner, tmp_path: Path, flag: str, answered: str, unanswered: str
+) -> None:
+    """Passing one of the two flags answers only that feature: it is written enabled = true,
+    and the other — never answered — is not written as enabled = false."""
+    config_path = tmp_path / "archon-search.toml"
+
+    _run_minimal_wizard(runner, config_path, flag)
+
+    doc = _written(config_path)
+    assert doc[answered] == {"enabled": True}
+    assert unanswered not in doc, f"[{unanswered}] written without {flag}'s twin: {doc[unanswered]!r}"
+
+
+@pytest.mark.integration
+def test_rerun_without_query_expansion_flag_removes_previous_hyde_enabled(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """A non-interactive re-run that leaves the AI-query-expansion question unanswered removes
+    the [hyde].enabled an earlier `--enable-hyde` run wrote — like the five tri-state keys —
+    rather than rewriting it as false."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--enable-hyde")
+    assert _written(config_path)["hyde"]["enabled"] is True
+
+    _run_minimal_wizard(runner, config_path)
+
+    hyde = _written(config_path).get("hyde", {})
+    assert "enabled" not in hyde, f"unanswered re-run kept/rewrote [hyde].enabled: {hyde!r}"
+
+
+@pytest.mark.integration
+def test_rerun_without_query_expansion_flag_keeps_previous_hyde_provider_block(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """The unanswered re-run removes only [hyde].enabled: a provider block the file already
+    holds (provider/model/ollama_base_url) survives in its table, and the config still loads
+    with HyDE disabled."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--enable-hyde")
+    doc = tomlkit.parse(config_path.read_text())
+    doc["hyde"]["provider"] = "ollama"
+    doc["hyde"]["model"] = "llama3"
+    doc["hyde"]["ollama_base_url"] = "http://ollama.internal:11434"
+    config_path.write_text(tomlkit.dumps(doc))
+
+    _run_minimal_wizard(runner, config_path)
+
+    assert _written(config_path)["hyde"] == {
+        "provider": "ollama",
+        "model": "llama3",
+        "ollama_base_url": "http://ollama.internal:11434",
+    }
+    assert load_config(config_path).hyde.enabled is False
+
+
+@pytest.mark.integration
+def test_interactive_no_to_query_expansion_writes_both_disabled(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Answering 'n' at "Enable AI query expansion (HyDE + RAG Fusion)?" is an answer for
+    both features, so both are written enabled = false."""
+    _run_documented_flow(runner, tmp_path)
+
+    doc = _written(tmp_path / "archon-search.toml")
+    assert doc["hyde"] == {"enabled": False}
+    assert doc["rag_fusion"] == {"enabled": False}
+
+
+@pytest.mark.integration
+def test_fresh_non_interactive_install_writes_no_telemetry_table(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Telemetry never answered → no [telemetry] table at all, not even an empty header."""
+    config_path = tmp_path / "archon-search.toml"
+
+    _run_minimal_wizard(runner, config_path)
+
+    assert "[telemetry]" not in config_path.read_text()
+    assert "telemetry" not in _written(config_path)
+
+
+@pytest.mark.integration
+def test_rerun_keeps_hand_written_key_the_run_did_not_answer(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """A re-run only rewrites what it answers: a hand-written `[server] port = 9000` and
+    non-loopback `host = "0.0.0.0"` survive a non-interactive re-run that never asks about
+    them — the fresh-install loopback host is not re-imposed without `--host`."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path)
+    doc = tomlkit.parse(config_path.read_text())
+    server = doc.setdefault("server", tomlkit.table())
+    server["port"] = 9000
+    server["host"] = "0.0.0.0"
+    config_path.write_text(tomlkit.dumps(doc))
+
+    _run_minimal_wizard(runner, config_path)
+
+    assert _written(config_path)["server"] == {"host": "0.0.0.0", "port": 9000}
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("serve", [False, True], ids=["cli", "serve"])
+@pytest.mark.parametrize("data_dir_set", [True, False], ids=["data-dir-set", "data-dir-unset"])
+def test_fresh_config_resolves_like_its_fully_defaulted_twin(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    serve: bool,
+    data_dir_set: bool,
+) -> None:
+    """Every key the wizard leaves out resolves exactly as if `_default_toml()` had written
+    it: loading the wizard's file and the same file with all missing default keys filled
+    in (what `config show` prints) yields identical SearchConfig values. This proves
+    load-equivalence only, not that those values are the documented ones; the documented
+    defaults of the omitted optional-feature keys are pinned by
+    `tests/test_install_config_writer.py::test_omitted_wizard_keys_fall_back_to_documented_search_config_defaults`."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path)
+    for env_var in ("ARCHON_SEARCH_HOST", "ARCHON_SEARCH_PORT"):
+        monkeypatch.delenv(env_var, raising=False)
+    data_dir = tmp_path / "data"
+    if data_dir_set:
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+    else:
+        monkeypatch.delenv("ARCHON_SEARCH_DATA_DIR", raising=False)
+    filled_path = tmp_path / "filled.toml"
+    filled_path.write_text(_effective_toml(config_path))
+
+    written = asdict(load_config(config_path, serve=serve))
+    filled = asdict(load_config(filled_path, serve=serve))
+
+    assert written == filled
+    assert written["host"] == "127.0.0.1"
+    assert written["db_path"].startswith(str(data_dir)) is data_dir_set

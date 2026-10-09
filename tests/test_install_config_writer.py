@@ -132,7 +132,7 @@ class TestProfileToml:
 
         toml_str = _profile_toml("minimal", False)
         doc = tomlkit.parse(toml_str)
-        assert {"server", "database", "routing", "collections", "logging"} <= set(doc.keys())
+        assert set(doc.keys()) == {"server", "database"}
 
         config_path = tmp_path / "archon-search.toml"
         config_path.write_text(toml_str)
@@ -148,7 +148,7 @@ class TestProfileToml:
 
         toml_str = _profile_toml("max", True)
         doc = tomlkit.parse(toml_str)
-        assert {"server", "database", "routing", "collections", "logging"} <= set(doc.keys())
+        assert set(doc.keys()) == {"server", "database"}
 
         config_path = tmp_path / "archon-search.toml"
         config_path.write_text(toml_str)
@@ -219,27 +219,14 @@ class TestApplyWizardFeaturesToToml:
     def _empty_doc(self) -> tomlkit.TOMLDocument:
         return tomlkit.document()
 
-    def test_apply_defaults_creates_mandatory_sections_but_omits_unanswered_keys(self) -> None:
-        """WizardFeatures() creates mandatory sections but omits never-answered keys (S561)."""
+    def test_apply_defaults_writes_nothing_unanswered(self) -> None:
+        """WizardFeatures() writes no key and no section (S561, 20_wizard.md §"Only the
+        choices you actually made are written")."""
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = self._empty_doc()
         _apply_wizard_features_to_toml(doc, WizardFeatures())
-        # hyde/rag_fusion always write their enabled key (no None sentinel)
-        assert doc["hyde"]["enabled"] is False
-        assert doc["rag_fusion"]["enabled"] is False
-        # never-answered (None) keys are NOT written (20_wizard.md §"Only the choices you actually made are written")
-        assert "eager_load_embedders" not in doc.get("database", {})
-        assert "watch" not in doc.get("collections", {})
-        assert "enabled" not in doc.get("telemetry", {})
-        assert "routing_strategy" not in doc.get("routing", {})
-        assert "format" not in doc.get("logging", {})
-        # sections ARE created so config_show can find them
-        assert "database" in doc
-        assert "collections" in doc
-        assert "telemetry" in doc
-        assert "routing" in doc
-        assert "logging" in doc
+        assert doc.unwrap() == {}
 
     def test_apply_disable_reranker(self) -> None:
         """disable_reranker=True writes doc['database']['reranker_model'] = ''."""
@@ -432,8 +419,7 @@ class TestApplyWizardFeaturesToToml:
         _apply_wizard_features_to_toml(
             doc, WizardFeatures(enable_telemetry=None, telemetry_retention_days=7)
         )
-        assert "telemetry" in doc
-        assert "retention_days" not in doc["telemetry"]
+        assert "telemetry" not in doc
 
     def test_apply_telemetry_retention_with_telemetry_explicitly_disabled_skipped(self) -> None:
         """S556: enable_telemetry=False (--no-telemetry) writes enabled=false but no retention_days."""
@@ -458,13 +444,12 @@ class TestApplyWizardFeaturesToToml:
 
     def test_rerun_telemetry_unanswered_removes_prior_enabled_and_retention_days(self) -> None:
         """A prior `enabled = true, retention_days = 7` re-run that leaves telemetry
-        unanswered removes both keys."""
+        unanswered removes both keys — and the table they leave empty."""
         from archon_search.install import _apply_wizard_features_to_toml
 
         doc = tomlkit.parse("[telemetry]\nenabled = true\nretention_days = 7\n")
         _apply_wizard_features_to_toml(doc, WizardFeatures())
-        assert "enabled" not in doc["telemetry"]
-        assert "retention_days" not in doc["telemetry"]
+        assert "telemetry" not in doc
 
     def test_rerun_telemetry_enabled_without_retention_keeps_prior_retention_days(self) -> None:
         """A prior `enabled = true, retention_days = 7` re-run with `--telemetry` but no
@@ -894,7 +879,8 @@ class TestProfileTomlWithFeatures:
 
         toml_str = _profile_toml("minimal", False)
         doc = tomlkit.parse(toml_str)
-        assert {"server", "database", "routing", "collections", "logging"} <= set(doc.keys())
+        assert set(doc.keys()) == {"server", "database"}
+        assert doc["server"]["host"] == "127.0.0.1"
 
         config_path = tmp_path / "archon-search.toml"
         config_path.write_text(toml_str)
@@ -1044,3 +1030,123 @@ def test_omitted_wizard_keys_fall_back_to_documented_search_config_defaults() ->
     assert cfg.telemetry.enabled is False
     assert cfg.routing_strategy == "centroid"
     assert cfg.log_format == "text"
+
+
+# ---------------------------------------------------------------------------
+# Only answered keys are written (20_wizard.md:784)
+# ---------------------------------------------------------------------------
+
+
+class TestOnlyAnsweredKeysWritten:
+    def test_profile_toml_without_answers_holds_only_profile_keys_and_loopback_host(self) -> None:
+        """Bug 1: the fresh-install TOML is the profile's [database] answers plus the
+        loopback [server].host — not the whole `_default_toml()` (port, db_path, routing,
+        collections, logging) the operator never answered."""
+        from archon_search.install import _profile_toml
+
+        doc = tomlkit.parse(_profile_toml("minimal", False, WizardFeatures())).unwrap()
+
+        assert doc == {
+            "server": {"host": "127.0.0.1"},
+            "database": {
+                "embedding_model": "BAAI/bge-small-en-v1.5",
+                "reranker_model": "Xenova/ms-marco-MiniLM-L-6-v2",
+                "chunk_size": 512,
+                "profile": "minimal",
+                "multilingual": False,
+            },
+        }
+
+    @pytest.mark.parametrize(
+        ("profile_name", "multilingual"),
+        [("max", True), ("balanced", True), ("max", False)],
+    )
+    def test_profile_toml_without_answers_holds_exactly_the_profile_keys(
+        self, profile_name: str, multilingual: bool
+    ) -> None:
+        """Every profile — multilingual ones included — writes exactly the loopback host
+        plus that profile's own [database] values, nothing more."""
+        from archon_search.install import _profile_toml
+        from archon_search.profiles import get_profile
+
+        profile = get_profile(profile_name, multilingual)
+
+        doc = tomlkit.parse(_profile_toml(profile_name, multilingual, WizardFeatures())).unwrap()
+
+        assert doc == {
+            "server": {"host": "127.0.0.1"},
+            "database": {
+                "embedding_model": profile.embedder,
+                "reranker_model": profile.reranker if profile.reranker is not None else "",
+                "chunk_size": profile.chunk_size,
+                "profile": profile_name,
+                "multilingual": multilingual,
+            },
+        }
+
+    def test_unanswered_query_expansion_writes_no_tables(self) -> None:
+        """Bug 2: a WizardFeatures with HyDE/RAG Fusion never answered writes neither table."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.document()
+        _apply_wizard_features_to_toml(doc, WizardFeatures())
+
+        assert "hyde" not in doc
+        assert "rag_fusion" not in doc
+
+    def test_rerun_unanswered_query_expansion_removes_previous_enabled_keys(self) -> None:
+        """Bug 2 re-run: unanswered removes a prior `enabled`, mirroring `_OPTIONAL_KEYS`."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.parse("[hyde]\nenabled = true\n\n[rag_fusion]\nenabled = true\n")
+        _apply_wizard_features_to_toml(doc, WizardFeatures())
+
+        assert "enabled" not in doc.get("hyde", {})
+        assert "enabled" not in doc.get("rag_fusion", {})
+
+    def test_rerun_unanswered_hyde_keeps_the_table_holding_its_provider_block(self) -> None:
+        """Removing only `enabled` keeps a table that still has keys: the provider, model
+        and Ollama URL a prior run wrote survive the unanswered re-run."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.parse(
+            '[hyde]\nenabled = true\nprovider = "ollama"\nmodel = "m"\n'
+            'ollama_base_url = "http://ollama.internal:11434"\n'
+        )
+        _apply_wizard_features_to_toml(doc, WizardFeatures())
+
+        assert doc.unwrap() == {
+            "hyde": {"provider": "ollama", "model": "m", "ollama_base_url": "http://ollama.internal:11434"}
+        }
+
+    def test_unanswered_features_leave_no_empty_tables(self) -> None:
+        """Bug 3: nothing answered → no table is created just to hold no keys
+        (e.g. an empty `[telemetry]` header)."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.document()
+        _apply_wizard_features_to_toml(doc, WizardFeatures())
+
+        # The production emptiness rule (config_writer `_remove_key`): rendered text, not a key count.
+        empty_tables = [name for name, table in doc.items() if not table.as_string().strip()]
+        assert empty_tables == []
+
+    def test_rerun_removing_the_last_key_drops_the_emptied_table(self) -> None:
+        """Bug 3 re-run: removing a prior run's only key from a table leaves no bare
+        header behind (e.g. `[collections]` after an unanswered watcher question)."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.parse("[collections]\nwatch = true\n\n[hyde]\nenabled = true\n")
+        _apply_wizard_features_to_toml(doc, WizardFeatures())
+
+        assert tomlkit.dumps(doc).strip() == ""
+
+    def test_rerun_keeps_an_emptied_table_that_holds_a_user_comment(self) -> None:
+        """A table the operator annotated keeps its comment when the wizard removes its last key."""
+        from archon_search.install import _apply_wizard_features_to_toml
+
+        doc = tomlkit.parse("[collections]\n# my watcher notes\nwatch = true\n")
+        _apply_wizard_features_to_toml(doc, WizardFeatures())
+
+        assert "# my watcher notes" in tomlkit.dumps(doc)
+        assert "watch" not in doc["collections"]

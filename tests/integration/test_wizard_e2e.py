@@ -213,11 +213,10 @@ def test_wizard_non_interactive_hyde_accepted_writes_toml(
 def test_wizard_non_interactive_hyde_declined_omits_toml_key(
     tmp_path: Path,
 ) -> None:
-    """wizard --non-interactive without --enable-hyde writes [hyde] enabled=false.
+    """wizard --non-interactive without --enable-hyde leaves HyDE/RAG Fusion unanswered.
 
-    Verifies that HyDE is disabled by default and the wizard writes
-    enabled=false to [hyde] so a re-run that disables a previously enabled
-    feature always wins over whatever was written before.
+    Neither [hyde] nor [rag_fusion] is written (20_wizard.md: only the choices
+    you actually made are written), so both resolve to the disabled default.
     """
     result = _run_wizard(
         tmp_path,
@@ -235,12 +234,16 @@ def test_wizard_non_interactive_hyde_declined_omits_toml_key(
 
     import tomlkit
     doc = tomlkit.parse(config_path.read_text())
-    assert doc["hyde"]["enabled"] is False, (
-        f"Expected [hyde].enabled=false (wizard 'no' path), "
+    assert "hyde" not in doc, (
+        f"Expected no [hyde] table (never answered), "
         f"but found: {dict(doc.get('hyde', {}))}\n"
         f"TOML contents:\n{config_path.read_text()}"
     )
-    assert doc["rag_fusion"]["enabled"] is False
+    assert "rag_fusion" not in doc
+    from archon_search.config import load_config
+    cfg = load_config(config_path)
+    assert cfg.hyde.enabled is False
+    assert cfg.rag_fusion.enabled is False
 
 
 # ---------------------------------------------------------------------------

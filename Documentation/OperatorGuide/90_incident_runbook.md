@@ -203,7 +203,7 @@ curl -i -X POST http://127.0.0.1:8765/keys/rotate \
 
 - **macOS**: `launchctl load ~/Library/LaunchAgents/com.archon.search.plist`, then read `~/.archon-search/logs/archon-search.log`.
 - **Linux**: `systemctl --user status archon-search`, then `journalctl --user -u archon-search -e`.
-- **Port already in use**: `lsof -i :8765`; stop the conflicting process or change `[server].port` (there is no `--port` run flag — use the config key or `ARCHON_SEARCH_PORT`).
+- **Port already in use**: `lsof -i :8765`; stop the conflicting process or set `[server].port` with `archon-search config set server.port N` (a fresh wizard install does not write the key; there is no `--port` run flag — use the config key or `ARCHON_SEARCH_PORT`).
 
 ## Escalation
 

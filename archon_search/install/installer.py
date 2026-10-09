@@ -627,6 +627,7 @@ class BaseInstaller(ABC):
                 eager_load=eager_load,
                 routing_strategy=routing_strategy,
                 log_format=log_format,
+                # --enable-hyde/--enable-rag-fusion are presence-only (no --no-enable-*): absent → None = never answered.
                 enable_hyde=enable_hyde if enable_hyde else None,
                 enable_rag_fusion=enable_rag_fusion if enable_rag_fusion else None,
                 hyde_ollama_base_url_default=self.cfg.hyde.ollama_base_url,
@@ -650,10 +651,6 @@ class BaseInstaller(ABC):
                 features.top_k = top_k
             if telemetry_retention_days is not None:
                 features.telemetry_retention_days = telemetry_retention_days
-            if enable_hyde:
-                features.enable_hyde = enable_hyde
-            if enable_rag_fusion:
-                features.enable_rag_fusion = enable_rag_fusion
 
             # A multilingual profile needs the [multilingual] extra (fasttext-wheel)
             # or the server hard-fails at startup. Derived from the resolved profile

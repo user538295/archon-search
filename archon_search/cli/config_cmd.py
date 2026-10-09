@@ -10,7 +10,7 @@ from archon_search.config import SearchConfig, get_default_config_path
 
 
 def _default_toml() -> str:
-    """Return a complete default TOML string with all SearchConfig defaults."""
+    """Return the ``SearchConfig`` defaults that ``config show``/``get`` fill in for keys a file omits."""
     cfg = SearchConfig()
     doc = tomlkit.document()
 
@@ -46,6 +46,11 @@ def _default_toml() -> str:
     logging_table.add("format", cfg.log_format)
     logging_table.add("backup_count", cfg.backup_count)
     doc.add("logging", logging_table)
+
+    for section, feature in (("telemetry", cfg.telemetry), ("hyde", cfg.hyde), ("rag_fusion", cfg.rag_fusion)):
+        feature_table = tomlkit.table()
+        feature_table.add("enabled", feature.enabled)
+        doc.add(section, feature_table)
 
     return tomlkit.dumps(doc)
 

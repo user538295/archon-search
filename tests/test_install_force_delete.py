@@ -8,7 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 import tomlkit
 
-from archon_search.install import _execute_force_reinstall
+from archon_search.config import load_config
+from archon_search.install import WizardFeatures, _execute_force_reinstall
 from archon_search.profiles import get_profile
 
 
@@ -479,3 +480,99 @@ def test_force_reinstall_clears_collection_registrations(tmp_path):
     doc = tomlkit.parse(config_path.read_text())
     assert list(doc["collections"]["collections"]) == []
     assert list(doc["collections"]["pinned_collections"]) == []
+
+
+def test_force_reinstall_adds_no_collections_table_to_a_config_without_one(tmp_path):
+    """Clearing stale registrations must not write keys the operator never had:
+    a config without ``[collections]`` gets no ``[collections]`` table with empty
+    arrays (20_wizard.md: only the choices you actually made are written)."""
+    config_path = _make_config(tmp_path, content="[database]\ndb_path = \"/some/path\"\n")
+    db_path = _make_db(tmp_path)
+    profile, profile_name = _profile_and_name()
+
+    with (
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.shutil.rmtree"),
+    ):
+        mock_svc.return_value.stop.return_value = None
+        _execute_force_reinstall(
+            config_path=config_path,
+            db_path=db_path,
+            profile=profile,
+            profile_name=profile_name,
+            multilingual=False,
+            non_interactive=True,
+            features=WizardFeatures(),
+        )
+
+    doc = tomlkit.parse(config_path.read_text())
+    assert "collections" not in doc
+
+
+@pytest.mark.parametrize(
+    ("features", "expected_collections"),
+    [
+        pytest.param(WizardFeatures(), {"pinned_collections": []}, id="watch-unanswered-removed"),
+        pytest.param(
+            WizardFeatures(enable_watch=True),
+            {"pinned_collections": [], "watch": True},
+            id="watch-answered-kept",
+        ),
+    ],
+)
+def test_force_reinstall_clears_only_the_registration_keys_present(tmp_path, features, expected_collections):
+    """A ``[collections]`` table holding only ``pinned_collections`` (plus ``watch``)
+    has that list emptied, but gains no ``collections`` key it never had. The clear
+    step leaves ``watch`` alone; ``watch`` follows the normal re-run rule (removed
+    when the run leaves the watcher question unanswered, kept when answered).
+    Production passes ``features`` (installer.py ``_execute_force_reinstall`` call)."""
+    config_path = _make_config(
+        tmp_path,
+        content="[collections]\npinned_collections = [\"docs\"]\nwatch = true\n",
+    )
+    db_path = _make_db(tmp_path)
+    profile, profile_name = _profile_and_name()
+
+    with (
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.shutil.rmtree"),
+    ):
+        mock_svc.return_value.stop.return_value = None
+        _execute_force_reinstall(
+            config_path=config_path,
+            db_path=db_path,
+            profile=profile,
+            profile_name=profile_name,
+            multilingual=False,
+            non_interactive=True,
+            features=features,
+        )
+
+    collections = tomlkit.parse(config_path.read_text())["collections"].unwrap()
+    assert collections == expected_collections
+
+
+def test_force_reinstall_without_a_config_writes_the_fresh_install_loopback_host(tmp_path):
+    """``--force --delete-db`` with no existing config is a fresh install: it must write
+    the same loopback ``[server].host`` a normal fresh install writes, or
+    ``archon-search serve`` (host default 0.0.0.0) would expose the server on every
+    interface."""
+    config_path = tmp_path / "archon-search.toml"  # does not exist
+    db_path = _make_db(tmp_path)
+    profile, profile_name = _profile_and_name()
+
+    with (
+        patch("archon_search.install.prewarm.get_search_service") as mock_svc,
+        patch("archon_search.install.shutil.rmtree"),
+    ):
+        mock_svc.return_value.stop.return_value = None
+        _execute_force_reinstall(
+            config_path=config_path,
+            db_path=db_path,
+            profile=profile,
+            profile_name=profile_name,
+            multilingual=False,
+            non_interactive=True,
+        )
+
+    assert load_config(config_path, serve=True).host == "127.0.0.1"

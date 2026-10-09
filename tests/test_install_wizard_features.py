@@ -30,6 +30,7 @@ from archon_search.install import (
     _prompt_optional_features,
     _prompt_provider,
 )
+from archon_search.install.config_writer import _fresh_config_doc
 from archon_search.install.extras import (
     CODE_EXTRA_SIZE_ESTIMATE,
     GRAPH_MODEL_SIZE_ESTIMATE,
@@ -467,7 +468,7 @@ class TestPromptOptionalFeatures:
                 non_interactive=False,
                 profile=self._profile_with_reranker,
             )
-        # The five optional keys come back as the concrete prompt defaults (not the None
+        # The optional keys come back as the concrete prompt defaults (not the None
         # sentinel): this is the interactive path, where _ask_yn/_ask_choice always yield a value.
         assert features == WizardFeatures(
             enable_watch=False,
@@ -475,6 +476,8 @@ class TestPromptOptionalFeatures:
             eager_load_embedders=False,
             routing_strategy="centroid",
             log_format="text",
+            enable_hyde=False,
+            enable_rag_fusion=False,
         )
 
     def test_invalid_log_format_retries(self) -> None:
@@ -922,7 +925,7 @@ class TestWizardFeaturesC15NewFields:
     """Tests for C15 Task 1.1 — 9 new WizardFeatures fields."""
 
     def test_wizard_features_new_fields_default_to_none_or_false(self) -> None:
-        """All new C15 fields have correct defaults (None or False)."""
+        """All new C15 fields default to None (never answered)."""
         f = WizardFeatures()
         assert f.host is None
         assert f.port is None
@@ -930,8 +933,8 @@ class TestWizardFeaturesC15NewFields:
         assert f.log_level is None
         assert f.top_k is None
         assert f.telemetry_retention_days is None
-        assert f.enable_hyde is False
-        assert f.enable_rag_fusion is False
+        assert f.enable_hyde is None
+        assert f.enable_rag_fusion is None
 
     def test_wizard_features_new_fields_accept_values(self) -> None:
         """All new C15 fields accept non-default values."""
@@ -1041,15 +1044,15 @@ class TestPromptOptionalFeaturesHydeRagFusion:
         assert features.enable_rag_fusion is False
 
     def test_hyde_rag_fusion_skipped_non_interactive_even_with_key(self) -> None:
-        """non_interactive=True with ANTHROPIC_API_KEY → no prompt, both remain False."""
+        """non_interactive=True with ANTHROPIC_API_KEY → no prompt, both stay unanswered (None)."""
         with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
             with patch("builtins.input", side_effect=AssertionError("should not prompt")):
                 features = _prompt_optional_features(
                     non_interactive=True,
                     profile=self._profile,
                 )
-        assert features.enable_hyde is False
-        assert features.enable_rag_fusion is False
+        assert features.enable_hyde is None
+        assert features.enable_rag_fusion is None
 
     def test_enable_hyde_flag_bypasses_prompt(self) -> None:
         """enable_hyde=True flag pre-answers the prompt; no input() call for it."""
@@ -1177,9 +1180,7 @@ class TestWizardFeaturesG10:
 
     def test_wizard_ollama_writes_provider_and_model_to_toml(self) -> None:
         """Ollama provider + model written under [hyde] when feature enabled."""
-        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
-
-        doc = tomlkit.parse(_default_toml())
+        doc = _fresh_config_doc()
         features = WizardFeatures(
             enable_hyde=True,
             hyde_provider="ollama",
@@ -1194,9 +1195,7 @@ class TestWizardFeaturesG10:
 
     def test_wizard_anthropic_provider_not_written_to_toml(self) -> None:
         """Anthropic provider is the default — no provider/model key written."""
-        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
-
-        doc = tomlkit.parse(_default_toml())
+        doc = _fresh_config_doc()
         features = WizardFeatures(
             enable_hyde=True,
             hyde_provider="anthropic",
@@ -1209,9 +1208,7 @@ class TestWizardFeaturesG10:
 
     def test_wizard_openai_writes_provider_and_model_to_toml(self) -> None:
         """OpenAI provider + model written under [rag_fusion]."""
-        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
-
-        doc = tomlkit.parse(_default_toml())
+        doc = _fresh_config_doc()
         features = WizardFeatures(
             enable_rag_fusion=True,
             rag_fusion_provider="openai",
@@ -1225,9 +1222,7 @@ class TestWizardFeaturesG10:
 
     def test_wizard_ollama_empty_base_url_not_written(self) -> None:
         """Empty ollama_base_url is not written (default handled by config)."""
-        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
-
-        doc = tomlkit.parse(_default_toml())
+        doc = _fresh_config_doc()
         features = WizardFeatures(
             enable_hyde=True,
             hyde_provider="ollama",
@@ -1266,8 +1261,6 @@ class TestWizardFeaturesG10:
 
     def test_wizard_anthropic_path_unchanged(self) -> None:
         """Selecting Anthropic writes enabled=True but no provider/model to TOML."""
-        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
-
         # Inputs: enable=y, hyde_provider=anthropic (no model prompt)
         #         rag_fusion_provider=anthropic (no model prompt), then "n" declines graph enrichment
         with patch("builtins.input", side_effect=["y", "anthropic", "anthropic", "n"]):
@@ -1286,7 +1279,7 @@ class TestWizardFeaturesG10:
         assert features.hyde_provider == "anthropic"
 
         # Also verify TOML output does not contain provider key
-        doc = tomlkit.parse(_default_toml())
+        doc = _fresh_config_doc()
         _apply_wizard_features_to_toml(doc, features)
         assert doc["hyde"]["enabled"] is True
         assert "provider" not in doc["hyde"]
@@ -1414,9 +1407,7 @@ class TestWizardFeaturesG10:
         This ensures config.py's 'if not model: raise ConfigError' guard fires at
         server startup rather than silently running an Anthropic model against OpenAI/Ollama.
         """
-        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
-
-        doc = tomlkit.parse(_default_toml())
+        doc = _fresh_config_doc()
         features = WizardFeatures(
             enable_hyde=True,
             hyde_provider="openai",
@@ -1894,8 +1885,6 @@ class TestOllamaPickerE2E:
 
     def test_picked_model_survives_to_loaded_config(self, tmp_path) -> None:
         """A model picked in the wizard reaches a real SearchConfig via the written TOML."""
-        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
-
         with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2", "mistral"]):
             with patch("builtins.input", side_effect=["y", "ollama", "", "2", "ollama", "", "1", "n"]):
                 features = _prompt_optional_features(
@@ -1910,7 +1899,7 @@ class TestOllamaPickerE2E:
                     log_format="text",
                 )
 
-        doc = tomlkit.parse(_default_toml())
+        doc = _fresh_config_doc()
         _apply_wizard_features_to_toml(doc, features)
         cfg_path = tmp_path / "archon-search.toml"
         cfg_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
@@ -1925,8 +1914,6 @@ class TestOllamaPickerE2E:
 
     def test_custom_url_survives_to_loaded_config(self, tmp_path) -> None:
         """A custom base URL typed in the wizard reaches the loaded SearchConfig."""
-        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
-
         with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]):
             with patch("builtins.input", side_effect=["y", "ollama", "http://box:11434", "1", "anthropic", "n"]):
                 features = _prompt_optional_features(
@@ -1941,7 +1928,7 @@ class TestOllamaPickerE2E:
                     log_format="text",
                 )
 
-        doc = tomlkit.parse(_default_toml())
+        doc = _fresh_config_doc()
         _apply_wizard_features_to_toml(doc, features)
         cfg_path = tmp_path / "archon-search.toml"
         cfg_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
@@ -1953,8 +1940,6 @@ class TestOllamaPickerE2E:
 
     def test_rag_fusion_custom_url_survives_to_loaded_config(self, tmp_path) -> None:
         """A custom RAG Fusion base URL reaches the loaded config (C1-I-40: covers the rag_fusion write branch)."""
-        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
-
         # enable=y; hyde=anthropic (no ollama prompt); rag=ollama, custom URL, pick "1".
         with patch("archon_search.install.wizard._fetch_ollama_models", return_value=["llama3.2"]):
             with patch("builtins.input", side_effect=["y", "anthropic", "ollama", "http://rag:11434", "1", "n"]):
@@ -1970,7 +1955,7 @@ class TestOllamaPickerE2E:
                     log_format="text",
                 )
 
-        doc = tomlkit.parse(_default_toml())
+        doc = _fresh_config_doc()
         _apply_wizard_features_to_toml(doc, features)
         cfg_path = tmp_path / "archon-search.toml"
         cfg_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
@@ -2920,9 +2905,7 @@ class TestWizardClaudeCLI:
     # --- _apply_wizard_features_to_toml ---
 
     def test_claude_cli_with_model_writes_provider_and_model(self) -> None:
-        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
-
-        doc = tomlkit.parse(_default_toml())
+        doc = _fresh_config_doc()
         features = WizardFeatures(
             enable_hyde=True, hyde_provider="claude_cli", hyde_model="sonnet"
         )
@@ -2932,9 +2915,7 @@ class TestWizardClaudeCLI:
 
     def test_claude_cli_blank_model_omits_model_key(self) -> None:
         """Blank model must NOT be written — an empty model trips config's guard."""
-        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
-
-        doc = tomlkit.parse(_default_toml())
+        doc = _fresh_config_doc()
         features = WizardFeatures(
             enable_rag_fusion=True, rag_fusion_provider="claude_cli", rag_fusion_model=""
         )
@@ -2988,8 +2969,6 @@ class TestWizardClaudeCLI:
     # --- E2E: wizard → TOML → loaded SearchConfig ---
 
     def test_claude_cli_survives_to_loaded_config(self, tmp_path) -> None:
-        from archon_search.cli.config_cmd import _default_toml  # noqa: PLC0415
-
         with patch("archon_search.install.shutil.which", return_value="/usr/bin/claude"):
             with patch("builtins.input", side_effect=["y", "claude_cli", "opus", "claude_cli", "", "n"]):
                 features = _prompt_optional_features(
@@ -3004,7 +2983,7 @@ class TestWizardClaudeCLI:
                     log_format="text",
                 )
 
-        doc = tomlkit.parse(_default_toml())
+        doc = _fresh_config_doc()
         _apply_wizard_features_to_toml(doc, features)
         cfg_path = tmp_path / "archon-search.toml"
         cfg_path.write_text(tomlkit.dumps(doc), encoding="utf-8")

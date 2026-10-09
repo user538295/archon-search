@@ -342,7 +342,7 @@ AI query expansion (HyDE + RAG Fusion):
 Enable AI query expansion (HyDE + RAG Fusion)? [y/N]:
 ```
 
-**Default**: No.
+**Default**: No. Answering `n` (or pressing Enter, or closing stdin) writes `[hyde].enabled = false` and `[rag_fusion].enabled = false`.
 
 If you answer `y`, the wizard prompts for a provider for each feature independently:
 
@@ -623,7 +623,7 @@ Pass `--non-interactive` to run the wizard without any prompts. Combined with fe
 | Eager load | Disabled (key not written — pass `--eager-load`/`--no-eager-load` to write it explicitly) |
 | Routing strategy | `centroid` (key not written — pass `--routing-strategy` to write it explicitly) |
 | Log format | `text` (key not written — pass `--log-format` to write it explicitly) |
-| AI query expansion (HyDE/RAG Fusion) | Skipped (use `--enable-hyde --enable-rag-fusion` to enable; configure provider in TOML or re-run the interactive wizard) |
+| AI query expansion (HyDE/RAG Fusion) | Disabled (keys not written — use `--enable-hyde` and/or `--enable-rag-fusion` to enable; configure provider in TOML or re-run the interactive wizard) |
 | GPU acceleration | Auto-enabled if detected |
 | Jina license | Declined (install aborts for multilingual balanced/max unless `--accept-jina-license` is passed) |
 | fasttext license | Declined (install aborts for multilingual installs unless `--accept-fasttext-license` is passed) |
@@ -721,6 +721,7 @@ The wizard writes to `~/.archon-search/archon-search.toml`. The following table 
 
 | Wizard choice / flag | TOML key | Example value |
 |---|---|---|
+| Fresh install, `--host` not passed | `host` | `"127.0.0.1"` (always written on a fresh install — see below) |
 | `--host TEXT` | `host` | `"0.0.0.0"` |
 | `--port INTEGER` | `port` | `9000` |
 
@@ -773,15 +774,15 @@ The wizard writes to `~/.archon-search/archon-search.toml`. The following table 
 
 | Wizard choice / flag | TOML key | Example value |
 |---|---|---|
-| `--enable-hyde` | `enabled` | `true` |
+| AI query expansion (interactive answer, or `--enable-hyde`) | `enabled` | `true` / `false` |
 
 ### `[rag_fusion]` section
 
 | Wizard choice / flag | TOML key | Example value |
 |---|---|---|
-| `--enable-rag-fusion` | `enabled` | `true` |
+| AI query expansion (interactive answer, or `--enable-rag-fusion`) | `enabled` | `true` / `false` |
 
-**Only the choices you actually made are written.** A default you never answered — a `--non-interactive` run without the matching flag — is not written to the file (for `[collections].watch`, `[telemetry].enabled`, `[database].eager_load_embedders`, `[routing].routing_strategy`, and `[logging].format`, a re-run that leaves the question unanswered also removes the key a prior run wrote). An answer you actually gave *is* written, even when it matches the default: passing an explicit flag (e.g., `--port 8765`, `--routing-strategy centroid`, `--no-watch`) always writes the key, and so does answering the interactive `routing_strategy`, `log_format`, filesystem-watcher, telemetry, or eager-load prompt — including pressing Enter to accept the shown default, which counts as an answer (a declined y/n prompt is written as `false`). In an interactive run this also applies when stdin closes early (EOF, piped input): the wizard falls back to the shown default and records it as your answer, so `[routing].routing_strategy`, `[logging].format`, `[collections].watch`, `[telemetry].enabled`, and `[database].eager_load_embedders` are still written. All other keys in `archon-search.toml` remain at their defaults.
+**Only the choices you actually made are written.** A default you never answered — a `--non-interactive` run without the matching flag — is not written to the file, so a fresh install with no optional answers holds only `[server].host`, the profile's `[database]` keys (`embedding_model`, `reranker_model`, `chunk_size`, `profile`, `multilingual`) and `[database].providers` when the GPU step writes it (a detected GPU, or `--disable-gpu`/a declined GPU prompt, which write `[]`) — keys such as `[server].port`, `[database].db_path`, the `[routing]` tuning keys, `[collections].collections`/`pinned_collections` and the `[logging]` keys are left out and resolve to their built-in defaults (`archon-search config show` prints them filled in). The one exception is `[server].host = "127.0.0.1"`, which a fresh install (and `--force --delete-db` without an existing config) always writes unless `--host` is passed: `archon-search serve` defaults the host to `0.0.0.0`, so without the key a wizard-written config would bind all interfaces. The host is written only when the wizard creates the file: a re-run, or `--force --delete-db` over an existing config, keeps whatever `[server].host` the file has (or lacks) unless `--host` is passed, and `archon-search serve` then binds `0.0.0.0` if the key is absent. For `[collections].watch`, `[telemetry].enabled`, `[database].eager_load_embedders`, `[routing].routing_strategy`, `[logging].format`, `[hyde].enabled`, and `[rag_fusion].enabled`, a re-run that leaves the question unanswered also removes the key a prior run wrote. An answer you actually gave *is* written, even when it matches the default: passing an explicit flag (e.g., `--port 8765`, `--routing-strategy centroid`, `--no-watch`) always writes the key, and so does answering the interactive `routing_strategy`, `log_format`, filesystem-watcher, telemetry, eager-load, or AI-query-expansion prompt (the last writes both `[hyde].enabled` and `[rag_fusion].enabled`) — including pressing Enter to accept the shown default, which counts as an answer (a declined y/n prompt is written as `false`). In an interactive run this also applies when stdin closes early (EOF, piped input): the wizard falls back to the shown default and records it as your answer, so `[routing].routing_strategy`, `[logging].format`, `[collections].watch`, `[telemetry].enabled`, `[database].eager_load_embedders`, `[hyde].enabled`, and `[rag_fusion].enabled` are still written. All other keys in `archon-search.toml` remain at their defaults.
 
 The wizard also backs up your existing config to `~/.archon-search/archon-search.toml.bak` before making any changes.
 
@@ -805,7 +806,7 @@ collections = []           # Static collection list (name + source path)
 pinned_collections = []    # Collections always searched, bypassing the router
 ```
 
-Collections are normally managed through the HTTP API or the `archon-search ingest` CLI command. The wizard does not configure them — the one exception is `--force --delete-db`, which clears `collections` and `pinned_collections` (but not `watch`) because it wipes the database they point to.
+Collections are normally managed through the HTTP API or the `archon-search ingest` CLI command. The wizard does not configure them — the one exception is `--force --delete-db`, which empties `collections` and `pinned_collections` where the existing config has them, because it wipes the database they point to. That clear step leaves `watch` alone, but `watch` still follows the normal re-run rule: it is removed when the run leaves the filesystem-watcher question unanswered. It does not add these keys to a config that lacks them, and with no existing config it writes the same minimal file as a fresh install.
 
 ### Graph search
 
@@ -923,7 +924,7 @@ Switching to BAAI/bge-large-en-v1.5 (chunk_size=1024) requires rebuilding the in
 
 To update optional features without changing the profile, re-run the wizard with the same `--profile`. The interactive prompts ask every question again, or you can pass flags to answer them directly.
 
-A re-run does not merge with the previous optional-feature answers: each optional-feature key is rewritten from this run's answers alone. In a `--non-interactive` re-run, every optional-feature question you do not answer with a flag is reset — `[collections].watch`, `[telemetry].enabled` (and `[telemetry].retention_days`), `[database].eager_load_embedders`, `[routing].routing_strategy`, and `[logging].format` are removed from the config, HyDE and RAG Fusion are written as disabled, and a reranker removed with `--no-reranker` is restored to the profile default. The deployment settings are not reset: `--host`, `--port`, `--db-path`, `--log-level`, and `--top-k` write their keys (`[server].host`, `[server].port`, `[database].db_path`, `[logging].level`, `[database].top_k_return`/`top_k_retrieve`) only when you pass the flag, so a re-run without them keeps the previous values. The exceptions keep their previous value: `[graph].enabled = true` from an earlier code-enrichment opt-in is never cleared (declining code enrichment or omitting `--code` does not set it back to `false`); `[graph].provider`, `[graph].extraction_model`, and the graph base URL are written only when you choose a graph-enrichment provider, so a run that does not choose one leaves the previous values in place; and `[telemetry].retention_days` survives any re-run that turns telemetry on without a new retention value — passing `--telemetry` without `--telemetry-retention-days`, or answering `y` at the interactive telemetry prompt (without `--telemetry`, `--telemetry-retention-days` is ignored, so a `y` answer can never replace it). Edit those keys by hand to change them. In an interactive re-run, the watcher, telemetry, eager-load, routing, and log-format prompts offer their built-in default (shown in brackets), not your previous answer, so pressing Enter writes that default. To change one feature and keep the rest, either re-run interactively and answer every prompt again, or pass every flag you want to keep alongside the new one:
+A re-run does not merge with the previous optional-feature answers: each optional-feature key is rewritten from this run's answers alone. In a `--non-interactive` re-run, every optional-feature question you do not answer with a flag is reset — `[collections].watch`, `[telemetry].enabled` (and `[telemetry].retention_days`), `[database].eager_load_embedders`, `[routing].routing_strategy`, `[logging].format`, `[hyde].enabled`, and `[rag_fusion].enabled` are removed from the config (HyDE and RAG Fusion stay disabled by default; their provider/model keys from an earlier opt-in are left in place), and a reranker removed with `--no-reranker` is restored to the profile default. The deployment settings are not reset: `--host`, `--port`, `--db-path`, `--log-level`, and `--top-k` write their keys (`[server].host`, `[server].port`, `[database].db_path`, `[logging].level`, `[database].top_k_return`/`top_k_retrieve`) only when you pass the flag, so a re-run without them keeps the previous values. The exceptions keep their previous value: `[graph].enabled = true` from an earlier code-enrichment opt-in is never cleared (declining code enrichment or omitting `--code` does not set it back to `false`); `[graph].provider`, `[graph].extraction_model`, and the graph base URL are written only when you choose a graph-enrichment provider, so a run that does not choose one leaves the previous values in place; and `[telemetry].retention_days` survives any re-run that turns telemetry on without a new retention value — passing `--telemetry` without `--telemetry-retention-days`, or answering `y` at the interactive telemetry prompt (without `--telemetry`, `--telemetry-retention-days` is ignored, so a `y` answer can never replace it). Edit those keys by hand to change them. In an interactive re-run, the watcher, telemetry, eager-load, routing, and log-format prompts offer their built-in default (shown in brackets), not your previous answer, so pressing Enter writes that default. To change one feature and keep the rest, either re-run interactively and answer every prompt again, or pass every flag you want to keep alongside the new one:
 
 ```bash
 # Enable the filesystem watcher, keeping telemetry and JSON logs from the previous run
@@ -973,7 +974,7 @@ tail -50 ~/.archon-search/logs/archon-search.log
 
 On timeout the wizard also prints the last import-time error it found in the service log (`Last service-log error: ...`), if any. Common causes:
 - An import-time crash such as `ModuleNotFoundError` / `ImportError` on the *first* launch is usually a fresh-install race, not a packaging gap — the environment was still being written when the service started. The wizard already tolerates one supervisor restart, so check whether the service recovered on its own before doing anything: `archon-search status` and `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/health`. If it is healthy, no repair is needed.
-- Another process is using port 8765. Change `[server].port` in `archon-search.toml` and re-run `archon-search install`.
+- Another process is using port 8765. Set a different port with `archon-search config set server.port 9000` (or add `port` under `[server]` in `archon-search.toml` — a fresh wizard install does not write it) and re-run `archon-search install`.
 - Model weights failed to download or are corrupt. Re-run the wizard without `--skip-preload`; if pre-warm reports the model cannot be loaded, see [Model pre-warm fails](#model-pre-warm-fails-was-downloaded-but-cannot-be-loaded).
 - Insufficient disk space. Check with `df -h ~/.archon-search`.
 

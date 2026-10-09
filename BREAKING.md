@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — wizard: fresh-install config files omit never-answered keys; HyDE/RAG Fusion `enabled` written only when answered (2026-10-09)
+
+**Surface**: `archon-search wizard` → the generated `~/.archon-search/archon-search.toml` (fresh install, and `--force --delete-db`).
+
+**What changed:** A fresh install no longer seeds the file with every default. With no optional answers it holds only `[server].host = "127.0.0.1"` (kept so `archon-search serve`, whose host default is `0.0.0.0`, stays on loopback; `--host` overrides it), the profile's `[database]` keys (`embedding_model`, `reranker_model`, `chunk_size`, `profile`, `multilingual`) and `[database].providers` when the GPU step writes it (a detected GPU, or `--disable-gpu`/a declined GPU prompt, which write `[]`). These keys are no longer written unless answered by a flag: `[server].port`, `[database].db_path`, `[database].auto_reindex_on_chunk_size_change`, `[routing].routing_shortlist_size`, `[routing].routing_confidence_threshold`, `[collections].collections`, `[collections].pinned_collections`, `[logging].level`, `[logging].log_file`, `[logging].backup_count`; no empty section headers (e.g. `[telemetry]`) are written either. `--force --delete-db` without an existing config writes the same minimal file; with one, it empties `collections`/`pinned_collections` only where present instead of adding an empty `[collections]` table. `[hyde].enabled` and `[rag_fusion].enabled` are now written only when answered — the interactive prompt writes both (`true` or `false`), `--enable-hyde` writes only `[hyde].enabled = true` and no longer writes `[rag_fusion].enabled = false` (and vice versa for `--enable-rag-fusion`), a non-interactive run without either flag writes neither, and a re-run that leaves them unanswered removes a previous `enabled` key instead of writing `false`. The effective configuration is unchanged (every omitted key resolves to its `SearchConfig` default, and HyDE/RAG Fusion stay disabled), and existing config files keep the keys they already have on a re-run. An absent `[hyde].enabled` or `[rag_fusion].enabled` means disabled (the default): `archon-search config get hyde.enabled` / `config get rag_fusion.enabled` print `False` and `archon-search config show` lists `enabled = false` for both (as it does for an absent `[telemetry].enabled`).
+
+**Migration**: scripts that read or edit one of the omitted keys directly in the file must use `archon-search config get`/`config set` (or add the key themselves); `archon-search config show` still prints every key with its default filled in.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — S632: `/status` `warmup_result` reads `"failed"` and `/ready` `checks.models` `"fail"` when warm-up finishes with a model it could not load (2026-10-09)
 
 **Surface**: `GET /status` → `warmup_result`; `GET /ready` → `checks.models`; the server log's warm-up lines.

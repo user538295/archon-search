@@ -247,6 +247,32 @@ class TestDetectConfigHandEdits:
 
         assert _detect_config_hand_edits(config_path, "balanced", False) is True
 
+    @pytest.mark.parametrize(
+        ("section", "key", "value"),
+        [
+            pytest.param("server", "host", "0.0.0.0", id="server-host-non-default"),
+            pytest.param("hyde", "enabled", True, id="hyde-enabled"),
+            pytest.param("rag_fusion", "enabled", True, id="rag-fusion-enabled"),
+        ],
+    )
+    def test_detect_excluded_key_is_not_hand_edit(
+        self, tmp_path: Path, section: str, key: str, value: str | bool
+    ) -> None:
+        """[server].host and [hyde]/[rag_fusion] `enabled` are deliberately not compared
+        (20_wizard.md "Same profile (idempotent re-run)"): a non-default value there on an
+        otherwise profile-matching config is not reported as a hand edit."""
+        from archon_search.install import _detect_config_hand_edits
+
+        config_path = tmp_path / "archon-search.toml"
+        _write_wizard_config(config_path, "balanced", False)
+        doc = tomlkit.parse(config_path.read_text())
+        if section not in doc:
+            doc.add(section, tomlkit.table())
+        doc[section][key] = value
+        config_path.write_text(tomlkit.dumps(doc))
+
+        assert _detect_config_hand_edits(config_path, "balanced", False) is False
+
     def test_detect_missing_database_section_returns_true(self, tmp_path: Path) -> None:
         """Config with no [database] section → hand edit detected (all wizard keys absent/None)."""
         from archon_search.install import _detect_config_hand_edits

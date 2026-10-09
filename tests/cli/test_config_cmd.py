@@ -165,6 +165,30 @@ def test_config_show_preserves_file_values_and_unknown_sections(runner: CliRunne
     assert doc["hyde"]["enabled"] is True
 
 
+@pytest.mark.parametrize("key", ["telemetry.enabled", "hyde.enabled", "rag_fusion.enabled"])
+def test_config_get_reports_feature_default_absent_from_wizard_config(
+    runner: CliRunner, tmp_path: Path, key: str
+) -> None:
+    """C3-A-1: the wizard omits unanswered feature toggles; `config get` must report the
+    default (disabled) instead of 'key not found'."""
+    config_file = tmp_path / "archon-search.toml"
+    config_file.write_text("[server]\nhost = \"127.0.0.1\"\n")
+    result = runner.invoke(main, ["config", "get", key, "--config", str(config_file)])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "False"
+
+
+def test_config_show_fills_in_missing_feature_toggles(runner: CliRunner, tmp_path: Path) -> None:
+    """C3-A-1: `config show` lists the feature toggles the wizard left unanswered."""
+    config_file = tmp_path / "archon-search.toml"
+    config_file.write_text("[server]\nhost = \"127.0.0.1\"\n")
+    result = runner.invoke(main, ["config", "show", "--config", str(config_file)])
+    assert result.exit_code == 0, result.output
+    doc = tomlkit.parse(result.output)
+    for section in ("telemetry", "hyde", "rag_fusion"):
+        assert doc[section]["enabled"] is False, section
+
+
 # ---------------------------------------------------------------------------
 # install subcommand
 # ---------------------------------------------------------------------------
