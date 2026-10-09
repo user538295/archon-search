@@ -113,26 +113,15 @@ class TestExportArchiveWriter:
         assert not tmp_file.exists(), "Tmp file should be deleted after finalize"
 
     def test_writer_cleanup_on_exception(self, tmp_path: Path) -> None:
-        """Cleanup deletes tmp file even when used as context manager that raises."""
+        """An exception inside the context manager closes and deletes the tmp file."""
         tmp_file = tmp_path / "docs.jsonl.tmp"
-        archive_path = tmp_path / "bad.tar.gz"
         writer = ExportArchiveWriter(tmp_file)
-        writer.write_doc(_make_doc(0))
-        # Simulate exception during finalize by passing a bad archive path
-        # The context manager's __exit__ calls cleanup() only on exception.
-        class _BadWriter(ExportArchiveWriter):
-            def finalize(self, manifest: dict, archive_path: Path) -> None:
-                raise RuntimeError("simulated failure")
-
-        bad_writer = _BadWriter(tmp_file)
-        bad_writer.write_doc(_make_doc(1))
-        try:
-            with bad_writer:
-                bad_writer.write_doc(_make_doc(2))
-                raise RuntimeError("forced")
-        except RuntimeError:
-            pass
+        with pytest.raises(RuntimeError, match="forced"), writer:
+            writer.write_doc(_make_doc(1))
+            raise RuntimeError("forced")
         assert not tmp_file.exists(), "Tmp file should be cleaned up on context manager exception"
+        with pytest.raises(RuntimeError, match="closed"):
+            writer.write_doc(_make_doc(2))
 
 
 # ---------------------------------------------------------------------------
