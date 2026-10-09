@@ -22,10 +22,22 @@ Tests cover:
 from __future__ import annotations
 
 import asyncio
+import logging
+import sys
+import threading
+import traceback
 from collections import Counter
+from collections.abc import Callable
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from archon_search.graph_extractor import (
+    _BACKEND_UNAVAILABLE_DETAIL,
+    _LATCHED_LOAD_FAILURE_LOG_MESSAGE,
+    _LOAD_FAILURE_LOG_MESSAGE,
+    _LOAD_WAIT_TIMEOUT_DETAIL,
+)
 from archon_search.graph_types import (
     ChunkInput,
     EntityType,
@@ -39,6 +51,12 @@ from archon_search.prose_extraction_backend import (
     ChunkExtraction,
     ExtractedEntity,
     ExtractedRelation,
+    ProseExtractionLoadTimeoutError,
+)
+from tests._graph_engine_stub import fake_torch_and_gliner
+from tests._load_single_flight_probe import (
+    LoadSingleFlightProbe,
+    gated_failing_from_pretrained,
 )
 
 
@@ -60,11 +78,16 @@ class _FakeBackend:
         *,
         default: ChunkExtraction | None = None,
         load_error: BaseException | None = None,
+        load_error_factory: Callable[[], BaseException] | None = None,
         infer_error: BaseException | None = None,
     ) -> None:
         self._chunks_by_text = chunks_by_text or {}
         self._default = default if default is not None else ChunkExtraction()
         self._load_error = load_error
+        # Builds a FRESH exception per load() call (a non-latched failure),
+        # unlike `load_error`, which re-raises one instance as the real
+        # backend's latch does.
+        self._load_error_factory = load_error_factory
         self._infer_error = infer_error
         self.load_calls = 0
         self.infer_calls: list[tuple[tuple[str, ...], float, float]] = []
@@ -73,6 +96,8 @@ class _FakeBackend:
         self.load_calls += 1
         if self._load_error is not None:
             raise self._load_error
+        if self._load_error_factory is not None:
+            raise self._load_error_factory()
 
     async def inference(
         self, texts: list[str], ner_confidence: float, relation_confidence: float
@@ -667,6 +692,243 @@ def test_extractor_inference_failure_degrades_and_preserves_code_symbols() -> No
         m.entity_id in {n.id for n in result.nodes} for m in result.mentions
     )
     assert result.edges == []
+
+
+_EXTRACTOR_LOGGER = "archon_search.graph_extractor"
+_BACKEND_LOGGER = "archon_search.prose_extraction_backend"
+_BACKEND_LOAD_FAILURE_LOG_PREFIX = "Failed to load graph NER model"
+_LOAD_TIMEOUT_LOG_MESSAGE = (
+    "GraphExtractor: timed out waiting for the prose extraction backend's in-flight load"
+)
+_CONCURRENT_PROSE_DOCS = 4
+_FRESH_FAILURE_PROSE_DOCS = 3
+
+
+def _make_prose_chunks(doc: str) -> list[ChunkInput]:
+    return [
+        ChunkInput(
+            chunk_id=f"{doc}-c1",
+            text=f"Alice from Acme deployed Grafana for {doc}.",
+            symbol_type=None,
+            symbol_subtype=None,
+        )
+    ]
+
+
+def _extractor_records(caplog, level: int, message: str) -> list[logging.LogRecord]:
+    return [
+        r
+        for r in caplog.records
+        if r.name == _EXTRACTOR_LOGGER and r.levelno == level and r.getMessage() == message
+    ]
+
+
+def _assert_degraded_with_unavailable_warning(docs, results) -> None:
+    for doc, result in zip(docs, results, strict=True):
+        assert result.fatal_error is None, f"{doc}: fatal_error set to {result.fatal_error!r}"
+        assert result.degraded is True, f"{doc}: not degraded"
+        assert result.warnings.count(_BACKEND_UNAVAILABLE_DETAIL) == 1, (
+            f"{doc}: expected exactly one per-document warning, got {result.warnings}"
+        )
+
+
+def _latched_frame_counts(records: list[logging.LogRecord]) -> list[int]:
+    return [len(traceback.extract_tb(r.exc_info[2])) for r in records]
+
+
+def test_backend_load_failure_warning_is_logged_once_per_process(caplog) -> None:
+    """S612: a genuine checkpoint-load failure logs the documented WARNING
+    'prose extraction backend failed to load' ONCE per process (OperatorGuide
+    90_incident_runbook.md, 60_graph_operations.md) — not once per prose
+    document — across sequential jobs and a concurrent batch on the one shared
+    extractor; later documents log it at DEBUG with a traceback that does not
+    grow per document. Every prose document still carries the sanitized
+    per-document warning and is degraded; code-only documents never touch the
+    backend."""
+    code_only = [
+        ChunkInput(
+            chunk_id="deploy.py-c1",
+            text="def deploy(): ...",
+            symbol_type="function",
+            symbol_subtype="python-function",
+            containing_function="deploy",
+            source_path="deploy.py",
+        )
+    ]
+    concurrent_docs = ("a.md", "b.md", "c.md")
+    extractor = _make_extractor()  # real ProseExtractionBackend
+
+    async def _run():
+        job_1_results = [
+            await extractor.extract(_make_prose_chunks("acme.md"), "acme.md", "col-1"),
+            await extractor.extract(code_only, "deploy.py", "col-1"),
+            await extractor.extract(_make_prose_chunks("grafana.md"), "grafana.md", "col-1"),
+        ]
+        job_2_results = [
+            await extractor.extract(_make_prose_chunks("billing.md"), "billing.md", "col-2")
+        ]
+        job_3_results = list(
+            await asyncio.gather(
+                *(
+                    extractor.extract(_make_prose_chunks(doc), doc, "col-3")
+                    for doc in concurrent_docs
+                )
+            )
+        )
+        return job_1_results, job_2_results, job_3_results
+
+    from_pretrained = MagicMock(
+        side_effect=NotADirectoryError("models/graph is a file, not a directory")
+    )
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
+        with caplog.at_level(logging.DEBUG, logger=_EXTRACTOR_LOGGER):
+            job_1_results, job_2_results, job_3_results = asyncio.run(_run())
+
+    # The real backend latched: the checkpoint load was attempted exactly once.
+    assert from_pretrained.call_count == 1
+
+    code_result = job_1_results.pop(1)
+    assert code_result.warnings == []
+    assert code_result.degraded is False
+
+    prose_docs = ("acme.md", "grafana.md", "billing.md", *concurrent_docs)
+    prose_results = job_1_results + job_2_results + job_3_results
+    assert len(prose_results) == 6
+    _assert_degraded_with_unavailable_warning(prose_docs, prose_results)
+
+    load_failure_warnings = _extractor_records(caplog, logging.WARNING, _LOAD_FAILURE_LOG_MESSAGE)
+    assert len(load_failure_warnings) == 1, (
+        f"expected 1 load-failure WARNING per process, got {len(load_failure_warnings)} "
+        f"for {len(prose_results)} prose documents"
+    )
+    # The single WARNING still carries the traceback, so the failure stays diagnosable.
+    assert load_failure_warnings[0].exc_info is not None
+
+    latched_debugs = _extractor_records(caplog, logging.DEBUG, _LATCHED_LOAD_FAILURE_LOG_MESSAGE)
+    assert len(latched_debugs) == len(prose_results) - 1
+    # Same instance, not merely the same count: the WARNING and every DEBUG
+    # carry the backend's one latched exception object.
+    warned_exc = load_failure_warnings[0].exc_info[1]
+    assert all(r.exc_info[1] is warned_exc for r in latched_debugs)
+    frame_counts = _latched_frame_counts(latched_debugs)
+    assert len(set(frame_counts)) == 1, f"logged traceback grows per document: {frame_counts}"
+
+    # The backend's own loader WARNING is logged once per process, too.
+    backend_load_warnings = [
+        r
+        for r in caplog.records
+        if r.name == _BACKEND_LOGGER
+        and r.levelno == logging.WARNING
+        and r.getMessage().startswith(_BACKEND_LOAD_FAILURE_LOG_PREFIX)
+    ]
+    assert len(backend_load_warnings) == 1, (
+        f"expected 1 backend load-failure WARNING per process, got {len(backend_load_warnings)}"
+    )
+
+
+def test_concurrent_first_failing_load_warns_once(caplog) -> None:
+    """S612: when the FIRST job is a concurrent batch racing one failing load
+    (one loader, the rest genuine waiters — proven blocked on the in-flight
+    load before it fails — re-raising the latched failure on wake-up), the
+    load is attempted once and the WARNING is logged once; every prose
+    document is still degraded with the per-document warning."""
+    docs = [f"doc-{i}.md" for i in range(_CONCURRENT_PROSE_DOCS)]
+    extractor = _make_extractor()  # real ProseExtractionBackend
+    release = threading.Event()
+    from_pretrained = gated_failing_from_pretrained(
+        release, lambda: NotADirectoryError("models/graph is a file, not a directory")
+    )
+    probe = LoadSingleFlightProbe()
+
+    async def _run():
+        with probe.tracking():
+            extractions = [
+                asyncio.create_task(extractor.extract(_make_prose_chunks(doc), doc, "col"))
+                for doc in docs
+            ]
+            try:
+                await probe.until_blocked(waiters=len(docs) - 1)
+            finally:
+                release.set()  # let the one in-flight load fail
+                # Never leave a task pending if until_blocked() raised.
+                await asyncio.gather(*extractions, return_exceptions=True)
+            return await asyncio.gather(*extractions)
+
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
+        with caplog.at_level(logging.DEBUG, logger=_EXTRACTOR_LOGGER):
+            results = asyncio.run(_run())
+
+    assert from_pretrained.call_count == 1
+    assert probe.loader_dispatches == 1
+    assert probe.waiter_registrations == len(docs) - 1
+    _assert_degraded_with_unavailable_warning(docs, results)
+    assert len(_extractor_records(caplog, logging.WARNING, _LOAD_FAILURE_LOG_MESSAGE)) == 1
+    latched_debugs = _extractor_records(caplog, logging.DEBUG, _LATCHED_LOAD_FAILURE_LOG_MESSAGE)
+    assert len(latched_debugs) == len(docs) - 1
+    frame_counts = _latched_frame_counts(latched_debugs)
+    assert len(set(frame_counts)) == 1, f"logged traceback grows per document: {frame_counts}"
+
+
+def test_real_backend_non_latched_load_failure_is_retried_and_warns_per_document(
+    caplog,
+) -> None:
+    """The REAL backend latches only `Exception`: a `SystemExit` from the
+    checkpoint load is not latched, so every prose document re-attempts the
+    load and gets a fresh instance — each logs its own WARNING (never silenced
+    at DEBUG by an earlier, different failure) and is degraded, never fatal."""
+
+    def _fresh_system_exit(*_args, **_kwargs):
+        raise SystemExit("gliner aborted")
+
+    docs = [f"doc-{i}.md" for i in range(_FRESH_FAILURE_PROSE_DOCS)]
+    extractor = _make_extractor()  # real ProseExtractionBackend
+
+    async def _run():
+        return [await extractor.extract(_make_prose_chunks(doc), doc, "col") for doc in docs]
+
+    from_pretrained = MagicMock(side_effect=_fresh_system_exit)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
+        with caplog.at_level(logging.DEBUG, logger=_EXTRACTOR_LOGGER):
+            results = asyncio.run(_run())
+
+    assert from_pretrained.call_count == len(docs), "a non-latched failure must be re-attempted"
+    _assert_degraded_with_unavailable_warning(docs, results)
+    warnings = _extractor_records(caplog, logging.WARNING, _LOAD_FAILURE_LOG_MESSAGE)
+    assert len(warnings) == len(docs), f"expected one WARNING per fresh failure, got {len(warnings)}"
+    assert _extractor_records(caplog, logging.DEBUG, _LATCHED_LOAD_FAILURE_LOG_MESSAGE) == []
+
+
+def test_load_wait_timeout_warns_per_document_and_never_silences_a_later_load_failure(
+    caplog,
+) -> None:
+    """S46/S612: a waiter timeout is never latched — it logs WARNING for every
+    document that hits it, and a genuine load failure afterwards still logs its
+    own WARNING (the timeouts must not consume the once-per-process latch)."""
+    load_errors = iter(
+        [
+            ProseExtractionLoadTimeoutError("waited too long"),
+            ProseExtractionLoadTimeoutError("waited too long"),
+            RuntimeError("checkpoint missing"),
+        ]
+    )
+    docs = ("a.md", "b.md", "c.md")
+    extractor = _make_extractor()
+    extractor._backend = _FakeBackend(load_error_factory=load_errors.__next__)
+
+    async def _run():
+        return [await extractor.extract(_make_prose_chunks(doc), doc, "col") for doc in docs]
+
+    with caplog.at_level(logging.DEBUG, logger=_EXTRACTOR_LOGGER):
+        timeout_1, timeout_2, load_failure = asyncio.run(_run())
+
+    assert _LOAD_WAIT_TIMEOUT_DETAIL in timeout_1.warnings
+    assert _LOAD_WAIT_TIMEOUT_DETAIL in timeout_2.warnings
+    assert _BACKEND_UNAVAILABLE_DETAIL in load_failure.warnings
+    assert len(_extractor_records(caplog, logging.WARNING, _LOAD_TIMEOUT_LOG_MESSAGE)) == 2
+    assert len(_extractor_records(caplog, logging.WARNING, _LOAD_FAILURE_LOG_MESSAGE)) == 1
 
 
 # ---------------------------------------------------------------------------

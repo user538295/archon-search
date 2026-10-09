@@ -75,6 +75,13 @@ _BACKEND_UNAVAILABLE_DETAIL: str = (
     "graph prose extraction model is unavailable; prose entity extraction is "
     "disabled for this ingest (code-symbol extraction is unaffected)."
 )
+# Operator-log (never wire-facing) messages for a prose backend load failure:
+# the first sighting of a failure instance at WARNING, its latched re-raises at
+# DEBUG (S612). Quoted verbatim by the OperatorGuide.
+_LOAD_FAILURE_LOG_MESSAGE: str = "GraphExtractor: prose extraction backend failed to load"
+_LATCHED_LOAD_FAILURE_LOG_MESSAGE: str = (
+    "GraphExtractor: prose extraction backend is unavailable (latched load failure)"
+)
 _INFERENCE_FAILED_DETAIL: str = (
     "graph prose entity/relation extraction failed; prose entity extraction "
     "was skipped for this document (code-symbol extraction is unaffected)."
@@ -187,10 +194,15 @@ class GraphExtractor:
     ``ProseExtractionBackend``'s load/waiter mechanism — one caller loads,
     the rest wait, and a wait-timeout degrades just that document (Task
     BE-12, S46) without disturbing the in-flight load. The remaining mutable
-    instance state (``self._inference_failure_logged``) is a best-effort
-    once-per-process log latch, not a correctness-critical value — a benign
-    race there can at most log one extra WARNING, never corrupt extraction
-    results. The pipeline creates one shared instance per server process.
+    instance state (``self._warned_load_failure``,
+    ``self._inference_failure_logged``) consists of log latches, not
+    correctness-critical values. Each check-and-set runs on the event loop
+    with no await between the check and the set, so under single-threaded
+    asyncio two concurrent ``extract()`` coroutines cannot both WARN for the
+    SAME (latched) load-failure instance; distinct fresh, non-latched
+    failures each WARN by design. A latch only ever affects log level, never
+    extraction results. The pipeline creates one shared instance per server
+    process.
     """
 
     def __init__(
@@ -199,9 +211,13 @@ class GraphExtractor:
     ) -> None:
         self._config = config
         self._backend = ProseExtractionBackend(providers=config.providers)
-        # Latches the inference-call-failure traceback to one log per process
-        # (mirrors the pre-BE-11 prose NER-call latch) — the per-document
-        # `warnings` entry still fires every time.
+        # The load failure last logged at WARNING. The backend re-raises ONE
+        # instance for a latched failure, so keying on identity logs it once
+        # per process; a fresh (non-latched) failure is a new load attempt and
+        # logs again (S612). The per-document `warnings` entry fires every time.
+        self._warned_load_failure: BaseException | None = None
+        # Logs the first inference-call-failure traceback once per process —
+        # the per-document `warnings` entry still fires every time.
         self._inference_failure_logged: bool = False
 
     @property
@@ -230,6 +246,14 @@ class GraphExtractor:
         the model itself is loadable, only that this caller didn't wait long
         enough for someone else's load — so the next call here always gets a
         genuine fresh wait/load attempt, never a cached timeout.
+
+        A load failure is logged at WARNING with its traceback once per
+        failure INSTANCE (``_warned_load_failure``, S612): the backend's
+        latched failure re-raises the same instance, so later documents log it
+        at DEBUG; a fresh, non-latched failure is a genuine new load attempt
+        and logs WARNING again. Every document still gets the sanitized
+        per-document warning returned here. The timeout WARNING is never
+        latched, for the same reason its failure isn't.
         """
         try:
             await self._backend.load()
@@ -246,7 +270,7 @@ class GraphExtractor:
                 "backend's in-flight load"
             )
             return _LOAD_WAIT_TIMEOUT_DETAIL
-        except BaseException:
+        except BaseException as exc:
             # `BaseException`, not `Exception`: mirrors the pre-BE-11 prose
             # model-load path, which historically raised `SystemExit` — a
             # narrower catch here would let that escape uncaught and crash
@@ -254,10 +278,11 @@ class GraphExtractor:
             # aborting. `exc_info=True` preserves the traceback so a load
             # failure (import error, torch/gliner issue) is diagnosable
             # instead of silently degrading forever with no trace (C1-A-04).
-            _logger.warning(
-                "GraphExtractor: prose extraction backend failed to load",
-                exc_info=True,
-            )
+            if exc is not self._warned_load_failure:
+                self._warned_load_failure = exc
+                _logger.warning(_LOAD_FAILURE_LOG_MESSAGE, exc_info=True)
+            else:
+                _logger.debug(_LATCHED_LOAD_FAILURE_LOG_MESSAGE, exc_info=True)
             return _BACKEND_UNAVAILABLE_DETAIL
         return None
 

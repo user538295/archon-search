@@ -10,8 +10,10 @@ import asyncio
 import logging
 import re
 import threading
+import traceback
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from types import TracebackType
+from typing import TYPE_CHECKING, NoReturn
 
 from archon_search.graph_types import EntityType, RelationshipType
 from archon_search.paths import (
@@ -179,6 +181,25 @@ class ProseExtractionLoadTimeoutError(RuntimeError):
     """
 
 
+@dataclass(frozen=True)
+class _LatchedLoadFailure:
+    """A failed ``load()``'s exception plus its ORIGINAL traceback (S612).
+
+    ``frozen`` means the fields are never reassigned — NOT that the held
+    exception is immutable: ``reraise()`` deliberately resets that exception's
+    ``__traceback__`` on every call.
+    """
+
+    exception: Exception
+    traceback: TracebackType | None
+
+    def reraise(self) -> NoReturn:
+        """Re-raise the SAME exception instance with its traceback reset to the
+        original load failure's, so re-raising never prepends successive
+        callers' frames (and pins their locals) on the shared instance."""
+        raise self.exception.with_traceback(self.traceback)
+
+
 class ProseExtractionBackend:
     """Lazy-loading gliner.GLiNER backend for prose entity/relation extraction.
 
@@ -187,10 +208,11 @@ class ProseExtractionBackend:
     LOADER, the rest become WAITERS blocking on an ``asyncio.Event`` bounded
     by ``_LOAD_WAIT_TIMEOUT_SECONDS`` — Task BE-12, S46 — rather than each
     triggering their own load), and off the event loop via
-    ``asyncio.to_thread``. A failed load is latched — the
-    second call raises the same exception without retrying — except for
-    ``asyncio.CancelledError``, which is never latched so a cancelled caller's
-    successor can retry.
+    ``asyncio.to_thread``. A failed load (any ``Exception``) is latched — the
+    second call raises the same exception without retrying. A non-``Exception``
+    ``BaseException`` is never latched: ``asyncio.CancelledError`` so a
+    cancelled caller's successor can retry, and e.g. ``SystemExit`` is simply
+    re-attempted by the next call.
     """
 
     def __init__(
@@ -217,7 +239,11 @@ class ProseExtractionBackend:
         # Non-None while a load is in flight; set when that load finishes
         # (success, failure, or cancellation) so waiters wake and re-check.
         self._load_event: asyncio.Event | None = None
-        self._load_exception: BaseException | None = None
+        # The latched load failure (S612), or None. Its ORIGINAL traceback is
+        # retained for the process lifetime for diagnosis — bounded to that one
+        # traceback, with its finished frames' locals cleared at latch time
+        # (code/line info kept) so it never pins e.g. a constructed model.
+        self._latched_load_failure: _LatchedLoadFailure | None = None
         # Truncation-log latch (S30): once per backend INSTANCE — and the backend
         # itself is a per-process singleton by construction (one shared instance,
         # BE-8), which is what makes that once-per-process in practice. Guarded by
@@ -282,31 +308,37 @@ class ProseExtractionBackend:
         """Load the model, off the event loop, on first call.
 
         Idempotent and single-flight: concurrent callers share one in-flight
-        load rather than each triggering their own. A failed load latches —
-        every subsequent call re-raises the same exception without retrying
-        — except ``asyncio.CancelledError``, which never latches, so a
-        cancelled caller's successor gets a genuine retry.
+        load rather than each triggering their own. A failed load (any
+        ``Exception``) latches — every subsequent call re-raises the SAME
+        exception instance (``is``-identical to the first failure's) without
+        retrying, its traceback reset to the original load failure's so it
+        never grows per call (S612). That identity is a contract callers rely
+        on: ``GraphExtractor`` keys its once-per-process load-failure WARNING
+        on it. A non-``Exception`` ``BaseException`` never latches:
+        ``asyncio.CancelledError`` so a cancelled caller's successor gets a
+        genuine retry, and e.g. ``SystemExit`` is simply re-attempted by the
+        next call.
 
         A concurrent caller that lands while another is already loading is a
         WAITER, not the loader: it blocks on that in-flight load for at most
         ``_LOAD_WAIT_TIMEOUT_SECONDS`` (Task BE-12, S46) and raises
         ``ProseExtractionLoadTimeoutError`` on timeout — mirroring
         ``EmbedderCache.get_or_load``'s waiter (``embedder_cache.py``). A
-        waiter's timeout NEVER touches ``_model``/``_load_exception``/
+        waiter's timeout NEVER touches ``_model``/``_latched_load_failure``/
         ``_load_event``: it has no authority over the loader's lifecycle,
         which cleans up its own registration on every exit path.
         """
         while True:
             if self._model is not None:
                 return
-            if self._load_exception is not None:
-                raise self._load_exception
+            if self._latched_load_failure is not None:
+                self._latched_load_failure.reraise()
 
             async with self._load_lock:
                 if self._model is not None:
                     return
-                if self._load_exception is not None:
-                    raise self._load_exception
+                if self._latched_load_failure is not None:
+                    self._latched_load_failure.reraise()
                 if self._load_event is not None:
                     event = self._load_event
                 else:
@@ -342,7 +374,12 @@ class ProseExtractionBackend:
             logger.warning(
                 "Failed to load graph NER model %r: %s", self._model_name, exc
             )
-            self._load_exception = exc
+            # Clear the finished loader frames' locals (e.g. a model built
+            # before `.to(device)` failed) so the process-lifetime latch never
+            # pins them; executing frames are skipped by the stdlib, and
+            # code/line info is kept, so the traceback still formats fully.
+            traceback.clear_frames(exc.__traceback__)
+            self._latched_load_failure = _LatchedLoadFailure(exc, exc.__traceback__)
             raise
         finally:
             # Runs on every exit — success, exception, or cancellation — so a

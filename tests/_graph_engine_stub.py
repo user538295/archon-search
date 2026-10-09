@@ -2,8 +2,8 @@
 
 ``GraphExtractor`` extracts prose entities/relations through
 ``ProseExtractionBackend``/gliner (``archon_search/graph_extractor.py``). Tests
-need deterministic extraction without a real model load, at one of two depths
-(Q33):
+need deterministic extraction without a real model load, at one of three
+depths (the first two per Q33):
 
 * **Shallow** — ``install_graph_engine_stub`` patches the
   ``ProseExtractionBackend`` *class* that ``GraphExtractor.__init__``
@@ -22,6 +22,12 @@ need deterministic extraction without a real model load, at one of two depths
   mirrors gliner's real ``(entities, relations)`` per-text shape, recorded
   verbatim from the installed package (K2d) — never invented.
 
+* **Lowest seam** — ``fake_torch_and_gliner`` builds fake ``torch``/``gliner``
+  modules (for ``patch.dict(sys.modules, ...)``) around a caller-supplied
+  ``GLiNER.from_pretrained`` mock, so the real ``ProseExtractionBackend``
+  load/latch/waiter path runs unmodified. Use it for load-failure, latch, and
+  single-flight scenarios (S612, S46).
+
 Labels are the engine's own vocabulary — valid ``EntityType`` values
 (lowercase: ``person``/``concept``/``system``/``event``/``code_symbol``) set
 directly, not a mapping-table category. ``GraphExtractor`` silently skips any
@@ -33,6 +39,7 @@ from __future__ import annotations
 import sys
 import types
 from collections.abc import Callable
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -281,3 +288,18 @@ def install_deep_gliner_stub(monkeypatch: pytest.MonkeyPatch, model: object) -> 
     gliner_cls = types.SimpleNamespace(from_pretrained=lambda *a, **k: model)
     setattr(gliner_mod, "GLiNER", gliner_cls)
     monkeypatch.setitem(sys.modules, "gliner", gliner_mod)
+
+
+def fake_torch_and_gliner(from_pretrained: MagicMock) -> tuple[types.ModuleType, types.ModuleType]:
+    """Build fake ``torch`` and ``gliner`` modules for ``sys.modules`` injection
+    whose ``GLiNER.from_pretrained`` is ``from_pretrained`` — the lowest seam
+    below the real ``ProseExtractionBackend``, so its own load/latch/waiter
+    path runs unmodified. ``torch`` exposes only the thread-pinning setters the
+    load calls, as ``MagicMock``s callers may configure or assert on.
+    """
+    torch_mod = types.ModuleType("torch")
+    setattr(torch_mod, "set_num_threads", MagicMock())
+    setattr(torch_mod, "set_num_interop_threads", MagicMock())
+    gliner_mod = types.ModuleType("gliner")
+    setattr(gliner_mod, "GLiNER", types.SimpleNamespace(from_pretrained=from_pretrained))
+    return torch_mod, gliner_mod

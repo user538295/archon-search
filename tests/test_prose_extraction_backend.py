@@ -6,11 +6,16 @@ spec, so patch.dict(sys.modules, ...) is required rather than patching an attrib
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import subprocess
 import sys
+import threading
 import time
+import traceback
 import types
+import weakref
+from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,22 +24,15 @@ from archon_search.paths import get_graph_models_dir
 from archon_search.prose_extraction_backend import (
     _TORCH_INTER_OP_THREADS,
     _TORCH_INTRA_OP_THREADS,
+    _LatchedLoadFailure,
     ProseExtractionBackend,
     ProseExtractionLoadTimeoutError,
 )
-
-
-def _fake_torch_and_gliner(from_pretrained: MagicMock) -> tuple[types.ModuleType, types.ModuleType]:
-    """Build fake `torch` and `gliner` modules for sys.modules injection."""
-    torch_mod = types.ModuleType("torch")
-    torch_mod.set_num_threads = MagicMock()  # type: ignore[attr-defined]
-    torch_mod.set_num_interop_threads = MagicMock()  # type: ignore[attr-defined]
-
-    gliner_mod = types.ModuleType("gliner")
-    gliner_cls = MagicMock()
-    gliner_cls.from_pretrained = from_pretrained
-    gliner_mod.GLiNER = gliner_cls  # type: ignore[attr-defined]
-    return torch_mod, gliner_mod
+from tests._graph_engine_stub import fake_torch_and_gliner
+from tests._load_single_flight_probe import (
+    LoadSingleFlightProbe,
+    gated_failing_from_pretrained,
+)
 
 
 def _fake_torch_with_availability(
@@ -111,26 +109,160 @@ def test_providers_never_falls_back_to_embedder_or_reranker_config() -> None:
 # test_unloadable_artifact_latches_once_per_process
 # ---------------------------------------------------------------------------
 
+# The loader-side frame every latched re-raise's traceback must still reach.
+_LOADER_FRAME_NAME = "_load_sync"
+# The frame only a latched re-raise (never the loader's own raise) passes through.
+_LATCHED_RERAISE_FRAME_NAME = _LatchedLoadFailure.reraise.__name__
+_LATCHED_RELOAD_CALLS = 5
+_CONCURRENT_LOAD_CALLERS = 4
+
+
 @pytest.mark.asyncio
 async def test_unloadable_artifact_latches_once_per_process() -> None:
+    """A latched failure is re-raised as the IDENTICAL exception object on every
+    later call — the contract ``GraphExtractor`` keys its once-per-process
+    load-failure WARNING on (S612)."""
     from_pretrained = MagicMock(side_effect=RuntimeError("boom"))
-    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
+    backend = ProseExtractionBackend()
+
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
+        with pytest.raises(RuntimeError) as first:
+            await backend.load()
+        latched: list[BaseException] = []
+        for _ in range(_LATCHED_RELOAD_CALLS):
+            with pytest.raises(RuntimeError) as caught:
+                await backend.load()
+            latched.append(caught.value)
+
+    assert from_pretrained.call_count == 1
+    assert all(exc is first.value for exc in latched), (
+        "a latched load() must re-raise the first failure's exact instance"
+    )
+
+
+def _frame_names(exc: BaseException) -> list[str]:
+    return [frame.name for frame in traceback.extract_tb(exc.__traceback__)]
+
+
+@pytest.mark.asyncio
+async def test_repeated_failed_loads_do_not_retain_earlier_callers_frames() -> None:
+    """S612: every later load() re-raises the latched failure. Each caller must
+    receive the same-depth traceback that still reaches the original failing
+    loader frame — re-raising the one cached instance as-is prepends the
+    caller's frames to its ``__traceback__`` on every call, so the traceback
+    logged via ``exc_info`` grows per prose document and pins every earlier
+    caller's frames (and their locals) for the life of the process; dropping
+    the traceback instead would lose the diagnosis."""
+    from_pretrained = MagicMock(side_effect=RuntimeError("boom"))
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
+    backend = ProseExtractionBackend()
+
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
+        with pytest.raises(RuntimeError):
+            await backend.load()  # the genuine (latching) load attempt
+        latched_frame_names: list[list[str]] = []
+        for _ in range(_LATCHED_RELOAD_CALLS):
+            with pytest.raises(RuntimeError) as caught:
+                await backend.load()
+            latched_frame_names.append(_frame_names(caught.value))
+
+    assert from_pretrained.call_count == 1
+    depths = [len(names) for names in latched_frame_names]
+    assert all(depth == depths[0] for depth in depths), (
+        f"traceback depth grows per latched call: {depths}"
+    )
+    for names in latched_frame_names:
+        assert _LOADER_FRAME_NAME in names, f"original loader frame lost: {names}"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_callers_racing_a_failing_first_load_share_one_attempt() -> None:
+    """S612: concurrent callers racing the FIRST, failing load — one loader,
+    the rest genuine waiters (proven blocked on the in-flight load before it
+    fails) that loop back and re-raise the latch — all raise the same failure
+    from a single load attempt, each with a traceback that still reaches the
+    original loader frame."""
+    release = threading.Event()
+    from_pretrained = gated_failing_from_pretrained(release, lambda: RuntimeError("boom"))
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
+    backend = ProseExtractionBackend()
+    probe = LoadSingleFlightProbe()
+
+    async def _load_and_capture_frames() -> list[str]:
+        # Capture at catch time: every caller shares ONE exception instance,
+        # whose `__traceback__` the next caller's re-raise replaces.
+        with pytest.raises(RuntimeError) as caught:
+            await backend.load()
+        return _frame_names(caught.value)
+
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}), probe.tracking():
+        callers = [
+            asyncio.create_task(_load_and_capture_frames())
+            for _ in range(_CONCURRENT_LOAD_CALLERS)
+        ]
+        try:
+            await probe.until_blocked(waiters=_CONCURRENT_LOAD_CALLERS - 1)
+        finally:
+            release.set()  # let the one in-flight load fail
+            # Never leave a task pending if until_blocked() raised.
+            await asyncio.gather(*callers, return_exceptions=True)
+        frame_names_per_caller = await asyncio.gather(*callers)
+
+    assert from_pretrained.call_count == 1
+    assert probe.loader_dispatches == 1
+    assert probe.waiter_registrations == _CONCURRENT_LOAD_CALLERS - 1
+    for names in frame_names_per_caller:
+        assert _LOADER_FRAME_NAME in names, f"original loader frame lost: {names}"
+    # Waiters re-raise the latch; their tracebacks must not grow per re-raise.
+    waiter_depths = [
+        len(names) for names in frame_names_per_caller if _LATCHED_RERAISE_FRAME_NAME in names
+    ]
+    assert len(waiter_depths) == _CONCURRENT_LOAD_CALLERS - 1
+    assert len(set(waiter_depths)) == 1, f"latched re-raise traceback grows: {waiter_depths}"
+
+
+class _DevicePlacementFailingModel:
+    """A constructed model whose ``.to(device)`` fails — e.g. CUDA OOM."""
+
+    def to(self, _device: str) -> NoReturn:
+        raise RuntimeError("CUDA out of memory")
+
+
+@pytest.mark.asyncio
+async def test_latched_load_failure_does_not_pin_the_constructed_model() -> None:
+    """S612: a load that constructs the model but fails at ``.to(device)`` latches
+    the failure for the process lifetime. The latched traceback must not keep the
+    already-built (~1.2 GB) model alive through ``_load_sync``'s frame locals,
+    yet must still format with the original ``_load_sync`` frame for diagnosis."""
+    model_refs: list[weakref.ref[_DevicePlacementFailingModel]] = []
+
+    def _from_pretrained(*_args: object, **_kwargs: object) -> _DevicePlacementFailingModel:
+        model = _DevicePlacementFailingModel()
+        model_refs.append(weakref.ref(model))
+        return model
+
+    torch_mod, gliner_mod = fake_torch_and_gliner(MagicMock(side_effect=_from_pretrained))
     backend = ProseExtractionBackend()
 
     with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
         with pytest.raises(RuntimeError):
             await backend.load()
-        with pytest.raises(RuntimeError):
+        with pytest.raises(RuntimeError) as latched:
             await backend.load()
 
-    assert from_pretrained.call_count == 1
+    gc.collect()
+    (model_ref,) = model_refs
+    assert model_ref() is None, "the latched failure pins the failed load's model"
+    assert _LOADER_FRAME_NAME in _frame_names(latched.value)
+    assert _LOADER_FRAME_NAME in "".join(traceback.format_exception(latched.value))
 
 
 @pytest.mark.asyncio
 async def test_load_failure_logs_warning_before_latching(caplog) -> None:
     """A failed load attempt must be logged at WARNING before the exception latches."""
     from_pretrained = MagicMock(side_effect=RuntimeError("boom"))
-    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
     with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
@@ -150,7 +282,7 @@ async def test_interop_thread_runtime_error_does_not_latch() -> None:
     """torch.set_num_interop_threads/set_num_threads may only be called once per
     process — a RuntimeError from either must not poison the load-exception latch."""
     from_pretrained = MagicMock(return_value=_model_with_to())
-    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     torch_mod.set_num_interop_threads.side_effect = RuntimeError(
         "Error: cannot set number of interop threads after parallel work has started"
     )
@@ -180,7 +312,7 @@ async def test_load_times_out_and_latches(monkeypatch, caplog) -> None:
         return _model_with_to()
 
     from_pretrained = MagicMock(side_effect=_slow_from_pretrained)
-    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
     with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
@@ -205,7 +337,7 @@ async def test_cancellation_during_load_reraises_without_latching() -> None:
     backend = ProseExtractionBackend()
 
     from_pretrained = MagicMock(return_value=_model_with_to())
-    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
 
     dispatch_started = asyncio.Event()
     never_release = asyncio.Event()
@@ -242,7 +374,7 @@ async def test_cancellation_during_load_reraises_without_latching() -> None:
 @pytest.mark.asyncio
 async def test_load_passes_cache_dir_from_get_graph_models_dir() -> None:
     from_pretrained = MagicMock(return_value=_model_with_to())
-    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
     with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
@@ -255,7 +387,7 @@ async def test_load_passes_cache_dir_from_get_graph_models_dir() -> None:
 @pytest.mark.asyncio
 async def test_load_pins_torch_thread_counts() -> None:
     from_pretrained = MagicMock(return_value=_model_with_to())
-    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
     with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
@@ -275,7 +407,7 @@ async def test_concurrent_extractions_load_the_model_once() -> None:
     double-check: asserts asyncio.to_thread was dispatched exactly once across N
     concurrent callers, not merely that the model constructor was called once."""
     from_pretrained = MagicMock(return_value=_model_with_to())
-    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
     to_thread_calls: list[str] = []
@@ -329,7 +461,7 @@ async def test_loader_cancellation_frees_a_concurrent_waiter(
     )
 
     from_pretrained = MagicMock(return_value=_model_with_to())
-    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
     dispatch_started = asyncio.Event()
@@ -395,7 +527,7 @@ async def test_wait_timeout_degrades_and_leaves_loader_bookkeeping_untouched(
     monkeypatch.setattr(pe_mod, "_LOAD_WAIT_TIMEOUT_SECONDS", 0.01)
 
     from_pretrained = MagicMock(return_value=_model_with_to())
-    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
     dispatch_started = asyncio.Event()
@@ -421,7 +553,7 @@ async def test_wait_timeout_degrades_and_leaves_loader_bookkeeping_untouched(
 
             # B must not have mutated any of A's (the loader's) own state.
             assert backend._model is None
-            assert backend._load_exception is None
+            assert backend._latched_load_failure is None
             assert backend._load_event is in_flight_event
             assert not in_flight_event.is_set()
 
@@ -471,7 +603,7 @@ async def test_load_count_counts_only_real_model_constructions() -> None:
     repeated `load()` calls — the real-artifact lane asserts `== 1` to prove the load path
     executed, so a counter that also ticked on a no-op re-`load()` would not discriminate."""
     from_pretrained = MagicMock(return_value=_model_with_to())
-    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
     assert backend.load_count == 0
@@ -491,7 +623,7 @@ async def test_load_count_stays_zero_when_construction_fails() -> None:
     `== 1` as "the model really was built"; counting attempts instead would let a degraded
     run — the exact silent no-op the assert exists to catch — report a successful load."""
     from_pretrained = MagicMock(side_effect=RuntimeError("boom"))
-    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
     with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
@@ -512,7 +644,7 @@ async def test_load_count_stays_zero_when_device_placement_fails() -> None:
     model = _model_with_to()
     model.to.side_effect = RuntimeError("device placement failed")
     from_pretrained = MagicMock(return_value=model)
-    torch_mod, gliner_mod = _fake_torch_and_gliner(from_pretrained)
+    torch_mod, gliner_mod = fake_torch_and_gliner(from_pretrained)
     backend = ProseExtractionBackend()
 
     with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
