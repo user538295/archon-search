@@ -45,7 +45,7 @@ a growth policer under a separate host-safety ceiling.**
   smoke-load. `_prewarm_graph_model` loads the checkpoint, places it via
   `model.to(resolve_torch_device(providers))`, and returns `model.device.type` — the
   device it actually landed on — or `None` on any failure, since pre-warm is
-  non-fatal by construction (`prewarm.py:178-212`).
+  non-fatal by construction (`prewarm.py:228-256`).
 
 Stage 2 grades that into exactly one of three states — resolved, failed, or the
 neutral `not_yet_validated` sentinel — an invariant enforced structurally in

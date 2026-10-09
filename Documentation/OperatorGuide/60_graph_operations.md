@@ -47,7 +47,7 @@ GRAPH_NER_MODEL_NAME     = "knowledgator/gliner-relex-multi-v1.0"
 GRAPH_NER_MODEL_REVISION = "e990d9ba6f471b846f7d78bf7e4b4dab11761ada"
 ```
 
-**The runtime downloads it lazily on first use.** `ProseExtractionBackend.load()` (`prose_extraction_backend.py`) calls `GLiNER.from_pretrained(GRAPH_NER_MODEL_NAME, revision=GRAPH_NER_MODEL_REVISION, cache_dir=get_graph_models_dir())` off the event loop, once per process, and `huggingface_hub` populates the cache if it is empty. So a networked host needs no manual provisioning step at all — the first prose ingest after enabling the graph pays the download, and every later one is warm.
+**The runtime downloads it lazily on first use.** `ProseExtractionBackend.load()` (`prose_extraction_backend.py`) calls `load_gliner_model(GRAPH_NER_MODEL_NAME, GRAPH_NER_MODEL_REVISION)`, which runs `GLiNER.from_pretrained(..., cache_dir=get_graph_models_dir())` off the event loop, once per process, and `huggingface_hub` populates the cache if it is empty. So a networked host needs no manual provisioning step at all — the first prose ingest after enabling the graph pays the download, and every later one is warm.
 
 The cache directory is derived, never hand-written (`paths.get_graph_models_dir()`):
 
@@ -77,20 +77,17 @@ A failed pre-warm is **non-fatal**: it logs a WARNING and the wizard continues, 
 
 ### Remedy: seed the cache by hand
 
-For an air-gapped or scripted install, populate the cache directory on a networked host that has the `[graph]` extra installed, then copy it across. Do exactly what the pre-warm does:
+For an air-gapped or scripted install, populate the cache directory on a networked host that has the `[graph]` extra installed, then copy it across. Load it through the same loader the pre-warm uses:
 
 ```bash
 # On a networked host, with the same [graph] extra installed:
 python - <<'PY'
-from gliner import GLiNER
 from archon_search.paths import (
     GRAPH_NER_MODEL_NAME, GRAPH_NER_MODEL_REVISION, get_graph_models_dir,
 )
-dest = get_graph_models_dir()
-print("cache dir:", dest)
-GLiNER.from_pretrained(
-    GRAPH_NER_MODEL_NAME, revision=GRAPH_NER_MODEL_REVISION, cache_dir=str(dest)
-)
+from archon_search.prose_extraction_backend import load_gliner_model
+print("cache dir:", get_graph_models_dir())
+load_gliner_model(GRAPH_NER_MODEL_NAME, GRAPH_NER_MODEL_REVISION)
 PY
 
 # Then copy the whole directory to the same path on the air-gapped host:

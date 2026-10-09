@@ -23,6 +23,7 @@ from archon_search.install import (
 from archon_search.paths import get_models_dir
 from archon_search.profiles import ENGLISH_PROFILES, InstallProfile
 from archon_search.reranker import ModelReranker
+from tests._graph_engine_stub import gliner_from_pretrained_emulating_hub
 
 _COREML = "CoreMLExecutionProvider"
 # A host whose onnxruntime has CoreML: [database].providers reaches fastembed unchanged.
@@ -506,7 +507,24 @@ def test_prewarm_graph_model_calls_from_pretrained_with_cache_dir():
         GRAPH_NER_MODEL_NAME,
         revision=GRAPH_NER_MODEL_REVISION,
         cache_dir=str(get_graph_models_dir()),
+        resume_download=None,
     )
+
+
+@pytest.mark.filterwarnings("error")
+def test_prewarm_graph_model_does_not_hand_the_hub_a_deprecated_resume_download():
+    """gliner defaults `resume_download=False` and forwards it to huggingface_hub, which
+    warns on any non-None value; the pre-warm must load without that warning."""
+    model = MagicMock()
+    model.to.return_value = model
+    model.device.type = "cpu"
+    gliner_mod = types.ModuleType("gliner")
+    gliner_mod.GLiNER = types.SimpleNamespace(  # type: ignore[attr-defined]
+        from_pretrained=gliner_from_pretrained_emulating_hub(model)
+    )
+
+    with patch.dict(sys.modules, {"gliner": gliner_mod}):
+        assert _prewarm_graph_model() == "cpu"
 
 
 def test_prewarm_entry_is_non_fatal_and_logs_first_use_will_download(caplog):

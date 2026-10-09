@@ -14,11 +14,11 @@ from archon_search.paths import (
     GRAPH_NER_MODEL_NAME,
     GRAPH_NER_MODEL_REVISION,
     get_data_dir,
-    get_graph_models_dir,
     get_models_dir,
 )
 from archon_search.platform.runtime import get_search_service
 from archon_search.profiles import InstallProfile
+from archon_search.prose_extraction_backend import load_gliner_model
 from archon_search.reranker import ModelReranker
 from archon_search.torch_device import resolve_torch_device
 
@@ -230,22 +230,16 @@ def _prewarm_graph_model(providers: list[str] | None = None) -> str | None:
 
     Mirrors the reranker's non-fatal branch in ``_prewarm_models``: a failure
     here must never abort the wizard — the model downloads on first use
-    instead. Uses the same cache_dir as the runtime
-    lazy-load in ProseExtractionBackend.load() (get_graph_models_dir()), so
-    pre-warm and first use share one on-disk cache rather than two.
+    instead. Loads through ``load_gliner_model``, the same loader as the
+    runtime lazy-load in ProseExtractionBackend.load(), so pre-warm and first
+    use share one on-disk cache (get_graph_models_dir()) rather than two.
 
     Returns the resolved torch device string ("cpu"/"cuda"/"mps") read off the
     loaded model on success (Task BE-14's stage-2 device probe rides this
     pre-warm), or ``None`` on any failure.
     """
     try:
-        from gliner import GLiNER  # noqa: PLC0415 — lazy; not installed at import time
-
-        model = GLiNER.from_pretrained(
-            GRAPH_NER_MODEL_NAME,
-            revision=GRAPH_NER_MODEL_REVISION,
-            cache_dir=str(get_graph_models_dir()),
-        )
+        model = load_gliner_model(GRAPH_NER_MODEL_NAME, GRAPH_NER_MODEL_REVISION)
         # Place the model exactly where the runtime will (mirrors _load_sync in
         # prose_extraction_backend.py) rather than reporting gliner's auto
         # placement, so the device stage 2 probes is the device ingest gets.

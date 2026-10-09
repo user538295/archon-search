@@ -2,12 +2,12 @@
 
 Bug report: ``Documentation/Backlog/S652-unsupported_edge_survives.md``.
 
-Expected behaviour (``Documentation/OperatorGuide/60_graph_operations.md:250``):
+Expected behaviour (``Documentation/OperatorGuide/60_graph_operations.md:247``):
 ``[maintenance] graph_gc`` must be ``true`` for the GC pass "to sweep at all"; with it off,
 "stale nodes ... survive ... indefinitely". So with ``graph_gc = false`` a
 ``POST /maintenance/trigger`` pass must leave stale mention rows, orphaned nodes and
 unsupported edges untouched, and ``GET /status`` ``maintenance.last_graph_gc_at`` (the
-"timestamp of the last GC pass (``null`` until the first pass)", 60:257) must stay ``null``.
+"timestamp of the last GC pass (``null`` until the first pass)", 60:254) must stay ``null``.
 
 Run with:
     uv run pytest tests/integration/test_s652_graph_gc_disabled.py -n0 -v --no-cov
@@ -116,8 +116,8 @@ def _run_two_passes_over_stale_pair(
       - alone_b: Google only
     Then pair's vector chunks are deleted but its mention rows kept, so with GC enabled
     one pass would: prune pair's stale mentions → orphan + sweep "Bob" → sweep the now
-    unsupported Alice–Google edge (60:235-236). alone_a/alone_b keep the mentions
-    table non-empty, so the empty-table GC safety guard (60:240) cannot mask a sweep.
+    unsupported Alice–Google edge (60:233). alone_a/alone_b keep the mentions
+    table non-empty, so the empty-table GC safety guard (60:237) cannot mask a sweep.
     Two passes (S614's two-pass rationale) are triggered.
     """
     install_graph_stub(monkeypatch)
@@ -246,7 +246,7 @@ def test_s652_graph_gc_false_leaves_stale_mentions_nodes_and_edges(
 
     assert not violations, (
         "[maintenance] graph_gc = false was ignored — the maintenance passes ran graph "
-        "GC (60_graph_operations.md:250):\n- " + "\n- ".join(violations)
+        "GC (60_graph_operations.md:247):\n- " + "\n- ".join(violations)
     )
 
 
@@ -259,7 +259,7 @@ def test_s652_graph_gc_true_sweeps_the_same_scenario(
 
     Mirrors every negative assertion: the stale rows are pruned, the orphaned "Bob" node is
     swept, and the Alice–Google edge is removed from both GET /graph and the GraphStore as an
-    unsupported relationship (60_graph_operations.md:236) while Alice and Google — still
+    unsupported relationship (60_graph_operations.md:233) while Alice and Google — still
     mentioned by alone_a/alone_b — survive. Both passes stamp ``last_graph_gc_at``; pass 1
     reports the stale rows it counted before pruning, pass 2 finds none left.
     """

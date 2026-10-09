@@ -699,7 +699,7 @@ def _assert_child_non_vacuity(payload: dict, run_index: int) -> None:
 
 @pytest.mark.graph_real_artifact
 @pytest.mark.xdist_group("graph_real_artifact")
-def test_graph_ner_determinism_across_processes(_lane_data_dir, record_property) -> None:
+def test_graph_ner_determinism_across_processes(_lane_data_dir, record_testsuite_property) -> None:
     """S28: the same corpus extracted in two separate processes yields identical PERSISTED
     node and edge id sets and identical per-entity mention counts.
 
@@ -714,8 +714,8 @@ def test_graph_ner_determinism_across_processes(_lane_data_dir, record_property)
 
     _assert_child_non_vacuity(first, 0)
     _assert_child_non_vacuity(second, 1)
-    record_property("determinism_node_count", len(first["node_ids"]))
-    record_property("determinism_edge_count", len(first["edge_ids"]))
+    record_testsuite_property("determinism_node_count", len(first["node_ids"]))
+    record_testsuite_property("determinism_edge_count", len(first["edge_ids"]))
 
     # Sorted LISTS, so this is multiset equality — strictly stronger than the id-set
     # equality S28 asks for, and free. The reported difference is therefore a Counter
@@ -810,7 +810,7 @@ async def test_graph_ner_lane_non_vacuity(graph_pipeline) -> None:
     strict=False,
     reason="provisional spike-derived budget; replaced by the first green CI measurement",
 )
-async def test_graph_ner_memory_budget(graph_pipeline, record_property) -> None:
+async def test_graph_ner_memory_budget(graph_pipeline, record_testsuite_property) -> None:
     """S26's growth ceiling: steady-state own-process RSS over >= 1,000 prose chunks.
 
     `xfail(strict=False)` softens ONLY the final numeric comparison at the bottom of this
@@ -864,12 +864,12 @@ async def test_graph_ner_memory_budget(graph_pipeline, record_property) -> None:
     # Into the --junitxml the CI step already writes, so the figure that replaces the
     # provisional constant above (K9's second stage) is recoverable from a green CI run
     # rather than only from a failing one — captured stdout is not shown when a test passes.
-    # NOTE: record_property emits a PytestWarning under the default junit_family=xunit2
-    # ("incompatible with junit_family"); the <properties> block is still written and the
-    # figure is still recoverable, so this is an accepted, expected warning, not a bug.
-    record_property("rss_growth_mib", round(growth_mib, 1))
-    record_property("rss_baseline_mib", round(baseline_mib, 1))
-    record_property("measured_chunks", len(measured))
+    # Suite-level <properties>: the per-testcase block `record_property` writes is not
+    # valid under pytest's default junit_family=xunit2, which is why pytest warns on it.
+    # Like every lane step, this needs `-n0`: under xdist the fixture records nothing.
+    record_testsuite_property("rss_growth_mib", round(growth_mib, 1))
+    record_testsuite_property("rss_baseline_mib", round(baseline_mib, 1))
+    record_testsuite_property("measured_chunks", len(measured))
 
     assert growth_mib < _RSS_GROWTH_BUDGET_MIB, (
         f"graph NER steady-state RSS grew {growth_mib:.0f} MiB over {len(measured)} prose "
@@ -881,7 +881,9 @@ async def test_graph_ner_memory_budget(graph_pipeline, record_property) -> None:
 @pytest.mark.graph_real_artifact
 @pytest.mark.xdist_group("graph_real_artifact")
 @pytest.mark.asyncio
-async def test_graph_ner_throughput_within_budget(graph_pipeline, record_property) -> None:
+async def test_graph_ner_throughput_within_budget(
+    graph_pipeline, record_testsuite_property
+) -> None:
     """S27: total ingest wall time over the committed corpus, one comparison against the
     moved baseline — `measured <= THROUGHPUT_BASELINE_MS * REGRESSION_MULTIPLIER`.
 
@@ -1017,10 +1019,9 @@ async def test_graph_ner_throughput_within_budget(graph_pipeline, record_propert
     measured_ms = statistics.median(elapsed_ms)
     # Into the --junitxml the CI step already writes, so the CI-measured figure that
     # replaces the provisional multiplier (K9) is recoverable from a green run — captured
-    # stdout is not shown when a test passes. Same accepted `record_property` xunit2
-    # warning as the memory budget test above.
-    record_property("measured_ms", round(measured_ms, 1))
-    record_property("throughput_runs_ms", [round(ms, 1) for ms in elapsed_ms])
+    # stdout is not shown when a test passes. Suite-level, as in the memory budget test.
+    record_testsuite_property("measured_ms", round(measured_ms, 1))
+    record_testsuite_property("throughput_runs_ms", [round(ms, 1) for ms in elapsed_ms])
 
     budget_ms = THROUGHPUT_BASELINE_MS * REGRESSION_MULTIPLIER
     assert measured_ms <= budget_ms, (

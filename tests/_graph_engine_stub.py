@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import sys
 import types
+import warnings
 from collections.abc import Callable
 from unittest.mock import MagicMock
 
@@ -303,3 +304,26 @@ def fake_torch_and_gliner(from_pretrained: MagicMock) -> tuple[types.ModuleType,
     gliner_mod = types.ModuleType("gliner")
     setattr(gliner_mod, "GLiNER", types.SimpleNamespace(from_pretrained=from_pretrained))
     return torch_mod, gliner_mod
+
+
+def gliner_from_pretrained_emulating_hub(model: object) -> Callable[..., object]:
+    """A ``GLiNER.from_pretrained`` stand-in that keeps the one real contract the
+    ``resume_download`` fix depends on: gliner (0.2.28, 0.2.29 and ``main``) defaults
+    ``resume_download=False`` and forwards it to ``huggingface_hub.snapshot_download``,
+    whose ``smoothly_deprecate_legacy_arguments`` warns on any value but ``None``
+    (``huggingface_hub/utils/_validators.py``, hub 1.33). Returns ``model`` otherwise.
+    """
+
+    def from_pretrained(
+        model_id: str, *, resume_download: bool | None = False, **_kwargs: object
+    ) -> object:
+        if resume_download is not None:
+            warnings.warn(
+                "The `resume_download` argument is deprecated and ignored in "
+                "`snapshot_download`. Downloads always resume whenever possible.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return model
+
+    return from_pretrained

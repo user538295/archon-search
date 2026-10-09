@@ -14,7 +14,9 @@ import threading
 import time
 import traceback
 import types
+import warnings
 import weakref
+from pathlib import Path
 from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
@@ -28,7 +30,7 @@ from archon_search.prose_extraction_backend import (
     ProseExtractionBackend,
     ProseExtractionLoadTimeoutError,
 )
-from tests._graph_engine_stub import fake_torch_and_gliner
+from tests._graph_engine_stub import fake_torch_and_gliner, gliner_from_pretrained_emulating_hub
 from tests._load_single_flight_probe import (
     LoadSingleFlightProbe,
     gated_failing_from_pretrained,
@@ -382,6 +384,128 @@ async def test_load_passes_cache_dir_from_get_graph_models_dir() -> None:
 
     _, kwargs = from_pretrained.call_args
     assert kwargs["cache_dir"] == str(get_graph_models_dir())
+
+
+# ---------------------------------------------------------------------------
+# Third-party deprecation warnings raised by the model load
+# ---------------------------------------------------------------------------
+
+_TORCH_JIT_SCRIPT_MESSAGE = (
+    "`torch.jit.script` is deprecated. Please switch to `torch.compile` or `torch.export`."
+)
+
+
+def _install_importable_fake_gliner(root: Path, import_time_code: str) -> None:
+    """Write a ``gliner`` package under ``root`` whose import runs ``import_time_code``.
+
+    A real file, not a ``sys.modules`` entry: the warning under test is raised while
+    ``gliner`` is being imported, so the import machinery has to execute the module.
+    """
+    package = root / "gliner"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        "import warnings\n"
+        f"{import_time_code}\n"
+        "class _Model:\n"
+        "    def to(self, device):\n"
+        "        return self\n"
+        "class GLiNER:\n"
+        "    @staticmethod\n"
+        "    def from_pretrained(*args, **kwargs):\n"
+        "        return _Model()\n"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings("error")
+async def test_load_does_not_hand_the_hub_a_deprecated_resume_download() -> None:
+    """gliner defaults `resume_download=False` and forwards it to huggingface_hub, which
+    warns on any non-None value; the load must not let that default reach the hub."""
+    model = _model_with_to()
+    torch_mod, gliner_mod = fake_torch_and_gliner(
+        MagicMock(side_effect=gliner_from_pretrained_emulating_hub(model))
+    )
+    backend = ProseExtractionBackend()
+
+    with patch.dict(sys.modules, {"torch": torch_mod, "gliner": gliner_mod}):
+        await backend.load()
+
+    assert backend.is_loaded is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings("error")
+@pytest.mark.parametrize(
+    "category",
+    [
+        pytest.param("DeprecationWarning", id="torch-2.13"),
+        pytest.param("FutureWarning", id="torch-2.14"),
+    ],
+)
+async def test_load_silences_the_torch_jit_script_deprecation_raised_by_the_gliner_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, category: str
+) -> None:
+    """Importing gliner imports transformers' DeBERTa-v2 modeling module, whose
+    `@torch.jit.script` decorators warn at import time — an upstream deprecation neither
+    archon-search nor its users can act on."""
+    _install_importable_fake_gliner(
+        tmp_path, f"warnings.warn({_TORCH_JIT_SCRIPT_MESSAGE!r}, {category})"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    torch_mod, _ = fake_torch_and_gliner(MagicMock())
+    backend = ProseExtractionBackend()
+
+    with patch.dict(sys.modules, {"torch": torch_mod}):
+        sys.modules.pop("gliner", None)
+        await backend.load()
+        assert sys.modules["gliner"].__file__.startswith(str(tmp_path))
+
+    assert backend.is_loaded is True
+
+
+@pytest.mark.asyncio
+async def test_load_does_not_leak_the_jit_script_silencing_past_the_gliner_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ignore filter must be undone once gliner is imported, not left process-wide.
+    Inspects ``warnings.filters`` directly: ``pytest.warns`` prepends an 'always' filter,
+    which would mask a leaked 'ignore' entry and let a permanent filter pass."""
+    _install_importable_fake_gliner(
+        tmp_path, f"warnings.warn({_TORCH_JIT_SCRIPT_MESSAGE!r}, FutureWarning)"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    torch_mod, _ = fake_torch_and_gliner(MagicMock())
+    backend = ProseExtractionBackend()
+
+    with patch.dict(sys.modules, {"torch": torch_mod}):
+        sys.modules.pop("gliner", None)
+        await backend.load()
+
+    leaked = [
+        entry
+        for entry in warnings.filters
+        if entry[1] is not None and entry[1].match(_TORCH_JIT_SCRIPT_MESSAGE)
+    ]
+    assert leaked == []
+
+
+@pytest.mark.asyncio
+async def test_load_keeps_unrelated_warnings_raised_by_the_gliner_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The jit-script silencing is scoped to that one message: any other warning the
+    gliner import raises still reaches the caller."""
+    _install_importable_fake_gliner(
+        tmp_path, "warnings.warn('an unrelated gliner deprecation', FutureWarning)"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    torch_mod, _ = fake_torch_and_gliner(MagicMock())
+    backend = ProseExtractionBackend()
+
+    with patch.dict(sys.modules, {"torch": torch_mod}):
+        sys.modules.pop("gliner", None)
+        with pytest.warns(FutureWarning, match="an unrelated gliner deprecation"):
+            await backend.load()
 
 
 @pytest.mark.asyncio

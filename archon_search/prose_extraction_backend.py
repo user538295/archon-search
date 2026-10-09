@@ -11,6 +11,7 @@ import logging
 import re
 import threading
 import traceback
+import warnings
 from dataclasses import dataclass, field
 from types import TracebackType
 from typing import TYPE_CHECKING, NoReturn
@@ -24,7 +25,7 @@ from archon_search.paths import (
 from archon_search.torch_device import resolve_torch_device
 
 if TYPE_CHECKING:
-    # Type-checking only — the runtime import stays deferred inside _load_sync().
+    # Type-checking only — the runtime import stays deferred inside load_gliner_model().
     from gliner import GLiNER
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,13 @@ _LOAD_TIMEOUT_SECONDS = 300.0
 # per-document ingest that must degrade (skip prose extraction, keep going)
 # rather than hang the whole ingest for up to 300s behind someone else's load.
 _LOAD_WAIT_TIMEOUT_SECONDS = 30.0
+
+# Importing gliner imports transformers' DeBERTa-v2 modeling module, whose six
+# `@torch.jit.script` decorators warn at import time (DeprecationWarning on torch 2.13,
+# FutureWarning on 2.14) — still so in transformers 5.19.0 and `main`. Upstream code
+# neither archon-search nor its users can change, so load_gliner_model() silences
+# exactly this message, and only while gliner is being imported.
+_TORCH_JIT_SCRIPT_DEPRECATION = r"`torch\.jit\.script` is deprecated"
 
 # Pinned module constant (Task BE-9, S53) — NOT a [graph] config key, mirroring
 # S43's treatment of adjacency_threshold. Chunks are grouped into sub-batches of
@@ -200,6 +208,34 @@ class _LatchedLoadFailure:
         raise self.exception.with_traceback(self.traceback)
 
 
+def load_gliner_model(model_name: str, revision: str) -> GLiNER:
+    """Import gliner and construct the checkpoint from ``get_graph_models_dir()``.
+
+    Blocking, and the ONE place gliner is imported and loaded — shared by
+    ``ProseExtractionBackend`` and the install wizard's pre-warm, so both use the same
+    cache dir and neither emits the upstream warnings handled here.
+    """
+    # Accepted trade-off: catch_warnings saves/restores the process-global filter list, so it
+    # is not thread-safe (unless Python >= 3.14 runs with context-aware warnings). It stays
+    # scoped to this one-time import (the backend loads under _sync_lock, the pre-warm once in
+    # the wizard) so the deprecation is never suppressed globally; worst case, another thread's
+    # filter change in this window is undone, or the ignore entry outlives it.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=_TORCH_JIT_SCRIPT_DEPRECATION)
+        from gliner import GLiNER  # noqa: PLC0415 — lazy; not installed at import time
+
+    return GLiNER.from_pretrained(
+        model_name,
+        revision=revision,
+        cache_dir=str(get_graph_models_dir()),
+        # gliner (0.2.28-0.2.29, `main`) defaults this to False and forwards it to
+        # huggingface_hub.snapshot_download, which warns on any non-None value: the
+        # argument is deprecated and ignored, as downloads always resume. None is
+        # the hub's own "not passed".
+        resume_download=None,
+    )
+
+
 class ProseExtractionBackend:
     """Lazy-loading gliner.GLiNER backend for prose entity/relation extraction.
 
@@ -279,7 +315,6 @@ class ProseExtractionBackend:
             # time, so create_app() stays cheap (BE-8's contract) — these load only
             # on the first real load(), off the event loop.
             import torch  # noqa: PLC0415 — lazy; not installed at import time
-            from gliner import GLiNER  # noqa: PLC0415 — lazy; not installed at import time
 
             # Thread pinning is best-effort, not fatal to the load: torch raises
             # RuntimeError if either setter is called more than once per process
@@ -292,11 +327,7 @@ class ProseExtractionBackend:
             except RuntimeError as exc:
                 logger.debug("torch thread pinning skipped (already set): %s", exc)
 
-            model = GLiNER.from_pretrained(
-                self._model_name,
-                revision=self._revision,
-                cache_dir=str(get_graph_models_dir()),
-            )
+            model = load_gliner_model(self._model_name, self._revision)
             # After `.to(device)` succeeds, not right after `from_pretrained` — a
             # device-placement failure (e.g. CUDA OOM) must not count as a load: the
             # property's contract is "the model really was built", and self._model is
