@@ -185,7 +185,7 @@ In-process maintenance passes (FTS optimize, orphan cleanup, failed-ingest retry
 | `retry_max_attempts` | `3` | Max retry attempts per file per collection (≥1). |
 | `retry_max_age_hours` | `72` | Only retry failures newer than this (≥0; `0` warns — immediate churn). |
 | `prune_expired_chunks` | `true` | Prune chunks whose `expires_at < now`. |
-| `graph_gc` | `true` | Garbage-collect orphaned graph nodes/edges after document deletion. |
+| `graph_gc` | `true` | Graph GC: prune stale mentions, orphaned nodes and unsupported mention-derived edges. `false` skips it on every pass, including manual triggers. |
 | `exclude` | `[]` | Collections to skip (bare name = all namespaces; `{ns}/{col}` = one namespace). |
 
 Operating maintenance and jobs is covered in [`../OperatorGuide/50_maintenance_and_jobs.md`](../OperatorGuide/50_maintenance_and_jobs.md).

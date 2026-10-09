@@ -85,7 +85,7 @@ class RebuildState:
     Fields:
     - task: The asyncio.Task running the community rebuild
     - pending: True if another GC fired while this rebuild was running (needs re-enqueue)
-    - completed: True after the task completes (used to clear communities_invalidated on next GC pass)
+    - completed: True after the task completes (used to clear communities_invalidated on the next maintenance pass)
     """
 
     task: asyncio.Task[Any]
@@ -422,11 +422,20 @@ class MaintenanceLoop:
         if hasattr(self, "_current_health"):
             self._current_health["expired_chunks_removed_last_run"] = n
 
+    @property
+    def _graph_gc_active(self) -> bool:
+        """True when graph GC runs this pass: a graph store is wired and ``[maintenance].graph_gc`` is on.
+
+        ``[graph].enabled=false`` reaches the loop as ``graph_store=None``.
+        """
+        return self._graph_store is not None and self._config.graph_gc
+
     async def _run_graph_gc(self, collection: str, namespace: str) -> tuple[int, Any]:
         """Graph garbage collection for a single collection (BE-7).
 
         Algorithm:
-        1. Check if graph is disabled (graph_store=None or config.graph.enabled=False) → skip
+        1. Skip when ``_graph_gc_active`` is False — no graph store (``[graph].enabled=false``)
+           or ``[maintenance].graph_gc=false``
         2. Fetch live chunk IDs via store.list_chunks_raw(collection, namespace)
            On exception: WARNING logged, abort collection GC, return early
         3. Call graph_store.count_stale_mentions(collection, live_chunk_ids, namespace)
@@ -436,25 +445,15 @@ class MaintenanceLoop:
            - Check _rebuild_state[(namespace, collection)]:
              - If task exists and not done: set pending=True, don't spawn new task
              - If task done or no task: spawn new async rebuild task with done-callback
-           - Update per-collection health entry: communities_invalidated=True
+
+        The per-collection ``communities_invalidated`` health flag, including consuming a
+        completed rebuild entry, is owned by ``_run_collection_graph_gc``.
 
         Returns: (stale_count, GcPassResult) tuple where stale_count is the count
                  measured BEFORE pruning. Returns (0, None) if skipped.
         """
-        # Early exit if graph is disabled
-        if self._graph_store is None:
+        if not self._graph_gc_active:
             return (0, None)
-
-        # Check if graph.enabled = false in config (realistic path when store is live)
-        # This is a defense-in-depth check; route handlers should have already guarded this
-        try:
-            from archon_search.config import SearchConfig
-            # We don't have direct access to the full config here, so we check a simpler marker
-            # that would be set by tests or initialization
-            if not getattr(self, "_config_graph_enabled", True):
-                return (0, None)
-        except Exception:
-            pass  # Proceed on any config lookup error
 
         # Phase 1: Fetch live chunk IDs from the search store
         live_chunk_ids: set[str] = set()
@@ -484,7 +483,7 @@ class MaintenanceLoop:
         # Phase 4: Delete orphan nodes and edges
         gc_result = await self._graph_store.delete_orphan_nodes_and_edges(collection, ns=namespace)
 
-        # Phase 5: Handle community invalidation and rebuild
+        # Phase 5: Spawn (or mark pending) a community rebuild when orphans were removed
         rebuild_key = (namespace, collection)
         if gc_result.communities_invalidated:
             # Check if rebuild already in flight
@@ -500,16 +499,39 @@ class MaintenanceLoop:
             else:
                 # No existing rebuild; spawn a new task
                 self._spawn_rebuild_task(namespace, collection)
-        else:
-            # No new orphans this pass. Consume any completed rebuild state entry so
-            # the health update logic can reset communities_invalidated to False.
-            # (completed=True means the rebuild finished; the flag may be cleared now.)
-            if rebuild_key in self._rebuild_state:
-                existing_state = self._rebuild_state[rebuild_key]
-                if existing_state.completed:
-                    del self._rebuild_state[rebuild_key]
 
         return (stale_count, gc_result)
+
+    async def _run_collection_graph_gc(
+        self, collection: str, namespace: str, col_health: dict[str, Any]
+    ) -> int:
+        """Run graph GC for one collection and refresh its ``communities_invalidated`` health flag.
+
+        The flag turns True when this pass removed nodes/edges. Otherwise it clears when no
+        community rebuild is tracked or a tracked one has completed (the entry is consumed);
+        it is kept while a rebuild is still in flight.
+
+        Returns the collection's stale mention count, measured before pruning.
+        """
+        stale_count, gc_result = await self._run_graph_gc(collection, namespace)
+        if gc_result is not None and gc_result.communities_invalidated:
+            col_health["communities_invalidated"] = True
+        elif (namespace, collection) not in self._rebuild_state:
+            col_health["communities_invalidated"] = False
+        else:
+            rebuild_consumed = self._consume_completed_rebuild(namespace, collection)
+            if rebuild_consumed:
+                col_health["communities_invalidated"] = False
+        return stale_count
+
+    def _consume_completed_rebuild(self, namespace: str, collection: str) -> bool:
+        """Remove a finished community-rebuild entry; True when one was consumed."""
+        rebuild_key = (namespace, collection)
+        existing = self._rebuild_state.get(rebuild_key)
+        if existing is None or not existing.completed:
+            return False
+        del self._rebuild_state[rebuild_key]
+        return True
 
     def _spawn_rebuild_task(self, namespace: str, collection: str) -> None:
         """Spawn an async community rebuild task for a collection.
@@ -1166,33 +1188,20 @@ class MaintenanceLoop:
                 )
                 col_health["last_error"] = str(exc)
 
-            try:
-                gc_stale_count, _gc_result = await self._run_graph_gc(col, ns)
-                per_collection_stale_counts.append(gc_stale_count)
-                # Update communities_invalidated from gc_result if nodes were removed
-                if _gc_result is not None and getattr(_gc_result, "communities_invalidated", False):
-                    col_health["communities_invalidated"] = True
-                else:
-                    # Reset communities_invalidated when no new orphans were found.
-                    # Two cases:
-                    # 1. No rebuild in flight (key absent) — clear immediately.
-                    # 2. Rebuild completed since last pass (completed=True) — consume the flag,
-                    #    remove the entry, and clear communities_invalidated.
-                    rebuild_key = (ns, col)
-                    existing = self._rebuild_state.get(rebuild_key)
-                    if existing is None:
-                        col_health["communities_invalidated"] = False
-                    elif existing.completed:
-                        # Rebuild finished; consume the completed entry and reset the flag.
-                        del self._rebuild_state[rebuild_key]
-                        col_health["communities_invalidated"] = False
-                    # else: rebuild still in flight — keep communities_invalidated as-is
-                    #       (the state file's value from Phase 5 of the previous pass remains).
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "MaintenanceLoop: _run_graph_gc failed for %s: %s", key, exc
-                )
-                col_health["last_error"] = str(exc)
+            if self._graph_gc_active:
+                try:
+                    per_collection_stale_counts.append(
+                        await self._run_collection_graph_gc(col, ns, col_health)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("MaintenanceLoop: graph GC failed for %s: %s", key, exc)
+                    col_health["last_error"] = str(exc)
+            else:
+                # GC is off, but a community rebuild (e.g. drained after synonym
+                # enrichment) may have finished; consuming it clears the flag.
+                rebuild_consumed = self._consume_completed_rebuild(ns, col)
+                if rebuild_consumed:
+                    col_health["communities_invalidated"] = False
 
             health[key] = col_health
 
@@ -1227,14 +1236,14 @@ class MaintenanceLoop:
         else:
             last_expired_pruned_at = state.get("last_expired_pruned_at")
 
-        # Record last_graph_gc_at when graph GC ran
-        last_graph_gc_at: str | None = state.get("last_graph_gc_at")
-        if self._graph_store is not None:
-            last_graph_gc_at = now_str
-
-        # Aggregate stale mention counts from per-collection GC runs.
+        # Record last_graph_gc_at and the SUM of per-collection stale counts only when
+        # graph GC ran; otherwise preserve the cached values from the last GC pass.
         # The spec requires SUM — not last-collection-wins, average, or max.
-        stale_mention_count = sum(per_collection_stale_counts)
+        last_graph_gc_at: str | None = state.get("last_graph_gc_at")
+        stale_mention_count: int = state.get("stale_mention_count", 0)
+        if self._graph_gc_active:
+            last_graph_gc_at = now_str
+            stale_mention_count = sum(per_collection_stale_counts)
 
         # E2f BE-5: drain _communities_pending_rebuild — spawn community rebuild tasks
         # for any (ns, collection) pair added by synonym enrichment since the last pass.

@@ -20,7 +20,7 @@ import pytest
 
 from archon_search._types import CollectionInfo
 from archon_search.config import MaintenanceConfig
-from archon_search.jobs.maintenance_loop import MaintenanceLoop
+from archon_search.jobs.maintenance_loop import MaintenanceLoop, RebuildState
 from archon_search.store import FTSIndexNotFoundError
 
 
@@ -721,7 +721,6 @@ async def test_run_graph_gc_fetches_live_chunk_ids_with_correct_namespace(
     cfg = MaintenanceConfig(interval_hours=0)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
-    loop._config_graph_enabled = True
 
     # This will fail if _run_graph_gc is not implemented yet, which is expected in TDD phase
     result = await loop._run_graph_gc("docs", "tenant_x")
@@ -759,7 +758,6 @@ async def test_run_graph_gc_calls_prune_then_delete_orphans(tmp_path: Path) -> N
     cfg = MaintenanceConfig(interval_hours=0)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
-    loop._config_graph_enabled = True
 
     result = await loop._run_graph_gc("docs", "default")
 
@@ -786,7 +784,6 @@ async def test_run_graph_gc_sets_communities_invalidated_when_nodes_removed(tmp_
     cfg = MaintenanceConfig(interval_hours=0)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
-    loop._config_graph_enabled = True
     # Prevent fire-and-forget rebuild task leak; this test asserts the result flag, not the rebuild side effect.
     loop._spawn_rebuild_task = MagicMock()
 
@@ -803,7 +800,6 @@ async def test_run_graph_gc_skips_when_graph_disabled(tmp_path: Path) -> None:
     cfg = MaintenanceConfig(interval_hours=0)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     # graph_store NOT set
-    loop._config_graph_enabled = False
 
     stale_count, gc_result_returned = await loop._run_graph_gc("docs", "default")
 
@@ -813,28 +809,252 @@ async def test_run_graph_gc_skips_when_graph_disabled(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_graph_gc_skips_when_graph_enabled_false_with_live_store(
+async def test_run_graph_gc_skips_when_maintenance_graph_gc_false_with_live_store(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """BE-7 S8b: non-None graph_store + config graph.enabled=False → zero graph_store calls, no error logged."""
+    """S652: live graph_store + [maintenance].graph_gc=false → no graph or chunk reads, no error logged."""
     ss = AsyncMock()
     gs = MagicMock()
 
-    cfg = MaintenanceConfig(interval_hours=0)
+    cfg = MaintenanceConfig(interval_hours=0, graph_gc=False)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
-    loop._config_graph_enabled = False
 
     with caplog.at_level(logging.ERROR, logger="archon_search.jobs.maintenance_loop"):
         result = await loop._run_graph_gc("docs", "default")
 
-    gs.count_stale_mentions.assert_not_called()
-    gs.prune_stale_mentions.assert_not_called()
-    gs.delete_orphan_nodes_and_edges.assert_not_called()
+    assert result == (0, None)
+    assert gs.mock_calls == []
+    ss.list_chunks_raw.assert_not_called()
 
     # No ERROR logs
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(errors) == 0
+
+
+_PREVIOUS_GC_AT: str = "2026-01-01T00:00:00+00:00"
+_PREVIOUS_RUN_AT: str = "2026-01-01T00:00:01+00:00"
+_PREVIOUS_STALE_COUNT: int = 7
+
+
+async def _no_chunks(*args: Any, **kwargs: Any):
+    return
+    yield
+
+
+def _make_gc_bookkeeping_pass_loop(
+    tmp_path: Path, *, graph_store: Any, graph_gc: bool, communities_invalidated: bool = False
+) -> MaintenanceLoop:
+    """Loop over one ``default/docs`` collection whose previous pass ran graph GC.
+
+    The state file holds that pass's GC results; every non-GC policy is stubbed,
+    ``list_chunks_raw`` yields no chunks and ``get_all_collections_meta`` returns no
+    extra collections, so ``_run_one_pass`` exercises only the graph GC bookkeeping.
+    """
+    (tmp_path / ".maintenance-state.json").write_text(
+        json.dumps({
+            "last_run_at": _PREVIOUS_RUN_AT,
+            "last_graph_gc_at": _PREVIOUS_GC_AT,
+            "stale_mention_count": _PREVIOUS_STALE_COUNT,
+            "collection_health": {
+                "default/docs": {"communities_invalidated": communities_invalidated},
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    ss = AsyncMock()
+    ss.list_collections = AsyncMock(return_value=[_make_collection_info("docs", namespace="default")])
+    ss.get_collection_meta = AsyncMock(return_value=None)
+    ss.get_all_collections_meta = AsyncMock(return_value=[])
+    ss.list_chunks_raw = _no_chunks
+
+    cfg = MaintenanceConfig(interval_hours=0, prune_expired_chunks=False, graph_gc=graph_gc)
+    loop = MaintenanceLoop(
+        job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path, graph_store=graph_store
+    )
+    loop._run_fts_optimize = AsyncMock()  # type: ignore[method-assign]
+    loop._run_orphan_cleanup = AsyncMock()  # type: ignore[method-assign]
+    loop._run_expired_chunk_pruning = AsyncMock()  # type: ignore[method-assign]
+    loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
+    return loop
+
+
+def _load_state_file(tmp_path: Path) -> dict[str, Any]:
+    return json.loads((tmp_path / ".maintenance-state.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.asyncio
+async def test_run_one_pass_preserves_graph_gc_state_when_graph_gc_false(tmp_path: Path) -> None:
+    """S652: graph_gc=false → previous last_graph_gc_at and stale_mention_count are kept, not overwritten."""
+    gs = MagicMock()
+    loop = _make_gc_bookkeeping_pass_loop(tmp_path, graph_store=gs, graph_gc=False)
+
+    await loop._run_one_pass()
+
+    loaded = _load_state_file(tmp_path)
+    assert loaded["last_run_at"] != _PREVIOUS_RUN_AT, "the pass must have run and saved state"
+    assert loaded["last_graph_gc_at"] == _PREVIOUS_GC_AT
+    assert loaded["stale_mention_count"] == _PREVIOUS_STALE_COUNT
+    assert gs.mock_calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_one_pass_preserves_graph_gc_state_when_graph_disabled(tmp_path: Path) -> None:
+    """[graph].enabled=false (graph_store=None) → previous last_graph_gc_at and stale_mention_count are kept."""
+    loop = _make_gc_bookkeeping_pass_loop(tmp_path, graph_store=None, graph_gc=True)
+
+    await loop._run_one_pass()
+
+    loaded = _load_state_file(tmp_path)
+    assert loaded["last_run_at"] != _PREVIOUS_RUN_AT, "the pass must have run and saved state"
+    assert loaded["last_graph_gc_at"] == _PREVIOUS_GC_AT
+    assert loaded["stale_mention_count"] == _PREVIOUS_STALE_COUNT
+
+
+@pytest.mark.asyncio
+async def test_run_one_pass_preserves_communities_invalidated_when_graph_gc_false(tmp_path: Path) -> None:
+    """S652: graph_gc=false → a GC-set communities_invalidated=True survives the pass (no GC ran to clear it)."""
+    gs = MagicMock()
+    loop = _make_gc_bookkeeping_pass_loop(
+        tmp_path, graph_store=gs, graph_gc=False, communities_invalidated=True
+    )
+
+    await loop._run_one_pass()
+
+    loaded = _load_state_file(tmp_path)
+    assert loaded["last_run_at"] != _PREVIOUS_RUN_AT, "the pass must have run and saved state"
+    assert loaded["collection_health"]["default/docs"]["communities_invalidated"] is True
+    assert gs.mock_calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_one_pass_clears_communities_invalidated_on_completed_rebuild_when_graph_gc_false(
+    tmp_path: Path,
+) -> None:
+    """A community rebuild that completed (e.g. one spawned by synonym enrichment's drain) clears
+    communities_invalidated and is consumed even when graph_gc=false — the rebuild satisfied it."""
+    gs = MagicMock()
+    loop = _make_gc_bookkeeping_pass_loop(
+        tmp_path, graph_store=gs, graph_gc=False, communities_invalidated=True
+    )
+    loop._rebuild_state[("default", "docs")] = RebuildState(task=MagicMock(), completed=True)
+
+    await loop._run_one_pass()
+
+    loaded = _load_state_file(tmp_path)
+    assert loaded["collection_health"]["default/docs"]["communities_invalidated"] is False
+    assert ("default", "docs") not in loop._rebuild_state
+    assert loaded["last_graph_gc_at"] == _PREVIOUS_GC_AT
+    assert loaded["stale_mention_count"] == _PREVIOUS_STALE_COUNT
+
+
+@pytest.mark.asyncio
+async def test_run_one_pass_keeps_communities_invalidated_while_rebuild_in_flight_when_graph_gc_false(
+    tmp_path: Path,
+) -> None:
+    """graph_gc=false, rebuild still running → flag stays True, entry kept, graph store untouched."""
+    gs = MagicMock()
+    loop = _make_gc_bookkeeping_pass_loop(
+        tmp_path, graph_store=gs, graph_gc=False, communities_invalidated=True
+    )
+    in_flight = RebuildState(task=MagicMock(), completed=False)
+    loop._rebuild_state[("default", "docs")] = in_flight
+
+    await loop._run_one_pass()
+
+    loaded = _load_state_file(tmp_path)
+    assert loaded["collection_health"]["default/docs"]["communities_invalidated"] is True
+    assert loop._rebuild_state[("default", "docs")] is in_flight
+    assert gs.mock_calls == []
+
+
+def _make_active_gc_graph_store(*, communities_invalidated: bool = False) -> MagicMock:
+    """Graph store whose GC pass succeeds; ``communities_invalidated`` reports whether orphans were removed."""
+    gs = MagicMock()
+    gs.count_stale_mentions = AsyncMock(return_value=0)
+    gs.prune_stale_mentions = AsyncMock(return_value=0)
+    gs.delete_orphan_nodes_and_edges = AsyncMock(
+        return_value=MagicMock(communities_invalidated=communities_invalidated)
+    )
+    return gs
+
+
+@pytest.mark.asyncio
+async def test_run_one_pass_keeps_communities_invalidated_while_rebuild_in_flight(tmp_path: Path) -> None:
+    """GC active, no orphans this pass, rebuild still running → flag stays True and the rebuild entry is kept."""
+    gs = _make_active_gc_graph_store(communities_invalidated=False)
+    loop = _make_gc_bookkeeping_pass_loop(
+        tmp_path, graph_store=gs, graph_gc=True, communities_invalidated=True
+    )
+    in_flight = RebuildState(task=MagicMock(), completed=False)
+    loop._rebuild_state[("default", "docs")] = in_flight
+
+    await loop._run_one_pass()
+
+    loaded = _load_state_file(tmp_path)
+    assert loaded["last_graph_gc_at"] == loaded["last_run_at"], "GC must have run this pass"
+    assert loaded["collection_health"]["default/docs"]["communities_invalidated"] is True
+    assert loop._rebuild_state[("default", "docs")] is in_flight
+
+
+@pytest.mark.asyncio
+async def test_run_one_pass_consumes_completed_rebuild_when_gc_finds_no_orphans(tmp_path: Path) -> None:
+    """GC active, no orphans this pass, rebuild completed → flag clears and the rebuild entry is consumed."""
+    gs = _make_active_gc_graph_store(communities_invalidated=False)
+    loop = _make_gc_bookkeeping_pass_loop(
+        tmp_path, graph_store=gs, graph_gc=True, communities_invalidated=True
+    )
+    loop._rebuild_state[("default", "docs")] = RebuildState(task=MagicMock(), completed=True)
+
+    await loop._run_one_pass()
+
+    loaded = _load_state_file(tmp_path)
+    assert loaded["last_graph_gc_at"] == loaded["last_run_at"], "GC must have run this pass"
+    assert loaded["collection_health"]["default/docs"]["communities_invalidated"] is False
+    assert ("default", "docs") not in loop._rebuild_state
+
+
+@pytest.mark.asyncio
+async def test_run_one_pass_clears_communities_invalidated_when_no_orphans_and_no_rebuild(tmp_path: Path) -> None:
+    """GC active, no orphans this pass, no rebuild tracked → the steady-state pass clears the flag."""
+    gs = _make_active_gc_graph_store(communities_invalidated=False)
+    loop = _make_gc_bookkeeping_pass_loop(
+        tmp_path, graph_store=gs, graph_gc=True, communities_invalidated=True
+    )
+
+    await loop._run_one_pass()
+
+    loaded = _load_state_file(tmp_path)
+    assert loaded["last_graph_gc_at"] == loaded["last_run_at"], "GC must have run this pass"
+    assert loaded["collection_health"]["default/docs"]["communities_invalidated"] is False
+    assert loop._rebuild_state == {}
+
+
+@pytest.mark.asyncio
+async def test_run_one_pass_records_graph_gc_error_without_affecting_other_policies(tmp_path: Path) -> None:
+    """GC active and the graph store raises → the pass completes, last_error carries the message, and other
+    policies' results are kept."""
+    gs = _make_active_gc_graph_store()
+    gs.count_stale_mentions = AsyncMock(side_effect=RuntimeError("graph store unavailable"))
+    loop = _make_gc_bookkeeping_pass_loop(tmp_path, graph_store=gs, graph_gc=True)
+    orphans_removed = 2
+
+    async def _orphan_cleanup(collection: str, namespace: str) -> None:
+        loop._current_health["orphans_removed_last_run"] = orphans_removed
+
+    loop._run_orphan_cleanup = _orphan_cleanup  # type: ignore[method-assign]
+
+    await loop._run_one_pass()
+
+    loaded = _load_state_file(tmp_path)
+    health = loaded["collection_health"]["default/docs"]
+    assert loaded["last_run_at"] != _PREVIOUS_RUN_AT, "the pass must have run and saved state"
+    assert "graph store unavailable" in health["last_error"]
+    assert health["orphans_removed_last_run"] == orphans_removed
+    loop._run_fts_optimize.assert_awaited_once_with("docs", "default")
+    loop._run_expired_chunk_pruning.assert_awaited_once_with("docs", "default")
+    loop._run_failed_ingest_retry.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -867,7 +1087,6 @@ async def test_run_graph_gc_aborts_when_list_chunks_raises_exception(
     cfg = MaintenanceConfig(interval_hours=0)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
-    loop._config_graph_enabled = True
 
     with caplog.at_level(logging.WARNING, logger="archon_search.jobs.maintenance_loop"):
         result = await loop._run_graph_gc("docs", "default")
@@ -898,7 +1117,6 @@ async def test_run_graph_gc_prunes_when_collection_genuinely_empty(tmp_path: Pat
     cfg = MaintenanceConfig(interval_hours=0)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
-    loop._config_graph_enabled = True
     # Prevent fire-and-forget rebuild task leak; this test asserts the result flag, not the rebuild side effect.
     loop._spawn_rebuild_task = MagicMock()
 
@@ -934,7 +1152,6 @@ async def test_run_graph_gc_no_invalidation_when_zero_orphans(tmp_path: Path) ->
     cfg = MaintenanceConfig(interval_hours=0)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
-    loop._config_graph_enabled = True
 
     stale_count, gc_result_returned = await loop._run_graph_gc("docs", "default")
 
@@ -966,7 +1183,6 @@ async def test_maintenance_state_writes_last_graph_gc_at(tmp_path: Path) -> None
     cfg = MaintenanceConfig(interval_hours=0, prune_expired_chunks=False)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
-    loop._config_graph_enabled = True
 
     # Stub the GC method — returns (stale_count, gc_result) tuple
     loop._run_graph_gc = AsyncMock(return_value=(3, gc_result))  # type: ignore[method-assign]
@@ -982,11 +1198,10 @@ async def test_maintenance_state_writes_last_graph_gc_at(tmp_path: Path) -> None
     assert state_file.exists()
     loaded = json.loads(state_file.read_text(encoding="utf-8"))
 
-    # Check for new fields in state
-    assert "last_graph_gc_at" in loaded
-    assert "stale_mention_count" in loaded
-    health_entry = loaded["collection_health"].get("default/docs", {})
-    assert "communities_invalidated" in health_entry
+    # GC ran this pass: its timestamp is this pass's, and the count is the stub's stale count.
+    assert loaded["last_graph_gc_at"] == loaded["last_run_at"]
+    assert loaded["stale_mention_count"] == 3
+    assert loaded["collection_health"]["default/docs"]["communities_invalidated"] is True
 
 
 @pytest.mark.asyncio
@@ -1014,7 +1229,6 @@ async def test_stale_mention_count_is_sum_across_collections(tmp_path: Path) -> 
     cfg = MaintenanceConfig(interval_hours=0, prune_expired_chunks=False)
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
-    loop._config_graph_enabled = True
 
     # _run_graph_gc returns (stale_count, gc_result) — 3 stale per collection
     loop._run_graph_gc = AsyncMock(return_value=(3, gc_result))  # type: ignore[method-assign]

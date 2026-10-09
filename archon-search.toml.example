@@ -398,8 +398,8 @@ num_queries = 2
 # Requires E2a schema migration (POST /collections/{name}/migrate) before chunks with TTL are stored.
 # prune_expired_chunks = true
 #
-# Enable graph garbage-collection maintenance policy (removes orphaned graph nodes/edges
-# whose source documents have been deleted from the collection).
+# Enable graph garbage-collection maintenance policy (prunes stale mentions, orphaned graph
+# nodes and unsupported mention-derived edges). false skips GC on every pass, manual included.
 # graph_gc = true
 #
 # Maximum number of retry attempts per source file per collection before giving up.

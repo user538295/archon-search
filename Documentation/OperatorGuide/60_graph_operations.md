@@ -228,7 +228,7 @@ There is also a browser graph viewer at `GET /graph/{collection}/view` (HTML, au
 
 ## Lifecycle hygiene and garbage collection
 
-Deleting documents leaves behind stale graph state. The `MaintenanceLoop` reclaims it when `[maintenance] graph_gc = true` (default) and `interval_hours > 0`.
+Deleting documents leaves behind stale graph state. Each `MaintenanceLoop` pass reclaims it when `[maintenance] graph_gc = true` (default) and `[graph] enabled = true`; with either off the pass skips GC entirely. Scheduled passes need `interval_hours > 0`; a manual pass (`POST /maintenance/trigger` or `archon-search maintenance run`) runs regardless of `interval_hours`.
 
 GC does two sweeps in one pass (`delete_orphan_nodes_and_edges`, `graph_store.py`):
 
@@ -253,10 +253,10 @@ Two settings silently make that a no-op, so check both before concluding the pas
 
 `GET /status` surfaces two signals (`server/routes_status.py`, `jobs/maintenance_loop.py`):
 
-- `graph.stale_mention_count` — aggregate stale mention rows awaiting cleanup.
+- `graph.stale_mention_count` — stale mention rows the last GC pass found and pruned, summed across collections.
 - `maintenance.last_graph_gc_at` — timestamp of the last GC pass (`null` until the first pass).
 
-`archon-search status` prints both when set. A steadily rising `stale_mention_count` with a stale `last_graph_gc_at` means GC is not keeping up — check `[maintenance] interval_hours` and that `graph_gc` is enabled. Force an immediate pass with `POST /maintenance/trigger` (or `archon-search maintenance run`). See [`50_maintenance_and_jobs.md`](50_maintenance_and_jobs.md) and [`20_monitoring_and_alerts.md`](20_monitoring_and_alerts.md).
+`archon-search status` prints both when set. Both are written only by a pass that ran GC. With `graph_gc = false`, passes leave `last_graph_gc_at` and `stale_mention_count` at their last GC-pass values, both still visible, so a frozen `last_graph_gc_at` is expected there. With `[graph] enabled = false`, `GET /status` returns `"graph": null` (the key is present, the value is null), so `stale_mention_count` is not surfaced at all; `maintenance.last_graph_gc_at` stays at its last GC-pass value. With GC enabled, a stale `last_graph_gc_at` means GC passes are not running on schedule — check `[maintenance] interval_hours`. Force an immediate pass with `POST /maintenance/trigger` (or `archon-search maintenance run`). See [`50_maintenance_and_jobs.md`](50_maintenance_and_jobs.md) and [`20_monitoring_and_alerts.md`](20_monitoring_and_alerts.md).
 
 ### Orphan tables from before namespacing
 
