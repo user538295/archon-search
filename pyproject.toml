@@ -163,7 +163,23 @@ addopts = "--strict-markers --strict-config --cov=archon_search --cov-report=ter
 # Every StarletteDeprecationWarning is an error (warning-free policy, deliberately the whole
 # category: resolve Starlette deprecations, don't accumulate them). Among others this fails
 # collection if the httpx2 dev dependency is missing (starlette.testclient httpx fallback).
-filterwarnings = ["error::starlette.exceptions.StarletteDeprecationWarning"]
+# An unclosed resource is an error too. A ResourceWarning is almost always raised from
+# `__del__`, where Python cannot propagate it, so pytest reports it as a
+# PytestUnraisableExceptionWarning; that category must be an error as well for a leak to
+# fail the test (it also fails on any other exception Python cannot propagate, e.g. one
+# raised in a `__del__` or a GC/weakref callback). The leak is reported when the garbage
+# collector frees the object, which can be during a later test in the same xdist worker —
+# the failing test is not necessarily the leaker. To find it, rerun the reported file with
+# `-n 0` and `PYTHONTRACEMALLOC=20` (the warning then carries the allocation traceback).
+# Fix the leak at its source: close the resource in archon or the test, or raise the floor
+# of the leaking dependency (as `mcp>=1.30.0` does) — not with an ignore filter, except
+# the documented last resort for a leak with no fixed upstream release: see TLG-6 in
+# Documentation/Architecture/530_technical_debt_refactoring_roadmap.md.
+filterwarnings = [
+    "error::starlette.exceptions.StarletteDeprecationWarning",
+    "error::ResourceWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]
 markers = [
     "benchmark: latency benchmark — serialized via xdist_group('benchmark'); server-dependent tests auto-skip when server is unreachable",
     "integration: integration tests requiring live infrastructure",
