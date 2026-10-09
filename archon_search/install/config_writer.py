@@ -1,6 +1,7 @@
 """Config/TOML writing plus the shared ``WizardFeatures`` dataclass."""
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import dataclass
 from operator import attrgetter
@@ -62,11 +63,10 @@ class WizardFeatures:
     graph_ollama_base_url: str = ""           # empty = use config default
 
 
-# Tri-state optional keys shared by the writer and the hand-edit detector:
+# Tri-state optional keys written by `_apply_wizard_features_to_toml`:
 # (TOML section, TOML key, WizardFeatures field, dotted SearchConfig attribute holding the default).
 # `[hyde]`/`[rag_fusion]` `enabled` share the tri-state but are deliberately not listed: True also
-# writes a provider block, and this table drives hand-edit detection, which excludes them
-# (20_wizard.md "Same profile (idempotent re-run)").
+# writes a provider block, so they have their own writer (`_apply_query_expansion`).
 _OPTIONAL_KEYS: tuple[tuple[str, str, str, str], ...] = (
     ("database", "eager_load_embedders", "eager_load_embedders", "eager_load_embedders"),
     ("collections", "watch", "enable_watch", "watch"),
@@ -74,6 +74,49 @@ _OPTIONAL_KEYS: tuple[tuple[str, str, str, str], ...] = (
     ("routing", "routing_strategy", "routing_strategy", "routing_strategy"),
     ("logging", "format", "log_format", "log_format"),
 )
+
+# `[database]` keys every run rewrites from the chosen profile (`_apply_profile_keys`).
+_PROFILE_DATABASE_KEYS: tuple[str, ...] = (
+    "embedding_model", "reranker_model", "chunk_size", "profile", "multilingual",
+)
+
+# Non-profile keys a re-run rewrites or removes from its own answers even when no flag names them:
+# (TOML section, TOML key, dotted SearchConfig attribute holding the default).
+_DEFAULTED_RERUN_KEYS: tuple[tuple[str, str, str], ...] = (
+    *((section, key, default_attr) for section, key, _, default_attr in _OPTIONAL_KEYS),
+    ("hyde", "enabled", "hyde.enabled"),
+    ("rag_fusion", "enabled", "rag_fusion.enabled"),
+    ("telemetry", "retention_days", "telemetry.retention_days"),
+)
+
+# The keys hand-edit detection guards: the keys a re-run rewrites or removes from its own answers
+# even when no flag names them, except `[database].providers`. Deployment keys (`[server]`,
+# `db_path`, `[logging].level`, top-k), `[graph]` and the HyDE/RAG Fusion provider/model keys are
+# excluded: a re-run writes them only when their flag or answer is given. `[database].providers` is
+# excluded although Step 9 rewrites it from the GPU answer: a declined GPU prompt, `--disable-gpu`
+# or a failed CoreML check writes `[]` on every such run, and `configure_providers` keeps a chain
+# that already holds the detected provider, so guarding it would warn on re-runs that leave it unchanged.
+_RERUN_MANAGED_KEYS: tuple[tuple[str, str], ...] = (
+    *(("database", key) for key in _PROFILE_DATABASE_KEYS),
+    *((section, key) for section, key, _ in _DEFAULTED_RERUN_KEYS),
+)
+
+
+def _profile_database_values(profile: InstallProfile, profile_name: str, multilingual: bool) -> dict[str, object]:
+    """Return the ``[database]`` values a run writes for the chosen profile, keyed by ``_PROFILE_DATABASE_KEYS``."""
+    return dict(
+        zip(
+            _PROFILE_DATABASE_KEYS,
+            (
+                profile.embedder,
+                profile.reranker if profile.reranker is not None else "",
+                profile.chunk_size,
+                profile_name,
+                multilingual,
+            ),
+            strict=True,
+        )
+    )
 
 
 def _apply_profile_keys(
@@ -84,11 +127,8 @@ def _apply_profile_keys(
         doc.add("database", tomlkit.table())
 
     db = doc["database"]
-    db["embedding_model"] = profile.embedder
-    db["reranker_model"] = profile.reranker if profile.reranker is not None else ""
-    db["chunk_size"] = profile.chunk_size
-    db["profile"] = profile_name
-    db["multilingual"] = multilingual
+    for key, value in _profile_database_values(profile, profile_name, multilingual).items():
+        db[key] = value
 
 
 def _fresh_config_doc() -> tomlkit.TOMLDocument:
@@ -360,59 +400,115 @@ def _apply_wizard_features_to_toml(doc: tomlkit.TOMLDocument, features: WizardFe
 
 
 # ---------------------------------------------------------------------------
+# Wizard record: the managed values the wizard last left in the config
+# ---------------------------------------------------------------------------
+
+def _wizard_record_path(config_path: Path) -> Path:
+    """Return the record file kept next to *config_path* (named like the ``.toml.bak`` backup)."""
+    return config_path.with_suffix(".toml.wizard.json")
+
+
+def _managed_values(doc: tomlkit.TOMLDocument) -> dict[str, object]:
+    """Return ``{"section.key": value}`` for the ``_RERUN_MANAGED_KEYS`` present in *doc*.
+
+    A section that is not a table (e.g. a hand-edited ``hyde = "oops"``) holds no managed key.
+    """
+    plain = doc.unwrap()
+    values: dict[str, object] = {}
+    for section, key in _RERUN_MANAGED_KEYS:
+        table = plain.get(section)
+        if isinstance(table, dict) and key in table:
+            values[f"{section}.{key}"] = table[key]
+    return values
+
+
+def _record_wizard_values(config_path: Path) -> None:
+    """Record the managed values the wizard left in *config_path*; drop the record if it has no config.
+
+    The next re-run compares the config against this record (``_detect_config_hand_edits``),
+    so a value the wizard wrote itself is never mistaken for a hand edit. An ``OSError`` or a
+    config that no longer parses (``ValueError``) only warns: it runs on every install exit
+    and must not mask the run's own result.
+    """
+    record_path = _wizard_record_path(config_path)
+    try:
+        if not config_path.exists():
+            record_path.unlink(missing_ok=True)
+            return
+        values = _managed_values(tomlkit.parse(config_path.read_text()))
+        record_path.with_suffix(record_path.suffix + ".tmp").unlink(missing_ok=True)
+        # A non-JSON value (e.g. a hand-edited TOML datetime) is recorded as text, so it never
+        # equals the on-disk value and the next re-run reports it as a hand edit.
+        atomic_write_bytes(record_path, json.dumps(values, sort_keys=True, default=str).encode())
+    except (OSError, ValueError) as exc:
+        print(
+            f"Warning: could not update the wizard record {record_path}: {exc}. A later wizard "
+            "re-run may misreport hand edits.",
+            file=sys.stderr,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Hand-edit detection (Task C14-5.4)
 # ---------------------------------------------------------------------------
+
+def _read_wizard_record(config_path: Path) -> dict[str, object] | None:
+    """Return the wizard record for *config_path*, or None when it is missing or unreadable."""
+    try:
+        record = json.loads(_wizard_record_path(config_path).read_text())
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _differs_from_baseline(current: dict[str, object], prev_profile_name: str, prev_multilingual: bool) -> bool:
+    """Return True if the managed values *current* differ from what a wizard run could have written.
+
+    The profile ``[database]`` keys must match the previous profile; every other managed key
+    must be absent or equal its ``SearchConfig()`` default, so a wizard-written explicit
+    default (e.g. ``--no-watch``) passes but a wizard-written non-default value does not.
+    An unrecognized *prev_profile_name* always differs.
+    """
+    try:
+        profile = get_profile(prev_profile_name, prev_multilingual)
+    except ValueError:
+        return True
+
+    expected_database_values = _profile_database_values(profile, prev_profile_name, prev_multilingual)
+    if any(current.get(f"database.{key}") != value for key, value in expected_database_values.items()):
+        return True
+
+    config_defaults = SearchConfig()
+    for section, key, default_attr in _DEFAULTED_RERUN_KEYS:
+        default = attrgetter(default_attr)(config_defaults)
+        if current.get(f"{section}.{key}", default) != default:
+            return True
+    return False
+
 
 def _detect_config_hand_edits(
     config_path: Path,
     prev_profile_name: str,
     prev_multilingual: bool,
 ) -> bool:
-    """Return True if a wizard-written key on disk differs from its baseline value.
+    """Return True if a ``_RERUN_MANAGED_KEYS`` key was edited since the wizard last wrote the config.
 
-    Compares exactly two sets of keys: the profile ``[database]`` keys
-    (``embedding_model``, ``reranker_model``, ``chunk_size``, ``profile``,
-    ``multilingual``) against the profile's values, and the ``_OPTIONAL_KEYS``
-    against ``SearchConfig()`` defaults. ``[hyde]``/``[rag_fusion]`` ``enabled``,
-    ``[server]`` and the other deployment keys are deliberately not compared
-    (20_wizard.md "Same profile (idempotent re-run)"). Returns True (always warn) if
-    prev_profile_name is not a recognized profile name.
+    With a wizard record (``_record_wizard_values``), any managed key changed, added or
+    removed since the last run is a hand edit — including an edit back to a default — while
+    a value the wizard wrote itself is not. Without a readable record (configs written
+    before records existed) it falls back to ``_differs_from_baseline``, which cannot tell
+    a wizard-written non-default value from a hand edit. Keys outside
+    ``_RERUN_MANAGED_KEYS`` are never compared: ``[server]`` and the other deployment keys,
+    ``[graph]`` and the HyDE/RAG Fusion provider/model keys, which a re-run writes only when
+    asked to, and ``[database].providers``, which Step 9 rewrites from the GPU answer (``[]``
+    after a declined GPU prompt, ``--disable-gpu`` or a failed CoreML check) and otherwise
+    leaves unchanged when it already holds the detected provider.
     """
-    # Unknown profile — always warn
-    try:
-        profile = get_profile(prev_profile_name, prev_multilingual)
-    except ValueError:
-        return True
-
-    # Read the on-disk config
-    doc = tomlkit.parse(config_path.read_text())
-    db = doc.get("database", {})
-
-    # Compare [database] wizard-written keys against profile defaults
-    expected_reranker = profile.reranker if profile.reranker is not None else ""
-    if db.get("embedding_model") != profile.embedder:
-        return True
-    if db.get("reranker_model") != expected_reranker:
-        return True
-    if db.get("chunk_size") != profile.chunk_size:
-        return True
-    if db.get("profile") != prev_profile_name:
-        return True
-    if db.get("multilingual") != prev_multilingual:
-        return True
-
-    # Compare optional-feature keys against SearchConfig() defaults (the single source
-    # of truth — WizardFeatures holds the None "never answered" sentinel for these).
-    # Absent key = config default in effect — NOT a hand-edit. Only a key that is
-    # PRESENT and DIFFERENT from the default counts, so a wizard-written explicit
-    # default (e.g. `--no-watch`) is not a hand edit.
-    config_defaults = SearchConfig()
-    for section_name, key, _, default_attr in _OPTIONAL_KEYS:
-        section = doc.get(section_name, {})
-        if key in section and section[key] != attrgetter(default_attr)(config_defaults):
-            return True
-
-    return False
+    current = _managed_values(tomlkit.parse(config_path.read_text()))
+    record = _read_wizard_record(config_path)
+    if record is not None:
+        return current != record
+    return _differs_from_baseline(current, prev_profile_name, prev_multilingual)
 
 
 def _assert_features_persisted(cfg: SearchConfig, features: WizardFeatures) -> None:

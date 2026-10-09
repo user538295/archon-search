@@ -2252,6 +2252,7 @@ class TestInstallerStructure:
             "persist_fresh_config",
             "persist_reinstall_config",
             "write_gpu_providers_disabled",
+            "record_wizard_values",
             "write_server_key",
             "preload_models",
             "register_and_start",

@@ -38,6 +38,7 @@ from .config_writer import _assert_features_persisted as _assert_features_persis
 from .config_writer import _detect_config_hand_edits as _detect_config_hand_edits
 from .config_writer import _profile_toml as _profile_toml
 from .config_writer import _reconcile_ollama_base_url as _reconcile_ollama_base_url
+from .config_writer import _record_wizard_values as _record_wizard_values
 from .config_writer import _revert_graph_enabled_flag as _revert_graph_enabled_flag
 from .config_writer import _revert_multilingual_flag as _revert_multilingual_flag
 from .config_writer import _write_profile_config as _write_profile_config

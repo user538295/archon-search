@@ -1,5 +1,5 @@
 ---
-title: Core-module complexity refactor (defref_extractor, graph_extractor, config_writer, model_validation)
+title: Core-module complexity refactor (defref_extractor, graph_extractor, config_writer, installer, model_validation)
 status: draft        # draft → in-progress → done
 source: surfaced by the BE-21 (2026-08-19-035 MGE) clean-code review pass
 ---
@@ -36,9 +36,15 @@ edit baselines blindly.
 - [Moderate · function length] `extract` (`:278`, ~219 lines).
 
 ### `archon_search/install/config_writer.py`
-- [Major · cyclomatic complexity] `_apply_wizard_features_to_toml` (`:147`) and
-  `_detect_config_hand_edits` (`:311`).
-- [Moderate · function length] `_apply_wizard_features_to_toml` (`:147`, ~163 lines).
+- [Major · cyclomatic complexity] `_apply_wizard_features_to_toml` (`:227`).
+- [Moderate · function length] `_apply_wizard_features_to_toml` (`:227`, ~171 lines).
+
+### `archon_search/install/installer.py`
+Pre-existing structure flagged by the T14 (wizard hand-edit detection) clean-code review (C1-CC-1..5); that change added only a few lines to `run()`.
+- [Major · cyclomatic complexity] `BaseInstaller.run()` (`:510`, ~112 branch points).
+- [Moderate · function length] `BaseInstaller.run()` (`:510`, ~549 lines).
+- [Moderate · file length] 1468 lines.
+- [Moderate · class length] `BaseInstaller` (`:152`, ~970 lines) and `RealInstaller` (`:1234`, ~228 lines).
 
 ### `archon_search/model_validation.py`
 - [Major · cyclomatic complexity] `validate_providers_shared` (`:375`).

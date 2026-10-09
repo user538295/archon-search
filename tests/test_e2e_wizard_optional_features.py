@@ -31,8 +31,9 @@ from click.testing import CliRunner, Result
 
 from archon_search.cli.config_cmd import _effective_toml
 from archon_search.cli.main import main
-from archon_search.config import load_config
+from archon_search.config import SearchConfig, load_config
 from archon_search.install import InstallError, RealInstaller
+from archon_search.install.config_writer import _wizard_record_path
 from archon_search.install.extras import CODE_EXTRA_SIZE_ESTIMATE, GRAPH_MODEL_SIZE_ESTIMATE
 from archon_search.install.licenses import (
     _download_fasttext_model,
@@ -46,6 +47,7 @@ from archon_search.install.provisioning import (
 from archon_search.paths import get_fasttext_models_dir
 from archon_search.platform.types import GpuType
 from tests.test_install_fasttext_download import _pin_digest_of
+from tests.test_install_overwrite_detection import _set_key
 from tests.test_removed_engine_repo_guard import _ENGINE_PATTERN, _files_naming_engine
 
 # installer.py's non-interactive overwrite warning, printed when a re-run detects hand edits.
@@ -125,9 +127,12 @@ def _patched_wizard(**extra_module_patches: Any) -> Generator[None, None, None]:
         "_is_service_running": MagicMock(return_value=False),
     }
 
+    # `--force --delete-db` stops the service through prewarm's own import; unpatched it
+    # would unload the developer's real launchd/systemd service.
     with patch.multiple("archon_search.install.installer", **module_level):
         with patch.multiple(RealInstaller, **installer_patches):
-            yield
+            with patch("archon_search.install.prewarm.get_search_service", MagicMock()):
+                yield
 
 
 @pytest.fixture
@@ -2320,9 +2325,8 @@ def test_s553_s556_s557_explicit_no_flag_writes_false_on_rerun(
     runner: CliRunner, tmp_path: Path, flag: str, positive: str, table: str, key: str
 ) -> None:
     """S553/S556/S557 re-run half: after a run with the positive flag, re-running
-    with --no-X must leave the key present as false, not delete it. The wizard-written
-    true differs from the default, so run 2 reports it as a hand edit — the positive
-    control for the `_HAND_EDIT_WARNING not in` checks below."""
+    with --no-X must leave the key present as false, not delete it. The true on disk
+    is the wizard's own previous answer, so run 2 does not report it as a hand edit."""
     config_path = tmp_path / "archon-search.toml"
 
     _run_minimal_wizard(runner, config_path, positive)
@@ -2331,7 +2335,7 @@ def test_s553_s556_s557_explicit_no_flag_writes_false_on_rerun(
     rerun = _run_minimal_wizard(runner, config_path, flag)
 
     _assert_key_written_false(config_path, table, key, flag)
-    assert _HAND_EDIT_WARNING in rerun.output, rerun.output
+    assert _HAND_EDIT_WARNING not in rerun.output, rerun.output
 
 
 @pytest.mark.integration
@@ -2367,6 +2371,354 @@ def test_explicit_no_flag_then_rerun_without_flag_removes_key(
 
     section = tomlkit.parse(config_path.read_text()).get(table, {})
     assert key not in section, f"[{table}].{key} should be removed on an unanswered re-run; got {section[key]!r}"
+    assert _HAND_EDIT_WARNING not in rerun.output, rerun.output
+
+
+# ---------------------------------------------------------------------------
+# Re-run hand-edit detection: wizard-written values vs genuine hand edits
+# ---------------------------------------------------------------------------
+
+# installer.py's interactive overwrite confirm, asked when a re-run detects hand edits.
+_OVERWRITE_PROMPT = "Existing config has custom values. Overwrite with profile defaults? [y/N]: "
+# More newlines than the interactive flow has prompts: Enter answers each with its default.
+_ENTER_AT_EVERY_PROMPT = "\n" * 30
+
+# Every wizard flag that writes a re-run-managed key with a non-default value.
+_WIZARD_WRITTEN_VALUE_FLAGS = [
+    pytest.param(("--watch",), id="watch"),
+    pytest.param(("--telemetry",), id="telemetry"),
+    pytest.param(("--eager-load",), id="eager-load"),
+    pytest.param(("--routing-strategy", "hybrid"), id="routing-strategy-hybrid"),
+    pytest.param(("--log-format", "json"), id="log-format-json"),
+    pytest.param(("--no-reranker",), id="no-reranker"),
+    pytest.param(("--enable-hyde",), id="enable-hyde"),
+    pytest.param(("--enable-rag-fusion",), id="enable-rag-fusion"),
+    pytest.param(("--telemetry", "--telemetry-retention-days", "7"), id="telemetry-retention-days"),
+]
+
+# Keys the wizard owns on re-run that a user can hand-add to a no-flag install.
+_HAND_ADDED_MANAGED_KEYS = [
+    pytest.param("hyde", "enabled", True, id="hyde-enabled"),
+    pytest.param("rag_fusion", "enabled", True, id="rag-fusion-enabled"),
+    pytest.param("telemetry", "retention_days", SearchConfig().telemetry.retention_days, id="telemetry-retention-days"),
+]
+
+
+def _run_minimal_wizard_interactive(
+    runner: CliRunner, config_path: Path, *extra: str, answers: dict[str, str] | None = None
+) -> Result:
+    """Interactive minimal-profile re-run: Enter at every prompt, except that a prompt
+    listed in *answers* (exact prompt text → typed answer) gets that answer. Fails the
+    test if a scripted prompt was never asked."""
+    scripted = answers or {}
+    asked: set[str] = set()
+    real_input = builtins.input
+
+    def _answer(prompt: str = "") -> str:
+        typed = real_input(prompt)  # echoes the prompt and consumes one Enter
+        asked.add(prompt)
+        return scripted.get(prompt, typed)
+
+    with _no_anthropic_key(), _patched_wizard(), patch("builtins.input", _answer):
+        result = runner.invoke(
+            main,
+            [
+                "wizard",
+                "--profile", "minimal",
+                "--no-multilingual",
+                "--config", str(config_path),
+                "--skip-preload",
+                *extra,
+            ],
+            input=_ENTER_AT_EVERY_PROMPT,
+        )
+    never_asked = scripted.keys() - asked
+    assert not never_asked, f"scripted prompts never asked: {sorted(never_asked)}\nOUT:\n{result.output}"
+    return result
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("flags", _WIZARD_WRITTEN_VALUE_FLAGS)
+def test_rerun_does_not_flag_wizard_written_value_as_hand_edit_non_interactive(
+    runner: CliRunner, tmp_path: Path, flags: tuple[str, ...]
+) -> None:
+    """A value the wizard itself wrote on the previous run is not a hand edit: a
+    flagless --non-interactive re-run must not print the overwrite warning."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual", *flags)
+
+    rerun = _run_minimal_wizard(runner, config_path, "--no-multilingual")
+
+    assert _HAND_EDIT_WARNING not in rerun.output, (
+        f"value written by the wizard's own {' '.join(flags)} run was reported as a hand edit:\n"
+        f"{rerun.output}"
+    )
+
+
+@pytest.mark.integration
+def test_rerun_does_not_flag_wizard_written_value_as_hand_edit_interactive(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Interactive re-run after a --watch install, Enter at every prompt: no overwrite
+    confirm is asked (the wizard wrote watch = true itself), so the run completes."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual", "--watch")
+
+    rerun = _run_minimal_wizard_interactive(runner, config_path)
+
+    assert _OVERWRITE_PROMPT not in rerun.output, (
+        f"wizard-written watch = true triggered the overwrite confirm:\n{rerun.output}"
+    )
+    assert "Installation aborted." not in rerun.output, rerun.output
+    assert rerun.exit_code == 0, f"Exit {rerun.exit_code}:\nOUT: {rerun.output}"
+
+
+@pytest.mark.integration
+def test_rerun_flags_hand_added_watch_as_hand_edit(runner: CliRunner, tmp_path: Path) -> None:
+    """Guard: a hand-added [collections] watch = true on a no-flag install is a hand
+    edit, so the flagless --non-interactive re-run warns before overwriting it."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual")
+    _set_key(config_path, "collections", "watch", True)
+
+    rerun = _run_minimal_wizard(runner, config_path, "--no-multilingual")
+
+    assert _HAND_EDIT_WARNING in rerun.output, rerun.output
+
+
+@pytest.mark.integration
+def test_rerun_flags_hand_edit_back_to_default_as_hand_edit(runner: CliRunner, tmp_path: Path) -> None:
+    """The wizard wrote watch = true; the user changed it to false (the default). That
+    is still a hand edit, so the flagless --non-interactive re-run must warn."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual", "--watch")
+    _set_key(config_path, "collections", "watch", False)
+
+    rerun = _run_minimal_wizard(runner, config_path, "--no-multilingual")
+
+    assert _HAND_EDIT_WARNING in rerun.output, (
+        f"hand edit of wizard-written watch = true to false was not reported:\n{rerun.output}"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("section", "key", "value"), _HAND_ADDED_MANAGED_KEYS)
+def test_rerun_warns_before_removing_hand_added_managed_key_non_interactive(
+    runner: CliRunner, tmp_path: Path, section: str, key: str, value: Any
+) -> None:
+    """A hand-added managed key on a no-flag install is a hand edit: the flagless
+    --non-interactive re-run must warn, then overwrite it from this run's answers
+    (20_wizard.md: non-interactive auto-accepts the overwrite)."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual")
+    _set_key(config_path, section, key, value)
+
+    rerun = _run_minimal_wizard(runner, config_path, "--no-multilingual")
+
+    assert _HAND_EDIT_WARNING in rerun.output, (
+        f"hand-added [{section}].{key} = {value!r} was not reported as a hand edit; "
+        f"file after re-run:\n{config_path.read_text()}\nOUT:\n{rerun.output}"
+    )
+    assert key not in tomlkit.parse(config_path.read_text()).get(section, {}), (
+        f"hand-added [{section}].{key} survived the auto-accepted overwrite:\n{config_path.read_text()}"
+    )
+
+
+@pytest.mark.integration
+def test_rerun_interactive_yes_at_overwrite_confirm_overwrites_and_refreshes_record(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Answering `y` at the overwrite confirm proceeds: the hand edit is replaced by this
+    run's answers (Enter at the watch prompt writes false; `y` at the telemetry prompt
+    writes a non-default true), and the next flagless re-run is quiet because the record
+    now describes what this run wrote."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual")
+    _set_key(config_path, "collections", "watch", True)
+
+    overwrite = _run_minimal_wizard_interactive(
+        runner, config_path, answers={_OVERWRITE_PROMPT: "y", "Enable local query telemetry? [y/N]: ": "y"}
+    )
+
+    assert _OVERWRITE_PROMPT in overwrite.output, overwrite.output
+    assert overwrite.exit_code == 0, f"Exit {overwrite.exit_code}:\nOUT: {overwrite.output}"
+    written = tomlkit.parse(config_path.read_text())
+    assert written["collections"]["watch"] is False
+    assert written["telemetry"]["enabled"] is True
+
+    rerun = _run_minimal_wizard(runner, config_path, "--no-multilingual")
+
+    assert _HAND_EDIT_WARNING not in rerun.output, rerun.output
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(("section", "key", "value"), _HAND_ADDED_MANAGED_KEYS)
+def test_rerun_interactive_enter_at_overwrite_confirm_keeps_hand_added_managed_key(
+    runner: CliRunner, tmp_path: Path, section: str, key: str, value: Any
+) -> None:
+    """Interactive re-run over a hand-added managed key asks the overwrite confirm;
+    Enter (default N) aborts with exit 1 and leaves the hand edit on disk."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual")
+    _set_key(config_path, section, key, value)
+
+    rerun = _run_minimal_wizard_interactive(runner, config_path)
+
+    assert _OVERWRITE_PROMPT in rerun.output, (
+        f"hand-added [{section}].{key} = {value!r} did not trigger the overwrite confirm:\n{rerun.output}"
+    )
+    assert "Installation aborted." in rerun.output, rerun.output
+    assert rerun.exit_code == 1, f"Exit {rerun.exit_code}:\nOUT: {rerun.output}"
+    assert tomlkit.parse(config_path.read_text()).get(section, {}).get(key) == value, (
+        f"hand-added [{section}].{key} was removed:\n{config_path.read_text()}"
+    )
+
+
+def _run_minimal_wizard_prewarm_fails(runner: CliRunner, config_path: Path) -> Result:
+    """Flagless --non-interactive run whose Step 14 model pre-warm fails, so it exits 1: a
+    re-run restores the previous config from its `.toml.bak`, a fresh install removes its config."""
+    with _patched_wizard(_prewarm_models=MagicMock(side_effect=InstallError("embedder cannot be loaded"))):
+        result = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--no-multilingual",
+            "--config", str(config_path),
+        ])
+    assert result.exit_code == 1, f"Exit {result.exit_code}: {result.output}"
+    return result
+
+
+@pytest.mark.integration
+def test_rerun_after_failed_prewarm_does_not_flag_restored_wizard_written_value(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """A re-run whose pre-warm fails restores the --watch install's config; the next
+    flagless re-run still knows watch = true was written by the wizard."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual", "--watch")
+    _run_minimal_wizard_prewarm_fails(runner, config_path)
+    assert tomlkit.parse(config_path.read_text())["collections"]["watch"] is True
+
+    rerun = _run_minimal_wizard(runner, config_path, "--no-multilingual")
+
+    assert _HAND_EDIT_WARNING not in rerun.output, rerun.output
+
+
+@pytest.mark.integration
+def test_rerun_after_failed_prewarm_still_flags_restored_hand_edit(runner: CliRunner, tmp_path: Path) -> None:
+    """The failed re-run overwrote a hand edit and then restored it from the backup; the
+    hand edit is back on disk, so the next flagless re-run must warn about it again."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual")
+    _set_key(config_path, "collections", "watch", True)
+    _run_minimal_wizard_prewarm_fails(runner, config_path)
+    assert tomlkit.parse(config_path.read_text())["collections"]["watch"] is True
+
+    rerun = _run_minimal_wizard(runner, config_path, "--no-multilingual")
+
+    assert _HAND_EDIT_WARNING in rerun.output, rerun.output
+
+
+@pytest.mark.integration
+def test_dry_run_rerun_does_not_absorb_hand_edit(runner: CliRunner, tmp_path: Path) -> None:
+    """A --dry-run re-run writes nothing, so a hand edit it saw is still reported by the
+    next real flagless re-run."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual")
+    _set_key(config_path, "collections", "watch", True)
+    _run_minimal_wizard(runner, config_path, "--no-multilingual", "--dry-run")
+
+    rerun = _run_minimal_wizard(runner, config_path, "--no-multilingual")
+
+    assert _HAND_EDIT_WARNING in rerun.output, rerun.output
+
+
+@pytest.mark.integration
+def test_rerun_after_failed_service_start_does_not_flag_values_it_wrote(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """A re-run whose service start fails exits non-zero after writing the config; the
+    record is written on that exit, so the next flagless re-run does not report the
+    removal of the --watch install's watch = true as a hand edit."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual", "--watch")
+
+    with _patched_wizard(), patch.object(RealInstaller, "load_service", MagicMock(return_value=1)):
+        failed = runner.invoke(main, [
+            "wizard",
+            "--non-interactive",
+            "--profile", "minimal",
+            "--no-multilingual",
+            "--config", str(config_path),
+            "--skip-preload",
+        ])
+    assert failed.exit_code != 0, failed.output
+    assert "Service start returned exit code 1." in failed.output, failed.output
+    assert "watch" not in tomlkit.parse(config_path.read_text()).get("collections", {})
+
+    rerun = _run_minimal_wizard(runner, config_path, "--no-multilingual")
+
+    assert _HAND_EDIT_WARNING not in rerun.output, rerun.output
+
+
+@pytest.mark.integration
+def test_rerun_after_declined_proceed_does_not_flag_values_it_wrote(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """An interactive --watch re-run declined at `Proceed?` exits 1 with its config already
+    written (watch = true); the record is written on that exit, so the next flagless
+    re-run does not report watch = true as a hand edit."""
+    config_path = tmp_path / "archon-search.toml"
+    _run_minimal_wizard(runner, config_path, "--no-multilingual")
+
+    declined = _run_minimal_wizard_interactive(runner, config_path, "--watch", answers={"Proceed? [Y/n]: ": "n"})
+
+    assert "Installation aborted." in declined.output, declined.output
+    assert declined.exit_code == 1, f"Exit {declined.exit_code}:\nOUT: {declined.output}"
+    assert tomlkit.parse(config_path.read_text())["collections"]["watch"] is True
+
+    rerun = _run_minimal_wizard(runner, config_path, "--no-multilingual")
+
+    assert _HAND_EDIT_WARNING not in rerun.output, rerun.output
+
+
+@pytest.mark.integration
+def test_fresh_install_failed_prewarm_leaves_no_config_backup_or_record(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """A fresh install whose pre-warm fails removes its config and backup, and the record
+    goes with them; the following fresh install succeeds without a hand-edit warning."""
+    config_path = tmp_path / "archon-search.toml"
+
+    _run_minimal_wizard_prewarm_fails(runner, config_path)
+
+    assert not config_path.exists()
+    assert not config_path.with_suffix(".toml.bak").exists()
+    assert not _wizard_record_path(config_path).exists()
+
+    retry = _run_minimal_wizard(runner, config_path, "--no-multilingual")
+
+    assert _HAND_EDIT_WARNING not in retry.output, retry.output
+    assert _wizard_record_path(config_path).exists()
+
+
+@pytest.mark.integration
+def test_force_delete_db_reinstall_records_the_config_it_wrote(runner: CliRunner, tmp_path: Path) -> None:
+    """A `--force --delete-db` reinstall writes the config through its own branch; the
+    record is written on its exit too, so its non-default --telemetry is not reported as
+    a hand edit by the next flagless re-run."""
+    config_path = tmp_path / "archon-search.toml"
+    db_path = str(tmp_path / "lancedb")
+    _run_minimal_wizard(runner, config_path, "--no-multilingual", "--db-path", db_path)
+
+    _run_minimal_wizard(
+        runner, config_path, "--no-multilingual", "--db-path", db_path, "--force", "--delete-db", "--telemetry"
+    )
+    assert tomlkit.parse(config_path.read_text())["telemetry"]["enabled"] is True
+
+    rerun = _run_minimal_wizard(runner, config_path, "--no-multilingual", "--db-path", db_path)
+
     assert _HAND_EDIT_WARNING not in rerun.output, rerun.output
 
 

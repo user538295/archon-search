@@ -38,6 +38,7 @@ from .config_writer import (
     _assert_features_persisted,
     _detect_config_hand_edits,
     _profile_toml,
+    _record_wizard_values,
     _revert_graph_enabled_flag,
     _revert_multilingual_flag,
     _write_profile_config,
@@ -443,6 +444,9 @@ class BaseInstaller(ABC):
     def write_gpu_providers_disabled(self, config_path: Path) -> None: ...
 
     @abstractmethod
+    def record_wizard_values(self, config_path: Path) -> None: ...
+
+    @abstractmethod
     def write_server_key(self, server_key: str) -> None: ...
 
     @abstractmethod
@@ -547,7 +551,7 @@ class BaseInstaller(ABC):
         # A dry-run serializes against nothing (it writes no config/db), so it
         # skips the install lock — whose parent.mkdir would otherwise leave the
         # data dir (~/.archon-search) behind.
-        with self.install_lock():
+        with self.install_lock(), contextlib.ExitStack() as on_exit:
             # Step 0: log directory. The legacy-service cleanup is deliberately
             # NOT done here: removing it before the reinstall guard (Step 5) or
             # any other abort point would dismantle a running service that the
@@ -770,6 +774,11 @@ class BaseInstaller(ABC):
                     config_path, prof, profile_name, is_multilingual, features, has_edits
                 )
 
+            # Every exit from here on — success, abort, failure or exception — records what
+            # the wizard left in the config, after any flag revert, so the next re-run tells
+            # the wizard's own values from hand edits (_detect_config_hand_edits).
+            on_exit.callback(self.record_wizard_values, config_path)
+
             # Step 8b: reload config with freshly-written values
             if self.dry_run and branch == "fresh":
                 fd, tmp_path_str = tempfile.mkstemp(suffix=".toml")
@@ -961,6 +970,10 @@ class BaseInstaller(ABC):
                         bak = config_path.with_suffix(".toml.bak")
                         if bak.exists():
                             shutil.copy2(bak, config_path)
+                            # The restored file is the previous run's config, which the
+                            # previous record describes; recording it now would pass off any
+                            # hand edit it holds as wizard-written. Keep that record instead.
+                            on_exit.pop_all()
                     # branch == "force": leave backup, new config stays
                     return 1
 
@@ -1195,6 +1208,9 @@ class DryRunInstaller(BaseInstaller):
     def write_gpu_providers_disabled(self, config_path: Path) -> None:
         pass
 
+    def record_wizard_values(self, config_path: Path) -> None:
+        pass
+
     def write_server_key(self, server_key: str) -> None:
         print(f"[dry-run] Would write server key to {get_key_file()}.")
 
@@ -1403,6 +1419,9 @@ class RealInstaller(BaseInstaller):
             gpu_doc.add("database", tomlkit.table())
         gpu_doc["database"]["providers"] = tomlkit.array()
         atomic_write_bytes(config_path, tomlkit.dumps(gpu_doc).encode())
+
+    def record_wizard_values(self, config_path: Path) -> None:
+        _record_wizard_values(config_path)
 
     def write_server_key(self, server_key: str) -> None:
         _key_file = get_key_file()
