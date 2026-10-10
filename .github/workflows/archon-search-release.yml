@@ -244,9 +244,12 @@ jobs:
   #   - CPU: `archon-search:<tag>` and `archon-search:latest`
   #         base = python:3.12-slim (fastembed CPU onnxruntime)
   #   - GPU: `archon-search:<tag>-gpu` and `archon-search:gpu`
-  #         base = nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+  #         base = the job's `GPU_BASE_IMAGE` (the CUDA 13 `-base` tag)
   #         (Python 3.12 added via the deadsnakes PPA; onnxruntime swapped for
-  #          onnxruntime-gpu — fastembed 0.8.0 does not ship a `[gpu]` extra)
+  #          onnxruntime-gpu[cuda,cudnn] — fastembed does not ship a `[gpu]`
+  #          extra; the CUDA 13 / cuDNN 9 libraries come from the pip wheels
+  #          torch and onnxruntime-gpu share, so the base ships only the CUDA
+  #          runtime and env — see the Dockerfile)
   #
   # The Dockerfile uses `COPY .` so the image always contains the exact source
   # at the tagged commit. `needs: [test, unlocked-deps]` (not `needs: publish`) —
@@ -264,15 +267,17 @@ jobs:
   #
   # GPU build is best-effort: `continue-on-error: true` lets the workflow
   # finish even if the NVIDIA registry is rate-limited, the deadsnakes PPA is
-  # transiently unreachable, or fastembed/onnxruntime-gpu cannot resolve. A
-  # follow-up step annotates the workflow job summary so a silent GPU failure
+  # transiently unreachable, fastembed/onnxruntime-gpu cannot resolve, or the
+  # Dockerfile's guard finds onnxruntime-gpu, torch and the base on different
+  # CUDA majors. A follow-up step annotates the workflow job summary so a silent GPU failure
   # is loud — without this, operators pulling `:gpu` or `:<tag>-gpu` would get
   # "image not found" with no warning, or worse, the previous `:gpu` floating
   # tag would remain in GHCR and resolve to an older build.
   #
-  # The docker smoke test (`tests/test_docker_smoke.py`, `-m docker`) is
-  # intentionally NOT run here: it is a developer tool. CI lacks a GPU runner
-  # for the GPU smoke variant, and the build-step itself is the gate that a
+  # The docker smoke tests (`tests/test_docker_smoke.py` for the CPU image,
+  # `tests/test_docker_gpu_image.py` for the GPU image, `-m docker`) are
+  # intentionally NOT run here: they are a developer tool. CI lacks a GPU
+  # runner for the GPU image, and the build-step itself is the gate that a
   # working image was produced.
   # ---------------------------------------------------------------------------
   docker:
@@ -282,6 +287,10 @@ jobs:
     # Parallels the `github-release` job's gate so the same release contract
     # applies to PyPI publish, image push, and the GitHub Release.
     if: startsWith(github.ref, 'refs/tags/')
+    env:
+      # The GPU image's base, named once for the build step, its name and the
+      # failure annotation.
+      GPU_BASE_IMAGE: nvidia/cuda:13.0.3-base-ubuntu22.04
     permissions:
       contents: read
       packages: write
@@ -330,14 +339,14 @@ jobs:
             -t ghcr.io/${{ github.repository_owner }}/archon-search:latest \
             .
 
-      - name: Build and push GPU image (BASE_IMAGE=nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04, amd64 only — NVIDIA CUDA base has no arm64 variant)
+      - name: Build and push GPU image (BASE_IMAGE=${{ env.GPU_BASE_IMAGE }}, amd64 only)
         id: gpu_build
         continue-on-error: true
         env:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           docker buildx build --push \
-            --build-arg BASE_IMAGE=nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04 \
+            --build-arg BASE_IMAGE="$GPU_BASE_IMAGE" \
             --build-arg GIT_COMMIT=${{ github.sha }} \
             --build-arg RELEASE_VERSION=$TAG \
             -t ghcr.io/${{ github.repository_owner }}/archon-search:$TAG-gpu \
@@ -350,7 +359,7 @@ jobs:
           {
             echo "## :warning: GPU image build failed";
             echo "";
-            echo "The GPU image build (\`BASE_IMAGE=nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04\`) did not complete. The \`:gpu\` and \`:${{ steps.tag.outputs.tag }}-gpu\` tags have NOT been updated for this release.";
+            echo "The GPU image build (\`BASE_IMAGE=${GPU_BASE_IMAGE}\`) did not complete. The \`:gpu\` and \`:${{ steps.tag.outputs.tag }}-gpu\` tags have NOT been updated for this release.";
             echo "";
             echo "If the floating \`:gpu\` tag still exists in GHCR it points to the previous successful build. Verify with:";
             echo "";

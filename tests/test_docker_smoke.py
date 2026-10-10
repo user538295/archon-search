@@ -5,7 +5,7 @@ container, and verify it serves traffic. They are gated behind
 ``@pytest.mark.docker`` and the ``ARCHON_SEARCH_RUN_DOCKER_SMOKE`` opt-in
 env var so the default ``uv run pytest`` invocation does not pay the
 ~5-minute build cost on dev machines that happen to have a docker daemon
-installed. **No CI workflow runs them** — ``archon-search-release.yml:236-239``
+installed. **No CI workflow runs them** — the docker job's header comment in ``archon-search-release.yml``
 records that omission as deliberate (no GPU runner; the image build step is the
 gate). They are a manual, opt-in developer check::
 
@@ -36,7 +36,8 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from tests._docker_support import REPO_ROOT, SMOKE_OPT_IN_ENV, docker_available, smoke_opted_in
+
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 IMAGE_TAG = "archon-search:smoke-test"
@@ -84,43 +85,6 @@ ENTRYPOINT_HANDOFF_PREFIX = "=== setup complete — handing off to:"
 ENTRYPOINT_ABORT_MARKER = "ERROR: entrypoint aborted"
 # The entrypoint logs the resolved extras list verbatim at startup.
 ENTRYPOINT_DEFAULT_EXTRAS_LINE = "ARCHON_EXTRAS=graph,code,multilingual"
-
-
-SMOKE_OPT_IN_ENV = "ARCHON_SEARCH_RUN_DOCKER_SMOKE"
-
-
-def _docker_available() -> bool:
-    """A running daemon, not merely the CLI binary. ``shutil.which`` alone is a
-    false positive: Docker Desktop can be installed (``docker`` on PATH) but
-    stopped, in which case every ``docker build`` errors instead of skipping.
-    ``docker info`` is the cheapest call that actually touches the daemon."""
-    if shutil.which("docker") is None:
-        return False
-    try:
-        return (
-            subprocess.run(
-                ["docker", "info"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            ).returncode
-            == 0
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-
-
-def _smoke_opted_in() -> bool:
-    """Smoke tests are skipped unless the operator opts in.
-
-    Without this gate every ``uv run pytest`` on a developer laptop with
-    Docker Desktop installed would trigger the ~5-minute image build.
-    The C9 plan called for the suite to run via ``-m docker``; this
-    env var is the project-convention equivalent of marker exclusion,
-    matching how ``live`` / ``live_eval`` skip when their infrastructure
-    is absent.
-    """
-    return os.environ.get(SMOKE_OPT_IN_ENV) == "1"
 
 
 def _container_running(container_id: str) -> bool:
@@ -276,11 +240,11 @@ def cpu_image() -> Iterator[str]:
     runs on the same host reuse the build layer cache. CI runners are
     ephemeral so leftover images don't accumulate.
     """
-    if not _smoke_opted_in():
+    if not smoke_opted_in():
         pytest.skip(
             f"{SMOKE_OPT_IN_ENV} not set; opt in to run the docker smoke build"
         )
-    if not _docker_available():
+    if not docker_available():
         pytest.skip("docker not available")
     # Build budget: 25 min. The Task 4.3 spec suggested 300s, but a cold
     # `pip install .` pulls torch + onnxruntime + fastembed model deps,
@@ -338,10 +302,10 @@ def test_smoke_lane_still_invoked_by_docker_compose() -> None:
 @pytest.mark.docker
 @pytest.mark.xdist_group("docker")
 @pytest.mark.skipif(
-    not _smoke_opted_in(),
+    not smoke_opted_in(),
     reason=f"{SMOKE_OPT_IN_ENV} not set; opt in to run the docker smoke suite",
 )
-@pytest.mark.skipif(not _docker_available(), reason="docker not available")
+@pytest.mark.skipif(not docker_available(), reason="docker not available")
 def test_cpu_image_starts_and_serves_ready(cpu_image: str) -> None:
     """Build the CPU image, run it as the default user with an anonymous
     volume, and assert ``/ready`` returns HTTP 200 within ``READY_TIMEOUT_S``.
@@ -375,10 +339,10 @@ def test_cpu_image_starts_and_serves_ready(cpu_image: str) -> None:
 @pytest.mark.docker
 @pytest.mark.xdist_group("docker")
 @pytest.mark.skipif(
-    not _smoke_opted_in(),
+    not smoke_opted_in(),
     reason=f"{SMOKE_OPT_IN_ENV} not set; opt in to run the docker smoke suite",
 )
-@pytest.mark.skipif(not _docker_available(), reason="docker not available")
+@pytest.mark.skipif(not docker_available(), reason="docker not available")
 def test_uid_1000_can_write_data_dir(cpu_image: str) -> None:
     """Mount a host directory at ``/data`` with UID 1000 ownership and
     assert that the key file lands on the volume.
@@ -470,10 +434,10 @@ terms offered to Northwind Traders.
 @pytest.mark.docker
 @pytest.mark.xdist_group("docker")
 @pytest.mark.skipif(
-    not _smoke_opted_in(),
+    not smoke_opted_in(),
     reason=f"{SMOKE_OPT_IN_ENV} not set; opt in to run the docker smoke suite",
 )
-@pytest.mark.skipif(not _docker_available(), reason="docker not available")
+@pytest.mark.skipif(not docker_available(), reason="docker not available")
 def test_cpu_image_starts_and_serves_ready_without_spacy(cpu_image: str) -> None:
     """S56 default leg: the entrypoint reaches ``exec "$@"`` with the DEFAULT
     ``ARCHON_EXTRAS`` (which includes ``graph``) and no spaCy in the image.
@@ -578,10 +542,10 @@ def test_cpu_image_starts_and_serves_ready_without_spacy(cpu_image: str) -> None
 @pytest.mark.docker
 @pytest.mark.xdist_group("docker")
 @pytest.mark.skipif(
-    not _smoke_opted_in(),
+    not smoke_opted_in(),
     reason=f"{SMOKE_OPT_IN_ENV} not set; opt in to run the docker smoke suite",
 )
-@pytest.mark.skipif(not _docker_available(), reason="docker not available")
+@pytest.mark.skipif(not docker_available(), reason="docker not available")
 def test_graph_enabled_image_degrades_to_code_symbols_only(
     cpu_image: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -724,9 +688,9 @@ def test_runner_image() -> str:
     teardown — the named volumes (``archon-docker-venv``, ``archon-uv-cache``)
     persist and speed up subsequent runs.
     """
-    if not _smoke_opted_in():
+    if not smoke_opted_in():
         pytest.skip(f"{SMOKE_OPT_IN_ENV} not set; opt in to run the docker compose smoke suite")
-    if not _docker_available():
+    if not docker_available():
         pytest.skip("docker not available")
     subprocess.run(
         ["docker", "compose", "build", "archon-test-runner"],
@@ -740,10 +704,10 @@ def test_runner_image() -> str:
 @pytest.mark.docker
 @pytest.mark.xdist_group("docker")
 @pytest.mark.skipif(
-    not _smoke_opted_in(),
+    not smoke_opted_in(),
     reason=f"{SMOKE_OPT_IN_ENV} not set; opt in to run the docker compose smoke suite",
 )
-@pytest.mark.skipif(not _docker_available(), reason="docker not available")
+@pytest.mark.skipif(not docker_available(), reason="docker not available")
 def test_docker_smoke_suite_exits_0(test_runner_image: str) -> None:
     """Run ``tests/smoke/docker/`` inside the compose test-runner; assert exit 0.
 

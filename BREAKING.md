@@ -8,6 +8,21 @@
 
 ## Changelog
 
+### [next release] — Docker `:gpu` image: CUDA 13 base, NVIDIA driver ≥ 580 required; no system CUDA 12.1 / cuDNN 8 libraries (2026-10-10)
+
+**Surface**: the `ghcr.io/user538295/archon-search:gpu` and `:<version>-gpu` images — host driver requirement under `docker run --gpus`, and the base image that images built `FROM` them inherit.
+
+**What changed:** The base moves from `nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04` to `nvidia/cuda:13.0.3-base-ubuntu22.04` (`Dockerfile`, `.github/workflows/archon-search-release.yml`). The image now installs `onnxruntime-gpu[cuda,cudnn]>=1.27` and takes the CUDA 13 / cuDNN 9 libraries from the pip `nvidia-*` wheels it shares with PyPI's CUDA 13 torch; the old base could not load the CUDA provider of the CUDA 13 `onnxruntime-gpu` it installed, so embedding and reranking ran on CPU. The entrypoint no longer installs the CPU `onnxruntime` into `/pip-packages`, where it shadowed `onnxruntime-gpu`; it logs `Leaving out onnxruntime==<resolved version>: the image's onnxruntime-gpu <image version> replaces it (same onnxruntime import package).` instead, and does not re-check the extras' requirements on `onnxruntime` against the GPU build.
+
+- **Driver**: CUDA 13.x needs NVIDIA driver 580 or later ([CUDA 13.0 release notes](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html), Table 2). The image sets `NVIDIA_REQUIRE_CUDA=cuda>=13.0 …` (was `cuda>=12.1 …`; both read with `docker image inspect` from the images built on 2026-10-10, `Config.Env`), so with `--gpus` on an older driver the NVIDIA Container Toolkit refuses to start the container: `nvidia-container-cli: requirement error: unsatisfied condition: cuda>=13.0, please update your driver to a newer version, or use an earlier cuda container` (message format: [nvidia-container-toolkit#940](https://github.com/NVIDIA/nvidia-container-toolkit/issues/940)). The variable still admits data-center and professional brands (not GeForce or Titan) on the 535, 550, 565, 570 and 575 branches for CUDA forward compatibility (same `docker image inspect` output); that path is untested. Containers run without `--gpus` start as before and run on CPU.
+- **Derived images**: the image no longer contains system CUDA 12.1 or cuDNN 8 libraries (`libcudnn8`); the base ships only the CUDA 13 runtime, and cuDNN 9 / cuBLAS 13 come from Python wheels under `dist-packages/nvidia/*/lib`, registered in `/etc/ld.so.conf.d/archon-search-cuda-wheels.conf`.
+
+**Migration**: before pulling the new `:gpu` image, upgrade the host NVIDIA driver to 580 or later (check with `nvidia-smi`), or pin the last earlier `:<version>-gpu` tag. Keep the `/pip-packages` volume: the changed package list invalidates its stamp, so the first start reinstalls the extras and replaces its content, no manual step needed. An image built `FROM` `:gpu` that needs CUDA 12 or cuDNN 8 must bring its own, or build from the earlier base. Details: `Documentation/UserManual/140_running_with_docker.md` → "Running the GPU image". Real-GPU inference with the new image is not yet verified; the opt-in `tests/test_docker_gpu_image.py` tests check library resolution without a GPU.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — wizard: NVIDIA hosts write CUDA only after a CUDA load test passes; no `+cu126` torch swap when it does (2026-10-10)
 
 **Surface**: `archon-search wizard` → `[database].providers` / `reranker_providers` in `~/.archon-search/archon-search.toml`, its stdout and summary, and the Linux x86_64 PyTorch reinstall.

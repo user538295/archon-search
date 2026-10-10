@@ -1,8 +1,8 @@
 **Purpose**: Curated chronological index of breaking changes drawn directly from `BREAKING.md`, with a one-line migration step per entry and links back to the authoritative source.
 **Audience**: Operators planning an upgrade across multiple versions; maintainers scanning for surface-level impact before tagging.
 **Status**: Draft
-**Last reviewed**: 2026-09-07
-**Next review**: 2027-09-07
+**Last reviewed**: 2026-10-10
+**Next review**: 2027-10-10
 
 # Breaking Changes Index
 
@@ -14,7 +14,7 @@
 2. **One row per published entry.** Releases with no contract change have no row.
 3. **`[next release]` entries are included.** They describe behavior already on `main`; consumers building against the development head are already affected.
 
-> **This index is incomplete, and knowingly so.** Principle 2 is the target state, not the current state. `BREAKING.md` carries **76** `### ` headings — every one of them a `[next release]` entry, since no tagged release has shipped a breaking change yet. Only **11** (NR-1 … NR-11) have a row below. The other **65** predate this index and have never been backfilled, so the `[next release]` table below is a sample, not a complete inventory: *do not* plan an upgrade from it alone. Read `BREAKING.md` itself.
+> **This index is incomplete, and knowingly so.** Principle 2 is the target state, not the current state. `BREAKING.md` carries **77** `### ` headings — every one of them a `[next release]` entry, since no tagged release has shipped a breaking change yet. Only **12** (NR-1 … NR-12) have a row below. The other **65** predate this index and have never been backfilled, so the `[next release]` table below is a sample, not a complete inventory: *do not* plan an upgrade from it alone. Read `BREAKING.md` itself.
 >
 > The gap does not grow. `tests/test_removed_engine_repo_guard.py` (S52) pins exactly those 65 headings on an allowlist and fails the build on any **new** `BREAKING.md` heading that lands without a row here. That allowlist is also self-tightening: backfilling a heading requires striking it from the list, so the 65 can only shrink. Backfilling them is tracked work, not something to do opportunistically alongside an unrelated change.
 
@@ -29,7 +29,7 @@
 
 ### `[next release]` (queued on `main`, not yet tagged)
 
-11 of the 76 `[next release]` entries in `BREAKING.md` are indexed here — see the incompleteness note under [Principles](#principles).
+12 of the 77 `[next release]` entries in `BREAKING.md` are indexed here — see the incompleteness note under [Principles](#principles).
 
 | ID | Surface | What changed | Who is affected | One-line migration | Source |
 | --- | --- | --- | --- | --- | --- |
@@ -44,6 +44,7 @@
 | NR-9 | Config file written by `archon-search wizard` (fresh install, `--force --delete-db`) | A fresh install writes only `[server].host = "127.0.0.1"`, the profile's `[database]` keys and `[database].providers` when the GPU step writes it (a detected GPU, or `--disable-gpu`/a declined GPU prompt); never-answered defaults (`[server].port`, `[database].db_path`, `auto_reindex_on_chunk_size_change`, the `[routing]` tuning keys, `[collections]` lists, `[logging]` level/file/backups) are left out. `[hyde]`/`[rag_fusion]` `enabled` is written only when answered and is removed (not written `false`) by a re-run that leaves it unanswered. The effective config is unchanged; existing files keep their keys. | Scripts that read or edit those keys directly in a freshly written `archon-search.toml`. | Use `archon-search config get`/`config set` (or add the key); `config show` still prints every key. | [BREAKING.md → "[next release] — wizard: fresh-install config files omit never-answered keys; HyDE/RAG Fusion `enabled` written only when answered (2026-10-09)"](../../BREAKING.md) |
 | NR-10 | MCP (`/mcp` Streamable HTTP sessions) | Behaviour only, no schema change: with `mcp>=1.30.0` now required, a stateful session with no request in flight and no open GET stream for 30 minutes is closed, and its next request gets `404`; while 10 000 sessions are open, a new one gets `503`. Previously a session lived until `DELETE` or server stop. | MCP clients that hold an `Mcp-Session-Id` across idle periods over 30 minutes without the GET stream open (the MCP SDK clients keep it open and are unaffected). | On `404` for a session, initialize a new session and retry (MCP spec); retry `503` with backoff. | [BREAKING.md → "[next release] — `/mcp`: idle Streamable HTTP sessions expire after 30 minutes (`404`); at most 10 000 concurrent sessions (`503`) (2026-10-10)"](../../BREAKING.md) |
 | NR-11 | Config file written by `archon-search wizard` (`[database].providers`), its stdout and summary, the Linux x86_64 torch reinstall | On NVIDIA with CUDA accepted, the wizard loads both models under `CUDAExecutionProvider` before writing it. Without `onnxruntime-gpu` (the stock install) the check fails: it writes `providers = []` instead of `["CUDAExecutionProvider"]`, prints `Warning: CUDA validation failed — falling back to CPU.`, and the summary reads `(CPU default)`; the `+cu126` torch reinstall still runs on Linux x86_64. With `onnxruntime-gpu` it writes CUDA, removes `reranker_providers`, and skips the `+cu126` reinstall. `--dry-run` is unchanged. | Scripts or checks that expect `["CUDAExecutionProvider"]` in a wizard-written NVIDIA config; GPU-ORT environments that relied on the `+cu126` swap. | Accept `[]`, or install `onnxruntime-gpu` per `UserManual/10_installation.md` → "NVIDIA GPU: run embedding and reranking on CUDA" and re-run the wizard. | [BREAKING.md → "[next release] — wizard: NVIDIA hosts write CUDA only after a CUDA load test passes; no `+cu126` torch swap when it does (2026-10-10)"](../../BREAKING.md) |
+| NR-12 | Docker `:gpu` / `:<version>-gpu` images (host driver under `docker run --gpus`, base inherited by images built `FROM` them) | The base moves from `nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04` to `nvidia/cuda:13.0.3-base-ubuntu22.04`; CUDA 13 / cuDNN 9 come from pip wheels shared by torch and `onnxruntime-gpu[cuda,cudnn]`, so embedding and reranking can run on CUDA (the old base fell back to CPU). With `--gpus`, a driver older than 580 stops the container (`NVIDIA_REQUIRE_CUDA=cuda>=13.0 …`). No system CUDA 12.1 or cuDNN 8 libraries remain. | NVIDIA hosts on a driver older than 580; images built `FROM` `:gpu` that need CUDA 12 or cuDNN 8. | Upgrade the host driver to 580 or later (or pin the last earlier `:<version>-gpu` tag); keep the `/pip-packages` volume, which the first start refills. | [BREAKING.md → "[next release] — Docker `:gpu` image: CUDA 13 base, NVIDIA driver ≥ 580 required; no system CUDA 12.1 / cuDNN 8 libraries (2026-10-10)"](../../BREAKING.md) |
 
 NR-1 and NR-2 are tracked as paydown items in [`Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) as **API-1** (MCP shape) and **API-2** (`top_k` ignored). The Pydantic schema for `SearchRequest` still declares `top_k`; this is intentional and documented as debt — it will be removed when the entry is promoted out of `[next release]`.
 

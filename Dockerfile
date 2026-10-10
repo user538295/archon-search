@@ -6,13 +6,16 @@
 #
 #   docker build .                                                          # CPU (default)
 #   docker build --build-arg BASE_IMAGE=python:3.12-slim .                   # CPU (explicit)
-#   docker build --build-arg BASE_IMAGE=nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04 .  # GPU
+#   docker build --build-arg BASE_IMAGE=nvidia/cuda:13.0.3-base-ubuntu22.04 .  # GPU (release tag: GPU_BASE_IMAGE in .github/workflows/archon-search-release.yml)
 #
 # The CPU base ships Python 3.12 already; the NVIDIA CUDA base ships only the
 # CUDA runtime and is Ubuntu-based, so we conditionally install Python 3.12
-# from deadsnakes when the base does not provide it. fastembed 0.9.0 does
+# from deadsnakes when the base does not provide it. fastembed 0.9.0 (the version verified on 2026-10-10) does
 # not publish a `[gpu]` extra, so the GPU branch swaps the default CPU
-# `onnxruntime` for `onnxruntime-gpu` after the base archon-search install.
+# `onnxruntime` for `onnxruntime-gpu[cuda,cudnn]` after the base archon-search
+# install. The CUDA 13 / cuDNN 9 libraries come from the pip wheels torch and
+# onnxruntime-gpu share, so the GPU base is the slim CUDA 13 `-base` tag (no
+# system cuDNN to clash with the wheels'); CUDA 13 needs an NVIDIA driver >= 580.
 
 ARG BASE_IMAGE=python:3.12-slim
 FROM ${BASE_IMAGE}
@@ -83,11 +86,13 @@ COPY . /app
 # BOTH the bake-time `pip install .` below AND the entrypoint's runtime install
 # of the packages the extras add to the image (into /pip-packages) resolve
 # `torch==<ver>+cpu` (which declares no nvidia/cuda dependencies). The
-# nvidia/cuda GPU base skips this and keeps the default CUDA build it needs.
+# nvidia/cuda GPU base skips this: its torch is PyPI's Linux wheel, today the
+# CUDA 13 build (`+cu130`, with the CUDA 13 / cuDNN 9 wheels the GPU arm below
+# shares with onnxruntime-gpu).
 RUN set -eux; \
     case "${BASE_IMAGE}" in \
         *nvidia/cuda*) \
-            : "GPU base — keep the default index so torch resolves the CUDA build" ;; \
+            : "GPU base — keep the default index so torch resolves PyPI's CUDA 13 build" ;; \
         *) \
             printf '[global]\nextra-index-url = https://download.pytorch.org/whl/cpu\n' \
                 > /etc/pip.conf ;; \
@@ -101,14 +106,37 @@ RUN set -eux; \
 # For the GPU variant the project's CPU `onnxruntime` is swapped for
 # `onnxruntime-gpu` after the base install. fastembed 0.9.0 does not ship
 # a `[gpu]` extra (verified against the package metadata) so this is the
-# documented manual-swap path.
+# documented manual-swap path. PyPI's onnxruntime-gpu is built with CUDA 13.0
+# and cuDNN 9 from 1.27 on, needs CUDA >= 13.0 at run time, and works with
+# PyTorch's CUDA/cuDNN wheels when both use the same CUDA and cuDNN majors
+# (https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html);
+# CUDA 13 needs an NVIDIA driver >= 580 (Table 2 of
+# https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html).
+# Its `[cuda,cudnn]` extras require the same CUDA 13 / cuDNN 9 wheels torch
+# already pulls, so the image holds one shared stack, with one `libcudnn.so.9`.
+# fastembed preloads nothing, so the `nvidia/*/lib` directories of those wheels
+# (beside onnxruntime in the install dir, dist-packages on the Ubuntu base) go
+# into the loader cache (ldconfig) for the CUDA provider to find. That glob
+# relies on the wheels' layout, the one ORT's own `preload_dlls` looks in:
+# `nvidia/cu<major>/lib` for the CUDA 13 toolkit wheels, `nvidia/cudnn/lib`
+# for cuDNN (https://github.com/microsoft/onnxruntime/blob/v1.31.0/onnxruntime/__init__.py
+# lines 211-216 and 261). If no `nvidia/*/lib` directory exists, `ls -d` fails
+# the build; a wheel that moves only some of its libraries elsewhere leaves
+# them unregistered, which the GPU image tests catch
+# (tests/test_docker_gpu_image.py). scripts/check-gpu-cuda-majors.sh then
+# fails the build unless onnxruntime-gpu, torch and the base agree on the CUDA
+# major (rationale in its header).
 RUN set -eux; \
     SETUPTOOLS_SCM_PRETEND_VERSION="${RELEASE_VERSION}+docker" \
         /usr/local/bin/python3 -m pip install --no-cache-dir .; \
     case "${BASE_IMAGE}" in \
         *nvidia/cuda*) \
             /usr/local/bin/python3 -m pip uninstall -y onnxruntime; \
-            /usr/local/bin/python3 -m pip install --no-cache-dir onnxruntime-gpu; \
+            /usr/local/bin/python3 -m pip install --no-cache-dir "onnxruntime-gpu[cuda,cudnn]>=1.27"; \
+            site_packages="$(/usr/local/bin/python3 -c 'import pathlib, onnxruntime; print(pathlib.Path(onnxruntime.__file__).parents[1])')"; \
+            ls -d "${site_packages}"/nvidia/*/lib > /etc/ld.so.conf.d/archon-search-cuda-wheels.conf; \
+            ldconfig; \
+            sh /app/scripts/check-gpu-cuda-majors.sh; \
             ;; \
     esac
 

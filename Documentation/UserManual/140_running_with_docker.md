@@ -1,7 +1,7 @@
 **Purpose**: Run `archon-search` from the published Docker image — `docker run`, `docker compose`, and the build-arg matrix for CPU/GPU images.
 **Audience**: End users / operators who want a portable, reproducible deployment unit.
 **Status**: Stable
-**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-10-10 / **Next review**: 2027-10-10
 
 # Running with Docker
 
@@ -24,6 +24,7 @@ The container entrypoint is `scripts/docker-entrypoint.sh` (copied to `/entrypoi
 2. Checks that every name in `ARCHON_EXTRAS` is an extra of the image's archon-search. Names are compared PEP 685-normalised, so `rag_fusion` matches `rag-fusion`. An unknown name, such as a typo, logs `ERROR: unknown extra(s) in ARCHON_EXTRAS: <names>; valid extras: <names>`; an empty entry (a stray or doubled comma such as `code,`, or a blank value such as `" "`) logs `ERROR: empty entry in ARCHON_EXTRAS (stray or doubled comma, or a blank value); valid extras: <names>`. Either way the container exits with a non-zero code before anything is installed.
 3. Builds a fingerprint from the `ARCHON_EXTRAS` value, the Python version (`sys.version`) and the image's own package list (`pip list --format=freeze`, which includes the archon-search version). If the stamp file `/pip-packages/.extras-installed` holds the same fingerprint, the install is skipped.
 4. Otherwise resolves `archon-search[${ARCHON_EXTRAS}]==<image version>` against the image's own environment (`python3 -I -m pip install --dry-run --report`) and installs exactly the artifacts that resolution chose, one `<name> @ <url>` requirement per package, with `python3 -I -m pip install --no-cache-dir --no-deps --target /pip-packages/.staging`. It makes up to 3 attempts, each into an emptied `.staging` directory. Only after an attempt succeeds does it remove the old stamp and every other entry of the volume root, move the staged packages into the root, and write the new stamp last, so an interrupted install is redone on the next start. If all 3 attempts fail, the container exits with a non-zero code and the volume keeps its previous packages and stamp. During a reinstall (an upgrade, a rebuilt image, or a changed `ARCHON_EXTRAS`) the volume therefore holds the previous packages and the staged new ones at the same time, so `/pip-packages` needs free space for both sets at once; without it the install fails and the volume keeps the previous packages.
+   On the `:gpu` image it leaves out the CPU `onnxruntime` that the resolution adds back (fastembed and magika, in the image's base closure, require `onnxruntime` by name, as does gliner 0.2.26–0.2.28 of the `graph` extra — 0.2.29 only through its `onnx` extra — and the image replaced it with `onnxruntime-gpu`, which ships the same `onnxruntime` import package) and logs both versions: `Leaving out onnxruntime==<resolved version>: the image's onnxruntime-gpu <image version> replaces it (same onnxruntime import package).` The two versions can differ, and the extras' requirements on `onnxruntime` are not re-checked against the GPU build: the image's `onnxruntime-gpu` stands in for whichever `onnxruntime` version the resolution picked. A CPU copy in `/pip-packages`, first on `PYTHONPATH`, would shadow the image's GPU build (`scripts/docker-entrypoint.sh`, `print_image_onnxruntime_gpu_version`).
 5. Prepends `/pip-packages` to `PYTHONPATH` and execs the CMD (`archon-search serve`).
 
 The volume never holds archon-search itself, so the container always runs the image's own code. A package the image already provides at a version the extras accept is not copied either. A base package lands in the volume only when an extra requires a different version — for example, the `code` extra pins `tree-sitter<0.26` (`pyproject.toml`) while the image's base closure can ship a newer tree-sitter (0.26 or later), so a 0.25.x tree-sitter goes into the volume, the same way `pip install "archon-search[code]"` resolves it in a plain environment.
@@ -60,7 +61,7 @@ The CPU / GPU variant is chosen at **build time** via the `BASE_IMAGE` build-arg
 | Tag | Base image | Use when |
 | --- | --- | --- |
 | `:latest`, `:<version>` | `python:3.12-slim` | Any host without an NVIDIA GPU. CPU inference only. |
-| `:gpu`, `:<version>-gpu` | `nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04` | NVIDIA host with the container toolkit installed. Uses `onnxruntime-gpu` instead of CPU `onnxruntime` (fastembed 0.9.0 ships no `[gpu]` extra, so the GPU image swaps it manually). |
+| `:gpu`, `:<version>-gpu` | `nvidia/cuda:13.0.3-base-ubuntu22.04` (amd64 only) | NVIDIA host with driver 580 or later and the NVIDIA Container Toolkit; start it with `--gpus all`. Uses `onnxruntime-gpu` instead of CPU `onnxruntime` (fastembed 0.9.0, the version verified on 2026-10-10, ships no `[gpu]` extra, so the GPU image swaps it manually). See [Running the GPU image](#running-the-gpu-image). |
 
 The `:latest` CPU image ships the **CPU-only** PyTorch build: the image's pip configuration (`/etc/pip.conf`) adds the PyTorch CPU wheel index, so pip installs `torch==<ver>+cpu`. PDF and image-OCR parsing (docling) still works, but pulls no NVIDIA CUDA runtime, so the image carries no GPU libraries it cannot execute. For GPU-accelerated docling in a container, use the `:gpu` image.
 
@@ -72,6 +73,36 @@ docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revisi
 ```
 
 A failed GPU build does **not** delete the previous floating `:gpu` tag — operators pulling `:gpu` may receive an older successful build. Read the release notes for the version you expect, and confirm the SHA above matches.
+
+### Running the GPU image
+
+The `:gpu` image needs two things on the host: NVIDIA driver 580 or later, because CUDA 13.x requires it ([CUDA 13.0 release notes](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html), Table 2; check with `nvidia-smi`), and the NVIDIA Container Toolkit. Start the container with `--gpus all`; without it the container starts on any host and everything runs on CPU.
+
+```bash
+docker run -d \
+  --name archon-search \
+  --gpus all \
+  -e ARCHON_SEARCH_API_KEY=$ARCHON_SEARCH_API_KEY \
+  -v archon-search-data:/data \
+  -v archon-search-packages:/pip-packages \
+  -p 8765:8765 \
+  ghcr.io/user538295/archon-search:gpu
+```
+
+**A driver older than 580 stops the container at `docker run --gpus`.** The base image sets `NVIDIA_REQUIRE_CUDA=cuda>=13.0 …`, so the toolkit refuses to start it with `nvidia-container-cli: requirement error: unsatisfied condition: cuda>=13.0, please update your driver to a newer version, or use an earlier cuda container` (message format: [nvidia-container-toolkit#940](https://github.com/NVIDIA/nvidia-container-toolkit/issues/940)). The same variable also accepts data-center and professional GPU brands (Tesla, GRID, Quadro, NVIDIA RTX and others; not GeForce or Titan) on the 535, 550, 565, 570 and 575 driver branches — its space-separated conditions are ORed ([nvidia-container-runtime README](https://github.com/NVIDIA/nvidia-container-toolkit/blob/main/cmd/nvidia-container-runtime/README.md)) — for CUDA forward compatibility through the image's `cuda-compat-13-0` package. That forward-compatibility path has not been tested with this image.
+
+**How embedding and reranking land on CUDA.** The container leaves `[database].providers` at its default `[]` (`archon_search/config.py:260`). With an empty list archon-search passes no provider list to fastembed (`archon_search/onnx_providers.py`, `select_onnx_providers`), and fastembed 0.9.0 (the version verified on 2026-10-10) then picks `CUDAExecutionProvider` whenever the installed ONNX Runtime offers it (`fastembed/common/onnx_model.py:101-107`), which `onnxruntime-gpu` does. If the CUDA provider still fails to load when a session is created, fastembed runs that model on CPU and only emits `RuntimeWarning: Attempt to set CUDAExecutionProvider failed. …` on stderr; `GET /ready` does not report it. If the GPU stays idle, look for that line in `docker logs`.
+
+**One CUDA stack, from pip wheels.** PyPI's Linux torch (a CUDA 13.0 build) and `onnxruntime-gpu[cuda,cudnn]` 1.27 or later (CUDA 13.0 and cuDNN 9, [ONNX Runtime CUDA provider requirements](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html)) share one set of CUDA 13 / cuDNN 9 `nvidia-*` wheels; the `-base` image adds only the CUDA runtime and environment. The 2026-10-10 verification build resolved torch 2.14.1 and `onnxruntime-gpu` 1.31.0; neither is pinned, so a later build installs whatever PyPI then offers. The build registers the wheels' `nvidia/*/lib` directories with the dynamic loader (`/etc/ld.so.conf.d/archon-search-cuda-wheels.conf`, then `ldconfig`), so the CUDA provider finds them without `onnxruntime.preload_dlls()`, and it fails unless `onnxruntime-gpu`, torch and the base image's `CUDA_VERSION` have the same CUDA major (`scripts/check-gpu-cuda-majors.sh`, run by the `Dockerfile`; the opt-in tests also run it against a mismatched `CUDA_VERSION` to check that it fails): when PyPI moves torch or `onnxruntime-gpu` to a new CUDA major, the GPU build fails, by design, until the base tag is bumped. The base is not `13.0.3-cudnn-runtime` because that image's system cuDNN is 9.14.0.64 ([its Dockerfile](https://gitlab.com/nvidia/container-images/cuda/-/raw/master/dist/13.0.3/ubuntu2204/runtime/cudnn/Dockerfile)), older than the `nvidia-cudnn-cu13==9.24.0.43` torch 2.14.1 requires ([PyPI](https://pypi.org/pypi/torch/2.14.1/json)). Two `libcudnn.so.9` copies in one process means the first one loaded serves both, and torch refuses a runtime cuDNN whose minor version is older than the one it was compiled against (`torch/backends/cudnn/__init__.py`); that torch 2.14.1 is compiled against exactly 9.24 is inferred from its pin.
+
+**What is verified.** A local `--platform linux/amd64` build without a GPU (2026-10-10): every library `libonnxruntime_providers_cuda.so` links against resolves, except `libcuda.so.1`, which the host driver provides at run time; every library ORT's `preload_dlls` would load opens by soname without it, and `libcudnn.so.9` loads from the one copy, in the `nvidia/cudnn/lib` wheel directory; ONNX Runtime lists `CUDAExecutionProvider`; no CPU `onnxruntime` is installed, in the image or in `/pip-packages`. Inference on a real NVIDIA GPU has not been run. The opt-in container tests check the same points (no CI workflow runs them; `release.sh`'s docker lane runs them before a release tag):
+
+```bash
+ARCHON_SEARCH_RUN_DOCKER_SMOKE=1 uv run pytest tests/test_docker_gpu_image.py \
+  --no-cov -o addopts= --strict-markers --strict-config -n0 -m docker
+```
+
+**Upgrading from an earlier `:gpu` image.** Earlier `:gpu` images (base `nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04`) installed the newest `onnxruntime-gpu`, a CUDA 13 build from 1.27 on, and so ran embedding and reranking on CPU even with `--gpus all`: a pre-fix build with `onnxruntime-gpu` 1.31.0 links its CUDA provider against `libcublasLt.so.13`, `libcublas.so.13` and `libcudart.so.13`, which the CUDA 12.1 base does not have. Their entrypoint also put the CPU `onnxruntime` into `/pip-packages`, where it shadowed `onnxruntime-gpu`. Before you pull the new image, check that the host driver is 580 or later. Keep the `/pip-packages` volume: the new image's package list changes the fingerprint, so its first start reinstalls the extras and replaces the volume's content, the CPU `onnxruntime` included (see **Upgrading the image** above). Images built `FROM` the `:gpu` image no longer find system CUDA 12.1 or cuDNN 8 libraries. Locally, the new image takes 12.6 GB on disk (4.15 GB content) against 17.6 GB (6.16 GB) before (`docker image ls`).
 
 ## `docker run` quickstart
 

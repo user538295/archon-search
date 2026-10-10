@@ -144,7 +144,7 @@ Embedding and reranking run on the GPU only with the `onnxruntime-gpu` package i
 
 - PyPI's `onnxruntime-gpu` 1.27 and later is built for CUDA 13.0 and cuDNN 9 ([ONNX Runtime CUDA provider requirements](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html)); CUDA 12 builds are not on PyPI.
 - CUDA 13.x needs NVIDIA driver 580 or later ([CUDA 13.0 release notes](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html)). Check with `nvidia-smi`.
-- `onnxruntime` and `onnxruntime-gpu` cannot be installed in the same environment ([fastembed GPU guide](https://qdrant.github.io/fastembed/examples/FastEmbed_GPU/)). fastembed and gliner (the `graph` extra) both depend on `onnxruntime`, so every install command below has to keep `onnxruntime` out.
+- `onnxruntime` and `onnxruntime-gpu` cannot be installed in the same environment ([fastembed GPU guide](https://qdrant.github.io/fastembed/examples/FastEmbed_GPU/)). fastembed and magika (both in archon-search's base dependency tree) require `onnxruntime` by name, and so does gliner 0.2.26–0.2.28 (the `graph` extra; gliner 0.2.29 requires it only through its `onnx` extra), so every install command below has to keep `onnxruntime` out.
 
 The `[cuda,cudnn]` extras of `onnxruntime-gpu` install the CUDA 13 and cuDNN 9 libraries as `nvidia-*` wheels, so no system CUDA toolkit is needed. `onnxruntime-gpu`'s CUDA provider library does not find those wheels by itself, so archon-search calls `onnxruntime.preload_dlls()` once per process, before its first ONNX Runtime session, when the configured providers include `CUDAExecutionProvider` and the installed ONNX Runtime is a CUDA build (`archon_search/onnx_providers.py`).
 
@@ -165,7 +165,7 @@ pip uninstall -y onnxruntime
 pip install "onnxruntime-gpu[cuda,cudnn]"
 ```
 
-On Linux, PyPI's torch is already the CUDA 13 build. Any later `pip install` or upgrade that requires `onnxruntime` (archon-search, fastembed, gliner) reinstalls it next to `onnxruntime-gpu`. After each one, repeat `pip uninstall -y onnxruntime` and `pip install --force-reinstall "onnxruntime-gpu[cuda,cudnn]"`.
+On Linux, PyPI's torch is already the CUDA 13 build. Any later `pip install` or upgrade that requires `onnxruntime` (archon-search, fastembed, magika, gliner 0.2.26–0.2.28) reinstalls it next to `onnxruntime-gpu`. After each one, repeat `pip uninstall -y onnxruntime` and `pip install --force-reinstall "onnxruntime-gpu[cuda,cudnn]"`.
 
 **Checkout (`uv sync`).** Not supported: the lock pins the CPU-only torch on Linux x86_64, and `uv sync` removes every package the lock does not list, `onnxruntime-gpu` included.
 
@@ -174,6 +174,8 @@ Then re-run `archon-search wizard` and accept CUDA. The CUDA load test passes, t
 These steps were verified by dependency resolution and receipt behaviour, not run on a real NVIDIA GPU. With uv 0.12.23 on 2026-10-10, resolving `archon-search[graph]` with `onnxruntime-gpu[cuda,cudnn]`, `onnxruntime` excluded and `--torch-backend cu130` gave `onnxruntime-gpu` 1.31.0, no `onnxruntime`, torch 2.14.1+cu130 and a single CUDA 13 stack (`nvidia-cudnn-cu13`, no `-cu12` package) on Linux x86_64, Linux aarch64 and Windows x86_64. Without the exclusion, both `onnxruntime` and `onnxruntime-gpu` resolve. The uv tool receipt was checked to record the exclusion and keep it through `uv tool upgrade --reinstall`.
 
 If the CUDA libraries fail to load when a session is created, fastembed 0.9.0 runs that model on CPU and only emits a Python `RuntimeWarning` (`Attempt to set CUDAExecutionProvider failed. …`) on stderr; neither the wizard's CUDA load test nor `GET /ready` reports it. If the GPU stays idle after the wizard wrote CUDA, look for that warning in the service's stderr output.
+
+The `:gpu` Docker image comes with this setup in place (`onnxruntime-gpu`, no `onnxruntime`, one CUDA 13 / cuDNN 9 stack shared with torch) and needs no wizard run: see [`140_running_with_docker.md`](./140_running_with_docker.md#running-the-gpu-image).
 
 ## Install profiles (C0)
 

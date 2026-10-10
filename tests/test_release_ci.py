@@ -15,6 +15,8 @@ WORKFLOW_PATH = (
     / "workflows"
     / "archon-search-release.yml"
 )
+# The NVIDIA CUDA tag the GPU image is verified on (Dockerfile, Documentation/UserManual/140_running_with_docker.md).
+GPU_BASE_IMAGE = "nvidia/cuda:13.0.3-base-ubuntu22.04"
 
 
 @pytest.fixture(scope="module")
@@ -158,15 +160,28 @@ def test_docker_job_builds_cpu_image_with_base_image_python(workflow_text: str) 
     )
 
 
-def test_docker_job_builds_gpu_image_with_base_image_nvidia(workflow_text: str) -> None:
-    """GPU build step must pass --build-arg BASE_IMAGE=nvidia/cuda:...-ubuntu22.04."""
-    assert (
-        "--build-arg BASE_IMAGE=nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04"
-        in workflow_text
-    ), (
-        "docker job must build the GPU image with the verified NVIDIA CUDA tag "
-        "(nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04)"
+def _gpu_build_step(docker_steps: list[dict]) -> dict:
+    (step,) = [s for s in docker_steps if s.get("id") == "gpu_build"]
+    return step
+
+
+def test_docker_job_defines_the_gpu_base_image_once(docker_job: dict, workflow_text: str) -> None:
+    """The GPU base tag is the docker job's ``GPU_BASE_IMAGE``, written nowhere else in the workflow."""
+    assert docker_job.get("env", {}).get("GPU_BASE_IMAGE") == GPU_BASE_IMAGE, (
+        f"docker job must define env GPU_BASE_IMAGE: {GPU_BASE_IMAGE} (the verified NVIDIA CUDA tag)"
     )
+    assert workflow_text.count(GPU_BASE_IMAGE) == 1, (
+        f"{GPU_BASE_IMAGE} must appear only in the docker job's env; reference it as GPU_BASE_IMAGE elsewhere"
+    )
+
+
+def test_docker_job_builds_gpu_image_from_the_gpu_base_image(docker_steps: list[dict]) -> None:
+    """GPU build step must pass the job's GPU_BASE_IMAGE as BASE_IMAGE, and name and annotate it."""
+    gpu_step = _gpu_build_step(docker_steps)
+    assert '--build-arg BASE_IMAGE="$GPU_BASE_IMAGE"' in gpu_step["run"], gpu_step["run"]
+    assert "${{ env.GPU_BASE_IMAGE }}" in gpu_step["name"], gpu_step["name"]
+    (annotation,) = [s for s in docker_steps if "GPU image build failed" in s.get("run", "")]
+    assert "BASE_IMAGE=${GPU_BASE_IMAGE}" in annotation["run"], annotation["run"]
 
 
 def test_docker_job_passes_git_commit_to_both_builds(workflow_text: str) -> None:
@@ -221,7 +236,7 @@ def test_docker_job_gpu_step_has_continue_on_error(docker_steps: list[dict]) -> 
         s
         for s in docker_steps
         if "run" in s
-        and "nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04" in s["run"]
+        and '--build-arg BASE_IMAGE="$GPU_BASE_IMAGE"' in s["run"]
         and "buildx build" in s["run"]
     ]
     assert gpu_build_steps, "GPU build step must exist (with `docker buildx build`)"
@@ -321,10 +336,11 @@ def test_docker_job_does_not_run_smoke_test(workflow: dict, workflow_text: str) 
                 f"job '{job_name}' step '{step.get('name', '?')}' must not invoke "
                 f"the docker smoke test (`-m docker`)"
             )
-            assert "test_docker_smoke" not in run, (
-                f"job '{job_name}' step '{step.get('name', '?')}' must not invoke "
-                f"`tests/test_docker_smoke.py`"
-            )
+            for test_module in ("test_docker_smoke", "test_docker_gpu_image"):
+                assert test_module not in run, (
+                    f"job '{job_name}' step '{step.get('name', '?')}' must not invoke "
+                    f"`tests/{test_module}.py`"
+                )
     # A short comment must explain why the smoke test is intentionally skipped.
     assert "smoke" in workflow_text.lower(), (
         "release workflow must contain a comment explaining why the docker "
