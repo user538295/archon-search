@@ -30,9 +30,12 @@ Enabling requires the optional extras — the base install does not pull them in
 Install everything for a full graph deployment:
 
 ```bash
-pip install 'archon-search[graph,code]'
+pip install 'archon-search[graph,code]'        # or, for a uv tool install:
+# uv tool install 'archon-search[graph,code]'  # (list every extra you use)
 archon-search wizard   # pre-warms the prose extraction checkpoint (~1.2 GB)
 ```
+
+The startup and status messages for a missing extra print the install command for the running install method (`pip install …`, or in a `uv tool` install a `uv tool install …` command that keeps the extras recorded in the receipt; when the receipt cannot be reproduced, a plain `uv tool install 'archon-search[<extra>]'` with a `#` note to repeat the original install options). See [Optional extras](../UserManual/10_installation.md#optional-extras).
 
 Because `leidenalg`/`igraph` are lazy, a graph-enabled server boots fine without them — you only discover the gap when a community rebuild runs. Install them proactively if you use `local`/`global` search.
 

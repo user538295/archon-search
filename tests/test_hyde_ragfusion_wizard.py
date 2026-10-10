@@ -119,6 +119,45 @@ class TestCheckProviderDepsAnthropic:
         _check_provider_deps(cfg)  # must not raise
 
 
+class TestCheckProviderDepsInstallHint:
+    """The guard's remedy is the install command for the running install method."""
+
+    @pytest.mark.parametrize(
+        ("provider", "extra", "reason"),
+        [
+            ("anthropic", "hyde", "enabled=true with provider='anthropic' but the 'anthropic' package"),
+            ("ollama", "ollama", "provider='ollama' but the 'ollama' package"),
+            ("openai", "openai-provider", "provider='openai' but the 'openai' package"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("prefix_fixture", "command"),
+        [("uv_tool_prefix", "uv tool install"), ("pip_prefix", "pip install")],
+    )
+    def test_missing_package_message_names_the_install_command(
+        self,
+        request: pytest.FixtureRequest,
+        monkeypatch: pytest.MonkeyPatch,
+        provider: str,
+        extra: str,
+        reason: str,
+        prefix_fixture: str,
+        command: str,
+    ) -> None:
+        from archon_search.config import ConfigError, HyDEConfig, SearchConfig  # noqa: PLC0415
+        from archon_search.server.app import _check_provider_deps  # noqa: PLC0415
+
+        request.getfixturevalue(prefix_fixture)
+        monkeypatch.setitem(sys.modules, provider, None)
+        cfg = SearchConfig()
+        cfg.hyde = HyDEConfig(enabled=True, provider=provider, model="m")
+        with pytest.raises(ConfigError) as excinfo:
+            _check_provider_deps(cfg)
+        assert str(excinfo.value) == (
+            f"[hyde] {reason} is not installed; run: {command} 'archon-search[{extra}]'"
+        )
+
+
 # ---------------------------------------------------------------------------
 # _install_query_expansion_extras — provider→package, deduplicated
 # ---------------------------------------------------------------------------
@@ -134,14 +173,14 @@ class TestInstallQueryExpansionExtras:
         with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_query_expansion_extras(features, dry_run=False)
         mock_extra.assert_called_once()
-        assert mock_extra.call_args[0][0] == "archon-search[hyde]"
+        assert mock_extra.call_args[0][0] == "hyde"
 
     def test_hyde_only_anthropic(self) -> None:
         features = WizardFeatures(enable_hyde=True, hyde_provider="anthropic")
         with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_query_expansion_extras(features, dry_run=False)
         mock_extra.assert_called_once()
-        assert mock_extra.call_args[0][0] == "archon-search[hyde]"
+        assert mock_extra.call_args[0][0] == "hyde"
 
     def test_mixed_providers_install_each_package(self) -> None:
         """HyDE=anthropic + RAG Fusion=ollama → two distinct package installs."""
@@ -153,14 +192,14 @@ class TestInstallQueryExpansionExtras:
         with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_query_expansion_extras(features, dry_run=False)
         installed = {c[0][0] for c in mock_extra.call_args_list}
-        assert installed == {"archon-search[hyde]", "archon-search[ollama]"}
+        assert installed == {"hyde", "ollama"}
 
     def test_openai_provider_package(self) -> None:
         features = WizardFeatures(enable_hyde=True, hyde_provider="openai", hyde_model="gpt-4o-mini")
         with patch("archon_search.install.extras._install_extra") as mock_extra:
             _install_query_expansion_extras(features, dry_run=False)
         mock_extra.assert_called_once()
-        assert mock_extra.call_args[0][0] == "archon-search[openai-provider]"
+        assert mock_extra.call_args[0][0] == "openai-provider"
 
     def test_claude_cli_installs_nothing(self) -> None:
         """claude_cli has no pip package → no install call."""
@@ -186,6 +225,12 @@ class TestInstallQueryExpansionExtras:
             failed = _install_query_expansion_extras(features, dry_run=False)
         assert failed == ["hyde"]
 
+    def test_failed_install_warning_names_the_package(self, capsys: pytest.CaptureFixture) -> None:
+        features = WizardFeatures(enable_hyde=True, hyde_provider="ollama", hyde_model="qwen2.5:3b")
+        with patch("archon_search.install.extras._install_extra", side_effect=InstallError("boom")):
+            _install_query_expansion_extras(features, dry_run=False)
+        assert "install failed for archon-search[ollama]: boom" in capsys.readouterr().err
+
     def test_mixed_provider_partial_failure_returns_only_failed_section(self) -> None:
         """HyDE=anthropic (installs) + RAG Fusion=ollama (fails) → only rag_fusion reported."""
         features = WizardFeatures(
@@ -193,8 +238,8 @@ class TestInstallQueryExpansionExtras:
             enable_rag_fusion=True, rag_fusion_provider="ollama", rag_fusion_model="qwen2.5:3b",
         )
 
-        def _fail_ollama(package, *_a, **_k):
-            if package == "archon-search[ollama]":
+        def _fail_ollama(extra, *_a, **_k):
+            if extra == "ollama":
                 raise InstallError("boom")
 
         with patch("archon_search.install.extras._install_extra", side_effect=_fail_ollama):
@@ -230,6 +275,21 @@ class TestRevertQueryExpansionFlags:
         assert doc["hyde"]["enabled"] is False
         assert doc["rag_fusion"]["enabled"] is False
         assert "warning" in capsys.readouterr().err.lower()
+
+    @pytest.mark.parametrize(
+        ("prefix_fixture", "command"),
+        [("uv_tool_prefix", "uv tool install"), ("pip_prefix", "pip install")],
+    )
+    def test_warning_names_the_install_command_for_the_install_method(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture, request: pytest.FixtureRequest,
+        prefix_fixture: str, command: str,
+    ) -> None:
+        request.getfixturevalue(prefix_fixture)
+        cfg = self._write(tmp_path, "[hyde]\nenabled = true\n")
+        _revert_query_expansion_flags(cfg, dry_run=False)
+        err = capsys.readouterr().err
+        for extra in ("hyde", "openai-provider", "ollama"):
+            assert f"`{command} 'archon-search[{extra}]'`" in err
 
     def test_reverts_only_present_section(self, tmp_path: Path) -> None:
         """Only [hyde] present → reverted, no crash on absent [rag_fusion]."""

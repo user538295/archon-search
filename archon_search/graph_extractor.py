@@ -47,6 +47,7 @@ from archon_search.prose_extraction_backend import (
     ProseExtractionBackend,
     ProseExtractionLoadTimeoutError,
 )
+from archon_search.uv_tool import extra_install_hint
 
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig
@@ -57,17 +58,9 @@ _logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Public: shared with model_validation.py's graph_ner_status so the
-# "[graph] extra missing" message reads identically whether it is surfaced
-# from ensure_graph_engine_importable's construction-time guard or from
-# GET /status (2026-08-19-030 T6, renamed off the prior NER engine in cycle-2 C2-A-01).
-GLINER_NOT_INSTALLED_MESSAGE: str = (
-    "gliner is not installed. Install the graph extras: pip install 'archon-search[graph]'"
-)
-
 # Wire-facing degradation notices for the prose extraction backend (BE-11,
 # tightened by BE-12 for S14/S17/S46). Sanitized (never carry exception text
-# or str(exc)) per the same rule as the gliner notice above, and per
+# or str(exc)), like the message from ``gliner_not_installed_message`` below, and per
 # parser.py's ``_PARSE_WORKER_LOST_DETAIL`` convention — a DETAIL-only
 # constant, since ``GraphExtractionResult.warnings`` is plain ``list[str]``
 # with no separate wire-facing "code" field (graph_types.py) to pair it with.
@@ -95,6 +88,19 @@ _LOAD_WAIT_TIMEOUT_DETAIL: str = (
     "prose entity extraction is disabled for this ingest (code-symbol "
     "extraction is unaffected)."
 )
+
+def gliner_not_installed_message() -> str:
+    """The "[graph] extra missing" message, with the install command for this
+    interpreter's install method (``uv tool install …`` in a uv tool env,
+    ``pip install …`` elsewhere — see :func:`archon_search.uv_tool.extra_install_hint`).
+
+    Public: shared with model_validation.py's graph_ner_status so the message
+    reads identically whether it is surfaced from
+    ensure_graph_engine_importable's construction-time guard or from
+    GET /status (2026-08-19-030 T6, renamed off the prior NER engine in cycle-2 C2-A-01).
+    """
+    return f"gliner is not installed. Install the graph extras: {extra_install_hint('graph')}"
+
 
 def gliner_absent() -> bool:
     """Return ``True`` when ``gliner`` is not importable.
@@ -132,7 +138,7 @@ def ensure_graph_engine_importable(config: "GraphConfig") -> None:
     from archon_search.config import ConfigError  # noqa: PLC0415
 
     if gliner_absent():
-        raise ConfigError(f"graph.enabled=true but {GLINER_NOT_INSTALLED_MESSAGE}")
+        raise ConfigError(f"graph.enabled=true but {gliner_not_installed_message()}")
 
 
 def _build_typed_relation_edge(

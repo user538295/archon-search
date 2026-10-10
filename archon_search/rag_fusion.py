@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 from archon_search._privacy import _query_fingerprint
 from archon_search.config import RAGFusionConfig
 from archon_search.query_expansion_protocol import provider_key_available
+from archon_search.uv_tool import extra_install_hint
 
 _logger = logging.getLogger(__name__)
 
@@ -121,8 +122,7 @@ class RAGFusionGenerator:
         """
         if not self._provider_available:
             raise RAGFusionDependencyError(
-                "Install archon-search[rag_fusion] to use RAG Fusion "
-                "(pip install 'archon-search[rag_fusion]')"
+                f"Install archon-search[rag_fusion] to use RAG Fusion ({extra_install_hint('rag_fusion')})"
             )
 
         fp = _query_fingerprint(query)

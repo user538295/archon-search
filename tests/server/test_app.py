@@ -43,6 +43,20 @@ class TestCheckMultilingualDeps:
                 _check_multilingual_deps(cfg)
         assert "fasttext-wheel" in str(exc_info.value)
 
+    @pytest.mark.parametrize(
+        ("prefix_fixture", "command"),
+        [("uv_tool_prefix", "uv tool install"), ("pip_prefix", "pip install")],
+    )
+    def test_package_missing_names_the_install_command(self, request, prefix_fixture, command):
+        """The remedy is the install command for the running install method (uv tool vs pip)."""
+        request.getfixturevalue(prefix_fixture)
+        with patch("archon_search.server.app._import_fasttext", side_effect=ImportError("no fasttext")):
+            with pytest.raises(RuntimeError) as exc_info:
+                _check_multilingual_deps(_make_config(multilingual=True))
+        assert str(exc_info.value) == (
+            f"multilingual=true but fasttext-wheel is not installed; run: {command} 'archon-search[multilingual]'"
+        )
+
     def test_check_multilingual_deps_model_missing(self, tmp_path):
         """When multilingual=True, import succeeds but model file is absent: RuntimeError with 'lid.176.ftz'."""
         cfg = _make_config(multilingual=True)

@@ -62,6 +62,9 @@ mkdir -p "$DEST" && cp -a ~/.archon-search "$DEST/"
 #    - pipx:           pipx upgrade archon-search
 #    - plain pip:      pip install --upgrade archon-search
 #    - pinned version: pip install archon-search==<target>
+#    All four keep the optional extras (graph, code, multilingual, ...) the
+#    wizard installed — for uv tool, only when the receipt records them; see
+#    "Optional extras and the PyTorch build" below.
 
 # 4. Re-run install ONLY if BREAKING.md notes a service-definition change
 #    (the launchd plist / systemd unit is rewritten by `archon-search install`).
@@ -81,6 +84,14 @@ Verification:
 - `/status` lists the expected collections without new error entries, and `collections_schema_behind` is `0` once you have run pending migrations.
 - A known-good search query returns hits.
 - If telemetry is on, `/telemetry/stats` returns numbers, not `{"enabled": false}`.
+
+### Optional extras and the PyTorch build
+
+- **uv tool.** `uv tool upgrade` re-syncs the environment to the requirements recorded in the uv tool receipt and removes everything else. The current wizard records the extras it installs, so they survive the upgrade. Extras installed by an older wizard, or with `uv pip install`, are not recorded and are removed. Record them before you upgrade, repeating the options of your original install: `uv tool install "archon-search[graph,code,multilingual]"` (list every extra you use; on Linux with a `+cpu` or `+cu126` torch build, add `--torch-backend cpu` or `--torch-backend cu126`). See [Optional extras](../UserManual/10_installation.md#optional-extras).
+- **uv tool on Linux with a non-default PyTorch build.** The receipt does not record `--torch-backend`, so `uv tool upgrade` can replace a CPU-only (`+cpu`) build or the wizard's CUDA 12.6 (`+cu126`) build with PyPI's default Linux build (CUDA 13). Upgrade with `uv tool install --upgrade --torch-backend cpu "archon-search[<extras>]"` (or `--torch-backend cu126`) instead. See [Linux: install the CPU-only PyTorch build](../UserManual/10_installation.md#linux-install-the-cpu-only-pytorch-build).
+- **pipx.** `pipx upgrade` keeps the extras. `pipx reinstall` keeps only the extras named in the original `pipx install`.
+- **pip in a virtual environment.** `pip install --upgrade archon-search` keeps the extras installed in the environment.
+- **Docker.** The entrypoint installs `ARCHON_EXTRAS` into the `/pip-packages` volume with `pip install --target` (`scripts/docker-entrypoint.sh`). That directory also holds a copy of archon-search itself, and it is first on `PYTHONPATH`. The entrypoint skips the install when the stamp file `/pip-packages/.extras-installed` matches `ARCHON_EXTRAS`, and the stamp records only the extras list, not the version. After you pull a newer image and keep the same `/pip-packages` volume, the old archon-search copy in the volume can therefore shadow the new image's code [INFERENCE: the shadowing was reproduced with `pip install --target` and `PYTHONPATH` outside Docker, not in a container]. Deleting only the stamp does not help: without `--upgrade`, `pip install --target` keeps directories that already exist and only warns `Target directory … already exists`. Until this is fixed, recreate the volume when you upgrade the image (`docker volume rm archon-search-packages` with the container removed). The next start re-downloads the extras. Afterwards, check that `archon-search --version` inside the container matches the image.
 
 ## Schema migrations
 

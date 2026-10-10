@@ -205,6 +205,9 @@ request_id_header = "X-Request-ID"
 # data residency requirements apply. (provider = "claude_cli" sends query text to
 # Anthropic via Claude Code's own login — the same residency caveat applies.)
 #
+# Install commands below are for pip. In a `uv tool` install use
+# `uv tool install 'archon-search[<extras>]'`, listing every extra you use.
+#
 # Prerequisites (Anthropic — default):
 #   1. Install the optional dependency: pip install archon-search[hyde]
 #   2. Set ANTHROPIC_API_KEY in the server's environment.
@@ -278,6 +281,9 @@ max_requests_per_minute = 60
 # request that includes rag_fusion=true. Do not enable in air-gapped deployments or
 # where data residency requirements apply. (provider = "claude_cli" sends query text
 # to Anthropic via Claude Code's own login — the same residency caveat applies.)
+#
+# Install commands below are for pip. In a `uv tool` install use
+# `uv tool install 'archon-search[<extras>]'`, listing every extra you use.
 #
 # Prerequisites (Anthropic — default):
 #   1. Install the optional dependency: pip install archon-search[rag_fusion]
@@ -416,9 +422,10 @@ num_queries = 2
 [graph]
 # GraphRAG entity extraction and naive query expansion (E1a).
 # Disabled by default. Requires the optional graph extras:
-#   uv pip install 'archon-search[graph]'
-# or:
 #   pip install 'archon-search[graph]'
+# or, for a `uv tool` install (list every extra you use, so that
+# `uv tool upgrade` keeps them):
+#   uv tool install 'archon-search[graph]'
 #
 # The extras install the gliner library but NOT its model weights, which are
 # not on PyPI. Prose entity + relation extraction uses one pinned multilingual

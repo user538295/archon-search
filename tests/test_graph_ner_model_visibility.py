@@ -129,12 +129,12 @@ async def test_status_surfaces_missing_gliner(
 
 
 def test_gliner_absent_message_names_the_extra(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uv_tool_prefix: Path
 ) -> None:
     """T6: the extractor's own "[graph] extra missing" wording is reused
     verbatim so the two surfaces (construction-time guard, startup probe)
-    agree."""
-    from archon_search.graph_extractor import GLINER_NOT_INSTALLED_MESSAGE
+    agree — including the install-method-aware remedy."""
+    from archon_search.graph_extractor import gliner_not_installed_message
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     config = _config_with_graph(tmp_path, enabled=True, multilingual=False)
@@ -142,8 +142,8 @@ def test_gliner_absent_message_names_the_extra(
     with _gliner_absent():
         warnings = graph_ner_status(config)
 
-    assert len(warnings) == 1, warnings
-    assert GLINER_NOT_INSTALLED_MESSAGE in warnings[0]
+    assert warnings == [f"graph prose entity extraction is disabled: {gliner_not_installed_message()}"]
+    assert warnings[0].endswith("uv tool install 'archon-search[graph]'")
 
 
 # ---------------------------------------------------------------------------

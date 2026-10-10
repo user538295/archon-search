@@ -122,10 +122,16 @@ graph.enabled=true but gliner is not installed. Install the graph extras:
 pip install 'archon-search[graph]'
 ```
 
-1. **Install the extra**: `pip install 'archon-search[graph]'`, or
+The install command in the message matches how archon-search is installed. In a `uv tool` install it is a `uv tool install 'archon-search[...]'` command that repeats the extras and options recorded in the tool's receipt and adds `graph`; when the receipt cannot be reproduced, it is a plain `uv tool install 'archon-search[graph]'` with a `#` note to repeat the options of your original install. Elsewhere it is `pip install`.
+
+1. **Install the extra**: run the command from the message (see [Optional extras](./10_installation.md#optional-extras)), or
 2. **Disable graphing**: set `[graph].enabled = false`.
 
-Note: the prose extraction *checkpoint*, `leidenalg`/`igraph` (community clustering), and code-parser extras (`archon-search[code]`) are **not** checked at startup — a checkpoint that will not load degrades prose extraction (next symptom); a missing Leiden install fails only a `build-communities` job; missing code parsers log a WARNING and surface a per-file warning in `IngestResult.warnings`, but the server still starts and prose graphing still works.
+Note: the prose extraction *checkpoint*, `leidenalg`/`igraph` (community clustering), and code-parser extras (`archon-search[code]`) are **not** checked at startup — a checkpoint that will not load degrades prose extraction (see the `graph prose extraction model is unavailable` symptom below); a missing Leiden install fails only a `build-communities` job; missing code parsers log a WARNING and surface a per-file warning in `IngestResult.warnings`, but the server still starts and prose graphing still works.
+
+## Symptom: extras missing after `uv tool upgrade archon-search`
+
+After `uv tool upgrade archon-search`, the server refuses to start with `gliner is not installed`, `fasttext-wheel is not installed` or a missing provider package. Code files also log missing tree-sitter parsers. The extras were installed into the uv tool environment without being recorded in its receipt: by an older wizard or by `uv pip install`. `uv tool upgrade` removes anything the receipt does not list. Re-install with every extra you use, repeating the options of your original install, e.g. `uv tool install "archon-search[graph,code,multilingual]"`; on Linux with a `+cpu` or `+cu126` torch build, add `--torch-backend cpu` or `--torch-backend cu126`. uv then records them and later upgrades keep them. See [Optional extras](./10_installation.md#optional-extras).
 
 ## Symptom: graph has no prose entities — `graph prose extraction model is unavailable`
 
@@ -179,9 +185,9 @@ All three wordings are sanitized constants in `archon_search/graph_extractor.py`
 
 ## Symptom: server refuses to start — "the 'anthropic' package is not installed"
 
-The server exits with a `ConfigError` naming `[hyde]` or `[rag_fusion]`, e.g. `[hyde] enabled=true with provider='anthropic' but the 'anthropic' package is not installed; run: pip install archon-search[hyde]`. The feature is enabled with a provider whose package is missing.
+The server exits with a `ConfigError` naming `[hyde]` or `[rag_fusion]`, e.g. `[hyde] enabled=true with provider='anthropic' but the 'anthropic' package is not installed; run: pip install 'archon-search[hyde]'`. The feature is enabled with a provider whose package is missing. The command after `run:` matches how archon-search is installed: in a `uv tool` install it is the `uv tool install` command that keeps the extras already recorded in the receipt.
 
-1. **Install the package**: `pip install archon-search[hyde]` (or `[rag_fusion]` — both pull `anthropic`). For `provider = "openai"`: `pip install archon-search[openai-provider]`; for `provider = "ollama"`: `pip install archon-search[ollama]`; `claude_cli` needs no package.
+1. **Install the package**: run the command from the message. The extras are `hyde` (or `rag_fusion`; both pull `anthropic`), `openai-provider` for `provider = "openai"` and `ollama` for `provider = "ollama"`; `claude_cli` needs no package. See [Optional extras](./10_installation.md#optional-extras) for the command per install method.
 2. **Or disable**: set `[hyde].enabled = false` / `[rag_fusion].enabled = false`.
 3. This fires only when the feature is enabled — a default install (feature off) never requires `anthropic`.
 

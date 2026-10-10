@@ -62,6 +62,8 @@ uv tool install --upgrade --torch-backend cpu "archon-search[graph,code]"
 
 Do not use `uv tool upgrade archon-search` for this install: it has no `--torch-backend` option and ignores `UV_TORCH_BACKEND` (uv 0.12.23), so it replaces the CPU-only build with PyPI's CUDA build as soon as a newer `torch` is out. Sources: PyTorch's [install selector](https://pytorch.org/get-started/locally/) (Linux, Pip, CPU), uv's [PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/) and the [`uv tool install` reference](https://docs.astral.sh/uv/reference/cli/#uv-tool-install). The guide still says `--torch-backend` works only in the `uv pip` interface; the CLI reference lists it for `uv tool install`, and uv 0.12.23 accepts it there.
 
+The same applies to the CUDA 12.6 build the wizard installs on a Linux x86_64 GPU host (`torch==<version>+cu126`, see [`20_wizard.md`](./20_wizard.md)). The uv tool receipt does not record `--torch-backend`, so `uv tool upgrade archon-search` can replace that build with PyPI's default Linux build, which is CUDA 13. Upgrade with `uv tool install --upgrade --torch-backend cu126 "archon-search[graph,code]"` instead, listing your extras. When the wizard adds an extra to a uv tool install, it passes `--torch-backend` matching the installed torch build (`+cpu` → `cpu`, `+cu126` → `cu126`), so adding an extra keeps the build.
+
 To switch an existing CUDA install to the CPU-only build:
 
 - **uv:** run the same `uv tool install --upgrade --torch-backend cpu "archon-search[graph,code]"` command, with your extras. It converts the install in place and removes the `nvidia-*`/`cuda-*` packages.
@@ -84,7 +86,18 @@ uv run archon-search --version
 
 ## Optional extras
 
-Some features ship as optional dependency groups (`[project.optional-dependencies]` in `pyproject.toml`). Install them by adding the extra name in brackets, e.g. `pip install "archon-search[graph,code]"` (or `uv sync --extra graph`).
+Some features ship as optional dependency groups (`[project.optional-dependencies]` in `pyproject.toml`). Install them by adding the extra name in brackets. The command depends on how you installed archon-search:
+
+| Install method | Add extras | Upgrade, keeping the extras |
+| --- | --- | --- |
+| `uv tool` | `uv tool install "archon-search[graph,code]"` | `uv tool upgrade archon-search` — Linux `+cpu`/`+cu126` torch: see [Linux: install the CPU-only PyTorch build](#linux-install-the-cpu-only-pytorch-build) |
+| pip in a virtual environment | `pip install "archon-search[graph,code]"` | `pip install --upgrade archon-search` |
+| pipx | `pipx install --force "archon-search[graph,code]"` | `pipx upgrade archon-search` |
+| checkout | `uv sync --extra graph --extra code` | `git pull && uv sync --extra graph --extra code` |
+
+**`uv tool` installs: list every extra in one command.** A uv tool environment is declarative. `uv tool upgrade` re-syncs it to the requirements recorded in its receipt (`uv-receipt.toml` in the tool environment) and removes every package installed some other way, for example with `uv pip install`. `uv tool install` records exactly what it is given and replaces the previous receipt. So the command must list every extra you want, the ones already installed included. It must also repeat any `--with`, index or `--torch-backend` options from the original install. Otherwise the next `uv tool upgrade` removes what the command left out. uv documents this: tool environments are ["not intended to be mutated directly"](https://docs.astral.sh/uv/concepts/tools/#tool-environments), and upgrades ["retain the settings provided when installing the tool"](https://docs.astral.sh/uv/concepts/tools/#upgrading-tools). The setup wizard follows this rule. In a uv tool install it adds each extra by re-running `uv tool install` with the receipt's requirements and options plus the new extra (`archon_search/install/extras.py`, `archon_search/uv_tool.py`). The startup errors for a missing extra print the same full command. If the wizard cannot reproduce the receipt (it pins a Python version, or records constraints, overrides or executables from another package) or the installed torch build has a local tag uv has no `--torch-backend` for, it falls back to `uv pip install` with the receipt's index options and prints a warning: the extra works until the next `uv tool upgrade`. To keep it, re-run your original `uv tool install` command with the extra added.
+
+**Upgrading from an older version.** Earlier wizard versions installed extras into a uv tool environment with `uv pip install`, and the receipt did not record them. `uv tool upgrade archon-search` then removed them: `gliner`, `fasttext-wheel` and the `tree-sitter` parsers. The next server start failed with `[graph]` or multilingual enabled. Record your extras once, with the same options as your original install, before you upgrade: `uv tool install "archon-search[graph,code,multilingual]"`; on Linux with a `+cpu` or `+cu126` torch build, add `--torch-backend cpu` or `--torch-backend cu126`. If an upgrade already removed them, run the same command afterwards. pip and pipx installs are not affected: `pip install --upgrade` and `pipx upgrade` keep extras installed into the environment. `pipx reinstall` keeps only the extras named in the original `pipx install`.
 
 | Extra | Installs | Unlocks |
 | --- | --- | --- |

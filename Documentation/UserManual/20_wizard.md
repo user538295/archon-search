@@ -121,7 +121,7 @@ Immediately after profile selection, the wizard detects your GPU hardware and co
   ```
   Default: Yes. Press Enter to enable CUDA. Type `n` to use CPU only.
 
-  On a **Linux x86_64** host, confirming CUDA also reinstalls PyTorch (torch and torchvision) as the CUDA 12.6 (`+cu126`) build of the installed version, so PDF and image-OCR parsing (docling) runs on the GPU as well. Which build it replaces depends on how you installed (see [`10_installation.md`](./10_installation.md#linux-install-the-cpu-only-pytorch-build)). This step is best-effort: if the CUDA download fails, the wizard keeps the installed build and the install still succeeds. It does not run on other platforms (Windows and ARM are out of scope).
+  On a **Linux x86_64** host, confirming CUDA also reinstalls PyTorch (torch and torchvision) as the CUDA 12.6 (`+cu126`) build of the installed version, so PDF and image-OCR parsing (docling) runs on the GPU as well. Which build it replaces depends on how you installed (see [`10_installation.md`](./10_installation.md#linux-install-the-cpu-only-pytorch-build)). This step is best-effort: if the CUDA download fails, the wizard keeps the installed build and the install still succeeds. It does not run on other platforms (Windows and ARM are out of scope). In a `uv tool` install, `uv tool upgrade archon-search` can revert this build to PyPI's default (CUDA 13) because the uv tool receipt does not record `--torch-backend`. Upgrade with `uv tool install --upgrade --torch-backend cu126 "archon-search[<your extras>]"` instead.
 
   The wizard detects an NVIDIA GPU by running `nvidia-smi` and, when you confirm, writes `providers = ["CUDAExecutionProvider"]`. A native `pip`/`uv` install, however, ships the CPU `onnxruntime` that fastembed depends on, which has no CUDA provider (fastembed 0.9.0 has no `[gpu]` extra). Without `onnxruntime-gpu` in the same environment, Step 8 and the service drop the unavailable CUDA provider and load the models on CPU: the install still succeeds, stderr shows one `configured ONNX providers not available: CUDAExecutionProvider — loading models on CPUExecutionProvider instead …` warning, and `GET /ready` reports `checks.models: "warn"` until the config or the runtime changes. Answer `n` here or pass `--disable-gpu` to write CPU and avoid the warning, or replace `onnxruntime` with `onnxruntime-gpu` in that environment first to run on the GPU — the `:gpu` Docker image does exactly that: it uninstalls `onnxruntime`, then installs `onnxruntime-gpu` (see [Image variants](./140_running_with_docker.md#image-variants)).
 
@@ -226,7 +226,7 @@ The pre-install summary lists the graph bullet with the two confidence knobs you
 
 Corpus language is not a constraint: the pinned checkpoint is multilingual, so non-English documents produce prose entities and relations like any other. Only the interface — logs, CLI copy, error bodies — is English by design; see [`../Architecture/220_accessibility_and_internationalization.md`](../Architecture/220_accessibility_and_internationalization.md#internationalization).
 
-You can install this separately at any time with `pip install archon-search[code]`. Code enrichment also feeds the code graph — see [`70_code_graph_and_impact.md`](./70_code_graph_and_impact.md) for def/ref extraction and impact analysis.
+You can install this separately at any time; the command depends on how you installed archon-search (see [Optional extras](./10_installation.md#optional-extras)), e.g. `pip install "archon-search[code]"`. Code enrichment also feeds the code graph — see [`70_code_graph_and_impact.md`](./70_code_graph_and_impact.md) for def/ref extraction and impact analysis.
 
 #### 5b. Reranker toggle
 
@@ -474,15 +474,17 @@ This step runs **after** the summary and the "Proceed?" confirmation, so abortin
 If you enabled code enrichment (Step 5a), the wizard installs the packages now:
 
 ```
-Installing code enrichment packages...
-Code enrichment packages installed.
+Installing code enrichment...
+Code enrichment installed.
 ```
 
 If the install fails, a warning is shown but the overall wizard continues — code enrichment is optional.
 
 If you enabled the **graph** (Step 5a), the `archon-search[graph]` extra is installed at this step too. Its prose extraction model is *not* fetched here — that happens in Step 8, together with the embedder and reranker weights. If the package install fails, the wizard prints `Warning: graph enrichment install failed: ...`, reverts `graph.enabled` to `false`, and continues; see Step 5a for the exact copy.
 
-If you chose a **multilingual** profile, the wizard also installs the `archon-search[multilingual]` extra (`fasttext-wheel`, used for language detection) at this step — the server needs it to start when `multilingual = true`. If that install fails, the wizard reverts `multilingual = false` in the config so the server still starts (in English-only mode) instead of crashing on the next start. You can install it separately at any time with `pip install archon-search[multilingual]`.
+If you chose a **multilingual** profile, the wizard also installs the `archon-search[multilingual]` extra (`fasttext-wheel`, used for language detection) at this step — the server needs it to start when `multilingual = true`. If that install fails, the wizard reverts `multilingual = false` in the config so the server still starts (in English-only mode) instead of crashing on the next start. You can install it separately at any time (see [Optional extras](./10_installation.md#optional-extras)), e.g. `pip install "archon-search[multilingual]"`.
+
+**How the wizard installs extras.** In a pip virtual environment, a pipx environment or a checkout, the wizard installs each extra with `uv pip install --python <the running interpreter>`, and falls back to `python -m pip install` when that fails. In a `uv tool` install it re-runs `uv tool install` with the extras, `--with` packages and index options already recorded in the tool's receipt, plus the new extra and a `--torch-backend` matching the installed torch build. uv records the extra, so `uv tool upgrade archon-search` keeps it. If the receipt holds settings the wizard cannot reproduce, it installs the extra with `uv pip install` and warns that the next `uv tool upgrade` will remove it (see [Optional extras](./10_installation.md#optional-extras)).
 
 ### Step 8 — Model download
 

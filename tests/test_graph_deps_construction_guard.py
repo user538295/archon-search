@@ -41,6 +41,24 @@ def test_guard_raises_config_error_when_gliner_absent() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("prefix_fixture", "command"),
+    [("uv_tool_prefix", "uv tool install"), ("pip_prefix", "pip install")],
+)
+def test_guard_remedy_matches_the_install_method(
+    request: pytest.FixtureRequest, prefix_fixture: str, command: str
+) -> None:
+    """In a uv tool env `pip install` is not actionable (no pip; mutating the env
+    is undone by `uv tool upgrade`), so the remedy is the uv tool command there."""
+    request.getfixturevalue(prefix_fixture)
+    with _gliner_absent(), pytest.raises(ConfigError) as excinfo:
+        ensure_graph_engine_importable(GraphConfig(enabled=True))
+    assert str(excinfo.value) == (
+        "graph.enabled=true but gliner is not installed. "
+        f"Install the graph extras: {command} 'archon-search[graph]'"
+    )
+
+
 def test_create_pipeline_raises_before_building_anything() -> None:
     """The regression: `create_pipeline` used to build a doomed pipeline.
 

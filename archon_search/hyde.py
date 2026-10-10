@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 from archon_search._privacy import _query_fingerprint
 from archon_search.config import HyDEConfig
 from archon_search.query_expansion_protocol import provider_key_available
+from archon_search.uv_tool import extra_install_hint
 
 _logger = logging.getLogger(__name__)
 
@@ -89,9 +90,7 @@ class HyDEGenerator:
             RuntimeError: if the ``anthropic`` package is not installed.
         """
         if not self._provider_available:
-            raise RuntimeError(
-                "Install archon-search[hyde] to use HyDE (pip install 'archon-search[hyde]')"
-            )
+            raise RuntimeError(f"Install archon-search[hyde] to use HyDE ({extra_install_hint('hyde')})")
 
         # Token bucket pre-flight (under lock).
         # Ollama, claude_cli, and llama_cpp are local/free paths with no API cap —

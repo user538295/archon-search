@@ -95,9 +95,9 @@ async def test_rebuild_task_zero_nodes_sets_failed(tmp_path: Path, exc_cls, exc_
     assert updated.error == exc_msg
 
 
-async def test_rebuild_task_missing_leidenalg_sets_failed(tmp_path: Path) -> None:
-    """Missing leidenalg (ImportError) -> FAILED with the install hint, no startup crash (Q6, S8)."""
-    from archon_search.community_builder import _LEIDENALG_INSTALL_HINT
+async def test_rebuild_task_import_error_sets_failed_with_its_message(tmp_path: Path) -> None:
+    """An ImportError from the builder (e.g. missing leidenalg) -> FAILED carrying its message, no crash (Q6, S8)."""
+    import_error_message = "optional dependency missing"
     from archon_search.server.routes_graph import _community_rebuild_task
 
     jobs_path = tmp_path / "jobs.json"
@@ -107,7 +107,7 @@ async def test_rebuild_task_missing_leidenalg_sets_failed(tmp_path: Path) -> Non
 
     with patch("archon_search.server.routes_graph.CommunityBuilder") as mock_builder_cls:
         mock_builder_cls.return_value.build = AsyncMock(
-            side_effect=ImportError(_LEIDENALG_INSTALL_HINT)
+            side_effect=ImportError(import_error_message)
         )
 
         await _community_rebuild_task(
@@ -121,7 +121,7 @@ async def test_rebuild_task_missing_leidenalg_sets_failed(tmp_path: Path) -> Non
     updated = job_store.get(job.job_id)
     assert updated is not None
     assert updated.status == JobStatus.FAILED
-    assert updated.error == _LEIDENALG_INSTALL_HINT
+    assert updated.error == import_error_message
 
 
 async def test_rebuild_task_runtime_error_sets_failed(tmp_path: Path) -> None:

@@ -7,6 +7,7 @@ HuggingFace-tokenizers Rust-library process explosion.
 """
 from __future__ import annotations
 
+import importlib.metadata
 import os
 import sys
 import uuid
@@ -269,6 +270,47 @@ def auth_headers() -> dict[str, str]:
 def col_name() -> str:
     """Unique LanceDB collection name per test (avoids cross-test pollution)."""
     return f"test-{uuid.uuid4().hex[:8]}"
+
+
+# ---------------------------------------------------------------------------
+# Install-method prefixes: what `sys.prefix` looks like for a `uv tool install
+# archon-search` environment versus any other (pip venv, pipx, checkout).
+# ---------------------------------------------------------------------------
+
+UV_TOOL_RECEIPT = '[tool]\nrequirements = [{ name = "archon-search" }]\n'
+
+
+@pytest.fixture
+def uv_tool_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Run as if from a uv tool environment: ``sys.prefix`` is
+    ``<tmp>/tools/archon-search`` holding a plain ``uv-receipt.toml``.
+
+    torch reads as not installed, so commands and hints derived from the
+    receipt carry no ``--torch-backend`` regardless of the test venv's torch.
+    Tests may overwrite the receipt (``prefix / "uv-receipt.toml"``).
+    """
+    prefix = tmp_path / "tools" / "archon-search"
+    prefix.mkdir(parents=True)
+    (prefix / "uv-receipt.toml").write_text(UV_TOOL_RECEIPT)
+    monkeypatch.setattr(sys, "prefix", str(prefix))
+    real_version = importlib.metadata.version
+
+    def _version(name: str) -> str:
+        if name == "torch":
+            raise importlib.metadata.PackageNotFoundError(name)
+        return real_version(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", _version)
+    return prefix
+
+
+@pytest.fixture
+def pip_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Run as if from a plain virtualenv (no uv tool receipt)."""
+    prefix = tmp_path / ".venv"
+    prefix.mkdir()
+    monkeypatch.setattr(sys, "prefix", str(prefix))
+    return prefix
 
 
 # ---------------------------------------------------------------------------

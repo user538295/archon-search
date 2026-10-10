@@ -61,6 +61,7 @@ from archon_search.sync_suppression import (
     write_sync_suppressed_sentinel,
 )
 from archon_search.types import JobStatus
+from archon_search.uv_tool import extra_install_hint
 
 try:
     from importlib.metadata import version as _pkg_version, PackageNotFoundError
@@ -321,7 +322,7 @@ def _check_multilingual_deps(config: SearchConfig) -> None:
     except ImportError:
         raise RuntimeError(
             "multilingual=true but fasttext-wheel is not installed; "
-            "run: pip install archon-search[multilingual]"
+            f"run: {extra_install_hint('multilingual')}"
         )
 
     # Check 2 — model file presence
@@ -359,7 +360,7 @@ def _check_provider_deps(config: SearchConfig) -> None:
             except ImportError:
                 raise ConfigError(
                     f"[{label}] provider='ollama' but the 'ollama' package is not installed; "
-                    f"run: pip install archon-search[ollama]"
+                    f"run: {extra_install_hint('ollama')}"
                 )
             # _apply_toml already rejects empty model via ConfigError for the TOML path;
             # this guard covers programmatic construction with model=''.
@@ -374,7 +375,7 @@ def _check_provider_deps(config: SearchConfig) -> None:
             except ImportError:
                 raise ConfigError(
                     f"[{label}] provider='openai' but the 'openai' package is not installed; "
-                    f"run: pip install archon-search[openai-provider]"
+                    f"run: {extra_install_hint('openai-provider')}"
                 )
             # _apply_toml already rejects empty model via ConfigError for the TOML path;
             # this guard covers programmatic construction with model=''.
@@ -393,7 +394,7 @@ def _check_provider_deps(config: SearchConfig) -> None:
             except ImportError:
                 raise ConfigError(
                     f"[{label}] enabled=true with provider='anthropic' but the 'anthropic' "
-                    f"package is not installed; run: pip install archon-search[hyde]"
+                    f"package is not installed; run: {extra_install_hint('hyde')}"
                 )
         # provider='claude_cli' is intentionally not guarded: it has no pip package
         # and resolves availability via shutil.which('claude') with graceful runtime

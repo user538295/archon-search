@@ -40,8 +40,9 @@ Notes: Go/Rust/Bash have no class inheritance, so `inherits` stays empty for the
 1. **The `code` extra must be installed** — it provides tree-sitter and the nine grammars:
 
    ```bash
-   uv sync --extra code --extra graph      # dev
-   pip install 'archon-search[code,graph]' # end users
+   uv sync --extra code --extra graph          # dev
+   pip install 'archon-search[code,graph]'     # end users (pip / venv)
+   uv tool install 'archon-search[code,graph]' # end users (uv tool; list every extra you use)
    ```
 
    The wizard installs both bundles automatically. If you enable `[graph]` **without** the code parsers, the server still starts and prose graphing still works, but code graphing is skipped with a one-time startup WARNING (and a per-file warning in the ingest result). It never blocks boot.

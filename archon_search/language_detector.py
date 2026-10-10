@@ -14,6 +14,8 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+from archon_search.uv_tool import extra_install_hint
+
 # Module-level constants
 FASTTEXT_MODEL_FILENAME = "lid.176.ftz"
 
@@ -150,10 +152,7 @@ class LanguageDetector:
 
     def __init__(self, model_path: Path) -> None:
         if fasttext is None:
-            raise RuntimeError(
-                "fasttext-wheel not installed; "
-                "run: pip install archon-search[multilingual]"
-            )
+            raise RuntimeError(f"fasttext-wheel not installed; run: {extra_install_hint('multilingual')}")
         if not model_path.exists():
             raise FileNotFoundError(
                 f"fasttext model not found at {model_path}; "

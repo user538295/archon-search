@@ -39,6 +39,8 @@ docker run -d \
   ghcr.io/user538295/archon-search:latest
 ```
 
+**Known issue: recreate the `/pip-packages` volume when you upgrade the image.** `pip install --target` also puts a copy of archon-search itself into `/pip-packages`, which is first on `PYTHONPATH`. The stamp records only the extras list, so after a newer image starts on the same volume the entrypoint skips the install, and the old archon-search copy can shadow the new image's code [INFERENCE: reproduced with `pip install --target` and `PYTHONPATH` outside Docker, not in a container]. Deleting just the stamp is not enough, because `pip install --target` without `--upgrade` keeps directories that already exist. Remove the container and run `docker volume rm archon-search-packages` before you start the upgraded image, then check that `archon-search --version` in the container matches the image. See [Upgrading](../OperatorGuide/100_upgrading.md#optional-extras-and-the-pytorch-build).
+
 To skip extras entirely (lean core-only deployment), pass an empty value:
 
 ```bash

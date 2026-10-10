@@ -21,6 +21,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from archon_search.uv_tool import extra_install_hint
+
 if TYPE_CHECKING:
     from archon_search.config import GraphConfig
     from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
@@ -35,11 +37,6 @@ _MAX_SPLIT_DEPTH: int = 5
 
 # Leiden resolution is multiplied by this factor at each recursion level.
 _RESOLUTION_GROWTH_FACTOR: int = 2
-
-_LEIDENALG_INSTALL_HINT = (
-    "leidenalg is required for community detection. "
-    "Install it with: pip install archon-search[graph]"
-)
 
 # Module-level per-(namespace, collection) rebuild-lock registry (C3).
 #
@@ -176,7 +173,10 @@ def _run_leiden_partition_sync(
         import igraph as ig  # noqa: PLC0415
         import leidenalg  # noqa: PLC0415
     except (ImportError, TypeError) as exc:
-        raise ImportError(_LEIDENALG_INSTALL_HINT) from exc
+        raise ImportError(
+            "leidenalg is required for community detection. "
+            f"Install it with: {extra_install_hint('graph')}"
+        ) from exc
 
     if not nodes:
         return []

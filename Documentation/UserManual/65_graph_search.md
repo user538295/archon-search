@@ -17,6 +17,7 @@ Graph support ships as an optional extra and is **off by default**.
 
    ```bash
    pip install 'archon-search[graph]'
+   # uv tool install: uv tool install 'archon-search[graph]' (list every extra you use)
    ```
 
 2. Optionally pre-warm the prose extraction checkpoint — the extra installs the `gliner` library, not its weights:

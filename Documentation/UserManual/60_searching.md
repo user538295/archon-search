@@ -181,12 +181,13 @@ HyDE (Hypothetical Document Embeddings) improves recall for vocabulary-mismatch 
 
 ### Installation
 
-HyDE needs the optional provider package:
+HyDE needs the optional provider package. The command depends on how you installed archon-search (see [Optional extras](./10_installation.md#optional-extras)); a `uv tool` install must list every extra it uses in one command:
 
 ```bash
-pip install archon-search[hyde]              # Anthropic (default)
-# pip install archon-search[ollama]          # Ollama (local, zero-transmission)
-# pip install archon-search[openai-provider] # OpenAI
+pip install 'archon-search[hyde]'              # Anthropic (default)
+# pip install 'archon-search[ollama]'          # Ollama (local, zero-transmission)
+# pip install 'archon-search[openai-provider]' # OpenAI
+# uv tool install 'archon-search[hyde]'        # uv tool install (add your other extras)
 ```
 
 ### Configuration
@@ -258,7 +259,7 @@ max_requests_per_minute = 60
 num_queries = 2   # LLM-generated variants (1–5); total searches = num_queries + 1
 ```
 
-Installation and the provider matrix are identical to HyDE — swap the extra for `pip install archon-search[rag_fusion]`.
+Installation and the provider matrix are identical to HyDE — swap the extra for `rag_fusion`, e.g. `pip install 'archon-search[rag_fusion]'`.
 
 ### Usage
 

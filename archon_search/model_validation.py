@@ -207,7 +207,7 @@ def graph_ner_status(config: SearchConfig) -> list[str]:
     ``GraphExtractor`` construction (``importlib.util.find_spec``, BE-11) so a
     missing ``[graph]`` extra surfaces on ``GET /status`` instead of only
     failing every ingest — reusing
-    ``graph_extractor.GLINER_NOT_INSTALLED_MESSAGE`` so the two surfaces agree
+    ``graph_extractor.gliner_not_installed_message`` so the two surfaces agree
     (T6). Unlike the prior NER engine, gliner has no separate "installed but wrong model
     artifact" state to probe here: ``ProseExtractionBackend.load()`` fetches
     the pinned revision from the Hugging Face cache lazily and any load
@@ -226,12 +226,12 @@ def graph_ner_status(config: SearchConfig) -> list[str]:
     # ingest for the process lifetime — that state is invisible here.
     try:
         from archon_search.graph_extractor import (  # noqa: PLC0415
-            GLINER_NOT_INSTALLED_MESSAGE,
             gliner_absent,
+            gliner_not_installed_message,
         )
 
         if gliner_absent():
-            return [f"graph prose entity extraction is disabled: {GLINER_NOT_INSTALLED_MESSAGE}"]
+            return [f"graph prose entity extraction is disabled: {gliner_not_installed_message()}"]
     except Exception as exc:  # never raises — validate_models_async must not fail
         logger.warning("graph NER model probe failed: %s", exc)
         return ["graph NER model presence could not be determined"]
