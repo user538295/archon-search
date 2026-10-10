@@ -17,7 +17,6 @@ services:
       ARCHON_SEARCH_CONFIG: /config/archon-search.toml
       CLAUDE_PROXY_URL: "http://host.docker.internal:18766"
       ARCHON_EXTRAS: "graph,code,multilingual"
-      PYTHONPATH: "/pip-packages"
       FASTEMBED_CACHE_PATH: "/data/fastembed-cache"
     volumes:
       - archon-dev-data:/data

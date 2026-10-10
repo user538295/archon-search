@@ -519,8 +519,8 @@ def test_dockerfile_cpu_base_resolves_cpu_only_torch(dockerfile_text: str) -> No
     # torch + torchvision + ~18 nvidia/cuda packages (~6.2 GB). The fix must
     # point pip at the PyTorch CPU wheel index so torch resolves to a
     # `+cpu` build with no nvidia/cuda dependencies. Both the bake-time
-    # `pip install .` and the entrypoint's runtime `pip install .[extras]`
-    # must pick it up (e.g. via a baked /etc/pip.conf).
+    # `pip install .` and the entrypoint's runtime install of the packages the
+    # extras add to the image must pick it up (e.g. via a baked /etc/pip.conf).
     assert "download.pytorch.org/whl/cpu" in dockerfile_text, (
         "Dockerfile must route the CPU base at the PyTorch CPU wheel index "
         "(download.pytorch.org/whl/cpu) so torch resolves CPU-only"

@@ -80,10 +80,10 @@ COPY . /app
 # on linux the default PyPI `torch` pulls the full CUDA runtime — torch +
 # torchvision + ~18 nvidia-*/cuda* packages, ~6 GB — that a CPU host can never
 # execute. Bake an /etc/pip.conf pointing pip at PyTorch's CPU wheel index so
-# BOTH the bake-time `pip install .` below AND the entrypoint's runtime
-# `pip install --target /pip-packages .[extras]` resolve `torch==<ver>+cpu`
-# (which declares no nvidia/cuda dependencies). The nvidia/cuda GPU base skips
-# this and keeps the default CUDA build it needs.
+# BOTH the bake-time `pip install .` below AND the entrypoint's runtime install
+# of the packages the extras add to the image (into /pip-packages) resolve
+# `torch==<ver>+cpu` (which declares no nvidia/cuda dependencies). The
+# nvidia/cuda GPU base skips this and keeps the default CUDA build it needs.
 RUN set -eux; \
     case "${BASE_IMAGE}" in \
         *nvidia/cuda*) \

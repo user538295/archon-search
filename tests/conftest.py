@@ -12,8 +12,11 @@ import os
 import sys
 import uuid
 from pathlib import Path
-from typing import Generator
+from typing import TYPE_CHECKING, Generator
 from unittest.mock import patch
+
+if TYPE_CHECKING:
+    from tests._entrypoint_harness import Container
 
 # Cap native-runtime thread counts BEFORE ML libs / Tokio runtimes initialize.
 # onnxruntime, OpenMP, OpenBLAS and LanceDB's Tokio runtime each default to
@@ -419,3 +422,25 @@ class MockGraphStore:
 def mock_graph_store() -> MockGraphStore:
     """Fixture providing a MockGraphStore instance for unit tests."""
     return MockGraphStore()
+
+
+# ---------------------------------------------------------------------------
+# docker-entrypoint.sh harness (tests/_entrypoint_harness.py)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def entrypoint_wheelhouse(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The offline wheelhouse every entrypoint :class:`Container` resolves from; read-only once built."""
+    from tests._entrypoint_harness import build_wheelhouse  # noqa: PLC0415
+
+    directory = tmp_path_factory.mktemp("entrypoint-wheelhouse")
+    build_wheelhouse(directory)
+    return directory
+
+
+@pytest.fixture
+def entrypoint_container(tmp_path: Path, entrypoint_wheelhouse: Path) -> Container:
+    """A fresh image plus an empty ``/pip-packages`` volume that runs the real entrypoint."""
+    from tests import _entrypoint_harness  # noqa: PLC0415
+
+    return _entrypoint_harness.Container(tmp_path, entrypoint_wheelhouse)

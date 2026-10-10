@@ -56,13 +56,14 @@ CONTAINER_PORT = 8765
 # test authenticated; both S56 legs do.
 SMOKE_API_KEY = "5c0e5ea11eb5"
 # T-13 raised this from 30 s. ``ARCHON_EXTRAS`` defaults to
-# ``graph,code,multilingual`` (scripts/docker-entrypoint.sh:10), so a container
-# started from a freshly built image ALWAYS runs the cold
-# ``pip install --target /pip-packages ".[...]"`` before it execs the server —
-# the entrypoint's own log line calls that "network-bound … several minutes"
-# (scripts/docker-entrypoint.sh:20) and gliner pulls torch + transformers.
-# 30 s could only ever pass against an image whose /pip-packages volume was
-# already seeded. 600 s matches the Dockerfile's own HEALTHCHECK
+# ``graph,code,multilingual`` (the ``EXTRAS=`` default in
+# scripts/docker-entrypoint.sh), so a container started from a freshly built
+# image ALWAYS runs the cold install of the packages the extras add to the
+# image into /pip-packages before it execs the server — the entrypoint's own
+# log line calls that "network-bound … several minutes", and the graph extra's
+# gliner caps transformers below the release the image ships, so that install
+# also downloads an older transformers. 30 s could only ever pass against an
+# image whose /pip-packages volume was already seeded. 600 s matches the Dockerfile's own HEALTHCHECK
 # ``--start-period=600s`` (Dockerfile:145), i.e. the budget the image itself
 # declares for reaching a serving state. This is a ceiling, not a sleep:
 # ``_wait_for_ready`` returns as soon as the endpoint answers.
@@ -76,12 +77,12 @@ INGEST_TIMEOUT_S = 900
 # so it needs its own modest ceiling rather than the 600 s readiness budget.
 VALIDATION_TIMEOUT_S = 120
 
-# scripts/docker-entrypoint.sh:32 — the last thing logged before ``exec "$@"``.
+# The entrypoint's last log line before ``exec "$@"``.
 ENTRYPOINT_HANDOFF_PREFIX = "=== setup complete — handing off to:"
-# scripts/docker-entrypoint.sh:7 — the EXIT trap's non-zero branch, i.e. what a
-# `set -e` abort (i.e. the deleted spaCy-download block, K2) would leave behind.
+# Logged by the entrypoint's EXIT handler (``on_exit``) on a non-zero exit, i.e.
+# what a `set -e` abort (i.e. the deleted spaCy-download block, K2) would leave behind.
 ENTRYPOINT_ABORT_MARKER = "ERROR: entrypoint aborted"
-# scripts/docker-entrypoint.sh:13 logs the resolved list verbatim.
+# The entrypoint logs the resolved extras list verbatim at startup.
 ENTRYPOINT_DEFAULT_EXTRAS_LINE = "ARCHON_EXTRAS=graph,code,multilingual"
 
 
@@ -496,9 +497,10 @@ def test_cpu_image_starts_and_serves_ready_without_spacy(cpu_image: str) -> None
 
     Steps 1 and 2 are deliberately two different instruments. The probe covers
     the BAKED image only, because ``--entrypoint python3`` bypasses the
-    entrypoint's runtime ``pip install --target /pip-packages``; the log scan in
-    step 2 covers that install, since pip names every package it resolves and
-    the entrypoint pipes the output through (``scripts/docker-entrypoint.sh:23``).
+    entrypoint's runtime install of the packages the extras add to the image
+    into ``/pip-packages``; the log scan in step 2 covers that install, since
+    the entrypoint logs every package it installs there (its ``Installing:``
+    line) and pipes pip's output through.
     Together they are S56's "no spaCy anywhere in the image" — neither alone is.
     """
     probe = subprocess.run(
