@@ -175,7 +175,8 @@ def test_ingest_config_max_tasks_per_child_invalid_raises(
 ) -> None:
     """Anything but a positive integer raises ConfigError with the matching one of the two
     distinct messages (config.py: "Expected integer for..." for type errors, "...must be >= 1"
-    for range errors — Documentation/Architecture/140_error_handling_strategy.md:37).
+    for range errors — Documentation/Architecture/140_error_handling_strategy.md §"Configuration
+    errors").
 
     Both messages contain the substring "max_tasks_per_child", so matching only that substring
     would let a type-error case pass on a range-error message and vice versa; assert the

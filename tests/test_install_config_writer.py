@@ -1039,7 +1039,7 @@ def test_omitted_wizard_keys_fall_back_to_documented_search_config_defaults() ->
 
 
 # ---------------------------------------------------------------------------
-# Only answered keys are written (20_wizard.md:784)
+# Only answered keys are written (20_wizard.md §"Only the choices you actually made are written")
 # ---------------------------------------------------------------------------
 
 

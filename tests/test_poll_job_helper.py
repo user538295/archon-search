@@ -408,13 +408,14 @@ def test_connect_fail_msg_service_alive_shows_starting_up() -> None:
 def test_connect_fail_msg_unreachable_api_url_ignores_local_service() -> None:
     """A refused base_url must report 'not running' even while the local service is alive.
 
-    Documented contract (`UserManual/100_jobs_and_async_operations.md:11`): the probe hits
-    ``{base_url}/ready``, and only a 503 with ``checks.models == "pending"`` yields the
-    "starting up" hint — "otherwise it prints ``_SERVER_NOT_RUNNING_MSG``". The
+    Documented contract (`UserManual/100_jobs_and_async_operations.md` §"The server must be
+    running"): the probe hits ``{base_url}/ready``, and only a 503 with
+    ``checks.models == "pending"`` yields the "starting up" hint — "otherwise it prints
+    ``_SERVER_NOT_RUNNING_MSG``". The
     managed-service probe answers for the *default local* instance, so consulting it after a
     caller-supplied ``--api-url`` was refused describes a different server than the one the
-    operator asked about (`UserManual/40_running_the_server.md:122`: the flags select the
-    target server, "there is no in-process fallback").
+    operator asked about (`UserManual/40_running_the_server.md` §"CLI write commands require the
+    server": the flags select the target server, "there is no in-process fallback").
     """
     with (
         patch(

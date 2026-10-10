@@ -2356,8 +2356,8 @@ def test_s561_routing_strategy_written_when_explicitly_passed(
     [routing].routing_strategy must appear in the TOML even though "centroid" is
     the wizard default.
 
-    See 20_wizard.md:703: "Passing an explicit flag value (even if it matches the
-    default, e.g. --port 8765) always writes the key."
+    See 20_wizard.md §"Only the choices you actually made are written": "passing an explicit
+    flag (e.g., `--port 8765`, `--routing-strategy centroid`, `--no-watch`) always writes the key".
     """
     config_path = tmp_path / "archon-search.toml"
 
@@ -2388,8 +2388,8 @@ def test_s561_log_format_written_when_explicitly_passed(
     """S561 (flag half, log_format twin): when --log-format text is passed explicitly,
     [logging].format must appear in the TOML even though "text" is the wizard default.
 
-    See 20_wizard.md: "Passing an explicit flag value (even if it matches the
-    default, e.g. --port 8765) always writes the key."
+    See 20_wizard.md §"Only the choices you actually made are written": "passing an explicit
+    flag (e.g., `--port 8765`, `--routing-strategy centroid`, `--no-watch`) always writes the key".
     """
     config_path = tmp_path / "archon-search.toml"
 
@@ -3791,7 +3791,7 @@ def test_e2e_declining_the_offer_is_what_the_operator_typed(
 
 
 # ---------------------------------------------------------------------------
-# Fresh install writes only the operator's answers (20_wizard.md:716-784)
+# Fresh install writes only the operator's answers (20_wizard.md §"Only the choices you actually made are written")
 # ---------------------------------------------------------------------------
 
 
@@ -3824,8 +3824,9 @@ def test_fresh_install_writes_only_answered_keys(
 ) -> None:
     """A fresh `--non-interactive --profile minimal` run with no optional flags writes the
     profile's [database] answers, the GPU step's providers and the loopback host — and
-    nothing else: no never-answered [server].port, [database].db_path, [routing],
-    [collections], [logging], [telemetry], [hyde] or [rag_fusion] (20_wizard.md:784).
+    nothing else: no never-answered [server].port, [database].db_path, [routing], [collections],
+    [logging], [telemetry], [hyde] or [rag_fusion] (20_wizard.md §"Only the choices you actually
+    made are written").
     The real `configure_providers`/`configure_reranker_providers`/`clear_reranker_providers`
     run, so a detected GPU's providers are what the GPU step actually writes. Only the
     model-loading CoreML probes (`coreml_probe` = validate_providers, validate_embedder_only

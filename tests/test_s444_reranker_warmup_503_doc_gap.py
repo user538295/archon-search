@@ -16,7 +16,8 @@ not documented anywhere, and the code says the opposite:
   (``routes_search.py:308-312``, ``:367-370``) or ``embedder_not_ready``
   (``routes_search.py:521-546``) — the latter is the *embedder cache* wedging past its 120 s bound
   (``embedder_cache.py``), correctly documented in
-  ``Documentation/Architecture/140_error_handling_strategy.md:73``, ``BREAKING.md``, and
+  ``Documentation/Architecture/140_error_handling_strategy.md`` §"REST surface — status code
+  mapping", ``BREAKING.md``, and
   ``Documentation/MigrationGuide/03_breaking_changes_index.md``. Neither is the reranker.
 
 So S444 is covered by the positive-path proxy the ticket specifies (the first ``POST /search`` on a
@@ -45,11 +46,12 @@ Scope, and why it is this narrow (mirrors ``tests/test_s343_reranker_503_doc_gap
   match tolerates a leading ``_`` because ``routes_search.py`` offers no word boundary, but unlike
   the sibling gates it does **not** admit the bare English word: "search" is ordinary prose here, and
   admitting it put a legitimate ``GET /ready`` warm-up paragraph in scope
-  (``OperatorGuide/80_capacity_and_performance.md:123``, which ends "...on the first search") and
-  fired a false red. A document asserting the guarded mapping names the endpoint. Inside a
+  (``OperatorGuide/80_capacity_and_performance.md`` §"Tuning knobs", which ends "...on the first
+  search") and fired a false red. A document asserting the guarded mapping names the endpoint. Inside a
   fenced block a ``#`` line is a shell comment, not a heading, so heading tracking is suspended
   there — offender scanning is not, because a documented error body is still a claim.
-* The unit of judgement is a sentence, not a line. ``Architecture/140_error_handling_strategy.md:73``
+* The unit of judgement is a sentence, not a line. ``Architecture/140_error_handling_strategy.md``
+  §"Model warm-up is outside the `/search` timeout budget (S184)"
   and ``OperatorGuide/90_incident_runbook.md`` each name ``/search``, ``503``, the reranker and
   warm-up within one very long line while asserting none of them of each other. Splitting on
   sentence boundaries keeps both green. The split is deliberately **periods only**: a colon or
@@ -79,11 +81,11 @@ _FENCE = re.compile(r"^\s*(?:```|~~~)")
 _SENTENCE_SPLIT = re.compile(r"\.\s")
 # The endpoint path only — unlike ``/explain`` in the sibling gates, "search" is an ordinary English
 # word all over this documentation set, and admitting it pulled a `GET /ready` warm-up paragraph in
-# ``OperatorGuide/80_capacity_and_performance.md:123`` into scope (it ends "...to be built lazily on
-# the first search") and fired a false red. A document that actually asserts the guarded mapping
-# names the endpoint. ``_search`` is kept because the heading that opens the endpoint's reference
-# section is ``### `routes_search.py` ``, where a leading word boundary never fires, and because it
-# is what puts ``UserManual/60_searching.md`` in scope by file name.
+# ``OperatorGuide/80_capacity_and_performance.md`` §"Tuning knobs" into scope (it ends "...to be
+# built lazily on the first search") and fired a false red. A document that actually asserts the
+# guarded mapping names the endpoint. ``_search`` is kept because the heading that opens the
+# endpoint's reference section is ``### `routes_search.py` ``, where a leading word boundary never
+# fires, and because it is what puts ``UserManual/60_searching.md`` in scope by file name.
 _SEARCH = re.compile(r"/search|_search")
 _RERANK = re.compile(r"re-?rank|cross[- ]encoder")
 # The warm-up leg: what makes this S444 rather than any other reranker-adjacent 503. The verb is

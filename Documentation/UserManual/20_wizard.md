@@ -589,7 +589,7 @@ All flags for the `wizard` command (verified against `archon_search/cli/install_
 | `--no-reranker` | False | Disable the cross-encoder reranker for lower latency. |
 | `--routing-strategy {centroid,hybrid}` | Not set (interactive) | Set the routing strategy directly, skipping the interactive prompt. |
 | `--log-format {text,json}` | Not set (interactive) | Set the log format directly, skipping the interactive prompt. |
-| `--disable-gpu` | False | Force CPU execution; skip GPU detection and confirmation entirely. Also forces `[graph].providers` to CPU, overriding `--graph-providers`. |
+| `--disable-gpu` | False | Force CPU execution: skip the GPU confirmation prompt and write `[database].providers = []`. Also forces `[graph].providers` to CPU, overriding `--graph-providers`. |
 | `--graph-providers TEXT` | Not set | Comma-separated ONNX execution providers for the graph extraction engine (`[graph].providers`), e.g. `CUDAExecutionProvider`. Unknown names are rejected. An empty string forces CPU. This supplies *candidates* only: the value is written just when the install-time two-stage device probe validates it against the pre-warmed model — otherwise CPU. Without this flag a `--non-interactive` install never opts into an accelerator, since nobody is there to accept one the guardrails were not tuned for. Ignored (with a note) when graph extraction is not being installed. |
 | **Tier 1 deployment flags** | | |
 | `--host TEXT` | Not set (uses `127.0.0.1`) | Bind address for the HTTP API. Use `0.0.0.0` for remote or Docker access. Non-loopback values print a security note reminding you to add a firewall or reverse proxy. Cannot be an empty string. |
@@ -736,15 +736,19 @@ The wizard writes to `~/.archon-search/archon-search.toml`. The following table 
 | Embedding model (from profile) | `embedding_model` | `"BAAI/bge-base-en-v1.5"` |
 | Reranker model (from profile) | `reranker_model` | `"Xenova/ms-marco-MiniLM-L-12-v2"` |
 | Chunk size (from profile) | `chunk_size` | `512` |
-| GPU (Metal, full CoreML) | `providers` | `["CoreMLExecutionProvider"]` |
+| GPU (Metal, full CoreML) | `providers` (+ `reranker_providers` removed if it is `[]`) | `["CoreMLExecutionProvider"]` |
 | GPU (Metal, split: embedder CoreML / reranker CPU) | `providers` + `reranker_providers` | `["CoreMLExecutionProvider"]` + `[]` |
-| GPU (CUDA) | `providers` | `["CUDAExecutionProvider"]` |
-| GPU declined | `providers` | `[]` |
+| GPU (CUDA; written without a load test) | `providers` | `["CUDAExecutionProvider"]` |
+| GPU (Metal, CoreML check fails or not in the installed ONNX Runtime) | `providers` | `[]` |
+| GPU declined, or `--disable-gpu` | `providers` | `[]` |
+| No GPU detected | nothing written (CPU) | — |
 | Reranker disabled (`--no-reranker`) | `reranker_model` | `""` |
 | Eager load (interactive answer, or `--eager-load`/`--no-eager-load`) | `eager_load_embedders` | `true` / `false` |
 | `--db-path PATH` | `db_path` | `"~/data/archon-search"` |
 | `--top-k INTEGER` | `top_k_return` | `20` |
 | `--top-k INTEGER` (derived) | `top_k_retrieve` | `60` (= max(15, 3 × top_k)) |
+
+GPU rows: `reranker_providers` is touched only on the two Metal paths. A `providers` list that already contains the detected provider is left unchanged, so a chain you extended by hand survives a re-run.
 
 ### `[collections]` section
 

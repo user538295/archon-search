@@ -349,7 +349,8 @@ async def test_build_maintenance_status_last_graph_gc_at_from_state(tmp_path: Pa
 async def test_build_maintenance_status_entry_has_documented_fields(tmp_path: Path) -> None:
     """S115: each collection_health entry exposes the two documented per-collection
     maintenance fields — expired_chunks_removed_last_run and communities_invalidated —
-    populated from the state file (OperatorGuide/50_maintenance_and_jobs.md:96)."""
+    populated from the state file (OperatorGuide/50_maintenance_and_jobs.md §"Where maintenance
+    health surfaces")."""
     from archon_search.server.routes_status import _build_maintenance_status
 
     config = SearchConfig()

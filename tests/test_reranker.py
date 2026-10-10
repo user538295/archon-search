@@ -437,9 +437,9 @@ async def test_rerank_with_trace_records_stage_when_bound() -> None:
 async def test_rerank_candidates_records_stage_on_empty_input() -> None:
     """S345: rerank_candidates must record 'rerank' stage even with empty candidates.
 
-    The docs (20_monitoring_and_alerts.md:82) list 'rerank' as a mandatory
-    stage key whenever rerank=True.  The early-return for empty candidates
-    must not skip the record_stage("rerank") call.
+    The docs (20_monitoring_and_alerts.md §"Stage-level latency and request-correlation IDs")
+    list 'rerank' as a mandatory stage key whenever rerank=True.  The early-return
+    for empty candidates must not skip the record_stage("rerank") call.
     """
     from archon_search.observability import bind_stage_recorder
 

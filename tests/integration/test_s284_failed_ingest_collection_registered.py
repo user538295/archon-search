@@ -2,7 +2,8 @@
 
 After the background ingest job transitions to FAILED, GET /collections/ must list the
 collection with doc_count=0 — matching the behaviour described in
-UserManual/50_ingestion_and_collections.md:113.
+UserManual/50_ingestion_and_collections.md §"`archon-search ingest`" ("The collection remains
+registered (with `docs=0`)").
 """
 from __future__ import annotations
 

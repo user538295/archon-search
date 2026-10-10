@@ -2,7 +2,8 @@
 
 Bug report: ``Documentation/Backlog/S652-unsupported_edge_survives.md``.
 
-Expected behaviour (``Documentation/OperatorGuide/60_graph_operations.md:247``):
+Expected behaviour (``Documentation/OperatorGuide/60_graph_operations.md`` §"Lifecycle hygiene and
+garbage collection"):
 ``[maintenance] graph_gc`` must be ``true`` for the GC pass "to sweep at all"; with it off,
 "stale nodes ... survive ... indefinitely". So with ``graph_gc = false`` a
 ``POST /maintenance/trigger`` pass must leave stale mention rows, orphaned nodes and
@@ -246,7 +247,8 @@ def test_s652_graph_gc_false_leaves_stale_mentions_nodes_and_edges(
 
     assert not violations, (
         "[maintenance] graph_gc = false was ignored — the maintenance passes ran graph "
-        "GC (60_graph_operations.md:247):\n- " + "\n- ".join(violations)
+        "GC (60_graph_operations.md §'Lifecycle hygiene and garbage collection'):\n- "
+        + "\n- ".join(violations)
     )
 
 
@@ -259,9 +261,10 @@ def test_s652_graph_gc_true_sweeps_the_same_scenario(
 
     Mirrors every negative assertion: the stale rows are pruned, the orphaned "Bob" node is
     swept, and the Alice–Google edge is removed from both GET /graph and the GraphStore as an
-    unsupported relationship (60_graph_operations.md:233) while Alice and Google — still
-    mentioned by alone_a/alone_b — survive. Both passes stamp ``last_graph_gc_at``; pass 1
-    reports the stale rows it counted before pruning, pass 2 finds none left.
+    unsupported relationship (60_graph_operations.md §"Lifecycle hygiene and garbage collection")
+    while Alice and Google — still mentioned by alone_a/alone_b — survive. Both passes stamp
+    ``last_graph_gc_at``; pass 1 reports the stale rows it counted before pruning, pass 2 finds
+    none left.
     """
     outcome = _run_two_passes_over_stale_pair(tmp_path, monkeypatch, graph_gc=True)
 

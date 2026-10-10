@@ -182,7 +182,8 @@ output_dir = "{tmp_path / 'backups'}"
 
         remaining = sorted(ns_dir.glob(f"{COL}.backup.*.tar.gz"))
 
-        # The two oldest seeded archives must be gone (line 52 of 40_backup_restore…).
+        # The two oldest seeded archives must be gone (OperatorGuide/40_backup_restore_disaster_recovery.md
+        # §"Configuration (`[backup]`)", `keep` row).
         oldest_survivors = [p for p in (a1, a2) if p.exists()]
         assert not oldest_survivors, (
             f"oldest archives must be deleted after rotation; "

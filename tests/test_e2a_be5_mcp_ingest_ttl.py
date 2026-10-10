@@ -121,7 +121,7 @@ def test_mcp_ingest_file_accepts_chunk_ttl_seconds() -> None:
 
 def test_mcp_ingest_file_result_has_all_documented_fields() -> None:
     """S469: ingest_file result must carry all fields documented at
-    UserManual/50_ingestion_and_collections.md:180 (IngestResultSchema dict):
+    UserManual/50_ingestion_and_collections.md §"MCP tools" (IngestResultSchema dict):
     doc_id, chunks_created, status, error, warnings, code.
     """
     pipeline = _make_pipeline_with_ingest_result()
@@ -132,22 +132,24 @@ def test_mcp_ingest_file_result_has_all_documented_fields() -> None:
 
     assert isinstance(result, dict), f"Expected dict, got: {type(result)!r}: {result!r}"
     assert "doc_id" in result and isinstance(result["doc_id"], str) and result["doc_id"], (
-        f"result must have a non-empty string doc_id (50_ingestion_and_collections.md:180); got: {result!r}"
+        "result must have a non-empty string doc_id (50_ingestion_and_collections.md §'MCP tools'); "
+        f"got: {result!r}"
     )
     assert "chunks_created" in result and isinstance(result["chunks_created"], int), (
-        f"result must have an integer chunks_created (50_ingestion_and_collections.md:180); got: {result!r}"
+        "result must have an integer chunks_created (50_ingestion_and_collections.md §'MCP tools'); "
+        f"got: {result!r}"
     )
     assert "status" in result and isinstance(result["status"], str), (
-        f"result must have a string status (50_ingestion_and_collections.md:180); got: {result!r}"
+        f"result must have a string status (50_ingestion_and_collections.md §'MCP tools'); got: {result!r}"
     )
     assert "error" in result, (
-        f"result must have an error key (50_ingestion_and_collections.md:180); got: {result!r}"
+        f"result must have an error key (50_ingestion_and_collections.md §'MCP tools'); got: {result!r}"
     )
     assert "warnings" in result and isinstance(result["warnings"], list), (
-        f"result must have a list warnings (50_ingestion_and_collections.md:180); got: {result!r}"
+        f"result must have a list warnings (50_ingestion_and_collections.md §'MCP tools'); got: {result!r}"
     )
     assert "code" in result, (
-        f"result must have a code key (50_ingestion_and_collections.md:180); got: {result!r}"
+        f"result must have a code key (50_ingestion_and_collections.md §'MCP tools'); got: {result!r}"
     )
 
 
@@ -422,7 +424,7 @@ def test_mcp_ingest_file_with_ttl_stores_expires_at(tmp_path: Any, monkeypatch: 
         ingest_result = _extract_tool_text(ingest_rpc, "ingest_file")
 
         # S469: assert the documented result shape directly
-        # (50_ingestion_and_collections.md:180 — IngestResultSchema dict)
+        # (50_ingestion_and_collections.md §"MCP tools" — IngestResultSchema dict)
         assert isinstance(ingest_result, dict), f"Expected dict: {ingest_result!r}"
         assert ingest_result.get("status") == "ok", (
             f"Expected status='ok' after ingest with TTL; got: {ingest_result!r}"

@@ -5,17 +5,19 @@ Ticket: ``Documentation/Backlog/S344-reranker_504_mapping_is_undocumented.md``.
 S344's subject — "``/explain`` answers ``504`` because the reranker timed out" — is not documented
 anywhere. The shipped documentation says the opposite, and says it in three places:
 
-* ``Documentation/UserManual/80_explain_and_debugging.md:169`` lists ``/explain``'s status codes and
-  gives its **only** ``504`` trigger as "``504`` on fanout timeout" — nothing reranker-specific.
-* ``Documentation/UserManual/60_searching.md:52-53`` maps a reranker failure to ``500``
+* ``Documentation/UserManual/80_explain_and_debugging.md`` §"Notes and limits" lists ``/explain``'s
+  status codes and gives its **only** ``504`` trigger as "``504`` on fanout timeout" — nothing
+  reranker-specific.
+* ``Documentation/UserManual/60_searching.md`` §"REST `POST /search`" maps a reranker failure to ``500``
   ("pipeline stage exception (embedder, store, or reranker raised)") and explicitly excludes the
   reranker from the ``504`` ("the timer starts after the reranker is loaded, so a cold model no
   longer causes this").
-* ``Documentation/OperatorGuide/90_incident_runbook.md:91`` repeats it for operators: "A cold
-  cross-encoder is **not** a cause" of the ``504``.
+* ``Documentation/OperatorGuide/90_incident_runbook.md`` §"Search returns HTTP 500 / 503 / 504"
+  repeats it for operators: "A cold cross-encoder is **not** a cause" of the ``504``.
 
 No ``reranker_timeout``-style knob exists either; the only search timeout setting is
-``[search] fanout_timeout_seconds`` (``Documentation/OperatorGuide/80_capacity_and_performance.md:46``).
+``[search] fanout_timeout_seconds`` (``Documentation/OperatorGuide/80_capacity_and_performance.md``
+§"RAG Fusion / multi-collection fan-out").
 
 So S344 is covered by positive-path fan-out-timeout tests shipped with S435/S443
 (``tests/integration/test_e1b_be6_routes_search_integration.py``, ``tests/server/test_app.py``,
@@ -32,17 +34,18 @@ Scope, and why it is this narrow (mirrors ``tests/test_s343_reranker_503_doc_gap
 * Shipped documentation is not only ``Documentation/`` — ``README.md``, ``BREAKING.md`` and
   ``archon-search.toml.example`` all document endpoints, and a per-directory scope would orphan them.
 * The claim is ``/explain``-specific. ``POST /search`` legitimately documents a ``504`` (a ~30 s
-  whole-pipeline timeout, 60:53) and the incident runbook discusses it at length next to the
-  reranker; that is not what S344 is about.
+  whole-pipeline timeout, ``60_searching.md`` §"REST `POST /search`") and the incident runbook
+  discusses it at length next to the reranker; that is not what S344 is about.
 * ``/explain`` context comes from the line, any enclosing heading, or the file name — a status table
   under ``### `routes_explain.py` `` does not repeat the endpoint on every row. Enclosing means the
   whole heading stack: a ``#### Error responses`` nested under that section must not shed it. The
   match tolerates a leading ``_`` because ``routes_explain.py`` offers no word boundary. Inside a
   fenced block a ``#`` line is a shell comment, not a heading, so heading tracking is suspended
   there — offender scanning is not, because a documented error body is still a claim.
-* The unit of judgement is a sentence, not a line. ``OperatorGuide/90_incident_runbook.md:92`` names
-  ``POST /explain``, the reranker and ``504`` inside one very long line while asserting none of them
-  of each other. Splitting on sentence boundaries keeps it green. The split is deliberately
+* The unit of judgement is a sentence, not a line. ``OperatorGuide/90_incident_runbook.md``
+  §"Search returns HTTP 500 / 503 / 504" names ``POST /explain``, the reranker and ``504`` inside
+  one very long line while asserting none of them of each other. Splitting on sentence boundaries
+  keeps it green. The split is deliberately
   **periods only**: a colon or semicolon is how a status mapping is normally written
   ("``504``: the reranker timed out"), so splitting on those would let the guarded claim through in
   its most likely form.

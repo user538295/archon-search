@@ -1,10 +1,11 @@
 """S327: ``PATCH /collections/{name}`` must not 422 a documented, shipped model.
 
-``UserManual/50_ingestion_and_collections.md`` (:200) documents "indexed data +
-different model" as *setting* ``pending_embedding_model`` with
+``UserManual/50_ingestion_and_collections.md`` §"Per-collection embedding model" documents
+"indexed data + different model" as *setting* ``pending_embedding_model`` with
 ``needs_reindex = true`` — the only documented 422 on this surface is an unknown
-model name at creation (:189). ``BAAI/bge-base-en-v1.5`` is a shipped profile
-model (``UserManual/10_installation.md:106``), so the branch must apply to it.
+model name at creation. ``BAAI/bge-base-en-v1.5`` is the ``balanced`` profile's
+embedder (``UserManual/10_installation.md`` §"Install profiles (C0)";
+``archon_search/profiles.py``), so the branch must apply to it.
 
 ``validate_embedding_model`` resolves a known model's dimension from
 ``TextEmbedding.list_supported_models()`` without downloading anything. These

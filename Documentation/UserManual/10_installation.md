@@ -116,7 +116,7 @@ The `graph` extra installs the `gliner` library but **not** its model weights. T
 
 ## ONNX Runtime providers (GPU acceleration)
 
-Embedding and reranking run through ONNX Runtime. By default the CPU provider is used. To enable hardware acceleration, set `[database].providers` in `~/.archon-search/archon-search.toml` (see `archon_search/config.py` and `archon-search.toml.example`):
+Embedding and reranking run through ONNX Runtime. With `[database].providers` unset or empty, the CPU provider is used. `archon-search wizard` writes `[database].providers` from its GPU step (see below). To override that, or on an install the wizard did not configure, set `[database].providers` in `~/.archon-search/archon-search.toml` (see `archon_search/config.py` and `archon-search.toml.example`):
 
 ```toml
 [database]
@@ -132,7 +132,9 @@ providers = ["CUDAExecutionProvider"]
 
 `providers` is the list of ONNX Runtime execution providers to load the models with, in order. A provider the locally installed ONNX Runtime build does not offer — for example `CUDAExecutionProvider` without `onnxruntime-gpu`, which a native `pip`/`uv` install does not include — is dropped: the models load on the remaining providers, or on CPU when none remain, the log carries one `configured ONNX providers not available: …` warning, and `GET /ready` reports `checks.models: "warn"` (`archon_search/onnx_providers.py`). Install the matching onnxruntime build to use the accelerator.
 
-The CLI's GPU autodetection (`archon_search/platform/runtime.py:detect_gpu_type`) currently only reports the available accelerator type — it does not auto-populate `providers`. You must set this manually.
+The wizard detects the accelerator with `archon_search/platform/runtime.py:detect_gpu_type` (NVIDIA when `nvidia-smi` succeeds, otherwise Apple Silicon) and asks whether to use it (`--non-interactive` accepts). It then writes `[database].providers` (`archon_search/install/installer.py`): `["CUDAExecutionProvider"]` on NVIDIA without a load test; `["CoreMLExecutionProvider"]` on Apple Silicon only after a CoreML load test passes, otherwise `[]`; `[]` when you decline or pass `--disable-gpu`. The full per-case matrix, including `reranker_providers`, is in [`20_wizard.md` — `[database]` section](./20_wizard.md#database-section).
+
+The wizard does not install `onnxruntime-gpu`: on an NVIDIA host without it, the CUDA entry is dropped at load time as described above. `[graph].providers` (graph extraction) is settled separately; see [`20_wizard.md`](./20_wizard.md#step-8--model-download).
 
 **PDF / image-OCR acceleration (PyTorch).** The `providers` setting above only covers embedding and reranking (ONNX Runtime). PDF and image-OCR parsing (docling) runs on PyTorch. Which PyTorch build you have depends on how you installed (see [Linux: install the CPU-only PyTorch build](#linux-install-the-cpu-only-pytorch-build)). To run docling on an NVIDIA GPU, answer **Yes** to the wizard's "enable CUDA acceleration?" prompt on a Linux x86_64 host. The wizard then reinstalls torch and torchvision as the CUDA 12.6 (`+cu126`) build of the installed version. This step is best-effort: it keeps the installed build if the download fails. There is no manual TOML setting for this; it is driven by the wizard's GPU confirmation.
 

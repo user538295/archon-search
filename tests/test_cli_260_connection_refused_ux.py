@@ -260,8 +260,8 @@ def test_collection_migrate_unreachable_api_url_reports_target_not_running() -> 
     The autouse fixture above forces the managed service to be unavailable; this test
     overrides it with a *running* local service, which is the state the bug needs. The
     ``--api-url`` port is refused, so the documented message
-    (`UserManual/100_jobs_and_async_operations.md:11`) is the only correct answer — the
-    local instance is a different server than the one the operator named.
+    (`UserManual/100_jobs_and_async_operations.md` §"The server must be running") is the only
+    correct answer — the local instance is a different server than the one the operator named.
     """
     from archon_search.cli import _helpers
     from archon_search.cli.collection import collection

@@ -292,9 +292,9 @@ def test_explain_stage_timings_rerank_key_present(
 ) -> None:
     """POST /explain with rerank=True includes all six documented stage keys.
 
-    The docs at 20_monitoring_and_alerts.md:82 list six query-path stages:
-    embed, vector, fts, fuse, rerank, total.  When rerank=True (default) and
-    a reranker is configured, every key must be present and >= 0.
+    The docs at 20_monitoring_and_alerts.md §"Stage-level latency and request-correlation IDs"
+    list six query-path stages: embed, vector, fts, fuse, rerank, total.  When
+    rerank=True (default) and a reranker is configured, every key must be present and >= 0.
     Regression guard for S345.
     """
     import secrets
@@ -342,7 +342,8 @@ def test_explain_stage_timings_rerank_key_present(
         missing = documented_stages - set(timings.keys())
         assert not missing, (
             f"stage_timings_ms is missing documented stage(s) {sorted(missing)} "
-            f"(20_monitoring_and_alerts.md:82); present keys={sorted(timings.keys())}"
+            f"(20_monitoring_and_alerts.md §'Stage-level latency and request-correlation IDs'); "
+            f"present keys={sorted(timings.keys())}"
         )
         for key in documented_stages:
             assert isinstance(timings[key], (int, float)), (

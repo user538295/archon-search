@@ -3,7 +3,7 @@ in the lowercase form the server actually emits.
 
 The wire format is lowercase (``ok``/``warn``/``fail``/``pending``) — the
 ``CheckStatus`` enum values below and the literal JSON body at
-``Documentation/OperatorGuide/20_monitoring_and_alerts.md:23`` are authoritative.
+``Documentation/OperatorGuide/20_monitoring_and_alerts.md`` §"Endpoint matrix" are authoritative.
 Two user-facing pages previously showed the values in UPPERCASE, producing tests
 that asserted ``"OK"`` and failed against the correct ``"ok"``. These tests pin
 the docs to the wire format.
