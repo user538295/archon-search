@@ -62,7 +62,7 @@ uv tool install --upgrade --torch-backend cpu "archon-search[graph,code]"
 
 Do not use `uv tool upgrade archon-search` for this install: it has no `--torch-backend` option and ignores `UV_TORCH_BACKEND` (uv 0.12.23), so it replaces the CPU-only build with PyPI's CUDA build as soon as a newer `torch` is out. Sources: PyTorch's [install selector](https://pytorch.org/get-started/locally/) (Linux, Pip, CPU), uv's [PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/) and the [`uv tool install` reference](https://docs.astral.sh/uv/reference/cli/#uv-tool-install). The guide still says `--torch-backend` works only in the `uv pip` interface; the CLI reference lists it for `uv tool install`, and uv 0.12.23 accepts it there.
 
-The same applies to the CUDA 12.6 build the wizard installs on a Linux x86_64 GPU host (`torch==<version>+cu126`, see [`20_wizard.md`](./20_wizard.md)). The uv tool receipt does not record `--torch-backend`, so `uv tool upgrade archon-search` can replace that build with PyPI's default Linux build, which is CUDA 13. Upgrade with `uv tool install --upgrade --torch-backend cu126 "archon-search[graph,code]"` instead, listing your extras. When the wizard adds an extra to a uv tool install, it passes `--torch-backend` matching the installed torch build (`+cpu` → `cpu`, `+cu126` → `cu126`), so adding an extra keeps the build.
+The same applies to the CUDA 12.6 build the wizard installs on a Linux x86_64 GPU host (`torch==<version>+cu126`, see [`20_wizard.md`](./20_wizard.md)). The uv tool receipt does not record `--torch-backend`, so `uv tool upgrade archon-search` can replace that build with PyPI's default Linux build, which is CUDA 13. Upgrade with `uv tool install --upgrade --torch-backend cu126 "archon-search[graph,code]"` instead, listing your extras. When the wizard adds an extra to a uv tool install, it passes `--torch-backend` matching the installed torch build (`+cpu` → `cpu`, `+cu126` → `cu126`, `+cu130` → `cu130`), so adding an extra keeps the build. An install set up for ONNX Runtime on the GPU ([NVIDIA GPU: run embedding and reranking on CUDA](#nvidia-gpu-run-embedding-and-reranking-on-cuda)) uses the CUDA 13 build (`--torch-backend cu130`) instead, and the wizard leaves it in place.
 
 To switch an existing CUDA install to the CPU-only build:
 
@@ -123,7 +123,7 @@ Embedding and reranking run through ONNX Runtime. With `[database].providers` un
 # Apple Silicon (M-series Macs)
 providers = ["CoreMLExecutionProvider"]
 
-# NVIDIA GPU (Linux/Windows with CUDA toolkit installed)
+# NVIDIA GPU (needs onnxruntime-gpu, see "NVIDIA GPU: run embedding and reranking on CUDA" below)
 providers = ["CUDAExecutionProvider"]
 
 # CPU only (default)
@@ -132,11 +132,48 @@ providers = ["CUDAExecutionProvider"]
 
 `providers` is the list of ONNX Runtime execution providers to load the models with, in order. A provider the locally installed ONNX Runtime build does not offer — for example `CUDAExecutionProvider` without `onnxruntime-gpu`, which a native `pip`/`uv` install does not include — is dropped: the models load on the remaining providers, or on CPU when none remain, the log carries one `configured ONNX providers not available: …` warning, and `GET /ready` reports `checks.models: "warn"` (`archon_search/onnx_providers.py`). Install the matching onnxruntime build to use the accelerator.
 
-The wizard detects the accelerator with `archon_search/platform/runtime.py:detect_gpu_type` (NVIDIA when `nvidia-smi` succeeds, otherwise Apple Silicon) and asks whether to use it (`--non-interactive` accepts). It then writes `[database].providers` (`archon_search/install/installer.py`): `["CUDAExecutionProvider"]` on NVIDIA without a load test; `["CoreMLExecutionProvider"]` on Apple Silicon only after a CoreML load test passes, otherwise `[]`; `[]` when you decline or pass `--disable-gpu`. The full per-case matrix, including `reranker_providers`, is in [`20_wizard.md` — `[database]` section](./20_wizard.md#database-section).
+The wizard detects the accelerator with `archon_search/platform/runtime.py:detect_gpu_type` (NVIDIA when `nvidia-smi` succeeds, otherwise Apple Silicon) and asks whether to use it (`--non-interactive` accepts). It then writes `[database].providers` (`archon_search/install/installer.py`): `["CUDAExecutionProvider"]` on NVIDIA only after a CUDA load test passes, otherwise `[]`; `["CoreMLExecutionProvider"]` on Apple Silicon only after a CoreML load test passes, otherwise `[]`; `[]` when you decline or pass `--disable-gpu`. The full per-case matrix, including `reranker_providers`, is in [`20_wizard.md` — `[database]` section](./20_wizard.md#database-section).
 
-The wizard does not install `onnxruntime-gpu`: on an NVIDIA host without it, the CUDA entry is dropped at load time as described above. `[graph].providers` (graph extraction) is settled separately; see [`20_wizard.md`](./20_wizard.md#step-8--model-download).
+The wizard does not install `onnxruntime-gpu`, so on a plain NVIDIA install the CUDA load test fails, the wizard writes `[]` and prints `Warning: CUDA validation failed — falling back to CPU.` with a pointer to the section below. `[graph].providers` (graph extraction) is settled separately; see [`20_wizard.md`](./20_wizard.md#step-8--model-download).
 
-**PDF / image-OCR acceleration (PyTorch).** The `providers` setting above only covers embedding and reranking (ONNX Runtime). PDF and image-OCR parsing (docling) runs on PyTorch. Which PyTorch build you have depends on how you installed (see [Linux: install the CPU-only PyTorch build](#linux-install-the-cpu-only-pytorch-build)). To run docling on an NVIDIA GPU, answer **Yes** to the wizard's "enable CUDA acceleration?" prompt on a Linux x86_64 host. The wizard then reinstalls torch and torchvision as the CUDA 12.6 (`+cu126`) build of the installed version. This step is best-effort: it keeps the installed build if the download fails. There is no manual TOML setting for this; it is driven by the wizard's GPU confirmation.
+**PDF / image-OCR acceleration (PyTorch).** The `providers` setting above only covers embedding and reranking (ONNX Runtime). PDF and image-OCR parsing (docling) and the graph engine run on PyTorch. Which PyTorch build you have depends on how you installed (see [Linux: install the CPU-only PyTorch build](#linux-install-the-cpu-only-pytorch-build)). To run them on an NVIDIA GPU, answer **Yes** to the wizard's "enable CUDA acceleration?" prompt on a Linux x86_64 host. When the CUDA load test fails (the stock `onnxruntime`), the wizard then reinstalls torch and torchvision as the CUDA 12.6 (`+cu126`) build of the installed version. This step is best-effort: it keeps the installed build if the download fails. When the CUDA load test passes (`onnxruntime-gpu` installed), the wizard keeps the installed torch build instead: the `+cu126` build's cuDNN wheel would overwrite the cuDNN library `onnxruntime-gpu` uses. There is no manual TOML setting for this; it is driven by the wizard's GPU confirmation.
+
+### NVIDIA GPU: run embedding and reranking on CUDA
+
+Embedding and reranking run on the GPU only with the `onnxruntime-gpu` package in place of `onnxruntime`. Requirements:
+
+- PyPI's `onnxruntime-gpu` 1.27 and later is built for CUDA 13.0 and cuDNN 9 ([ONNX Runtime CUDA provider requirements](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html)); CUDA 12 builds are not on PyPI.
+- CUDA 13.x needs NVIDIA driver 580 or later ([CUDA 13.0 release notes](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html)). Check with `nvidia-smi`.
+- `onnxruntime` and `onnxruntime-gpu` cannot be installed in the same environment ([fastembed GPU guide](https://qdrant.github.io/fastembed/examples/FastEmbed_GPU/)). fastembed and gliner (the `graph` extra) both depend on `onnxruntime`, so every install command below has to keep `onnxruntime` out.
+
+The `[cuda,cudnn]` extras of `onnxruntime-gpu` install the CUDA 13 and cuDNN 9 libraries as `nvidia-*` wheels, so no system CUDA toolkit is needed. `onnxruntime-gpu`'s CUDA provider library does not find those wheels by itself, so archon-search calls `onnxruntime.preload_dlls()` once per process, before its first ONNX Runtime session, when the configured providers include `CUDAExecutionProvider` and the installed ONNX Runtime is a CUDA build (`archon_search/onnx_providers.py`).
+
+**uv tool.** Reinstall with `onnxruntime` excluded, `onnxruntime-gpu` added and the CUDA 13 PyTorch build (list your extras):
+
+```bash
+printf 'onnxruntime\n' | uv tool install --upgrade --torch-backend cu130 \
+  --with "onnxruntime-gpu[cuda,cudnn]" --excludes - "archon-search[graph,code]"
+```
+
+`--excludes -` reads the excluded package names from standard input. The receipt records the exclusion and the `--with` requirement, so `uv tool upgrade archon-search` keeps them, and the wizard keeps the exclusion when it adds an extra (`archon_search/uv_tool.py`). The receipt does not record `--torch-backend`; `uv tool upgrade` re-resolves torch from PyPI, whose Linux torch 2.14.1 is itself the CUDA 13 build (its metadata requires `cuda-toolkit==13.0.3` and `nvidia-cudnn-cu13`), so the two stay on one CUDA stack. To be explicit, upgrade by re-running the command above.
+
+**pip.** Use a new virtual environment: an existing one keeps the wizard's `+cu126` torch and its `nvidia-cudnn-cu12`, which installs the same `libcudnn.so.9` file as `onnxruntime-gpu`'s cuDNN wheel.
+
+```bash
+pip install "archon-search[graph,code]"
+pip uninstall -y onnxruntime
+pip install "onnxruntime-gpu[cuda,cudnn]"
+```
+
+On Linux, PyPI's torch is already the CUDA 13 build. Any later `pip install` or upgrade that requires `onnxruntime` (archon-search, fastembed, gliner) reinstalls it next to `onnxruntime-gpu`. After each one, repeat `pip uninstall -y onnxruntime` and `pip install --force-reinstall "onnxruntime-gpu[cuda,cudnn]"`.
+
+**Checkout (`uv sync`).** Not supported: the lock pins the CPU-only torch on Linux x86_64, and `uv sync` removes every package the lock does not list, `onnxruntime-gpu` included.
+
+Then re-run `archon-search wizard` and accept CUDA. The CUDA load test passes, the wizard writes `providers = ["CUDAExecutionProvider"]` and keeps the installed PyTorch build.
+
+These steps were verified by dependency resolution and receipt behaviour, not run on a real NVIDIA GPU. With uv 0.12.23 on 2026-10-10, resolving `archon-search[graph]` with `onnxruntime-gpu[cuda,cudnn]`, `onnxruntime` excluded and `--torch-backend cu130` gave `onnxruntime-gpu` 1.31.0, no `onnxruntime`, torch 2.14.1+cu130 and a single CUDA 13 stack (`nvidia-cudnn-cu13`, no `-cu12` package) on Linux x86_64, Linux aarch64 and Windows x86_64. Without the exclusion, both `onnxruntime` and `onnxruntime-gpu` resolve. The uv tool receipt was checked to record the exclusion and keep it through `uv tool upgrade --reinstall`.
+
+If the CUDA libraries fail to load when a session is created, fastembed 0.9.0 runs that model on CPU and only emits a Python `RuntimeWarning` (`Attempt to set CUDAExecutionProvider failed. …`) on stderr; neither the wizard's CUDA load test nor `GET /ready` reports it. If the GPU stays idle after the wizard wrote CUDA, look for that warning in the service's stderr output.
 
 ## Install profiles (C0)
 

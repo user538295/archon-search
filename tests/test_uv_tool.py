@@ -49,7 +49,7 @@ def _receipt(
 
 
 def _command(receipt: dict[str, Any], extra: str = "graph", backend: str | None = None) -> list[str]:
-    return install_extra_command(receipt, extra, backend=backend)
+    return install_extra_command(receipt, extra, backend=backend).argv
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +175,25 @@ def test_entrypoint_without_from_is_a_main_package_entrypoint() -> None:
     assert _command(receipt) == ["uv", "tool", "install", "archon-search[graph]"]
 
 
+def test_excludes_are_read_from_stdin_after_the_other_flags() -> None:
+    receipt = _receipt(options={"find-links": ["file:///l"]}, excludes=["onnxruntime", "triton"])
+    assert install_extra_command(receipt, "graph", backend="cu130") == (
+        [
+            "uv", "tool", "install", "archon-search[graph]",
+            "--find-links", "file:///l", "--torch-backend", "cu130", "--excludes", "-",
+        ],
+        "onnxruntime\ntriton\n",
+    )
+
+
+@pytest.mark.parametrize("receipt", [_receipt(excludes=[]), _receipt()])
+def test_empty_excludes_add_no_flag_and_no_stdin(receipt: dict[str, Any]) -> None:
+    assert install_extra_command(receipt, "graph", backend=None) == (
+        ["uv", "tool", "install", "archon-search[graph]"],
+        None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # install_extra_command — unsupported receipts fail closed
 # ---------------------------------------------------------------------------
@@ -186,7 +205,8 @@ def test_entrypoint_without_from_is_a_main_package_entrypoint() -> None:
         (_receipt(python="3.12"), "python"),
         (_receipt(constraints=[{"name": "numpy", "specifier": "<3"}]), "constraints"),
         (_receipt(overrides=[{"name": "numpy", "specifier": "<3"}]), "overrides"),
-        (_receipt(excludes=["numpy"]), "excludes"),
+        (_receipt(excludes="numpy"), "excludes"),
+        (_receipt(excludes=["numpy", 1]), "excludes"),
         (_receipt(**{"build-constraint-dependencies": [{"name": "setuptools"}]}), "build-constraint-dependencies"),
         (_receipt(**{"future-key": 1}), "future-key"),
         ({"tool": {"requirements": [], "entrypoints": []}}, "requirements"),
@@ -239,6 +259,7 @@ def test_unsupported_receipt_state_raises_naming_it(receipt: dict[str, Any], nam
     [
         ("2.14.1+cpu", "cpu"),
         ("2.14.1+cu126", "cu126"),
+        ("2.14.1+cu130", "cu130"),
         ("2.14.1+rocm6.3", "rocm6.3"),
         ("2.14.1+rocm6.2.4", "rocm6.2.4"),
         ("2.14.1+xpu", "xpu"),
@@ -379,6 +400,20 @@ def test_hint_in_a_uv_tool_env_is_the_receipt_preserving_command(
     torch_version("2.14.1+cpu")
     assert extra_install_hint("graph") == (
         "uv tool install 'archon-search[code,graph]' --with rich --find-links file:///links --torch-backend cpu"
+    )
+
+
+def test_hint_with_excludes_feeds_them_on_stdin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, torch_version: Any
+) -> None:
+    prefix = _tool_prefix(
+        tmp_path, '[tool]\nrequirements = [{ name = "archon-search" }]\nexcludes = ["onnxruntime", "a b"]\n'
+    )
+    monkeypatch.setattr(sys, "prefix", str(prefix))
+    torch_version("2.14.1+cu130")
+    assert extra_install_hint("graph") == (
+        "printf '%s\\n' onnxruntime 'a b' | "
+        "uv tool install 'archon-search[graph]' --torch-backend cu130 --excludes -"
     )
 
 

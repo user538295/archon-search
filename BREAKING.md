@@ -8,6 +8,23 @@
 
 ## Changelog
 
+### [next release] — wizard: NVIDIA hosts write CUDA only after a CUDA load test passes; no `+cu126` torch swap when it does (2026-10-10)
+
+**Surface**: `archon-search wizard` → `[database].providers` / `reranker_providers` in `~/.archon-search/archon-search.toml`, its stdout and summary, and the Linux x86_64 PyTorch reinstall.
+
+**What changed:** On an NVIDIA host where you accept CUDA, the wizard now loads the embedder and reranker under `CUDAExecutionProvider` before writing it, the check Apple Silicon runs for CoreML (`archon_search/install/installer.py`, `_probe_and_configure_cuda`; ADR 16). It previously wrote `providers = ["CUDAExecutionProvider"]` unchecked.
+
+- **Check fails** — every install where `onnxruntime-gpu` has not replaced the stock `onnxruntime`, which has no CUDA provider: the wizard writes `providers = []` instead of `["CUDAExecutionProvider"]`, the summary's `Providers:` reads `(CPU default)` instead of `CUDA`, and stdout carries a four-line block starting `Warning: CUDA validation failed — falling back to CPU.` On Linux x86_64 the `+cu126` torch/torchvision reinstall still runs.
+- **Check passes** (`onnxruntime-gpu` installed): the wizard writes `providers = ["CUDAExecutionProvider"]`, removes `[database].reranker_providers`, and no longer reinstalls torch as `+cu126` on Linux x86_64; it prints `Keeping the installed PyTorch build: onnxruntime-gpu shares its CUDA libraries, which the CUDA 12.6 PyTorch build would replace.`
+- `--dry-run` is unchanged: it narrates the CUDA write and the torch reinstall and runs no check.
+- When the wizard adds an extra to a `uv tool` install whose receipt records `excludes`, it now keeps them (`--excludes -` with the names on stdin) instead of falling back to `uv pip install`.
+
+**Migration**: embedding and reranking ran on CPU on these hosts before too, so nothing stops working. Scripts or checks that expect `["CUDAExecutionProvider"]` in a wizard-written config on NVIDIA must accept `[]`, or the host must first get `onnxruntime-gpu`: follow `Documentation/UserManual/10_installation.md` → "NVIDIA GPU: run embedding and reranking on CUDA", then re-run `archon-search wizard` and accept CUDA. An existing config keeps its CUDA entry until the wizard is re-run. If you relied on the wizard's `+cu126` torch alongside `onnxruntime-gpu`, use the CUDA 13 torch the guide installs (`--torch-backend cu130`).
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — `/mcp`: idle Streamable HTTP sessions expire after 30 minutes (`404`); at most 10 000 concurrent sessions (`503`) (2026-10-10)
 
 **Surface**: the MCP endpoint `/mcp` — Streamable HTTP session lifetime (`Mcp-Session-Id`) and its HTTP status codes.
@@ -54,10 +71,10 @@
 - **Failure wording** names the phase: `Could not resolve or download the <role> model '<name>': <cause>` or `The <role> model '<name>' was downloaded but cannot be loaded: <cause>` (was `Failed to pre-warm embedder model '<name>': <cause>`, and `Failed to pre-warm reranker model '<name>': <cause> — the model will be downloaded on first search.` for the reranker). The timeout warning now reads `Model pre-warm timed out after <N>s with the embedder ready — skipping the <models>; …`, where `<models>` names only the models not yet started (`reranker model`, `graph NER model`, or `reranker and graph NER models`).
 - **Progress label** (stdout): `[4/5] Downloading models...` → `[4/5] Downloading and loading models...`; with `--dry-run`, `[DRY RUN] Would download models (~<N> MB).` → `[DRY RUN] Would download and load models (~<N> MB).`.
 - **Removed**: the post-download CoreML re-check and its `Warning: model validation failed under <provider> — the reranker will fall back to CPU.` line; pre-warm loads both models under the written providers instead.
-- **Native NVIDIA installs without `onnxruntime-gpu` install and run on CPU, with a warning**: the wizard detects NVIDIA via `nvidia-smi` and, on a yes (the default answer), writes `providers = ["CUDAExecutionProvider"]`; a native `pip`/`uv` install ships the CPU `onnxruntime`, which has no CUDA provider. Pre-warm and the service drop the provider the installed onnxruntime lacks and load both models on CPU (S635, ADR 15), so the install exits `0` as before, and the wizard's stderr carries one `configured ONNX providers not available: CUDAExecutionProvider — loading models on CPUExecutionProvider instead …` warning. The service now embeds on CPU where it previously failed every load (`Provider CUDAExecutionProvider is not available`), and `GET /ready` reports `checks.models: "warn"`.
+- **A configured GPU provider the installed onnxruntime lacks loads on CPU, with a warning**: pre-warm and the service drop the provider and load both models on CPU (S635, ADR 15), so the install exits `0`, and the wizard's stderr carries one `configured ONNX providers not available: <provider> — loading models on CPUExecutionProvider instead …` warning; the service embeds on CPU where it previously failed every load (`Provider <provider> is not available`), and `GET /ready` reports `checks.models: "warn"`. The wizard itself no longer writes an unavailable CUDA provider: see the CUDA load-test entry above.
 - **CoreML fallback writes CPU**: when both CoreML checks fail, the wizard now writes `[database].providers = []` instead of keeping a CoreML entry a previous run wrote.
 
-**Migration**: scripts that match `Model download failed:` must match `Model pre-warm failed:`. A host whose onnxruntime lacks the configured GPU provider needs no action to install; to run on the GPU, replace `onnxruntime` with `onnxruntime-gpu` in the install's environment (NVIDIA), or re-run with `--disable-gpu` to write CPU and clear the `checks.models: "warn"`. No config or data migration is required.
+**Migration**: scripts that match `Model download failed:` must match `Model pre-warm failed:`. A host whose onnxruntime lacks the configured GPU provider needs no action to install; to run on the GPU, replace `onnxruntime` with `onnxruntime-gpu` in the install's environment (NVIDIA, see `Documentation/UserManual/10_installation.md` → "NVIDIA GPU: run embedding and reranking on CUDA"), or re-run the wizard to write CPU and clear the `checks.models: "warn"`. No config or data migration is required.
 
 **Announced in**: this release.
 

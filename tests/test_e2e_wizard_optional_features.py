@@ -1855,7 +1855,7 @@ def test_wizard_log_level_invalid_rejects(runner: CliRunner, tmp_path: Path) -> 
     config_path = tmp_path / "archon-search.toml"
     with _patched_wizard():
         result = runner.invoke(main, _wizard_args(config_path, "--log-level", "VERBOSE"))
-    assert result.exit_code != 0, f"Expected non-zero exit for invalid log level"
+    assert result.exit_code != 0, "Expected non-zero exit for invalid log level"
 
 
 @pytest.mark.integration
@@ -1888,7 +1888,7 @@ def test_wizard_top_k_0_rejects(runner: CliRunner, tmp_path: Path) -> None:
     config_path = tmp_path / "archon-search.toml"
     with _patched_wizard():
         result = runner.invoke(main, _wizard_args(config_path, "--top-k", "0"))
-    assert result.exit_code != 0, f"Expected non-zero exit for --top-k 0"
+    assert result.exit_code != 0, "Expected non-zero exit for --top-k 0"
 
 
 @pytest.mark.integration
@@ -1897,7 +1897,7 @@ def test_wizard_top_k_101_rejects(runner: CliRunner, tmp_path: Path) -> None:
     config_path = tmp_path / "archon-search.toml"
     with _patched_wizard():
         result = runner.invoke(main, _wizard_args(config_path, "--top-k", "101"))
-    assert result.exit_code != 0, f"Expected non-zero exit for --top-k 101"
+    assert result.exit_code != 0, "Expected non-zero exit for --top-k 101"
     assert "performance" in result.output.lower() or "performance" in (result.stderr or "").lower(), (
         f"Expected performance message, got: {result.output}"
     )
@@ -2098,7 +2098,7 @@ def test_wizard_host_empty_string_rejects(runner: CliRunner, tmp_path: Path) -> 
     config_path = tmp_path / "archon-search.toml"
     with _patched_wizard():
         result = runner.invoke(main, _wizard_args(config_path, "--host", ""))
-    assert result.exit_code != 0, f"Expected non-zero exit for empty --host"
+    assert result.exit_code != 0, "Expected non-zero exit for empty --host"
 
 
 @pytest.mark.integration
@@ -3797,11 +3797,12 @@ def test_e2e_declining_the_offer_is_what_the_operator_typed(
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    ("extra", "detected_gpu", "coreml_probe", "gpu_keys"),
+    ("extra", "detected_gpu", "provider_probe", "gpu_keys"),
     [
         pytest.param((), GpuType.NONE, (False, False), {}, id="gpu-detected-none"),
         pytest.param(("--disable-gpu",), GpuType.NONE, (False, False), {"providers": []}, id="disable-gpu"),
-        pytest.param((), GpuType.CUDA, (False, False), {"providers": [_CUDA_PROVIDER]}, id="gpu-detected-cuda"),
+        pytest.param((), GpuType.CUDA, (True, False), {"providers": [_CUDA_PROVIDER]}, id="gpu-detected-cuda"),
+        pytest.param((), GpuType.CUDA, (False, False), {"providers": []}, id="gpu-detected-cuda-probe-fails"),
         pytest.param(
             (), GpuType.METAL, (True, False), {"providers": [_COREML_PROVIDER]}, id="gpu-detected-metal"
         ),
@@ -3819,7 +3820,7 @@ def test_fresh_install_writes_only_answered_keys(
     tmp_path: Path,
     extra: tuple[str, ...],
     detected_gpu: GpuType,
-    coreml_probe: tuple[bool, bool],
+    provider_probe: tuple[bool, bool],
     gpu_keys: dict[str, Any],
 ) -> None:
     """A fresh `--non-interactive --profile minimal` run with no optional flags writes the
@@ -3829,18 +3830,19 @@ def test_fresh_install_writes_only_answered_keys(
     made are written").
     The real `configure_providers`/`configure_reranker_providers`/`clear_reranker_providers`
     run, so a detected GPU's providers are what the GPU step actually writes. Only the
-    model-loading CoreML probes (`coreml_probe` = validate_providers, validate_embedder_only
-    results) and the CUDA torch swap are stubbed, so nothing loads a model or pip-installs."""
+    model-loading provider probes (`provider_probe` = validate_providers, validate_embedder_only
+    results; CoreML uses both, CUDA only the first) and the CUDA torch swap are stubbed, so
+    nothing loads a model or pip-installs."""
     config_path = tmp_path / "archon-search.toml"
-    full_coreml_ok, embedder_only_coreml_ok = coreml_probe
+    full_probe_ok, embedder_only_probe_ok = provider_probe
 
     with _patched_wizard(_install_cuda_torch=MagicMock()):
         with patch.multiple(
             RealInstaller,
             detect_gpu=MagicMock(return_value=detected_gpu),
             configure_providers=_REAL_CONFIGURE_PROVIDERS,
-            validate_providers=MagicMock(return_value=full_coreml_ok),
-            validate_embedder_only=MagicMock(return_value=embedder_only_coreml_ok),
+            validate_providers=MagicMock(return_value=full_probe_ok),
+            validate_embedder_only=MagicMock(return_value=embedder_only_probe_ok),
         ):
             result = runner.invoke(main, _wizard_args(config_path, *extra))
     assert result.exit_code == 0, f"Exit {result.exit_code}: {result.output}"

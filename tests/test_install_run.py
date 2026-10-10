@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -1529,8 +1528,9 @@ def test_configure_providers_after_config_write(tmp_path: Path) -> None:
     from archon_search.install import _profile_toml
     config_path.write_text(_profile_toml("minimal", False))
 
-    # Use CUDA GPU so configure_providers actually fires
+    # Use CUDA GPU with a passing probe so configure_providers actually fires
     method_patches["detect_gpu"] = MagicMock(return_value=GpuType.CUDA)
+    method_patches["validate_providers"] = MagicMock(return_value=True)
 
     with patch.multiple("archon_search.install.installer", **{
         k.replace("archon_search.install.installer.", ""): v for k, v in patches.items()
@@ -2299,27 +2299,29 @@ def test_wizard_metal_checks_coreml_once_before_prewarm(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("gpu", "coreml_combined_ok", "use_default_path", "expected_providers", "expected_reranker"),
+    ("gpu", "probe_ok", "use_default_path", "expected_providers", "expected_reranker"),
     [
         (GpuType.METAL, True, False, [_COREML], [_COREML]),
         (GpuType.METAL, True, True, [_COREML], [_COREML]),
         (GpuType.METAL, False, False, [_COREML], None),
-        (GpuType.CUDA, False, False, [_CUDA], [_CUDA]),
+        (GpuType.CUDA, True, False, [_CUDA], [_CUDA]),
+        (GpuType.CUDA, False, False, [], None),
     ],
-    ids=["metal-combined", "metal-combined-default-path", "metal-split-coreml", "cuda"],
+    ids=["metal-combined", "metal-combined-default-path", "metal-split-coreml", "cuda", "cuda-probe-fails"],
 )
 def test_wizard_prewarms_the_providers_step_9_wrote(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     gpu: GpuType,
-    coreml_combined_ok: bool,
+    probe_ok: bool,
     use_default_path: bool,
     expected_providers: list[str],
     expected_reranker: list[str] | None,
 ) -> None:
     """Step 9 rewrites [database].providers (and, on the split CoreML path,
-    reranker_providers = []) after Step 8b loaded the config; pre-warm must load the
-    models under what the service will read, not the stale config."""
+    reranker_providers = []; on a failed CUDA probe, providers = []) after Step 8b loaded
+    the config; pre-warm must load the models under what the service will read, not the
+    stale config."""
     from archon_search.config import resolve_reranker_providers
     from archon_search.install import _prewarm_timeout
     from archon_search.profiles import get_profile
@@ -2331,7 +2333,7 @@ def test_wizard_prewarms_the_providers_step_9_wrote(
 
     with (
         _gpu_patches(
-            config_path, tmp_path / "fake.plist", MagicMock(return_value=coreml_combined_ok),
+            config_path, tmp_path / "fake.plist", MagicMock(return_value=probe_ok),
             prewarm_mock, gpu=gpu,
         ),
         patch.object(BaseInstaller, "validate_embedder_only", return_value=True),
@@ -2398,10 +2400,9 @@ def test_wizard_coreml_fallback_writes_cpu_providers(tmp_path: Path) -> None:
     assert tomlkit.parse(config_path.read_text())["database"]["providers"] == []
 
 
-@pytest.mark.parametrize("gpu", [GpuType.NONE, GpuType.CUDA], ids=["cpu", "cuda"])
-def test_wizard_runs_no_provider_check_without_metal(tmp_path: Path, gpu: GpuType) -> None:
-    """Only the Metal path validates providers at Step 9: a CPU install has nothing to
-    check, and CUDA install-time validation is out of scope (D6)."""
+def test_wizard_runs_no_provider_check_without_gpu(tmp_path: Path) -> None:
+    """A CPU install has nothing to check at Step 9 (Metal and CUDA probes are covered
+    by test_wizard_prewarms_the_providers_step_9_wrote)."""
     config_path = tmp_path / "archon-search.toml"
     validate_mock = MagicMock(return_value=True)
 
@@ -2412,7 +2413,7 @@ def test_wizard_runs_no_provider_check_without_metal(tmp_path: Path, gpu: GpuTyp
         patch("archon_search.install.installer._install_cuda_torch"),
         patch("archon_search.install.installer._prewarm_models"),
         patch("archon_search.install.installer._check_disk_space"),
-        patch.object(BaseInstaller, "detect_gpu", return_value=gpu),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
         patch.object(BaseInstaller, "validate_providers", validate_mock),
         patch.object(RealInstaller, "configure_providers"),
         patch.object(RealInstaller, "write_service_file"),

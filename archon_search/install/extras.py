@@ -93,12 +93,13 @@ def _install_extra(extra: str, label: str, dry_run: bool = False) -> None:
 def _uv_tool_install_extra(receipt_path: Path, extra: str, package: str) -> None:
     """Add *extra* to the uv tool environment owning *receipt_path*.
 
-    Re-runs ``uv tool install`` with the receipt's own requirements and options
-    plus the extra (never ``--reinstall``/``--force``: those recreate the env
-    under the running wizard), so uv syncs the env in place and records the
-    extra. ``--torch-backend`` follows the installed torch build, which keeps a
-    ``+cpu`` or wizard-installed ``+cu126`` torch through the re-resolve. There
-    is no pip fallback: uv tool environments ship no pip.
+    Re-runs ``uv tool install`` with the receipt's own requirements, options
+    and excludes (fed on stdin) plus the extra (never ``--reinstall``/``--force``:
+    those recreate the env under the running wizard), so uv syncs the env in
+    place and records the extra. ``--torch-backend`` follows the installed
+    torch build, which keeps a ``+cpu`` or wizard-installed ``+cu126`` torch
+    through the re-resolve. There is no pip fallback: uv tool environments ship
+    no pip.
 
     A receipt (or torch build) the command cannot reproduce faithfully falls
     back to ``uv pip install`` with the receipt's index options and a warning:
@@ -106,9 +107,10 @@ def _uv_tool_install_extra(receipt_path: Path, extra: str, package: str) -> None
     """
     receipt = None
     env = None
+    stdin = None
     try:
         receipt = load_receipt(receipt_path)
-        command = install_extra_command(receipt, extra, backend=installed_torch_backend())
+        command, stdin = install_extra_command(receipt, extra, backend=installed_torch_backend())
         env = tool_env(receipt_path, receipt, os.environ)
     except UnsupportedReceiptError as exc:
         print(
@@ -118,8 +120,11 @@ def _uv_tool_install_extra(receipt_path: Path, extra: str, package: str) -> None
             file=sys.stderr,
         )
         command = ["uv", "pip", "install", "--python", sys.executable, package, *_fallback_option_flags(receipt)]
+        stdin = None
     try:
-        subprocess.run(command, check=True, capture_output=True, env=env)
+        subprocess.run(
+            command, check=True, capture_output=True, env=env, input=stdin.encode() if stdin is not None else None
+        )
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or b"").decode(errors="replace")
         raise InstallError(f"Failed to install {package}: {stderr}") from exc

@@ -216,15 +216,17 @@ def _archon_isolated_data_dir(
 
 @pytest.fixture(autouse=True)
 def _fresh_onnx_fallback_warnings() -> None:
-    """Start every test as a fresh process would: no ONNX provider fallback warned yet.
+    """Start every test as a fresh process would: no ONNX provider fallback warned yet
+    and no CUDA DLL preload attempted yet.
 
-    The S635 fallback WARNING is latched once per process per configured list, so a
-    test that triggers it would otherwise silence the same warning in later tests on
-    the same xdist worker.
+    The S635 fallback WARNING and the T21 CUDA DLL preload are latched once per
+    process, so a test that triggers either would otherwise silence it in later tests
+    on the same xdist worker.
     """
-    from archon_search.onnx_providers import reset_fallback_warnings
+    from archon_search.onnx_providers import reset_cuda_dll_preload, reset_fallback_warnings
 
     reset_fallback_warnings()
+    reset_cuda_dll_preload()
 
 
 @pytest.fixture(autouse=True)

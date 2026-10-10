@@ -12,23 +12,41 @@ load on what remains, falling back to CPU, with one WARNING per configured list
 onnxruntime is queried only when a model is about to load, never at import, so CLI
 startup does not pay for it.
 
+When ``CUDAExecutionProvider`` is configured on a CUDA build of onnxruntime, the
+CUDA/cuDNN libraries are preloaded (``onnxruntime.preload_dlls``) once per process
+before onnxruntime is first asked for its providers. onnxruntime-gpu's
+``libonnxruntime_providers_cuda.so`` carries no RPATH
+to pip's ``site-packages/nvidia/cu13/lib``, so without that preload (or a prior
+``import torch``, which archon never does before building ONNX sessions) the CUDA
+provider fails to load and models silently run on CPU — see
+https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html#preload-dlls.
+Plugin-EP builds may also only list ``CUDAExecutionProvider`` after the preload
+registered it. Every ONNX session archon builds takes its providers from
+:func:`select_onnx_providers`, evaluated before the session, so the preload here
+precedes every provider query and session build for a configured CUDA list.
+
 The fallback WARNING is latched per process, keyed by the configured list: the embedder
 cache, collection sync and the routes each build their own models, so warning per build
 would repeat the same line. Like the per-instance latches elsewhere (e.g.
 ``GraphExtractor._inference_failure_logged``) the state lives behind one small object;
 it is module-level because selection has no owning instance, and
-:func:`reset_fallback_warnings` exists so each test can start as a fresh process.
+:func:`reset_fallback_warnings` / :func:`reset_cuda_dll_preload` exist so each test can
+start as a fresh process.
 """
 from __future__ import annotations
 
 import logging
 import threading
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # Built into every onnxruntime build, so it needs no availability query.
 CPU_PROVIDER = "CPUExecutionProvider"
+
+# The only provider whose native libraries need preloading before the availability query.
+CUDA_PROVIDER = "CUDAExecutionProvider"
 
 # Public contract: validation reports and the installer logs `<prefix><names>`, and the
 # runtime fallback WARNING starts with it.
@@ -40,32 +58,39 @@ def missing_providers_message(unavailable: list[str]) -> str:
     return MISSING_PROVIDERS_PREFIX + ", ".join(unavailable)
 
 
-class _WarnOnceLatch:
-    """Thread-safe set of keys already warned about in this process."""
+class _OnceLatch:
+    """Thread-safe set of keys already seen in this process."""
 
     def __init__(self) -> None:
-        self._warned: set[tuple[str, ...]] = set()
+        self._seen: set[tuple[str, ...]] = set()
         self._lock = threading.Lock()
 
     def first(self, key: tuple[str, ...]) -> bool:
         """True the first time *key* is seen; False on every later call."""
         with self._lock:
-            if key in self._warned:
+            if key in self._seen:
                 return False
-            self._warned.add(key)
+            self._seen.add(key)
             return True
 
     def reset(self) -> None:
         with self._lock:
-            self._warned.clear()
+            self._seen.clear()
 
 
-_fallback_warnings = _WarnOnceLatch()
+_fallback_warnings = _OnceLatch()
+_cuda_dll_preload = _OnceLatch()
+_CUDA_DLL_PRELOAD_KEY = (CUDA_PROVIDER,)
 
 
 def reset_fallback_warnings() -> None:
     """Forget which configured lists were warned about, as in a fresh process."""
     _fallback_warnings.reset()
+
+
+def reset_cuda_dll_preload() -> None:
+    """Forget that the CUDA DLLs were preloaded, as in a fresh process."""
+    _cuda_dll_preload.reset()
 
 
 @dataclass(frozen=True)
@@ -83,14 +108,61 @@ class OnnxProviderSelection:
     unavailable: list[str]
 
 
-def _available_providers() -> list[str]:
+def _available_providers(preload_cuda: bool) -> list[str]:
     """Return the ONNX execution providers the installed onnxruntime offers.
 
-    Isolated behind a helper so tests can patch it without importing onnxruntime.
+    With *preload_cuda*, first preloads the CUDA/cuDNN libraries once per process
+    (:func:`_preload_cuda_dlls`). Isolated behind a helper so tests can patch it
+    without importing onnxruntime.
     """
     import onnxruntime  # noqa: PLC0415 — lazy: keeps onnxruntime off CLI startup
 
+    if preload_cuda and _cuda_dll_preload.first(_CUDA_DLL_PRELOAD_KEY):
+        _preload_cuda_dlls(onnxruntime)
     return list(onnxruntime.get_available_providers())
+
+
+def _preload_cuda_dlls(onnxruntime: Any) -> None:
+    """Best-effort ``onnxruntime.preload_dlls(msvc=False)`` on a CUDA build; never raises.
+
+    ``preload_dlls`` exists "Since version 1.21.0"
+    (https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html#preload-dlls),
+    with the ``msvc`` parameter from that first release
+    (https://github.com/microsoft/onnxruntime/blob/v1.21.0/onnxruntime/__init__.py#L241),
+    while fastembed 0.9.0 (the floor archon runs on) accepts
+    ``onnxruntime>=1.17.0,!=1.20.0`` on Python 3.12 (its PyPI ``requires_dist``), so an
+    older onnxruntime simply lacks it and is queried as before.
+
+    Only a CUDA build is preloaded: its module-level ``cuda_version`` is non-empty
+    (https://github.com/microsoft/onnxruntime/blob/v1.21.0/onnxruntime/__init__.py#L79,
+    https://github.com/microsoft/onnxruntime/blob/v1.23.0/onnxruntime/__init__.py#L90,
+    https://github.com/microsoft/onnxruntime/blob/v1.31.0/onnxruntime/__init__.py#L102),
+    and empty on CPU/CoreML builds, which have nothing to preload. Skipping them keeps
+    the preload side-effect free there: on Windows/Linux, onnxruntime 1.21-1.23
+    ``preload_dlls`` prints a "not built with CUDA 12.x support" warning to stdout on a
+    build without CUDA (v1.21.0 ``__init__.py:277-281``).
+
+    ``msvc=False``: the Windows ``msvc`` branch loads the VC++ runtime with ``CDLL`` and
+    prints to stdout when it is missing (onnxruntime 1.30 ``__init__.py:394-402``).
+    It is redundant here: ``import onnxruntime`` has already loaded the pybind
+    extension, which links that runtime [inference: from the extension being a
+    MSVC-built DLL; not verified on Windows].
+
+    A failure is logged as one WARNING (the caller's latch runs this once per process)
+    and model loading continues: onnxruntime then reports CUDA unavailable, or the CUDA
+    session falls back on its own, exactly as without the preload.
+    """
+    preload_dlls = getattr(onnxruntime, "preload_dlls", None)
+    if preload_dlls is None or not getattr(onnxruntime, "cuda_version", ""):
+        return
+    try:
+        preload_dlls(msvc=False)
+    except Exception as exc:  # best-effort: must never break model loading
+        logger.warning(
+            "could not preload the CUDA libraries for onnxruntime (%s); the CUDA provider"
+            " may fail to load and models may run on CPU.",
+            exc,
+        )
 
 
 def _find_unavailable(providers: list[str] | None) -> tuple[list[str], list[str]]:
@@ -98,20 +170,24 @@ def _find_unavailable(providers: list[str] | None) -> tuple[list[str], list[str]
     onnxruntime lacks, in configured order, and what onnxruntime offers.
 
     CPU is never unavailable. Without an accelerator onnxruntime is not queried and
-    ``available`` is empty.
+    ``available`` is empty. A configured CUDA provider preloads the CUDA libraries
+    before the query.
     """
     accelerators = list(dict.fromkeys(p for p in providers or [] if p != CPU_PROVIDER))
     if not accelerators:
         return [], []
-    available = _available_providers()
+    available = _available_providers(preload_cuda=CUDA_PROVIDER in accelerators)
     return [p for p in accelerators if p not in available], available
 
 
 def unavailable_onnx_providers(providers: list[str] | None) -> list[str]:
     """Return the distinct configured *providers* the installed onnxruntime lacks, in order.
 
-    Pure: logs nothing. A CPU-only or empty list never queries onnxruntime. Raises
-    whatever querying onnxruntime raises — callers decide what an unknown answer means.
+    Logs nothing itself, but on a CUDA build a list naming ``CUDAExecutionProvider``
+    first runs the once-per-process CUDA library preload (:func:`_preload_cuda_dlls`),
+    which may log one WARNING. A CPU-only or empty list never queries onnxruntime.
+    Raises whatever querying onnxruntime raises — callers decide what an unknown answer
+    means.
     """
     unavailable, _available = _find_unavailable(providers)
     return unavailable

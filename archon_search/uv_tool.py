@@ -9,9 +9,11 @@ options plus the extra; uv then records it and keeps it on upgrade
 (https://docs.astral.sh/uv/concepts/tools/#upgrading-tools).
 
 ``uv tool install`` replaces the receipt with exactly what it is given, so the
-command must reproduce every recorded setting. Receipt state outside the
-supported subset raises :class:`UnsupportedReceiptError` — callers fall back to
-``uv pip install`` and tell the user how to record the extra themselves.
+command must reproduce every recorded setting. ``excludes`` is reproduced as
+``--excludes -`` with the names on stdin (:class:`ToolInstall` carries both). Receipt
+state outside the supported subset raises :class:`UnsupportedReceiptError` —
+callers fall back to ``uv pip install`` and tell the user how to record the
+extra themselves.
 
 Stdlib-only on purpose: the server's startup guards import it, and it must not
 pull in the installer package.
@@ -25,19 +27,17 @@ import sys
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 TOOL_NAME = "archon-search"
 RECEIPT_FILENAME = "uv-receipt.toml"
 
 # `[tool]` keys `uv tool install` re-applies from its own CLI flags.
-_REPRODUCIBLE_TOOL_KEYS = frozenset({"requirements", "entrypoints", "options"})
+_REPRODUCIBLE_TOOL_KEYS = frozenset({"requirements", "entrypoints", "options", "excludes"})
 # `[tool]` keys this module does not reproduce: `python` (an explicit Python
 # request that does not match the env interpreter recreates the env under the
 # running wizard) and settings that need extra files. Present-but-empty is fine.
-_UNREPRODUCED_TOOL_KEYS = frozenset(
-    {"python", "constraints", "overrides", "excludes", "build-constraint-dependencies"}
-)
+_UNREPRODUCED_TOOL_KEYS = frozenset({"python", "constraints", "overrides", "build-constraint-dependencies"})
 _SOURCE_KEYS = ("path", "directory", "url")
 _REQUIREMENT_KEYS = frozenset({"name", "extras", "marker", "specifier", "subdirectory", *_SOURCE_KEYS})
 _STRING_OPTIONS = frozenset({"index-url", "index-strategy", "prerelease"})
@@ -54,6 +54,13 @@ _REPEAT_INSTALL_NOTE = (
 
 class UnsupportedReceiptError(ValueError):
     """The receipt holds state a ``uv tool install`` command cannot reproduce faithfully."""
+
+
+class ToolInstall(NamedTuple):
+    """A ``uv tool install`` command and the standard input it reads (``None``: no stdin)."""
+
+    argv: list[str]
+    stdin: str | None
 
 
 def find_receipt(prefix: Path) -> Path | None:
@@ -98,12 +105,14 @@ def installed_torch_backend() -> str | None:
         return None
 
 
-def install_extra_command(receipt: Mapping[str, Any], extra: str, *, backend: str | None) -> list[str]:
+def install_extra_command(receipt: Mapping[str, Any], extra: str, *, backend: str | None) -> ToolInstall:
     """Build the ``uv tool install`` command that reproduces *receipt* plus *extra*.
 
     *receipt* is the parsed ``uv-receipt.toml``. *backend* is the
     ``--torch-backend`` that keeps the installed torch build: re-resolving
     without it swaps a ``+cpu``/``+cu126`` torch for PyPI's default build.
+    Recorded ``excludes`` end the argv with ``--excludes -`` and become the
+    returned stdin, one name per line.
     Raises :class:`UnsupportedReceiptError` naming the first receipt setting
     the command could not reproduce.
     """
@@ -132,7 +141,18 @@ def install_extra_command(receipt: Mapping[str, Any], extra: str, *, backend: st
     command += install_option_flags(receipt)
     if backend:
         command += ["--torch-backend", backend]
-    return command
+    stdin = _excludes_stdin(tool)
+    if stdin is not None:
+        command += ["--excludes", "-"]
+    return ToolInstall(command, stdin)
+
+
+def _excludes_stdin(tool: Mapping[str, Any]) -> str | None:
+    """The receipt's ``[tool].excludes`` one name per line; ``None`` when it records none."""
+    excludes = tool.get("excludes", [])
+    if not _is_string_list(excludes):
+        raise UnsupportedReceiptError(f"the receipt records `excludes` as {excludes!r}, not a list of names")
+    return "".join(f"{name}\n" for name in excludes) or None
 
 
 def install_option_flags(receipt: Mapping[str, Any]) -> list[str]:
@@ -166,8 +186,9 @@ def extra_install_hint(extra: str) -> str:
     """Shell command that installs ``archon-search[<extra>]`` for this interpreter.
 
     In a uv tool environment it is the receipt-preserving ``uv tool install``
-    command; when the receipt cannot be reproduced, a plain ``uv tool install``
-    with a shell comment telling the user what else to repeat. Anywhere else,
+    command, fed the receipt's excludes through ``printf`` when it records any;
+    when the receipt cannot be reproduced, a plain ``uv tool install`` with a
+    shell comment telling the user what else to repeat. Anywhere else,
     ``pip install``.
     """
     package = f"{TOOL_NAME}[{extra}]"
@@ -175,10 +196,12 @@ def extra_install_hint(extra: str) -> str:
     if receipt_path is None:
         return shlex.join(["pip", "install", package])
     try:
-        command = install_extra_command(load_receipt(receipt_path), extra, backend=installed_torch_backend())
+        install = install_extra_command(load_receipt(receipt_path), extra, backend=installed_torch_backend())
     except UnsupportedReceiptError:
         return unrecorded_install_hint(extra)
-    return shlex.join(command)
+    if install.stdin is None:
+        return shlex.join(install.argv)
+    return f"{shlex.join(['printf', '%s\\n', *install.stdin.splitlines()])} | {shlex.join(install.argv)}"
 
 
 def unrecorded_install_hint(extra: str) -> str:

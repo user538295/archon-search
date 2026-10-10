@@ -7,12 +7,10 @@ Use ``create_installer(config_file, dry_run)`` to obtain the right one.
 from __future__ import annotations
 
 import contextlib
-import importlib
 import logging
 import os
 import platform
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -84,7 +82,6 @@ from .wizard import (
 logger = logging.getLogger(__name__)
 
 
-_SEARCH_PACKAGES = ["lancedb", "fastembed", "docling", "markitdown", "trafilatura", "chonkie", "fastmcp"]
 _WAIT_FOR_SERVICE_TIMEOUT = 60
 # Import-time crash markers that identify a first-launch environment race (e.g.
 # a service started before its freshly-installed venv is fully materialised).
@@ -101,6 +98,21 @@ _RETENTION_INERT_WARNING = (
     "{prefix}Warning: [telemetry].retention_days = {days} {outcome}, but telemetry is not enabled, "
     "so it has no effect until you enable telemetry (--telemetry, or answer y at the telemetry prompt)."
 )
+# The operator guide the failed-CUDA-probe warning points at: replacing onnxruntime with
+# onnxruntime-gpu for each install method. A URL, because pip/uv-tool installs ship no docs.
+_REPO_BLOB_BASE = "https://github.com/user538295/archon-search/blob/main"
+_CUDA_GUIDE_DOC = "Documentation/UserManual/10_installation.md"
+_CUDA_GUIDE_HEADING = "NVIDIA GPU: run embedding and reranking on CUDA"
+
+
+def _github_heading_anchor(heading: str) -> str:
+    """GitHub's heading anchor: lowercase, drop punctuation except hyphens/underscores/spaces, spaces → hyphens."""
+    return "".join(c for c in heading.lower() if c.isalnum() or c in "-_ ").replace(" ", "-")
+
+
+_CUDA_GUIDE_URL = f"{_REPO_BLOB_BASE}/{_CUDA_GUIDE_DOC}#{_github_heading_anchor(_CUDA_GUIDE_HEADING)}"
+# The summary's `Providers:` label once [database].providers holds CUDAExecutionProvider.
+_CUDA_PROVIDER_LABEL = "CUDA"
 
 
 def _compute_svc_timeout(eager_load: bool, total_bytes: int) -> int:
@@ -137,9 +149,7 @@ class InstallerProtocol(Protocol):
     cfg: SearchConfig
     dry_run: bool
 
-    def check_deps(self) -> list[str]: ...
     def detect_gpu(self) -> GpuType: ...
-    def install_deps(self, gpu: GpuType) -> None: ...
     def validate_providers(self, providers: list[str]) -> bool: ...
     def validate_embedder_only(self, providers: list[str]) -> bool: ...
     def configure_providers(
@@ -185,16 +195,6 @@ class BaseInstaller(ABC):
     # ------------------------------------------------------------------
     # Read-only methods (no filesystem / service / subprocess mutation)
     # ------------------------------------------------------------------
-
-    def check_deps(self) -> list[str]:
-        """Return list of package names that cannot be imported."""
-        missing: list[str] = []
-        for pkg in _SEARCH_PACKAGES:
-            try:
-                importlib.import_module(pkg)
-            except ImportError:
-                missing.append(pkg)
-        return missing
 
     def detect_gpu(self) -> GpuType:
         """Return the GPU type detected by the platform runtime."""
@@ -276,6 +276,56 @@ class BaseInstaller(ABC):
             # A re-run keeps the previous [database].providers, so CPU must be written.
             self.write_gpu_providers_disabled(config_path)
             return []
+
+    def _configure_cuda(self, gpu: "GpuType", config_path: Path) -> list[str]:
+        """Step 9 for an accepted CUDA GPU: settle the ONNX providers and the torch build.
+
+        Returns the summary's provider labels. Dry-run narrates the CUDA write and the
+        torch swap without probing (the probe loads models). On linux/x86_64 the
+        best-effort +cu126 torch swap runs unless the real CUDA probe passed. Rationale:
+        Documentation/ADRs/16_wizard_validates_cuda_before_writing.md.
+        """
+        swap_platform = sys.platform.startswith("linux") and platform.machine() == "x86_64"
+        if self.dry_run:
+            self.configure_providers(gpu=gpu)
+            if swap_platform:
+                _install_cuda_torch(dry_run=True)
+            return [_CUDA_PROVIDER_LABEL]
+        cuda_written = self._probe_and_configure_cuda(gpu, config_path)
+        if swap_platform:
+            if cuda_written:
+                print(
+                    "Keeping the installed PyTorch build: onnxruntime-gpu shares its "
+                    "CUDA libraries, which the CUDA 12.6 PyTorch build would replace."
+                )
+            else:
+                _install_cuda_torch(dry_run=False)
+        return [_CUDA_PROVIDER_LABEL] if cuda_written else []
+
+    def _probe_and_configure_cuda(self, gpu: "GpuType", config_path: Path) -> bool:
+        """Probe CUDA and write the providers it settles on; True when CUDA was written.
+
+        Nothing installs ``onnxruntime-gpu`` (it conflicts with fastembed's CPU
+        ``onnxruntime``), so without a manual swap the probe fails and CPU is written.
+        """
+        if self.validate_providers(["CUDAExecutionProvider"]):
+            self.configure_providers(gpu=gpu)
+            self.clear_reranker_providers()  # self-heal: clear stale split config
+            return True
+        logger.warning("CUDA validation failed — falling back to CPU")
+        print("Warning: CUDA validation failed — falling back to CPU.")
+        print(
+            "  Text search and result ranking (ONNX Runtime) will run on CPU: "
+            "the installed onnxruntime has no usable CUDAExecutionProvider."
+        )
+        print(
+            "  To run them on the GPU, replace onnxruntime with onnxruntime-gpu "
+            "(its PyPI build needs CUDA 13 and an NVIDIA driver >= 580), then re-run the wizard."
+        )
+        print(f"  Commands for each install method: {_CUDA_GUIDE_URL}")
+        # A re-run keeps the previous [database].providers, so CPU must be written.
+        self.write_gpu_providers_disabled(config_path)
+        return False
 
     def _warn_if_retention_inert(self, features: "WizardFeatures") -> None:
         """After the config write, warn on stderr that an explicit retention_days is inert
@@ -402,9 +452,6 @@ class BaseInstaller(ABC):
     # ------------------------------------------------------------------
     # Destructive operations — implemented by the concrete subclasses
     # ------------------------------------------------------------------
-
-    @abstractmethod
-    def install_deps(self, gpu: GpuType) -> None: ...
 
     @abstractmethod
     def configure_providers(
@@ -835,16 +882,7 @@ class BaseInstaller(ABC):
             elif not self.dry_run and gpu == GpuType.METAL:
                 provider_labels = self._probe_and_configure_coreml(gpu, config_path)
             elif gpu == GpuType.CUDA:
-                self.configure_providers(gpu=gpu)
-                provider_labels = ["CUDA"]
-                # CUDA torch swap (wizard-cuda-torch-upgrade): only on linux/x86_64,
-                # the only platform where S269 pins `uv sync` checkouts to +cpu and
-                # the only platform the cu126 swap targets. It reinstalls the installed
-                # torch version as its +cu126 build (whether the installed build is
-                # +cpu or PyPI's CUDA build). Best-effort: a failed swap warns and
-                # keeps the installed build, never failing the install.
-                if sys.platform.startswith("linux") and platform.machine() == "x86_64":
-                    _install_cuda_torch(dry_run=self.dry_run)
+                provider_labels = self._configure_cuda(gpu, config_path)
             else:
                 self.configure_providers(gpu=gpu)
             if not self.dry_run:
@@ -1148,9 +1186,6 @@ class DryRunInstaller(BaseInstaller):
     dry_run = True
     _MODE_BANNER = "=== DRY-RUN MODE: No changes will be made ==="
 
-    def install_deps(self, gpu: GpuType) -> None:
-        print("[DRY RUN] Would install search dependencies.")
-
     def configure_providers(
         self,
         gpu: GpuType | None = None,
@@ -1258,31 +1293,6 @@ class RealInstaller(BaseInstaller):
     dry_run = False
     _MODE_BANNER = "=== REAL MODE: System will be modified ==="
 
-    def install_deps(self, gpu: GpuType) -> None:
-        """Install search dependencies into the same Python that runs this process."""
-        python = sys.executable
-
-        if gpu == GpuType.CUDA:
-            subprocess.run(
-                ["uv", "pip", "uninstall", "--python", python, "fastembed", "-y"],
-                check=False,
-            )
-            subprocess.run(
-                ["uv", "pip", "install", "--python", python, "fastembed-gpu>=0.8.0", "onnxruntime-gpu"],
-                check=True,
-            )
-        else:
-            subprocess.run(
-                ["uv", "pip", "install", "--python", python, "fastembed>=0.8.0"],
-                check=True,
-            )
-
-        subprocess.run(
-            ["uv", "pip", "install", "--python", python, "lancedb", "docling", "markitdown",
-             "trafilatura", "chonkie", "fastmcp"],
-            check=True,
-        )
-
     def configure_providers(
         self,
         gpu: GpuType | None = None,
@@ -1298,7 +1308,8 @@ class RealInstaller(BaseInstaller):
 
         With ``providers`` left None the legacy ``[database]`` mapping applies:
 
-        - GpuType.CUDA: write ["CUDAExecutionProvider"]
+        - GpuType.CUDA: write ["CUDAExecutionProvider"] (Step 9 calls this only after
+          ``_probe_and_configure_cuda`` validated it)
         - GpuType.METAL: write ["CoreMLExecutionProvider"]
         - GpuType.NONE: no-op
         """

@@ -94,7 +94,7 @@ _DEFAULTED_RERUN_KEYS: tuple[tuple[str, str, str], ...] = (
 # `db_path`, `[logging].level`, top-k), `[graph]` and the HyDE/RAG Fusion provider/model keys are
 # excluded: a re-run writes them only when their flag or answer is given. `[database].providers` is
 # excluded although Step 9 rewrites it from the GPU answer: a declined GPU prompt, `--disable-gpu`
-# or a failed CoreML check writes `[]` on every such run, and `configure_providers` keeps a chain
+# or a failed CoreML or CUDA check writes `[]` on every such run, and `configure_providers` keeps a chain
 # that already holds the detected provider, so guarding it would warn on re-runs that leave it unchanged.
 _RERUN_MANAGED_KEYS: tuple[tuple[str, str], ...] = (
     *(("database", key) for key in _PROFILE_DATABASE_KEYS),

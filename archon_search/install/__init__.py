@@ -13,7 +13,6 @@ from __future__ import annotations
 
 # Stdlib / external module names re-bound onto the package namespace so tests
 # that monkeypatch via ``archon_search.install.<X>`` keep resolving.
-import importlib as importlib
 import os as os
 import shutil as shutil
 import subprocess as subprocess
@@ -54,7 +53,6 @@ from .extras import _install_multilingual_extra as _install_multilingual_extra
 from .extras import _install_query_expansion_extras as _install_query_expansion_extras
 from .extras import _revert_graph_enrichment_flags as _revert_graph_enrichment_flags
 from .extras import _revert_query_expansion_flags as _revert_query_expansion_flags
-from .installer import _SEARCH_PACKAGES as _SEARCH_PACKAGES
 from .installer import _WAIT_FOR_SERVICE_TIMEOUT as _WAIT_FOR_SERVICE_TIMEOUT
 from .installer import BaseInstaller as BaseInstaller
 from .installer import DryRunInstaller as DryRunInstaller

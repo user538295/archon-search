@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -129,36 +128,6 @@ def _make_installer(tmp_path: Path, dry_run: bool = False) -> object:
 
 
 # ---------------------------------------------------------------------------
-# check_deps
-# ---------------------------------------------------------------------------
-
-
-class TestCheckDeps:
-    def test_check_deps_all_present(self, tmp_path: Path) -> None:
-        """When all packages importable → empty list returned."""
-        installer = _make_installer(tmp_path)
-
-        with patch("archon_search.install.importlib.import_module", return_value=MagicMock()):
-            missing = installer.check_deps()
-
-        assert missing == []
-
-    def test_check_deps_missing_package(self, tmp_path: Path) -> None:
-        """When one package not importable → its name in the returned list."""
-        installer = _make_installer(tmp_path)
-
-        def fake_import(name: str) -> object:
-            if name == "lancedb":
-                raise ImportError("No module named 'lancedb'")
-            return MagicMock()
-
-        with patch("archon_search.install.importlib.import_module", side_effect=fake_import):
-            missing = installer.check_deps()
-
-        assert "lancedb" in missing
-
-
-# ---------------------------------------------------------------------------
 # detect_gpu
 # ---------------------------------------------------------------------------
 
@@ -200,80 +169,6 @@ class TestDetectGpu:
         mock_runtime.detect_gpu_type.return_value = "none"
         with patch("archon_search.install.installer.get_runtime", return_value=mock_runtime):
             assert installer.detect_gpu() == "none"
-
-
-# ---------------------------------------------------------------------------
-# install_deps
-# ---------------------------------------------------------------------------
-
-
-class TestInstallDeps:
-    def _capture_pip_args(self, tmp_path: Path, gpu: str) -> list[list[str]]:
-        installer = _make_installer(tmp_path)
-        calls: list[list[str]] = []
-
-        def fake_run(cmd: list[str], **kwargs: object) -> None:
-            calls.append(cmd)
-
-        with patch("subprocess.run", side_effect=fake_run):
-            installer.install_deps(gpu=gpu)
-
-        return calls
-
-    def test_install_deps_cuda_still_installs_gpu_packages(self, tmp_path: Path) -> None:
-        calls = self._capture_pip_args(tmp_path, gpu="cuda")
-        all_args = " ".join(arg for cmd in calls for arg in cmd)
-        assert "fastembed-gpu" in all_args
-        assert "onnxruntime-gpu" in all_args
-
-    def test_install_deps_apple_silicon_installs_standard_fastembed(self, tmp_path: Path) -> None:
-        calls = self._capture_pip_args(tmp_path, gpu=GpuType.METAL)
-        all_args = " ".join(arg for cmd in calls for arg in cmd)
-        assert "fastembed" in all_args
-        assert "fastembed-gpu" not in all_args
-
-    def test_install_deps_none_installs_standard_fastembed(self, tmp_path: Path) -> None:
-        calls = self._capture_pip_args(tmp_path, gpu="none")
-        all_args = " ".join(arg for cmd in calls for arg in cmd)
-        assert "fastembed" in all_args
-        assert "fastembed-gpu" not in all_args
-
-    def test_install_deps_dry_run_no_op(self, tmp_path: Path) -> None:
-        installer = _make_installer(tmp_path, dry_run=True)
-        with patch("subprocess.run") as mock_run:
-            installer.install_deps(gpu="none")
-        mock_run.assert_not_called()
-
-    def test_install_deps_cuda_passes_python_to_all_calls(self, tmp_path: Path) -> None:
-        """All 3 subprocess calls for CUDA path include --python sys.executable."""
-        calls = self._capture_pip_args(tmp_path, gpu="cuda")
-        assert len(calls) == 3  # uninstall fastembed + install fastembed-gpu + install common
-        for cmd in calls:
-            assert "--python" in cmd
-            assert cmd[cmd.index("--python") + 1] == sys.executable
-
-    @pytest.mark.parametrize("gpu", ["none", GpuType.METAL])
-    def test_install_deps_cpu_passes_python_to_all_calls(self, tmp_path: Path, gpu: str) -> None:
-        """All 2 subprocess calls for CPU/Apple Silicon path include --python sys.executable."""
-        calls = self._capture_pip_args(tmp_path, gpu=gpu)
-        assert len(calls) == 2  # install fastembed + install common
-        for cmd in calls:
-            assert "--python" in cmd
-            assert cmd[cmd.index("--python") + 1] == sys.executable
-
-    def test_install_deps_cpu_common_packages_present(self, tmp_path: Path) -> None:
-        """lancedb and docling appear in the flat args of all captured commands for cpu."""
-        calls = self._capture_pip_args(tmp_path, gpu="none")
-        all_args = " ".join(arg for cmd in calls for arg in cmd)
-        assert "lancedb" in all_args
-        assert "docling" in all_args
-
-    def test_install_deps_dry_run_cuda_no_op(self, tmp_path: Path) -> None:
-        """dry_run=True with CUDA GPU skips all subprocess calls."""
-        installer = _make_installer(tmp_path, dry_run=True)
-        with patch("subprocess.run") as mock_run:
-            installer.install_deps(gpu="cuda")
-        mock_run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -631,8 +526,6 @@ class TestRun:
              patch("archon_search.install.installer.create_pipeline", return_value=mock_pipeline), \
              patch("archon_search.sync.SearchCollectionSync") as MockSync, \
              patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
              patch.object(installer, "_wait_for_service", return_value=True), \
              patch.object(installer, "_is_service_running", return_value=True):
             MockSync.return_value.sync = AsyncMock(return_value=MagicMock())
@@ -1546,8 +1439,6 @@ class TestRunServiceReadiness:
     def _base_run_patches(self, installer: object) -> dict:
         return {
             "detect_gpu": MagicMock(return_value="none"),
-            "check_deps": MagicMock(return_value=[]),
-            "install_deps": MagicMock(),
             "configure_providers": MagicMock(),
             "validate_providers": MagicMock(return_value=True),
             "create_data_dir": MagicMock(),
@@ -1562,8 +1453,6 @@ class TestRunServiceReadiness:
 
         with patch.object(installer, "_wait_for_service", return_value=False), \
              patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
              patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
@@ -1580,8 +1469,6 @@ class TestRunServiceReadiness:
 
         with patch.object(installer, "_wait_for_service", return_value=False), \
              patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
              patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
@@ -1600,8 +1487,6 @@ class TestRunServiceReadiness:
         mock_wait = MagicMock(return_value=True)
         with patch.object(installer, "_wait_for_service", mock_wait), \
              patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
              patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
@@ -1632,8 +1517,6 @@ class TestRunServiceReadiness:
         with patch.object(installer, "_wait_for_service", mock_wait), \
              patch("archon_search.install.installer._planned_total_bytes", return_value=planned_bytes), \
              patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
              patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
@@ -1651,8 +1534,6 @@ class TestRunServiceReadiness:
         mock_wait = MagicMock(return_value=True)
         with patch.object(installer, "_wait_for_service", mock_wait), \
              patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
              patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "_bootstrap_collections", new_callable=AsyncMock), \
@@ -1669,8 +1550,6 @@ class TestRunServiceReadiness:
         installer = _make_installer(tmp_path, dry_run=True)
 
         with patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
              patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
@@ -1745,8 +1624,6 @@ class TestRunFlow:
         installer = _make_installer(tmp_path)
 
         with patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
-             patch.object(installer, "install_deps"), \
-             patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "validate_providers", return_value=False) as mock_validate, \
              patch.object(installer, "validate_embedder_only", return_value=False), \
              patch.object(installer, "configure_providers") as mock_configure, \
@@ -1764,8 +1641,15 @@ class TestRunFlow:
         captured = capsys.readouterr()
         assert "Warning: CoreML validation failed" in captured.out
 
-    def test_run_flow_cuda_skips_validation(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
-        """CUDA: validation NOT called → configure_providers called directly, no CoreML messages."""
+    @pytest.mark.parametrize(
+        ("cuda_ok", "configured", "label"),
+        [(True, True, "CUDA"), (False, False, "CUDA validation failed")],
+        ids=["probe-passes", "probe-fails"],
+    )
+    def test_run_flow_cuda_validates_before_writing(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture, cuda_ok: bool, configured: bool, label: str
+    ) -> None:
+        """CUDA: probe CUDAExecutionProvider; write it only when the probe passes, else warn + CPU."""
         installer = _make_installer(tmp_path)
         config_path = Path(installer.config_file)
         fake_legacy = tmp_path / "fake.plist"
@@ -1774,9 +1658,10 @@ class TestRunFlow:
              patch("archon_search.install.installer._remove_legacy_service"), \
              patch("archon_search.install.installer._prewarm_models"), \
              patch("archon_search.install.installer._check_disk_space"), \
+             patch("archon_search.install.installer._install_cuda_torch"), \
              patch("archon_search.install.installer.get_default_config_path", return_value=config_path), \
              patch.object(installer, "detect_gpu", return_value=GpuType.CUDA), \
-             patch.object(installer, "validate_providers") as mock_validate, \
+             patch.object(installer, "validate_providers", return_value=cuda_ok) as mock_validate, \
              patch.object(installer, "configure_providers") as mock_configure, \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
@@ -1786,9 +1671,10 @@ class TestRunFlow:
             result = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
 
         assert result == 0
-        mock_validate.assert_not_called()
-        mock_configure.assert_called_once_with(gpu=GpuType.CUDA)
+        mock_validate.assert_called_once_with(["CUDAExecutionProvider"])
+        assert mock_configure.call_args_list == ([call(gpu=GpuType.CUDA)] if configured else [])
         captured = capsys.readouterr()
+        assert label in captured.out
         assert "CoreML" not in captured.out
 
     def test_run_flow_no_gpu_unchanged(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
@@ -1827,8 +1713,6 @@ class TestRunFlow:
         installer.config_file = str(config_file)
 
         with patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
-             patch.object(installer, "install_deps"), \
-             patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "validate_providers", return_value=False), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "_bootstrap_collections", new=AsyncMock()), \
@@ -1849,8 +1733,6 @@ class TestRunFlow:
         installer = _make_installer(tmp_path, dry_run=True)
 
         with patch.object(installer, "detect_gpu", return_value=GpuType.METAL), \
-             patch.object(installer, "install_deps"), \
-             patch.object(installer, "check_deps", return_value=[]), \
              patch.object(installer, "validate_providers") as mock_validate, \
              patch.object(installer, "configure_providers") as mock_configure, \
              patch.object(installer, "create_data_dir"), \
@@ -1947,8 +1829,6 @@ class TestRunNonBlocking:
         bootstrap_mock = AsyncMock()
 
         with patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
              patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
@@ -1979,8 +1859,6 @@ class TestRunNonBlocking:
         installer = _make_installer(tmp_path)
 
         with patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
              patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
@@ -2002,8 +1880,6 @@ class TestRunNonBlocking:
         # Simulate that _wait_for_service returns True immediately
         # If bootstrap was still blocking, this would hang; since it's removed the call succeeds fast.
         with patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
              patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
@@ -2019,8 +1895,6 @@ class TestRunNonBlocking:
     def test_exact_call_order_service_before_wait_no_bootstrap(self, tmp_path: Path) -> None:
         """run() must call load_service before _wait_for_service, and _bootstrap_collections must never appear.
 
-        install_deps is excluded from recording because check_deps returns [] (no missing deps),
-        so install_deps is never invoked on the happy path.
         The relative ordering of configure_providers/create_data_dir/write_service_file is an
         implementation detail — only the load_service→_wait_for_service pair is a strict contract.
         """
@@ -2038,8 +1912,6 @@ class TestRunNonBlocking:
             return _side_effect
 
         with patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
              patch.object(installer, "configure_providers", side_effect=record("configure_providers")), \
              patch.object(installer, "create_data_dir", side_effect=record("create_data_dir")), \
              patch.object(installer, "write_service_file", side_effect=record("write_service_file")), \
@@ -2075,8 +1947,6 @@ class TestRunNonBlocking:
         installer = _make_installer(tmp_path)
 
         with patch.object(installer, "detect_gpu", return_value="none"), \
-             patch.object(installer, "check_deps", return_value=[]), \
-             patch.object(installer, "install_deps"), \
              patch.object(installer, "configure_providers"), \
              patch.object(installer, "create_data_dir"), \
              patch.object(installer, "write_service_file"), \
@@ -2109,8 +1979,6 @@ class TestConsoleIntegration:
     def _run_patches() -> dict:
         return {
             "detect_gpu": MagicMock(return_value="none"),
-            "check_deps": MagicMock(return_value=[]),
-            "install_deps": MagicMock(),
             "configure_providers": MagicMock(),
             "validate_providers": MagicMock(return_value=True),
             "create_data_dir": MagicMock(),
@@ -2127,8 +1995,6 @@ class TestConsoleIntegration:
 
         patches = self._run_patches()
         with patch.object(installer, "detect_gpu", patches["detect_gpu"]), \
-             patch.object(installer, "check_deps", patches["check_deps"]), \
-             patch.object(installer, "install_deps", patches["install_deps"]), \
              patch.object(installer, "configure_providers", patches["configure_providers"]), \
              patch.object(installer, "validate_providers", patches["validate_providers"]), \
              patch.object(installer, "create_data_dir", patches["create_data_dir"]), \
@@ -2169,7 +2035,6 @@ class TestConsoleIntegration:
         patches = self._run_patches()
         patches["load_service"] = MagicMock(return_value=42)
         with patch.object(installer, "detect_gpu", patches["detect_gpu"]), \
-             patch.object(installer, "check_deps", patches["check_deps"]), \
              patch.object(installer, "configure_providers", patches["configure_providers"]), \
              patch.object(installer, "create_data_dir", patches["create_data_dir"]), \
              patch.object(installer, "_bootstrap_collections", patches["_bootstrap_collections"]), \
@@ -2191,7 +2056,6 @@ class TestConsoleIntegration:
         patches = self._run_patches()
         patches["_wait_for_service"] = MagicMock(return_value=False)
         with patch.object(installer, "detect_gpu", patches["detect_gpu"]), \
-             patch.object(installer, "check_deps", patches["check_deps"]), \
              patch.object(installer, "configure_providers", patches["configure_providers"]), \
              patch.object(installer, "create_data_dir", patches["create_data_dir"]), \
              patch.object(installer, "_bootstrap_collections", patches["_bootstrap_collections"]), \
@@ -2237,7 +2101,6 @@ class TestInstallerStructure:
         from archon_search.install import BaseInstaller
 
         assert BaseInstaller.__abstractmethods__ == frozenset({
-            "install_deps",
             "configure_providers",
             "configure_reranker_providers",
             "clear_reranker_providers",

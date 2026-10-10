@@ -8,7 +8,8 @@ in the receipt is therefore uninstalled by the next upgrade.
 
 The test drives real ``uv`` fully offline against hand-built wheels: a fake
 ``archon-search`` (module ``fake_archon``, never the real package) whose
-``graph`` extra pulls ``fake-gliner``. Every uv location is redirected into
+``graph`` extra pulls ``fake-gliner`` (which depends on ``fake-onnxruntime``,
+a dependency a user can exclude). Every uv location is redirected into
 ``tmp_path`` so the user's real tool installs, caches and Python installs are
 never touched.
 """
@@ -27,11 +28,16 @@ from pathlib import Path
 
 import pytest
 
-from archon_search.install.extras import _install_graph_extra, _install_multilingual_extra
+from archon_search.install.extras import (
+    _install_graph_extra,
+    _install_multilingual_extra,
+)
 
 _TOOL_NAME = "archon-search"
 _EXTRA_DIST = "fake-gliner"
 _SECOND_EXTRA_DIST = "fake-fasttext"
+# A dependency of the graph extra's dist that a user can `--excludes`.
+_EXCLUDABLE_DIST = "fake-onnxruntime"
 _OLD_VERSION = "1.0.0"
 _NEW_VERSION = "2.0.0"
 # Generous ceiling for one offline uv command; a hang must fail, not stall the suite.
@@ -161,15 +167,29 @@ def isolated_uv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Pa
     return dirs
 
 
-def _install_tool(isolated_uv: dict[str, Path]) -> Path:
-    """Build the old tool wheel plus the extra dists and ``uv tool install`` it plainly; return the env dir."""
+def _install_tool(isolated_uv: dict[str, Path], excludes: tuple[str, ...] = ()) -> Path:
+    """Build the old tool wheel plus the extra dists and ``uv tool install`` it plainly; return the env dir.
+
+    *excludes* are passed as ``--excludes -`` on stdin, as a user excluding a dependency would.
+    """
     links = isolated_uv["links"]
     _build_tool_wheel(links, _OLD_VERSION)
-    _build_wheel(links, _EXTRA_DIST, "1.0.0", module="fake_gliner")
+    _build_wheel(
+        links, _EXTRA_DIST, "1.0.0", module="fake_gliner", metadata_lines=(f"Requires-Dist: {_EXCLUDABLE_DIST}",)
+    )
     _build_wheel(links, _SECOND_EXTRA_DIST, "1.0.0", module="fake_fasttext")
+    _build_wheel(links, _EXCLUDABLE_DIST, "1.0.0", module="fake_onnxruntime")
 
     # A plain user install: no --python, no extras.
-    install = _run_uv("tool", "install", _TOOL_NAME)
+    args = ("--excludes", "-") if excludes else ()
+    install = subprocess.run(
+        ["uv", "tool", "install", _TOOL_NAME, *args],
+        input="".join(f"{name}\n" for name in excludes),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=_UV_TIMEOUT_SECONDS,
+    )
     assert install.returncode == 0, f"uv tool install failed:\n{install.stdout}\n{install.stderr}"
     env_dir = isolated_uv["tools"] / _TOOL_NAME
     receipt = env_dir / "uv-receipt.toml"
@@ -231,3 +251,21 @@ def test_second_wizard_extra_keeps_the_first_recorded(
     assert _installed_versions(env_dir, _TOOL_NAME) == [_NEW_VERSION], upgrade.stderr
     for dist in (_EXTRA_DIST, _SECOND_EXTRA_DIST):
         assert _installed_versions(env_dir, dist) == ["1.0.0"], f"`uv tool upgrade` removed {dist}:\n{upgrade.stderr}"
+
+
+def test_wizard_extra_keeps_the_receipts_excludes(
+    isolated_uv: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_dir = _install_tool(isolated_uv, excludes=(_EXCLUDABLE_DIST,))
+    _run_in_tool_env(monkeypatch, env_dir, _install_graph_extra)
+
+    receipt = tomllib.loads((env_dir / "uv-receipt.toml").read_text())
+    assert receipt["tool"]["requirements"][0]["extras"] == ["graph"]
+    assert receipt["tool"]["excludes"] == [_EXCLUDABLE_DIST]
+    assert _installed_versions(env_dir, _EXTRA_DIST) == ["1.0.0"]
+    assert _installed_versions(env_dir, _EXCLUDABLE_DIST) == []
+
+    upgrade = _upgrade(isolated_uv["links"])
+    assert _installed_versions(env_dir, _TOOL_NAME) == [_NEW_VERSION], upgrade.stderr
+    assert _installed_versions(env_dir, _EXTRA_DIST) == ["1.0.0"], f"`uv tool upgrade` removed {_EXTRA_DIST}:\n{upgrade.stderr}"
+    assert _installed_versions(env_dir, _EXCLUDABLE_DIST) == [], f"`uv tool upgrade` installed {_EXCLUDABLE_DIST}:\n{upgrade.stderr}"

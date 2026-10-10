@@ -4,6 +4,7 @@
 **Date**: 2026-10-09
 **Deciders**: archon-search maintainers
 **Supersedes**: partially supersedes [ADR 14 — Wizard Pre-Warm Loads the Models It Downloads](14_wizard_prewarm_loads_models.md) — only its Negative / Tradeoffs bullet "Hosts whose configured GPU provider the installed onnxruntime lacks now exit `1` at install: fastembed raises for a provider it cannot find (`fastembed/common/onnx_model.py:111-117`). That includes every native NVIDIA install that accepts CUDA without `onnxruntime-gpu`, since fastembed depends on the CPU `onnxruntime`. Before, the same host installed with exit `0` and a broken service; `--disable-gpu` installs on CPU." (`14_wizard_prewarm_loads_models.md:36`). Such hosts now install with exit `0` and a service that runs on CPU. ADR 14's decision — pre-warm loads each model through the service's own backend, and only an embedder failure is fatal — and everything else in it are unchanged and still authoritative.
+**Superseded in part by**: [ADR 16 — Wizard Validates CUDA Before Writing It](16_wizard_validates_cuda_before_writing.md) — only the Negative / Tradeoffs bullet "The NVIDIA wizard default still writes `CUDAExecutionProvider` with no check …" (`:40`). The wizard now probes CUDA and writes `providers = []` when the probe fails.
 
 ## Context
 

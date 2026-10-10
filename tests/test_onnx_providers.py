@@ -232,6 +232,161 @@ def test_unavailable_query_failure_propagates() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CUDA DLL preload (T21): onnxruntime-gpu's CUDA provider library has no RPATH to
+# pip's nvidia/cu13/lib, so the DLLs must be preloaded before onnxruntime is asked
+# which providers it has.
+# ---------------------------------------------------------------------------
+
+
+def _fake_onnxruntime(
+    monkeypatch: pytest.MonkeyPatch, *, preload: Any = "default", cuda_version: str = "13.0"
+) -> list[Any]:
+    """Install a fake ``onnxruntime`` that lists CUDA only after ``preload_dlls`` ran.
+
+    Returns the ordered call log. ``preload=None`` builds a module without
+    ``preload_dlls`` (onnxruntime < 1.21); a callable replaces its body.
+    *cuda_version* is the build's CUDA version, ``""`` for a CPU/CoreML build.
+    """
+    calls: list[Any] = []
+    module = types.ModuleType("onnxruntime")
+    module.cuda_version = cuda_version  # type: ignore[attr-defined]
+
+    def get_available_providers() -> list[str]:
+        calls.append("get_available_providers")
+        preloaded = any(isinstance(c, tuple) and c[0] == "preload_dlls" for c in calls)
+        return [_CUDA, CPU_PROVIDER] if preloaded else [CPU_PROVIDER]
+
+    module.get_available_providers = get_available_providers  # type: ignore[attr-defined]
+    if preload is not None:
+
+        def preload_dlls(**kwargs: Any) -> None:
+            calls.append(("preload_dlls", kwargs))
+            if callable(preload):
+                preload()
+
+        module.preload_dlls = preload_dlls  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "onnxruntime", module)
+    return calls
+
+
+def test_cuda_list_preloads_dlls_without_msvc_before_querying_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _fake_onnxruntime(monkeypatch)
+
+    selection = select_onnx_providers([_CUDA, CPU_PROVIDER])
+
+    assert calls == [("preload_dlls", {"msvc": False}), "get_available_providers"]
+    assert selection.providers == [_CUDA, CPU_PROVIDER]
+    assert selection.unavailable == []
+
+
+def test_cuda_dlls_are_preloaded_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _fake_onnxruntime(monkeypatch)
+
+    select_onnx_providers([_CUDA])
+    unavailable_onnx_providers([_CUDA, CPU_PROVIDER])
+
+    assert [c for c in calls if isinstance(c, tuple)] == [("preload_dlls", {"msvc": False})]
+
+
+@pytest.mark.parametrize(
+    "configured", [[_COREML], [_COREML, CPU_PROVIDER], [CPU_PROVIDER]], ids=["coreml", "coreml-cpu", "cpu"]
+)
+def test_non_cuda_lists_never_preload_cuda_dlls(
+    monkeypatch: pytest.MonkeyPatch, configured: list[str]
+) -> None:
+    calls = _fake_onnxruntime(monkeypatch)
+
+    select_onnx_providers(configured)
+
+    assert not [c for c in calls if isinstance(c, tuple)]
+
+
+def test_onnxruntime_without_preload_dlls_still_selects(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _fake_onnxruntime(monkeypatch, preload=None)
+
+    selection = select_onnx_providers([_CUDA])
+
+    assert calls == ["get_available_providers"]
+    assert selection.providers == [CPU_PROVIDER]
+
+
+def test_build_without_cuda_never_calls_preload(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """onnxruntime 1.21-1.23 CPU builds print a "not built with CUDA 12.x support" warning
+    to stdout from ``preload_dlls``; a build without CUDA has nothing to preload."""
+    calls = _fake_onnxruntime(
+        monkeypatch, preload=lambda: print("WARNING: onnxruntime is not built with CUDA 12.x support."),
+        cuda_version="",
+    )
+    capfd.readouterr()
+
+    selection = select_onnx_providers([_CUDA, CPU_PROVIDER])
+
+    assert calls == ["get_available_providers"]
+    assert capfd.readouterr() == ("", "")
+    assert selection.providers == [CPU_PROVIDER]
+    assert selection.unavailable == [_CUDA]
+
+
+def test_failing_preload_warns_once_and_selection_continues(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def explode() -> None:
+        raise OSError("libcudart.so.13: cannot open shared object file")
+
+    calls = _fake_onnxruntime(monkeypatch, preload=explode)
+
+    with caplog.at_level(logging.WARNING):
+        selection = select_onnx_providers([_CUDA, CPU_PROVIDER])
+        select_onnx_providers([_CUDA, CPU_PROVIDER])
+
+    assert calls[-1] == "get_available_providers"
+    assert selection.providers == [_CUDA, CPU_PROVIDER]
+    preload_warnings = [w for w in _warnings(caplog) if "preload" in w]
+    assert len(preload_warnings) == 1
+    assert "libcudart.so.13" in preload_warnings[0]
+
+
+def test_real_onnxruntime_cuda_preload_is_a_silent_no_op_on_a_build_without_cuda(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """The real installed onnxruntime (no CUDA build here): preload is not even called."""
+    import onnxruntime  # noqa: PLC0415 — real module, imported only by this test
+
+    if _CUDA in onnxruntime.get_available_providers():
+        pytest.skip("this onnxruntime build has CUDA; the no-op path does not apply")
+    spy = MagicMock(side_effect=onnxruntime.preload_dlls)
+    monkeypatch.setattr(onnxruntime, "preload_dlls", spy)
+    capfd.readouterr()
+    modules_before = set(sys.modules)
+
+    selection = select_onnx_providers([_CUDA])
+
+    spy.assert_not_called()
+    assert set(sys.modules) - modules_before == set()
+    assert capfd.readouterr() == ("", "")
+    assert selection.providers == [CPU_PROVIDER]
+    assert selection.unavailable == [_CUDA]
+
+
+@pytest.mark.parametrize("configured", [[_COREML], [CPU_PROVIDER]], ids=["coreml", "cpu"])
+def test_real_onnxruntime_non_cuda_lists_never_preload(
+    monkeypatch: pytest.MonkeyPatch, configured: list[str]
+) -> None:
+    import onnxruntime  # noqa: PLC0415 — real module, imported only by this test
+
+    spy = MagicMock(side_effect=onnxruntime.preload_dlls)
+    monkeypatch.setattr(onnxruntime, "preload_dlls", spy)
+
+    select_onnx_providers(configured)
+
+    spy.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Runtime backends load on the selected providers, resolved lazily
 # ---------------------------------------------------------------------------
 
