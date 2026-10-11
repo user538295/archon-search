@@ -65,6 +65,8 @@ jobs:
       - name: Run full default suite (integration + eval, coverage fail-under 85)
         # pyproject's `-n 8`: the default suite stubs fastembed (~0.3 GB/worker, ~2.4 GB in
         # all), which fits every GitHub-hosted ubuntu runner; fewer vCPUs only slow it down.
+        # `benchmark` is deselected, as in the release `test` job: its latency ceilings do
+        # not hold under 8 workers on a 4-vCPU runner.
         timeout-minutes: 60
         run: bash scripts/test-unlocked-deps.sh suite
 

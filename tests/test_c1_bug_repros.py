@@ -922,6 +922,7 @@ async def test_eager_warmup_has_terminal_timeout(
     the loop below rebinds every numeric ``*TIMEOUT*`` constant in ``server/warmup.py``.
     """
     from archon_search.embedder_cache import EmbedderCache  # noqa: PLC0415
+    from archon_search.pipeline import SearchPipeline  # noqa: PLC0415
     from archon_search.server import warmup as warmup_module  # noqa: PLC0415
     from archon_search.server.app import create_app  # noqa: PLC0415
     from archon_search.store import SearchStore  # noqa: PLC0415
@@ -944,6 +945,13 @@ async def test_eager_warmup_has_terminal_timeout(
     with ExitStack() as stack:
         _enter_store_patches(stack)
         stack.enter_context(patch.object(SearchStore, "disconnect", new=AsyncMock()))
+        # The dialled-down bound also covers warmup_models(), which runs before
+        # preload(); a real one can outlast 0.1 s on a loaded runner, so the bound
+        # fired before preload was ever entered. Make it instant so the only
+        # wedge — and the only place the bound can expire — is the parked preload.
+        stack.enter_context(
+            patch.object(SearchPipeline, "warmup_models", new=AsyncMock(return_value=True))
+        )
         stack.enter_context(patch.object(EmbedderCache, "preload", new=parked_preload))
 
         app = create_app(cfg, job_store)

@@ -129,7 +129,11 @@ suite() {
     require_venv
     # COVERAGE_FILE keeps this run's data out of ./.coverage, which release.sh's own
     # --cov-append lanes accumulate into before their final fail-under check.
-    COVERAGE_FILE="$WORK_DIR/.coverage" "$PY" -m pytest --basetemp="$WORK_DIR/pytest-suite"
+    # The -m filter is pyproject addopts' own plus `not benchmark`, as the release `test`
+    # job deselects it: latency ceilings measured under `-n 8` on a 4-vCPU runner fail on
+    # CPU contention, not on drift. release.sh lane 7 runs the benchmarks serially.
+    COVERAGE_FILE="$WORK_DIR/.coverage" "$PY" -m pytest --basetemp="$WORK_DIR/pytest-suite" \
+        -m "not live_benchmark and not smoke and not live_eval and not docling and not graph_real_artifact and not benchmark"
     assert_venv_unchanged
 }
 

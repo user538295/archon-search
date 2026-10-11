@@ -116,9 +116,12 @@ async def test_core_starts_on_the_committed_balanced_profile() -> None:
         assert "BALANCED // INFO" in rendered
 
 
-async def test_core_arrow_navigation_wraps_and_selection_commits() -> None:
+async def test_core_arrow_navigation_wraps_and_selection_commits(monkeypatch) -> None:
     async with WizardApp().run_test(size=SIZE) as pilot:
         core = await _goto_core(pilot)
+        # The lock flash clears on a 0.9 s wall-clock timer; on a loaded runner
+        # pilot.press() can return after it fired. Keep the flash up for the assert.
+        monkeypatch.setattr(core, "_clear_lock", lambda: None)
         core.cur = 0
         core.refresh()
         await pilot.press("up")  # wrap 0 -> 6 (NEXT)
