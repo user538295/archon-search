@@ -1,6 +1,17 @@
 # Changelog
 
 
+## [26.10.2181] - 2026-10-11
+
+**Test infrastructure hardening: smoke server initialization, timing races, and CI stability**
+
+- **Smoke server initialization and process group management** — `_spawn_server` now links the model cache on every startup (fixing ~22s cold cache delays that exceeded startup deadlines) and starts servers in a new process group for clean teardown. `_kill_server` SIGKILLs the entire group, eliminating orphaned `archon-search serve` processes that leaked ports and file descriptors when startup failed.
+
+- **Warm-up timeout and textual core lock test fixes** — `test_eager_warmup_has_terminal_timeout` now patches `SearchPipeline.warmup_models` to prevent the timeout from firing during pre-model-load setup. `test_core_arrow_navigation_wraps_and_selection_commits` stubs `_clear_lock` so the flash state persists for assertion, fixing races under load where the lock cleared before the test could read it.
+
+- **Unlocked-deps CI lane benchmark deselection** — `test-unlocked-deps.sh` repeats the `-m not benchmark` filter in `suite` to prevent p99 timing variance from CPU contention on the 4-vCPU runner from masking real dependency drift.
+
+
 ## [26.10.2178] - 2026-10-11
 
 **CUDA 13 GPU support, Docker extras deduplication, uv tool extras persistence, and resource-leak detection**
