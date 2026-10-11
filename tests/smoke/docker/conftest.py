@@ -20,7 +20,6 @@ import pytest
 
 from tests.smoke.conftest import (
     SmokeServer,
-    _TEARDOWN_TIMEOUT_S,
     _free_port,
     _poll_health_and_ready,
     _seed_corpus,
@@ -92,12 +91,7 @@ def smoke_docker_server(tmp_path_factory) -> Iterator[SmokeServer]:
 
     yield server
 
-    proc.terminate()
-    try:
-        proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
+    if not _terminate(proc):
         pytest.fail("docker smoke server did not stop cleanly on SIGTERM")
 
 
@@ -151,10 +145,5 @@ def smoke_docker_server_seeded(tmp_path_factory) -> Iterator[SmokeServer]:
 
     yield server
 
-    proc.terminate()
-    try:
-        proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
+    if not _terminate(proc):
         pytest.fail("docker smoke seeded server did not stop cleanly on SIGTERM")

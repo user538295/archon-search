@@ -14,12 +14,20 @@ from __future__ import annotations
 
 import secrets
 import socket
+import subprocess
+import sys
 import time
 
 import httpx
 import pytest
 
-from tests.smoke.conftest import _HEALTH_READY_TIMEOUT_S, _start_server, _free_port
+from tests.smoke import conftest as smoke_conftest
+from tests.smoke.conftest import (
+    _HEALTH_READY_TIMEOUT_S,
+    _free_port,
+    _start_server,
+    _terminate,
+)
 
 pytestmark = pytest.mark.xdist_group("smoke_e2e")
 
@@ -92,7 +100,11 @@ def test_startup_failure_error_includes_stderr(tmp_path_factory) -> None:
     blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     blocker.bind(("0.0.0.0", port))
-    blocker.listen(1)
+    # Default backlog, not listen(1): once a tiny backlog overflows, macOS resets the
+    # poller's next connect and httpcore 1.0.9 leaks that socket (its TCP_NODELAY
+    # setsockopt raises EINVAL before it can close it) — a ResourceWarning that
+    # fails the suite. With room in the queue every poll ends in a clean ReadTimeout.
+    blocker.listen()
     try:
         data_dir = tmp_path_factory.mktemp("smoke_data_bindfail")
         api_key = secrets.token_hex(32)
@@ -108,6 +120,60 @@ def test_startup_failure_error_includes_stderr(tmp_path_factory) -> None:
         assert "--- captured stderr ---" in message
     finally:
         blocker.close()
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — server teardown closes the captured pipes
+# ---------------------------------------------------------------------------
+
+_SLEEP_SCRIPT = "import time; time.sleep(60)"
+_IGNORE_SIGTERM_SCRIPT = (
+    "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+    "print('ready', flush=True); time.sleep(60)"
+)
+_FAST_TEARDOWN_TIMEOUT_S = 0.5
+
+
+def _spawn_piped(script: str) -> subprocess.Popen:
+    return subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def _assert_reaped_and_pipes_closed(proc: subprocess.Popen) -> None:
+    assert proc.returncode is not None
+    assert proc.stdout.closed
+    assert proc.stderr.closed
+
+
+def test_terminate_stops_live_process_and_closes_pipes() -> None:
+    """A server that exits on SIGTERM is reaped and its stdout/stderr pipes closed."""
+    proc = _spawn_piped(_SLEEP_SCRIPT)
+
+    assert _terminate(proc) is True
+    _assert_reaped_and_pipes_closed(proc)
+
+
+def test_terminate_closes_pipes_of_already_exited_process() -> None:
+    """A server that already exited (e.g. stopped by the test) still gets its pipes closed."""
+    proc = _spawn_piped("pass")
+    proc.wait(timeout=_HEALTH_READY_TIMEOUT_S)
+
+    assert _terminate(proc) is True
+    _assert_reaped_and_pipes_closed(proc)
+
+
+def test_terminate_kills_process_ignoring_sigterm_and_closes_pipes(monkeypatch) -> None:
+    """A server that ignores SIGTERM is SIGKILLed, reported unclean, and its pipes closed."""
+    monkeypatch.setattr(smoke_conftest, "_TEARDOWN_TIMEOUT_S", _FAST_TEARDOWN_TIMEOUT_S)
+    proc = _spawn_piped(_IGNORE_SIGTERM_SCRIPT)
+    assert proc.stdout.readline() == "ready\n"  # SIGTERM handler is installed
+
+    assert _terminate(proc) is False
+    _assert_reaped_and_pipes_closed(proc)
 
 
 # ---------------------------------------------------------------------------

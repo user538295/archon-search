@@ -203,15 +203,23 @@ def _startup_failure(proc: subprocess.Popen, reason: str) -> RuntimeError:
     return RuntimeError(f"server did not start: {reason}\n--- captured stderr ---\n{stderr}")
 
 
-def _terminate(proc: subprocess.Popen) -> None:
-    """Best-effort cleanup for a subprocess that failed to start cleanly."""
-    if proc.poll() is None:
-        proc.terminate()
+def _terminate(proc: subprocess.Popen) -> bool:
+    """SIGTERM ``proc``, SIGKILL it after ``_TEARDOWN_TIMEOUT_S``; return True if SIGTERM sufficed.
+
+    ``communicate()`` drains the stdout/stderr pipes while waiting, so a server
+    logging during shutdown cannot block on a full pipe. Leaving the ``with``
+    block closes both pipes even when the process had already exited; an
+    unclosed pipe is a ``ResourceWarning``, which fails the suite.
+    """
+    with proc:
+        if proc.poll() is None:
+            proc.terminate()
         try:
-            proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
+            proc.communicate(timeout=_TEARDOWN_TIMEOUT_S)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
+            return False
+    return True
 
 
 #: Persistent model cache shared with a normal install — the default
@@ -338,12 +346,7 @@ def smoke_server(tmp_path_factory) -> Iterator[SmokeServer]:
 
     yield server
 
-    proc.terminate()
-    try:
-        proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
+    if not _terminate(proc):
         pytest.fail("server did not stop cleanly on SIGTERM")
 
 
@@ -547,10 +550,5 @@ def smoke_server_graph_enabled(tmp_path_factory) -> Iterator[SmokeServer]:
 
     yield server
 
-    proc.terminate()
-    try:
-        proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=_TEARDOWN_TIMEOUT_S)
+    if not _terminate(proc):
         pytest.fail("server did not stop cleanly on SIGTERM")
