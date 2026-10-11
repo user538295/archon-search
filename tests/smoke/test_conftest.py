@@ -12,6 +12,7 @@ the pattern in ``tests/smoke/test_cli.py``).
 
 from __future__ import annotations
 
+import os
 import secrets
 import socket
 import subprocess
@@ -127,19 +128,29 @@ def test_startup_failure_error_includes_stderr(tmp_path_factory) -> None:
 # ---------------------------------------------------------------------------
 
 _SLEEP_SCRIPT = "import time; time.sleep(60)"
-_IGNORE_SIGTERM_SCRIPT = (
-    "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-    "print('ready', flush=True); time.sleep(60)"
+# Models `uv run archon-search serve` refusing to stop: a parent with a grandchild
+# server sharing its pipes, both ignoring SIGTERM (SIG_IGN survives exec, so the
+# grandchild inherits it before it starts). Prints the grandchild's pid.
+_IGNORE_SIGTERM_TREE_SCRIPT = (
+    "import signal, subprocess, sys, time\n"
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+    "server = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+    "print(server.pid, flush=True)\n"
+    "time.sleep(60)\n"
 )
 _FAST_TEARDOWN_TIMEOUT_S = 0.5
+_REAP_TIMEOUT_S = 5.0
+_REAP_POLL_S = 0.05
 
 
 def _spawn_piped(script: str) -> subprocess.Popen:
+    # Own session, like the real server (`_spawn_server`), so a group kill is scoped.
     return subprocess.Popen(
         [sys.executable, "-c", script],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
 
 
@@ -147,6 +158,17 @@ def _assert_reaped_and_pipes_closed(proc: subprocess.Popen) -> None:
     assert proc.returncode is not None
     assert proc.stdout.closed
     assert proc.stderr.closed
+
+
+def _process_gone(pid: int) -> bool:
+    deadline = time.monotonic() + _REAP_TIMEOUT_S
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(_REAP_POLL_S)
+    return False
 
 
 def test_terminate_stops_live_process_and_closes_pipes() -> None:
@@ -166,14 +188,19 @@ def test_terminate_closes_pipes_of_already_exited_process() -> None:
     _assert_reaped_and_pipes_closed(proc)
 
 
-def test_terminate_kills_process_ignoring_sigterm_and_closes_pipes(monkeypatch) -> None:
-    """A server that ignores SIGTERM is SIGKILLed, reported unclean, and its pipes closed."""
+def test_terminate_kills_whole_tree_ignoring_sigterm_and_closes_pipes(monkeypatch) -> None:
+    """A server tree that ignores SIGTERM is SIGKILLed — grandchild included — and reported unclean.
+
+    SIGKILL on the ``uv run`` parent alone cannot reach the server it started; the
+    orphan kept running with its port, its memory and the stderr pipe.
+    """
     monkeypatch.setattr(smoke_conftest, "_TEARDOWN_TIMEOUT_S", _FAST_TEARDOWN_TIMEOUT_S)
-    proc = _spawn_piped(_IGNORE_SIGTERM_SCRIPT)
-    assert proc.stdout.readline() == "ready\n"  # SIGTERM handler is installed
+    proc = _spawn_piped(_IGNORE_SIGTERM_TREE_SCRIPT)
+    server_pid = int(proc.stdout.readline())
 
     assert _terminate(proc) is False
     _assert_reaped_and_pipes_closed(proc)
+    assert _process_gone(server_pid), f"server grandchild {server_pid} outlived the teardown"
 
 
 # ---------------------------------------------------------------------------

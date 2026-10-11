@@ -24,8 +24,10 @@ clustering.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import secrets
+import signal
 import socket
 import subprocess
 import time
@@ -116,6 +118,31 @@ def _subprocess_env(*, port: int, data_dir: Path, api_key: str) -> dict[str, str
     return env
 
 
+def _spawn_server(env: dict[str, str]) -> subprocess.Popen:
+    """Spawn ``archon-search serve`` with its model cache linked, in its own process group.
+
+    ``uv run`` forwards SIGTERM to the server it starts, but SIGKILL cannot be
+    forwarded: killing ``uv`` alone orphans the server, which keeps its port, its
+    memory and the stderr pipe. A new session lets ``_kill_server`` SIGKILL the
+    whole group.
+    """
+    _link_model_cache(Path(env["ARCHON_SEARCH_DATA_DIR"]))
+    return subprocess.Popen(
+        ["uv", "run", "archon-search", "serve"],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+
+
+def _kill_server(proc: subprocess.Popen) -> None:
+    """SIGKILL the server's whole process group (see ``_spawn_server``)."""
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(proc.pid, signal.SIGKILL)
+
+
 def _start_server(*, port: int, data_dir: Path, api_key: str) -> subprocess.Popen:
     """Spawn ``archon-search serve`` and wait for it to become healthy+ready.
 
@@ -123,13 +150,7 @@ def _start_server(*, port: int, data_dir: Path, api_key: str) -> subprocess.Pope
     captured stderr) if the process exits early or ``/health``/``/ready`` do
     not succeed within ``_HEALTH_READY_TIMEOUT_S``.
     """
-    proc = subprocess.Popen(
-        ["uv", "run", "archon-search", "serve"],
-        env=_subprocess_env(port=port, data_dir=data_dir, api_key=api_key),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    proc = _spawn_server(_subprocess_env(port=port, data_dir=data_dir, api_key=api_key))
 
     base_url = f"http://127.0.0.1:{port}"
     try:
@@ -189,12 +210,12 @@ def _poll_health_and_ready(proc: subprocess.Popen, base_url: str) -> None:
 def _startup_failure(proc: subprocess.Popen, reason: str) -> RuntimeError:
     """Build the RuntimeError raised on startup failure, capturing stderr.
 
-    On the health/ready timeout path the subprocess is still alive, so a bare
-    ``communicate()`` would time out and yield empty stderr. Kill it first so
-    the buffered output can be drained.
+    On the health/ready timeout path the server is still alive, so a bare
+    ``communicate()`` would time out and yield empty stderr. Kill its process
+    group first — the ``uv`` parent and the server holding the pipes — so the
+    buffered output can be drained.
     """
-    if proc.poll() is None:
-        proc.kill()
+    _kill_server(proc)
     stderr = ""
     try:
         _, stderr = proc.communicate(timeout=2)
@@ -204,7 +225,7 @@ def _startup_failure(proc: subprocess.Popen, reason: str) -> RuntimeError:
 
 
 def _terminate(proc: subprocess.Popen) -> bool:
-    """SIGTERM ``proc``, SIGKILL it after ``_TEARDOWN_TIMEOUT_S``; return True if SIGTERM sufficed.
+    """SIGTERM ``proc``, SIGKILL its process group after ``_TEARDOWN_TIMEOUT_S``; return True if SIGTERM sufficed.
 
     ``communicate()`` drains the stdout/stderr pipes while waiting, so a server
     logging during shutdown cannot block on a full pipe. Leaving the ``with``
@@ -217,7 +238,7 @@ def _terminate(proc: subprocess.Popen) -> bool:
         try:
             proc.communicate(timeout=_TEARDOWN_TIMEOUT_S)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_server(proc)
             return False
     return True
 
@@ -324,7 +345,6 @@ def smoke_server(tmp_path_factory) -> Iterator[SmokeServer]:
     api_key = secrets.token_hex(32)
 
     _write_corpus(corpus_dir)
-    _link_model_cache(data_dir)
 
     proc = _start_server(port=port, data_dir=data_dir, api_key=api_key)
     base_url = f"http://127.0.0.1:{port}"
@@ -483,7 +503,6 @@ def smoke_server_graph_enabled(tmp_path_factory) -> Iterator[SmokeServer]:
 
     _write_graph_corpus(corpus_dir)
     _write_graph_enabled_config(data_dir)
-    _link_model_cache(data_dir)
 
     proc = _start_server(port=port, data_dir=data_dir, api_key=api_key)
     base_url = f"http://127.0.0.1:{port}"

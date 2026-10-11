@@ -13,7 +13,6 @@ Provides:
 from __future__ import annotations
 
 import secrets
-import subprocess
 from collections.abc import Iterator
 
 import pytest
@@ -23,6 +22,7 @@ from tests.smoke.conftest import (
     _free_port,
     _poll_health_and_ready,
     _seed_corpus,
+    _spawn_server,
     _subprocess_env,
     _terminate,
     _write_corpus,
@@ -66,13 +66,7 @@ def smoke_docker_server(tmp_path_factory) -> Iterator[SmokeServer]:
 
     env = _docker_env(port=port, data_dir=data_dir, api_key=api_key)
 
-    proc = subprocess.Popen(
-        ["uv", "run", "archon-search", "serve"],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    proc = _spawn_server(env)
     base_url = f"http://127.0.0.1:{port}"
     try:
         _poll_health_and_ready(proc, base_url)
@@ -119,13 +113,7 @@ def smoke_docker_server_seeded(tmp_path_factory) -> Iterator[SmokeServer]:
 
     env = _docker_env(port=port, data_dir=data_dir, api_key=api_key)
 
-    proc = subprocess.Popen(
-        ["uv", "run", "archon-search", "serve"],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    proc = _spawn_server(env)
     base_url = f"http://127.0.0.1:{port}"
     try:
         _poll_health_and_ready(proc, base_url)
