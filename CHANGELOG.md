@@ -1,6 +1,48 @@
 # Changelog
 
 
+## [26.10.2178] - 2026-10-11
+
+**CUDA 13 GPU support, Docker extras deduplication, uv tool extras persistence, and resource-leak detection**
+
+**CUDA 13 and GPU validation**
+- `:gpu` Docker image now runs CUDA 13 stack (nvidia/cuda:13.0.3 base, onnxruntime-gpu 1.27+), fixing library resolution for `libcublasLt.so.13`, `libcudnn.so.9`, etc. Build check `scripts/check-gpu-cuda-majors.sh` ensures onnxruntime-gpu, torch, and `$CUDA_VERSION` share a major version.
+- Wizard now validates CUDA before writing `[database].providers = ["CUDAExecutionProvider"]` — `BaseInstaller._probe_and_configure_cuda` calls `validate_providers()` and falls back to `providers = []` with a warning on failure, fixing the config-promises-GPU-but-uses-CPU bug.
+- CUDA library preloading via `archon_search/onnx_providers.py` calls `onnxruntime.preload_dlls(msvc=False)` before the provider query when CUDA is configured, fixing GPU resolution on pip-installed builds without system CUDA 13 libraries.
+- GPU image test: `tests/test_docker_gpu_image.py` (opt-in, `-m docker`) validates provider resolution, cuDNN mapping, CUDA major match, and confirms CPU `onnxruntime` does not shadow the GPU build.
+
+**Docker extras volume: install only add-ons, not the base**
+- Entrypoint resolves `archon-search[EXTRAS]==<image version>` with `pip install --dry-run --report` and installs only the chosen extras via `--no-deps --target /pip-packages`. The volume never holds archon-search itself—fixing the bug where new images on old volumes ran stale archon-search copies (e.g., a 2.0.0 image running the volume's 0.0.0+local, wasting 2.3 GB).
+- Install stamp is now a fingerprint of the extras list, `sys.version`, and the image's pip freeze; any image change triggers a reinstall and legacy cleanup.
+- Staging and rollback: each install attempt writes to `/pip-packages/.staging`; only success replaces the volume and writes the stamp last, so failed upgrades preserve the previous volume.
+- Validation: unknown or empty `ARCHON_EXTRAS` fail loudly; entrypoint logs both `onnxruntime` and `onnxruntime-gpu` versions to clarify which is in use.
+
+**uv tool extras: record wizard choices and per-method install hints**
+- Wizard extras now survive `uv tool upgrade` — `archon_search/uv_tool.py` rebuilds the receipt as a `uv tool install` command with the new extra and matching `--torch-backend` (`+cpu`, `+cu126`, ...), so upgrades preserve gliner, tree-sitter, and fasttext-wheel.
+- uv tool receipts with `--excludes` render excludes as stdin to `--excludes -`; fallback `uv pip install` (for unsupported receipt state) doesn't receive stdin, fixing the bug where uv treated excludes as unreproducible.
+- Per-method install hints: `extra_install_hint()` names the correct command (`uv tool install`, `pip install`, etc.) in every startup guard and runtime error—no more "pip install archon-search[gliner]" in a uv tool env that ships no pip.
+- Upgrade docs: `UserManual/10_installation.md` table lists add/upgrade commands per method (uv tool, pip venv, pipx, checkout) and the CUDA 12.6 revert note for `uv tool upgrade`.
+
+**onnxruntime telemetry disabled to prevent exit-time SIGABRT**
+- `archon_search/__init__.py` sets `ORT_DISABLE_TELEMETRY=1` before any onnxruntime import on all platforms (preserving operator-set values), preventing 1DS uploader creation—the only switch that works before it's spun up. Fixes exit-time SIGABRT from `PosixTelemetry::Shutdown` destroying a mutex while a worker thread decodes an upload response.
+- Security doc: `Architecture/150_security_and_privacy_architecture.md` now notes third-party library telemetry under "No external transmission."
+
+**Test reliability and resource-leak detection**
+- `filterwarnings` escalates `ResourceWarning` and `pytest.PytestUnraisableExceptionWarning` to errors, catching unclosed files and streams before release (both the mcp SSE stream and smoke-test socket leaks fixed in this release).
+- Smoke server teardown: `_terminate()` in `tests/smoke/conftest.py` drains pipes via `communicate()`, SIGKILLs after timeout, closes both pipes in a context manager, and returns whether SIGTERM sufficed—preventing leaks when servers log at shutdown.
+- Bind-collision blocker: `test_startup_failure_error_includes_stderr` now uses the default backlog; every health-check poll ends cleanly without triggering the `TCP_NODELAY` EINVAL that leaked sockets on httpcore 1.0.9 + macOS.
+
+**mcp dependency updated for SSE stream closure**
+- `mcp>=1.30.0` closes each SSE response stream in a `finally:`, fixing the per-request stream leak on `/mcp` (mcp 1.29.x left one anyio `MemoryObjectReceiveStream` unclosed per POST).
+- mcp 1.30.0 also expires idle stateful sessions after 30 minutes (404) and caps open sessions at 10,000 (503); see `BREAKING.md` and `DeveloperGuide/06_error_handling.md`.
+
+**Documentation**
+- Test doc citations: converted all `<file>.md:<line>` references in `tests/` to `<file>.md §"<heading>"`, fixing stale line refs across 12+ tests.
+- Wizard GPU writes: `20_wizard.md` adds CoreML-fail, `--disable-gpu`, and `reranker_providers` rows to the GPU matrix; `10_installation.md` explains what the wizard writes (CUDA unvalidated, CoreML only after load test, `[]` on decline).
+- Upgrading guide: `OperatorGuide/100_upgrading.md` lists per-method extras and torch notes (CUDA 12.6 revert under `uv tool upgrade`) and covers the Docker `/pip-packages` stale-shadow known issue.
+- Removed: unused `install_deps` and `check_deps` methods from the installer protocol.
+
+
 ## [26.10.2150] - 2026-10-03
 
 **Collection consistency + interactive profile rebuilds + search metadata fixes**
