@@ -55,6 +55,16 @@ def test_stub_not_active_in_live_benchmark() -> None:
     )
 
 
+@pytest.mark.live_benchmark
+@pytest.mark.xdist_group("live_benchmark")
+def test_fastembed_cache_dir_is_pinned_to_the_guarded_cache(live_fastembed_cache_dir: Path) -> None:
+    """S493: the backends resolve the cache ``_require_model_cache`` checked, not the
+    root conftest's empty per-worker ``<data>/models`` (which would re-download)."""
+    from archon_search.paths import get_fastembed_cache_dir
+
+    assert get_fastembed_cache_dir() == live_fastembed_cache_dir
+
+
 # ---------------------------------------------------------------------------
 # Unit: steady-state p95 assertion logic (no real models needed)
 # ---------------------------------------------------------------------------

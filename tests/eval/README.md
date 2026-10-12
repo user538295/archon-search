@@ -254,7 +254,7 @@ Because step 1 runs at module level (unconditionally at conftest import), the `l
 
 ### Model-cache skip hook
 
-A session-scoped autouse fixture `_require_model_cache` skips the entire session if either `*bge-small*` or `*ms-marco-MiniLM*` blobs are absent from the fastembed cache directory (`$FASTEMBED_CACHE_PATH` or `~/.cache/fastembed`). On developer machines without a prefetched cache, the session skips rather than fails.
+A session-scoped autouse fixture `_require_model_cache` skips the entire session if either `*bge-small-en-v1.5*` or `*ms-marco-MiniLM-L-6-v2*` entries (exact model ids, so an L-12 reranker does not count) are absent from the fastembed cache directory — `archon_search.paths.get_fastembed_cache_dir()` resolved from the shell environment at session start: `$FASTEMBED_CACHE_PATH` when set, else `<ARCHON_SEARCH_DATA_DIR>/models` (default `~/.archon-search/models`). The skip message names that directory. A function-scoped autouse fixture re-pins `FASTEMBED_CACHE_PATH` to it after the root `tests/conftest.py` fixture deletes the variable, so the real backends load from the directory the guard checked (S493). On developer machines without a prefetched cache, the session skips rather than fails. CI (`archon-search-pr.yml`) exports `FASTEMBED_CACHE_PATH=$HOME/.cache/fastembed` in the prefetch and benchmark steps, so prefetch, the `actions/cache` path, the guard and the load share one directory; the benchmark step also exports `HF_HUB_OFFLINE=1`, so a cache mismatch fails instead of silently downloading.
 
 This is defense-in-depth. The primary protection is the `not live_benchmark` in `addopts` — a developer running `uv run pytest` never loads this conftest at all.
 
@@ -271,10 +271,14 @@ uv run pytest tests/eval/live_benchmark/test_real_model_search_benchmark.py::tes
 To prefetch models locally:
 
 ```python
+# Run with the same FASTEMBED_CACHE_PATH / ARCHON_SEARCH_DATA_DIR as pytest: without an explicit
+# cache_dir, fastembed would write to <tempdir>/fastembed_cache, which the guard never checks.
 from fastembed import TextEmbedding
 from fastembed.rerank.cross_encoder import TextCrossEncoder
-TextEmbedding("BAAI/bge-small-en-v1.5")
-TextCrossEncoder("Xenova/ms-marco-MiniLM-L-6-v2")
+from archon_search.paths import get_fastembed_cache_dir
+cache_dir = str(get_fastembed_cache_dir())
+TextEmbedding("BAAI/bge-small-en-v1.5", cache_dir=cache_dir)
+TextCrossEncoder("Xenova/ms-marco-MiniLM-L-6-v2", cache_dir=cache_dir)
 ```
 
 ### Calibration procedure

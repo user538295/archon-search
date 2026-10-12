@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -389,23 +390,44 @@ def test_model_embedder_is_warm_true_after_encode() -> None:
     assert me.is_warm is True
 
 
-def test_embedder_caches_models_under_the_archon_data_dir() -> None:
-    """encode() must construct TextEmbedding with cache_dir=str(get_models_dir())."""
-    from unittest.mock import MagicMock, patch
+def _s493_cache_dir_passed_by_encode() -> str:
+    """The ``cache_dir`` ModelEmbedder.encode() hands to fastembed's TextEmbedding."""
+    from unittest.mock import patch
 
     from archon_search.embedder import ModelEmbedder
-    from archon_search.paths import get_models_dir
 
     fake_embedding = MagicMock()
     fake_embedding.tolist.return_value = [0.1, 0.2]
     fake_model = MagicMock()
     fake_model.embed.return_value = [fake_embedding]
-
-    me = ModelEmbedder("some-model")
     with patch("fastembed.TextEmbedding", return_value=fake_model) as mock_te:
-        me.encode(["hello"])
+        ModelEmbedder("some-model").encode(["hello"])
+    return mock_te.call_args.kwargs["cache_dir"]
 
-    assert mock_te.call_args.kwargs["cache_dir"] == str(get_models_dir())
+
+def test_s493_fastembed_cache_path_relocates_the_embedder_weight_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S493: FASTEMBED_CACHE_PATH, set to a directory OUTSIDE ARCHON_SEARCH_DATA_DIR, is
+    where the embedder's fastembed weights go (UserManual/30_configuration.md,
+    150_multi_instance_setup.md: "overrides the ARCHON_SEARCH_DATA_DIR-derived default")."""
+    data_dir = tmp_path / "archon-data"
+    fastembed_cache = tmp_path / "fastembed-cache"
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("FASTEMBED_CACHE_PATH", str(fastembed_cache))
+
+    assert _s493_cache_dir_passed_by_encode() == str(fastembed_cache)
+
+
+def test_embedder_caches_models_under_the_archon_data_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BE-26 (S493 presence anchor): with FASTEMBED_CACHE_PATH unset, encode() hands
+    TextEmbedding ``$ARCHON_SEARCH_DATA_DIR/models`` as its cache_dir."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("FASTEMBED_CACHE_PATH", raising=False)
+
+    assert _s493_cache_dir_passed_by_encode() == str(tmp_path / "models")
 
 
 # ---------------------------------------------------------------------------

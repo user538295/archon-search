@@ -213,11 +213,11 @@ def test_dockerfile_has_container_env(dockerfile_text: str) -> None:
 
 
 def test_dockerfile_has_fastembed_cache_env(dockerfile_text: str) -> None:
-    # Without FASTEMBED_CACHE_PATH the model weights download into the
-    # ephemeral container layer and are lost on every container recreate.
+    # The documented image cache dir (140_running_with_docker.md): without the
+    # env var the weights land in /data/models (get_fastembed_cache_dir(), S493).
     assert "FASTEMBED_CACHE_PATH=/data/fastembed-cache" in dockerfile_text, (
         "Dockerfile must set FASTEMBED_CACHE_PATH so fastembed weights "
-        "persist on the mounted volume"
+        "land in the documented /data/fastembed-cache"
     )
 
 

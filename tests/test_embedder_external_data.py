@@ -13,7 +13,11 @@ onnxruntime, offline, against a tiny synthetic model laid out the way huggingfac
 lays out the real one. The guard covers archon's embedder load path and holds while
 onnxruntime rejects the split layout, which the test asserts first. It fails if fastembed
 drops below 0.9.0 or archon stops loading models through fastembed from
-``get_models_dir()``.
+``get_fastembed_cache_dir()``.
+
+S493: the same real load, with the snapshot in a directory outside
+``ARCHON_SEARCH_DATA_DIR`` that ``FASTEMBED_CACHE_PATH`` names, proves the env var
+relocates the weights fastembed actually reads — not only the ``cache_dir`` argument.
 """
 from __future__ import annotations
 
@@ -77,7 +81,7 @@ print(json.dumps(asyncio.run(make_embedder(sys.argv[1]).embed([sys.argv[2]]))))
 _LOADER_FAILURE_HINT = (
     f'"{_S671_ERROR}" below is the S671 regression (fastembed < 0.9.0, or archon'
     " bypassing fastembed's loader). "
-    f'"{_NO_SOURCE_ERROR}" means archon no longer passes `get_models_dir()` as'
+    f'"{_NO_SOURCE_ERROR}" means archon no longer passes `get_fastembed_cache_dir()` as'
     " `cache_dir`, or fastembed changed the model's source. Any other error means this"
     " test's scaffolding has rotted."
 )
@@ -102,6 +106,30 @@ def _run_child(
         env=env,
         timeout=_CHILD_TIMEOUT_S,
     )
+
+
+def _offline_child_env(
+    data_dir: Path, tmpdir: Path, *, fastembed_cache: Path | None = None
+) -> dict[str, str]:
+    """Child env that loads models offline, only from the cache archon resolves.
+
+    *tmpdir* is created empty and becomes the child's TMPDIR, so fastembed's own
+    ``<tempdir>/fastembed_cache`` fallback — which may hold the real model — stays
+    empty: a site that stopped passing ``cache_dir`` fails with "from any source".
+    ``FASTEMBED_CACHE_PATH`` is set only to *fastembed_cache* (S493); otherwise it is
+    removed, so archon uses BE-26's ``<data_dir>/models``.
+    """
+    tmpdir.mkdir()
+    env = {
+        **os.environ,
+        "ARCHON_SEARCH_DATA_DIR": str(data_dir),
+        "TMPDIR": str(tmpdir),
+        "HF_HUB_OFFLINE": "1",
+    }
+    env.pop("FASTEMBED_CACHE_PATH", None)
+    if fastembed_cache is not None:
+        env["FASTEMBED_CACHE_PATH"] = str(fastembed_cache)
+    return env
 
 
 def _last_line_json(stdout: str) -> Any:
@@ -229,15 +257,12 @@ def _write_shared_blob_cache(
     return snapshot_dir
 
 
-def test_embedder_loads_external_data_model_from_shared_blob_cache(tmp_path: Path) -> None:
-    import onnxruntime  # noqa: PLC0415
-
-    files = _fastembed_model_files()
-    workdir = tmp_path / "build"
-    model_bytes, data_bytes = _build_model(workdir, files)
-    data_dir = tmp_path / "data"
-    snapshot_dir = _write_shared_blob_cache(
-        data_dir / "models",
+def _write_model_snapshot(
+    cache_dir: Path, files: _ModelFiles, model_bytes: bytes, data_bytes: bytes
+) -> Path:
+    """The synthetic ``_MODEL_NAME`` snapshot, shared-blob layout, under *cache_dir*."""
+    return _write_shared_blob_cache(
+        cache_dir,
         files.repo_dir,
         xet_files={
             files.model_file: (model_bytes, _MODEL_XET_HASH),
@@ -246,26 +271,8 @@ def test_embedder_loads_external_data_model_from_shared_blob_cache(tmp_path: Pat
         git_files=_tokenizer_files(),
     )
 
-    # Precondition: onnxruntime rejects the layout, which proves the two files resolve into
-    # different directories. If the load below stops raising, this environment no longer
-    # reproduces S671 and the test guards nothing: revisit it. (ORT's `Fail` lives in a
-    # non-public module.)
-    with pytest.raises(Exception, match=_S671_ERROR):
-        onnxruntime.InferenceSession(str(snapshot_dir / files.model_file))
 
-    # An empty fastembed default cache: if archon stopped passing `cache_dir`, fastembed
-    # would fall back to FASTEMBED_CACHE_PATH or `<tempdir>/fastembed_cache`, which may hold
-    # the real model; empty, that regression fails with the "from any source" error.
-    fallback_cache = tmp_path / "fastembed_cache"
-    fallback_cache.mkdir()
-    env = {
-        **os.environ,
-        "ARCHON_SEARCH_DATA_DIR": str(data_dir),
-        "FASTEMBED_CACHE_PATH": str(fallback_cache),
-        "HF_HUB_OFFLINE": "1",
-    }
-    child = _run_child(_LOADER_SCRIPT, _MODEL_NAME, _QUERY_TOKEN, env=env)
-
+def _assert_loaded_the_synthetic_model(child: subprocess.CompletedProcess[str]) -> None:
     assert child.returncode == 0, f"{_LOADER_FAILURE_HINT}\n--- stderr ---\n{child.stderr}"
     vectors = _last_line_json(child.stdout)
     assert len(vectors) == 1, f"expected one vector for one query: {vectors}"
@@ -278,3 +285,50 @@ def test_embedder_loads_external_data_model_from_shared_blob_cache(tmp_path: Pat
         f"expected one-hot row {row} of the table; a mismatch means the pooling or"
         " tokenizer contract this test relies on changed"
     )
+
+
+def test_embedder_loads_external_data_model_from_shared_blob_cache(tmp_path: Path) -> None:
+    import onnxruntime  # noqa: PLC0415
+
+    files = _fastembed_model_files()
+    workdir = tmp_path / "build"
+    model_bytes, data_bytes = _build_model(workdir, files)
+    data_dir = tmp_path / "data"
+    snapshot_dir = _write_model_snapshot(data_dir / "models", files, model_bytes, data_bytes)
+
+    # Precondition: onnxruntime rejects the layout, which proves the two files resolve into
+    # different directories. If the load below stops raising, this environment no longer
+    # reproduces S671 and the test guards nothing: revisit it. (ORT's `Fail` lives in a
+    # non-public module.)
+    with pytest.raises(Exception, match=_S671_ERROR):
+        onnxruntime.InferenceSession(str(snapshot_dir / files.model_file))
+
+    # BE-26: with FASTEMBED_CACHE_PATH unset, archon passes `<data>/models` as `cache_dir`.
+    env = _offline_child_env(data_dir, tmp_path / "tmpdir")
+    child = _run_child(_LOADER_SCRIPT, _MODEL_NAME, _QUERY_TOKEN, env=env)
+
+    _assert_loaded_the_synthetic_model(child)
+
+
+def test_s493_embedder_loads_from_fastembed_cache_path_outside_the_data_dir(
+    tmp_path: Path,
+) -> None:
+    """S493: the real fastembed reads the weights from ``FASTEMBED_CACHE_PATH``.
+
+    The snapshot exists ONLY in that directory, outside ``ARCHON_SEARCH_DATA_DIR``;
+    ``<data>/models`` and fastembed's own TMPDIR fallback are empty and the child is
+    offline. Before S493 archon passed ``<data>/models`` unconditionally, so this load
+    failed with "from any source".
+    """
+    files = _fastembed_model_files()
+    model_bytes, data_bytes = _build_model(tmp_path / "build", files)
+    data_dir = tmp_path / "archon-data"
+    (data_dir / "models").mkdir(parents=True)
+    fastembed_cache = tmp_path / "fastembed-cache"
+    _write_model_snapshot(fastembed_cache, files, model_bytes, data_bytes)
+
+    env = _offline_child_env(data_dir, tmp_path / "tmpdir", fastembed_cache=fastembed_cache)
+    child = _run_child(_LOADER_SCRIPT, _MODEL_NAME, _QUERY_TOKEN, env=env)
+
+    _assert_loaded_the_synthetic_model(child)
+    assert not any((data_dir / "models").iterdir()), "nothing may land in <data>/models"

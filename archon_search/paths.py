@@ -22,7 +22,8 @@ for the canonical list.
 
 Every model-artifact directory accessor lives in ``paths.py`` — see
 ``get_models_dir()`` (the shared models root) and ``get_fasttext_models_dir()``
-/ ``get_graph_models_dir()`` (derived from it) below.
+/ ``get_graph_models_dir()`` (derived from it) below, plus
+``get_fastembed_cache_dir()`` (``FASTEMBED_CACHE_PATH``, else the models root).
 
 Raises ``ValueError`` (not ``ConfigError``) so it can be safely imported by
 ``archon_search.config`` without a circular import; ``load_config()`` wraps
@@ -35,6 +36,11 @@ import os
 from pathlib import Path
 
 _ENV_VAR: str = "ARCHON_SEARCH_DATA_DIR"
+
+#: fastembed's own weight-cache env var. fastembed reads it only when its
+#: ``cache_dir`` argument is ``None`` (``fastembed/common/utils.py``
+#: ``define_cache_dir``), so ``get_fastembed_cache_dir()`` honours it explicitly.
+_FASTEMBED_CACHE_PATH_ENV_VAR: str = "FASTEMBED_CACHE_PATH"
 
 #: Pinned GLiNER checkpoint (BE-8's ``ProseExtractionBackend`` loads this via
 #: ``GLiNER.from_pretrained(GRAPH_NER_MODEL_NAME, revision=GRAPH_NER_MODEL_REVISION,
@@ -101,6 +107,23 @@ def get_models_dir() -> Path:
     return get_data_dir() / "models"
 
 
+def get_fastembed_cache_dir() -> Path:
+    """Return the fastembed weight-cache directory, resolved fresh on every call.
+
+    The ``cache_dir`` every fastembed construction site (embedder, reranker,
+    startup probes, install prewarm) must pass. Resolution order:
+
+    1. ``$FASTEMBED_CACHE_PATH`` if set and non-empty — the operator's explicit
+       relocation, which may lie outside ``ARCHON_SEARCH_DATA_DIR``.
+    2. ``get_models_dir()`` otherwise — BE-26's default, so the weights follow
+       ``ARCHON_SEARCH_DATA_DIR`` instead of fastembed's ``<tempdir>/fastembed_cache``.
+
+    Passing ``cache_dir`` unconditionally makes fastembed ignore its own env var
+    (S493), hence the explicit precedence here. Not guaranteed to exist.
+    """
+    return Path(os.environ.get(_FASTEMBED_CACHE_PATH_ENV_VAR) or get_models_dir())
+
+
 def get_fasttext_models_dir() -> Path:
     """Return the fasttext models directory, resolved fresh on every call.
 
@@ -120,8 +143,8 @@ def get_graph_models_dir() -> Path:
     ``<model>`` is ``GRAPH_NER_MODEL_NAME`` with its ``/`` (HuggingFace repo
     ids are ``org/name``) replaced by ``--`` so it stays a single path segment.
     This is the ``cache_dir`` BE-8's ``ProseExtractionBackend`` passes to
-    ``GLiNER.from_pretrained(...)`` — mirroring how ``get_models_dir()`` serves
-    as the fastembed ``cache_dir`` for ``embedder.py``/``reranker.py``. Not
+    ``GLiNER.from_pretrained(...)`` — mirroring how ``get_fastembed_cache_dir()``
+    serves as the fastembed ``cache_dir`` for ``embedder.py``/``reranker.py``. Not
     guaranteed to exist; ``huggingface_hub`` populates it on first use.
     """
     model_segment = GRAPH_NER_MODEL_NAME.replace("/", "--")

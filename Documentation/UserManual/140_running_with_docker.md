@@ -182,7 +182,7 @@ The container reads the same env vars as a host-installed server, plus several t
 | `ARCHON_SEARCH_PORT` | `8765` | Bind port. 1–65535. |
 | `ARCHON_SEARCH_DATA_DIR` | `/data` (baked into image) | Root of every runtime path: `db_path` (`/data/search`), `log_file` (`/data/logs/archon-search.log`), `telemetry.log_dir` (`/data/search-logs`), key file (`/data/.search.env`), managed key store (`/data/keys.json`), jobs file (`/data/archon-search-jobs.json`), sync-suppression sentinel (`/data/archon-search-sync-suppressed.json`, present only while the startup-sync crash-loop guard is suppressed), fasttext models (`/data/models`), ingest history (`/data/history/sessions`). One env var relocates the entire runtime tree — do not change it unless you also remount the volume. |
 | `ARCHON_SEARCH_CONTAINER` | `1` (baked into image) | Adds `StreamHandler(sys.stderr)` to the `archon_search` logger so `docker logs` captures output. |
-| `FASTEMBED_CACHE_PATH` | `/data/fastembed-cache` (baked into image) | Persists fastembed-downloaded model weights on the mounted volume instead of the ephemeral container layer. |
+| `FASTEMBED_CACHE_PATH` | `/data/fastembed-cache` (baked into image) | Keeps fastembed-downloaded model weights (embedder + reranker) in their own directory on the mounted volume, apart from `/data/models`. archon-search passes it as fastembed's `cache_dir` (`paths.get_fastembed_cache_dir()`); an empty value counts as unset. Unset, the weights go to `$ARCHON_SEARCH_DATA_DIR/models`. |
 | `ARCHON_SEARCH_KEY_FILE` | unset | Overrides the key file path. Takes precedence over `ARCHON_SEARCH_DATA_DIR` for the key file only. |
 | `ARCHON_SEARCH_CONFIG` | unset | Points at a TOML config file. Optional — when unset, the default path is `~/.archon-search/archon-search.toml`, which resolves to `/data/.archon-search/archon-search.toml` inside the container (because `HOME=/data`), so `collection add/remove` already writes to the mounted volume. Set explicitly (e.g. `ARCHON_SEARCH_CONFIG=/data/archon-search.toml`) only if you need a specific location. |
 | `ARCHON_EXTRAS` | `graph,code,multilingual` | Comma-separated list of optional package extras; the entrypoint installs the packages they add to the image into `/pip-packages` and puts that directory on `PYTHONPATH`. Set to `""` to skip extras and run core-only (`/pip-packages` is then not on `PYTHONPATH`). A name that is not an archon-search extra, or an empty entry such as the one a trailing comma leaves, stops the container with an error that lists the valid extras. Change the value, or start an image with a different Python version or package list, and the entrypoint re-installs and replaces the volume's content on the next start (fingerprint stamp). |
@@ -212,6 +212,8 @@ When `/data` is mounted, the volume looks like this after a few requests:
 └── history/
     └── sessions/                # history sessions directory
 ```
+
+> **Upgrading from 26.9.2101 – 26.10.2181 (CPU and `:gpu` images alike):** those images ignored the baked `FASTEMBED_CACHE_PATH=/data/fastembed-cache` and kept the fastembed weights in `/data/models/` (S493). Current images honour it again, so the weights move to `/data/fastembed-cache/`: the first start re-downloads them once. Afterwards the old fastembed entries under `/data/models/` can be deleted: the `models--*` directories plus huggingface_hub's cache-wide `blobs/` store (where newer huggingface_hub releases keep the large files those directories link to), its `.huggingface-shared-blobs` marker and `.locks/` — keep `lid.176.ftz` and `graph/`. This applies only to a container running with the image's baked value on a `/data` volume of its own. In `archon-dev` (`docker-compose.override.yml`), `/data/models` is the bind-mounted host `~/.archon-search/models`, which still holds a native install's live fastembed weights — never delete anything there. archon-dev's own fastembed weights now load from `/data/fastembed-cache`, the bind-mounted host `~/.cache/fastembed`, which native installs no longer fill, so its first run after upgrading downloads them there once.
 
 When `/pip-packages` is mounted (recommended), it holds the optional-extras install:
 
@@ -245,7 +247,7 @@ This is exactly what the `archon-dev` service in `docker-compose.override.yml` a
 
 ### Prerequisites
 
-- `~/.cache/fastembed` populated (run `uv run archon-search serve` once on the host, or copy from another machine).
+- `~/.cache/fastembed` on the host — archon-dev's fastembed cache (the override sets `FASTEMBED_CACHE_PATH: /data/fastembed-cache` and bind-mounts this directory there). A native archon-search does not fill it (it caches in `~/.archon-search/models`), so the first archon-dev start downloads the weights into it once; copy them from another machine to skip that.
 - Claude Code installed on the Mac host and logged in.
 
 ### Steps
@@ -269,7 +271,7 @@ This is exactly what the `archon-dev` service in `docker-compose.override.yml` a
    - `archon-dev-data:/data` — persistent LanceDB index and key file
    - `archon-dev-packages:/pip-packages` — cached optional extras
    - `./archon-search.docker-dev.toml:/config/archon-search.toml:ro` — dev config (full profile, graph enabled, claude_cli HyDE/RAG Fusion)
-   - `~/.cache/fastembed:/data/fastembed-cache` — host fastembed model cache (avoids re-downloading ~500 MB)
+   - `~/.cache/fastembed:/data/fastembed-cache` — host fastembed model cache (avoids re-downloading ~500 MB after the first run)
    - `~/.archon-search/models:/data/models` — host model cache: the fasttext language detector, and the graph prose-extraction checkpoint if the host has provisioned one
 
 3. **First start:** the entrypoint installs the packages the graph + code + multilingual extras add to the image — a network-bound pip install (longer on a slow uplink; the image allows up to 10 minutes before the healthcheck counts failures). It runs again after a rebuild that changes the image's Python version or installed packages, including the archon-search version. Watch progress with `docker compose logs -f archon-dev`. No model weights are downloaded here; the `~/.archon-search/models:/data/models` mount above is what supplies the graph checkpoint, if your host has one.
@@ -364,7 +366,7 @@ Separate from the production image above, `docker-compose.override.yml` defines 
   docker compose stop archon-dev-shell
   ```
 
-Both share a named venv volume (`archon-docker-venv`), so the one-time install (core + `graph` extra, packages only — no model weights) is paid once and reused across both services and across restarts. Embedding model weights are bind-mounted from your host `~/.cache/fastembed`.
+Both share a named venv volume (`archon-docker-venv`), so the one-time install (core + `graph` extra, packages only — no model weights) is paid once and reused across both services and across restarts. Embedding model weights live in a bind mount of your host `~/.cache/fastembed` (`FASTEMBED_CACHE_PATH=/cache/fastembed`): a cache these services own — a native archon-search does not write there — so the first run downloads the weights once and later runs reuse them.
 
 For the full explanation — volume architecture, the two-phase test split, and why the graph extra matters — see [`../docker-test-runner.md`](../docker-test-runner.md).
 

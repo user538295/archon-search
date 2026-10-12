@@ -170,6 +170,9 @@ def _archon_isolated_data_dir(
         "ARCHON_SEARCH_CONTAINER",
         "ARCHON_SEARCH_KEY_FILE",
         "ARCHON_SEARCH_CONFIG",
+        # fastembed's own cache override (S493): an exported value would relocate
+        # every fastembed cache_dir away from the isolated data dir.
+        "FASTEMBED_CACHE_PATH",
     ):
         monkeypatch.delenv(var, raising=False)
 

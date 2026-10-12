@@ -14,7 +14,7 @@ from archon_search.paths import (
     GRAPH_NER_MODEL_NAME,
     GRAPH_NER_MODEL_REVISION,
     get_data_dir,
-    get_models_dir,
+    get_fastembed_cache_dir,
 )
 from archon_search.platform.runtime import get_search_service
 from archon_search.profiles import InstallProfile
@@ -159,7 +159,7 @@ def _prewarm_models(
     from fastembed import TextEmbedding  # noqa: PLC0415
     from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: PLC0415
 
-    cache_dir = str(get_models_dir())
+    cache_dir = str(get_fastembed_cache_dir())
     deadline = time.monotonic() + timeout
     try:
         _prewarm_model(

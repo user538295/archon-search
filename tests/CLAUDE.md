@@ -36,10 +36,15 @@ bash scripts/test-unlocked-deps.sh            # install + suite + docling + grap
 ```
 
 The smoke lane's server subprocesses run on a throwaway `ARCHON_SEARCH_DATA_DIR`, but `_link_model_cache`
-(`tests/smoke/conftest.py`) symlinks their `models/` at the persistent `~/.archon-search/models` — every
-cache in the tree derives from that one env var (`paths.py`), so without the link each run would
-re-download ~1.3 GB of weights and the lane's latency budgets would be network-bound. First run on a
-cold host pays that download once, into the shared cache.
+(`tests/smoke/conftest.py`) symlinks their `models/` at the fixed `~/.archon-search/models`
+(`_SHARED_MODELS_DIR`, not the shell's `ARCHON_SEARCH_DATA_DIR`) — the server's model caches derive from
+its data dir (`paths.py`), so without the link each run would re-download ~1.3 GB of weights and the
+lane's latency budgets would be network-bound. First run on a cold host pays that download once, into
+the shared cache. Exception: an exported `FASTEMBED_CACHE_PATH` relocates the fastembed weights
+(`get_fastembed_cache_dir()`, S493) and every smoke server inherits it. The root `_archon_isolated_data_dir`
+deletes it for in-process tests; `tests/_live_fastembed_cache.py` re-pins the session-resolved value for
+both real-model lanes — `tests/eval/live/` without a guard, `tests/eval/live_benchmark/` behind
+`_require_model_cache`, which skips the session when that directory lacks the benchmark models.
 
 ## PARALLEL TESTS ARE MANDATORY
 

@@ -3,12 +3,21 @@
 Shadows the parent conftest's autouse fixture so that
 ARCHON_SEARCH_EVAL_BACKENDS is never set to "1" for tests in this
 directory.  Live tests must use real model backends.
+
+Imports the shared fastembed-cache fixtures (``tests/_live_fastembed_cache.py``) so the
+real models load from the session's cache — the one CI restores — not from the root
+conftest's empty per-worker data dir (S493).
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
+
+from tests._live_fastembed_cache import (  # noqa: F401 — fixtures, used by name
+    _pin_live_fastembed_cache,
+    live_fastembed_cache_dir,
+)
 
 
 @pytest.fixture(autouse=True)

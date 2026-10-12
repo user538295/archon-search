@@ -50,7 +50,8 @@ These are the rules that are not discoverable by reading one file. Everything el
 - **`GET /openapi.json` is the authoritative HTTP contract.** Keep it in sync; record breaking REST/MCP
   changes in `BREAKING.md`.
 - **`paths.py` `get_data_dir()`** (env `ARCHON_SEARCH_DATA_DIR`, default `~/.archon-search/`) is the single
-  source every path accessor derives from — one env var relocates the whole runtime tree.
+  source every path accessor derives from — one env var relocates the whole runtime tree. Exception:
+  fastembed weights honour `FASTEMBED_CACHE_PATH` via `get_fastembed_cache_dir()` (S493), else `<data>/models`.
 - **Lifespan startup never awaits slow work.** uvicorn binds the listening socket only after lifespan
   startup returns, so anything awaited there keeps the port closed (clients get `ConnectError`, not a
   served 503). Spawn with `asyncio.create_task` and track in `app.state._background_tasks`.

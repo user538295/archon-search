@@ -473,15 +473,48 @@ def test_prewarm_deadline_never_passed_runs_every_model(caplog):
 
 
 # ---------------------------------------------------------------------------
-# _prewarm_models — cache_dir matches runtime ModelEmbedder/ModelReranker (BE-26)
+# _prewarm_models — cache_dir matches runtime ModelEmbedder/ModelReranker (BE-26, S493)
 # ---------------------------------------------------------------------------
 
-def test_archon_search_data_dir_relocates_embedder_and_reranker_caches(tmp_path, monkeypatch):
-    """Redirecting ARCHON_SEARCH_DATA_DIR relocates get_models_dir() (and thus every cache_dir
-    derived from it — see test_embedder.py / test_reranker.py / the prewarm tests above)."""
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+def _s493_prewarm_download_cache_dirs() -> dict[str, str]:
+    """The ``cache_dir`` pre-warm's two download steps (``lazy_load=True``) hand to
+    fastembed's TextEmbedding and TextCrossEncoder — asserted equal to the one the
+    runtime load step that follows each download reads, so the load finds the weights."""
+    mock_te, mock_tce = _fastembed_cls(), _fastembed_cls()
+    with patch.dict(sys.modules, _fastembed_modules(mock_te, mock_tce)):
+        _prewarm_models(_cfg_for(ENGLISH_PROFILES["minimal"]), _TIMEOUT_S)
+    cache_dirs: dict[str, str] = {}
+    for name, cls in (("embedder", mock_te), ("reranker", mock_tce)):
+        download, load = cls.call_args_list
+        assert download.kwargs["lazy_load"] is True
+        assert download.kwargs["cache_dir"] == load.kwargs["cache_dir"], name
+        cache_dirs[name] = download.kwargs["cache_dir"]
+    return cache_dirs
 
-    assert str(get_models_dir()) == str(tmp_path / "models")
+
+def test_s493_fastembed_cache_path_relocates_prewarm_downloads(tmp_path, monkeypatch):
+    """S493: with FASTEMBED_CACHE_PATH set to a directory OUTSIDE ARCHON_SEARCH_DATA_DIR,
+    the wizard's pre-warm downloads both models into it, where the service later
+    reads them (UserManual/30_configuration.md, 150_multi_instance_setup.md)."""
+    data_dir = tmp_path / "archon-data"
+    fastembed_cache = tmp_path / "fastembed-cache"
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("FASTEMBED_CACHE_PATH", str(fastembed_cache))
+
+    assert _s493_prewarm_download_cache_dirs() == {
+        "embedder": str(fastembed_cache),
+        "reranker": str(fastembed_cache),
+    }
+
+
+def test_archon_search_data_dir_relocates_embedder_and_reranker_caches(tmp_path, monkeypatch):
+    """BE-26 (S493 presence anchor): with FASTEMBED_CACHE_PATH unset, redirecting
+    ARCHON_SEARCH_DATA_DIR relocates pre-warm's downloads into its ``models/`` dir."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("FASTEMBED_CACHE_PATH", raising=False)
+
+    expected = str(tmp_path / "models")
+    assert _s493_prewarm_download_cache_dirs() == {"embedder": expected, "reranker": expected}
 
 
 # ---------------------------------------------------------------------------

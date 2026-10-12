@@ -46,6 +46,11 @@ _TEARDOWN_TIMEOUT_S: float = 10.0
 
 _TERMINAL_JOB_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
 
+# The shell's FASTEMBED_CACHE_PATH, captured at import — before the root conftest's
+# function-scoped `_archon_isolated_data_dir` deletes it — so servers a test starts itself
+# (test_s04_health_after_stop.py) inherit it exactly like the session-scoped ones (S493).
+_SHELL_FASTEMBED_CACHE_PATH: str | None = os.environ.get("FASTEMBED_CACHE_PATH")
+
 # Corpus files: each must contain real prose so ingestion produces > 0 chunks
 # (empty files produce 0 chunks and mask the bug under test — see plan Data section).
 _CORPUS_DOCS: dict[str, str] = {
@@ -105,11 +110,13 @@ def _subprocess_env(*, port: int, data_dir: Path, api_key: str) -> dict[str, str
         # would make the smoke server fail to start on that machine.
         "ARCHON_SEARCH_CONFIG": str(data_dir / "archon-search.toml"),
         "ARCHON_SEARCH_API_KEY": api_key,
-        # Inherit FASTEMBED_CACHE_PATH from the process env (e.g. Docker bind-mount)
-        # but fall back to the default home-dir path when not set.
-        "FASTEMBED_CACHE_PATH": os.environ.get("FASTEMBED_CACHE_PATH", str(Path.home() / ".cache/fastembed")),
         "PYTEST_ADDOPTS": "",
     }
+    # FASTEMBED_CACHE_PATH is never forced: unset, fastembed weights load through
+    # the `_link_model_cache` link; an explicit shell export (the Docker test runner's
+    # bind-mounted /cache/fastembed) is passed on and relocates them (S493).
+    if _SHELL_FASTEMBED_CACHE_PATH is not None:
+        env["FASTEMBED_CACHE_PATH"] = _SHELL_FASTEMBED_CACHE_PATH
     # An operator's exported ARCHON_SEARCH_HOST would otherwise leak in via
     # **os.environ above and change which interface serve mode binds to,
     # breaking the 0.0.0.0-default assumption the S15 bind-collision test
@@ -253,10 +260,10 @@ def _link_model_cache(data_dir: Path) -> None:
     """Symlink ``{data_dir}/models`` at the persistent shared model cache.
 
     Every model cache in the tree derives from ``ARCHON_SEARCH_DATA_DIR`` —
-    ``get_models_dir()`` (fastembed embedder + cross-encoder reranker) and
-    ``get_graph_models_dir()`` (pinned GLiNER checkpoint) both hang off
-    ``<data>/models`` (``archon_search/paths.py``), with no per-cache env
-    override by design. These fixtures point that env var at a throwaway
+    ``get_fastembed_cache_dir()`` (fastembed embedder + cross-encoder reranker,
+    unless ``FASTEMBED_CACHE_PATH`` is set) and ``get_graph_models_dir()``
+    (pinned GLiNER checkpoint) both hang off ``<data>/models``
+    (``archon_search/paths.py``). These fixtures point that env var at a throwaway
     ``tmp_path_factory`` dir, so without this link every smoke run re-downloads
     ~1.3 GB of weights from HuggingFace — which made this suite's latency
     budgets network-bound rather than compute-bound (a cold cross-encoder

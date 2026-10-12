@@ -10,7 +10,7 @@ from archon_search._diagnostics import ScoredSearchCandidate
 from archon_search._types import SearchResult
 from archon_search.observability import record_stage
 from archon_search.onnx_providers import select_onnx_providers
-from archon_search.paths import get_models_dir
+from archon_search.paths import get_fastembed_cache_dir
 
 # Trivial (query, document) pair used only to force a cold backend to load.
 _WARMUP_PAIR = ("warmup", "warmup")
@@ -54,7 +54,7 @@ class ModelReranker:
                     self._model = TextCrossEncoder(
                         self._model_name,
                         providers=select_onnx_providers(self._providers).providers,
-                        cache_dir=str(get_models_dir()),
+                        cache_dir=str(get_fastembed_cache_dir()),
                     )
         # TextCrossEncoder.rerank(query, documents) → Iterable[float]
         # All pairs share the same query (pairs[0][0])
