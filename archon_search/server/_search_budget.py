@@ -26,19 +26,20 @@ SEARCH_TIMEOUT_SECONDS = 30.0
 # Upper bound on how long one search request waits for the cross-encoder to finish
 # its cold ONNX build before answering without reranking (S286/S288).  Deliberately
 # short, not a client-read-timeout budget: a request already this deep into a cold
-# path means an ingest job upstream (bounded by routes_jobs._INGEST_WARMUP_WAIT_SECONDS)
-# or the lifespan warm-up already spent up to their own ceilings on this same build
-# and it is still not done, so a further multi-second wait here buys little.  The
-# build keeps running in its worker thread regardless — this request degrades to the
-# fused vector+FTS ranking and later requests get the full reranked pipeline back.
+# path means an ingest or import job upstream (bounded by
+# _job_warmup.JOB_WARMUP_WAIT_SECONDS) or the lifespan warm-up already spent up to
+# their own ceilings on this same build and it is still not done, so a further
+# multi-second wait here buys little.  The build keeps running in its worker thread
+# regardless — this request degrades to the fused vector+FTS ranking and later
+# requests get the full reranked pipeline back.
 RERANKER_WARMUP_WAIT_SECONDS = 0.5
 
 # Upper bound on how long one search request waits for the query embedder to finish
 # its cold ONNX build before answering FTS-only (S290).  Same reasoning as the
 # reranker bound above — a request this deep into a cold path is waiting behind a
-# lifespan or ingest warm-up that has already spent its own ceiling on this build —
-# and the same outcome: the build keeps running in its worker thread, this request
-# degrades rather than parking the connection past the client's read timeout.
+# lifespan, ingest or import warm-up that has already spent its own ceiling on this
+# build — and the same outcome: the build keeps running in its worker thread, this
+# request degrades rather than parking the connection past the client's read timeout.
 EMBEDDER_WARMUP_WAIT_SECONDS = 0.5
 
 _T = TypeVar("_T")

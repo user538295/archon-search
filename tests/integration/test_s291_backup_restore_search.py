@@ -17,48 +17,22 @@ Run with:
 """
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import pytest
 
 import archon_search.jobs.backup_loop as _backup_loop_module
 import archon_search.jobs.scheduler as _scheduler_module
-from archon_search.types import JobStatus
-from tests.integration.conftest import ingest_file_via_path, make_real_app, search
+from tests.integration.conftest import ingest_file_via_path, make_real_app, search, wait_for_job_done
 
 pytestmark = pytest.mark.integration
 
-_POLL_TIMEOUT_S: float = 30.0
-_POLL_INTERVAL_S: float = 0.1
 _COLLECTION = "s291-offsite-restore"
 _QUERY = "hybrid retrieval reranker"
 
 
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
-
-
-def _poll_job_done(job_store, job_id: str, *, what: str) -> None:
-    """Poll ``job_store`` until ``job_id`` is terminal; fail unless it is DONE."""
-    terminal = {
-        JobStatus.DONE,
-        JobStatus.FAILED,
-        JobStatus.FAILED_EXPIRED,
-        JobStatus.CANCELLED,
-    }
-    deadline = time.monotonic() + _POLL_TIMEOUT_S
-    while time.monotonic() < deadline:
-        job = job_store.get(job_id)
-        if job is not None and job.status in terminal:
-            if job.status != JobStatus.DONE:
-                pytest.fail(
-                    f"{what} job {job_id} ended in {job.status}: "
-                    f"{getattr(job, 'error', None)}"
-                )
-            return
-        time.sleep(_POLL_INTERVAL_S)
-    pytest.fail(f"{what} job {job_id} did not reach a terminal status in {_POLL_TIMEOUT_S}s")
 
 
 def test_s291_offsite_backup_archive_can_be_restored_and_searched(
@@ -89,7 +63,6 @@ def test_s291_offsite_backup_archive_can_be_restored_and_searched(
     )
 
     with make_real_app(tmp_path, monkeypatch, backup_enabled=True) as (client, cfg, api_key):
-        job_store = client.app.state.job_store
         # Off-host archive root, as documented for [backup].output_dir.
         cfg.backup.output_dir = str(offsite_root)
 
@@ -104,7 +77,7 @@ def test_s291_offsite_backup_archive_can_be_restored_and_searched(
         assert trigger.status_code == 202, f"{trigger.status_code}: {trigger.text}"
         queued = trigger.json()["queued"]
         assert queued, f"no backup job queued: {trigger.json()}"
-        _poll_job_done(job_store, queued[0]["job_id"], what="backup")
+        wait_for_job_done(client, queued[0]["job_id"], what="backup")
 
         archives = list(offsite_root.rglob("*.tar.gz"))
         assert len(archives) == 1, f"expected one archive under {offsite_root}, got {archives}"
@@ -125,7 +98,7 @@ def test_s291_offsite_backup_archive_can_be_restored_and_searched(
             f"POST /collections/{_COLLECTION}/import returned "
             f"{restore.status_code}: {restore.text} (archive={archive})"
         )
-        _poll_job_done(job_store, restore.json()["job_id"], what="import")
+        wait_for_job_done(client, restore.json()["job_id"], what="import")
 
         # --- search again ---
         restored = search(client, _COLLECTION, _QUERY, api_key=api_key)

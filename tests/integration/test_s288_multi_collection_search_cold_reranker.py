@@ -54,7 +54,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("s288")]
 #: fan-out search lands while the build is still in flight.
 _COLD_CROSS_ENCODER_LOAD_SECONDS = 6.0
 
-#: ``routes_jobs._INGEST_WARMUP_WAIT_SECONDS`` rebound for the test, keeping the
+#: ``_job_warmup.JOB_WARMUP_WAIT_SECONDS`` rebound for the test, keeping the
 #: production relationship (ceiling < build) at a scale a test suite can pay.
 _REBOUND_INGEST_WARMUP_CEILING_SECONDS = 0.5
 
@@ -105,7 +105,7 @@ def test_s288_multi_collection_search_answers_while_reranker_is_cold(tmp_path, m
     data_dir.mkdir()
 
     monkeypatch.setattr(
-        "archon_search.server.routes_jobs._INGEST_WARMUP_WAIT_SECONDS",
+        "archon_search.server._job_warmup.JOB_WARMUP_WAIT_SECONDS",
         _REBOUND_INGEST_WARMUP_CEILING_SECONDS,
     )
     # Before the app starts: the warm-up that runs at startup is the one that must

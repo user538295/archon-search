@@ -6,7 +6,6 @@ import logging
 import time
 from contextlib import ExitStack
 from functools import partial
-from pathlib import Path
 from time import monotonic
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
@@ -59,7 +58,13 @@ from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 from archon_search.telemetry.writer import TelemetryWriter
 
 from archon_search.embedder_cache import EMBEDDER_NOT_READY_CODE, EMBEDDER_NOT_READY_DETAIL, EmbedderCache, EmbedderNotReadyError
-from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION, ImportArchiveReader
+from archon_search.jobs.export_archive import (
+    EXPORT_SCHEMA_VERSION,
+    INVALID_ARCHIVE_DETAIL,
+    ImportArchiveReader,
+    manifest_error_detail,
+    quote_archive_value,
+)
 from archon_search.jobs.model import job_to_dict
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
 from archon_search.paths import get_data_dir
@@ -1607,24 +1612,26 @@ def create_app(
                 error=f"unsafe archive: {exc.reason}", code="path_unsafe"
             )
         except Exception as exc:  # noqa: BLE001
-            return McpErrorResponse(
-                error=f"invalid archive: {exc}", code="validation_error"
-            )
+            # tarfile/gzip error text can reflect the archive's own bytes: log it, send a fixed detail.
+            logger.warning("import archive %s could not be opened: %s", archive_path, exc, exc_info=exc)
+            return McpErrorResponse(error=INVALID_ARCHIVE_DETAIL, code="validation_error")
 
         try:
             reader = ImportArchiveReader(archive_path)
             manifest = reader.read_manifest()
         except (ValueError, PathUnsafeError) as exc:
             return McpErrorResponse(
-                error=f"invalid manifest: {exc}", code="validation_error"
+                error=f"invalid manifest: {manifest_error_detail(exc, archive_path)}",
+                code="validation_error",
             )
 
+        # The mismatch texts below match POST /collections/{name}/import's `detail` verbatim.
         archive_model = manifest.get("active_embedding_model", "")
         server_model = config.embedding_model if config is not None else ""
         if archive_model != server_model:
             return McpErrorResponse(
                 error=(
-                    f"embedding model mismatch: archive has {archive_model!r}, "
+                    f"archive uses model {quote_archive_value(archive_model)}; "
                     f"server is configured with {server_model!r}"
                 ),
                 code="embedding_model_mismatch",
@@ -1641,9 +1648,9 @@ def create_app(
         if not ignore_schema_version and archive_schema != EXPORT_SCHEMA_VERSION:
             return McpErrorResponse(
                 error=(
-                    f"archive has schema_version={archive_schema!r}; "
+                    f"archive has schema_version={quote_archive_value(archive_schema)}; "
                     f"server expects {EXPORT_SCHEMA_VERSION!r}; "
-                    "use ignore_schema_version=True to bypass"
+                    "use ignore_schema_version=true to bypass"
                 ),
                 code="schema_version_mismatch",
             )

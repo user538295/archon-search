@@ -286,6 +286,31 @@ def ingest_file_via_path(
     pytest.fail(f"ingest did not complete in {timeout_s}s (job_id={job_id})")
 
 
+_JOB_POLL_INTERVAL_S = 0.05
+
+
+def wait_for_job_done(client: TestClient, job_id: str, *, what: str, timeout_s: float = 30.0) -> Any:
+    """Poll the app's job store until *job_id* is terminal; fail unless it is DONE. Returns the job.
+
+    Reads ``app.state.job_store`` directly rather than ``GET /jobs/{id}``: the test needs
+    the job object (``result``, ``error``) and the store is what that route serves, so
+    polling it skips per-poll auth and serialization without changing what is observed.
+    """
+    from archon_search.server.routes_jobs import _TERMINAL_STATUSES
+    from archon_search.types import JobStatus
+
+    job_store = client.app.state.job_store
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        job = job_store.get(job_id)
+        if job is not None and job.status in _TERMINAL_STATUSES:
+            if job.status != JobStatus.DONE:
+                pytest.fail(f"{what} job {job_id} ended in {job.status}: {job.error}")
+            return job
+        time.sleep(_JOB_POLL_INTERVAL_S)
+    pytest.fail(f"{what} job {job_id} did not reach a terminal status in {timeout_s}s")
+
+
 def search(
     client: TestClient,
     col: str,
@@ -315,8 +340,6 @@ async def make_real_pipeline(tmp_path, monkeypatch):
     most likely failure since ``SearchStore`` raises ``RuntimeError("not
     connected")`` without it.
     """
-    from unittest.mock import MagicMock
-
     from archon_search.chunker import DocumentChunker
     from archon_search.embedder import Embedder
     from archon_search.parser import DocumentParser

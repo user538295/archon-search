@@ -100,10 +100,12 @@ def _make_collection_meta(
     )
 
 
-def _make_valid_tar(tmp_path: Path, embedding_model: str = "BAAI/bge-small-en-v1.5") -> Path:
+def _make_valid_tar(
+    tmp_path: Path, embedding_model: str = "BAAI/bge-small-en-v1.5", schema_version: object = 1
+) -> Path:
     """Create a minimal valid .tar.gz archive with manifest.json and documents.jsonl."""
     manifest = {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "collection": "my-col",
         "exported_at": "2024-01-01T00:00:00+00:00",
         "doc_count": 0,
@@ -291,6 +293,125 @@ async def test_mcp_import_invalid_on_error(tmp_path: Path) -> None:
     assert isinstance(result, dict)
     assert "error" in result
     assert result.get("code") == "validation_error"
+
+
+# ---------------------------------------------------------------------------
+# import_collection archive/manifest errors carry only text archon-search builds
+# ---------------------------------------------------------------------------
+
+
+async def _import_tool_result(tmp_path: Path, archive_path: Path) -> dict[str, Any]:
+    app = _make_mcp_app(
+        _make_pipeline(collection_meta=None), config=_make_config(), job_store=_make_job_store(tmp_path)
+    )
+    with patch("archon_search.server.mcp.get_data_dir", return_value=tmp_path):
+        return await app.tools["import_collection"](collection="new-col", path=str(archive_path))
+
+
+@pytest.mark.asyncio
+async def test_mcp_import_corrupt_archive_sends_sanitized_error(tmp_path: Path) -> None:
+    """tarfile/gzip error text (derived from the archive's bytes) never reaches the client."""
+    from archon_search.jobs.export_archive import INVALID_ARCHIVE_DETAIL
+
+    corrupt = tmp_path / "corrupt.tar.gz"
+    corrupt.write_bytes(b"not a real gzip archive")
+
+    result = await _import_tool_result(tmp_path, corrupt)
+
+    assert result == {"error": INVALID_ARCHIVE_DETAIL, "code": "validation_error"}
+
+
+@pytest.mark.asyncio
+async def test_mcp_import_rejected_manifest_keeps_its_own_message(tmp_path: Path) -> None:
+    """A non-JSON manifest gets archon-search's wording, never the JSON parser's."""
+    archive_path = tmp_path / "bad-manifest.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as tf:
+        for name, payload in (("manifest.json", b"{not json"), ("documents.jsonl", b"")):
+            info = tarfile.TarInfo(name=name)
+            info.size = len(payload)
+            tf.addfile(info, io.BytesIO(payload))
+
+    result = await _import_tool_result(tmp_path, archive_path)
+
+    assert result == {
+        "error": "invalid manifest: manifest.json is not valid UTF-8 JSON",
+        "code": "validation_error",
+    }
+
+
+@pytest.mark.asyncio
+async def test_mcp_import_unexpected_manifest_error_sends_sanitized_error(tmp_path: Path) -> None:
+    from archon_search.jobs.export_archive import INVALID_MANIFEST_DETAIL, ImportArchiveReader
+
+    def _internal_failure(_self: ImportArchiveReader) -> dict:
+        raise ValueError("internal: /var/lib/secret/state.db is locked")
+
+    with patch.object(ImportArchiveReader, "read_manifest", _internal_failure):
+        result = await _import_tool_result(tmp_path, _make_valid_tar(tmp_path))
+
+    assert result == {"error": f"invalid manifest: {INVALID_MANIFEST_DETAIL}", "code": "validation_error"}
+
+
+@pytest.mark.asyncio
+async def test_mcp_import_deeply_nested_manifest_is_rejected_not_raised(tmp_path: Path) -> None:
+    """Nesting deep enough to make the JSON parser raise RecursionError is a refusal, not a crash."""
+    archive_path = tmp_path / "deep-manifest.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as tf:
+        for name, payload in (("manifest.json", b"[" * 100_000), ("documents.jsonl", b"")):
+            info = tarfile.TarInfo(name=name)
+            info.size = len(payload)
+            tf.addfile(info, io.BytesIO(payload))
+
+    result = await _import_tool_result(tmp_path, archive_path)
+
+    assert result == {
+        "error": "invalid manifest: manifest.json is not valid UTF-8 JSON",
+        "code": "validation_error",
+    }
+
+
+@pytest.mark.asyncio
+async def test_mcp_import_model_mismatch_truncates_archive_supplied_model(tmp_path: Path) -> None:
+    """A crafted model name is quoted truncated, in the REST route's exact wording."""
+    from archon_search.jobs.export_archive import ARCHIVE_VALUE_MAX_CHARS, quote_archive_value
+
+    crafted_model = "m" * 10_000
+    result = await _import_tool_result(tmp_path, _make_valid_tar(tmp_path, embedding_model=crafted_model))
+
+    assert result == {
+        "error": (
+            f"archive uses model {quote_archive_value(crafted_model)}; "
+            f"server is configured with {_make_config().embedding_model!r}"
+        ),
+        "code": "embedding_model_mismatch",
+    }
+    assert len(quote_archive_value(crafted_model)) == ARCHIVE_VALUE_MAX_CHARS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("crafted_schema", "quoted"),
+    [
+        (["v"] * 1_000, "['v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v'…"),
+        ({"k": "x" * 200}, "{'k': '" + "x" * 72 + "…"),
+    ],
+    ids=["long-list", "long-dict"],
+)
+async def test_mcp_import_schema_mismatch_truncates_archive_supplied_value(
+    tmp_path: Path, crafted_schema: object, quoted: str
+) -> None:
+    """A non-int schema_version is quoted truncated, in the REST route's exact wording."""
+    from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION
+
+    result = await _import_tool_result(tmp_path, _make_valid_tar(tmp_path, schema_version=crafted_schema))
+
+    assert result == {
+        "error": (
+            f"archive has schema_version={quoted}; server expects {EXPORT_SCHEMA_VERSION!r}; "
+            "use ignore_schema_version=true to bypass"
+        ),
+        "code": "schema_version_mismatch",
+    }
 
 
 # ---------------------------------------------------------------------------
