@@ -12,7 +12,7 @@ This guide covers a developer install from source. For the PyPI install path, se
 
 1. **`uv` is the only supported workflow.** Run everything through `uv sync` and `uv run`. Mixing `pip` against the same checkout will drift.
 2. **State lives under `~/.archon-search/`.** Config, API key, indexes, and logs all live there. Nothing in the repo gets mutated at runtime.
-3. **`GET /health` is the only unauthenticated endpoint.** Everything else requires a bearer token.
+3. **Only `GET /health`, `GET /ready`, `GET /docs`, `GET /openapi.json` and `GET /redoc` are unauthenticated.** Everything else requires a bearer token.
 4. **The OpenAPI document is the contract.** When in doubt, read `GET /openapi.json` (or browse `GET /docs`).
 5. **Don't bake `--no-cov` or hardcoded versions into the project.** Both are forbidden by the engineering constraints (see `Architecture/010_engineering_principles_and_constraints.md`).
 
@@ -90,7 +90,9 @@ uv run archon-search install --profile minimal --non-interactive --skip-preload
 curl http://127.0.0.1:8765/health
 ```
 
-`GET /health` is unauthenticated. Every other endpoint requires `Authorization: Bearer <key>`.
+`GET /health`, `GET /ready`, `GET /docs`, `GET /openapi.json` and `GET /redoc` are unauthenticated. Every other endpoint requires `Authorization: Bearer <key>`.
+
+`/health` answers `200` as soon as the process is up, but `/ready` answers `503` until storage is connected, the startup model warm-up finished and the startup sync finished — poll `/ready` until it answers `200` before sending traffic.
 
 Interactive API explorer:
 
