@@ -1,7 +1,7 @@
 **Purpose**: Define what `archon-search` returns when things go wrong, on both REST and MCP, and tell clients what to retry vs. surface as failure.
 **Audience**: Engineers building clients that must behave correctly under partial outage, slow ingest, network blips, and auth churn.
 **Status**: Draft
-**Last reviewed**: 2026-05-20 / **Next review**: 2027-05-20
+**Last reviewed**: 2026-10-12 / **Next review**: 2027-10-12
 
 # Error Handling
 
@@ -86,16 +86,34 @@ MCP tools never raise out-of-band on application errors. They return:
 {"error": "human-readable message", "code": "internal_error"}
 ```
 
-Verified `code` values today (`mcp.py`):
+Every `code` value `mcp.py` returns today (grep `code=` in `archon_search/server/mcp.py`):
 
 | `code` | Where | Meaning |
 | --- | --- | --- |
-| `internal_error` | every tool's `except Exception` branch | Unhandled server-side failure. Treat like REST `500`. |
-| `not_found` | `get_collection_meta` when the name is unknown | Treat like REST `404`. |
-| `path_unsafe` | `ingest_file` / `ingest_directory` when `path` fails safety validation; `error` is an LLM-readable phrase (e.g. `"path is unsafe: the path contains a '..' segment — use an absolute path without traversal"`) | Treat like REST `400`. Use an absolute path with no `..` segments. |
-| `store_busy` | `ingest_file` / `ingest_directory` when a reindex holds the per-collection lock | Treat like REST `503`. Retry after a short wait; ingest to a different collection is unaffected. |
+| `internal_error` | the catch-all `except Exception` of the search, ingest, collection, document, and graph tools; `export_collection` / `import_collection` without a job store; `create_key` / `rotate_key` write failures. `export_collection`, `import_collection`, `list_keys`, `revoke_key`, and `rotate_key` have no catch-all | Unhandled server-side failure. Treat like REST `500`. |
+| `schema_validation_error` | the 11 schema-validated tools, when a success payload fails its Pydantic schema | Server-side contract drift. Treat like REST `500`; report it. |
+| `validation_error` | `search`, `search_with_context`, `explain`, `update_collection`, `import_collection`, `get_graph_cross_collection`, `graph_impact`, `create_key`, `list_keys`, `rotate_key` — an invalid argument (bad filter, too many `collections`, `rerank=false` across several `collections` on `explain`, a malformed archive, …) | Treat like REST `422`. Fix the arguments; do not retry unchanged. |
+| `invalid_parameter` | `ingest_file` / `ingest_directory` — `chunk_ttl_seconds` or `chunk_scopes` out of range | Treat like REST `422`. |
+| `invalid_scope_filter` | `search`, `search_with_context`, `explain` — malformed `scope_filter` pattern | Treat like REST `400`. |
+| `invalid_graph_mode` | `search`, `explain` — unknown `graph_mode` value | Treat like REST `422`. |
+| `scope_filter_graph_mode_incompatible` | `search`, `explain` — `scope_filter` combined with a `graph_mode` | Treat like REST `422`. |
+| `graph_mode_not_supported` | `search_with_context` — any non-null `graph_mode` | Use the `search` tool for graph modes. |
+| `graph_mode_multi_collection_unsupported` | `explain` — `graph_mode` with `collections` | Pin one `collection`. |
+| `graph_disabled` | `search`, `explain`, `get_graph`, `get_graph_cross_collection`, `graph_impact` when `[graph] enabled = false` | Enable the graph subsystem or drop `graph_mode`. |
+| `graph_communities_not_built` | `search`, `explain` — `graph_mode="local"` or `"global"` before the collection's communities are built | Rebuild communities, then retry. |
+| `not_found` | an unknown collection (`search`, `search_with_context`, `explain`, `get_collection_meta`, `update_collection`, `export_collection`, the graph tools), archive (`import_collection`), or key (`revoke_key`) | Treat like REST `404`. |
+| `forbidden` | `delete_document` when `namespace` differs from the caller's authenticated namespace | Treat like REST `403`. |
+| `conflict` | `update_collection` while the collection's reindex job is pending or running; `rotate_key` while `ARCHON_SEARCH_API_KEY` is set | Treat like REST `409`. Retry after the reindex finishes, or unset the env var. |
+| `collection_exists` | `import_collection` into an existing collection without `force_overwrite=True` | Pass `force_overwrite=True` or pick another name. |
+| `embedding_model_mismatch` | `import_collection` when the archive's embedding model differs from the server's | Align the models before importing. |
+| `schema_version_mismatch` | `import_collection` when the archive's export schema version differs | Pass `ignore_schema_version=True` only if you accept the risk. |
+| `path_unsafe` | `ingest_file` / `ingest_directory` / `export_collection` / `import_collection` when `path` fails safety validation; `error` is an LLM-readable phrase (e.g. `"path is unsafe: the path contains a '..' segment — use an absolute path without traversal"`) | Treat like REST `400`. Use an absolute path with no `..` segments. |
+| `store_busy` | `ingest_file` / `ingest_directory` / `delete_document` when a reindex holds the per-collection lock | Treat like REST `503`. Retry after a short wait; other collections are unaffected. |
+| `metadata_store_error` | `search`, `explain` when collection metadata cannot be read | Treat like REST `503`. Retry with backoff. |
+| `embedder_not_ready` | `search`, `search_with_context`, `explain`, `ingest_file`, `ingest_directory` while the collection's embedding model is still loading | Treat like REST `503`. Retry with backoff. |
+| `timeout` | `search` when the ~30 s search budget runs out or a multi-collection fan-out times out; `explain` when its fan-out times out | Treat like REST `504`. |
 
-The `McpErrorResponse` `TypedDict` is declared at `mcp.py:25`. Because MCP tools are not yet Pydantic-validated (`API-4` / roadmap C7 #Unverified), do not assume *additional* fields will never appear in a success payload — schema-tolerant parsing is safer than strict matching.
+The `McpErrorResponse` `TypedDict` is declared in `mcp.py`. Since C7 (`API-4` resolved) the 11 search, ingest, collection, and document tools validate success payloads through `extra='forbid'` Pydantic schemas, but the export/import, graph, and key-management tools return plain dicts — schema-tolerant parsing is safer than strict matching.
 
 Auth and transport errors at `/mcp` itself surface as standard HTTP responses from the wrapping ASGI middleware:
 

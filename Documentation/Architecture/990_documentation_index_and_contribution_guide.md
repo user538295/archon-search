@@ -1,7 +1,7 @@
 Purpose: Single entry point to all `archon-search` documentation, plus the rules for adding and maintaining docs.
 Audience: Medior engineers contributing to or navigating the `archon-search` documentation set.
 Status: Draft
-Last reviewed: 2026-07-29 / Next review: 2026-08-31
+Last reviewed: 2026-10-12 / Next review: 2027-10-12
 
 # Documentation Index and Contribution Guide
 
@@ -86,7 +86,7 @@ Integration-side documentation for engineers consuming `archon-search` from anot
 | [`DeveloperGuide/02_authentication.md`](../DeveloperGuide/02_authentication.md) | API-key resolution, Bearer header, per-namespace keys. |
 | [`DeveloperGuide/03_rest_client_python.md`](../DeveloperGuide/03_rest_client_python.md) | `httpx` examples for search, collections, jobs, route, health. |
 | [`DeveloperGuide/04_rest_client_typescript.md`](../DeveloperGuide/04_rest_client_typescript.md) | Same flows in TypeScript with hand-written types matching `schemas.py`. |
-| [`DeveloperGuide/05_mcp_integration.md`](../DeveloperGuide/05_mcp_integration.md) | The 17 MCP tools (D7 added 4 key-management tools), Claude Code wiring, SDK usage. |
+| [`DeveloperGuide/05_mcp_integration.md`](../DeveloperGuide/05_mcp_integration.md) | The MCP tool set and when each registers, the search/ingest/collection/document tool table (the rest are in `600`), Claude Code wiring, SDK usage. |
 | [`DeveloperGuide/06_error_handling.md`](../DeveloperGuide/06_error_handling.md) | REST status codes, MCP `McpErrorResponse`, retry guidance, 500/504 on pipeline failure (`CON-5` resolved in A3). |
 | [`DeveloperGuide/07_versioning_and_breaking_changes.md`](../DeveloperGuide/07_versioning_and_breaking_changes.md) | CalVer scheme, `BREAKING.md` reading guide, client pinning. |
 
