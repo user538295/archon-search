@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — `GET /status`: `model_validation` is always an object, never `null` while validation is pending (2026-10-12)
+
+**Surface**: `GET /status` → `model_validation` (`StatusResponse`, `ModelValidationStatus`); CLI `archon-search maintenance status` (text and `--json` output).
+
+**What changed:** While the background model-validation task is still running, `model_validation` was `null`. It is now the documented sub-object with every probe field unknown: `{"embedder_ok": null, "reranker_ok": null, "llama_cpp_ok": null, "provider_warnings": [], "validated_at": null}` (`archon_search/server/routes_status.py`, `_build_model_validation_status`; S488), matching `Documentation/OperatorGuide/20_monitoring_and_alerts.md` ("unknown is distinct from failed"). The OpenAPI schema is unchanged (`ModelValidationStatus | null`, kept nullable like the sibling `search` sub-object); only the emitted value changed. Completed results are emitted exactly as before. CLI side effect: `archon-search maintenance status` now prints the "Model validation" block with `pending` values while validation runs (it was omitted), and `archon-search maintenance status --json` includes `model_validation` (`archon_search/cli/maintenance_cmd.py`).
+
+**Migration**: clients that treated `model_validation == null` as "pending" must check `model_validation.validated_at == null` instead. A poll loop that waits for `model_validation` to become non-null now exits immediately on the pending object; wait for `validated_at` to become non-null.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — Docker `:gpu` image: CUDA 13 base, NVIDIA driver ≥ 580 required; no system CUDA 12.1 / cuDNN 8 libraries (2026-10-10)
 
 **Surface**: the `ghcr.io/user538295/archon-search:gpu` and `:<version>-gpu` images — host driver requirement under `docker run --gpus`, and the base image that images built `FROM` them inherit.

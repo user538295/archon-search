@@ -2,17 +2,22 @@
 
 After server startup, the background validation task (BE-4) populates
 ``app.state.model_validation``. The /status route (BE-8) mirrors it into the
-``model_validation`` sub-object. This test boots a real app, polls GET /status
-until ``model_validation`` is non-null, and asserts the ``embedder_ok`` field is
-present — proving the route reads live background-task state end-to-end.
+``model_validation`` sub-object, which is always an object since S488 — the
+all-null pending object until validation completes. These tests boot a real app,
+assert that pending object while validation is held, and poll GET /status until
+``validated_at`` is set — proving the route reads live background-task state
+end-to-end.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 import time
 
 import pytest
 
+from archon_search.model_validation import ModelValidationResult
 from tests.integration.conftest import make_real_app
 from tests.test_onnx_provider_fallback import (
     _UNAVAILABLE_PROVIDER_CASES,
@@ -24,10 +29,13 @@ pytestmark = pytest.mark.integration
 # Upper bound for the background validation task to publish its result under stub models.
 _POLL_DEADLINE_SECONDS = 5.0
 _POLL_INTERVAL_SECONDS = 0.05
+# Backstop for a stuck hold; lifespan shutdown cancels the task anyway. Must exceed the 30s
+# `_await_startup_sync` timeout in tests/integration/conftest.py, which runs before the GET.
+_HOLD_DEADLINE_SECONDS = 60.0
 
 
 def test_status_endpoint_includes_model_validation_after_startup(tmp_path, monkeypatch) -> None:
-    """Poll GET /status until model_validation is populated; assert embedder_ok present."""
+    """Poll GET /status until model_validation completes (``validated_at`` set); assert the contract fields."""
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
 
@@ -37,17 +45,58 @@ def test_status_endpoint_includes_model_validation_after_startup(tmp_path, monke
             resp = client.get("/status", headers=headers)
             assert resp.status_code == 200, resp.text
             mv = resp.json()["model_validation"]
-            if mv is not None:
+            assert isinstance(mv, dict), f"model_validation must always be an object (S488); got {mv!r}"
+            if mv["validated_at"] is not None:
                 break
             time.sleep(_POLL_INTERVAL_SECONDS)
 
-        assert mv is not None, "model_validation never populated within deadline"
-        # All four contract fields survive the real lifespan → route round-trip.
+        assert mv["validated_at"] is not None, f"model_validation never completed within deadline: {mv!r}"
+        # All five contract fields survive the real lifespan → route round-trip.
         assert "embedder_ok" in mv
         assert "reranker_ok" in mv
+        assert "llama_cpp_ok" in mv
         assert "provider_warnings" in mv
         assert "validated_at" in mv
-        assert mv["validated_at"] is not None
+
+
+def test_status_model_validation_is_pending_object_while_validation_runs_s488(
+    tmp_path, monkeypatch
+) -> None:
+    """S488: hold the real lifespan's background validation pending and assert GET /status
+    emits the all-null pending object, not ``null``. The patched coroutine polls a
+    ``threading.Event`` (the TestClient runs the app on its own loop) instead of running the
+    real validation. Its normal exit is lifespan shutdown cancellation: ``server/app.py``
+    cancels every ``app.state._background_tasks`` entry on teardown. Setting ``release``
+    with the bare ``ModelValidationResult()`` return (for a poll that sees ``release`` before
+    that cancel lands) and the ``_HOLD_DEADLINE_SECONDS`` bound are only backstops."""
+    import archon_search.server.app as app_module
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    async def _held_validate(*_args, **_kwargs) -> ModelValidationResult:
+        entered.set()
+        deadline = time.monotonic() + _HOLD_DEADLINE_SECONDS
+        while not release.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+        return ModelValidationResult()
+
+    monkeypatch.setattr(app_module, "validate_models_async", _held_validate)
+    with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
+        try:
+            resp = client.get("/status", headers={"Authorization": f"Bearer {api_key}"})
+        finally:
+            release.set()
+
+    assert entered.is_set(), "patched validate_models_async never ran; the hold did not take effect"
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["model_validation"] == {
+        "embedder_ok": None,
+        "reranker_ok": None,
+        "llama_cpp_ok": None,
+        "provider_warnings": [],
+        "validated_at": None,
+    }
 
 
 def test_ready_models_transitions_from_pending_to_ok(tmp_path, monkeypatch) -> None:

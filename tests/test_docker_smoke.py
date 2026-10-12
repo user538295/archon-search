@@ -191,18 +191,19 @@ def _api(url: str, payload: dict | None = None) -> dict:
 def _wait_for_model_validation(base_url: str, timeout_s: int) -> dict:
     """Poll ``GET /status`` until the background model-validation task has run.
 
-    ``model_validation`` is ``None`` until the lifespan's background task
-    commits a result, so reading ``provider_warnings`` before that would assert
-    on an empty list for the wrong reason. ``validate_models_async`` is itself
-    bounded — ``server/app.py:616`` passes ``config.validation_timeout_seconds``
+    ``model_validation`` is the all-null pending object (``validated_at`` null)
+    until the lifespan's background task commits a result (S488), so reading
+    ``provider_warnings`` before that would assert on an empty list for the wrong
+    reason. ``validate_models_async`` is itself bounded — ``server/app.py:607``
+    passes ``config.validation_timeout_seconds``
     (default 60, ``archon_search/config.py:265``) — so ``validated_at`` is
     always eventually set.
     """
     deadline = time.monotonic() + timeout_s
     last: dict | None = None
     while time.monotonic() < deadline:
-        last = _api(f"{base_url}/status").get("model_validation")
-        if last is not None and last.get("validated_at"):
+        last = _api(f"{base_url}/status")["model_validation"]
+        if last.get("validated_at"):
             return last
         time.sleep(1)
     raise TimeoutError(

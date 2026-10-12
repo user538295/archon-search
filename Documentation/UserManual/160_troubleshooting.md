@@ -204,7 +204,7 @@ The server exits with a `ConfigError` naming `[hyde]` or `[rag_fusion]`, e.g. `[
 A background probe (`model_validation.py`) loads the embedder and reranker and records the result on `app.state.model_validation`. It never blocks startup and never raises. Surfaces:
 
 - `GET /ready` → `checks.models`: `fail` (a model could not load), `warn` (both loaded but a provider fallback warning was emitted), `ok`, or `pending`.
-- `GET /status` → `model_validation` sub-object: `embedder_ok`, `reranker_ok`, and `provider_warnings` (e.g. `validation timed out after 60s`, `validation failed unexpectedly: …`).
+- `GET /status` → `model_validation` sub-object: `embedder_ok`, `reranker_ok`, `llama_cpp_ok`, `provider_warnings` (e.g. `validation timed out after 60s`, `model validation failed unexpectedly; see server logs for details`, or `validation task failed unexpectedly` when the validation task itself crashed), and `validated_at`. While validation is pending the object is still present, with the `*_ok` flags and `validated_at` `null` and `provider_warnings` empty.
 
 1. `fail` / `embedder_ok=false` — the embedding model failed to load: check the log for download errors, disk space, and that `[database].embedding_model` names a valid model.
 2. A timeout warning — raise `[database].validation_timeout_seconds` (default 60) if first-run downloads are slow.
