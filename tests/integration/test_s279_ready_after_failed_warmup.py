@@ -4,9 +4,10 @@ The sibling repro (``test_s279_max_profile_cold_reranker.py``) pins the
 *pending* case: ``/ready`` stays 503 while the warm-up task is running.
 A *failed* warm-up never gates readiness — ``routes_ready.py`` computes::
 
-    ready_flag = storage_ok and not warmup_pending and not sync_pending
+    ready_flag = storage_ok and models_status is not CheckStatus.PENDING and not sync_pending
 
-so once warm-up lands on ``WarmupResult.FAILED`` (here: it blew its
+and a failed warm-up maps ``models_status`` to ``FAIL`` before ``model_validation`` is
+even consulted (S631) — so once warm-up lands on ``WarmupResult.FAILED`` (here: it blew its
 ``_WARMUP_TASK_TIMEOUT_SECONDS`` budget, 600 s in ``server/warmup.py``) ``/ready``
 answers 200 with ``ready: true`` and reports the failure only through
 ``checks.models: "fail"`` and a ``model warm-up failed: timed out ...`` WARNING

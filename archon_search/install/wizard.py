@@ -750,7 +750,8 @@ def _prompt_optional_features(
     print(
         "\nEager embedder loading:\n"
         "  The server always pre-loads the default embedding model and the reranker at startup,\n"
-        "  and reports /ready as 503 until that finishes — no query ever pays the cold-load cost.\n"
+        "  and /ready returns 503 until model warm-up and the background model validation finish\n"
+        "  (a failed warm-up ends the wait) — after a successful warm-up no query pays the cold-load cost.\n"
         "  This option widens that warm-up to every per-collection embedding model as well,\n"
         "  at the cost of a longer startup. Default: disabled."
     )

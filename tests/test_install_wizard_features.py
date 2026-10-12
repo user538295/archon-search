@@ -794,6 +794,17 @@ class TestPromptOptionalFeaturesExplanations:
             assert keyword in out, f"Missing explanation block for: {keyword!r}"
         assert "cross-encoder" not in out.lower()
 
+    def test_eager_load_explanation_states_ready_gate(self, capsys) -> None:
+        """S631: the eager-loading block tells the operator /ready stays 503 until model
+        warm-up and validation finish, and that a failed warm-up ends the wait."""
+        out = self._run_non_interactive(self._profile_with_reranker, capsys)
+        flattened = " ".join(out.split())  # the sentence wraps across printed lines
+        assert (
+            "/ready returns 503 until model warm-up and the background model validation "
+            "finish (a failed warm-up ends the wait) — after a successful warm-up no query "
+            "pays the cold-load cost."
+        ) in flattened
+
     def test_prompt_count_7_with_reranker(self, capsys) -> None:
         """Interactive mode with reranker profile (hyde/rag_fusion pre-answered): exactly 7 input() calls."""
         responses = iter(["n", "n", "n", "n", "n", "", ""])

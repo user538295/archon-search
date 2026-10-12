@@ -39,7 +39,10 @@ import httpx
 import pytest
 
 # --- Timing budgets (seconds) ---
-_HEALTH_READY_TIMEOUT_S: float = 90.0 if os.environ.get("ARCHON_SEARCH_CONTAINER") == "1" else 30.0
+# /ready stays 503 until model warm-up AND the background model validation finish (S631);
+# validation alone may spend ``validation_timeout_seconds`` (default 60 s) after its
+# pre-probes, so this budget must exceed it in every mode, container or not.
+_HEALTH_READY_TIMEOUT_S: float = 90.0
 _JOB_POLL_TIMEOUT_S: float = 60.0
 _POLL_INTERVAL_S: float = 0.5
 _TEARDOWN_TIMEOUT_S: float = 10.0
@@ -165,8 +168,9 @@ def _poll_health_and_ready(proc: subprocess.Popen, base_url: str) -> None:
     """Poll GET /health then GET /ready until both succeed, or raise RuntimeError.
 
     /health is auth-exempt and returns 200 unconditionally once the app is up.
-    /ready returns 503 (with a JSON body) until storage is initialised; success
-    is `response.json()["ready"] is True`.
+    /ready returns 503 (with a JSON body) until storage is initialised, the
+    models check has left ``pending`` (warm-up and model validation finished) and
+    the startup sync is done; success is `response.json()["ready"] is True`.
     """
     # Each phase gets its own full budget — otherwise a slow /health phase
     # would starve /ready of poll time within a single shared deadline.

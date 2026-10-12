@@ -83,14 +83,22 @@ multilingual = false
 # Startup model warm-up always runs; this flag only widens its SCOPE. Left false, the
 # server warms the default embedding_model above plus the reranker cross-encoder. Set
 # true, it additionally warms every distinct per-collection active_embedding_model.
-# Either way /ready answers 503 with checks.models = "pending" until warm-up finishes,
-# so no request pays the ~5-15s (much more for large models) lazy first-load cost.
+# Either way /ready answers 503 with checks.models = "pending" until warm-up and the
+# model validation below finish (a failed warm-up ends the wait), so a client that waits
+# for readiness never pays the ~5-15s (much more for large models) lazy first-load cost
+# of any model the warm-up covers.
 # Set interactively via `archon-search wizard` or with the `--eager-load / --no-eager-load` flag.
 # eager_load_embedders = false
 
 # Timeout (seconds) for the background model-validation task that runs at server startup.
 # Validation probes the configured embedding/reranker models and ONNX providers, then
 # surfaces the result in GET /status and GET /ready without blocking startup or queries.
+# /ready answers 503 with checks.models = "pending" until validation finishes. Validation
+# starts with warm-up and runs its startup probes first (3 s llama-server reachability, the
+# graph NER importability check, up to min([graph].extraction_timeout_seconds, 75 s)
+# extraction-model, each only when configured), so this timeout bounds only the last part
+# of the /ready 503 window; a timeout reports checks.models = "fail".
+# A "warn"/"fail" result is informational and never gates readiness.
 # Must be > 0; values <= 0 are rejected with a warning and fall back to the default 60.
 # validation_timeout_seconds = 60
 

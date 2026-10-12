@@ -24,7 +24,6 @@ from __future__ import annotations
 import ast
 import asyncio
 import threading
-import time
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -36,28 +35,39 @@ from click.testing import CliRunner
 from archon_search.config import SearchConfig
 from archon_search.jobs.model import JobStatus
 from archon_search.jobs.store import JobStore
-from archon_search.server.schemas import WarmupResult
+from archon_search.model_validation import ModelValidationResult
+from tests.test_app import (
+    MODELS_CHECK_SETTLE_TIMEOUT_SECONDS,
+    wait_for_models_check_to_settle,
+    wait_for_warmup,
+)
 
 pytestmark = pytest.mark.xdist_group("c1_bugs")
 
-#: Ceiling for waiting out the lifespan's model warm-up task. It runs on every
-#: startup (S279), so a test that pins ``app.state.warmup_result`` by hand has to
-#: wait for the task to settle first or the task overwrites the pinned value.
-_WARMUP_SETTLE_TIMEOUT_SECONDS = 10.0
+#: Poll interval while waiting out a lifespan background task from a test.
+_SETTLE_POLL_INTERVAL_SECONDS = 0.01
+
+#: A finished, clean model validation: ``checks.models`` reads ``ok``, so ``/ready``
+#: gates only on the condition a test varies (a pending check gates it too, S631).
+_CLEAN_MODEL_VALIDATION = ModelValidationResult(embedder_ok=True, reranker_ok=True)
 
 
-def _wait_for_warmup_to_settle(app) -> None:  # type: ignore[no-untyped-def]
-    """Block until the lifespan warm-up task has left the ``pending`` state.
+async def _await_model_validation(app) -> None:  # type: ignore[no-untyped-def]
+    """Wait (on the app's own loop) until the lifespan's background model validation
+    has stored a result — a pending ``checks.models`` holds ``/ready`` at 503 (S631).
 
-    ``TestClient`` drives the app's event loop on a portal thread, so sleeping
-    here lets the warm-up task make progress.
+    Async because its callers run inside the app's own loop, where the blocking
+    ``tests.test_app.wait_for_models_check_to_settle`` would starve the task it waits on.
     """
-    import time  # noqa: PLC0415
-
-    deadline = time.monotonic() + _WARMUP_SETTLE_TIMEOUT_SECONDS
-    while app.state.warmup_result == "pending" and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert app.state.warmup_result != "pending", "lifespan warm-up never settled"
+    try:
+        async with asyncio.timeout(MODELS_CHECK_SETTLE_TIMEOUT_SECONDS):
+            while app.state.model_validation is None:
+                await asyncio.sleep(_SETTLE_POLL_INTERVAL_SECONDS)
+    except TimeoutError:
+        raise AssertionError(
+            "model validation did not store a result within "
+            f"{MODELS_CHECK_SETTLE_TIMEOUT_SECONDS}s"
+        ) from None
 
 
 @pytest.fixture
@@ -1074,7 +1084,7 @@ async def test_ready_gates_on_startup_sync_task() -> None:
         ping = AsyncMock(return_value=True)
 
     class FakeState:
-        model_validation = None
+        model_validation = _CLEAN_MODEL_VALIDATION
         warmup_result = None
         config = cfg
         search_store = FakeStore()
@@ -1088,6 +1098,8 @@ async def test_ready_gates_on_startup_sync_task() -> None:
 
     response = await ready(FakeRequest())
     body = json.loads(response.body)
+    # Anchor: the clean validation keeps checks.models out of the gate under test.
+    assert body["checks"]["models"] == "ok"
 
     assert response.status_code == 503, (
         "/ready answered 200 while app.state._startup_sync_task was still running — "
@@ -1122,7 +1134,7 @@ async def test_ready_returns_200_when_startup_sync_task_completed() -> None:
         ping = AsyncMock(return_value=True)
 
     class FakeState:
-        model_validation = None
+        model_validation = _CLEAN_MODEL_VALIDATION
         warmup_result = None
         config = cfg
         search_store = FakeStore()
@@ -1136,6 +1148,8 @@ async def test_ready_returns_200_when_startup_sync_task_completed() -> None:
 
     response = await ready(FakeRequest())
     body = json.loads(response.body)
+    # Anchor: the clean validation keeps checks.models out of the gate under test.
+    assert body["checks"]["models"] == "ok"
 
     assert response.status_code == 200, (
         f"/ready answered {response.status_code} while the startup sync task was "
@@ -1179,7 +1193,7 @@ async def test_ready_sync_fail_when_startup_sync_failed() -> None:
         ping = AsyncMock(return_value=True)
 
     class FakeState:
-        model_validation = None
+        model_validation = _CLEAN_MODEL_VALIDATION
         warmup_result = None
         config = cfg
         search_store = FakeStore()
@@ -1194,6 +1208,8 @@ async def test_ready_sync_fail_when_startup_sync_failed() -> None:
 
     response = await ready(FakeRequest())
     body = json.loads(response.body)
+    # Anchor: the clean validation keeps checks.models out of the gate under test.
+    assert body["checks"]["models"] == "ok"
 
     assert body["checks"]["sync"] == "fail", (
         "app.state._startup_sync_failed=True must report checks.sync='fail', "
@@ -1226,7 +1242,7 @@ async def test_ready_returns_200_when_startup_sync_task_attribute_missing() -> N
         ping = AsyncMock(return_value=True)
 
     class FakeState:
-        model_validation = None
+        model_validation = _CLEAN_MODEL_VALIDATION
         warmup_result = None
         config = cfg
         search_store = FakeStore()
@@ -1240,6 +1256,8 @@ async def test_ready_returns_200_when_startup_sync_task_attribute_missing() -> N
 
     response = await ready(FakeRequest())
     body = json.loads(response.body)
+    # Anchor: the clean validation keeps checks.models out of the gate under test.
+    assert body["checks"]["models"] == "ok"
 
     assert response.status_code == 200, (
         f"/ready answered {response.status_code} with no _startup_sync_task "
@@ -1313,10 +1331,14 @@ async def test_startup_sync_with_per_collection_errors_sets_startup_sync_failed(
             sync_task = app.state._startup_sync_task
             assert sync_task is not None, "startup sync task never spawned"
             await asyncio.wait_for(sync_task, timeout=30.0)
-            # The lifespan also warms the models on every startup (S279) and a
-            # pending warm-up legitimately holds /ready at 503 — wait it out so the
-            # assertions below see the startup-sync state in isolation.
-            await asyncio.wait_for(app.state._warmup_task, timeout=30.0)
+            # The lifespan also warms (S279) and validates the models on every
+            # startup, and a pending models check legitimately holds /ready at 503
+            # (S631) — wait both out so the assertions below see the startup-sync
+            # state in isolation.
+            await asyncio.wait_for(
+                app.state._warmup_task, timeout=MODELS_CHECK_SETTLE_TIMEOUT_SECONDS
+            )
+            await _await_model_validation(app)
 
             assert app.state._startup_sync_failed is True, (
                 "a startup sync that returned per-collection errors left "
@@ -1414,10 +1436,14 @@ async def test_startup_sync_has_terminal_timeout(
                     break
                 await asyncio.sleep(0.01)
             startup_sync_failed = app.state._startup_sync_failed
-            # The lifespan also warms the models on every startup (S279) and a
-            # pending warm-up legitimately holds /ready at 503 — wait it out so the
-            # readiness assertion below sees the startup-sync state in isolation.
-            await asyncio.wait_for(app.state._warmup_task, timeout=30.0)
+            # The lifespan also warms (S279) and validates the models on every
+            # startup, and a pending models check legitimately holds /ready at 503
+            # (S631) — wait both out so the readiness assertion below sees the
+            # startup-sync state in isolation.
+            await asyncio.wait_for(
+                app.state._warmup_task, timeout=MODELS_CHECK_SETTLE_TIMEOUT_SECONDS
+            )
+            await _await_model_validation(app)
             sync_result = app.state.sync_result
 
             # /ready must never gate on this failure — 200 with checks.sync='fail'.
@@ -1638,7 +1664,8 @@ def test_status_surfaces_warmup_result(tmp_path: Path, monkeypatch: pytest.Monke
     from tests.integration.conftest import make_real_app  # noqa: PLC0415
 
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
-        _wait_for_warmup_to_settle(client.app)
+        # The lifespan warm-up (S279) would overwrite the pinned value — let it finish.
+        wait_for_warmup(client.app)
         client.app.state.warmup_result = "pending"
         resp = client.get("/status", headers={"Authorization": f"Bearer {api_key}"})
 
@@ -1662,7 +1689,8 @@ def test_status_surfaces_warmup_result_terminal_states(
     from tests.integration.conftest import make_real_app  # noqa: PLC0415
 
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, api_key):
-        _wait_for_warmup_to_settle(client.app)
+        # The lifespan warm-up (S279) would overwrite the pinned value — let it finish.
+        wait_for_warmup(client.app)
         client.app.state.warmup_result = value
         resp = client.get("/status", headers={"Authorization": f"Bearer {api_key}"})
 
@@ -1981,25 +2009,6 @@ def test_sequential_add_second_does_not_report_starting_up_when_probe_non_usable
 # ingest, unattended. See
 # Documentation/Backlog/2026-08-19-020-startup-sync-crash-loop-brief.md.
 # --------------------------------------------------------------------------- #
-def _wait_for_model_warmup(client) -> None:
-    """Block until the lifespan's background model warm-up task has settled.
-
-    ``/ready`` gates on ``checks.models``, and the warm-up deliberately runs as a
-    background task (lifespan startup never awaits slow work) — so a request
-    issued immediately after ``make_real_app`` returns can legitimately observe
-    ``models: "pending"`` and a 503. Tests that assert on some *other* readiness
-    signal must therefore let the warm-up settle first, otherwise they are
-    asserting on a race: adding one more ``await`` inside ``warmup_models`` is
-    enough to flip them.
-    """
-    deadline = time.monotonic() + 10.0
-    while time.monotonic() < deadline:
-        if getattr(client.app.state, "warmup_result", None) != WarmupResult.PENDING:
-            return
-        time.sleep(0.01)
-    raise AssertionError("model warm-up did not settle within 10s")
-
-
 def _seed_crashed_ingest_jobs_file(path: Path) -> None:
     """Write a jobs file whose ingest job is still RUNNING — an unclean death.
 
@@ -2358,7 +2367,7 @@ def test_status_surfaces_suppressed_sync_result(
     ) as (client, _cfg, api_key):
         headers = {"Authorization": f"Bearer {api_key}"}
         resp = client.get("/status", headers=headers)
-        _wait_for_model_warmup(client)
+        wait_for_models_check_to_settle(client.app)
         ready = client.get("/ready")
 
     assert resp.status_code == 200, resp.text
@@ -2390,7 +2399,7 @@ def test_ready_warns_but_stays_200_when_startup_sync_suppressed(
         monkeypatch,
         toml_content='[collections]\ncollections = ["docs"]\n',
     ) as (client, _cfg, _api_key):
-        _wait_for_model_warmup(client)
+        wait_for_models_check_to_settle(client.app)
         resp = client.get("/ready")
 
     body = resp.json()
@@ -3268,7 +3277,6 @@ async def test_start_startup_sync_job_transition_failure_does_not_orphan_queued_
     """
     from archon_search.server.app import _STARTUP_SYNC_ERROR_NEVER_STARTED  # noqa: PLC0415
     from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.store import SearchStore  # noqa: PLC0415
     from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
 
     sync_calls: list[list[str]] = []

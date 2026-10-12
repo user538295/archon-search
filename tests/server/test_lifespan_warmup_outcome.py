@@ -39,7 +39,7 @@ from archon_search.server import warmup as warmup_module
 from archon_search.server.app import create_app
 from archon_search.server.schemas import WarmupResult
 from archon_search.store import SearchStore
-from tests.test_app import wait_for_warmup
+from tests.test_app import wait_for_models_check_to_settle, wait_for_warmup
 
 _WARMUP_LOGGER = "archon_search.server.warmup"
 _FAILED_PREFIX = "model warm-up failed: "
@@ -150,6 +150,9 @@ def run_warmup(
         app = create_app(cfg, JobStore(path=tmp_path / "jobs.json"))
         with TestClient(app) as client:
             wait_for_warmup(app)
+            # The background validation is a separate task: until it stores its
+            # result checks.models reads pending and /ready answers 503 (S631).
+            wait_for_models_check_to_settle(app)
             ready = client.get("/ready")
         return WarmupRun(app=app, ready_status=ready.status_code, ready=ready.json())
 

@@ -104,8 +104,9 @@ def _wait_for_ready(url: str, timeout_s: int, container_id: str | None = None) -
     ``TimeoutError`` if the URL never responds within the budget. Uses a
     1-second sleep between attempts per the Task 4.3 spec.
 
-    A 503 is retried rather than raised: ``/ready`` answers 503 while eager
-    warm-up or the startup sync is still pending (``routes_ready.py:145``). But
+    A 503 is retried rather than raised: ``/ready`` answers 503 while model
+    warm-up, the background model validation, or the startup sync is still pending
+    (``routes_ready.ready``). But
     ``HTTPError`` is a SUBCLASS of ``URLError``, so it must be caught first to be
     recorded — otherwise a container stuck at 503 times out reporting a stale
     connection error and the real readiness body is never seen.

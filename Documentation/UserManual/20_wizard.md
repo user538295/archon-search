@@ -293,7 +293,8 @@ If you answer `y`, archon-search appends one JSON line per search request to dai
 ```
 Eager embedder loading:
   The server always pre-loads the default embedding model and the reranker at startup,
-  and reports /ready as 503 until that finishes — no query ever pays the cold-load cost.
+  and /ready returns 503 until model warm-up and the background model validation finish
+  (a failed warm-up ends the wait) — after a successful warm-up no query pays the cold-load cost.
   This option widens that warm-up to every per-collection embedding model as well,
   at the cost of a longer startup. Default: disabled.
 Also pre-load every per-collection embedding model at startup? [y/N]:
@@ -301,7 +302,7 @@ Also pre-load every per-collection embedding model at startup? [y/N]:
 
 **Default**: No.
 
-Model warm-up is **not** optional and this answer does not turn it off. On every start the server loads `[database].embedding_model` and the cross-encoder reranker in a background task, and `GET /ready` answers `503` with `checks.models: "pending"` until that finishes — so a client that waits for readiness never pays the ~5–15 s (much longer for the `max` profile's models) cold-load cost on its first search. Answering `y` only widens the *scope* of that same warm-up to every distinct per-collection `active_embedding_model`, so a collection pinned to a non-default model is warm too; the trade-off is a longer window before the server reports ready, and the models must fit within `[database].embedder_cache_size`. Recommended when collections pin their own models. Either way the answer is recorded — `[database].eager_load_embedders` is written to the config as `true` or `false`, including when you press Enter to keep the default. Only a `--non-interactive` run without `--eager-load`/`--no-eager-load` leaves the key out.
+Model warm-up is **not** optional and this answer does not turn it off. On every start the server loads `[database].embedding_model` and the cross-encoder reranker in a background task, and `GET /ready` returns `503` until model warm-up and the background model validation finish (a failed warm-up ends the wait). After a successful warm-up, a client that waits for readiness never pays the ~5–15 s (much longer for the `max` profile's models) cold-load cost on its first search; after a failed one, searches run degraded (FTS-only without the embedder, unreranked without the cross-encoder) while each retries the cold model. Answering `y` only widens the *scope* of that same warm-up to every distinct per-collection `active_embedding_model`, so a collection pinned to a non-default model is warm too; the trade-off is a longer window before the server reports ready, and the models must fit within `[database].embedder_cache_size`. Recommended when collections pin their own models. Either way the answer is recorded — `[database].eager_load_embedders` is written to the config as `true` or `false`, including when you press Enter to keep the default. Only a `--non-interactive` run without `--eager-load`/`--no-eager-load` leaves the key out.
 
 #### 5f. Routing strategy
 
@@ -601,7 +602,7 @@ All flags for the `wizard` command (verified against `archon_search/cli/install_
 | `--code / --no-code` | Not set (interactive) | Install (`--code`) or skip (`--no-code`) tree-sitter code enrichment packages. |
 | `--watch / --no-watch` | Not set (interactive) | Enable (`--watch`) or disable (`--no-watch`) the filesystem watcher. Either flag writes `[collections].watch` (`true`/`false`), skipping the interactive prompt. |
 | `--telemetry / --no-telemetry` | Not set (interactive) | Enable (`--telemetry`) or disable (`--no-telemetry`) local query telemetry. Either flag writes `[telemetry].enabled` (`true`/`false`), skipping the interactive prompt. |
-| `--eager-load / --no-eager-load` | Not set (interactive) | Widen startup warm-up — which always covers the default embedder and the reranker, with `/ready` held at `503` until it finishes — to every per-collection embedding model (`--eager-load`), or keep it at the default embedder and reranker only (`--no-eager-load`). Either flag writes `[database].eager_load_embedders` (`true`/`false`), skipping the interactive prompt. |
+| `--eager-load / --no-eager-load` | Not set (interactive) | Widen startup warm-up to every per-collection embedding model (`--eager-load`), or keep it at the default embedder and reranker only (`--no-eager-load`). Warm-up always covers those two, and `/ready` returns `503` until model warm-up and the background model validation finish (a failed warm-up ends the wait). Either flag writes `[database].eager_load_embedders` (`true`/`false`), skipping the interactive prompt. |
 | `--no-reranker` | False | Disable the cross-encoder reranker for lower latency. |
 | `--routing-strategy {centroid,hybrid}` | Not set (interactive) | Set the routing strategy directly, skipping the interactive prompt. |
 | `--log-format {text,json}` | Not set (interactive) | Set the log format directly, skipping the interactive prompt. |

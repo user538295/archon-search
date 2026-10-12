@@ -251,6 +251,8 @@ def test_poll_job_connect_error_exits_1(capsys) -> None:
     with (
         # Dead server: /ready refuses too, so the message is the 'not running' one.
         patch("archon_search.cli._helpers.httpx.get", side_effect=_httpx_get_side_effect()),
+        # Hermetic: a real local service on the host would turn this into "starting up".
+        patch("archon_search.cli._helpers._get_service", return_value=_service_mock(running=False)),
         patch("archon_search.cli._helpers.time.sleep"),
     ):
         with pytest.raises(SystemExit) as exc_info:
@@ -258,7 +260,8 @@ def test_poll_job_connect_error_exits_1(capsys) -> None:
 
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert "not running" in captured.err.lower() or "start it first" in captured.err.lower()
+    assert "not running" in captured.err.lower(), captured.err
+    assert "start it first" in captured.err.lower(), captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +329,8 @@ def test_poll_job_connect_error_server_dead_shows_not_running(capsys) -> None:
     """Connect failure on /ready too (nothing listening) → the existing 'not running' text."""
     with (
         patch("archon_search.cli._helpers.httpx.get", side_effect=_httpx_get_side_effect()),
+        # Hermetic: a real local service on the host would turn this into "starting up".
+        patch("archon_search.cli._helpers._get_service", return_value=_service_mock(running=False)),
         patch("archon_search.cli._helpers.time.sleep"),
     ):
         with pytest.raises(SystemExit) as exc_info:

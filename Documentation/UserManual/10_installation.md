@@ -234,7 +234,7 @@ Key `wizard` flags (verified against `archon_search/cli/install_cmd.py`):
 | `--code / --no-code` | Install tree-sitter code enrichment packages (`archon-search[code]`). Enables symbol extraction for code files. |
 | `--watch / --no-watch` | Enable filesystem watcher: auto-reindex collection source directories on file changes. Either flag writes `[collections].watch` (`true`/`false`). |
 | `--telemetry / --no-telemetry` | Enable local query telemetry (structural metadata only, no raw query strings). Either flag writes `[telemetry].enabled` (`true`/`false`). |
-| `--eager-load / --no-eager-load` | Widen startup warm-up — which always covers the default embedder and the reranker, with `/ready` held at `503` until it finishes — to every per-collection embedding model (`--eager-load`), or keep it at the default embedder and reranker only (`--no-eager-load`). Either flag writes `[database].eager_load_embedders` (`true`/`false`). |
+| `--eager-load / --no-eager-load` | Widen startup warm-up to every per-collection embedding model (`--eager-load`), or keep it at the default embedder and reranker only (`--no-eager-load`). Warm-up always covers those two, and `/ready` returns `503` until model warm-up and the background model validation finish (a failed warm-up ends the wait). Either flag writes `[database].eager_load_embedders` (`true`/`false`). |
 | `--no-reranker` | Disable the cross-encoder reranker for lower latency (less precise results). |
 | `--routing-strategy {centroid,hybrid}` | Set routing strategy. `hybrid` blends centroid + description-embedding scores. |
 | `--log-format {text,json}` | Log format. Use `json` for container deployments and log aggregators. |

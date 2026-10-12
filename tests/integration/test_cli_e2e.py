@@ -19,13 +19,12 @@ from pathlib import Path
 from typing import Generator
 from unittest.mock import MagicMock, patch
 
-import time
-
 import pytest
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
 from tests.integration.conftest import make_real_app
+from tests.test_app import wait_for_models_check_to_settle
 
 pytestmark = pytest.mark.integration
 
@@ -105,7 +104,6 @@ def test_serve_command_with_real_app_responds_to_ready(
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
-    from archon_search.server.schemas import WarmupResult
 
     # load_config(serve=True) flips host default to 0.0.0.0
     config = load_config(serve=True)
@@ -126,16 +124,11 @@ def test_serve_command_with_real_app_responds_to_ready(
     )
 
     with TestClient(app) as client:
-        # /ready gates on the lifespan's background model warm-up, which is
-        # deliberately never awaited by the lifespan itself (the port must bind
-        # immediately). Polling that task is the only race-free way to assert the
+        # /ready gates on the lifespan's background model warm-up AND model
+        # validation (S631), neither of which the lifespan awaits (the port must
+        # bind immediately). Polling both is the only race-free way to assert the
         # ready-state here; a bare GET asserts on whichever finishes first.
-        deadline = time.monotonic() + 120.0
-        while (
-            time.monotonic() < deadline
-            and getattr(app.state, "warmup_result", None) == WarmupResult.PENDING
-        ):
-            time.sleep(0.05)
+        wait_for_models_check_to_settle(app)
         resp = client.get("/ready")
     assert resp.status_code == 200, f"expected 200 from /ready, got {resp.status_code}: {resp.text}"
 

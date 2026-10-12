@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — S631: `GET /ready` stays `503` while the background model validation is pending (2026-10-12)
+
+**Surface**: `GET /ready` → `ready` and the HTTP status.
+
+**What changed:** `/ready` gated on storage, model warm-up and the startup sync only, so once warm-up finished it answered `200 {"ready": true, "checks": {"models": "pending", ...}}` while the separate background model validation (`app.py` `_run_model_validation`) was still running — reporting ready while its own models check was pending (S631). This reverses the D6 entry below, which promised `ready` would **not** be gated on `checks.models` so that load balancers keying on `ready` would be unaffected — they now are, while `checks.models` is `"pending"`. `ready` now gates on `checks.models != "pending"`, which covers both a running warm-up and an unfinished validation: `/ready` answers `503` with `checks.models: "pending"` until both finish, then `200`. A failed warm-up is the exception: it reports `checks.models: "fail"` at once, which ends the models gate even before validation finishes. The validation starts alongside warm-up and never raises; it runs its startup probes first — the llama-server reachability probe (3 s, only when `llama_cpp` is configured), the graph NER importability check (only when `[graph].enabled`), and the graph extraction-model probe (at most min(`[graph].extraction_timeout_seconds`, 75 s), only when configured — `[graph].enabled`, `[graph].extraction_model` set, a `[graph].provider` with a buildable enrichment client and, for `llama_cpp`, a reachable llama-server) — then the embedder/reranker probe, bounded by `[database].validation_timeout_seconds` (default 60 s). A timeout of that last probe yields `checks.models: "fail"` with both models reported not ok (only the reranker when its split-provider re-check, under `reranker_providers`, is what overran). `"warn"` and `"fail"` are unchanged: informational only, they do not gate `ready`.
+
+**Migration**: probes that gate on `/ready` (Kubernetes readiness, Docker `HEALTHCHECK`, load balancers) may see `503` after warm-up until validation finishes. Validation starts with warm-up and takes up to its startup probes (3 s llama-server reachability, the graph NER importability check, up to 75 s extraction-model, each only when configured) plus `validation_timeout_seconds`; allow that in the startup grace period. Lowering `validation_timeout_seconds` shortens only the last part, and a validation that times out reports `checks.models: "fail"`, which trips a `models = "fail"` alert. Use `GET /health` for liveness.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — Docker `:gpu` image: CUDA 13 base, NVIDIA driver ≥ 580 required; no system CUDA 12.1 / cuDNN 8 libraries (2026-10-10)
 
 **Surface**: the `ghcr.io/user538295/archon-search:gpu` and `:<version>-gpu` images — host driver requirement under `docker run --gpus`, and the base image that images built `FROM` them inherit.

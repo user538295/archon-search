@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -42,6 +42,8 @@ def client_ping_false(tmp_path: Path) -> TestClient:
 
 
 def test_ready_returns_200_when_storage_ok(client_ping_true: TestClient) -> None:
+    # A pending models check gates readiness (S631) — finish validation first.
+    _set_validation(client_ping_true, embedder_ok=True, reranker_ok=True)
     response = client_ping_true.get("/ready")
     assert response.status_code == 200
     body = response.json()
@@ -50,17 +52,22 @@ def test_ready_returns_200_when_storage_ok(client_ping_true: TestClient) -> None
 
 
 def test_ready_returns_503_when_storage_fails(client_ping_false: TestClient) -> None:
+    # A clean validation keeps checks.models out of the gate: only storage can 503 here.
+    _set_validation(client_ping_false, embedder_ok=True, reranker_ok=True)
     response = client_ping_false.get("/ready")
     assert response.status_code == 503
     body = response.json()
     assert body["ready"] is False
     assert body["checks"]["storage"] == "fail"
+    assert body["checks"]["models"] == "ok"
 
 
 def test_ready_reachable_without_bearer_token(client_ping_true: TestClient) -> None:
     """GET /ready must not require authentication."""
+    # A finished validation makes the unauthenticated probe answer 200, not merely "not 401".
+    _set_validation(client_ping_true, embedder_ok=True, reranker_ok=True)
     response = client_ping_true.get("/ready")
-    assert response.status_code != 401
+    assert response.status_code == 200
 
 
 def test_ready_body_schema_is_bounded(client_ping_true: TestClient) -> None:
@@ -75,8 +82,12 @@ def test_ready_503_body_is_readiness_response_not_error_detail(
     client_ping_false: TestClient,
 ) -> None:
     """503 body must be ReadinessResponse shape, not ErrorDetail."""
+    # A clean validation keeps checks.models out of the gate: the 503 comes from storage.
+    _set_validation(client_ping_false, embedder_ok=True, reranker_ok=True)
     response = client_ping_false.get("/ready")
+    assert response.status_code == 503
     body = response.json()
+    assert body["checks"]["storage"] == "fail"
     assert "ready" in body
     assert "checks" in body
     assert "detail" not in body
@@ -129,7 +140,11 @@ def _set_validation(client: TestClient, **kwargs: object) -> None:
 def test_ready_models_pending_when_validation_none(client_ping_true: TestClient) -> None:
     client_ping_true.app.state.model_validation = None
     response = client_ping_true.get("/ready")
-    assert response.json()["checks"]["models"] == "pending"
+    body = response.json()
+    assert body["checks"]["models"] == "pending"
+    # A pending models check gates readiness (S631).
+    assert body["ready"] is False
+    assert response.status_code == 503
 
 
 def test_ready_models_ok_when_both_pass(client_ping_true: TestClient) -> None:
@@ -198,7 +213,7 @@ def test_ready_not_degraded_by_probe_fail(client_ping_true: TestClient) -> None:
     assert response.json()["checks"]["models"] == "ok"
 
 
-def test_ready_always_200_regardless_of_model_status(client_ping_true: TestClient) -> None:
+def test_ready_200_when_models_fail(client_ping_true: TestClient) -> None:
     _set_validation(client_ping_true, embedder_ok=False, reranker_ok=False)
     response = client_ping_true.get("/ready")
     assert response.status_code == 200
@@ -226,5 +241,9 @@ def test_ready_returns_503_after_store_disconnect(tmp_path: Path) -> None:
     # "no current event loop" in MainThread when a prior async test closed the loop.
     asyncio.run(setup())
     client = TestClient(app)
+    # A clean validation keeps checks.models out of the gate: only storage can 503 here.
+    _set_validation(client, embedder_ok=True, reranker_ok=True)
     response = client.get("/ready")
     assert response.status_code == 503
+    assert response.json()["checks"]["storage"] == "fail"
+    assert response.json()["checks"]["models"] == "ok"
