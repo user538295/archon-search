@@ -1,7 +1,7 @@
 **Purpose**: Debug and tune retrieval with `POST /explain` — see why a result did or didn't rank where it did.
 **Audience**: End users / operators / integrators tuning routing, reranking, or hybrid scoring.
 **Status**: Stable
-**Last reviewed**: 2026-08-07 / **Next review**: 2027-08-07
+**Last reviewed**: 2026-10-12 / **Next review**: 2027-10-12
 
 # Explain and debugging
 
@@ -99,7 +99,7 @@ Every result and near-miss carries an `ExplainScoreBreakdown`:
 | `fts_rank` / `fts_score` | Rank and score in the full-text (BM25) leg. `null` if the chunk never surfaced there. |
 | `fts_score_kind` | `"bm25"` when a raw score is present; `null` when LanceDB omits it. |
 | `rrf_score` | The fused reciprocal-rank score that combines both legs. |
-| `reranker_score` | The cross-encoder second-stage score; `null` when `rerank=false`. |
+| `reranker_score` | The cross-encoder second-stage score; `null` when `rerank=false` or when `[database].reranker_model` is empty (no reranker configured). |
 
 The top-level `score` on each result is the **final** score: the `reranker_score` when a reranker ran, otherwise the `rrf_score`.
 

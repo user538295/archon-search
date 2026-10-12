@@ -1,16 +1,16 @@
 **Purpose**: Query the index over REST and MCP.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-08-07 / **Next review**: 2027-08-07
+**Last reviewed**: 2026-10-12 / **Next review**: 2027-10-12
 
 # Searching
 
 ## Principles
 
-1. **Hybrid search by default.** Every `/search` query runs dense vector + FTS retrieval, then a cross-encoder reranker (`archon_search/pipeline.py:SearchPipeline.search`).
+1. **Hybrid search by default.** Every `/search` query runs dense vector + FTS retrieval, then a cross-encoder reranker (`archon_search/pipeline.py:SearchPipeline.search`). Three exceptions: the reranker is skipped when `[database].reranker_model` is empty, or when the cross-encoder is still cold after the request's bounded warm-up wait; the vector leg is dropped when the query embedder is still cold (both cold cases: `server/_search_budget.py:warmup_for_search`).
 2. **The collection is part of the request.** `POST /search` requires either a `collection` or a `collections[]` list — the server does not auto-pick. Use `POST /route` to discover which collections to query.
 3. **Result count is server-configured.** Per-request `top_k` is validated (`1..[database].top_k_max`) but does not set the returned count — the pipeline returns `[database].top_k_return` results. See [`/BREAKING.md`](../../BREAKING.md).
-4. **REST and MCP are equivalent surfaces.** The MCP tools wrap the same pipeline calls; choose REST for HTTP clients, MCP for MCP-native clients.
+4. **REST and MCP share one pipeline.** The MCP tools wrap the same pipeline calls, but the surfaces differ in places — see [Difference vs REST](../DeveloperGuide/05_mcp_integration.md#difference-vs-rest). Choose REST for HTTP clients, MCP for MCP-native clients.
 
 For graph-aware retrieval (`graph_mode`), the `/explain` provenance trace, and the OpenAI-compatible shim, this guide gives only pointers — those topics moved to their own files (see [Related documents](#related-documents)).
 
@@ -42,7 +42,7 @@ Key request fields (see `GET /openapi.json` for the exhaustive schema):
 | `acl_context` | `bool` | Attach a per-result `acl_gate` — see [Permission-aware snippets](#permission-aware-snippets-acl_context--g15). |
 | `include_metadata` | `bool` | **S274** — top-level twin of `filters.include_metadata` (mirrors the MCP `search` kwarg); OR-ed with the nested flag, so either one `true` returns the stored `metadata` dict. Default `false`. See [Filtering results](#filtering-results-a2--c2). |
 
-Response (`SearchResponse`) carries `results[]` plus signal fields (`acl_filtered`, `hyde_applied`, `rag_fusion_applied`, `graph_expansion_applied`, `expansion_used`, `expansion_warning`, `applied_filters`, `excluded_collections`, `embedding_model`). Each result includes `doc_id`, `chunk_id`, `text`, `score`, `source_path`, `file_type`, `language`, and `collection`.
+Response (`SearchResponse`) carries `results[]` plus signal fields (`acl_filtered`, `hyde_applied`, `rag_fusion_applied`, `rag_fusion_queries_used`, `rag_fusion_attempted`, `graph_expansion_applied`, `ppr_entities_matched`, `expansion_used`, `expansion_warning`, `applied_filters`, `excluded_collections`, `embedding_model`). Each result includes `doc_id`, `chunk_id`, `text`, `score`, `source_path`, `file_type`, `language`, `indexed_at`, `updated_at`, `ingested_by`, `metadata`, `acl`, `collection`, `reranker_score`, and `acl_gate` — `reranker_score` is the cross-encoder score, or `null` when no reranker ran (see the [`/search` reference](../Architecture/600_api_reference_or_public_interface.md#routes_searchpy)), and `acl_gate` is `null` unless the request sets `acl_context`.
 
 Status codes:
 
@@ -51,7 +51,7 @@ Status codes:
 - `422` — invalid selection (both/neither of `collection`/`collections`), fan-out over `max_fanout`, `top_k` over `top_k_max`, or an invalid model/parameter. A missing HyDE/RAG-Fusion provider package prevents startup entirely (see `160_troubleshooting.md`).
 - `503` — internal metadata lookup failed.
 - `500` — pipeline stage exception (embedder, store, or reranker raised).
-- `504` — pipeline call timed out (~30 s). The timer starts after the reranker is loaded, so a cold model no longer causes this on the first search after a restart.
+- `504` — pipeline call timed out (~30 s). The timer starts after a bounded model warm-up wait (`0.5 s` per model), and a model still cold after it degrades the request instead (no reranking, or FTS only — see Principle 1), so a cold model no longer causes this on the first search after a restart.
 
 ### `curl` example
 
@@ -102,8 +102,19 @@ A typical workflow is: call `/route`, then call `/search` once per name in `pinn
 
 | Tool | Key inputs | Output |
 | --- | --- | --- |
-| `search` | `query`, `collection?` / `collections?`, filter params (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language`, `include_metadata`), `hyde`, `rag_fusion`, `graph_mode`, `scope_filter` | `{"results":[…], "acl_filtered":bool, "excluded_collections":[…], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null, "graph_expansion_applied":bool}` |
+| `search` | `query`, `collection?` / `collections?`, filter params (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language`, `include_metadata`), `hyde`, `rag_fusion`, `graph_mode`, `scope_filter` | `{"results":[…], "acl_filtered":bool, "excluded_collections":[…], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null, "graph_expansion_applied":bool, "ppr_entities_matched":int\|null}` |
 | `search_with_context` | `query`, `collection?`, `context_window=1`, same filter/expansion params — but **`graph_mode` is rejected unconditionally** (`code="graph_mode_not_supported"`; use `search` for graph modes) | Results with `context_before` / `context_after` neighbours, plus `hyde_applied`, `expansion_used`, `expansion_warning` |
+
+Per-result `reranker_score`, on each `search` result and on the `result` object of each `search_with_context` item:
+
+- `reranker_score` is the cross-encoder score, and `score` then equals it.
+- `reranker_score` is `null`, and `score` is the fused RRF score, when no reranker ran for the request.
+- On the `search` tool, no reranker runs while the cross-encoder is still cold after the bounded 0.5 s warm-up wait.
+- On both tools, no reranker runs when `[database].reranker_model` is empty.
+- `search_with_context` has no warm-up bound — it waits for a cold cross-encoder instead.
+- The cold case normally ends once the background model build finishes. A reranker model that cannot load at all (a bad model name, a full disk) is retried on every request, so every `search` result keeps `reranker_score: null` until the cause is fixed, while any `search_with_context` call that has candidates to rerank returns `{"error": ..., "code": "internal_error"}` instead of results.
+- Operator runbook: [cold-start symptoms](../OperatorGuide/90_incident_runbook.md#search-returns-http-500--503--504) and [a model that fails to load](../OperatorGuide/90_incident_runbook.md#provider--model-validation-failing-ready-status).
+- The `search` tool takes no `rerank` input — reranking runs whenever a warm cross-encoder is available. To compare the ranking with and without it, call the `explain` tool with `rerank=false` on a single collection (it rejects `rerank=false` across several `collections`); see [`80_explain_and_debugging.md`](./80_explain_and_debugging.md).
 
 When `collection` is omitted, the server uses the `default_collection` injected at app construction. The MCP `search` tool exposes filters as flat parameters rather than a nested `filters` object, and — unlike REST — does **not** echo `applied_filters` (track filters client-side).
 
@@ -111,7 +122,7 @@ For MCP client setup and worked SDK examples, see [`../DeveloperGuide/05_mcp_int
 
 ## Filtering results (A2 + C2)
 
-`POST /search` and the `search` / `search_with_context` MCP tools accept an optional `filters` object (`SearchFilters`, `archon_search/filters.py`):
+`POST /search` accepts an optional `filters` object (`SearchFilters`, `archon_search/filters.py`); the `search` / `search_with_context` MCP tools take the same fields as flat parameters instead (see [MCP tools](#mcp-tools)):
 
 ```json
 {
