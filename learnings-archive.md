@@ -49,3 +49,5 @@
 - **[2026-10-13] smoke/container (compacted from learnings.md)**: never force `FASTEMBED_CACHE_PATH` in smoke servers (guarded by `tests/smoke/test_conftest.py`, S493). REST `/import` allowlists `get_data_dir()` + `backup.output_dir` (S291); MCP import allows only `get_data_dir()`.
 
 - **[2026-10-12] TOCTOU lock fixes (evicted from learnings.md, ×1, 2026-08-27)**: `asyncio.Lock` is non-reentrant — wrapping a method's body in its own lock deadlocks any caller that already holds it. Add `_locked_by_caller` (matches `ingest_chunks`), don't just wrap.
+- **[2026-10-13] guards (compacted from ×21 entry)**: doc-gate regex `warm.?up` does not match the phrase "warms up" — write the gate pattern against the real wording.
+- **[2026-10-13] guards (compacted)**: doc gate also needs a red test for the new rule before the doc change lands.

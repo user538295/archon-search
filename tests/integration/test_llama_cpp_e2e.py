@@ -38,10 +38,13 @@ pytestmark = [pytest.mark.integration, pytest.mark.live]
 
 def _is_llama_cpp_reachable() -> bool:
     try:
-        httpx.get(f"{LLAMA_CPP_BASE_URL_DEFAULT}/v1/models", timeout=2.0)
-        return True
-    except (httpx.ConnectError, httpx.TimeoutException):
+        response = httpx.get(f"{LLAMA_CPP_BASE_URL_DEFAULT}/v1/models", timeout=2.0)
+        body = response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, ValueError):
         return False
+    # Only llama-server's OpenAI-style model list counts: any other local web app on the port
+    # answers this GET with HTTP 200 HTML (or 405) and the live tests would fail against it.
+    return response.status_code == 200 and isinstance(body, dict) and isinstance(body.get("data"), list)
 
 
 @pytest.fixture(autouse=True)

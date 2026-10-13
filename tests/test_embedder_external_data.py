@@ -47,6 +47,12 @@ _DATA_XET_HASH = "9e" + "b" * 62
 # Layout version huggingface_hub writes into the store marker (`_shared_blobs.py`).
 _SHARED_BLOBS_MARKER = (".huggingface-shared-blobs", "1\n")
 _S671_ERROR = "External data path escapes model directory"
+# onnxruntime>=1.31 validates the path `fcntl(F_GETPATH)` reports for the OPENED data file. APFS
+# may report either name of a hard link, so the `onnx_snapshots/` link fastembed 0.9.0 makes is
+# intermittently rejected as the `blobs/` name (~5% of loads under parallel load; never seen on
+# Linux, which reads `/proc/self/fd`). The layout is right, the load is not deterministic.
+_OPENED_PATH_ERROR = "Opened external data file escapes model directory"
+_MACOS_LOADER_ATTEMPTS = 3
 # fastembed's error once no source holds the model (`model_management.py`).
 _NO_SOURCE_ERROR = "from any source"
 
@@ -106,6 +112,16 @@ def _run_child(
         env=env,
         timeout=_CHILD_TIMEOUT_S,
     )
+
+
+def _run_loader(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Run the loader child; on macOS retry only the `_OPENED_PATH_ERROR` flake."""
+    attempts = _MACOS_LOADER_ATTEMPTS if sys.platform == "darwin" else 1
+    for _ in range(attempts):
+        child = _run_child(_LOADER_SCRIPT, _MODEL_NAME, _QUERY_TOKEN, env=env)
+        if child.returncode == 0 or _OPENED_PATH_ERROR not in child.stderr:
+            break
+    return child
 
 
 def _offline_child_env(
@@ -305,7 +321,7 @@ def test_embedder_loads_external_data_model_from_shared_blob_cache(tmp_path: Pat
 
     # BE-26: with FASTEMBED_CACHE_PATH unset, archon passes `<data>/models` as `cache_dir`.
     env = _offline_child_env(data_dir, tmp_path / "tmpdir")
-    child = _run_child(_LOADER_SCRIPT, _MODEL_NAME, _QUERY_TOKEN, env=env)
+    child = _run_loader(env)
 
     _assert_loaded_the_synthetic_model(child)
 
@@ -328,7 +344,69 @@ def test_s493_embedder_loads_from_fastembed_cache_path_outside_the_data_dir(
     _write_model_snapshot(fastembed_cache, files, model_bytes, data_bytes)
 
     env = _offline_child_env(data_dir, tmp_path / "tmpdir", fastembed_cache=fastembed_cache)
-    child = _run_child(_LOADER_SCRIPT, _MODEL_NAME, _QUERY_TOKEN, env=env)
+    child = _run_loader(env)
 
     _assert_loaded_the_synthetic_model(child)
     assert not any((data_dir / "models").iterdir()), "nothing may land in <data>/models"
+
+
+# ---------------------------------------------------------------------------
+# macOS retry of the loader child (onnxruntime 1.31 + APFS hard-link names)
+# ---------------------------------------------------------------------------
+
+
+def _child(returncode: int, stderr: str = "") -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout="", stderr=stderr)
+
+
+def _stub_children(
+    monkeypatch: pytest.MonkeyPatch, platform: str, children: list[subprocess.CompletedProcess[str]]
+) -> list[int]:
+    """Make `_run_loader` see *platform* and hand out *children*; returns the call counter."""
+    calls: list[int] = []
+
+    def fake_run_child(*_args: str, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(1)
+        return children[len(calls) - 1]
+
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(sys.modules[__name__], "_run_child", fake_run_child)
+    return calls
+
+
+def test_run_loader_retries_the_opened_path_flake_on_macos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flake = _child(1, f"{_OPENED_PATH_ERROR}. Opened path: blobs/9e")
+    calls = _stub_children(monkeypatch, "darwin", [flake, _child(0)])
+
+    assert _run_loader({}).returncode == 0
+    assert len(calls) == 2
+
+
+def test_run_loader_gives_up_after_the_retry_budget_on_macos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flake = _child(1, f"{_OPENED_PATH_ERROR}. Opened path: blobs/9e")
+    calls = _stub_children(monkeypatch, "darwin", [flake] * _MACOS_LOADER_ATTEMPTS)
+
+    assert _run_loader({}).returncode == 1
+    assert len(calls) == _MACOS_LOADER_ATTEMPTS
+
+
+def test_run_loader_does_not_retry_on_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    flake = _child(1, f"{_OPENED_PATH_ERROR}. Opened path: blobs/9e")
+    calls = _stub_children(monkeypatch, "linux", [flake, _child(0)])
+
+    assert _run_loader({}).returncode == 1
+    assert len(calls) == 1
+
+
+def test_run_loader_does_not_retry_other_failures_on_macos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    s671 = _child(1, f"{_S671_ERROR}. Opened path: blobs/9e")
+    calls = _stub_children(monkeypatch, "darwin", [s671, _child(0)])
+
+    assert _run_loader({}).returncode == 1
+    assert len(calls) == 1
