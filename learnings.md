@@ -5,6 +5,7 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 ## What Has Failed
 - **[2026-10-12] (×62) pytest OOM/memory RCA**: rules: `tests/CLAUDE.md`. Never pytest a `tests/eval/corpus` path (.pyc breaks the corpus loader: 54 eval fails). Rotating timing fail = contention; failure-path budget 5s→30s. Leaks: archive.
 - **[2026-10-12] (×2) release-path CI**: GH caches are ref-scoped — a tag run reads its own tag or `main` only, and nothing runs on `main` here, so a release cache step never hits, only evicts the PR gate's. Autouse function fixtures beat module env.
+- **[2026-10-14] (×1) release.sh runs**: `tee` masks the exit code (log `RELEASE_SH_EXIT`); a full disk kills runs silently. Stub `docker` in release.sh tests (wedged daemon hangs `docker info`); probe it with `gtimeout -k 2 8`, not perl alarm.
 ## What Has Worked
 - **[2026-10-12] (×1) untrusted JSON parse**: `json.loads` raises `RecursionError` (a RuntimeError) on deep nesting and a plain `ValueError` on >4300-digit ints — catch `(ValueError, RecursionError)`; reject non-dict lines explicitly.
 - **[2026-10-12] (×141) briefs**: failing repro FIRST; fix at guard layer. Re-filed → `<name>-reopened.md`. Same symptom as a sibling S-report (S40=S27)? Check its fix first. Non-disk `source_path` writer needs a `_run_orphan_cleanup` exemption.
@@ -19,11 +20,10 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 - **[2026-08-03] (×9) LanceDB quirks**: `.limit()` is a scan limit, not sort-then-limit. `merge_insert(["c1","c2"])` for composite keys; `when_matched_update_all()` replaces the whole row. Missing table → `ValueError`. `db.close()` is sync.
 - **[2026-09-29] (×32) install/wizard**: unprinted doc option→fix CODE; `is_multilingual=False` re-resolves `prof`. Interactive guard: optional prompts eat input()—assert prompt TEXT not count; force-reinstall rmtree needs `db_path.exists()`.
 - **[2026-10-13] (×16) 3rd-party wiring**: verify params+DICT KEYS on REAL lib. fastembed: models key `"model"`; no `cache_dir` → `<tmp>/fastembed_cache`. ORT>=1.31 F_GETPATH+APFS hardlinks flake ~5%: macOS-only retry. Real-model conftest: pop stub
-
 ## Plan-Making & Agent Process
-- **[2026-10-13] (×211) verify claims/state**: grep-verify every cite AND cited PRECEDENTs. Grep the tasks file for a spike's Notes. Repro vs the ticket's `Version:` tag, not only HEAD (`git worktree`). Re-grep after bulk `replace` — hits twins.
+- **[2026-10-14] (×212) verify claims/state**: grep-verify every cite AND cited PRECEDENTs. Grep the tasks file for a spike's Notes. Repro vs the ticket's `Version:` tag, not only HEAD (`git worktree`). Re-grep after bulk `replace` — hits twins.
 - **[2026-09-07] (×55) subagents**: final text DISCARDED; API death mid-run leaves NOTHING; nested leak to GRANDPARENT. Non-general-purpose lacks SendMessage: idle_notification carries no content — pull result from subagents/agent-<name>-*.jsonl.
 - **[2026-10-13] (×21) guards**: allowlist entries STILL match; tests IMPORT `_ENGINE_PATTERN`; deleted file → `git rm`+strike BOTH; bare `xfail` can't fail. Live-skip probe checks response SHAPE. Doc gate: -Backlog/Completed, +README, PERIOD split.
 - **[2026-10-13] (×58) doc close-out**: grep WHOLE tree (+`README.md`, `*.toml.example`) for the old string. Error docs cite the FIRST rejecting layer. No `>` amid table rows. Compose override wins. Order: api-ref→catalog→CLAUDE.md→manual.
 - **[2026-08-24] (×3) plan/task authoring**: a fix in the body but not the Decisions table / mermaid / doc-checklist is the top defect — sweep all 8 surfaces + the `.tsp`. `#team` gate → agent-runnable findings; never flip the box.
-- **[2026-10-13] (×20) smoke/container**: Dockerfile ENV pins `PIP_DEFAULT_TIMEOUT`/`PIP_RETRIES`; `-o addopts=`; pair `*_CONFIG`+`*_DATA_DIR`; tmp `DATA_DIR`: symlink `models/`. Run a lane cmd ONCE before gating it (multi-instance e2e: dev-box only).
+- **[2026-10-14] (×21) smoke/container**: Dockerfile ENV pins `PIP_DEFAULT_TIMEOUT`/`PIP_RETRIES`; `-o addopts=`; pair `*_CONFIG`+`*_DATA_DIR`; tmp `DATA_DIR`: symlink `models/`. Run a lane cmd ONCE before gating it (multi-instance e2e: dev-box only).
