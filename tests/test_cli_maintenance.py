@@ -265,6 +265,7 @@ def test_maintenance_status_renders_pending_probes(tmp_path: Path) -> None:
         model_validation={
             "embedder_ok": None,
             "reranker_ok": None,
+            "llama_cpp_ok": None,
             "provider_warnings": [],
             "validated_at": None,
         }
@@ -310,11 +311,12 @@ def test_maintenance_status_renders_multiple_warnings(tmp_path: Path) -> None:
 
 
 def test_maintenance_status_model_validation_null_no_crash(tmp_path: Path) -> None:
-    """Server sends model_validation=null (real pending shape) → no crash, omitted.
+    """Server sends model_validation=null → no crash, omitted.
 
     Unlike the absent-key test, this exercises the ``isinstance(mv, dict)``
-    guards with an explicit ``None`` value — the shape the server actually emits
-    before background validation completes (C1-COV-3 / C1-EDGE-1).
+    guards with an explicit ``None`` value — the shape a pre-S488 server emitted
+    before background validation completed (C1-COV-3 / C1-EDGE-1); a current
+    server sends the all-null pending object instead.
     """
     runner = CliRunner()
     server_payload = _status_server_payload()
@@ -330,6 +332,9 @@ def test_maintenance_status_model_validation_null_no_crash(tmp_path: Path) -> No
 
     assert result.exit_code == 0, result.output
     assert "Traceback" not in result.output
+    # Presence anchor: the server-reachable status block rendered, so the absence below is meaningful.
+    assert "Last run:  2026-06-21T10:00:00+00:00" in result.output, result.output
+    assert "Model validation:" not in result.output
     assert "embedder_ok" not in result.output
 
 

@@ -307,16 +307,19 @@ def _build_rag_fusion_status(request: Request, config: SearchConfig) -> RagFusio
     )
 
 
-def _build_model_validation_status(request: Request) -> ModelValidationStatus | None:
+def _build_model_validation_status(request: Request) -> ModelValidationStatus:
     """Mirror the background validation result into the ``model_validation`` sub-object.
 
-    Returns ``None`` while the background task has not yet completed (D6 S2) — the
-    ``getattr`` guard also keeps the endpoint resilient to app factories that never
-    set ``app.state.model_validation`` (mirrors ``_build_maintenance_status``).
+    Always returns the sub-object (S488). While the background task has not yet
+    completed it is the all-null pending object — ``*_ok`` flags and ``validated_at``
+    ``None``, ``provider_warnings`` empty — because unknown is distinct from failed.
+    The ``getattr`` guard also keeps the endpoint resilient to app factories that
+    never set ``app.state.model_validation``; only that guard pattern is shared with
+    ``_build_maintenance_status``, which returns ``None`` when its state is missing.
     """
     result = getattr(request.app.state, "model_validation", None)
     if result is None:
-        return None
+        return ModelValidationStatus()
     return ModelValidationStatus(
         embedder_ok=result.embedder_ok,
         reranker_ok=result.reranker_ok,

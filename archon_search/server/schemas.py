@@ -461,7 +461,8 @@ class StatusResponse(BaseModel):
     collections_schema_behind: int = Field(default=0, ge=0)
     # D5 BE-3 — maintenance health field (additive, nullable)
     maintenance: MaintenanceStatusDetail | None = None
-    # D6 BE-2 — model validation health field (additive, nullable)
+    # D6 BE-2 — model validation health field; nullable like `search` below, which the route
+    # also always populates; the builder emits the all-null object while pending (S488).
     model_validation: ModelValidationStatus | None = None
     # D8 BE-5 — telemetry status field (additive, nullable); null when telemetry disabled
     telemetry: TelemetryStatusDetail | None = None

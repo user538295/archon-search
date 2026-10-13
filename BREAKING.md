@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — `GET /status`: `model_validation` is always an object, never `null` while validation is pending (2026-10-12)
+
+**Surface**: `GET /status` → `model_validation` (`StatusResponse`, `ModelValidationStatus`); CLI `archon-search maintenance status` (text and `--json` output).
+
+**What changed:** While the background model-validation task is still running, `model_validation` was `null`. It is now the documented sub-object with every probe field unknown: `{"embedder_ok": null, "reranker_ok": null, "llama_cpp_ok": null, "provider_warnings": [], "validated_at": null}` (`archon_search/server/routes_status.py`, `_build_model_validation_status`; S488), matching `Documentation/OperatorGuide/20_monitoring_and_alerts.md` ("unknown is distinct from failed"). The OpenAPI schema is unchanged (`ModelValidationStatus | null`, kept nullable like the sibling `search` sub-object); only the emitted value changed. Completed results are emitted exactly as before. CLI side effect: `archon-search maintenance status` now prints the "Model validation" block with `pending` values while validation runs (it was omitted), and `archon-search maintenance status --json` includes `model_validation` (`archon_search/cli/maintenance_cmd.py`).
+
+**Migration**: clients that treated `model_validation == null` as "pending" must check `model_validation.validated_at == null` instead. A poll loop that waits for `model_validation` to become non-null now exits immediately on the pending object; wait for `validated_at` to become non-null.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — export/import: failed jobs, the import route's `invalid_manifest` detail and MCP `import_collection` errors report fixed text, not exception text; an import reaches `DONE` only after warming its embedder (2026-10-12, S288 (import))
 
 **Surface**: `GET /jobs/{id}` / `GET /jobs` → `error` and terminal timing of export and import jobs (`POST /collections/{name}/export`, `POST /collections/{name}/import`, `archon-search export|import --wait`, the MCP `export_collection` / `import_collection` tools); the `422` `detail` of `POST /collections/{name}/import`; the `error` text of the MCP `import_collection` tool.

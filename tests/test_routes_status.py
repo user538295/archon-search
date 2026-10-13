@@ -869,17 +869,44 @@ def _make_client_with_model_validation(tmp_db: Path, result: object) -> TestClie
     return TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
 
-def test_status_model_validation_null_while_pending(tmp_db: Path) -> None:
-    """While the background validation task has not completed, the route returns
-    ``model_validation: null`` (S2). ``app.state.model_validation`` is explicitly
-    set to ``None`` so this exercises the route's ``getattr`` guard — not merely the
-    Pydantic field default (which would mask a route that ignored the field)."""
+# The documented all-null pending object: unknown is distinct from failed (S488).
+_PENDING_MODEL_VALIDATION = {
+    "embedder_ok": None,
+    "reranker_ok": None,
+    "llama_cpp_ok": None,
+    "provider_warnings": [],
+    "validated_at": None,
+}
+_MODEL_VALIDATION_CONTRACT = "OperatorGuide/20_monitoring_and_alerts.md (GET /status model_validation bullet)"
+
+
+def test_status_model_validation_pending_is_object_with_null_fields_s488(tmp_db: Path) -> None:
+    """S488: while validation is pending, ``model_validation`` is still the documented
+    sub-object — ``*_ok`` flags and ``validated_at`` null ("unknown is distinct from
+    failed"), ``provider_warnings`` an empty list — never a bare ``null``."""
     c = _make_client_with_model_validation(tmp_db, None)
     response = c.get("/status")
     assert response.status_code == 200
-    data = response.json()
-    assert "model_validation" in data
-    assert data["model_validation"] is None
+    mv = response.json()["model_validation"]
+    assert isinstance(mv, dict), (
+        f"pending `model_validation` must be the documented object, not null ({_MODEL_VALIDATION_CONTRACT}); got {mv!r}"
+    )
+    assert mv == _PENDING_MODEL_VALIDATION, (
+        f"pending `model_validation` must be the all-null pending object ({_MODEL_VALIDATION_CONTRACT}); got {mv!r}"
+    )
+
+
+def test_status_model_validation_state_absent_is_pending_object_s488(tmp_db: Path) -> None:
+    """S488: an app factory that never sets ``app.state.model_validation`` still gets the
+    all-null pending object via the route's ``getattr`` guard, not a bare ``null``."""
+    c = _make_client_with_model_validation(tmp_db, None)
+    del c.app.state.model_validation
+    assert not hasattr(c.app.state, "model_validation"), "precondition: state attribute must be absent"
+    response = c.get("/status")
+    assert response.status_code == 200
+    assert response.json()["model_validation"] == _PENDING_MODEL_VALIDATION, (
+        f"absent state must yield the all-null pending object ({_MODEL_VALIDATION_CONTRACT})"
+    )
 
 
 def test_status_model_validation_populated_after_validation(tmp_db: Path) -> None:
@@ -898,7 +925,7 @@ def test_status_model_validation_populated_after_validation(tmp_db: Path) -> Non
     response = c.get("/status")
     assert response.status_code == 200
     mv = response.json()["model_validation"]
-    assert mv is not None
+    assert mv["validated_at"] is not None
     assert mv["embedder_ok"] is True
     assert mv["reranker_ok"] is True
     assert mv["provider_warnings"] == ["used CPU fallback"]
@@ -923,7 +950,7 @@ def test_status_model_validation_failure_with_empty_warnings(tmp_db: Path) -> No
     response = c.get("/status")
     assert response.status_code == 200
     mv = response.json()["model_validation"]
-    assert mv is not None
+    assert mv["validated_at"] is not None
     assert mv["embedder_ok"] is False
     assert mv["reranker_ok"] is False
     assert mv["provider_warnings"] == []
@@ -945,7 +972,7 @@ def test_status_shows_llama_cpp_ok(tmp_db: Path) -> None:
     response = c.get("/status")
     assert response.status_code == 200
     mv = response.json()["model_validation"]
-    assert mv is not None
+    assert mv["validated_at"] is not None
     assert mv["llama_cpp_ok"] is True
 
 

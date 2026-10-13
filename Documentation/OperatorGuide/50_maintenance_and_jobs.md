@@ -97,7 +97,7 @@ archon-search maintenance status --json
 
 `GET /openapi.json` is the authoritative schema. Wire `last_error` (non-null on any collection means the last pass failed there) and a stale `last_run_at` into alerting — see [Monitoring and alerts](20_monitoring_and_alerts.md).
 
-`archon-search maintenance status` renders the same data as a per-collection health table and works offline (from the state file) when the server is down.
+`archon-search maintenance status` renders the same data as a per-collection health table and works offline (from the state file) when the server is down. When the server is reachable it also prints a "Model validation" block (`model_validation` in `--json`) mirroring `GET /status`, showing `pending` until validation completes.
 
 ## State file
 
