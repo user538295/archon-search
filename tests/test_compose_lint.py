@@ -329,6 +329,73 @@ def test_compose_archon_model_cache_volume_commented_out(
 
 
 # ---------------------------------------------------------------------------
+# fastembed cache wiring (S493: the app honours FASTEMBED_CACHE_PATH via
+# `get_fastembed_cache_dir()`, so every cache mount must target that path)
+# ---------------------------------------------------------------------------
+
+COMPOSE_OVERRIDE_FILE = REPO_ROOT / "docker-compose.override.yml"
+DOCKERFILE = REPO_ROOT / "Dockerfile"
+FASTEMBED_CACHE_ENV = "FASTEMBED_CACHE_PATH"
+DATA_DIR_ENV = "ARCHON_SEARCH_DATA_DIR"
+# Directories the Dockerfile.test `runner` user can create its data dir under.
+RUNNER_WRITABLE_ROOTS = ("/tmp/", "/home/runner/")
+
+
+def _image_env(dockerfile: Path) -> dict[str, str]:
+    """``KEY=VALUE`` pairs set by the Dockerfile's ``ENV`` instructions."""
+    return dict(re.findall(r"^\s*(?:ENV\s+)?([A-Z_]+)=(\S+?)\s*\\?$", dockerfile.read_text(), re.MULTILINE))
+
+
+def _override_services() -> dict[str, dict]:
+    return yaml.safe_load(COMPOSE_OVERRIDE_FILE.read_text())["services"]
+
+
+def _effective_env(service: dict) -> dict[str, str]:
+    """The image's ENV overlaid by the service's compose ``environment:``."""
+    build = service.get("build", {})
+    dockerfile = REPO_ROOT / build.get("dockerfile", "Dockerfile")
+    return {**_image_env(dockerfile), **{k: str(v) for k, v in service.get("environment", {}).items()}}
+
+
+def test_compose_opt_in_cache_lines_target_image_fastembed_cache_path(compose_text: str) -> None:
+    # The commented opt-in must mount (and name) the directory the image's server
+    # actually downloads fastembed weights into, one line of each per service.
+    image_cache = _image_env(DOCKERFILE)[FASTEMBED_CACHE_ENV]
+    mounts = re.findall(r"^\s*#\s*-\s*archon-model-cache:(\S+)\s*$", compose_text, re.MULTILINE)
+    envs = re.findall(rf"^\s*#\s*{FASTEMBED_CACHE_ENV}:\s*(\S+)\s*$", compose_text, re.MULTILINE)
+    assert len(mounts) == len(EXPECTED_SERVICES), f"one opt-in mount per service, got {mounts!r}"
+    assert len(envs) == len(EXPECTED_SERVICES), f"one opt-in env line per service, got {envs!r}"
+    wrong = [p for p in [*mounts, *envs] if p != image_cache]
+    assert not wrong, f"opt-in cache lines point at {wrong!r}, not the image's {image_cache}"
+
+
+@pytest.mark.parametrize("service_name", sorted(_override_services()))
+def test_override_service_mounts_its_fastembed_cache_path(service_name: str) -> None:
+    # Unmounted, the weights would land in the container layer and be re-downloaded
+    # on every container recreate.
+    service = _override_services()[service_name]
+    cache_path = _effective_env(service)[FASTEMBED_CACHE_ENV]
+    targets = [v.split(":")[1] for v in service.get("volumes", []) if ":" in v]
+    assert cache_path in targets, (
+        f"`{service_name}` loads fastembed weights from {FASTEMBED_CACHE_ENV}={cache_path} "
+        f"but mounts nothing there (targets: {targets!r})"
+    )
+
+
+@pytest.mark.parametrize(
+    "service_name",
+    sorted(n for n, s in _override_services().items() if s.get("build", {}).get("dockerfile") == "Dockerfile.test"),
+)
+def test_test_image_service_data_dir_is_writable_by_runner(service_name: str) -> None:
+    # Dockerfile.test runs as the non-root `runner` user and creates no /data, so a
+    # data dir outside /tmp or its HOME makes a hand-started `archon-search serve` fail.
+    data_dir = _effective_env(_override_services()[service_name])[DATA_DIR_ENV]
+    assert data_dir.startswith(RUNNER_WRITABLE_ROOTS), (
+        f"`{service_name}` sets {DATA_DIR_ENV}={data_dir}, which `runner` cannot create"
+    )
+
+
+# ---------------------------------------------------------------------------
 # .env.example contents
 # ---------------------------------------------------------------------------
 

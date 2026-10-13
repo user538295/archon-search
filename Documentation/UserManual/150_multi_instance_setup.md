@@ -40,7 +40,7 @@ Each instance has its own:
 | API key file | `~/.archon-search/.search.env` | `/data/.search.env` inside volume |
 | LanceDB index | `~/.archon-search/search/` | `/data/search/` inside volume |
 | Config TOML | `~/.archon-search/archon-search.toml` | `/data/archon-search.toml` (if `ARCHON_SEARCH_CONFIG` set); otherwise the in-container default |
-| Fastembed model cache | `~/.archon-search/models/` (`<ARCHON_SEARCH_DATA_DIR>/models`; `FASTEMBED_CACHE_PATH` overrides) | Container default; mount `archon-model-cache:/data/fastembed-cache` to persist across restarts (see [`140_running_with_docker.md`](140_running_with_docker.md)) |
+| Fastembed model cache | `~/.archon-search/models/` (`<ARCHON_SEARCH_DATA_DIR>/models`; `FASTEMBED_CACHE_PATH` overrides) | `/data/fastembed-cache/` inside volume (image `FASTEMBED_CACHE_PATH`); mount `archon-model-cache:/data/fastembed-cache` to share one copy across services (see [`140_running_with_docker.md`](140_running_with_docker.md)) |
 | Host port | `8765` | `18765` |
 | MCP endpoint | `127.0.0.1:8765/mcp` | `127.0.0.1:18765/mcp` |
 
@@ -568,7 +568,7 @@ After editing, bring up the services:
 docker compose up archon-dev archon-test -d
 ```
 
-The first service to start will populate `archon-model-cache`; the second will reuse the cached weights.
+The first service to start that mounts `archon-model-cache` populates it; the next one reuses the cached weights. With `docker-compose.override.yml` loaded (the default without `-f`), that excludes `archon-dev`: compose merges `volumes:` by container target, so the override's `~/.cache/fastembed` bind replaces its `archon-model-cache` mount, and only `archon-test` (and `archon-prod`) share the volume. Start with `docker compose -f docker-compose.yml` to include `archon-dev`. A volume created from 26.10.2181 or earlier is root-owned and unwritable — see [`140_running_with_docker.md#sharing-the-fastembed-model-cache`](140_running_with_docker.md#sharing-the-fastembed-model-cache).
 
 > **Cold-cache startup:** if both services start simultaneously against an empty `archon-model-cache`, both containers will attempt to download model weights concurrently into the same volume. To avoid a race on first use, start one service first and wait for it to become healthy (`docker compose up archon-dev -d` → poll `/ready`) before starting the second.
 

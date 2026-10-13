@@ -44,7 +44,11 @@ jobs:
 
       - name: Run live eval suite
         continue-on-error: true
-        run: uv run pytest -o addopts= --strict-markers -m live_eval tests/eval/live/ -v --no-cov
+        # Load the weights from the cache restored above (S493): without the export,
+        # get_fastembed_cache_dir() resolves ~/.archon-search/models, which is never cached.
+        run: |
+          export FASTEMBED_CACHE_PATH="$HOME/.cache/fastembed"
+          uv run pytest -o addopts= --strict-markers -m live_eval tests/eval/live/ -v --no-cov
 
       - name: Upload live eval report
         uses: actions/upload-artifact@v7.0.1

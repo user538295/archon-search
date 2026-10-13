@@ -31,8 +31,11 @@ services:
       # To enable the shared fastembed cache: (1) uncomment the next env
       # line, (2) uncomment the `archon-model-cache` volume mount below,
       # AND (3) uncomment the `archon-model-cache:` volume declaration at
-      # the bottom of this file. All three must be uncommented together
-      # or compose rejects the config with "undefined volume".
+      # the bottom of this file. (1) only restates the image's baked value;
+      # (2) and (3) must be uncommented together or compose rejects the
+      # config with "undefined volume". With docker-compose.override.yml
+      # loaded (the default without `-f`), its `~/.cache/fastembed` bind at
+      # the same target replaces this service's opt-in mount.
       # FASTEMBED_CACHE_PATH: /data/fastembed-cache
     volumes:
       - archon-dev-data:/data
@@ -77,9 +80,9 @@ volumes:
   archon-test-data:
   archon-prod-data:
   # Optional shared cache for fastembed model weights. Uncomment this
-  # volume AND the `FASTEMBED_CACHE_PATH` environment line in every
-  # service that should reuse the cache. Mount target inside the
-  # container is `/data/fastembed-cache`, which keeps the cache on the
-  # same persistent volume layout as the rest of the runtime state and
-  # avoids re-downloading several hundred MB on every container recreate.
+  # volume AND the `archon-model-cache` mount in every service that
+  # should reuse the cache. Mount target inside the container is the
+  # image's `FASTEMBED_CACHE_PATH=/data/fastembed-cache`, so the services
+  # download the weights (several hundred MB) once instead of once per
+  # data volume.
   # archon-model-cache:

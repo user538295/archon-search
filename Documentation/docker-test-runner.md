@@ -19,7 +19,10 @@ You do **not** need this for everyday development. Running `uv run pytest` on yo
 ## The 30-second version
 
 ```bash
-# First time only: build the throwaway test image (takes a minute or two)
+# First time only: create the host weight cache (on a Linux host Docker would
+# otherwise create the bind-mount source root-owned, unwritable for uid 1000),
+# then build the throwaway test image (takes a minute or two)
+mkdir -p ~/.cache/fastembed
 docker compose build archon-test-runner
 
 # Run the full suite + smoke tests, then delete the container
@@ -61,6 +64,7 @@ ENV PATH="/venv/bin:$PATH" \
     HOME=/home/runner \
     ARCHON_SEARCH_CONTAINER=1 \
     ARCHON_SEARCH_DATA_DIR=/tmp/archon-test \
+    # Persistent named volume so uv sync survives container restarts.
     UV_PROJECT_ENVIRONMENT=/venv \
     UV_CACHE_DIR=/cache/uv \
     FASTEMBED_CACHE_PATH=/cache/fastembed \

@@ -221,6 +221,29 @@ def test_dockerfile_has_fastembed_cache_env(dockerfile_text: str) -> None:
     )
 
 
+def test_dockerfile_precreates_fastembed_cache_dir_for_appuser(
+    dockerfile_logical: list[str],
+) -> None:
+    # Docker seeds a fresh named volume from the image directory it mounts over,
+    # ownership included; a mountpoint the image lacks is created root-owned. So the
+    # documented `archon-model-cache:/data/fastembed-cache` opt-in (docker-compose.yml)
+    # was unwritable for UID 1000 (verified on Docker 29.4.3: `Permission denied`), and
+    # the server, which honours FASTEMBED_CACHE_PATH (S493), could not download weights.
+    env_lines = " ".join(line for line in dockerfile_logical if line.startswith("ENV "))
+    cache_dir = re.search(r"\bFASTEMBED_CACHE_PATH=(\S+)", env_lines)
+    assert cache_dir, "Dockerfile ENV must set FASTEMBED_CACHE_PATH"
+    user_idx = dockerfile_logical.index("USER appuser")
+    before_user = [line for line in dockerfile_logical[:user_idx] if line.startswith("RUN ")]
+    commands = [cmd.strip() for line in before_user for cmd in re.split(r";|&&", line[4:])]
+    path = re.escape(cache_dir.group(1))
+    assert any(re.match(rf"mkdir -p .*(?<!\S){path}(?!\S)", c) for c in commands), (
+        f"Dockerfile must `mkdir -p {cache_dir.group(1)}` before `USER appuser`"
+    )
+    assert any(re.match(rf"chown appuser:appuser .*(?<!\S){path}(?!\S)", c) for c in commands), (
+        f"Dockerfile must `chown appuser:appuser {cache_dir.group(1)}` before `USER appuser`"
+    )
+
+
 def test_dockerfile_sets_home_to_data(dockerfile_text: str) -> None:
     assert "HOME=/data" in dockerfile_text, (
         "Dockerfile must set HOME=/data so pip and other tools write caches "

@@ -142,10 +142,14 @@ RUN set -eux; \
 
 # Non-root runtime user. The data directory is pre-created with the
 # correct ownership: anonymous-volume runs (`docker run` without `-v`)
-# rely on this so UID 1000 can write the auto-generated key file.
+# rely on this so UID 1000 can write the auto-generated key file. The
+# fastembed cache dir (FASTEMBED_CACHE_PATH below) is pre-created too:
+# Docker seeds a fresh named volume mounted there (the compose
+# `archon-model-cache` opt-in) from this directory, ownership included,
+# and a mountpoint the image lacks would come up root-owned.
 RUN useradd --uid 1000 --no-create-home --shell /usr/sbin/nologin appuser; \
-    mkdir -p /data /pip-packages; \
-    chown appuser:appuser /data /pip-packages
+    mkdir -p /data/fastembed-cache /pip-packages; \
+    chown appuser:appuser /data /data/fastembed-cache /pip-packages
 
 # Runtime configuration. `ARCHON_SEARCH_DATA_DIR` redirects every runtime
 # path (db, logs, telemetry, key file, jobs, fasttext models, ingest

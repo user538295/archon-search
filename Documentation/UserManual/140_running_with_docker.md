@@ -163,13 +163,17 @@ Each service has `stop_grace_period: 30s` so `docker compose down` lets uvicorn 
 
 ### Sharing the fastembed model cache
 
-By default each service downloads its own fastembed model weights into its own `/data/fastembed-cache`. To share the cache across services and avoid re-downloading several hundred MB on every container recreate, follow the three-step uncomment procedure marked in `docker-compose.yml`:
+By default each service downloads its own fastembed model weights into its own `/data/fastembed-cache`, on its own data volume. To share one copy across services and download the several hundred MB once instead of once per data volume, follow the three-step uncomment procedure marked in `docker-compose.yml`:
 
 1. Uncomment `FASTEMBED_CACHE_PATH: /data/fastembed-cache` in the `environment:` block of every service that should share it.
 2. Uncomment `- archon-model-cache:/data/fastembed-cache` in the `volumes:` block of those services.
 3. Uncomment the `archon-model-cache:` declaration at the bottom of the file under `volumes:`.
 
-All three must be uncommented together — compose rejects the config otherwise (`undefined volume`).
+Step 1 only restates the value the image already bakes in; steps 2 and 3 must be uncommented together — compose rejects the config otherwise (`undefined volume`).
+
+The image pre-creates `/data/fastembed-cache` owned by the non-root server user (UID 1000), and Docker seeds a fresh named volume from that directory, so a new `archon-model-cache` volume is writable. A volume first created from an image that lacked the directory (26.10.2181 and earlier) is root-owned, and the server cannot download weights into it; fix it once with `docker run --rm -u 0 --entrypoint chown -v archon-model-cache:/c <image> 1000:1000 /c` (compose prefixes the volume name with the project name — check `docker volume ls`).
+
+> **`archon-dev` keeps its host cache while `docker-compose.override.yml` is loaded.** `docker compose` reads the override automatically unless `-f` is given, and merges `volumes:` by container target, so the override's `~/.cache/fastembed:/data/fastembed-cache` bind replaces archon-dev's `archon-model-cache` mount. The shared volume then reaches `archon-test` and `archon-prod` only; archon-dev joins it only with `docker compose -f docker-compose.yml`.
 
 ## Environment variables
 
@@ -247,7 +251,7 @@ This is exactly what the `archon-dev` service in `docker-compose.override.yml` a
 
 ### Prerequisites
 
-- `~/.cache/fastembed` on the host — archon-dev's fastembed cache (the override sets `FASTEMBED_CACHE_PATH: /data/fastembed-cache` and bind-mounts this directory there). A native archon-search does not fill it (it caches in `~/.archon-search/models`), so the first archon-dev start downloads the weights into it once; copy them from another machine to skip that.
+- `~/.cache/fastembed` on the host — archon-dev's fastembed cache (the override sets `FASTEMBED_CACHE_PATH: /data/fastembed-cache` and bind-mounts this directory there). A native archon-search does not fill it (it caches in `~/.archon-search/models`), so the first archon-dev start downloads the weights into it once; copy them from another machine to skip that. Create it before the first start (`mkdir -p ~/.cache/fastembed`): on a Linux host the Docker daemon creates a missing bind-mount source root-owned, and the container's UID 1000 user cannot write into it.
 - Claude Code installed on the Mac host and logged in.
 
 ### Steps

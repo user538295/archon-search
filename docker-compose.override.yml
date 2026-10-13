@@ -67,7 +67,6 @@ services:
       - ~/.cache/fastembed:/cache/fastembed
     environment:
       ARCHON_SEARCH_CONTAINER: "1"
-      ARCHON_SEARCH_DATA_DIR: /data
       UV_PROJECT_ENVIRONMENT: /venv
       UV_CACHE_DIR: /cache/uv
       FASTEMBED_CACHE_PATH: /cache/fastembed
