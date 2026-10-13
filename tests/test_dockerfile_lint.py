@@ -244,6 +244,16 @@ def test_dockerfile_precreates_fastembed_cache_dir_for_appuser(
     )
 
 
+def test_dockerfile_hardens_pip_against_network_stalls(dockerfile_logical: list[str]) -> None:
+    # The bake-time `pip install .` pulls multi-hundred-MB wheels; pip's default 15 s read
+    # timeout aborted a release gate run (ReadTimeoutError from files.pythonhosted.org).
+    env_lines = " ".join(line for line in dockerfile_logical if line.startswith("ENV "))
+    timeout = re.search(r"\bPIP_DEFAULT_TIMEOUT=(\d+)", env_lines)
+    retries = re.search(r"\bPIP_RETRIES=(\d+)", env_lines)
+    assert timeout and int(timeout.group(1)) >= 100, "Dockerfile ENV must set PIP_DEFAULT_TIMEOUT>=100"
+    assert retries and int(retries.group(1)) >= 10, "Dockerfile ENV must set PIP_RETRIES>=10"
+
+
 def test_dockerfile_sets_home_to_data(dockerfile_text: str) -> None:
     assert "HOME=/data" in dockerfile_text, (
         "Dockerfile must set HOME=/data so pip and other tools write caches "

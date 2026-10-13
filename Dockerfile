@@ -37,7 +37,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=100 \
+    PIP_RETRIES=10
 
 # Install base OS dependencies. On the python:3.12-slim base, Python is
 # already present and apt is Debian-based; on the NVIDIA CUDA Ubuntu base,
