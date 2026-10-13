@@ -21,9 +21,9 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 - **[2026-10-13] (×15) 3rd-party wiring**: verify params+DICT KEYS on REAL lib. fastembed: models key `"model"`; no `cache_dir` → `<tmp>/fastembed_cache`. Real-model lane conftest: pop the fastembed stub (zeros). GLiNER `relations` no-op off-RelEx.
 
 ## Plan-Making & Agent Process
-- **[2026-10-13] (×209) verify claims/state**: grep-verify every cite AND cited PRECEDENTs. Grep the tasks file for a spike's Notes. Repro vs the ticket's `Version:` tag, not only HEAD (`git worktree`). Re-grep after bulk `replace` — hits twins.
+- **[2026-10-13] (×210) verify claims/state**: grep-verify every cite AND cited PRECEDENTs. Grep the tasks file for a spike's Notes. Repro vs the ticket's `Version:` tag, not only HEAD (`git worktree`). Re-grep after bulk `replace` — hits twins.
 - **[2026-09-07] (×55) subagents**: final text DISCARDED; API death mid-run leaves NOTHING; nested leak to GRANDPARENT. Non-general-purpose lacks SendMessage: idle_notification carries no content — pull result from subagents/agent-<name>-*.jsonl.
 - **[2026-10-12] (×20) guards**: allowlist entries STILL match; tests IMPORT `_ENGINE_PATTERN`; deleted file → `git rm`+strike BOTH; bare `xfail` can't fail. Doc gate: -Backlog/Completed, +README, PERIOD split, +red test; `warm.?up` ≠ "warms up".
-- **[2026-10-13] (×57) doc close-out**: grep WHOLE tree (+`README.md`, `*.toml.example`) for the old string. Error docs cite the FIRST rejecting layer, not a fallback. No `>` amid table rows. Compose override wins. Order: api-ref→catalog→CLAUDE.md→manual.
+- **[2026-10-13] (×58) doc close-out**: grep WHOLE tree (+`README.md`, `*.toml.example`) for the old string. Error docs cite the FIRST rejecting layer, not a fallback. No `>` amid table rows. Compose override wins. Order: api-ref→catalog→CLAUDE.md→manual.
 - **[2026-08-24] (×3) plan/task authoring**: a fix in the body but not the Decisions table / mermaid / doc-checklist is the top defect — sweep all 8 surfaces + the `.tsp`. `#team` gate → agent-runnable findings; never flip the box.
 - **[2026-10-13] (×18) smoke/container**: `-o addopts=`; pair `*_CONFIG`+`*_DATA_DIR`; tmp `DATA_DIR`: symlink `models/`. Image must mkdir+chown a volume mount target (else root-owned); compose merges volumes BY TARGET, override wins. `/import`: S291.
