@@ -210,7 +210,7 @@ Breaking changes to REST or MCP land in [`BREAKING.md`](BREAKING.md), not buried
 
 ## MCP tools
 
-Your MCP client gets the same server your HTTP client does — same auth, same data, no separate integration to build. 16 tools always register; 4 more join when a key store is configured, 20 total (`archon_search/server/mcp.py`):
+Your MCP client gets the same server your HTTP client does — same auth, same data, no separate integration to build. 16 tools always register; the 4 key-management tools join whenever `mcp.create_app` gets a key store, which the shipped server always passes — 20 total (`archon_search/server/mcp.py`):
 
 - `search` — hybrid vector + FTS search; returns `{"results": [...], "acl_filtered": bool}`
 - `search_with_context` — same as `search` with adjacent-chunk context
@@ -227,7 +227,7 @@ Your MCP client gets the same server your HTTP client does — same auth, same d
 - `get_graph` — entity-graph summary for one collection (nodes, edges, top entities by salience)
 - `get_graph_cross_collection` — merged entity graph across 2+ collections
 - `graph_impact` — blast-radius caller/callee analysis for a code symbol
-- `create_key` / `list_keys` / `revoke_key` / `rotate_key` — API key lifecycle, mirroring the REST `/keys` endpoints (registered only when key management is configured)
+- `create_key` / `list_keys` / `revoke_key` / `rotate_key` — API key lifecycle, mirroring the REST `/keys` endpoints (always registered on the shipped server)
 
 ## Telemetry (opt-in)
 

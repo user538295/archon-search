@@ -1,7 +1,7 @@
 **Purpose**: Explain `archon-search`'s versioning scheme, how to read `BREAKING.md`, and how to pin a client across releases.
 **Audience**: Engineers maintaining a long-lived integration who need to know what guarantees they have between two `archon-search` versions.
 **Status**: Draft
-**Last reviewed**: 2026-09-07 / **Next review**: 2027-09-07
+**Last reviewed**: 2026-10-12 / **Next review**: 2027-10-12
 
 # Versioning and Breaking Changes
 
@@ -12,7 +12,7 @@
 1. **CalVer ≠ SemVer.** A bump from `26.5.x` to `26.6.x` is not a minor release in the SemVer sense. The third segment is the **total** commit count across the repository's history (`git rev-list --count HEAD`, see `release.sh`), so it is monotonic across months — not a per-month counter. Read `BREAKING.md` before upgrading.
 2. **`BREAKING.md` is the contract.** Every release that removes or alters an existing API contract (REST, MCP, CLI, config, on-disk layout) adds an entry there with `Surface`, `Change`, `Migration`, and `Announced in`. If a change is not in `BREAKING.md`, it was not intentional — file a bug.
 3. **OpenAPI is the machine-readable shape.** Pin to a captured `/openapi.json` snapshot if your CI must catch contract drift automatically. The `info.version` field in that document is the running server's CalVer string (`server/app.py::_configure_openapi`).
-4. **MCP shapes are Pydantic-gated as of C7.** All 11 MCP tools validate return values through explicit Pydantic schemas in `archon_search/server/mcp_schemas.py` (`extra='forbid'`). Adding or removing a field in a domain dataclass now fails loudly at the schema boundary with `{"error": "...", "code": "schema_validation_error"}` rather than silently drifting the MCP contract. Debt item `API-4` is resolved. See `BREAKING.md` C7 entries.
+4. **MCP shapes are Pydantic-gated as of C7.** The 11 search, ingest, collection, and document MCP tools validate return values through explicit Pydantic schemas (`archon_search/server/mcp_schemas.py`, or `ExplainResponse` in `routes_explain.py` for `explain`; `extra='forbid'`). The `mcp_schemas.py` schemas copy each field from the domain dataclass by name in an explicit `from_result` mapping, so a field added to a dataclass never reaches the MCP wire until its schema adds it, and a dataclass field the mapping still reads but that was removed raises `AttributeError`, which the tool's catch-all returns as `{"error": "...", "code": "internal_error"}`. `schema_validation_error` is returned only when a mapped value fails the schema's own validation (e.g. a wrong type). Debt item `API-4` is resolved. See `BREAKING.md` C7 entries.
 
 ## Reading the version
 
