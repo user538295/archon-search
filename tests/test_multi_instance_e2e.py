@@ -8,6 +8,14 @@ These tests are gated behind ``ARCHON_SEARCH_RUN_DOCKER_SMOKE=1`` — the
 same opt-in env var used by ``test_docker_smoke.py`` — so default
 ``uv run pytest`` invocations do not start Docker Compose services.
 
+Manual developer suite — NOT part of any release gate (``release.sh`` lane 8 and
+CI both leave it out). It needs developer-machine state and errors at setup on a
+clean host: ``docker-compose.override.yml`` runs ``archon-dev`` from the local
+``archon-search:dev`` image with ``archon-search.docker-dev.toml``
+(``multilingual = true``) and mounts ``~/.archon-search/models``, which must hold
+``lid.176.ftz`` (``archon-search install --multilingual``); ``archon-test`` runs
+``ARCHON_SEARCH_IMAGE`` and falls back to a placeholder registry image without it.
+
 Run explicitly with::
 
     ARCHON_SEARCH_RUN_DOCKER_SMOKE=1 ARCHON_SEARCH_IMAGE=<image> \\

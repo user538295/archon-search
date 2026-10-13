@@ -272,33 +272,6 @@ class TestFullAppAuth:
         resp = client.get("/redoc")
         assert resp.status_code == 200
 
-    @pytest.mark.skip(reason="Requires SearchApiKeyAuth from (not yet implemented)")
-    def test_key_roundtrip_generate_then_auth(  # noqa: ANN201
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Integration: generate key via key_manager, use SearchApiKeyAuth to request a protected endpoint."""
-        import archon_search.key_manager as km
-        from archon_search.ai.search_client import SearchApiKeyAuth # noqa: F401
-        monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
-        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-        key, _ = km.load_or_generate_key()
-
-        auth = SearchApiKeyAuth()
-        assert auth._KEY_FILE == km.get_key_file()
-
-        config = SearchConfig()
-        config.db_path = str(tmp_path / "search")
-        job_store = JobStore(path=tmp_path / "jobs.json")
-        app = create_app(config, job_store)
-
-        import httpx
-
-        with TestClient(app) as tc:
-            transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
-            # Make a request via SearchApiKeyAuth — would need async client
-            resp = tc.get("/status", headers={"Authorization": f"Bearer {key}"})
-            assert resp.status_code == 200
-
 
 # ---------------------------------------------------------------------------
 # Multi-key namespace resolution tests

@@ -51,3 +51,4 @@
 - **[2026-10-12] TOCTOU lock fixes (evicted from learnings.md, ×1, 2026-08-27)**: `asyncio.Lock` is non-reentrant — wrapping a method's body in its own lock deadlocks any caller that already holds it. Add `_locked_by_caller` (matches `ingest_chunks`), don't just wrap.
 - **[2026-10-13] guards (compacted from ×21 entry)**: doc-gate regex `warm.?up` does not match the phrase "warms up" — write the gate pattern against the real wording.
 - **[2026-10-13] guards (compacted)**: doc gate also needs a red test for the new rule before the doc change lands.
+- **[2026-10-13] smoke/container (compacted)**: the Docker lane once died on a pip ReadTimeout (fixed via ENV above); images must mkdir+chown volume mount targets or they come up root-owned.

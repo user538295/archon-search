@@ -216,6 +216,8 @@ assert c[0].find('skipped') is None, 'test_graph_ner_lane_non_vacuity was skippe
     fi
     [ "$_bench_rc" -eq 0 ] || bail "benchmark lane failed — fix all failures before releasing"
 
+    # tests/test_multi_instance_e2e.py is deliberately NOT run here: it is a manual developer
+    # suite that needs developer-machine state (see its docstring) and errors at setup elsewhere.
     echo "[8/12] Docker image smoke lane (real CPU and GPU image builds — CPU ~5 min; the amd64 GPU build, emulated on arm64 hosts, measured 1228 s (~20 min) cold and the GPU module run 778-843 s (~13-14 min, incl. the network extras start) on an arm64 Mac, 2026-10-10)..."
     ensure_docker_running
     ARCHON_SEARCH_RUN_DOCKER_SMOKE=1 uv run pytest tests/test_docker_smoke.py tests/test_docker_gpu_image.py \
