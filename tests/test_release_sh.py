@@ -27,7 +27,11 @@ SAMPLE_NOTES = """\
 
 
 def _add_uv_pytest_stub(stub_bin: Path) -> None:
-    """Add a uv stub that exits 0 for 'uv run pytest', simulating a passing suite."""
+    """Add a uv stub that exits 0 for 'uv run pytest', simulating a passing suite.
+
+    Also stubs docker (`docker info` exits 0): release.sh's docker lane probes the real
+    daemon otherwise, and a wedged Docker Desktop blocks the test forever.
+    """
     stub = stub_bin / "uv"
     stub.write_text(
         "#!/usr/bin/env bash\n"
@@ -35,6 +39,9 @@ def _add_uv_pytest_stub(stub_bin: Path) -> None:
         "exit 0\n"
     )
     stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    docker_stub = stub_bin / "docker"
+    docker_stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+    docker_stub.chmod(docker_stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
 def _make_stub_git_cliff(bin_dir: Path, version_output: str) -> None:
