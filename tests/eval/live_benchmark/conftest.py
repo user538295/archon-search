@@ -15,7 +15,10 @@ Exclusion from the default ``uv run pytest`` run is enforced at two levels:
    out any test items that do get collected with the marker.
 
 The ``_require_model_cache`` fixture below is defense-in-depth for the
-explicit-path case (skips gracefully when the fastembed model cache is absent).
+explicit-path case (skips gracefully when the fastembed model cache is absent). It
+checks ``get_fastembed_cache_dir()`` as resolved at session start, and
+``_pin_live_fastembed_cache`` (``tests/_live_fastembed_cache.py``) makes every test's
+backends load from that same dir.
 """
 from __future__ import annotations
 
@@ -56,23 +59,26 @@ def _activate_deterministic_eval_backends() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fixture: skip entire session if model cache is absent
+# Fixtures: one fastembed cache for the guard AND the backends (S493)
 # ---------------------------------------------------------------------------
 
 from pathlib import Path  # noqa: E402
 
+from tests._live_fastembed_cache import (  # noqa: E402, F401 — fixtures, used by name
+    _pin_live_fastembed_cache,
+    live_fastembed_cache_dir,
+)
+
 
 @pytest.fixture(autouse=True, scope="session")
-def _require_model_cache() -> None:
-    cache_dir = Path(
-        os.environ.get("FASTEMBED_CACHE_PATH", Path.home() / ".cache" / "fastembed")
-    )
+def _require_model_cache(live_fastembed_cache_dir: Path) -> None:  # noqa: F811 — fixture param
     missing = []
-    if not any(cache_dir.glob("*bge-small*")):
+    if not any(live_fastembed_cache_dir.glob("*bge-small-en-v1.5*")):
         missing.append("BAAI/bge-small-en-v1.5")
-    if not any(cache_dir.glob("*ms-marco-MiniLM*")):
+    if not any(live_fastembed_cache_dir.glob("*ms-marco-MiniLM-L-6-v2*")):
         missing.append("Xenova/ms-marco-MiniLM-L-6-v2")
     if missing:
         pytest.skip(
-            f"fastembed model cache absent for: {missing!r} — run the CI prefetch step first"
+            f"fastembed model cache {live_fastembed_cache_dir} lacks {missing!r} — "
+            "run the CI prefetch step first (or export FASTEMBED_CACHE_PATH)"
         )

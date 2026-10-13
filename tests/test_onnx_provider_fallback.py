@@ -19,7 +19,6 @@ the same approach as ``tests/test_embedder_external_data.py``.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,7 +27,7 @@ import numpy as np
 import pytest
 
 from archon_search.config import SearchConfig
-from tests.test_embedder_external_data import _last_line_json, _run_child
+from tests.test_embedder_external_data import _last_line_json, _offline_child_env, _run_child
 
 # onnx, onnxruntime and tokenizers are imported inside the functions that use them: a
 # module-level import would load them into every xdist worker at collection.
@@ -210,17 +209,9 @@ def models_cache(tmp_path_factory: pytest.TempPathFactory) -> _ModelsCache:
     root = tmp_path_factory.mktemp("s635")
     data_dir = root / "data"
     _write_default_models(data_dir / "models")
-    # An empty fastembed default cache, so nothing but the synthetic snapshots can load.
-    fallback_cache = root / "fastembed_cache"
-    fallback_cache.mkdir()
-    return _ModelsCache(
-        env={
-            **os.environ,
-            "ARCHON_SEARCH_DATA_DIR": str(data_dir),
-            "FASTEMBED_CACHE_PATH": str(fallback_cache),
-            "HF_HUB_OFFLINE": "1",
-        }
-    )
+    # BE-26: with FASTEMBED_CACHE_PATH unset, archon loads from `<data>/models`; nothing
+    # but the synthetic snapshots can load.
+    return _ModelsCache(env=_offline_child_env(data_dir, root / "tmpdir"))
 
 
 def _load(models_cache: _ModelsCache, step: str, providers: list[str]) -> Any:
@@ -272,3 +263,24 @@ def test_validation_reports_models_loaded_with_missing_provider_warning(
 
     assert (embedder_ok, reranker_ok) == (True, True), warnings
     assert warnings == [f"configured ONNX providers not available: {unavailable}"], warnings
+
+
+def test_s493_reranker_loads_from_fastembed_cache_path_outside_the_data_dir(
+    tmp_path: Path,
+) -> None:
+    """S493: the real fastembed cross-encoder reads its weights from ``FASTEMBED_CACHE_PATH``.
+
+    The synthetic reranker snapshot exists ONLY there, outside ``ARCHON_SEARCH_DATA_DIR``;
+    ``<data>/models`` and fastembed's TMPDIR fallback are empty and the child is offline,
+    so a ``ModelReranker`` that ignored the env var would fail with "from any source".
+    """
+    data_dir = tmp_path / "archon-data"
+    (data_dir / "models").mkdir(parents=True)
+    fastembed_cache = tmp_path / "fastembed-cache"
+    _write_default_models(fastembed_cache)
+    env = _offline_child_env(data_dir, tmp_path / "tmpdir", fastembed_cache=fastembed_cache)
+
+    scores = _load(_ModelsCache(env=env), "rerank", [_CPU_PROVIDER])
+
+    assert scores == [pytest.approx(_QUERY_TOKEN_SCORE)]
+    assert not any((data_dir / "models").iterdir()), "nothing may land in <data>/models"

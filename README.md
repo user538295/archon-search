@@ -123,7 +123,7 @@ Neither step touches your data. `uninstall` only stops and unregisters the OS se
 | `~/.archon-search/.search.env` | API key |
 | `~/.archon-search/search/` | LanceDB vector store and FTS index |
 | `~/.archon-search/logs/` | Server logs |
-| `~/.archon-search/models/` | Downloaded embedding/reranker model weights (fastembed), plus the fastText language-ID model (only if the `multilingual` extra is installed) |
+| `~/.archon-search/models/` | Downloaded model weights: fastembed's embedding/reranker models (unless `FASTEMBED_CACHE_PATH` relocates them), the fastText language-ID model (`multilingual` extra), the GLiNER graph model (`graph` extra) |
 | `~/.archon-search/search-logs/` | Telemetry JSONL (only if telemetry was enabled) |
 
 Or skip the table and remove all of it in one shot:
@@ -132,7 +132,7 @@ Or skip the table and remove all of it in one shot:
 rm -rf ~/.archon-search/
 ```
 
-That also removes the embedding/reranker model weights fastembed downloads — archon-search caches them under `~/.archon-search/models/`, not in fastembed's own default cache.
+That also removes the embedding/reranker weights fastembed downloaded into `~/.archon-search/models/`. Only if you exported `FASTEMBED_CACHE_PATH` do those weights live outside this tree, at that path — clear it separately for a truly complete wipe.
 
 ## Quick start
 
@@ -188,7 +188,7 @@ Want a dev/test/prod stack with isolated volumes instead of one container? [`doc
 
 Every endpoint requires a `Bearer` token in the `Authorization` header, except a small unauthenticated set: `GET /health`, `GET /ready`, `GET /docs`, `GET /openapi.json`, `GET /redoc`. One route has a second, narrower exemption — `GET /graph/{collection}/view` (the HTML graph viewer) also accepts the token as a `?token=` query parameter instead of the header, since it's meant to be opened directly in a browser; the query param is still validated against the same key set (`archon_search/server/middleware_auth.py`).
 
-First start auto-generates a key and writes it to `~/.archon-search/.search.env` at `600`. Running in Docker, CI, or across multiple hosts? Set `ARCHON_SEARCH_API_KEY` — it wins over the file every time. Need the key read from somewhere else? Set `ARCHON_SEARCH_KEY_FILE`. Need the whole runtime tree — index, logs, key file, jobs file, the fastText language-ID model cache, ingest history — under one root instead of `~/.archon-search/`? Set `ARCHON_SEARCH_DATA_DIR` (the Docker image already does this for you, pointing it at `/data`). That includes the embedding/reranker model weights, which archon-search caches under `<data dir>/models/` — see [Uninstall](#uninstall).
+First start auto-generates a key and writes it to `~/.archon-search/.search.env` at `600`. Running in Docker, CI, or across multiple hosts? Set `ARCHON_SEARCH_API_KEY` — it wins over the file every time. Need the key read from somewhere else? Set `ARCHON_SEARCH_KEY_FILE`. Need the whole runtime tree — index, logs, key file, jobs file, the downloaded model weights, ingest history — under one root instead of `~/.archon-search/`? Set `ARCHON_SEARCH_DATA_DIR` (the Docker image already does this for you, pointing it at `/data`). The fastembed embedding/reranker weights follow it into `<ARCHON_SEARCH_DATA_DIR>/models` unless `FASTEMBED_CACHE_PATH` moves them elsewhere — the Docker image sets it to `/data/fastembed-cache`.
 
 ## Configuration
 

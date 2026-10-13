@@ -834,35 +834,62 @@ async def test_probe_failure_does_not_block_boot(caplog: pytest.LogCaptureFixtur
     assert "llama-server unreachable" in caplog.text
 
 
-def test_validate_providers_shared_probes_the_archon_models_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """S278: both startup probes must read/write ``get_models_dir()``.
-
-    ``ModelEmbedder``/``ModelReranker``/``install.prewarm`` all pass an explicit
-    ``cache_dir`` derived from ``get_models_dir()`` (BE-26). ``validate_providers_shared``
-    does not, so the startup probe downloads the profile's weights into fastembed's
-    default cache while the pipeline's own models still see an empty
-    ``$ARCHON_SEARCH_DATA_DIR/models`` — ``/ready`` reports ``models: ok`` and the
-    first ``POST /search`` then pays the balanced profile's full ~330 MB download
-    inside the request, so the client gets no response at all.
-    """
-    from archon_search.paths import get_models_dir
-    from archon_search.profiles import get_profile
-
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
-    balanced = get_profile("balanced", multilingual=False)
-    expected_cache_dir = str(get_models_dir())
-
+def _s493_probe_cache_dirs(
+    embedder: str = "some-embedder", reranker: str = "some-reranker"
+) -> dict[str, str]:
+    """The ``cache_dir`` each validate_providers_shared probe hands to fastembed: the
+    TextEmbedding probe and the ``_load_cross_encoder`` TextCrossEncoder probe."""
     te, _unused_ce, avail = _patch_probes()
     ce_instance = MagicMock()
     ce_instance.rerank.return_value = iter([0.0])
     ce_cls = MagicMock(return_value=ce_instance)
-
     with patch("archon_search.model_validation.TextEmbedding", te), \
          patch("fastembed.rerank.cross_encoder.TextCrossEncoder", ce_cls), \
          patch(_AVAILABLE_PROVIDERS, return_value=avail):
-        validate_providers_shared(["CPUExecutionProvider"], balanced.embedder, balanced.reranker)
+        validate_providers_shared(["CPUExecutionProvider"], embedder, reranker)
+    return {
+        "embedder": te.call_args.kwargs["cache_dir"],
+        "reranker": ce_cls.call_args.kwargs["cache_dir"],
+    }
 
-    assert te.call_args.kwargs.get("cache_dir") == expected_cache_dir
-    assert ce_cls.call_args.kwargs.get("cache_dir") == expected_cache_dir
+
+def test_s493_fastembed_cache_path_relocates_both_startup_probe_caches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S493: with FASTEMBED_CACHE_PATH set to a directory OUTSIDE ARCHON_SEARCH_DATA_DIR,
+    both startup probes warm that directory, the one the runtime models read from
+    (UserManual/30_configuration.md, 150_multi_instance_setup.md)."""
+    data_dir = tmp_path / "archon-data"
+    fastembed_cache = tmp_path / "fastembed-cache"
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("FASTEMBED_CACHE_PATH", str(fastembed_cache))
+
+    assert _s493_probe_cache_dirs() == {
+        "embedder": str(fastembed_cache),
+        "reranker": str(fastembed_cache),
+    }
+
+
+def test_validate_providers_shared_probes_the_archon_models_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S278 (S493 presence anchor): with FASTEMBED_CACHE_PATH unset, both startup probes
+    must read/write ``$ARCHON_SEARCH_DATA_DIR/models``, the runtime models' cache.
+
+    ``validate_providers_shared`` once passed no ``cache_dir``, so the startup probe
+    downloaded the profile's weights into fastembed's default cache while the pipeline's
+    own models still saw an empty ``$ARCHON_SEARCH_DATA_DIR/models`` — ``/ready``
+    reported ``models: ok`` and the first ``POST /search`` then paid the balanced
+    profile's full ~330 MB download inside the request, so the client got no response.
+    """
+    from archon_search.profiles import get_profile
+
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("FASTEMBED_CACHE_PATH", raising=False)
+    balanced = get_profile("balanced", multilingual=False)
+
+    expected = str(tmp_path / "models")
+    assert _s493_probe_cache_dirs(balanced.embedder, balanced.reranker) == {
+        "embedder": expected,
+        "reranker": expected,
+    }

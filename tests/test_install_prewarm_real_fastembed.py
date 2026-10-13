@@ -16,23 +16,20 @@ no logging, exactly like the wizard. Runs on the synthetic default models
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
 from archon_search.config import SearchConfig
 from tests.test_embedder_external_data import (
-    _DATA_XET_HASH,
     _MODEL_NAME,
-    _MODEL_XET_HASH,
     _build_model,
     _ModelFiles,
     _fastembed_model_files,
     _last_line_json,
+    _offline_child_env,
     _run_child,
-    _tokenizer_files,
-    _write_shared_blob_cache,
+    _write_model_snapshot,
 )
 from tests.test_onnx_provider_fallback import (
     _UNAVAILABLE_PROVIDER_CASES,
@@ -65,16 +62,8 @@ else:
 def _offline_env(tmp_path: Path, name: str) -> tuple[Path, dict[str, str]]:
     """An isolated data dir and the child env that loads models only from it, offline."""
     data_dir = tmp_path / name
-    # Empty, so a model can only come from the cache pre-warm passes as cache_dir.
-    fallback_cache = tmp_path / f"{name}-fastembed_cache"
-    fallback_cache.mkdir()
-    env = {
-        **os.environ,
-        "ARCHON_SEARCH_DATA_DIR": str(data_dir),
-        "FASTEMBED_CACHE_PATH": str(fallback_cache),
-        "HF_HUB_OFFLINE": "1",
-    }
-    return data_dir, env
+    # BE-26: with FASTEMBED_CACHE_PATH unset, pre-warm passes `<data>/models` as cache_dir.
+    return data_dir, _offline_child_env(data_dir, tmp_path / f"{name}-tmpdir")
 
 
 def _run_prewarm(
@@ -92,15 +81,7 @@ def _prewarm_offline(
     """Pre-warm ``_MODEL_NAME`` from an offline cache holding *model_bytes*; return the
     InstallError message, or None on success."""
     data_dir, env = _offline_env(tmp_path, name)
-    _write_shared_blob_cache(
-        data_dir / "models",
-        files.repo_dir,
-        xet_files={
-            files.model_file: (model_bytes, _MODEL_XET_HASH),
-            files.data_file: (data_bytes, _DATA_XET_HASH),
-        },
-        git_files=_tokenizer_files(),
-    )
+    _write_model_snapshot(data_dir / "models", files, model_bytes, data_bytes)
     error, _stderr = _run_prewarm(env, _MODEL_NAME, "", [])
     return error
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 import importlib.metadata
 import json
+import math
 import os
 import re
 from datetime import UTC, datetime
@@ -25,6 +26,10 @@ from archon_search.eval.runner import (
 )
 
 
+# bge-small-en-v1.5 vectors are L2-normalised; the fastembed stub's are all zeros.
+_UNIT_NORM_TOLERANCE = 1e-3
+
+
 # ---------------------------------------------------------------------------
 # Test 1 — live backend uses real models
 # ---------------------------------------------------------------------------
@@ -35,11 +40,18 @@ async def test_live_backend_uses_real_models(
     tmp_path: Path,
     live_corpus_root: Path,
 ) -> None:
-    """Real models produce 384-dim embeddings, not the stub's 128-dim."""
+    """Real models produce unit-norm 384-dim embeddings, not the fastembed stub's zeros.
+
+    The stub (``tests/_search_stubs.py``) also yields 384 dims, so only the norm tells them apart.
+    """
     pipeline = await _build_pipeline_with_eval_backends(tmp_path, backend="live")
     try:
         vecs = pipeline._global_embedder._backend.encode(["hello world"])
         assert len(vecs[0]) == 384, f"expected 384-dim vectors, got {len(vecs[0])}"
+        norm = math.fsum(x * x for x in vecs[0]) ** 0.5
+        assert norm == pytest.approx(1.0, abs=_UNIT_NORM_TOLERANCE), (
+            f"expected a unit-norm real embedding, got norm {norm}"
+        )
         assert pipeline._global_embedder.model_name == "BAAI/bge-small-en-v1.5"
     finally:
         await pipeline.store.disconnect()

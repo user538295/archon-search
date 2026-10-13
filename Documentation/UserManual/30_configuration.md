@@ -292,7 +292,7 @@ Read at config load, key resolution, and by every lazy path accessor. All overri
 | `ARCHON_SEARCH_PORT` | Bind-port override; int `1–65535` or raises `ConfigError`. Empty = not set. | unset → `[server].port` |
 | `ARCHON_SEARCH_DATA_DIR` | Relocate the whole runtime tree (DB, logs, telemetry, key file, jobs file, models). Must be absolute; empty raises `ConfigError`. Docker sets `/data`. | unset → `~/.archon-search/` |
 | `ARCHON_SEARCH_CONTAINER` | `"1"` attaches a stderr handler so `docker logs` captures output. Docker sets `1`. | unset → no stderr handler |
-| `FASTEMBED_CACHE_PATH` | fastembed's own weight-cache directory. Docker sets `/data/fastembed-cache`. | fastembed default (`~/.cache/fastembed`) |
+| `FASTEMBED_CACHE_PATH` | fastembed's own weight-cache directory for the embedder and reranker; archon-search passes it as `cache_dir` (`paths.get_fastembed_cache_dir()`), so it may lie outside the data dir. An empty value = not set. Docker sets `/data/fastembed-cache`. | unset → `<data-dir>/models` |
 
 `ARCHON_SEARCH_CONFIG` and `ARCHON_SEARCH_DATA_DIR` are **independent**: the TOML config file is not relocated by `ARCHON_SEARCH_DATA_DIR`. To also move the TOML onto a mounted volume, set `ARCHON_SEARCH_CONFIG` explicitly. `archon-search serve` warns at startup if `ARCHON_SEARCH_DATA_DIR` is set without `ARCHON_SEARCH_CONFIG`.
 

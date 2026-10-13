@@ -142,18 +142,23 @@ RUN set -eux; \
 
 # Non-root runtime user. The data directory is pre-created with the
 # correct ownership: anonymous-volume runs (`docker run` without `-v`)
-# rely on this so UID 1000 can write the auto-generated key file.
+# rely on this so UID 1000 can write the auto-generated key file. The
+# fastembed cache dir (FASTEMBED_CACHE_PATH below) is pre-created too:
+# Docker seeds a fresh named volume mounted there (the compose
+# `archon-model-cache` opt-in) from this directory, ownership included,
+# and a mountpoint the image lacks would come up root-owned.
 RUN useradd --uid 1000 --no-create-home --shell /usr/sbin/nologin appuser; \
-    mkdir -p /data /pip-packages; \
-    chown appuser:appuser /data /pip-packages
+    mkdir -p /data/fastembed-cache /pip-packages; \
+    chown appuser:appuser /data /data/fastembed-cache /pip-packages
 
 # Runtime configuration. `ARCHON_SEARCH_DATA_DIR` redirects every runtime
 # path (db, logs, telemetry, key file, jobs, fasttext models, ingest
 # history) onto the mounted volume. `ARCHON_SEARCH_CONTAINER=1` tells
 # `configure_logging()` to attach a StreamHandler(sys.stderr) so
-# `docker logs` captures application logs. `FASTEMBED_CACHE_PATH` keeps
-# fastembed's downloaded model weights on the same persistent volume
-# instead of the ephemeral container layer.
+# `docker logs` captures application logs. `FASTEMBED_CACHE_PATH` gives
+# fastembed's downloaded model weights their own directory on the same
+# persistent volume (`get_fastembed_cache_dir()`; unset, they would land in
+# `/data/models`), so a named volume can share them across containers.
 ENV ARCHON_SEARCH_DATA_DIR=/data \
     ARCHON_SEARCH_CONTAINER=1 \
     FASTEMBED_CACHE_PATH=/data/fastembed-cache \

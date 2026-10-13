@@ -24,7 +24,7 @@ from archon_search.onnx_providers import (
     select_onnx_providers,
     unavailable_onnx_providers,
 )
-from archon_search.paths import get_models_dir
+from archon_search.paths import get_fastembed_cache_dir
 
 if TYPE_CHECKING:
     from archon_search.config import SearchConfig
@@ -373,7 +373,9 @@ def _load_cross_encoder(model_name: str, providers: list[str] | None) -> Any:
     """Instantiate a fastembed ``TextCrossEncoder`` (reranker probe entry point)."""
     from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: PLC0415
 
-    return TextCrossEncoder(model_name, providers=providers, cache_dir=str(get_models_dir()))
+    return TextCrossEncoder(
+        model_name, providers=providers, cache_dir=str(get_fastembed_cache_dir())
+    )
 
 
 def validate_providers_shared(
@@ -427,7 +429,7 @@ def validate_providers_shared(
             model = TextEmbedding(
                 embedding_model,
                 providers=load_providers,
-                cache_dir=str(get_models_dir()),
+                cache_dir=str(get_fastembed_cache_dir()),
             )
             list(model.embed(["archon search validation probe"]))
         except Exception as exc:  # never raises

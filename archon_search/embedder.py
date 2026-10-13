@@ -7,7 +7,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from archon_search.observability import record_stage
 from archon_search.onnx_providers import select_onnx_providers
-from archon_search.paths import get_models_dir
+from archon_search.paths import get_fastembed_cache_dir
 
 _WARMUP_TEXT = "warmup"
 _WARMUP_TIMEOUT_SECONDS = 300.0
@@ -54,7 +54,7 @@ class ModelEmbedder:
                     self._model = TextEmbedding(
                         self.model_name,
                         providers=select_onnx_providers(self._providers).providers,
-                        cache_dir=str(get_models_dir()),
+                        cache_dir=str(get_fastembed_cache_dir()),
                     )
         # TextEmbedding.embed() returns a generator of 1-D numpy arrays
         return [e.tolist() for e in self._model.embed(texts)]
