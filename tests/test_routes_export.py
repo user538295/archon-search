@@ -13,11 +13,16 @@ from fastapi.testclient import TestClient
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
-from archon_search.jobs.export_archive import EXPORT_SCHEMA_VERSION
+from archon_search.jobs.export_archive import (
+    EXPORT_SCHEMA_VERSION,
+    INVALID_ARCHIVE_DETAIL,
+    INVALID_MANIFEST_DETAIL,
+    ImportArchiveReader,
+    quote_archive_value,
+)
 from archon_search.jobs.store import JobStore
 from archon_search.paths import get_data_dir
 from archon_search.server.app import create_app
-from archon_search.server.routes_export import INVALID_ARCHIVE_DETAIL
 from archon_search.types import JobStatus
 
 
@@ -169,7 +174,7 @@ _DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 def _make_valid_archive(
     dest_dir: Path,
     *,
-    schema_version: int = EXPORT_SCHEMA_VERSION,
+    schema_version: object = EXPORT_SCHEMA_VERSION,
     embedding_model: str = _DEFAULT_EMBEDDING_MODEL,
     collection: str = "my-collection",
     doc_count: int = 0,
@@ -354,10 +359,11 @@ def test_post_import_corrupt_archive_sanitizes_wire_detail(
     # The wire detail must be a fixed, sanitized message — never the raw exception text.
     assert body["detail"] == INVALID_ARCHIVE_DETAIL
     assert "gzip" not in body["detail"].lower()
-    # The real exception is still logged server-side for diagnosis.
-    assert any("corrupt" in record.getMessage().lower() for record in caplog.records) or any(
-        record.exc_info for record in caplog.records
-    )
+    # The real exception is still logged server-side for diagnosis, with its traceback.
+    [record] = [r for r in caplog.records if r.name == "archon_search.server.routes_export"]
+    assert str(corrupt) in record.getMessage()
+    assert record.exc_info is not None
+    assert isinstance(record.exc_info[1], tarfile.TarError)
 
 
 @pytest.mark.integration
@@ -455,6 +461,32 @@ def test_post_import_schema_version_mismatch_no_flag(
 
 
 @pytest.mark.integration
+def test_post_import_schema_version_mismatch_truncates_archive_supplied_value(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    auth_headers: dict[str, str],
+) -> None:
+    """A crafted non-int schema_version is quoted truncated, so it cannot inflate the detail."""
+    crafted_schema = ["v"] * 1_000
+    archive = _make_valid_archive(
+        get_data_dir() / "exports" / "test_import_long_schema", schema_version=crafted_schema
+    )
+
+    response = _import_client(tmp_path, tmp_store, auth_headers).post(
+        "/collections/my-collection/import", json={"path": str(archive)}
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json() == {
+        "error": "schema_version_mismatch",
+        "detail": (
+            "archive has schema_version=['v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v', 'v'…; "
+            f"server expects {EXPORT_SCHEMA_VERSION!r}; use ignore_schema_version=true to bypass"
+        ),
+    }
+
+
+@pytest.mark.integration
 def test_post_import_invalid_on_error(
     tmp_path: Path,
     tmp_store: JobStore,
@@ -474,3 +506,99 @@ def test_post_import_invalid_on_error(
         json={"path": str(get_data_dir() / "exports" / "any.tar.gz"), "on_error": "invalid"},
     )
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# invalid_manifest / mismatch details carry only text archon-search builds itself
+# ---------------------------------------------------------------------------
+
+
+def _import_client(tmp_path: Path, tmp_store: JobStore, auth_headers: dict[str, str]) -> TestClient:
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    config.embedding_model = _DEFAULT_EMBEDDING_MODEL
+    app = create_app(config, tmp_store)
+    app.state.search_store = _make_mock_search_store(collection_meta=None)
+    return TestClient(app, headers=auth_headers)
+
+
+def _make_raw_archive(dest_dir: Path, manifest_bytes: bytes) -> Path:
+    """A member-safe archive whose manifest.json holds *manifest_bytes* verbatim."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    archive_path = dest_dir / "raw.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as tf:
+        for name, payload in (("manifest.json", manifest_bytes), ("documents.jsonl", b"")):
+            info = tarfile.TarInfo(name=name)
+            info.size = len(payload)
+            tf.addfile(info, io.BytesIO(payload))
+    return archive_path
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "manifest_bytes", [b"{not json", b"[" * 100_000], ids=["not-json", "deep-nesting"]
+)
+def test_post_import_undecodable_manifest_sends_fixed_text_not_parser_error(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    auth_headers: dict[str, str],
+    manifest_bytes: bytes,
+) -> None:
+    """A manifest.json the JSON parser cannot read (bad syntax, or nesting deep enough to raise
+    RecursionError) is a 422 with archon-search's own wording, never the parser's or a 500."""
+    archive = _make_raw_archive(get_data_dir() / "exports" / "test_import_bad_manifest", manifest_bytes)
+
+    response = _import_client(tmp_path, tmp_store, auth_headers).post(
+        "/collections/my-collection/import", json={"path": str(archive)}
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json() == {
+        "error": "invalid_manifest",
+        "detail": "manifest.json is not valid UTF-8 JSON",
+    }
+
+
+@pytest.mark.integration
+def test_post_import_unexpected_manifest_error_sends_sanitized_detail(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ValueError that is not an ArchiveRejectedError never reaches the wire as text."""
+    archive = _make_valid_archive(get_data_dir() / "exports" / "test_import_manifest_internal")
+
+    def _internal_failure(_self: ImportArchiveReader) -> dict:
+        raise ValueError("internal: /var/lib/secret/state.db is locked")
+
+    monkeypatch.setattr(ImportArchiveReader, "read_manifest", _internal_failure)
+
+    response = _import_client(tmp_path, tmp_store, auth_headers).post(
+        "/collections/my-collection/import", json={"path": str(archive)}
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json() == {"error": "invalid_manifest", "detail": INVALID_MANIFEST_DETAIL}
+
+
+@pytest.mark.integration
+def test_post_import_model_mismatch_truncates_archive_supplied_model(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    auth_headers: dict[str, str],
+) -> None:
+    crafted_model = "m" * 10_000
+    archive = _make_valid_archive(
+        get_data_dir() / "exports" / "test_import_long_model", embedding_model=crafted_model
+    )
+
+    response = _import_client(tmp_path, tmp_store, auth_headers).post(
+        "/collections/my-collection/import", json={"path": str(archive)}
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == (
+        f"archive uses model {quote_archive_value(crafted_model)}; "
+        f"server is configured with {_DEFAULT_EMBEDDING_MODEL!r}"
+    )

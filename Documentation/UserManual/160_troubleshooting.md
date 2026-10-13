@@ -217,7 +217,7 @@ A background probe (`model_validation.py`) loads the embedder and reranker and r
 
 1. **`schema_version mismatch: archive has X, server expects Y; use ignore_schema_version=true to bypass`** — the archive was produced by a different schema version. Retry with `--ignore-schema-version` **only if** you accept the risk of a format drift.
 2. **`collection '<name>' already exists. Use --force-overwrite to overwrite.`** (HTTP `409`) — pass `--force-overwrite` to drop-and-recreate the target.
-3. **Corrupt / unparseable lines in the archive** — by default `--on-error=fail` aborts the whole import on the first bad line. Use `--on-error=skip` to skip corrupt lines and import the rest.
+3. **Corrupt / unparseable lines in the archive** (`Corrupt line N: not valid UTF-8 JSON`, `Corrupt line N: not a JSON object`, `corrupt doc (vector) at line N: …`, `malformed doc at line N: …`) — by default `--on-error=fail` aborts the whole import on the first bad line. Use `--on-error=skip` to skip corrupt lines and import the rest.
 4. Add `--wait` to poll the import job and see progress and the terminal status.
 
 See [`90_export_import.md`](./90_export_import.md) for the full export/import workflow.

@@ -16,12 +16,12 @@ Root cause — distinct from S281. ``Reranker._warmup_failed`` (``reranker.py:85
 is a *permanent latch*: the first build that raises for any reason (an HF 429, a
 network blip, an unwritable cache) sets it, and every later ``warmup()`` returns
 immediately forever. ``SearchPipeline.warmup_models`` swallows that failure with a
-WARNING (``pipeline.py:411-415``), so every gate built on it silently becomes a
+WARNING (in ``SearchPipeline.warmup_models``), so every gate built on it silently becomes a
 no-op:
 
-* S281's ingest gate ``_await_models_warm`` (``server/routes_jobs.py:199-226``)
+* S281's ingest gate ``await_models_warm`` (``server/_job_warmup.py``)
   returns at once, and the job still reports ``DONE`` — step 1 prints success.
-* ``server/routes_search.py:369`` ``await pipeline.warmup_models(embedder)``
+* ``server/routes_search.py`` ``search``'s ``await pipeline.warmup_models(embedder)``
   returns at once too, so the cold ONNX build is no longer pre-paid off the
   request path. It happens *inside* ``pipeline.search`` →
   ``Reranker.rerank`` → ``asyncio.to_thread(ModelReranker.predict)``
@@ -247,8 +247,8 @@ def test_s283_search_answers_with_documented_fields_after_failed_warmup(tmp_path
         assert elapsed < _CLIENT_SEARCH_TIMEOUT_SECONDS, (
             f"first POST /search took {elapsed:.1f}s after `collection add --wait` reported the "
             f"ingest complete — Reranker._warmup_failed (reranker.py:85) was latched by a "
-            f"transient startup failure, so both the S281 ingest gate (routes_jobs.py:218) and "
-            f"the search route's own pre-pay (routes_search.py:369) silently no-opped and the "
+            f"transient startup failure, so both the S281 ingest gate (_job_warmup.await_models_warm) and "
+            f"the search route's own pre-pay (routes_search.search) silently no-opped and the "
             f"cold cross-encoder build ran inside the request. A real client times out and "
             f"records status=0 body=None (S283). One transient warm-up failure must not disarm "
             f"every warm-up gate for the life of the process."

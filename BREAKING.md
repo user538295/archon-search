@@ -8,6 +8,37 @@
 
 ## Changelog
 
+### [next release] — export/import: failed jobs, the import route's `invalid_manifest` detail and MCP `import_collection` errors report fixed text, not exception text; an import reaches `DONE` only after warming its embedder (2026-10-12, S288 (import))
+
+**Surface**: `GET /jobs/{id}` / `GET /jobs` → `error` and terminal timing of export and import jobs (`POST /collections/{name}/export`, `POST /collections/{name}/import`, `archon-search export|import --wait`, the MCP `export_collection` / `import_collection` tools); the `422` `detail` of `POST /collections/{name}/import`; the `error` text of the MCP `import_collection` tool.
+
+**Behaviour-only change — no schema field was added, removed or retyped, so `GET /openapi.json` needs no regeneration.**
+
+**What changed:**
+
+- **Unexpected failure** (a store, filesystem or other internal error) of a running export or import job: `error` is now the fixed `"export failed; see the server log for details"` / `"import failed; see the server log for details"` instead of the exception's own text, which could embed server paths and library internals. The original exception is logged server-side.
+- **Import refusals** keep a specific `error`, now built only from archon-search's own wording, line numbers and field names — never a library's exception text. Archive-supplied values (model name, `schema_version`) are quoted truncated to 80 characters, here and in the import route's and MCP tool's mismatch messages. Changed wording:
+  - a non-JSON line in `documents.jsonl`: `Corrupt line N: <JSON parser message>` → `Corrupt line N: not valid UTF-8 JSON`;
+  - a corrupt vector: `corrupt doc (vector): <decoder message>` → `corrupt doc (vector) at line N: missing or not base64-encoded float32`;
+  - a malformed document: `malformed doc: <exception message>` → `malformed doc at line N: a required field is missing or has the wrong type`;
+  - a `documents.jsonl` line that is valid JSON but not an object (an array, a number, a string): `corrupt doc (vector): <exception message>` → `Corrupt line N: not a JSON object`;
+  - a manifest that is not UTF-8 JSON: the JSON parser's or UTF-8 decoder's message → `manifest.json is not valid UTF-8 JSON`;
+  - a manifest that is not a JSON object: `… got <class 'list'>` → `… got list`;
+  - unchanged in the job `error`: the schema-version and embedding-model mismatch messages (apart from the truncation), `collection '<name>' already exists; use force_overwrite=true to overwrite`, `manifest.json is missing required keys: …`, the `unsafe_tar_member` reason code, and `service unavailable: embedding model still loading`.
+- **Unparseable `documents.jsonl` line** — not UTF-8, or JSON the parser rejects for an integer over Python's 4300-digit limit or for nesting past its recursion limit: with `on_error="skip"` it is now skipped and counted in `skipped` like a non-JSON line; with `on_error="fail"` it fails with `Corrupt line N: not valid UTF-8 JSON`. Before, either mode failed the job with the decoder's or parser's message (`maximum recursion depth exceeded …` for deep nesting).
+- **Unparseable manifest** (the same oversized-integer and deep-nesting cases): now the `manifest.json is not valid UTF-8 JSON` refusal everywhere. Before, an oversized integer reported the parser's message, and deep nesting escaped the handlers — a `500` from `POST /collections/{name}/import`, an unhandled error from the MCP tool.
+- **`POST /collections/{name}/import` → `422` `invalid_manifest`**: `detail` is the refusal message above (e.g. `manifest.json is not valid UTF-8 JSON` instead of the JSON parser's message), or the fixed `manifest.json could not be read` for any other manifest read failure.
+- **MCP `import_collection`**: an archive that cannot be opened now returns `archive could not be opened: invalid or corrupt tar.gz` (the REST route's existing detail) instead of `invalid archive: <tarfile/gzip message>`; a manifest failure stays `invalid manifest: <message>`, where `<message>` is the refusal message above or `manifest.json could not be read`, never a library's text. The mismatch errors now read exactly like the REST route's `detail`: `embedding_model_mismatch` changed from `embedding model mismatch: archive has '<model>', server is configured with '<model>'` to `archive uses model '<model>'; server is configured with '<model>'`, and `schema_version_mismatch` now ends `use ignore_schema_version=true to bypass` instead of `…=True…`.
+- **Import `DONE` timing**: an import job now reaches `DONE` only after warming the embedder serving the imported collection plus the reranker (best-effort, bounded; the job never fails because of it), so the first single-collection search after `import --wait` runs the full hybrid ranking instead of silently falling back to FTS-only. On a server whose models are still building, the import's `DONE` therefore arrives later and its bulk-job slot is held for that time. A `DELETE /jobs/{id}` landing during that warm-up ends the job `CANCELLED` — but every document is already written, so the imported collection stays (as for an ingest cancelled during its warm-up), and importing the archive again needs `force_overwrite=true`, else `409` `collection_exists`. A server shutdown during the warm-up leaves the job to crash recovery, which marks it `FAILED` (`process_restart`) and `POST /jobs/{id}/resume` can continue it, unchanged.
+
+A job the scheduler fails to start still reports `dispatch_failed: <exception text>` (unchanged).
+
+**Migration**: clients that parsed an unexpected export/import failure's `error`, the changed refusal messages listed above, the import route's `invalid_manifest` `detail`, or the MCP `invalid archive: …` and mismatch texts must match the new fixed wording; the cause of an unexpected failure is in the server log. Nothing else is needed.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — Docker `:gpu` image: CUDA 13 base, NVIDIA driver ≥ 580 required; no system CUDA 12.1 / cuDNN 8 libraries (2026-10-10)
 
 **Surface**: the `ghcr.io/user538295/archon-search:gpu` and `:<version>-gpu` images — host driver requirement under `docker run --gpus`, and the base image that images built `FROM` them inherit.

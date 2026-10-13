@@ -30,12 +30,7 @@ Each `.tar.gz` contains exactly two members:
 | `manifest.json` | `archon_search_version`, `schema_version`, `collection`, `exported_at`, `doc_count`, `active_embedding_model`, `description`, `lancedb_version` |
 | `documents.jsonl` | One JSON object per chunk; vectors are base64-encoded little-endian float32 arrays |
 
-The **centroid is not exported** — the import job recomputes collection metadata
-(centroid + description embedding) as its final step. `source_path` values are preserved
-as-is; on a different machine they may point at paths that no longer exist. That is
-accepted — `source_path` is metadata, not a live reference. To restore live path
-references (for `search_with_context` or the watcher), re-ingest from the target
-filesystem after import.
+The **centroid is not exported** — the import job recomputes the collection metadata (centroid and counts) from the imported vectors. The manifest's `description` is **not** restored: the imported collection starts without one. Before reporting `DONE` the job warms the embedder serving the collection plus the reranker (best-effort, capped at 180 s), so the first single-collection search after `--wait` returns runs the full hybrid ranking rather than an FTS-only fallback (S288); multi-collection search uses the global embedder, which the server warms at startup. `source_path` values are preserved as-is; on a different machine they may point at paths that no longer exist. That is accepted — `source_path` is metadata, not a live reference. To restore live path references (for `search_with_context` or the watcher), re-ingest from the target filesystem after import.
 
 ### Constraints to know before you start
 
@@ -182,11 +177,9 @@ record as `{processed, total, phase}` every `[jobs].checkpoint_interval` documen
 - **Export**: `reading` → `writing` → `packaging`
 - **Import**: `validating` → `ingesting` → `indexing`
 
-Because they're bulk jobs, they may sit in `QUEUED` behind another export/import until a
-slot frees up (concurrency is capped by `[jobs].max_concurrent_bulk`, default 1). If the
-server restarts mid-run, the job becomes `FAILED` but its checkpoint is preserved — call
-`POST /jobs/{job_id}/resume` to re-enqueue from the last checkpoint (export re-opens its
-`.export-<job_id>.jsonl.tmp` temp file; import skips already-ingested batches).
+Because they're bulk jobs, they may sit in `QUEUED` behind another export/import until a slot frees up (concurrency is capped by `[jobs].max_concurrent_bulk`, default 1). An import holds its slot through the final model warm-up too, so on a server whose models are still building, a queued export or backup can wait up to that warm-up's ceiling longer. If the server restarts mid-run, the job becomes `FAILED` but its checkpoint is preserved — call `POST /jobs/{job_id}/resume` to re-enqueue from the last checkpoint (export re-opens its `.export-<job_id>.jsonl.tmp` temp file; import skips already-ingested batches).
+
+Cancelling an import (`DELETE /jobs/{job_id}`) during that final warm-up ends the job `CANCELLED`, but every document is already written, so the imported collection stays — as with an ingest cancelled at the same point. To import the archive again, pass `--force-overwrite` (`force_overwrite=true`); without it the import is refused with `409` `collection_exists`.
 
 Track a job without `--wait` using the CLI:
 

@@ -13,13 +13,13 @@ fails at step 2 with ``status=0 body=None`` — no HTTP response at all, i.e. th
 client's read timeout expired.
 
 Root cause. S281 made an ingest job absorb the model warm-up before reporting
-DONE (``server/routes_jobs.py`` ``_await_models_warm``), but that absorption is
-*bounded* by ``_INGEST_WARMUP_WAIT_SECONDS`` (180 s) while the search side is
-**not** bounded at all: ``server/routes_search.py:373`` awaits
+DONE (``server/_job_warmup.py`` ``await_models_warm``), but that absorption is
+*bounded* by ``JOB_WARMUP_WAIT_SECONDS`` (180 s) while the search side is
+**not** bounded at all: ``server/routes_search.py`` ``search`` awaits
 ``pipeline.warmup_models(embedder)`` outside the ``_SEARCH_TIMEOUT_SECONDS``
 (30 s) ``wait_for`` that guards the search itself. When the cold cross-encoder
-build outlives the ingest ceiling, ``_await_models_warm`` deliberately logs a
-WARNING and lets the job report DONE anyway — its own docstring concedes "a
+build outlives the ingest ceiling, ``await_models_warm`` deliberately logs a
+WARNING and lets the job report DONE anyway — its docstring then conceded "a
 timeout only means the first search pays the build cost, which is the old
 behaviour". So the ingest hands the client the documented completion signal
 while search is still unusable, and the search that follows produces no response
@@ -55,7 +55,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("s286")]
 #: production 180 s one.
 _COLD_CROSS_ENCODER_LOAD_SECONDS = 4.0
 
-#: ``routes_jobs._INGEST_WARMUP_WAIT_SECONDS`` rebound for the test, keeping the
+#: ``_job_warmup.JOB_WARMUP_WAIT_SECONDS`` rebound for the test, keeping the
 #: production relationship (ceiling < build) at a scale a test suite can pay.
 _REBOUND_INGEST_WARMUP_CEILING_SECONDS = 0.5
 
@@ -135,7 +135,7 @@ def test_s286_search_answers_after_single_file_ingest_wait_reports_success(tmp_p
     data_dir.mkdir()
 
     monkeypatch.setattr(
-        "archon_search.server.routes_jobs._INGEST_WARMUP_WAIT_SECONDS",
+        "archon_search.server._job_warmup.JOB_WARMUP_WAIT_SECONDS",
         _REBOUND_INGEST_WARMUP_CEILING_SECONDS,
     )
     # Before the app starts: the warm-up that runs at startup is the one that must
@@ -167,8 +167,8 @@ def test_s286_search_answers_after_single_file_ingest_wait_reports_success(tmp_p
         assert elapsed < _CLIENT_SEARCH_TIMEOUT_SECONDS, (
             f"first POST /search took {elapsed:.1f}s after `ingest --path <file> --collection "
             f"{_COLLECTION} --wait` reported the job DONE (the CLI's exit 0). The cold "
-            f"cross-encoder build outran _INGEST_WARMUP_WAIT_SECONDS, so the ingest job "
-            f"reported DONE with the model still cold, and routes_search.py:373 then awaits "
+            f"cross-encoder build outran JOB_WARMUP_WAIT_SECONDS, so the ingest job "
+            f"reported DONE with the model still cold, and routes_search.search then awaits "
             f"warmup_models() outside _SEARCH_TIMEOUT_SECONDS with no bound of its own. A real "
             f"client times out and records status=0 body=None (S286). A completed ingest must "
             f"not be a signal the server hands out while search is still unusable."

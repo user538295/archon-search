@@ -4,6 +4,9 @@ Provides:
   - EXPORT_SCHEMA_VERSION: int constant identifying the archive format version.
   - ExportArchiveWriter: two-phase writer (temp JSONL → finalized .tar.gz).
   - ImportArchiveReader: validated streaming reader for import archives.
+  - ArchiveRejectedError: an archive the import refuses, with a caller-safe message.
+  - INVALID_ARCHIVE_DETAIL / INVALID_MANIFEST_DETAIL / manifest_error_detail: the
+    wire-safe texts the REST route and the MCP tool share for an unreadable archive.
 """
 from __future__ import annotations
 
@@ -15,11 +18,56 @@ import tarfile
 from pathlib import Path
 from typing import IO, Iterator
 
-from archon_search._path_safety import validate_archive_members
+from archon_search._path_safety import PathUnsafeError, validate_archive_members
 
 logger = logging.getLogger(__name__)
 
 EXPORT_SCHEMA_VERSION: int = 1
+
+
+class ArchiveRejectedError(ValueError):
+    """A refusal the import makes: the archive's content is unusable, or the target collection already exists.
+
+    The message is fixed text built by archon-search, quoting only line numbers, its own
+    field names and request values, and archive values through :func:`quote_archive_value`
+    — never a library's or the server's exception text — so it is safe for a wire-facing
+    ``detail`` or a job's ``error``.
+    """
+
+
+# Wire-safe detail for an import archive that does not open as a tar.gz (tarfile/gzip
+# error text can reflect the archive's own bytes); the cause is logged.
+INVALID_ARCHIVE_DETAIL = "archive could not be opened: invalid or corrupt tar.gz"
+
+# Wire-safe detail for a manifest that failed to read for any reason other than an
+# ArchiveRejectedError (whose own message is safe to send); the cause is logged.
+INVALID_MANIFEST_DETAIL = "manifest.json could not be read"
+
+#: Longest archive-supplied value an ArchiveRejectedError message quotes: an archive is
+#: untrusted input, so a crafted manifest value cannot inflate a ``detail`` or ``error``.
+ARCHIVE_VALUE_MAX_CHARS = 80
+_TRUNCATION_MARK = "…"
+
+
+def quote_archive_value(value: object) -> str:
+    """``repr(value)``, cut to :data:`ARCHIVE_VALUE_MAX_CHARS` with a trailing ``…``."""
+    quoted = repr(value)
+    if len(quoted) <= ARCHIVE_VALUE_MAX_CHARS:
+        return quoted
+    return quoted[: ARCHIVE_VALUE_MAX_CHARS - len(_TRUNCATION_MARK)] + _TRUNCATION_MARK
+
+
+def manifest_error_detail(exc: Exception, archive_path: Path) -> str:
+    """The wire-safe text for a failed :meth:`ImportArchiveReader.read_manifest`.
+
+    An :class:`ArchiveRejectedError` message or a ``PathUnsafeError`` reason code is
+    text archon-search built itself; anything else is logged (with its traceback) and
+    reported as :data:`INVALID_MANIFEST_DETAIL`.
+    """
+    if isinstance(exc, (ArchiveRejectedError, PathUnsafeError)):
+        return str(exc)
+    logger.warning("import archive %s: manifest could not be read: %s", archive_path, exc, exc_info=exc)
+    return INVALID_MANIFEST_DETAIL
 
 
 def get_lancedb_version() -> str | None:
@@ -140,28 +188,40 @@ class ImportArchiveReader:
     def __init__(self, archive_path: Path) -> None:
         self._archive_path = archive_path
         self.skipped_lines: int = 0
+        #: 1-based ``documents.jsonl`` line of the document :meth:`iter_docs` last yielded.
+        self.line_number: int = 0
 
     def read_manifest(self) -> dict:
         """Open the archive, validate its members, and return the parsed manifest.
 
         Raises:
             PathUnsafeError: if any tar member is unsafe (via :func:`validate_archive_members`).
-            ValueError: if the manifest is missing required keys or is malformed.
+            ArchiveRejectedError: if the manifest is not a regular file, not UTF-8 JSON
+                (including an oversized int or nesting past the parser's recursion
+                limit), not a JSON object, or is missing required keys.
         """
         with tarfile.open(self._archive_path, "r:gz") as tf:
             validate_archive_members(tf)
             member = tf.getmember("manifest.json")
             f = tf.extractfile(member)
             if f is None:
-                raise ValueError("manifest.json member is not a regular file")
-            manifest = json.loads(f.read().decode("utf-8"))
+                raise ArchiveRejectedError("manifest.json member is not a regular file")
+            try:
+                manifest = json.loads(f.read().decode("utf-8"))
+            # ValueError covers UnicodeDecodeError, JSONDecodeError and an oversized int;
+            # RecursionError covers nesting deeper than the parser's recursion limit.
+            except (ValueError, RecursionError) as exc:
+                logger.warning("manifest.json of %s is not valid UTF-8 JSON: %s", self._archive_path, exc)
+                raise ArchiveRejectedError("manifest.json is not valid UTF-8 JSON") from exc
 
         if not isinstance(manifest, dict):
-            raise ValueError(f"manifest.json must be a JSON object, got {type(manifest)}")
+            raise ArchiveRejectedError(
+                f"manifest.json must be a JSON object, got {type(manifest).__name__}"
+            )
 
         missing = _REQUIRED_MANIFEST_KEYS - manifest.keys()
         if missing:
-            raise ValueError(
+            raise ArchiveRejectedError(
                 f"manifest.json is missing required keys: {', '.join(sorted(missing))}"
             )
 
@@ -172,36 +232,48 @@ class ImportArchiveReader:
 
         Each yielded value is a parsed JSON dict representing one document.
 
-        When *on_error* is ``"skip"``, corrupt JSON lines are logged, counted
-        in :attr:`skipped_lines`, and skipped.  When ``"fail"`` (default), a
-        corrupt line raises immediately.
+        When *on_error* is ``"skip"``, corrupt lines (not UTF-8 JSON — including an
+        oversized int or nesting past the parser's recursion limit — or not a JSON
+        object) are logged, counted in :attr:`skipped_lines`, and skipped.  When
+        ``"fail"`` (default), a corrupt line raises immediately, unlogged: the caller
+        logs the refusal.  :attr:`line_number` holds the line of the document last
+        yielded.
 
         Raises:
-            ValueError: if *on_error* is ``"fail"`` and a line cannot be parsed
-                as JSON (includes the 1-based line number in the message).
+            ArchiveRejectedError: if *on_error* is ``"fail"`` and a line is corrupt
+                (the message names its 1-based line number), or ``documents.jsonl``
+                is not a regular file.
         """
         self.skipped_lines = 0
         with tarfile.open(self._archive_path, "r:gz") as tf:
             member = tf.getmember("documents.jsonl")
             f = tf.extractfile(member)
             if f is None:
-                raise ValueError("documents.jsonl member is not a regular file")
+                raise ArchiveRejectedError("documents.jsonl member is not a regular file")
             lines_skipped = 0
             lineno = 0
             for raw_line in f:
                 lineno += 1
-                line = raw_line.decode("utf-8").rstrip("\n")
+                line = raw_line.rstrip(b"\n")
                 if not line:
                     continue
                 if lines_skipped < skip:
                     lines_skipped += 1
                     continue
+                cause: Exception | None = None
                 try:
-                    parsed = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    if on_error == "skip":
-                        self.skipped_lines += 1
-                        logger.warning("Corrupt line %d: %s", lineno, exc)
-                        continue
-                    raise ValueError(f"Corrupt line {lineno}: {exc}") from exc
+                    parsed = json.loads(line.decode("utf-8"))
+                # Same cases as read_manifest: decode/syntax errors, oversized ints, deep nesting.
+                except (ValueError, RecursionError) as exc:
+                    cause, reason = exc, "not valid UTF-8 JSON"
+                else:
+                    reason = "" if isinstance(parsed, dict) else "not a JSON object"
+                if reason:
+                    if on_error != "skip":
+                        # The caller logs the refusal, with its job context and this cause.
+                        raise ArchiveRejectedError(f"Corrupt line {lineno}: {reason}") from cause
+                    self.skipped_lines += 1
+                    logger.warning("Corrupt line %d: %s", lineno, cause or reason)
+                    continue
+                self.line_number = lineno
                 yield parsed

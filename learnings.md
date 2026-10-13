@@ -3,16 +3,16 @@
 Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings-archive.md` (grep it, never read whole).
 
 ## What Has Failed
-- **[2026-10-12] (×59) pytest OOM/memory RCA**: rules: `tests/CLAUDE.md`. Never pytest a `tests/eval/corpus` path (.pyc breaks the corpus loader: 54 eval fails). Rotating timing fail = contention; failure-path budget 5s→30s. Leaks: archive.
+- **[2026-10-12] (×61) pytest OOM/memory RCA**: rules: `tests/CLAUDE.md`. Never pytest a `tests/eval/corpus` path (.pyc breaks the corpus loader: 54 eval fails). Rotating timing fail = contention; failure-path budget 5s→30s. Leaks: archive.
 - **[2026-10-12] (×2) release-path CI**: GH caches are ref-scoped — a tag run reads its own tag or `main` only, and nothing runs on `main` here, so a release cache step never hits, only evicts the PR gate's. Autouse function fixtures beat module env.
 ## What Has Worked
-- **[2026-08-27] (×1) TOCTOU lock fixes**: `asyncio.Lock` is non-reentrant — wrapping a method's body in its own lock deadlocks any caller that already holds it. Add `_locked_by_caller` (matches `ingest_chunks`), don't just wrap.
-- **[2026-10-12] (×135) briefs**: failing repro FIRST; fix at guard layer. Re-filed → `<name>-reopened.md`. Same symptom as a sibling S-report (S40=S27)? Check its fix first. Non-disk `source_path` writer needs a `_run_orphan_cleanup` exemption.
+- **[2026-10-12] (×1) untrusted JSON parse**: `json.loads` raises `RecursionError` (a RuntimeError) on deep nesting and a plain `ValueError` on >4300-digit ints — catch `(ValueError, RecursionError)`; reject non-dict lines explicitly.
+- **[2026-10-12] (×138) briefs**: failing repro FIRST; fix at guard layer. Re-filed → `<name>-reopened.md`. Same symptom as a sibling S-report (S40=S27)? Check its fix first. Non-disk `source_path` writer needs a `_run_orphan_cleanup` exemption.
 - **[2026-09-05] (×5) brief refinement**: grep every "reuse X from Y" claim. Deleting a feature strands wire fields added only for it (`provider_notes`); a sibling method survives; narrowing a protocol ripples to its probe + any "N sites" test.
 - **[2026-09-16] (×33) new field/pin**: dataclass + `_apply_toml` + coerce + snapshots. `body.filters`-only flag drops top-level — add top-level OR nested (S274). "or warning" branch can test UNBUILT code; build it, `_GRAMMAR_LOGGED` global restore.
-- **[2026-10-12] (×20) xdist/asyncio**: `AsyncMock`; `asyncio.run()`; `xdist_group("mcp")`. be9/rag_fusion leave `_StubFastMCP` on `server.mcp`; real one: `patch.object(mcp_module,"FastMCP",fastmcp.server.server.FastMCP)`.
-- **[2026-10-12] (×38) warm-up/lifespan**: readiness gates it; x-encoder BEFORE preload; bound BOTH legs EVERY branch + pre-warmup `get_or_load` (S299); cold→`fts_only`; HyDE embeds first, LLM leg needs a budget wrap (S582). `shield`+`*WarmupTimeout`.
-- **[2026-10-13] (×40) test vacuity**: split `or` asserts; overrides start OPPOSITE. Every ABSENCE assert needs a PRESENCE anchor + the deleted wording. A scenario saying "persisted" = read back via GraphStore, not `result.*`. A tester e2e adds a LAYER.
+- **[2026-10-12] (×23) xdist/asyncio**: `AsyncMock`; `asyncio.run()`; `xdist_group("mcp")`. be9/rag_fusion leave `_StubFastMCP` on `server.mcp`; real one: `patch.object(mcp_module,"FastMCP",fastmcp.server.server.FastMCP)`.
+- **[2026-10-12] (×42) warm-up/lifespan**: readiness gates it; x-encoder BEFORE preload; bound BOTH legs+pre-warmup `get_or_load` (S299); cold→`fts_only`; HyDE LLM leg: budget wrap (S582). import warms pre-DONE; shutdown cancel→RUNNING, resumable (S288).
+- **[2026-10-13] (×44) test vacuity**: split `or` asserts; overrides start OPPOSITE. Every ABSENCE assert needs a PRESENCE anchor + the deleted wording. A scenario saying "persisted" = read back via GraphStore, not `result.*`. A tester e2e adds a LAYER.
 - **[2026-10-12] (×21) new column/kwarg**: mirror ALL sites — dataclass, `_row_to_meta`, BOTH meta-write fns, every ctor, `_ROUTING_FIELDS`, `_migrate_<field>()`, catalog, `fake_<method>`. fastembed `cache_dir=get_fastembed_cache_dir()` (S493).
 - **[2026-08-18] (×16) CLI HTTP-proxy**: custom `--api-url` probe fail → NOT_RUNNING (S530). Default URL probe fail + service running → STARTING_MSG (c7829cbd). Probe OK but non-usable → NOT_RUNNING (C1-I-16). Distinguish via `_LOCAL_DEFAULT_URL`.
 - **[2026-08-20] (×12) job-spawning route**: guard→404→create→`transition({QUEUED},RUNNING)` BEFORE `create_task`→track + `add_done_callback`. 409 via persisted `meta.<job>_job_id`, cleared BEFORE `job_store.update(DONE/FAILED)`.
@@ -21,9 +21,9 @@ Hard cap: under 30 lines, under 256 chars per line. Long-form detail: `learnings
 - **[2026-10-13] (×15) 3rd-party wiring**: verify params+DICT KEYS on REAL lib. fastembed: models key `"model"`; no `cache_dir` → `<tmp>/fastembed_cache`. Real-model lane conftest: pop the fastembed stub (zeros). GLiNER `relations` no-op off-RelEx.
 
 ## Plan-Making & Agent Process
-- **[2026-10-13] (×199) verify claims/state**: grep-verify every cite AND cited PRECEDENTs. Grep the tasks file for a spike's Notes. Repro vs the ticket's `Version:` tag, not only HEAD (`git worktree`). Re-grep after bulk `replace` — hits twins.
+- **[2026-10-13] (×203) verify claims/state**: grep-verify every cite AND cited PRECEDENTs. Grep the tasks file for a spike's Notes. Repro vs the ticket's `Version:` tag, not only HEAD (`git worktree`). Re-grep after bulk `replace` — hits twins.
 - **[2026-09-07] (×55) subagents**: final text DISCARDED; API death mid-run leaves NOTHING; nested leak to GRANDPARENT. Non-general-purpose lacks SendMessage: idle_notification carries no content — pull result from subagents/agent-<name>-*.jsonl.
 - **[2026-10-12] (×19) guards**: allowlist entries STILL match; tests IMPORT `_ENGINE_PATTERN`; deleted file → `git rm`+strike BOTH; bare `xfail` can't fail. Doc gate: -Backlog/Completed, +README, PERIOD split, +red test; `warm.?up` ≠ "warms up".
-- **[2026-10-13] (×54) doc close-out**: grep WHOLE tree (+`README.md`, `*.toml.example`) for the old string. Error docs cite the FIRST rejecting layer, not a fallback. No `>` amid table rows. Compose override wins. Order: api-ref→catalog→CLAUDE.md→manual.
+- **[2026-10-13] (×55) doc close-out**: grep WHOLE tree (+`README.md`, `*.toml.example`) for the old string. Error docs cite the FIRST rejecting layer, not a fallback. No `>` amid table rows. Compose override wins. Order: api-ref→catalog→CLAUDE.md→manual.
 - **[2026-08-24] (×3) plan/task authoring**: a fix in the body but not the Decisions table / mermaid / doc-checklist is the top defect — sweep all 8 surfaces + the `.tsp`. `#team` gate → agent-runnable findings; never flip the box.
 - **[2026-10-13] (×18) smoke/container**: `-o addopts=`; pair `*_CONFIG`+`*_DATA_DIR`; tmp `DATA_DIR`: symlink `models/`. Image must mkdir+chown a volume mount target (else root-owned); compose merges volumes BY TARGET, override wins. `/import`: S291.

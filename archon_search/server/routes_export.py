@@ -15,7 +15,7 @@ import struct
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter
@@ -26,31 +26,37 @@ from pydantic import BaseModel, field_validator
 from archon_search._path_safety import PathUnsafeError, validate_archive_members, validate_export_path
 from archon_search._types import ChunkRecord
 from archon_search.config import SearchConfig
-from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.embedder_cache import EMBEDDER_NOT_READY_DETAIL, EmbedderCache, EmbedderNotReadyError
 from archon_search.jobs.export_archive import (
     EXPORT_SCHEMA_VERSION,
+    INVALID_ARCHIVE_DETAIL,
+    ArchiveRejectedError,
     ExportArchiveWriter,
     ImportArchiveReader,
     get_lancedb_version,
+    manifest_error_detail,
+    quote_archive_value,
 )
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.paths import get_data_dir
 from archon_search.pipeline import SearchPipeline
+from archon_search.server._job_warmup import await_models_warm
 from archon_search.server.schemas import ErrorDetail, JobResponse
 from archon_search.store import SearchStore
 from archon_search.types import ExportJob, ImportJob, JobStatus
 
 logger = logging.getLogger(__name__)
 
-# Sanitized detail for a caught archive-open exception whose message may embed internals
-# (tarfile/gzip error text can reflect the archive's own byte content).
-INVALID_ARCHIVE_DETAIL = "archive could not be opened: invalid or corrupt tar.gz"
+# Sanitized job ``error`` for an export/import that failed unexpectedly (store,
+# filesystem or library errors, whose text can embed paths and internals). The
+# original exception is logged server-side.
+EXPORT_FAILED_DETAIL = "export failed; see the server log for details"
+IMPORT_FAILED_DETAIL = "import failed; see the server log for details"
 
 router = APIRouter()
 
-_ERROR_400_401_404 = {
+_ERROR_400_401_404: dict[int | str, dict[str, Any]] = {
     400: {"model": ErrorDetail, "description": "Path unsafe or invalid request"},
     401: {"model": ErrorDetail},
     404: {"model": ErrorDetail},
@@ -139,10 +145,10 @@ async def _export_task(
 
         store.update(job_id, status=JobStatus.DONE, result={"archive_path": str(archive_path)})
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("_export_task: job %s failed", job_id)
         try:
-            store.update(job_id, status=JobStatus.FAILED, error=str(exc))
+            store.update(job_id, status=JobStatus.FAILED, error=EXPORT_FAILED_DETAIL)
         except (KeyError, OSError):
             logger.error("_export_task: could not persist FAILED status for job %s", job_id)
 
@@ -161,8 +167,12 @@ async def _import_task(
       1. validating phase: read manifest, check schema_version and embedding model
       2. collection exists check: fail or drop+recreate depending on force_overwrite
       3. ingesting phase: stream docs from archive into the store; checkpoint progress
-      4. indexing phase: rebuild FTS index and recompute collection meta
+      4. indexing phase: rebuild FTS index, recompute collection meta, warm the models
       5. mark DONE on success; FAILED on any exception; CANCELLED if CANCELLING detected
+
+    A cancelled task (only the lifespan shutdown cancels it) leaves the job RUNNING on
+    purpose: crash recovery turns it into FAILED ``process_restart``, which
+    ``POST /jobs/{id}/resume`` accepts — a CANCELLED job could not be resumed.
     """
     job_id = job.job_id
     try:
@@ -181,8 +191,8 @@ async def _import_task(
 
         # Schema version check (bypassable)
         if not job.ignore_schema_version and manifest["schema_version"] != EXPORT_SCHEMA_VERSION:
-            raise ValueError(
-                f"schema_version mismatch: archive has {manifest['schema_version']!r}, "
+            raise ArchiveRejectedError(
+                f"schema_version mismatch: archive has {quote_archive_value(manifest['schema_version'])}, "
                 f"server expects {EXPORT_SCHEMA_VERSION!r}; use ignore_schema_version=true to bypass"
             )
 
@@ -190,8 +200,8 @@ async def _import_task(
         archive_model = manifest["active_embedding_model"]
         server_model = config.embedding_model
         if archive_model != server_model:
-            raise ValueError(
-                f"embedding model mismatch: archive has {archive_model!r}, "
+            raise ArchiveRejectedError(
+                f"embedding model mismatch: archive has {quote_archive_value(archive_model)}, "
                 f"server is configured with {server_model!r}; re-export with a matching model"
             )
 
@@ -207,7 +217,7 @@ async def _import_task(
         # the collection was already partially created in the first run.
         if collection_exists and not is_resume:
             if not job.force_overwrite:
-                raise ValueError(
+                raise ArchiveRejectedError(
                     f"collection {job.collection!r} already exists; use force_overwrite=true to overwrite"
                 )
             # Drop and recreate
@@ -261,7 +271,10 @@ async def _import_task(
                     skipped += 1
                     logger.warning("_import_task: skipping corrupt doc (vector decode): %s", exc)
                     continue
-                raise ValueError(f"corrupt doc (vector): {exc}") from exc
+                # Logged once, with this cause chained, by the ArchiveRejectedError handler below.
+                raise ArchiveRejectedError(
+                    f"corrupt doc (vector) at line {reader.line_number}: missing or not base64-encoded float32"
+                ) from exc
 
             try:
                 raw_meta = doc.get("metadata", {})
@@ -290,7 +303,9 @@ async def _import_task(
                     skipped += 1
                     logger.warning("_import_task: skipping malformed doc: %s", exc)
                     continue
-                raise ValueError(f"malformed doc: {exc}") from exc
+                raise ArchiveRejectedError(
+                    f"malformed doc at line {reader.line_number}: a required field is missing or has the wrong type"
+                ) from exc
 
             batch.append(chunk)
 
@@ -323,10 +338,15 @@ async def _import_task(
             detected_language = manifest.get("language", "")
             await search_store.rebuild_fts_index(job.collection, language=detected_language)
 
-            global_embedder = await embedder_cache.get_or_load(manifest["active_embedding_model"])
+            collection_embedder = await embedder_cache.get_or_load(manifest["active_embedding_model"])
             await pipeline.recompute_collection_meta(
-                job.collection, global_embedder, namespace=job.namespace, force=True
+                job.collection, collection_embedder, namespace=job.namespace, force=True
             )
+            # get_or_load returns a lazy embedder, and an import takes its vectors from
+            # the archive, so nothing here builds it: without this the first search
+            # after DONE finds it cold and runs FTS-only, dropping every vector-only
+            # hit (S288 (import)).
+            await await_models_warm(pipeline, job_id, collection_embedder)
         else:
             # Empty archive: table was never created; nothing to index or recompute.
             logger.info("_import_task: archive for %r is empty; skipping FTS rebuild and centroid recompute", job.collection)
@@ -334,6 +354,13 @@ async def _import_task(
         # Total skipped = JSON-parse errors (handled by iter_docs) + vector/doc
         # errors (handled locally in the while loop above).
         total_skipped = skipped + reader.skipped_lines
+
+        # A DELETE /jobs/{id} may have landed during the indexing phase (the warm-up
+        # can take minutes on a cold server); honour it rather than overwrite it.
+        current = store.get(job_id)
+        if current is not None and current.status == JobStatus.CANCELLING:
+            store.update(job_id, status=JobStatus.CANCELLED)
+            return
 
         store.update(
             job_id,
@@ -354,10 +381,18 @@ async def _import_task(
             store.update(job_id, status=JobStatus.FAILED, error=EMBEDDER_NOT_READY_DETAIL)
         except (KeyError, OSError):
             logger.error("_import_task: could not persist FAILED status for job %s", job_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("_import_task: job %s failed", job_id)
+    except (ArchiveRejectedError, PathUnsafeError) as exc:
+        # A refusal phrased by archon-search itself (an ArchiveRejectedError message or a
+        # PathUnsafeError reason code): safe to report.
+        logger.warning("_import_task: job %s rejected the archive: %s", job_id, exc, exc_info=True)
         try:
             store.update(job_id, status=JobStatus.FAILED, error=str(exc))
+        except (KeyError, OSError):
+            logger.error("_import_task: could not persist FAILED status for job %s", job_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("_import_task: job %s failed", job_id)
+        try:
+            store.update(job_id, status=JobStatus.FAILED, error=IMPORT_FAILED_DETAIL)
         except (KeyError, OSError):
             logger.error("_import_task: could not persist FAILED status for job %s", job_id)
 
@@ -516,7 +551,7 @@ async def import_collection(
         manifest = reader.read_manifest()
     except (ValueError, PathUnsafeError) as exc:
         return JSONResponse(
-            {"error": "invalid_manifest", "detail": str(exc)},
+            {"error": "invalid_manifest", "detail": manifest_error_detail(exc, archive_path)},
             status_code=422,
         )
 
@@ -527,7 +562,7 @@ async def import_collection(
             {
                 "error": "embedding_model_mismatch",
                 "detail": (
-                    f"archive uses model {archive_model!r}; "
+                    f"archive uses model {quote_archive_value(archive_model)}; "
                     f"server is configured with {server_model!r}"
                 ),
             },
@@ -549,7 +584,7 @@ async def import_collection(
             {
                 "error": "schema_version_mismatch",
                 "detail": (
-                    f"archive has schema_version={archive_schema!r}; "
+                    f"archive has schema_version={quote_archive_value(archive_schema)}; "
                     f"server expects {EXPORT_SCHEMA_VERSION!r}; "
                     "use ignore_schema_version=true to bypass"
                 ),

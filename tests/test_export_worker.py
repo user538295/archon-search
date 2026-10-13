@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import hashlib
 import tarfile
 import uuid
@@ -15,7 +14,7 @@ from archon_search._types import ChunkRecord
 from archon_search.config import SearchConfig
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.store import JobStore
-from archon_search.server.routes_export import _export_task
+from archon_search.server.routes_export import EXPORT_FAILED_DETAIL, _export_task
 from archon_search.store import SearchStore
 from archon_search.types import ExportJob, JobStatus
 
@@ -202,6 +201,7 @@ async def test_export_task_store_error(
     tmp_job_store: JobStore,
     tmp_search_store: SearchStore,
     search_config: SearchConfig,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Simulated read failure results in FAILED job with error message."""
     col = "export-test-error"
@@ -213,14 +213,22 @@ async def test_export_task_store_error(
     archive_path = tmp_path / "error-export.tar.gz"
     tmp_file = tmp_path / ".export-error.jsonl.tmp"
     job = _make_export_job(col, str(archive_path), str(tmp_file), tmp_job_store)
+    routes_export_logger = "archon_search.server.routes_export"
 
-    await _export_task(job, tmp_job_store, disconnected_store, search_config)
+    with caplog.at_level("ERROR", logger=routes_export_logger):
+        await _export_task(job, tmp_job_store, disconnected_store, search_config)
 
     finished = tmp_job_store.get(job.job_id)
     assert finished is not None
     assert finished.status == JobStatus.FAILED
-    assert finished.error is not None
+    # The store's own exception text never reaches the wire-facing job ``error``.
+    assert finished.error == EXPORT_FAILED_DETAIL
     assert not archive_path.exists()
+    # ...but it is logged server-side, traceback included.
+    [record] = [r for r in caplog.records if r.name == routes_export_logger]
+    assert job.job_id in record.getMessage()
+    assert record.exc_info is not None
+    assert isinstance(record.exc_info[1], RuntimeError)
 
 
 @pytest.mark.integration
