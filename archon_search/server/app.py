@@ -600,8 +600,10 @@ def create_app(
         app.state.model_validation = None
 
         async def _run_model_validation() -> None:
-            embedder_is_warm = app.state.embedder.is_warm
             try:
+                # Inside the try: a raise here would otherwise leave model_validation
+                # None — ``checks.models: pending`` and /ready 503 forever (S631).
+                embedder_is_warm = app.state.embedder.is_warm
                 app.state.model_validation = await validate_models_async(
                     config,
                     timeout_seconds=config.validation_timeout_seconds,

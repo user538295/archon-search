@@ -94,9 +94,12 @@ class StartupSyncResult(str, Enum):
 
 class ReadinessChecks(BaseModel):
     storage: CheckStatus
-    # D6 BE-5 — model validation check; PENDING until background validation
-    # completes. Default required: routes_ready.py constructs this with only
-    # ``storage=`` while validation may still be running.
+    # D6 BE-5 — model validation check; PENDING until warm-up and background
+    # validation complete (a failed warm-up ends it as FAIL), and a PENDING value
+    # gates ``ready`` (S631).
+    # ``routes_ready.ready`` always passes it explicitly; the default exists only
+    # for direct constructions, and a PENDING value never pairs with
+    # ``ready: true`` on the wire.
     models: CheckStatus = CheckStatus.PENDING
     # Startup-sync check: PENDING while the lifespan's startup sync task is
     # still running (the index is mid-(re)build), FAIL if it crashed or
@@ -237,7 +240,7 @@ class ModelValidationStatus(BaseModel):
     ``llama_cpp_ok`` (S7, S17): ``None`` while pending or when ``llama_cpp`` is not
     configured as the provider in any of ``[hyde]``/``[rag_fusion]``/``[graph]``;
     ``True``/``False`` reflects llama-server reachability. Warn-not-block — never
-    feeds the ``/ready`` FAIL gate (S25).
+    feeds the ``checks.models`` FAIL status (S25).
     """
 
     embedder_ok: bool | None = None

@@ -50,7 +50,7 @@ Two auth-exempt probes are distinct on purpose:
 | Probe | Meaning | Behaviour |
 | --- | --- | --- |
 | `GET /health` | **Liveness** — the process is up and answering | Always `200` `{"status":"running","version":"…","mcp":…}` (`routes_health.py`) |
-| `GET /ready` | **Readiness** — storage, model, and startup-sync checks | `200` when storage is OK, the startup model warm-up (run on every start) has finished, and no startup collection sync is running, `503` otherwise; body reports per-check status (`routes_ready.py`) |
+| `GET /ready` | **Readiness** — storage, model, and startup-sync checks | `200` when storage is OK, neither the startup model warm-up (run on every start) nor the background model validation is pending (a failed warm-up ends that wait at once, as `checks.models: "fail"`), and no startup collection sync is running, `503` otherwise; body reports per-check status (`routes_ready.py`) |
 
 Use `/health` for a restart-if-dead liveness probe and `/ready` to gate traffic until the store and model backends are usable. For probe wiring and alerting depth see [`../OperatorGuide/20_monitoring_and_alerts.md`](../OperatorGuide/20_monitoring_and_alerts.md).
 

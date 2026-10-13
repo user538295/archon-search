@@ -2789,7 +2789,7 @@
         "type": "object"
       },
       "ModelValidationStatus": {
-        "description": "API-facing mirror of ModelValidationResult, nested under GET /status (D6 C1).\n\nA null (``None``) boolean field means the corresponding probe has not run /\ncompleted. ``validated_at`` is ``None`` while validation is pending and a UTC\ntimestamp once it has finished. See ``D6-model-validation-status.tsp`` (C1).\n\n``llama_cpp_ok`` (S7, S17): ``None`` while pending or when ``llama_cpp`` is not\nconfigured as the provider in any of ``[hyde]``/``[rag_fusion]``/``[graph]``;\n``True``/``False`` reflects llama-server reachability. Warn-not-block \u2014 never\nfeeds the ``/ready`` FAIL gate (S25).",
+        "description": "API-facing mirror of ModelValidationResult, nested under GET /status (D6 C1).\n\nA null (``None``) boolean field means the corresponding probe has not run /\ncompleted. ``validated_at`` is ``None`` while validation is pending and a UTC\ntimestamp once it has finished. See ``D6-model-validation-status.tsp`` (C1).\n\n``llama_cpp_ok`` (S7, S17): ``None`` while pending or when ``llama_cpp`` is not\nconfigured as the provider in any of ``[hyde]``/``[rag_fusion]``/``[graph]``;\n``True``/``False`` reflects llama-server reachability. Warn-not-block \u2014 never\nfeeds the ``checks.models`` FAIL status (S25).",
         "properties": {
           "embedder_ok": {
             "anyOf": [
@@ -6464,6 +6464,7 @@
     },
     "/ready": {
       "get": {
+        "description": "Readiness probe: ``200`` once the storage ping succeeds and neither the models\ncheck nor the startup sync is ``pending``; ``503`` otherwise.\n\n``checks.models`` stays ``pending`` until model warm-up and the background model\nvalidation finish (a failed warm-up ends it as ``fail``). ``warn``/``fail`` model\nor sync results do not gate readiness \u2014 search still answers, degraded.",
         "operationId": "ready_ready_get",
         "responses": {
           "200": {

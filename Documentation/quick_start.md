@@ -92,7 +92,7 @@ curl http://127.0.0.1:8765/health
 
 `GET /health`, `GET /ready`, `GET /docs`, `GET /openapi.json` and `GET /redoc` are unauthenticated. Every other endpoint requires `Authorization: Bearer <key>`.
 
-`/health` answers `200` as soon as the process is up, but `/ready` answers `503` until storage is connected, the startup model warm-up finished and the startup sync finished — poll `/ready` until it answers `200` before sending traffic.
+`/health` answers `200` as soon as the process is up, but `/ready` answers `503` until storage is connected, the startup model warm-up and the background model validation finished and the startup sync finished — poll `/ready` until it answers `200` before sending traffic.
 
 Interactive API explorer:
 

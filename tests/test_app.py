@@ -39,7 +39,15 @@ def job_store(tmp_path: Path) -> JobStore:
     return JobStore(path=tmp_path / "jobs.json")
 
 
-def wait_for_warmup(app: FastAPI, timeout: float = 10.0) -> None:
+#: Default ceiling for ``wait_for_warmup`` and ``wait_for_models_check_to_settle`` —
+#: only a broken build reaches it, so it is sized for a loaded xdist host, not the happy path.
+MODELS_CHECK_SETTLE_TIMEOUT_SECONDS = 30.0
+
+#: Poll interval while waiting for the lifespan's warm-up and validation tasks.
+_MODELS_CHECK_POLL_INTERVAL_SECONDS = 0.01
+
+
+def wait_for_warmup(app: FastAPI, timeout: float = MODELS_CHECK_SETTLE_TIMEOUT_SECONDS) -> None:
     """Block the calling thread until the backgrounded model warm-up has finished.
 
     The lifespan hands warm-up to ``asyncio.create_task`` so lifespan startup
@@ -57,8 +65,46 @@ def wait_for_warmup(app: FastAPI, timeout: float = 10.0) -> None:
     )
     deadline = time.monotonic() + timeout
     while not task.done() and time.monotonic() < deadline:
-        time.sleep(0.01)
+        time.sleep(_MODELS_CHECK_POLL_INTERVAL_SECONDS)
     assert task.done(), "model warm-up task did not finish within the timeout"
+
+
+def wait_for_models_check_to_settle(
+    app: FastAPI, timeout: float = MODELS_CHECK_SETTLE_TIMEOUT_SECONDS
+) -> None:
+    """Block until ``checks.models`` can leave ``pending``: warm-up settled AND a
+    ``model_validation`` result stored.
+
+    ``/ready`` answers ``503`` while ``checks.models`` is pending, which lasts until both
+    the lifespan's background warm-up and its background model validation finish (S631).
+    Neither is awaited by the lifespan, so a test asserting on any other readiness
+    signal must let both settle first or it asserts on a race. Both tasks run on the
+    TestClient portal thread's loop, so poll from here instead of awaiting.
+
+    Raises ``AssertionError`` naming whichever of the two did not settle in time.
+    """
+    import time  # noqa: PLC0415
+
+    from archon_search.server.schemas import WarmupResult  # noqa: PLC0415
+
+    deadline = time.monotonic() + timeout
+    while True:
+        warmup_settled = getattr(app.state, "warmup_result", None) != WarmupResult.PENDING
+        validation_stored = getattr(app.state, "model_validation", None) is not None
+        if warmup_settled and validation_stored:
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(_MODELS_CHECK_POLL_INTERVAL_SECONDS)
+    unsettled = [
+        name
+        for name, settled in (
+            ("model warm-up", warmup_settled),
+            ("model validation", validation_stored),
+        )
+        if not settled
+    ]
+    raise AssertionError(f"{' and '.join(unsettled)} did not settle within {timeout}s")
 
 
 def test_create_app_returns_fastapi_instance(config: SearchConfig, job_store: JobStore) -> None:
@@ -159,7 +205,7 @@ async def test_lifespan_calls_startup_migrations(config: SearchConfig, job_store
     BE-6 consolidated the five direct migrate_*() calls into _run_startup_migrations().
     This test verifies the call order: connect → _run_startup_migrations → disconnect.
     """
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     from archon_search.store import SearchStore
 

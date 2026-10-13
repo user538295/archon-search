@@ -104,7 +104,7 @@ class ModelValidationResult:
     probe has not run, or when ``llama_cpp`` is not configured as the provider in
     any of ``[hyde]``/``[rag_fusion]``/``[graph]`` (no probe is attempted); ``True``
     when the probe reached ``GET /v1/models``; ``False`` otherwise. This probe is
-    warn-not-block: it must never feed the ``/ready`` FAIL gate (S25).
+    warn-not-block: it must never feed the ``checks.models`` FAIL status (S25).
     """
 
     embedder_ok: bool | None = None
@@ -138,7 +138,10 @@ async def _probe_llama_cpp(config: SearchConfig) -> bool | None:
     attempted). Otherwise issues ``GET {base_url}/v1/models`` under a short, fixed
     timeout and returns ``True`` on any 2xx response, ``False`` on any failure
     (connection error, timeout, non-2xx status). Never raises — a WARNING is
-    logged on failure so boot can continue uninterrupted (S7).
+    logged on failure so boot can continue uninterrupted (S7). It never blocks
+    startup or queries, but it runs before the embedder/reranker probe inside
+    background validation, so its duration extends the ``/ready`` 503 window
+    (``checks.models`` stays ``pending`` until validation finishes, S631).
     """
     base_url = _llama_cpp_probe_url(config)
     if base_url is None:
@@ -252,7 +255,9 @@ async def _probe_extraction_model(
     unsummarised community. The only reachable, observable enforcement point is a one-shot
     startup probe feeding ``provider_warnings`` — the same pattern as :func:`graph_ner_status`
     and :func:`_probe_llama_cpp` above. Warn-not-block: never raises, never fails startup, and
-    never blocks it either — the probe is bounded by
+    never blocks startup or queries — but it runs before the embedder/reranker probe inside
+    background validation, so its duration extends the ``/ready`` 503 window (``checks.models``
+    stays ``pending`` until validation finishes, S631). The probe is bounded by
     ``min(extraction_timeout_seconds, _EXTRACTION_MODEL_PROBE_ECONOMIC_CEILING_SECONDS)``, so it
     can never run longer than the caller's own configured budget, AND an operator raising
     ``extraction_timeout_seconds`` to accommodate a slow reasoning model (K3's own experiment
@@ -459,9 +464,11 @@ async def validate_models_async(
     """Validate the configured embedder and reranker without blocking startup (C1).
 
     Runs :func:`validate_providers_shared` in a worker thread guarded by
-    ``asyncio.wait_for``. Never raises: a timeout or any other failure (including
-    ``CancelledError``) yields a result with both ``ok`` flags ``False`` and a
-    descriptive warning, rather than propagating.
+    ``asyncio.wait_for``. Never raises, with one exception: a timeout or any other
+    failure of the embedder/reranker probe (including ``CancelledError``) yields a
+    result with both ``ok`` flags ``False`` and a descriptive warning, rather than
+    propagating. The pre-probes below swallow their own errors but run outside that
+    ``try``, so a ``CancelledError`` (shutdown) delivered during them propagates.
 
     When *embedder_is_warm* is ``True`` the embedder probe is skipped (the caller
     has confirmed the global embedder is already exercised). Note: this is NOT the

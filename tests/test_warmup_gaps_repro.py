@@ -147,14 +147,15 @@ def test_warmup_result_attribute_missing(tmp_path: Path, job_store: JobStore) ->
 # Bug 3 — /ready returns 200 while eager warm-up is pending
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
-async def test_ready_returns_200_while_warmup_pending() -> None:
+async def test_ready_returns_503_while_warmup_pending() -> None:
     """``/ready`` must report ``models=pending`` (503) while eager warm-up runs.
 
-    ``model_validation`` completes in seconds (it only probes that the models are
-    resolvable); eager warm-up takes minutes. Today ``_model_check_status`` looks at
-    ``model_validation`` alone, so ``/ready`` answers 200/``models=ok`` while the
-    first real search would still block on ONNX construction — an orchestrator
-    routes traffic to a server that cannot serve it.
+    ``model_validation`` builds and runs its own throwaway probe instances, so it can
+    report OK while warm-up is still building the instances search actually uses
+    (minutes). Were ``_model_check_status`` to look at ``model_validation`` alone,
+    ``/ready`` would answer 200/``models=ok`` while the first real search still
+    blocks on ONNX construction — an orchestrator would route traffic to a server
+    that cannot serve it.
     """
     import json  # noqa: PLC0415
     from datetime import UTC, datetime  # noqa: PLC0415
@@ -276,7 +277,8 @@ async def test_ready_reports_fail_after_failed_warmup(warmup_result_value: str |
     )
     assert body["ready"] is True, (
         "a failed eager warm-up must stay informational-only and NOT wedge "
-        "/ready — only a PENDING warm-up (still running) gates readiness"
+        "/ready — only a PENDING models check (warm-up or validation still running) "
+        "gates readiness"
     )
     assert response.status_code == 200
 

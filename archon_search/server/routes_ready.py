@@ -18,18 +18,19 @@ router = APIRouter()
 def _warmup_pending(request: Request) -> bool:
     """True while model warm-up is still running.
 
-    ``model_validation`` only probes that the models are *resolvable* (seconds);
-    warm-up builds the ONNX weights (minutes). Only the latter means the
-    first real search would block, so it is the one signal that gates readiness.
+    Warm-up builds the ONNX weights (minutes); until it finishes the models are
+    not usable yet and search runs degraded (``_search_budget.warmup_for_search``),
+    so ``_model_check_status`` reports ``PENDING`` and readiness is gated through it.
 
     This must NOT be conditioned on ``config.eager_load_embedders`` (S279): that
     flag only widens warm-up's scope from the default embedder to every
     per-collection model, and gating on it left ``/ready`` blind for every
     deployment that did not opt in — reporting ``ready: true`` while the first
     search still paid the full cold cross-encoder build. ``warmup_result`` is
-    ``None`` unless the lifespan actually started a warm-up task, so the
-    ``getattr`` guard alone keeps the endpoint resilient to app factories that
-    never set it.
+    ``None`` unless the lifespan actually started a warm-up task; the ``getattr``
+    guard keeps the endpoint from raising for app factories that never set it —
+    such an app falls through to ``model_validation``, which reads ``PENDING`` (so
+    ``/ready`` answers ``503``) until a result is set (S631).
     """
     return getattr(request.app.state, "warmup_result", None) == WarmupResult.PENDING
 
@@ -85,16 +86,19 @@ def _model_check_status(request: Request, warmup_pending: bool) -> CheckStatus:
     produced a result yet — either ``app.state.model_validation`` is ``None``, or a result
     exists but a probe flag is still unset (``None``). Each branch asserts its
     condition positively so a partially-populated result can never read as OK/WARN.
-    The ``getattr`` guard keeps the endpoint resilient to app factories that never
-    set ``app.state.model_validation``.
+    The ``getattr`` guard keeps the endpoint from raising for app factories that never
+    set ``app.state.model_validation`` — such an app reads ``PENDING``, so ``/ready``
+    answers ``503`` (S631).
 
     Warm-up outranks everything: while it is pending the models are not
     usable yet no matter what ``model_validation`` already concluded.
+    ``PENDING`` — from either source — gates ``ready`` (S631); ``WARN``/``FAIL`` do not.
     ``warmup_pending`` is a required argument — the caller evaluates
-    ``_warmup_pending`` exactly once per request and passes the result in, so
-    ``app.state.warmup_result`` is never read twice: two reads are not atomic and
-    a warm-up finishing between them would yield ``models: pending`` with
-    ``ready: true``.
+    ``_warmup_pending`` exactly once per request and passes the result in, so one
+    read of ``app.state.warmup_result`` decides ``PENDING``: two reads are not atomic,
+    and a single deciding read keeps ``checks.models`` and ``ready`` (derived from it)
+    consistent within one response. The later ``FAILED`` read below is safe because
+    terminal warm-up states never return to pending.
 
     A *failed* warm-up also outranks ``model_validation``: mirrors
     ``_sync_check_status``, which gained an equivalent ``FAIL`` state for a
@@ -102,9 +106,9 @@ def _model_check_status(request: Request, warmup_pending: bool) -> CheckStatus:
     ``WarmupResult.FAILED`` when it raised or timed out, *or* when it finished with
     any model it covered failing to load or warm (S632 — the WARNING log names them).
     Without this branch such a failure is indistinguishable from a healthy warm-up once
-    ``model_validation``'s cheap resolvability probe (seconds) reports OK,
-    because that probe never proves the ONNX weights were actually built
-    (minutes). This does NOT gate ``ready`` — see the comment in ``ready()`` —
+    ``model_validation`` reports OK, because validation builds and runs its own
+    throwaway probe instances — it never proves the instances search actually uses
+    were built. This does NOT gate ``ready`` — see the comment in ``ready()`` —
     only the diagnostic.
     """
     if warmup_pending:
@@ -131,19 +135,31 @@ def _model_check_status(request: Request, warmup_pending: bool) -> CheckStatus:
     },
 )
 async def ready(request: Request) -> JSONResponse:
+    """Readiness probe: ``200`` once the storage ping succeeds and neither the models
+    check nor the startup sync is ``pending``; ``503`` otherwise.
+
+    ``checks.models`` stays ``pending`` until model warm-up and the background model
+    validation finish (a failed warm-up ends it as ``fail``). ``warn``/``fail`` model
+    or sync results do not gate readiness — search still answers, degraded.
+    """
     store = request.app.state.search_store
     storage_ok = await store.ping()
     warmup_pending = _warmup_pending(request)
     models_status = _model_check_status(request, warmup_pending)
     sync_pending = _startup_sync_pending(request)
-    # Readiness gates on storage, model warm-up and the startup sync. A failed/warned
-    # model_validation stays informational: search still answers, degraded — FTS-only
-    # while the query embedder is cold, unreranked while the cross-encoder is
-    # (``_search_budget.warmup_for_search``). A pending warm-up, though, means the
-    # first search would block on ONNX construction, and a running startup sync means
-    # the index is still being (re)built — a load balancer must not route real
-    # traffic here in either case.
-    ready_flag = storage_ok and not warmup_pending and not sync_pending
+    # Readiness gates on storage, a pending models check and the startup sync.
+    # ``models: pending`` covers both a running warm-up (the models are not usable yet,
+    # so search runs degraded) and a model validation that has not finished yet (S631) —
+    # never report ready while our own check is pending. Validation never raises; its
+    # bound is the pre-probes (llama-server reachability, graph NER importability
+    # check, and the extraction-model probe only when configured) plus
+    # ``validation_timeout_seconds`` for the embedder/reranker probe
+    # (``model_validation.validate_models_async``).
+    # A running startup sync means the index is still being (re)built. WARN/FAIL models
+    # stay informational: search still answers, degraded — FTS-only while the query
+    # embedder is cold, unreranked while the cross-encoder is
+    # (``_search_budget.warmup_for_search``).
+    ready_flag = storage_ok and models_status is not CheckStatus.PENDING and not sync_pending
     body = ReadinessResponse(
         ready=ready_flag,
         checks=ReadinessChecks(

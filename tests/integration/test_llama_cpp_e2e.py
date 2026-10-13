@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -32,6 +31,7 @@ from archon_search.install.config_writer import WizardFeatures, _apply_wizard_fe
 from archon_search.install.wizard import _list_cached_models_via_cli, _prompt_llama_cpp_model
 from tests._graph_engine_stub import install_graph_engine_stub
 from tests.integration.conftest import ingest_file_via_path, make_real_app
+from tests.test_app import wait_for_models_check_to_settle
 
 pytestmark = [pytest.mark.integration, pytest.mark.live]
 
@@ -270,10 +270,8 @@ def test_status_probe_llama_cpp_reachability(tmp_path: Path, monkeypatch: pytest
     """
     toml_content = '[hyde]\nprovider = "llama_cpp"\n'
     with make_real_app(tmp_path, monkeypatch, toml_content=toml_content) as (client, cfg, api_key):
-        deadline = time.monotonic() + 10.0
-        while time.monotonic() < deadline and client.app.state.model_validation is None:
-            time.sleep(0.05)
-        assert client.app.state.model_validation is not None, "model validation probe did not complete in time"
+        # /ready stays 503 until warm-up AND validation settle (S631) — wait both out.
+        wait_for_models_check_to_settle(client.app)
 
         ready_resp = client.get("/ready")
         assert ready_resp.status_code == 200, f"/ready degraded: {ready_resp.status_code} {ready_resp.text}"

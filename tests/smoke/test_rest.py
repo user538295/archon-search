@@ -65,6 +65,8 @@ def test_ready_returns_200(smoke_server) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["ready"] is True
+    # A pending models check gates readiness (S631) — ready:true must never carry it.
+    assert body["checks"]["models"] != "pending", body
 
 
 def test_status_returns_json_no_reprs(smoke_server) -> None:
@@ -305,7 +307,7 @@ _RECURSION_GUARD_ENV = "_ARCHON_E2E_SUBPROCESS"
 # while tolerating environment-dependent skips (graph extra absent, etc.).
 _EXPECTED_MIN_PASSED = 25
 
-# Child budget: fixture startup (30s health/ready poll + 60s ingest job poll,
+# Child budget: fixture startup (90s per health/ready poll phase + 60s ingest job poll,
 # tests/smoke/conftest.py) plus ~17 tests, several of which spawn their own
 # `uv run archon-search` subprocess (each paying its own cold-start cost).
 # Measured wall-clock on this machine: ~45s. 480s leaves ample margin while

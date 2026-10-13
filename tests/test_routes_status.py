@@ -507,6 +507,8 @@ def test_ready_not_affected_by_failed_collection(tmp_db: Path) -> None:
     """GET /ready only calls ping() — a FAILED collection does not affect its result."""
     from unittest.mock import AsyncMock, MagicMock
 
+    from archon_search.model_validation import ModelValidationResult
+
     state = IndexingState(
         collections={"broken": CollectionProgress(status=IndexingStatus.FAILED)}
     )
@@ -524,6 +526,8 @@ def test_ready_not_affected_by_failed_collection(tmp_db: Path) -> None:
     mock_store.connect = AsyncMock()
     mock_store.disconnect = AsyncMock()
     app.state.search_store = mock_store
+    # A pending models check gates readiness (S631) — finish validation first.
+    app.state.model_validation = ModelValidationResult(embedder_ok=True, reranker_ok=True)
 
     c = TestClient(app)
     response = c.get("/ready")

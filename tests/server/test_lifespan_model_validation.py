@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,7 +13,7 @@ from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.model_validation import ModelValidationResult
 from archon_search.server.app import create_app
-from archon_search.server.schemas import WarmupResult
+from tests.test_app import wait_for_models_check_to_settle
 
 
 def _make_config(tmp_path: Path) -> SearchConfig:
@@ -71,9 +70,7 @@ def test_background_task_exception_sets_failure_result(tmp_path: Path) -> None:
         side_effect=_boom,
     ):
         with TestClient(app):
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline and app.state.model_validation is None:
-                time.sleep(0.05)
+            wait_for_models_check_to_settle(app)
             assert app.state.model_validation is not None
             assert app.state.model_validation.embedder_ok is False
             assert app.state.model_validation.reranker_ok is False
@@ -111,18 +108,11 @@ def test_startup_warning_logged_llama_cpp_unreachable(
     with patch("archon_search.model_validation.httpx.AsyncClient", mock_cls), \
          caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
         with TestClient(app) as client:
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline and app.state.model_validation is None:
-                time.sleep(0.05)
-            # /ready gates on the background model warm-up too, and that task is
-            # deliberately not awaited by the lifespan — wait for it to settle, or
-            # this asserts on a race rather than on the probe failure.
-            deadline = time.monotonic() + 10.0
-            while (
-                time.monotonic() < deadline
-                and getattr(app.state, "warmup_result", None) == WarmupResult.PENDING
-            ):
-                time.sleep(0.01)
+            # /ready gates on a pending checks.models, which lasts until both the
+            # background warm-up and the background validation finish (S631); the
+            # lifespan awaits neither — wait both out, or this asserts on a race
+            # rather than on the probe failure.
+            wait_for_models_check_to_settle(app)
             # Boot completed normally — /ready is reachable despite the probe failure.
             assert client.get("/ready").status_code == 200
 
@@ -138,9 +128,7 @@ def test_background_validation_completes_and_sets_app_state(tmp_path, monkeypatc
 
     with make_real_app(tmp_path, monkeypatch) as (client, _cfg, _api_key):
         app = client.app
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline and app.state.model_validation is None:
-            time.sleep(0.05)
+        wait_for_models_check_to_settle(app)
         assert app.state.model_validation is not None
         assert app.state.model_validation.validated_at is not None
         # Stubbed embedder + reranker probes succeed → S1 happy path.

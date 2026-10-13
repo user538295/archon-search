@@ -105,11 +105,11 @@ def _wait_for_ready(url: str, timeout_s: int, container_id: str | None = None) -
     503 included. Uses a 1-second sleep between attempts per the Task 4.3 spec.
 
     A 503 is retried rather than raised: ``/ready`` answers 503 while the
-    startup model warm-up or the startup sync is still pending (``ready_flag``
-    in ``routes_ready.py``). But ``HTTPError`` is a SUBCLASS of ``URLError``, so
-    it must be caught first to be recorded — otherwise a container stuck at 503
-    times out reporting a stale connection error and the real readiness body is
-    never seen.
+    startup model warm-up, the background model validation, or the startup sync
+    is still pending (``ready_flag`` in ``routes_ready.py``). But ``HTTPError``
+    is a SUBCLASS of ``URLError``, so it must be caught first to be recorded —
+    otherwise a container stuck at 503 times out reporting a stale connection
+    error and the real readiness body is never seen.
 
     When *container_id* is given, an exited container fails immediately with its
     logs. Without this, the exact regression S56 guards against — a ``set -e``

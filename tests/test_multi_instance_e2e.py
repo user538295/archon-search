@@ -48,7 +48,10 @@ SMOKE_OPT_IN_ENV = "ARCHON_SEARCH_RUN_DOCKER_SMOKE"
 
 DEV_HOST_PORT = 18765
 TEST_HOST_PORT = 18766
-READY_TIMEOUT_S = 60
+# /ready stays 503 until model warm-up AND the background model validation finish (S631);
+# validation alone may spend ``validation_timeout_seconds`` (default 60 s), so the budget
+# must exceed it with room for the warm-up and pre-probes.
+READY_TIMEOUT_S = 120
 JOB_POLL_TIMEOUT_S = 60
 
 

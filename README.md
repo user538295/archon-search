@@ -163,7 +163,7 @@ Kick the tires — ephemeral, the key regenerates on every start, nothing persis
 docker run --rm -p 8765:8765 ghcr.io/user538295/archon-search:latest
 ```
 
-`/health` answers `200` first, but `/ready` answers `503` until storage is connected and the startup model warm-up and startup sync finish, so poll `/ready` before sending traffic — see [the `docker run` quickstart's smoke test](Documentation/UserManual/140_running_with_docker.md#docker-run-quickstart).
+`/health` answers `200` first, but `/ready` answers `503` until storage is connected and the startup model warm-up, the background model validation and the startup sync finish, so poll `/ready` before sending traffic — see [the `docker run` quickstart's smoke test](Documentation/UserManual/140_running_with_docker.md#docker-run-quickstart).
 
 Run it for real — pin the key, pin the volume:
 

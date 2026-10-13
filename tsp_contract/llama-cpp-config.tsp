@@ -156,7 +156,7 @@ model ModelValidationResult {
   // New — additive. Result of the non-blocking llama-server GET /v1/models
   // probe. null = probe pending, true = reachable, false = unreachable.
   // Never blocks boot; must not feed the GET /ready checks.models FAIL
-  // condition (S25).
+  // status (S25).
   llama_cpp_ok: boolean | null = null;
 }
 
