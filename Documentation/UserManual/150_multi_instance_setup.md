@@ -161,8 +161,8 @@ docker compose up archon-dev -d
 Poll until healthy:
 
 ```bash
-until curl -sf http://127.0.0.1:18765/ready > /dev/null; do sleep 1; done
-echo "dev-UAT ready"
+for _ in $(seq 1 600); do curl -sf --max-time 5 http://127.0.0.1:18765/ready > /dev/null && break; sleep 1; done
+curl -s http://127.0.0.1:18765/ready    # prints the readiness body (empty if the server isn't listening yet); a first start with the extras install may need the loop rerun
 ```
 
 Or watch the logs:

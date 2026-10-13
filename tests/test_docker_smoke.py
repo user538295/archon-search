@@ -65,7 +65,7 @@ SMOKE_API_KEY = "5c0e5ea11eb5"
 # gliner caps transformers below the release the image ships, so that install
 # also downloads an older transformers. 30 s could only ever pass against an
 # image whose /pip-packages volume was already seeded. 600 s matches the Dockerfile's own HEALTHCHECK
-# ``--start-period=600s`` (Dockerfile:145), i.e. the budget the image itself
+# ``--start-period=600s``, i.e. the budget the image itself
 # declares for reaching a serving state. This is a ceiling, not a sleep:
 # ``_wait_for_ready`` returns as soon as the endpoint answers.
 READY_TIMEOUT_S = 600
@@ -98,17 +98,18 @@ def _container_running(container_id: str) -> bool:
 
 
 def _wait_for_ready(url: str, timeout_s: int, container_id: str | None = None) -> int:
-    """Poll ``url`` until it returns a status code or ``timeout_s`` expires.
+    """Poll ``url`` until it answers a non-error status or ``timeout_s`` expires.
 
-    Returns the HTTP status code from the last successful response. Raises
-    ``TimeoutError`` if the URL never responds within the budget. Uses a
-    1-second sleep between attempts per the Task 4.3 spec.
+    Returns the HTTP status code of the first successful response. Raises
+    ``TimeoutError`` if no attempt succeeds within the budget — a URL stuck at
+    503 included. Uses a 1-second sleep between attempts per the Task 4.3 spec.
 
-    A 503 is retried rather than raised: ``/ready`` answers 503 while eager
-    warm-up or the startup sync is still pending (``routes_ready.py:145``). But
-    ``HTTPError`` is a SUBCLASS of ``URLError``, so it must be caught first to be
-    recorded — otherwise a container stuck at 503 times out reporting a stale
-    connection error and the real readiness body is never seen.
+    A 503 is retried rather than raised: ``/ready`` answers 503 while the
+    startup model warm-up or the startup sync is still pending (``ready_flag``
+    in ``routes_ready.py``). But ``HTTPError`` is a SUBCLASS of ``URLError``, so
+    it must be caught first to be recorded — otherwise a container stuck at 503
+    times out reporting a stale connection error and the real readiness body is
+    never seen.
 
     When *container_id* is given, an exited container fails immediately with its
     logs. Without this, the exact regression S56 guards against — a ``set -e``
@@ -159,7 +160,7 @@ def _docker_logs(container_id: str) -> str:
     """Return the container's combined stdout+stderr.
 
     The entrypoint logs to stdout; application logs reach stderr because the
-    image sets ``ARCHON_SEARCH_CONTAINER=1`` (Dockerfile:130).
+    image sets ``ARCHON_SEARCH_CONTAINER=1`` (the Dockerfile's runtime ``ENV``).
     """
     proc = subprocess.run(
         ["docker", "logs", container_id],
