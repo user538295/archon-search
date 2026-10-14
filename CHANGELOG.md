@@ -1,6 +1,22 @@
 # Changelog
 
 
+## [26.10.2205] - 2026-10-14
+
+**Docker reliability, model cache path support, and import warmup**
+
+- `Dockerfile` sets `PIP_DEFAULT_TIMEOUT=100` and `PIP_RETRIES=10` to survive network stalls during wheel downloads, hardening against transient PyPI timeouts
+- Pre-create `/data/fastembed-cache` owned by `appuser`; Docker-managed volumes no longer mount root-owned, fixing `Permission denied` when the server writes cached weights
+- `FASTEMBED_CACHE_PATH` environment variable now works end-to-end for native and Docker installations: `get_fastembed_cache_dir()` resolves the cache location across all fastembed sites
+- Import task now warms the collection's embedder before reporting `DONE`, preventing cold-start FTS-only searches on the first query after `import --wait`
+- `DELETE /jobs/{id}` during import warmup correctly ends the job `CANCELLED` instead of being overwritten by `DONE`
+- Export and import report fixed error messages (e.g., `IMPORT_FAILED_DETAIL`, `EXPORT_FAILED_DETAIL`) instead of raw exception text; non-UTF-8 `documents.jsonl` lines honor `on_error="skip"`
+- macOS onnxruntime 1.31 validates APFS hard-link paths; external-data errors now retry up to 3 times on darwin, matching locked 1.30.0 behavior
+- `_is_llama_cpp_reachable()` validates HTTP 200 with proper `{"object": "list", "data": [...]}` body, preventing false positives from local web apps
+- MCP documentation now reflects actual behavior: 20 tools, 22 error codes, shared `config.namespaces` auth
+- Search results document `reranker_score: float | null`; `search` takes no `rerank` input (use `explain` with `rerank=false`)
+
+
 ## [26.10.2181] - 2026-10-11
 
 **Test infrastructure hardening: smoke server initialization, timing races, and CI stability**
