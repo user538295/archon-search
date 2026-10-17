@@ -83,6 +83,8 @@ curl -fsS -X POST -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY" \
 
 `POST /backup/trigger` returns `202` with `{queued: [...], skipped: [{collection, reason}]}`; skip reasons are `excluded`, `already_active`, `already_queued`, or `enqueue_failed`. Multi-namespace operators must call the endpoint once per namespace with each namespace's key — the CLI only covers the default namespace.
 
+`backup --now --wait` exits `0` when every job ends `DONE` (or the `--timeout` elapses with nothing failed or cancelled), `2` when any job ends `FAILED`, `FAILED_EXPIRED` or `CANCELLED`, and `1` on a connection, auth, or HTTP error — see the [CLI reference](../Architecture/600_api_reference_or_public_interface.md#cli-commands).
+
 ### Checking backup state
 
 ```bash
@@ -166,6 +168,8 @@ For per-collection restore, cross-instance migration, or recovering one collecti
 ```bash
 archon-search import <collection> /mnt/nfs/archon-search/backups/default/<collection>.backup.<timestamp>.tar.gz --wait
 ```
+
+With `--wait`, import exits `0` on `DONE` and `1` on `FAILED`, `FAILED_EXPIRED` or `CANCELLED` (a cancelled import may leave a partial collection — re-run the same import command with `--force-overwrite`); see [Export & import](../UserManual/90_export_import.md#import).
 
 Import ingests with checkpointing (resumable via `POST /jobs/{id}/resume`). The full export/import workflow, archive layout, and manifest fields are documented in [Export & import](../UserManual/90_export_import.md).
 

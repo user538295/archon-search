@@ -383,7 +383,7 @@ Create a `QueryExpansionProviderSpec` registry containing the provider name, fac
 
 ### DUP-01 — CLI API-key resolution is copied
 
-Equivalent API-key resolution helpers exist in `archon_search/cli/export_cmd.py:18-30`, `archon_search/cli/key_cmd.py:44-56`, `archon_search/cli/backup_cmd.py:36-48`, `archon_search/cli/collection.py:16-28`, and `archon_search/cli/maintenance_cmd.py:33-45`.
+Equivalent API-key resolution helpers exist in `archon_search/cli/export_cmd.py:31-43`, `archon_search/cli/key_cmd.py:44-56`, `archon_search/cli/backup_cmd.py:43-55`, `archon_search/cli/collection.py:17-29`, and `archon_search/cli/maintenance_cmd.py:33-45`.
 
 Move one typed helper to `archon_search/cli/_helpers.py` and test precedence once.
 

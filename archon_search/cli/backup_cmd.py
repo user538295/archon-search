@@ -16,20 +16,27 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import click
 import httpx
 
+from archon_search.cli._helpers import (
+    _CONNECT_FAIL,
+    _EXIT_JOB_UNSUCCESSFUL,
+    _TERMINAL_STATUSES,
+    _jobs_status_hint,
+    _server_connect_fail_msg,
+)
 from archon_search.config import ConfigError, load_config
 from archon_search.key_manager import load_key
 from archon_search.paths import get_data_dir
-from archon_search.cli._helpers import _CONNECT_FAIL, _server_connect_fail_msg
+from archon_search.types import JobStatus
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
 _DEFAULT_WAIT_TIMEOUT_SECONDS = 300
-_TERMINAL_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
+_JOBS_STATUS_HINT = f"{_jobs_status_hint('<job_id>')} (job IDs are listed under 'Queued jobs:')."
 _STATE_FILE_NAME = ".backup-state.json"
 
 
@@ -61,7 +68,8 @@ def _resolve_api_key(api_key: str | None) -> str:
     type=click.IntRange(min=1),
     help=(
         "Maximum seconds to wait for all backup jobs to complete "
-        "(only used with --now --wait). On timeout: exits 0 and prints a recovery hint."
+        "(only used with --now --wait). On timeout: exits 0 and prints a recovery hint, "
+        "or exits 2 if a job already failed or was cancelled."
     ),
 )
 @click.option("--api-url", default=_DEFAULT_API_URL, show_default=True,
@@ -141,18 +149,20 @@ def _wait_for_jobs(
     headers: dict[str, str],
     timeout_seconds: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
 ) -> None:
-    """Poll each job until terminal; exit 2 if any FAILED, exit 0 on timeout or success.
+    """Poll each job until terminal; exit 2 if any did not end DONE, else 0 (on timeout too).
 
     job_map maps job_id → collection_name so progress lines use the collection name.
 
-    Per-collection output format:
+    Per-collection output format (only DONE goes to stdout; the rest to stderr):
     - DONE:      ``{col}: DONE``
-    - FAILED:    ``{col}: FAILED — {error}``
+    - FAILED:    ``{col}: FAILED — {error}`` (also FAILED_EXPIRED)
     - CANCELLED: ``{col}: CANCELLED``
 
     Exit codes:
-    - Exits 0 on success (all DONE) or timeout — prints a recovery hint on timeout.
-    - Exits 2 when any job confirms FAILED.
+    - Exits 0 when all jobs are DONE, or on a timeout with nothing failed or
+      cancelled yet — prints a recovery hint on timeout.
+    - Exits 2 when any job ends FAILED, FAILED_EXPIRED or CANCELLED, including
+      before a timeout. FAILED wins: the cancelled summary is skipped.
     - Exits 1 on fatal errors (network, auth, HTTP errors).
     """
     failed: list[str] = []
@@ -164,21 +174,8 @@ def _wait_for_jobs(
 
     while pending:
         if polls >= max_polls:
-            if failed:
-                click.echo(
-                    "Some backup jobs failed before timeout. "
-                    "Run 'archon-search backup status' to see details.",
-                    err=True,
-                )
-                raise SystemExit(2)
             pending_cols = " ".join(sorted(job_map[jid] for jid in pending))
-            click.echo(
-                f"Timed out after {timeout_seconds}s waiting for backup jobs to complete. "
-                f"Pending: {pending_cols} — "
-                "poll with 'archon-search backup status' to check progress.",
-                err=True,
-            )
-            raise SystemExit(0)
+            _exit_on_timeout(failed, cancelled, pending_cols, timeout_seconds)
 
         for job_id in list(pending):
             col = job_map[job_id]
@@ -201,26 +198,53 @@ def _wait_for_jobs(
             status: str = job.get("status", "")
             if status in _TERMINAL_STATUSES:
                 pending.discard(job_id)
-                if status in {"FAILED", "FAILED_EXPIRED"}:
+                if status == JobStatus.DONE:
+                    click.echo(f"{col}: DONE")
+                elif status == JobStatus.CANCELLED:
+                    click.echo(f"{col}: CANCELLED", err=True)
+                    cancelled.append(col)
+                else:  # FAILED / FAILED_EXPIRED
                     err = job.get("error") or "unknown error"
                     click.echo(f"{col}: FAILED — {err}", err=True)
                     failed.append(col)
-                elif status == "CANCELLED":
-                    click.echo(f"{col}: CANCELLED")
-                    cancelled.append(col)
-                elif status == "DONE":
-                    click.echo(f"{col}: DONE")
         if pending:
             click.echo(f"Backing up... ({total - len(pending)}/{total} complete)")
             time.sleep(_POLL_INTERVAL_SECONDS)
             polls += 1
 
     if failed:
-        raise SystemExit(2)
+        raise SystemExit(_EXIT_JOB_UNSUCCESSFUL)
     if cancelled:
-        click.echo(f"Backup finished ({len(cancelled)} collection(s) cancelled).")
-    else:
-        click.echo("Backup completed for all collections.")
+        click.echo(f"Backup incomplete: {len(cancelled)} collection(s) cancelled.", err=True)
+        raise SystemExit(_EXIT_JOB_UNSUCCESSFUL)
+    click.echo("Backup completed for all collections.")
+
+
+def _exit_on_timeout(
+    failed: list[str],
+    cancelled: list[str],
+    pending_cols: str,
+    timeout_seconds: int,
+) -> NoReturn:
+    """Report a ``--wait`` timeout; exit 2 if any job already failed or was cancelled, else 0."""
+    outcomes = [
+        outcome
+        for outcome, cols in (("failed", failed), ("were cancelled", cancelled))
+        if cols
+    ]
+    if outcomes:
+        click.echo(
+            f"Some backup jobs {' or '.join(outcomes)} before timeout. "
+            f"Pending: {pending_cols}. {_JOBS_STATUS_HINT}",
+            err=True,
+        )
+        raise SystemExit(_EXIT_JOB_UNSUCCESSFUL)
+    click.echo(
+        f"Timed out after {timeout_seconds}s waiting for backup jobs to complete. "
+        f"Pending: {pending_cols}. {_JOBS_STATUS_HINT}",
+        err=True,
+    )
+    raise SystemExit(0)
 
 
 # ---------------------------------------------------------------------------

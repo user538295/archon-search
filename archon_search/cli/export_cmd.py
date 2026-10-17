@@ -6,13 +6,26 @@ import time
 import click
 import httpx
 
+from archon_search.cli._helpers import (
+    _CONNECT_FAIL,
+    _EXIT_JOB_UNSUCCESSFUL,
+    _TERMINAL_STATUSES,
+    _jobs_status_hint,
+    _server_connect_fail_msg,
+)
 from archon_search.key_manager import load_key
-from archon_search.cli._helpers import _CONNECT_FAIL, _server_connect_fail_msg
+from archon_search.types import JobStatus
 
 _DEFAULT_API_URL = "http://localhost:8765"
 _POLL_INTERVAL_SECONDS = 2
 _DEFAULT_WAIT_TIMEOUT_SECONDS = 300
-_TERMINAL_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
+# Process exit code when an import job ends in a terminal status other than DONE:
+# 1, not _EXIT_JOB_UNSUCCESSFUL (2) like export/backup — tech-debt CLI-2.
+_EXIT_IMPORT_UNSUCCESSFUL = 1
+_IMPORT_CANCELLED_MSG = (
+    "Import CANCELLED: the collection may be partially or fully imported; "
+    "re-run the same import command with --force-overwrite to restore a complete copy."
+)
 
 
 def _resolve_api_key(api_key: str | None) -> str:
@@ -118,7 +131,7 @@ def _poll_job(
 
     Exit codes:
     - Exits 0 on success (DONE) or timeout — prints a recovery hint on timeout.
-    - Exits 2 on confirmed FAILED status.
+    - Exits 2 on FAILED, FAILED_EXPIRED or CANCELLED — no archive was produced.
     - Exits 1 on fatal errors (network, auth, HTTP errors).
     """
     url = f"{api_url.rstrip('/')}/jobs/{job_id}"
@@ -161,7 +174,7 @@ def _poll_job(
             # Loop exhausted without hitting a terminal status → timeout
             click.echo(
                 f"Timed out after {timeout_seconds}s waiting for export job to complete. "
-                f"Job ID: {job_id} — check job status with the REST API: GET /jobs/{job_id}",
+                f"{_jobs_status_hint(job_id)}.",
                 err=True,
             )
             raise SystemExit(0)
@@ -170,16 +183,17 @@ def _poll_job(
         click.echo("Polling stopped — job continues on server")
         return
 
-    if status == "DONE":
+    if status == JobStatus.DONE:
         result = job.get("result") or {}
         archive_path = result.get("archive_path", "")
         click.echo(f"Done. Archive: {archive_path}")
-    elif status in {"FAILED", "FAILED_EXPIRED"}:
+    elif status == JobStatus.CANCELLED:
+        click.echo("Export CANCELLED: no archive was produced.", err=True)
+        raise SystemExit(_EXIT_JOB_UNSUCCESSFUL)
+    else:
         error = job.get("error") or "unknown error"
         click.echo(f"Export FAILED: {error}", err=True)
-        raise SystemExit(2)
-    else:
-        click.echo(f"Job ended with status: {status}")
+        raise SystemExit(_EXIT_JOB_UNSUCCESSFUL)
 
 
 @click.command("import")
@@ -276,9 +290,13 @@ def import_cmd(
 def _poll_import_job(job_id: str, api_url: str, headers: dict) -> None:
     """Poll GET /jobs/{job_id} until terminal, printing progress and result.
 
-    Tech debt (E0b FE-2): import --wait does not support --timeout or the E0b
-    exit-code contract (exit 2 on FAILED, exit 0 on timeout). Adding --timeout to
-    import --wait is deferred to a future task for CLI consistency.
+    Exit codes:
+    - Exits 0 on success (DONE).
+    - Exits 1 on FAILED, FAILED_EXPIRED or CANCELLED, and on fatal errors
+      (network, auth, HTTP errors).
+
+    Tech debt CLI-2 (530_technical_debt_refactoring_roadmap.md): no --timeout, a
+    loop duplicated from _helpers._poll_job, and exit 1 where export/backup exit 2.
     """
     url = f"{api_url.rstrip('/')}/jobs/{job_id}"
 
@@ -318,7 +336,7 @@ def _poll_import_job(job_id: str, api_url: str, headers: dict) -> None:
         click.echo("Polling stopped — job continues on server")
         return
 
-    if status == "DONE":
+    if status == JobStatus.DONE:
         result = job.get("result") or {}
         imported = result.get("imported", 0)
         skipped = result.get("skipped", 0)
@@ -331,9 +349,10 @@ def _poll_import_job(job_id: str, api_url: str, headers: dict) -> None:
                 f"Warning: {skipped} document(s) were skipped due to errors.",
                 err=True,
             )
-    elif status == "FAILED":
+    elif status == JobStatus.CANCELLED:
+        click.echo(_IMPORT_CANCELLED_MSG, err=True)
+        raise SystemExit(_EXIT_IMPORT_UNSUCCESSFUL)
+    else:
         error = job.get("error") or "unknown error"
         click.echo(f"Import FAILED: {error}", err=True)
-        raise SystemExit(1)
-    else:
-        click.echo(f"Job ended with status: {status}")
+        raise SystemExit(_EXIT_IMPORT_UNSUCCESSFUL)

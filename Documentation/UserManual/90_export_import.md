@@ -69,6 +69,8 @@ archon-search export COLLECTION [--output-dir PATH] [--wait/--no-wait]
 
 Without `--wait`, the command prints the `job_id` and exits `0` immediately.
 
+With `--wait`, the exit code reports the job's outcome: `0` when it ends `DONE` or the `--timeout` elapses; `2` when it ends `FAILED` or `FAILED_EXPIRED` (stderr: `Export FAILED: <error>`) or `CANCELLED` (stderr: `Export CANCELLED: no archive was produced.`); `1` on a connection, auth, or HTTP error while submitting or polling.
+
 ### Import
 
 ```
@@ -88,6 +90,8 @@ archon-search import COLLECTION PATH [--force-overwrite/--no-force-overwrite]
 `PATH` is the absolute path to the `.tar.gz` **on the server**. These three flags are
 deliberately independent — `force_overwrite`, `ignore_schema_version`, and `on_error`
 are orthogonal safety decisions.
+
+With `--wait`, the exit code reports the job's outcome: `0` when it ends `DONE`; `1` when it ends `FAILED` or `FAILED_EXPIRED` (stderr: `Import FAILED: <error>`) or `CANCELLED` (stderr: `Import CANCELLED: the collection may be partially or fully imported; re-run the same import command with --force-overwrite to restore a complete copy.`), and on a connection, auth, or HTTP error while submitting or polling. Import has no `--timeout`: `--wait` polls until the job reaches a terminal status.
 
 ### Worked example: migrate `handbook` from prod to dev
 
@@ -179,7 +183,7 @@ record as `{processed, total, phase}` every `[jobs].checkpoint_interval` documen
 
 Because they're bulk jobs, they may sit in `QUEUED` behind another export/import until a slot frees up (concurrency is capped by `[jobs].max_concurrent_bulk`, default 1). An import holds its slot through the final model warm-up too, so on a server whose models are still building, a queued export or backup can wait up to that warm-up's ceiling longer. If the server restarts mid-run, the job becomes `FAILED` but its checkpoint is preserved — call `POST /jobs/{job_id}/resume` to re-enqueue from the last checkpoint (export re-opens its `.export-<job_id>.jsonl.tmp` temp file; import skips already-ingested batches).
 
-Cancelling an import (`DELETE /jobs/{job_id}`) during that final warm-up ends the job `CANCELLED`, but every document is already written, so the imported collection stays — as with an ingest cancelled at the same point. To import the archive again, pass `--force-overwrite` (`force_overwrite=true`); without it the import is refused with `409` `collection_exists`.
+Cancelling an import (`DELETE /jobs/{job_id}`) never rolls anything back. Cancelled during `ingesting`, the job ends `CANCELLED` with the batches written so far left in place — a partial collection, with no FTS index rebuild or centroid recompute. Cancelled during that final warm-up, every document is already written, so the fully imported collection stays — as with an ingest cancelled at the same point. Either way, with `--force-overwrite` the original collection was already dropped before ingesting began. To import the archive again, pass `--force-overwrite` (`force_overwrite=true`). Without it, a re-run after a warm-up cancel is refused with `409` `collection_exists`; after a mid-`ingesting` cancel no collection metadata exists yet (it is written only in the `indexing` phase), so the request is accepted (`202`) and the job ends `FAILED` with `collection '<name>' already exists; use force_overwrite=true to overwrite` (`import --wait` exits `1`).
 
 Track a job without `--wait` using the CLI:
 

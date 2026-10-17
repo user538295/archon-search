@@ -9,11 +9,20 @@ import click
 import httpx
 
 from archon_search.platform.service import SearchServiceLifecycle
+from archon_search.types import JobStatus
 
 logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL_SECONDS = 2
-_TERMINAL_STATUSES = {"DONE", "FAILED", "FAILED_EXPIRED", "CANCELLED"}
+_TERMINAL_STATUSES = {
+    JobStatus.DONE,
+    JobStatus.FAILED,
+    JobStatus.FAILED_EXPIRED,
+    JobStatus.CANCELLED,
+}
+# Process exit code for `export --wait` / `backup --now --wait` when a job ends in a
+# terminal status other than DONE. `import --wait` exits 1 instead (tech-debt CLI-2).
+_EXIT_JOB_UNSUCCESSFUL = 2
 # ConnectTimeout (bound-not-listening) and ConnectError (refused) both mean the port is
 # unreachable; _server_connect_fail_msg() decides whether that is "stopped" or "still starting".
 _SERVER_NOT_RUNNING_MSG = "archon-search serve is not running. Start it first with: archon-search serve"
@@ -74,8 +83,9 @@ def _server_connect_fail_msg(base_url: str | None = None) -> str:
         try:
             resp = httpx.get(f"{base_url}/ready", timeout=2)
             body = resp.json()
-            checks = body.get("checks") if isinstance(body, dict) else None
-            usable = isinstance(checks, dict) and checks.get("models") is not None
+            raw_checks = body.get("checks") if isinstance(body, dict) else None
+            checks: dict = raw_checks if isinstance(raw_checks, dict) else {}
+            usable = checks.get("models") is not None
         except (httpx.HTTPError, ValueError):
             logger.debug("_server_connect_fail_msg: /ready probe failed", exc_info=True)
             if _is_custom:
@@ -104,6 +114,11 @@ def _server_connect_fail_msg(base_url: str | None = None) -> str:
     return _SERVER_NOT_RUNNING_MSG
 
 
+def _jobs_status_hint(job_id: str) -> str:
+    """Return the ``--wait`` timeout recovery hint pointing at ``archon-search jobs status``."""
+    return f"Check status: 'archon-search jobs status {job_id}' with the same --api-url/--api-key"
+
+
 def _poll_job(
     job_id: str,
     base_url: str,
@@ -119,7 +134,7 @@ def _poll_job(
     url = f"{base_url}/jobs/{job_id}"
     max_polls = (max(1, timeout_seconds // _POLL_INTERVAL_SECONDS)
                  if timeout_seconds is not None else None)
-    status = "UNKNOWN"
+    status: str | None = "UNKNOWN"
     job: dict = {}
     polls = 0
 
@@ -171,7 +186,7 @@ def _poll_job(
         click.echo("Polling stopped — job continues on server")
         return {}
 
-    if status == "DONE":
+    if status == JobStatus.DONE:
         return job
 
     error = job.get("error") or "unknown error"

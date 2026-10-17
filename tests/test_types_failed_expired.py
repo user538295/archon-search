@@ -20,20 +20,17 @@ def test_failed_expired_is_terminal_in_routes_jobs():
     assert JobStatus.FAILED_EXPIRED in routes_mod._TERMINAL_STATUSES
 
 
-def test_failed_expired_is_terminal_in_backup_cmd():
-    """cli/backup_cmd.py _TERMINAL_STATUSES includes FAILED_EXPIRED string literal."""
+def test_cli_commands_share_helpers_terminal_statuses():
+    """backup_cmd and export_cmd (export --wait and import --wait) reuse _helpers._TERMINAL_STATUSES."""
+    import archon_search.cli._helpers as helpers_mod
     import archon_search.cli.backup_cmd as backup_mod
-    assert "FAILED_EXPIRED" in backup_mod._TERMINAL_STATUSES
-
-
-def test_failed_expired_is_terminal_in_export_cmd():
-    """cli/export_cmd.py _TERMINAL_STATUSES includes FAILED_EXPIRED string literal."""
     import archon_search.cli.export_cmd as export_mod
-    assert "FAILED_EXPIRED" in export_mod._TERMINAL_STATUSES
+    assert backup_mod._TERMINAL_STATUSES is helpers_mod._TERMINAL_STATUSES
+    assert export_mod._TERMINAL_STATUSES is helpers_mod._TERMINAL_STATUSES
 
 
 def test_failed_expired_is_terminal_in_helpers():
-    """cli/_helpers.py _TERMINAL_STATUSES includes FAILED_EXPIRED string literal."""
+    """cli/_helpers.py _TERMINAL_STATUSES includes FAILED_EXPIRED (a JobStatus member, equal to the wire string)."""
     import archon_search.cli._helpers as helpers_mod
     assert "FAILED_EXPIRED" in helpers_mod._TERMINAL_STATUSES
 
@@ -45,7 +42,8 @@ def test_job_status_enum_members():
     assert existing.issubset(actual), f"Existing members changed: {existing - actual}"
 
 
-def test_failed_expired_stops_import_wait_poll():
-    """FAILED_EXPIRED in export_cmd._TERMINAL_STATUSES stops the import --wait poll loop (export_cmd.py:240)."""
-    import archon_search.cli.export_cmd as export_mod
-    assert "FAILED_EXPIRED" in export_mod._TERMINAL_STATUSES
+def test_in_progress_statuses_are_not_terminal_in_helpers():
+    """cli/_helpers.py _TERMINAL_STATUSES excludes every in-progress status, so --wait keeps polling them."""
+    import archon_search.cli._helpers as helpers_mod
+    in_progress = {JobStatus.PENDING, JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.CANCELLING}
+    assert in_progress.isdisjoint(helpers_mod._TERMINAL_STATUSES)
