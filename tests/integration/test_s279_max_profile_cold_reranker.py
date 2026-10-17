@@ -19,7 +19,7 @@ cold cross-encoder download+build that runs **on the request path**. Any HTTP cl
 with a normal read timeout gets no response at all — the ``status=0 body=None`` in the
 ticket. The gate exists (``_warmup_pending`` in ``server/routes_ready.py``) but is armed
 only by ``eager_load_embedders``, which defaults to ``False``
-(``config.py:286``) and is never set by ``archon-search install --profile max``
+(``SearchConfig.eager_load_embedders``) and is never set by ``archon-search install --profile max``
 (``install/config_writer.py:31``, which writes only embedder/reranker/chunk_size).
 
 The cold load is simulated here (``_ColdLoadTextCrossEncoder``) so the test stays

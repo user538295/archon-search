@@ -357,13 +357,29 @@ async def test_validate_models_async_timeout():
         return (True, True, [])
 
     with patch("archon_search.model_validation.validate_providers_shared", side_effect=_slow):
-        # validation_timeout_seconds is whole seconds in config, but the wrapper
-        # accepts the value directly; use a sub-second internal override via the
-        # dedicated parameter. 10x margin (0.1s vs 1.0s) avoids CI flakiness.
+        # Pass a sub-second timeout_seconds directly (config's float
+        # validation_timeout_seconds accepts fractions too). 10x margin
+        # (0.1s vs 1.0s) avoids CI flakiness.
         result = await validate_models_async(_cfg(), timeout_seconds=0.1)
     assert result.embedder_ok is False
     assert result.reranker_ok is False
-    assert any("timed out" in w for w in result.provider_warnings)
+    assert "validation timed out after 0.1s" in result.provider_warnings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("timeout_seconds", "rendered"), [(60.0, "60s"), (1000000.0, "1000000s")])
+async def test_validate_models_async_timeout_message_renders_whole_seconds(
+    timeout_seconds: float, rendered: str
+) -> None:
+    """Whole-second floats render without ".0" or an exponent: 60.0 -> "60s" (the form the docs quote), 1e6 -> "1000000s"."""
+
+    async def _timed_out(coro, timeout):
+        coro.close()  # never awaited — close it so no "coroutine was never awaited" RuntimeWarning leaks
+        raise TimeoutError
+
+    with patch.object(asyncio, "wait_for", side_effect=_timed_out):
+        result = await validate_models_async(_cfg(), timeout_seconds=timeout_seconds)
+    assert f"validation timed out after {rendered}" in result.provider_warnings
 
 
 @pytest.mark.asyncio
