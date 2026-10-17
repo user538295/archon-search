@@ -12,7 +12,7 @@
 
 1. **All keys are optional.** A missing key falls back to the default in `SearchConfig` / `TelemetryConfig`. An entirely missing file is valid.
 2. **Unknown keys are silently ignored.** `load_config` reads each section with `doc.get(section, {})` and only consumes known keys. There is no "strict mode" today — typos do not raise.
-3. **Type errors raise `ConfigError`.** Wrong type, out-of-range port, negative `chunk_size`, etc. fail loudly at load time. See `_coerce_int` / `_coerce_float` / `_coerce_bool` in `config.py`.
+3. **Type errors raise `ConfigError`.** Wrong type (including a TOML boolean in a number key, `inf`/`nan` in a float key, or a fractional value in an integer key), out-of-range port, negative `chunk_size`, etc. fail loudly at load time. See `_coerce_int` / `_coerce_float` / `_coerce_bool` in `config.py`.
 4. **Range validation is enforced where it exists.** `port` must be `1..65535`, `routing_confidence_threshold` must be in `[0.0, 1.0]`, several integer fields must be `> 0`.
 
 ## Stable keys

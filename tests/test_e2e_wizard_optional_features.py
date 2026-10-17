@@ -1726,7 +1726,7 @@ _PROFILE_DATABASE_KEYS = {
     "multilingual": False,
 }
 # Fresh installs keep the loopback bind: without it `serve` (load_config(serve=True),
-# config.py:481) would default to 0.0.0.0 — the one documented non-answer that is written.
+# config.py ``load_config``) would default to 0.0.0.0 — the one documented non-answer that is written.
 _FRESH_SERVER = {"host": "127.0.0.1"}
 
 

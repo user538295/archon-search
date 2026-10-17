@@ -8,6 +8,25 @@
 
 ## Changelog
 
+### [next release] — config: number keys reject booleans, `inf`/`nan` and fractional integers; `[database].validation_timeout_seconds` is a float (2026-10-17)
+
+**Surface**: `archon-search.toml` loading (`load_config`, server startup, every CLI command that reads the config).
+
+**What changed:**
+
+- **A TOML boolean in a float key is a `ConfigError` at load time** (`Expected float for '<key>', got bool`). Before, `float(True)` silently became `1.0` for `[database].language_detection_confidence_threshold`, `[search].fanout_timeout_seconds`, `[routing].routing_confidence_threshold`, `[routing].routing_description_weight`, `[hyde].timeout_seconds`, `[rag_fusion].timeout_seconds` and `[graph].extraction_timeout_seconds`. `false` (`0.0`) loaded silently only for the two `[routing]` keys, whose range is `[0.0, 1.0]`; the other five already failed their range check with `0.0`. The `[graph]` keys `leiden_resolution`, `ppr_damping`, `synonym_threshold`, `ner_confidence` and `relation_confidence` already rejected booleans and are unchanged.
+- **`inf`, `-inf` and `nan` in any float key are a `ConfigError`** (`Expected finite float for '<key>', got inf`), including the quoted string forms (`"inf"`). Before, a key whose only check was `> 0` loaded them — `inf` as a timeout (`fanout_timeout_seconds`, `[hyde]`/`[rag_fusion]`/`[graph]` timeouts) or `leiden_resolution`, and `nan` there too, since `nan <= 0` is false. A TOML integer too large for a float is also a `ConfigError` (`Expected finite float for '<key>', got an int beyond float range`) instead of an uncaught `OverflowError`.
+- **A TOML boolean in a lenient integer key is a `ConfigError`** (`Expected integer for '<key>', got bool`). The lenient integer keys are the ones loaded through `_coerce_int`: `[server].port`; `[database]` `chunk_size`, `top_k_retrieve`, `top_k_return`, `centroid_recompute_threshold`, `embedder_cache_size`; `[search]` `max_fanout`, `fanout_leg_trim`, `top_k_max`; `[routing].routing_shortlist_size`; `[logging].backup_count`; `[telemetry].retention_days`; `[hyde].max_requests_per_minute`; `[rag_fusion]` `max_requests_per_minute`, `num_queries`; `[jobs]` `max_concurrent_bulk`, `checkpoint_interval`; `[backup]` `interval_hours`, `keep`; `[maintenance]` `interval_hours`, `retry_max_attempts`, `retry_max_age_hours`; `[auth].rotate_grace_seconds`; `[graph]` `extraction_rate_limit_rpm`, `extraction_token_budget`. Before, `int(True)` loaded every one of them as `1`. `false` (`0`) loaded silently only for the keys whose range admits `0` — `[logging].backup_count`, `[backup].interval_hours`, `[backup].keep`, `[maintenance].interval_hours`, `[maintenance].retry_max_age_hours` and `[auth].rotate_grace_seconds`; the others already failed their `> 0` / `>= 1` range check with `0`.
+- **A fractional value in a lenient integer key is a `ConfigError`** (`Expected integer for '<key>', got Float`) instead of being truncated — `top_k_return = 5.9` used to load as `5`. `inf` there is the same `ConfigError` instead of an uncaught `OverflowError`; `nan` already raised that exact `ConfigError` and is unchanged. Integral floats such as `5.0` and numeric strings such as `"5"` still load as `5` in these keys.
+- **The strict integer keys are unchanged.** `[ingest].max_file_mb`, `[ingest].max_tasks_per_child`, `[graph].backend_threshold_edges`, the `[graph]` keys `max_community_size`, `community_summary_chunks`, `max_global_candidates`, `max_inspection_nodes`, `max_inspection_edges`, `ppr_top_entities`, `naive_max_expansion_terms`, and `[openai_shim].top_k` already required a TOML integer: any boolean, float (`5.0` included) or string was, and still is, a `ConfigError`.
+- **`[database].validation_timeout_seconds` is now a float** (`SearchConfig.validation_timeout_seconds: float = 60.0`). Fractional values such as `1.5` are honoured instead of being truncated by `int()`. `true`, which `int(True)` previously turned into a 1-second timeout, and `false`, which previously loaded as `0` and then warned and fell back to `60`, are now a `ConfigError`. `inf` (formerly an uncaught `OverflowError`) and `nan` are a `ConfigError` too; values `<= 0` still warn and fall back to `60.0`. The timeout warning in `provider_warnings` still reads `validation timed out after 60s` for whole-second values (`1.5` renders `1.5s`).
+
+**Migration**: replace any `true`/`false` in a number key with a number (`true` was equivalent to `1`), replace `inf`/`nan` with a finite value, and write integer keys as whole numbers. Library callers reading `SearchConfig.validation_timeout_seconds` receive a `float`; an integer in the TOML file still loads (as `30.0` for `30`).
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — S631: `GET /ready` stays `503` while the background model validation is pending (2026-10-12)
 
 **Surface**: `GET /ready` → `ready` and the HTTP status.
@@ -196,7 +215,7 @@ A job the scheduler fails to start still reports `dispatch_failed: <exception te
 2. **Trigger the maintenance pass** (`POST /maintenance/trigger`, or `archon-search maintenance run`). Its graph GC sweep is what actually deletes the orphaned nodes and their unsupported edges.
 3. **Rebuild communities** (`archon-search graph build-communities <collection>`), because community membership computed over the pre-sweep graph is stale once step 2 removes nodes.
 
-**Two settings gate this silently, and neither reports an error if it is off**: `[maintenance].graph_gc` must be `true` or step 2's GC sweep never runs at all, and `[graph].gc_rebuild_communities` must be `true` for step 3 to happen automatically after the sweep (leave it `false` and you must run `graph build-communities` by hand). Both default to `true` (`config.py:106,177`). Check both before concluding the cleanup worked.
+**Two settings gate this silently, and neither reports an error if it is off**: `[maintenance].graph_gc` must be `true` or step 2's GC sweep never runs at all, and `[graph].gc_rebuild_communities` must be `true` for step 3 to happen automatically after the sweep (leave it `false` and you must run `graph build-communities` by hand). Both default to `true` (`MaintenanceConfig.graph_gc`, `GraphConfig.gc_rebuild_communities` in `config.py`). Check both before concluding the cleanup worked.
 
 ---
 

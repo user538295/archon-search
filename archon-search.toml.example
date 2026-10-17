@@ -99,8 +99,9 @@ multilingual = false
 # extraction-model, each only when configured), so this timeout bounds only the last part
 # of the /ready 503 window; a timeout reports checks.models = "fail".
 # A "warn"/"fail" result is informational and never gates readiness.
-# Must be > 0; values <= 0 are rejected with a warning and fall back to the default 60.
-# validation_timeout_seconds = 60
+# Float seconds (fractions allowed). Values <= 0 are rejected with a warning and fall back
+# to the default 60.0. A boolean, inf or nan is a config error.
+# validation_timeout_seconds = 60.0
 
 # Number of results returned per query (top-K return set).
 # Set via `archon-search wizard --top-k N` (valid wizard range: 1–100).

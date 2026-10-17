@@ -22,22 +22,22 @@ See also: [100_system_architecture_overview.md](100_system_architecture_overview
 
 `archon_search/config.py::ConfigError` is raised for:
 
-- TOML parse failure (`Failed to parse {path}: {exc}`)
-- Wrong type — per-type messages, not slash-joined: `Expected integer for '{field}', got {type}` (`config.py:98`), `Expected float for '{field}', got {type}` (`config.py:105`), `Expected boolean for '{field}', got {type}` (`config.py:110`)
+- TOML parse failure (`Failed to parse {path}: {exc}`, `load_config`)
+- Wrong type — per-type messages, not slash-joined: `Expected integer for '{field}', got {type}` (`_coerce_int`, `_coerce_bounded_int`), `Expected float for '{field}', got {type}` (`_coerce_float`, `_coerce_bounded_float`), `Expected boolean for '{field}', got {type}` (`_coerce_bool`). A TOML boolean is never coerced into a number key (`got bool`). Integer keys come in two strictness levels: `_coerce_int` keys (e.g. `port`, `top_k_return`, `[backup].keep`) reject a fractional or non-finite float instead of truncating it (`top_k_return = 5.9` → `got Float`) but still accept an integral float or numeric string (`5.0` and `"5"` load as `5`); `_coerce_bounded_int` keys and the inline-checked `[ingest].max_file_mb`, `[ingest].max_tasks_per_child` and `[graph].backend_threshold_edges` require a TOML integer and reject any float or string. A float key rejects `inf`, `-inf` and `nan` (also quoted) with `Expected finite float for '{field}', got {value}`, and an integer beyond float range with `Expected finite float for '{field}', got an int beyond float range`
 - Out-of-range / non-empty checks:
-  - `port must be between 1 and 65535` (`config.py:137`)
-  - `chunk_size must be > 0` (`config.py:150`)
-  - `top_k_retrieve must be > 0` (`config.py:161`)
-  - `top_k_return must be > 0` (`config.py:166`)
-  - `routing_shortlist_size must be > 0` (`config.py:173`)
-  - `routing_confidence_threshold must be in [0.0, 1.0]` (`config.py:178`)
-  - `[telemetry].retention_days must be >= 1` (`config.py:207`)
-  - `[telemetry].log_dir must be a non-empty string` (`config.py:221`)
+  - `port must be between 1 and 65535` (`_apply_toml`, `[server]`)
+  - `chunk_size must be > 0` (`_apply_toml`, `[database]`)
+  - `top_k_retrieve must be > 0` (`_apply_toml`, `[database]`)
+  - `top_k_return must be > 0` (`_apply_toml`, `[database]`)
+  - `routing_shortlist_size must be > 0` (`_apply_toml`, `[routing]`)
+  - `routing_confidence_threshold must be in [0.0, 1.0]` (`_apply_toml`, `[routing]`)
+  - `[telemetry].retention_days must be >= 1` (`_apply_toml`, `[telemetry]`)
+  - `[telemetry].log_dir must be a non-empty string` (`_apply_toml`, `[telemetry]`)
   - `[ingest].max_file_mb must be >= 0, got {raw}` — negative values raise `ConfigError`; `0` (the default) is valid and disables the size guard entirely. **E0d**: `IngestConfig` (`config.py`)
   - `[ingest].max_tasks_per_child must be >= 1, got {raw}` (`config.py`, `_apply_toml`, `[ingest].max_tasks_per_child` branch) — `0` is rejected too: it would mean "never recycle the docling parse worker", which is the unbounded-memory behaviour the key exists to prevent. Non-integers (and `bool`, rejected explicitly despite being an `int` subclass) raise `Expected integer for '[ingest].max_tasks_per_child', got {type}` (same branch) rather than being coerced.
-- Invalid `[namespaces]` shape (non-string key or value)
+- Invalid `[namespaces]` shape (non-string key or value; `_apply_toml`, `[namespaces]`)
 
-`[telemetry].export_enabled = true` is **not** raised — `config.py:213–215` emits a warning and silently coerces to `false`. This is the documented v1 contract: external export is reserved and ignored, not rejected.
+`[telemetry].export_enabled = true` is **not** raised — `_apply_toml` (`[telemetry]` branch) emits a warning and silently coerces to `false`. This is the documented v1 contract: external export is reserved and ignored, not rejected.
 
 `ConfigError` is caught explicitly by the `archon-search start` subcommand (`cli/start.py:16-23`), which prints `Error: {exc}` to stderr and exits with `SystemExit(1)`. Other entry points (e.g. importing the server module directly in tests) propagate the exception per Python defaults — "the process does not start" is enforced by the `start` path, not centrally.
 

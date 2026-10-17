@@ -40,7 +40,7 @@ _VECTOR_DIM = 384  # must match the stub fastembed dimension (zeros(384))
 _COLLECTION = "s582col"
 
 #: What the operator configured as the HyDE LLM call timeout. Unclamped by config
-#: validation — any value > 0 is accepted ([hyde].timeout_seconds, config.py:744).
+#: validation — any value > 0 is accepted ([hyde].timeout_seconds, config.py ``_apply_toml``).
 _HYDE_TIMEOUT_SECONDS = 8.0
 
 #: The server's own per-request search budget for this test, shrunk from the 30 s

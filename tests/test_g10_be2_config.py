@@ -269,7 +269,7 @@ def test_config_rag_fusion_ollama_package_absent_raises_config_error(
 # C1-I-20: path_home_allowlist contains config.py entry with correct line number and SHA
 # ---------------------------------------------------------------------------
 
-_EXPECTED_CONFIG_LINE_NO = 379
+_EXPECTED_CONFIG_LINE_NO = 380
 _EXPECTED_CONFIG_SHA = "8c6844f3268afa9c4a632945843e776075a111407a0540b8a29041b99d669043"
 _CONFIG_REL_PATH = "archon_search/config.py"
 
@@ -354,7 +354,7 @@ def test_config_toml_empty_model_with_ollama_provider_raises_config_error() -> N
     """_apply_toml with [hyde] provider='ollama' and model='' raises ConfigError.
 
     _apply_toml validates model non-emptiness independently of provider — the
-    generic empty-string guard at config.py:615-616 fires before _check_provider_deps.
+    generic empty-string guard in ``_apply_toml``'s ``[hyde]`` branch fires before _check_provider_deps.
     """
     from archon_search.config import SearchConfig, _apply_toml  # noqa: PLC0415
 

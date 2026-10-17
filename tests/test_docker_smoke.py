@@ -74,7 +74,7 @@ READY_TIMEOUT_S = 600
 # mounted volume before any chunk is written.
 INGEST_TIMEOUT_S = 900
 # The startup model-validation task is itself bounded by
-# ``config.validation_timeout_seconds`` (default 60, ``archon_search/config.py:265``),
+# ``SearchConfig.validation_timeout_seconds`` (default 60.0),
 # so it needs its own modest ceiling rather than the 600 s readiness budget.
 VALIDATION_TIMEOUT_S = 120
 
@@ -195,9 +195,9 @@ def _wait_for_model_validation(base_url: str, timeout_s: int) -> dict:
     ``model_validation`` is the all-null pending object (``validated_at`` null)
     until the lifespan's background task commits a result (S488), so reading
     ``provider_warnings`` before that would assert on an empty list for the wrong
-    reason. ``validate_models_async`` is itself bounded — ``server/app.py:607``
-    passes ``config.validation_timeout_seconds``
-    (default 60, ``archon_search/config.py:265``) — so ``validated_at`` is
+    reason. ``validate_models_async`` is itself bounded — ``_run_model_validation``
+    in ``server/app.py`` passes ``SearchConfig.validation_timeout_seconds``
+    (default 60.0) — so ``validated_at`` is
     always eventually set.
     """
     deadline = time.monotonic() + timeout_s
@@ -456,7 +456,7 @@ def test_cpu_image_starts_and_serves_ready_without_spacy(cpu_image: str) -> None
        log line, and left no ``set -e`` abort behind;
     3. ``/ready`` answers 200;
     4. with ``[graph].enabled`` at its default (``False``,
-       ``archon_search/config.py:137``) there is no graph-related warning of
+       ``GraphConfig.enabled`` in ``archon_search/config.py``) there is no graph-related warning of
        any kind — ``graph_ner_status`` returns ``[]`` when graph is disabled
        (``archon_search/model_validation.py``), and ``provider_warnings`` is
        the only channel it has.
