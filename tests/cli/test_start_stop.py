@@ -92,12 +92,30 @@ def test_stop_unsupported_platform_exits_nonzero(runner: CliRunner) -> None:
 
 
 def test_start_config_error_exits_nonzero(runner: CliRunner, mock_service: MagicMock, tmp_path: Path) -> None:
+    """Malformed TOML → clean ``Error:`` + exit 1 (SystemExit, no traceback), service never started."""
     bad_config = tmp_path / "bad.toml"
     bad_config.write_text("[broken")
     with patch("archon_search.cli.start._get_service", return_value=mock_service):
         result = runner.invoke(main, ["start", "--config", str(bad_config)])
-    assert result.exit_code != 0
-    assert "Error" in result.output or "error" in result.output.lower()
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert result.output.startswith("Error: ")
+    mock_service.start.assert_not_called()
+
+
+def test_start_invalid_data_dir_exits_nonzero(
+    runner: CliRunner, mock_service: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No --config + relative ARCHON_SEARCH_DATA_DIR → clean ``Error:`` + exit 1, service never started."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "relative/data")
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    with patch("archon_search.cli.start._get_service", return_value=mock_service):
+        result = runner.invoke(main, ["start"])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Error:" in result.output
+    assert "absolute path" in result.output
+    mock_service.start.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

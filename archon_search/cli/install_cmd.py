@@ -8,7 +8,7 @@ from shutil import rmtree
 
 import click
 
-from archon_search.cli._helpers import _CONTAINER_MSG, _get_service
+from archon_search.cli._helpers import _CONTAINER_MSG, _exit_on_config_error, _get_service
 from archon_search.install import create_installer
 from archon_search.install.provisioning import CPU_EXECUTION_PROVIDER, GPU_EXECUTION_PROVIDER
 from archon_search.key_manager import _HEX_RE
@@ -41,8 +41,9 @@ class _HexKeyParamType(click.ParamType):
 
 
 def _get_db_path(config_path: Path | None = None) -> Path:
-    """Return the expanded database path from config."""
-    from archon_search.config import load_config
+    """Return the expanded database path from config, warning when a legacy config is ignored."""
+    from archon_search.config import load_config, warn_if_legacy_config_ignored
+    warn_if_legacy_config_ignored(config_path)
     cfg = load_config(config_path)
     return Path(cfg.db_path).expanduser()
 
@@ -188,11 +189,13 @@ def wizard(
     graph_providers: list[str] | None,
 ) -> None:
     """Interactive setup wizard: choose a profile, download models, start service."""
-    sys.exit(
-        create_installer(
+    with _exit_on_config_error():
+        installer = create_installer(
             config_file=str(config_path) if config_path else None,
             dry_run=dry_run,
-        ).run(
+        )
+    sys.exit(
+        installer.run(
             non_interactive=non_interactive,
             profile=profile,
             multilingual=multilingual,
@@ -234,11 +237,13 @@ def install(dry_run: bool, config_path: Path | None) -> None:
     if os.environ.get("ARCHON_SEARCH_CONTAINER") == "1":
         click.echo(_CONTAINER_MSG, err=True)
         raise SystemExit(1)
-    try:
-        rc = create_installer(
+    with _exit_on_config_error():
+        installer = create_installer(
             config_file=str(config_path) if config_path else None,
             dry_run=dry_run,
-        ).run_register_and_start()
+        )
+    try:
+        rc = installer.run_register_and_start()
     except RuntimeError as exc:
         if "systemctl binary not found" in str(exc):
             click.echo(_CONTAINER_MSG, err=True)
@@ -256,6 +261,11 @@ def uninstall(delete_db: bool, config_path: Path | None) -> None:
     if os.environ.get("ARCHON_SEARCH_CONTAINER") == "1":
         click.echo(_CONTAINER_MSG, err=True)
         raise SystemExit(1)
+    # Resolve before teardown: a bad config must not leave the service stopped with the DB kept.
+    db_path: Path | None = None
+    if delete_db:
+        with _exit_on_config_error():
+            db_path = _get_db_path(config_path)
     try:
         service = _get_service()
         service.stop()
@@ -270,10 +280,8 @@ def uninstall(delete_db: bool, config_path: Path | None) -> None:
         click.echo(f"Error during service teardown: {exc}", err=True)
         raise SystemExit(1)
 
-    if delete_db:
-        db_path = _get_db_path(config_path)
-        if db_path.exists():
-            rmtree(db_path)
-            click.echo(f"Deleted search database at {db_path}.")
+    if db_path is not None and db_path.exists():
+        rmtree(db_path)
+        click.echo(f"Deleted search database at {db_path}.")
 
     click.echo("archon-search uninstalled.")

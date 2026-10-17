@@ -105,12 +105,12 @@ def _subprocess_env(*, port: int, data_dir: Path, api_key: str) -> dict[str, str
         **os.environ,
         "ARCHON_SEARCH_PORT": str(port),
         "ARCHON_SEARCH_DATA_DIR": str(data_dir),
-        # Point at a non-existent path under the isolated data dir so the
-        # subprocess never reads the developer's real
-        # ~/.archon-search/archon-search.toml (load_config() treats a missing
-        # file as "use defaults") — without this, an operator TOML enabling
-        # e.g. [database].multilingual = true with fasttext-wheel uninstalled
-        # would make the smoke server fail to start on that machine.
+        # Pin the (non-existent) config under the isolated data dir so an
+        # ARCHON_SEARCH_CONFIG exported in the developer's shell never reaches the
+        # subprocess (load_config() treats a missing file as "use defaults") —
+        # without this, an operator TOML enabling e.g. [database].multilingual =
+        # true with fasttext-wheel uninstalled would make the smoke server fail
+        # to start on that machine.
         "ARCHON_SEARCH_CONFIG": str(data_dir / "archon-search.toml"),
         "ARCHON_SEARCH_API_KEY": api_key,
         "PYTEST_ADDOPTS": "",

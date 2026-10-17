@@ -250,7 +250,7 @@ def test_wizard_summary_no_english_only_note_when_graph_disabled() -> None:
 
     profile = get_profile("balanced", multilingual=True)
     features = WizardFeatures(install_graph_extra=False)
-    output = _render_summary("balanced", profile, multilingual=True, providers=[], features=features)
+    output = _render_summary("balanced", profile, multilingual=True, providers=[], features=features, config_path="archon-search.toml")
 
     assert "English-only" not in output, (
         "multilingual=True with graph disabled must not carry the graph-specific "

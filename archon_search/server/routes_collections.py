@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -30,6 +31,11 @@ from archon_search.types import IngestJob, JobStatus, MetadataReindexJob, Migrat
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/collections")
+
+#: Wire-facing body when persisting a collection add/remove to the config file fails
+#: (read-only file, hand-corrupted TOML, ...); the exception text embeds filesystem paths, so it is logged only.
+CONFIG_PERSIST_FAILED_DETAIL = "could not save the collection change to the config file; see the server log for details"
+CONFIG_PERSIST_FAILED_CODE = "config_persist_failed"
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +85,48 @@ def _maybe_save_config(config: SearchConfig, request: Request) -> None:
     config_path = getattr(request.app.state, "config_path", None)
     if config_path is not None:
         save_config(config, config_path)
+
+
+def _persist_config_or_500(config: SearchConfig, request: Request, rollback: Callable[[], None]) -> JSONResponse | None:
+    """Persist *config*; on any failure run *rollback* and return the sanitized 500 response, else ``None``."""
+    try:
+        _maybe_save_config(config, request)
+    except Exception:  # noqa: BLE001 — OSError, tomlkit ParseError, TypeError: all map to one sanitized 500
+        rollback()
+        logger.exception("Failed to persist collection change to the config file")
+        return JSONResponse(
+            {"detail": CONFIG_PERSIST_FAILED_DETAIL, "code": CONFIG_PERSIST_FAILED_CODE},
+            status_code=500,
+        )
+    return None
+
+
+def _drop_path_from_config(config: SearchConfig, resolved: str) -> Callable[[], None]:
+    """Remove *resolved* from both config path lists; return a callback restoring them as they were.
+
+    Call it with no ``await`` before the matching persist, so the restore cannot discard a
+    change another request made in between.
+    """
+    collections_before = list(config.collections)
+    pinned_before = list(config.pinned_collections)
+    config.collections = [p for p in config.collections if str(Path(p).expanduser().resolve()) != resolved]
+    config.pinned_collections = [
+        p for p in config.pinned_collections if str(Path(p).expanduser().resolve()) != resolved
+    ]
+
+    def _restore() -> None:
+        config.collections = collections_before
+        config.pinned_collections = pinned_before
+
+    return _restore
+
+
+def _save_config_after_rollback(config: SearchConfig, request: Request, reason: str) -> None:
+    """Best-effort config save after an in-memory rollback; a failure is logged so the caller's status survives."""
+    try:
+        _maybe_save_config(config, request)
+    except Exception:  # noqa: BLE001 — must not mask the caller's own error response
+        logger.exception("Failed to rollback config after %s", reason)
 
 
 # ---------------------------------------------------------------------------
@@ -160,9 +208,25 @@ _ERROR_400_401_409_503 = {
     409: {"model": ErrorDetail},
     503: {"model": ErrorDetail, "description": "Store busy — reindex in progress"},
 }
+_CONFIG_PERSIST_500_DESCRIPTION = "Config file could not be saved (code config_persist_failed); change rolled back"
+_ERROR_500_CONFIG_PERSIST = {500: {"model": ErrorDetail, "description": _CONFIG_PERSIST_500_DESCRIPTION}}
+_ERROR_500_ADD_COLLECTION = {
+    500: {
+        "model": ErrorDetail,
+        "description": (
+            f"{_CONFIG_PERSIST_500_DESCRIPTION}; or the collection meta write / job creation failed "
+            '(body {"detail": "internal error"})'
+        ),
+    },
+}
 
 
-@router.post("/", status_code=202, response_model=JobResponse, responses={**_ERROR_400_401_409_503, 422: {"model": ErrorDetail}})
+@router.post(
+    "/",
+    status_code=202,
+    response_model=JobResponse,
+    responses={**_ERROR_400_401_409_503, 422: {"model": ErrorDetail}, **_ERROR_500_ADD_COLLECTION},
+)
 async def add_collection(body: AddCollectionRequest, request: Request) -> JobResponse | JSONResponse:
     """Add a new collection: persist config + enqueue ingest. Returns 202 + IngestJob."""
     config: SearchConfig = request.app.state.config
@@ -197,7 +261,9 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
         return JSONResponse({"detail": "collection name already registered"}, status_code=409)
 
     config.collections.append(resolved)
-    _maybe_save_config(config, request)
+    persist_error = _persist_config_or_500(config, request, lambda: config.collections.remove(resolved))
+    if persist_error is not None:
+        return persist_error
 
     # Write stub meta — update_collection_meta acquires the per-collection lock internally.
     # StoreBusyError → 503; ValueError → 409 TOCTOU race; other → 500.
@@ -218,7 +284,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
         )
     except StoreBusyError as e:
         config.collections.remove(resolved)
-        _maybe_save_config(config, request)
+        _save_config_after_rollback(config, request, "stub meta write store-busy")
         retry_after = str(math.ceil(e.timeout_s))
         return JSONResponse(
             {"detail": f"store busy; retry in {retry_after} seconds"},
@@ -228,14 +294,11 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     except ValueError:
         # TOCTOU race: name claimed by another namespace between check and write
         config.collections.remove(resolved)
-        _maybe_save_config(config, request)
+        _save_config_after_rollback(config, request, "stub meta write name race")
         return JSONResponse({"detail": "collection name already registered"}, status_code=409)
     except Exception:
         config.collections.remove(resolved)
-        try:
-            _maybe_save_config(config, request)
-        except Exception:
-            logger.exception("Failed to rollback config after stub meta write failure")
+        _save_config_after_rollback(config, request, "stub meta write failure")
         return JSONResponse({"detail": "internal error"}, status_code=500)
 
     # Pre-acquire the per-collection lock for the ingest task.
@@ -243,10 +306,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     if isinstance(lock_result, JSONResponse):
         # Lock busy for ingest task — roll back config and meta to leave clean state.
         config.collections.remove(resolved)
-        try:
-            _maybe_save_config(config, request)
-        except Exception:
-            logger.exception("Failed to rollback config after ingest-lock timeout")
+        _save_config_after_rollback(config, request, "ingest-lock timeout")
         try:
             await search_store.delete_collection_meta(collection_name, ns)
         except Exception:
@@ -293,7 +353,17 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     return JobResponse(**job_to_dict(job))
 
 
-@router.delete("/{name}", response_model=DeleteResponse, responses={401: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}, 503: {"model": ErrorDetail}})
+@router.delete(
+    "/{name}",
+    response_model=DeleteResponse,
+    responses={
+        401: {"model": ErrorDetail},
+        404: {"model": ErrorDetail},
+        409: {"model": ErrorDetail},
+        503: {"model": ErrorDetail},
+        **_ERROR_500_CONFIG_PERSIST,
+    },
+)
 async def remove_collection(name: str, request: Request) -> DeleteResponse | JSONResponse:
     """Remove a collection: delete config entry and drop LanceDB data."""
     config: SearchConfig = request.app.state.config
@@ -343,17 +413,10 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
     # Pop the config registration and return without acquiring the lock or
     # touching store data (drop_collection/delete_collection_meta would fail).
     if meta is None:
-        if in_collections:
-            config.collections = [
-                p for p in config.collections
-                if str(Path(p).expanduser().resolve()) != resolved
-            ]
-        if in_pinned:
-            config.pinned_collections = [
-                p for p in config.pinned_collections
-                if str(Path(p).expanduser().resolve()) != resolved
-            ]
-        _maybe_save_config(config, request)
+        restore_config_lists = _drop_path_from_config(config, resolved)
+        persist_error = _persist_config_or_500(config, request, restore_config_lists)
+        if persist_error is not None:
+            return persist_error
         return DeleteResponse(name=name, deleted=True)
 
     # Refuse if a base IngestJob is actively writing to this collection.
@@ -418,21 +481,12 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
         return lock_result
 
     try:
-        # Remove from collections list (by original path values)
-        if in_collections:
-            config.collections = [
-                p for p in config.collections
-                if str(Path(p).expanduser().resolve()) != resolved
-            ]
-
-        # Remove from pinned_collections list if also present there
-        if in_pinned:
-            config.pinned_collections = [
-                p for p in config.pinned_collections
-                if str(Path(p).expanduser().resolve()) != resolved
-            ]
-
-        _maybe_save_config(config, request)
+        # Snapshot + mutate only now, under the lock: a snapshot taken before the lock
+        # wait would make a rollback discard config changes made during that wait.
+        restore_config_lists = _drop_path_from_config(config, resolved)
+        persist_error = _persist_config_or_500(config, request, restore_config_lists)
+        if persist_error is not None:
+            return persist_error
 
         # Drop LanceDB table and meta row
         if search_store is not None:

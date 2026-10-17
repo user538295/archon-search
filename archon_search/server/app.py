@@ -29,6 +29,7 @@ from archon_search.config import (
     resolve_active_model,
     resolve_reranker_providers,
     warn_gc_cpu_priority,
+    warn_if_legacy_config_ignored,
 )
 from archon_search.embedder import Embedder, ModelEmbedder
 from archon_search.embedder_cache import (
@@ -1248,9 +1249,14 @@ def run_server(config: SearchConfig, config_path: Path | str | None = None) -> N
     ``create_app`` as ``app.state.config_path``. This is what makes runtime config
     persistence effective — ``_maybe_save_config`` (``collection add``/``remove``)
     no-ops when it is ``None`` (the S07 / S252 root cause).
+
+    When no ``config_path`` is given, the ignored-legacy-config WARNING
+    (``warn_if_legacy_config_ignored``) is emitted right after
+    ``configure_logging`` so it reaches the configured ``log_file`` / format.
     """
-    config_path = config_path or get_default_config_path()
+    effective_config_path = config_path or get_default_config_path()
     configure_logging(config)
+    warn_if_legacy_config_ignored(config_path)
     job_store = JobStore()
 
     # Defensive placeholder dispatch: the lifespan handler in ``create_app()``
@@ -1271,7 +1277,7 @@ def run_server(config: SearchConfig, config_path: Path | str | None = None) -> N
         max_concurrent=config.jobs.max_concurrent_bulk,
         dispatch_fn=_placeholder_dispatch,
     )
-    app = create_app(config, job_store, scheduler=scheduler, config_path=config_path)
+    app = create_app(config, job_store, scheduler=scheduler, config_path=effective_config_path)
     uvicorn_kwargs: dict = {"host": config.host, "port": config.port}
     log_config = build_uvicorn_log_config(config)
     if log_config is not None:

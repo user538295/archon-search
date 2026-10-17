@@ -1,6 +1,7 @@
 # archon-search.toml — configuration for the archon-search server
 #
-# Default location: ~/.archon-search/archon-search.toml
+# Default location: <data-dir>/archon-search.toml — $ARCHON_SEARCH_DATA_DIR
+# when set, else ~/.archon-search/archon-search.toml
 # Override the path with the ARCHON_SEARCH_CONFIG environment variable
 # (absolute or tilde-prefixed).
 #

@@ -14,7 +14,7 @@
 
 ## Where to look
 
-Paths are shown for the default data dir `~/.archon-search/`; `ARCHON_SEARCH_DATA_DIR` relocates every entry except the config, which follows `ARCHON_SEARCH_CONFIG` instead (the managed service bakes that in at install time: the `--config` path, else `<data-dir>/archon-search.toml`), and `ARCHON_SEARCH_KEY_FILE`, when set, overrides the `.search.env` location. See [`30_configuration.md`](./30_configuration.md).
+Paths are shown for the default data dir `~/.archon-search/`; `ARCHON_SEARCH_DATA_DIR` relocates every entry, the config included; `ARCHON_SEARCH_CONFIG`, when set, overrides the config location (the managed service bakes the config path in at install time: the `--config` path, else `ARCHON_SEARCH_CONFIG`, else `<data-dir>/archon-search.toml`), and `ARCHON_SEARCH_KEY_FILE`, when set, overrides the `.search.env` location. See [`30_configuration.md`](./30_configuration.md).
 
 | Location | Contents |
 | --- | --- |
@@ -23,14 +23,14 @@ Paths are shown for the default data dir `~/.archon-search/`; `ARCHON_SEARCH_DAT
 | `~/.archon-search/.secrets.env` | HyDE / RAG-Fusion provider keys (mode `600`; managed service only). |
 | `~/.archon-search/search/` | LanceDB data. Deleting forces a full rebuild on next sync. |
 | `~/.archon-search/search-logs/` | Telemetry JSONL — only present when telemetry is enabled. |
-| `~/.archon-search/archon-search.toml` | Config. Default location; overridable via `ARCHON_SEARCH_CONFIG`. |
+| `~/.archon-search/archon-search.toml` | Config. Default `<data-dir>/archon-search.toml`; overridable via `ARCHON_SEARCH_CONFIG`. |
 
 ## Symptom: server will not start
 
 Symptoms: `archon-search start` prints `Error: …` and exits 1.
 
 1. Run `archon-search config show` — does the printed TOML look correct?
-2. Force the loader to use the default config path (`~/.archon-search/archon-search.toml`) by clearing `ARCHON_SEARCH_CONFIG` for one invocation. An empty value is treated as unset, so this loads the default file rather than skipping config:
+2. Force the loader to use the default config path (`<data-dir>/archon-search.toml`, default `~/.archon-search/archon-search.toml`) by clearing `ARCHON_SEARCH_CONFIG` for one invocation. An empty value is treated as unset, so this loads the default file rather than skipping config:
    ```bash
    ARCHON_SEARCH_CONFIG= archon-search start
    ```

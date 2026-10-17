@@ -4279,6 +4279,16 @@
             },
             "description": "Unprocessable Entity"
           },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Config file could not be saved (code config_persist_failed); change rolled back; or the collection meta write / job creation failed (body {\"detail\": \"internal error\"})"
+          },
           "503": {
             "content": {
               "application/json": {
@@ -4363,6 +4373,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Config file could not be saved (code config_persist_failed); change rolled back"
           },
           "503": {
             "content": {

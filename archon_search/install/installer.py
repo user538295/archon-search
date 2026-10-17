@@ -23,7 +23,7 @@ import click
 import tomlkit
 
 from archon_search._durable_io import atomic_write_bytes
-from archon_search.config import SearchConfig, get_default_config_path, load_config
+from archon_search.config import SearchConfig, get_default_config_path, load_config, warn_if_legacy_config_ignored
 from archon_search.key_manager import get_key_file, load_or_generate_key
 from archon_search.paths import get_data_dir, get_fasttext_models_dir
 from archon_search.pipeline import create_pipeline
@@ -190,8 +190,18 @@ class BaseInstaller(ABC):
 
     def __init__(self, config_file: str | None = None) -> None:
         self.config_file = config_file
-        cfg = load_config(path=Path(config_file) if config_file else None)
+        cfg = load_config(self.config_path)
         self.cfg: SearchConfig = cfg
+
+    @property
+    def config_path(self) -> Path:
+        """The config file this installer reads and writes: ``--config``, else the default path.
+
+        Always absolute: it is baked into the service unit / plist, whose working
+        directory is not the one the wizard ran in. Symlinks are kept, not resolved,
+        so repointing a link later still redirects the service.
+        """
+        return Path(self.config_file).expanduser().absolute() if self.config_file else get_default_config_path()
 
     # ------------------------------------------------------------------
     # Read-only methods (no filesystem / service / subprocess mutation)
@@ -610,6 +620,7 @@ class BaseInstaller(ABC):
     ) -> int:
         """Execute the full install flow. Returns 0 on success."""
         print(self._MODE_BANNER)
+        warn_if_legacy_config_ignored(self.config_file)
         # Validate --force requires --delete-db
         if force and not delete_db:
             print("--force requires --delete-db. To force a reinstall, use both flags together.")
@@ -746,7 +757,7 @@ class BaseInstaller(ABC):
                     return 1
 
             # Step 4: config path
-            config_path = Path(self.config_file) if self.config_file else get_default_config_path()
+            config_path = self.config_path
 
             # Step 5: reinstall check
             db_path = Path(self.cfg.db_path).expanduser()
@@ -934,6 +945,7 @@ class BaseInstaller(ABC):
                 port=features.port if features.port is not None else cfg.port,
                 api_key_file=str(_key_manager.get_key_file()),
                 total_bytes=_planned_total_bytes(prof, features),
+                config_path=str(config_path),
             ))
 
             # Step 13: confirmation
@@ -1080,7 +1092,7 @@ class BaseInstaller(ABC):
 
             # Step 16b: next steps guidance (non-dry-run only)
             if not self.dry_run:
-                _print_next_steps(cfg.host, cfg.port, str(_key_manager.get_key_file()))
+                _print_next_steps(cfg.host, cfg.port, str(_key_manager.get_key_file()), str(config_path))
 
             # Step 17: completion message
             if not self.dry_run:
@@ -1123,11 +1135,12 @@ class BaseInstaller(ABC):
 
         Returns 0 on success, non-zero on failure.
         """
-        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
+        warn_if_legacy_config_ignored(self.config_file)
+        config_path = self.config_path
         if not config_path.exists():
             click.echo(
-                "No configuration found. Run 'archon-search wizard' first to choose a profile"
-                " and download models.",
+                f"No configuration found at {config_path}. Run 'archon-search wizard' first"
+                " to choose a profile and download models.",
                 err=True,
             )
             return 1
@@ -1209,7 +1222,7 @@ class DryRunInstaller(BaseInstaller):
     def write_service_file(self) -> None:
         svc = get_search_service()
         svc.pre_activate_cleanup(dry_run=True)
-        svc.register(dry_run=True, config_path=self.config_file)
+        svc.register(dry_run=True, config_path=str(self.config_path))
 
     def load_service(self) -> int:
         return get_search_service().start(dry_run=True)
@@ -1324,7 +1337,7 @@ class RealInstaller(BaseInstaller):
         else:
             skip_if_present = False
 
-        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
+        config_path = self.config_path
         if not config_path.exists():
             logger.warning("Config file %s not found — skipping provider config", config_path)
             return
@@ -1348,7 +1361,7 @@ class RealInstaller(BaseInstaller):
 
     def configure_reranker_providers(self, providers: list[str]) -> None:
         """Write reranker_providers to [database] section (empty list = CPU)."""
-        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
+        config_path = self.config_path
         if not config_path.exists():
             logger.warning(
                 "Config file %s not found — skipping reranker_providers config",
@@ -1369,7 +1382,7 @@ class RealInstaller(BaseInstaller):
 
     def clear_reranker_providers(self) -> None:
         """Remove reranker_providers from [database] if present (self-heal on upgrade)."""
-        config_path = Path(self.config_file) if self.config_file else get_default_config_path()
+        config_path = self.config_path
         if not config_path.exists():
             return
         doc = tomlkit.parse(config_path.read_text(encoding="utf-8"))
@@ -1386,13 +1399,13 @@ class RealInstaller(BaseInstaller):
     def write_service_file(self) -> None:
         """Stop legacy service then register the new search service.
 
-        Threads the installer's config_file into register() so the service the
-        installer starts reads the config just written, not the hardcoded
-        default (S206). None → register() falls back to the default path.
+        Threads the installer's config_path into register() so the service the
+        installer starts reads the config just written, not a default the
+        service resolves on its own (S206).
         """
         svc = get_search_service()
         svc.pre_activate_cleanup(dry_run=False)
-        svc.register(dry_run=False, config_path=self.config_file)
+        svc.register(dry_run=False, config_path=str(self.config_path))
 
     def load_service(self) -> int:
         """Delegate to get_search_service().start()."""

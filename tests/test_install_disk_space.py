@@ -140,5 +140,6 @@ def test_disk_guard_timeouts_and_display_all_derive_from_one_total(minimal_profi
     output = _render_summary(
         "minimal", minimal_profile, multilingual=False, providers=[],
         features=features, total_bytes=total,
+        config_path="archon-search.toml",
     )
     assert f"~{total // BYTES_PER_MB} MB" in output

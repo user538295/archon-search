@@ -36,6 +36,8 @@ import os
 from pathlib import Path
 
 _ENV_VAR: str = "ARCHON_SEARCH_DATA_DIR"
+#: Name of the default data directory under HOME (``~/.archon-search``) when ``_ENV_VAR`` is unset.
+DEFAULT_DATA_DIR_NAME: str = ".archon-search"
 
 #: fastembed's own weight-cache env var. fastembed reads it only when its
 #: ``cache_dir`` argument is ``None`` (``fastembed/common/utils.py``
@@ -95,7 +97,7 @@ def get_data_dir() -> Path:
             f"{_ENV_VAR} must be set: HOME is not set and no data "
             "directory can be determined"
         ) from exc
-    return home / ".archon-search"
+    return home / DEFAULT_DATA_DIR_NAME
 
 
 def get_models_dir() -> Path:

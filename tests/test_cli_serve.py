@@ -3,10 +3,9 @@
 The `serve` command is a foreground-blocking entry point used by the Docker
 container. It:
   - Calls `load_config(path, serve=True)` so the host default is `0.0.0.0`.
-  - Calls `run_server(config)` and never touches platform service management.
-  - Emits a startup log warning when ARCHON_SEARCH_DATA_DIR is set but
-    ARCHON_SEARCH_CONFIG is not — surfacing the container collection-management
-    limitation at runtime.
+  - Calls `run_server(config, config_path)` and never touches platform service management.
+  - Resolves the default config under ARCHON_SEARCH_DATA_DIR, so a container's
+    config lives inside its /data volume without an explicit ARCHON_SEARCH_CONFIG.
 """
 from __future__ import annotations
 
@@ -18,7 +17,7 @@ import pytest
 from click.testing import CliRunner
 
 from archon_search.cli.main import main
-from archon_search.config import ConfigError, SearchConfig, get_default_config_path
+from archon_search.config import ConfigError, SearchConfig, warn_if_legacy_config_ignored
 
 
 @pytest.fixture
@@ -36,8 +35,11 @@ def _config_with_host(host: str) -> SearchConfig:
 # serve subcommand behaviour
 # ---------------------------------------------------------------------------
 
-def test_serve_calls_run_server(runner: CliRunner) -> None:
+def test_serve_calls_run_server(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`serve` must call `run_server` exactly once with the loaded config."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     cfg = _config_with_host("0.0.0.0")
     with (
         patch("archon_search.cli.serve.load_config", return_value=cfg) as mock_load,
@@ -45,10 +47,10 @@ def test_serve_calls_run_server(runner: CliRunner) -> None:
     ):
         result = runner.invoke(main, ["serve"])
     assert result.exit_code == 0, result.output
-    mock_load.assert_called_once()
-    # run_server receives the resolved config path so collection add/remove
-    # persists to the file this config was loaded from (S07/S252).
-    mock_run.assert_called_once_with(cfg, get_default_config_path())
+    mock_load.assert_called_once_with(None, serve=True)
+    # No --config: run_server gets None and resolves the same default load_config
+    # read, so collection add/remove persists to that file (S07/S252).
+    mock_run.assert_called_once_with(cfg, None)
 
 
 def test_serve_uses_serve_load_config(runner: CliRunner) -> None:
@@ -278,82 +280,99 @@ def test_start_still_registered_in_cli() -> None:
     )
 
 
-def test_serve_warns_when_data_dir_set_without_config(
+def _run_serve_capturing_config(runner: CliRunner, args: list[str]) -> tuple[SearchConfig, object]:
+    """Invoke ``serve`` with the REAL load_config and run_server stubbed; return what run_server got."""
+    captured: dict[str, object] = {}
+
+    def _capture(cfg: SearchConfig, config_path: object) -> None:
+        captured["cfg"], captured["config_path"] = cfg, config_path
+
+    with patch("archon_search.server.app.run_server", side_effect=_capture):
+        result = runner.invoke(main, ["serve", *args])
+    assert result.exit_code == 0, result.output
+    return captured["cfg"], captured["config_path"]  # type: ignore[return-value]
+
+
+def test_serve_data_dir_without_config_uses_data_dir_config(
     runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ARCHON_SEARCH_DATA_DIR set, ARCHON_SEARCH_CONFIG unset → the config lives
+    under the data dir (inside a container's /data volume), so serve loads it from there.
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "archon-search.toml").write_text("[server]\nport = 9123\n")
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    cfg, config_path = _run_serve_capturing_config(runner, [])
+    assert cfg.port == 9123
+    assert config_path is None  # run_server resolves the same default itself
+
+
+def test_serve_config_env_wins_over_data_dir(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both ARCHON_SEARCH_DATA_DIR and ARCHON_SEARCH_CONFIG set → serve loads the CONFIG file."""
+    config_file = tmp_path / "etc" / "archon-search.toml"
+    config_file.parent.mkdir()
+    config_file.write_text("[server]\nport = 9001\n")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "archon-search.toml").write_text("[server]\nport = 9002\n")
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(config_file))
+    cfg, config_path = _run_serve_capturing_config(runner, [])
+    assert cfg.port == 9001
+    assert config_path is None  # run_server re-resolves ARCHON_SEARCH_CONFIG itself
+
+
+def test_serve_defers_legacy_config_warning_to_run_server(
+    runner: CliRunner,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """When ARCHON_SEARCH_DATA_DIR is set but ARCHON_SEARCH_CONFIG is not,
-    `serve` emits a startup warning explaining that `collection add/remove`
-    will fail inside the container.
-    """
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
-    cfg = _config_with_host("0.0.0.0")
-    with (
-        patch("archon_search.cli.serve.load_config", return_value=cfg),
-        patch("archon_search.server.app.run_server"),
-        caplog.at_level(logging.WARNING, logger="archon_search.cli.serve"),
-    ):
-        result = runner.invoke(main, ["serve"])
-    assert result.exit_code == 0, result.output
-    # Look for the warning that mentions ARCHON_SEARCH_CONFIG.
-    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert warning_records, "Expected at least one WARNING log record"
-    assert any("ARCHON_SEARCH_CONFIG" in r.message for r in warning_records), (
-        f"Expected ARCHON_SEARCH_CONFIG in warning messages, got: {[r.message for r in warning_records]}"
-    )
+    """serve must not log the legacy-config WARNING itself — that would precede configure_logging and
+    bypass log_file / JSON format. It forwards ``None`` so run_server warns once logging is set up
+    (pinned by tests/test_run_server_config_path_persistence.py)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    legacy = tmp_path / ".archon-search" / "archon-search.toml"
+    legacy.parent.mkdir()
+    legacy.write_text("[server]\n")
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        _, config_path = _run_serve_capturing_config(runner, [])
+        assert config_path is None
+        assert not any(str(legacy) in r.getMessage() for r in caplog.records)
+        # Positive control: this setup does trigger the warning run_server will emit.
+        warn_if_legacy_config_ignored(config_path)
+    assert any(str(legacy) in r.getMessage() for r in caplog.records)
 
 
-def test_serve_no_warning_when_both_data_dir_and_config_set(
-    runner: CliRunner,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
+def test_serve_invalid_data_dir_exits_nonzero(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When both ARCHON_SEARCH_DATA_DIR and ARCHON_SEARCH_CONFIG are set,
-    the container-limitation warning is suppressed.
-    """
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "/data")
-    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", "/data/archon-search.toml")
-    cfg = _config_with_host("0.0.0.0")
-    with (
-        patch("archon_search.cli.serve.load_config", return_value=cfg),
-        patch("archon_search.server.app.run_server"),
-        caplog.at_level(logging.WARNING, logger="archon_search.cli.serve"),
-    ):
+    """A relative ARCHON_SEARCH_DATA_DIR with no --config fails with a clean error, not a traceback."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "relative/data")
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    with patch("archon_search.server.app.run_server") as mock_run:
         result = runner.invoke(main, ["serve"])
-    assert result.exit_code == 0, result.output
-    # The DATA_DIR/CONFIG warning specifically should NOT appear.
-    assert not any(
-        "ARCHON_SEARCH_CONFIG" in r.message and "collection" in r.message.lower()
-        for r in caplog.records
-    ), f"Did not expect container-limitation warning, got: {[r.message for r in caplog.records]}"
-
-
-@pytest.mark.archon_unset_data_dir
-def test_serve_no_warning_when_data_dir_unset(
-    runner: CliRunner,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """When ARCHON_SEARCH_DATA_DIR is unset, no container-limitation warning fires."""
-    cfg = _config_with_host("0.0.0.0")
-    with (
-        patch("archon_search.cli.serve.load_config", return_value=cfg),
-        patch("archon_search.server.app.run_server"),
-        caplog.at_level(logging.WARNING, logger="archon_search.cli.serve"),
-    ):
-        result = runner.invoke(main, ["serve"])
-    assert result.exit_code == 0, result.output
-    assert not any(
-        "ARCHON_SEARCH_CONFIG" in r.message and "collection" in r.message.lower()
-        for r in caplog.records
-    ), f"Did not expect container-limitation warning, got: {[r.message for r in caplog.records]}"
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert "absolute path" in result.output
+    mock_run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
 # BE-2: run_server import moved into serve() body (lazy import)
 # ---------------------------------------------------------------------------
 
-def test_serve_invokes_run_server_with_config(runner: CliRunner) -> None:
+def test_serve_invokes_run_server_with_config(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """After BE-2, run_server is imported lazily inside serve().
 
     - Patching at `archon_search.server.app.run_server` must intercept the call.
@@ -361,6 +380,7 @@ def test_serve_invokes_run_server_with_config(runner: CliRunner) -> None:
     """
     import archon_search.cli.serve as serve_mod
 
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     cfg = _config_with_host("0.0.0.0")
     with (
         patch("archon_search.cli.serve.load_config", return_value=cfg),
@@ -368,7 +388,7 @@ def test_serve_invokes_run_server_with_config(runner: CliRunner) -> None:
     ):
         result = runner.invoke(main, ["serve"])
     assert result.exit_code == 0, result.output
-    mock_run.assert_called_once_with(cfg, get_default_config_path())
+    mock_run.assert_called_once_with(cfg, None)
     # run_server must NOT be a module-level attribute after the lazy-import move.
     assert not hasattr(serve_mod, "run_server"), (
         "cli.serve must not expose run_server at module level after BE-2"

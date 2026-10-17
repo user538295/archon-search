@@ -11,7 +11,7 @@ Tests:
 - Anthropic provider with empty model is OK (sentinel kept)
 - Empty and whitespace-only ollama_base_url raises ConfigError
 - rag_fusion with ollama + absent package raises ConfigError
-- path_home_allowlist contains config.py entry with correct line number and SHA
+- path_home_allowlist's only config.py entry is the legacy-config probe
 - openai provider with empty model raises ConfigError (C2-I-15)
 - rag_fusion ollama provider with empty model raises ConfigError (C2-I-14)
 - _apply_toml rejects empty model string with ollama provider (C2-I-11)
@@ -266,31 +266,26 @@ def test_config_rag_fusion_ollama_package_absent_raises_config_error(
 
 
 # ---------------------------------------------------------------------------
-# C1-I-20: path_home_allowlist contains config.py entry with correct line number and SHA
+# C1-I-20: config.py derives every default path from get_data_dir() — the only
+# allowlisted Path.home() callsite is the legacy-config upgrade probe
 # ---------------------------------------------------------------------------
 
-_EXPECTED_CONFIG_LINE_NO = 379
-_EXPECTED_CONFIG_SHA = "8c6844f3268afa9c4a632945843e776075a111407a0540b8a29041b99d669043"
 _CONFIG_REL_PATH = "archon_search/config.py"
 
 
-def test_path_home_allowlist_line_number_updated() -> None:
-    """tests/path_home_allowlist.txt must contain the config.py entry with the line number
-    and SHA pinned above — proving the allowlist was updated after the Path.home() callsite
-    moved. Both pins move together whenever an edit shifts that line in config.py.
+def test_path_home_allowlist_config_entry_is_only_the_legacy_probe() -> None:
+    """tests/path_home_allowlist.txt grandfathers exactly one config.py Path.home() callsite —
+    warn_if_legacy_config_ignored's probe of the pre-data-dir default. The default config
+    path itself derives from get_data_dir() like every other config default.
     """
-    allowlist_path = Path(__file__).resolve().parent / "path_home_allowlist.txt"
-    assert allowlist_path.exists(), f"Allowlist file not found: {allowlist_path}"
+    repo_root = Path(__file__).resolve().parent.parent
+    lines = (repo_root / "tests" / "path_home_allowlist.txt").read_text(encoding="utf-8").splitlines()
+    config_entries = [ln for ln in lines if ln.startswith(f"{_CONFIG_REL_PATH}:")]
 
-    expected_entry = f"{_CONFIG_REL_PATH}:{_EXPECTED_CONFIG_LINE_NO}:{_EXPECTED_CONFIG_SHA}"
-    lines = allowlist_path.read_text(encoding="utf-8").splitlines()
-    data_lines = [ln for ln in lines if ln.strip() and not ln.startswith("#")]
-
-    assert expected_entry in data_lines, (
-        f"Expected allowlist entry not found:\n  {expected_entry}\n"
-        f"Actual config.py entries in allowlist:\n"
-        + "\n".join(f"  {ln}" for ln in data_lines if _CONFIG_REL_PATH in ln)
-    )
+    assert len(config_entries) == 1, f"Expected one config.py allowlist entry, got: {config_entries}"
+    line_no = int(config_entries[0].split(":")[1])
+    source_line = (repo_root / _CONFIG_REL_PATH).read_text(encoding="utf-8").splitlines()[line_no - 1]
+    assert "legacy_path = Path.home()" in source_line
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,9 @@
 """TDD tests for archon-search CLI subcommands: install, uninstall, ingest, sync, collection, config."""
 from __future__ import annotations
 
-import sys
+import logging
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import tomlkit
@@ -189,6 +189,50 @@ def test_config_show_fills_in_missing_feature_toggles(runner: CliRunner, tmp_pat
         assert doc[section]["enabled"] is False, section
 
 
+_CONFIG_SUBCOMMANDS = [["config", "show"], ["config", "get", "server.port"], ["config", "set", "server.port", "9000"]]
+
+
+@pytest.mark.parametrize("args", _CONFIG_SUBCOMMANDS, ids=["show", "get", "set"])
+def test_config_invalid_data_dir_exits_nonzero(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, args: list[str]
+) -> None:
+    """With no --config, a relative ARCHON_SEARCH_DATA_DIR fails with a clean error, not a traceback."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "relative/data")
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    result = runner.invoke(main, args)
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert "absolute path" in result.output
+
+
+@pytest.mark.parametrize("args", _CONFIG_SUBCOMMANDS, ids=["show", "get", "set"])
+@pytest.mark.parametrize("explicit", [False, True], ids=["default-config", "explicit-config"])
+def test_config_subcommands_warn_about_ignored_legacy_config(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    args: list[str],
+    explicit: bool,
+) -> None:
+    """Upgrade with a custom data dir: show/get/set name the ignored legacy config unless --config is given.
+
+    ``config set`` would otherwise silently start a fresh config in the data dir that diverges from the
+    legacy file the operator is still editing by habit.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    legacy = tmp_path / ".archon-search" / "archon-search.toml"
+    legacy.parent.mkdir()
+    legacy.write_text("[server]\nport = 8765\n")
+    extra = ["--config", str(tmp_path / "explicit.toml")] if explicit else []
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        result = runner.invoke(main, [*args, *extra])
+    assert result.exit_code == 0, result.output
+    assert any(str(legacy) in r.getMessage() for r in caplog.records) is not explicit
+
+
 # ---------------------------------------------------------------------------
 # install subcommand
 # ---------------------------------------------------------------------------
@@ -256,6 +300,27 @@ def test_uninstall_delete_db_flag_preserved(runner: CliRunner, mock_service: Mag
     assert not db_dir.exists()
 
 
+@pytest.mark.parametrize("bad_source", ["data_dir", "toml"])
+def test_uninstall_delete_db_bad_config_fails_before_service_teardown(
+    runner: CliRunner, mock_service: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_source: str
+) -> None:
+    """--delete-db resolves the db path first: a bad DATA_DIR / config exits 1 with the service left intact."""
+    args = ["uninstall", "--delete-db"]
+    if bad_source == "data_dir":
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "relative/data")
+        monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    else:
+        bad_toml = tmp_path / "archon-search.toml"
+        bad_toml.write_text("[server\n")
+        args += ["--config", str(bad_toml)]
+    with patch("archon_search.cli.install_cmd._get_service", return_value=mock_service):
+        result = runner.invoke(main, args)
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    mock_service.stop.assert_not_called()
+    mock_service.unregister.assert_not_called()
+
+
 def test_uninstall_no_delete_db_preserves_directory(runner: CliRunner, mock_service: MagicMock, tmp_path: Path) -> None:
     db_dir = tmp_path / "search_db"
     db_dir.mkdir()
@@ -280,7 +345,6 @@ def test_sync_command_available(runner: CliRunner) -> None:
 
 def test_sync_calls_collection_sync(runner: CliRunner, tmp_path: Path) -> None:
     # sync is now an httpx proxy (FE-6) — verify it POSTs to /sync.
-    import httpx as _httpx
 
     resp_202 = MagicMock()
     resp_202.status_code = 202
@@ -326,7 +390,6 @@ def test_collection_remove_available(runner: CliRunner) -> None:
 
 def test_collection_remove_proxies_delete_to_server(runner: CliRunner) -> None:
     """collection remove now proxies to DELETE /collections/{name} via httpx (FE-8)."""
-    import httpx
 
     del_resp = MagicMock()
     del_resp.status_code = 200
@@ -394,7 +457,6 @@ def test_collection_remove_dry_run_no_longer_an_option(runner: CliRunner) -> Non
 
 def test_collection_add_submits_job_via_httpx(runner: CliRunner, tmp_path: Path) -> None:
     """collection add now proxies to POST /collections/ via httpx (FE-4)."""
-    import httpx
 
     post_resp = MagicMock()
     post_resp.status_code = 202

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,6 +17,7 @@ from archon_search.config import SearchConfig
 from archon_search.jobs.model import JobStatus
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
+from archon_search.store import StoreBusyError
 from archon_search.sync import path_to_collection_name
 from archon_search.types import IngestJob, ReindexJob
 
@@ -1901,6 +1903,222 @@ def test_add_collection_rollback_save_failure(
         response = c.post("/collections/", json={"path": str(src)})
 
     assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+    assert app.state.config.collections == []
+
+
+@pytest.mark.parametrize(
+    "persist_error",
+    [
+        PermissionError(13, "Permission denied", "/very/secret/internal/path"),
+        TypeError("unserialisable value"),
+        ValueError("hand-corrupted TOML"),
+    ],
+    ids=["read-only-config", "type-error", "parse-error"],
+)
+def test_add_collection_persist_failure_rolls_back_with_sanitized_500(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture, persist_error: Exception
+) -> None:
+    """save_config raising (PermissionError from a read-only config, TypeError, or tomlkit ParseError,
+    a ValueError) → sanitized 500, in-memory append reverted, no meta written or job started."""
+    from archon_search.server.routes_collections import (
+        CONFIG_PERSIST_FAILED_CODE,
+        CONFIG_PERSIST_FAILED_DETAIL,
+    )
+
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    app.state.config_path = str(tmp_path / "archon-search.toml")
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"}, raise_server_exceptions=False)
+
+    with (
+        patch("archon_search.server.routes_collections.save_config", side_effect=persist_error),
+        caplog.at_level("ERROR", logger="archon_search.server.routes_collections"),
+    ):
+        response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": CONFIG_PERSIST_FAILED_DETAIL, "code": CONFIG_PERSIST_FAILED_CODE}
+    [record] = [r for r in caplog.records if r.getMessage().startswith("Failed to persist collection change")]
+    assert record.levelname == "ERROR"
+    assert record.exc_info is not None and record.exc_info[1] is persist_error
+    assert app.state.config.collections == []
+    mock_store.update_collection_meta.assert_not_awaited()
+    assert tmp_store.list() == []
+
+
+def _remove_app(
+    tmp_path: Path, tmp_store: JobStore, *, with_meta: bool
+) -> tuple[object, MagicMock, str, list[str], list[str]]:
+    """App whose config registers one collection in both lists, with or without a store meta row."""
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    cfg.pinned_collections = [str(src)]
+    name = path_to_collection_name(str(src))
+
+    mock_store = MagicMock()
+    mock_store.get_collection_meta = AsyncMock(
+        return_value=CollectionMeta(name=name, namespace="default") if with_meta else None
+    )
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.drop_collection = AsyncMock()
+    mock_store.delete_collection_meta = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
+
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    app.state.config_path = str(tmp_path / "archon-search.toml")
+    return app, mock_store, name, list(cfg.collections), list(cfg.pinned_collections)
+
+
+@pytest.mark.parametrize("with_meta", [False, True], ids=["config-only", "with-meta"])
+@pytest.mark.parametrize(
+    "persist_error",
+    [PermissionError(13, "Permission denied", "/very/secret/internal/path"), TypeError("bad value")],
+    ids=["oserror", "type-error"],
+)
+def test_remove_collection_persist_failure_rolls_back_with_sanitized_500(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture, with_meta: bool, persist_error: Exception
+) -> None:
+    """DELETE whose config save fails → sanitized 500, both config lists restored, store data untouched."""
+    from archon_search.server.routes_collections import (
+        CONFIG_PERSIST_FAILED_CODE,
+        CONFIG_PERSIST_FAILED_DETAIL,
+    )
+
+    app, mock_store, name, collections_before, pinned_before = _remove_app(
+        tmp_path, tmp_store, with_meta=with_meta
+    )
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"}, raise_server_exceptions=False)
+
+    with (
+        patch("archon_search.server.routes_collections.save_config", side_effect=persist_error),
+        caplog.at_level("ERROR", logger="archon_search.server.routes_collections"),
+    ):
+        response = c.delete(f"/collections/{name}")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": CONFIG_PERSIST_FAILED_DETAIL, "code": CONFIG_PERSIST_FAILED_CODE}
+    [record] = [r for r in caplog.records if r.getMessage().startswith("Failed to persist collection change")]
+    assert record.levelname == "ERROR"
+    assert record.exc_info is not None and record.exc_info[1] is persist_error
+    assert app.state.config.collections == collections_before
+    assert app.state.config.pinned_collections == pinned_before
+    mock_store.drop_collection.assert_not_awaited()
+    mock_store.delete_collection_meta.assert_not_awaited()
+    assert not mock_store.lock_for.return_value.locked()
+
+
+def test_remove_collection_rollback_keeps_config_change_made_while_waiting_for_lock(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """The DELETE rollback snapshot is taken under the collection lock: a path another
+    request registers while DELETE waits for that lock survives a failed config save."""
+    from archon_search.server import routes_collections
+
+    app, _mock_store, name, collections_before, pinned_before = _remove_app(tmp_path, tmp_store, with_meta=True)
+    added_while_waiting = str(tmp_path / "added-while-waiting")
+    real_acquire = routes_collections.acquire_collection_lock_or_503
+
+    async def _acquire_while_another_request_adds(search_store: object, collection: str) -> object:
+        app.state.config.collections.append(added_while_waiting)
+        return await real_acquire(search_store, collection)
+
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"}, raise_server_exceptions=False)
+    with (
+        patch.object(routes_collections, "acquire_collection_lock_or_503", new=_acquire_while_another_request_adds),
+        patch.object(routes_collections, "save_config", side_effect=OSError("disk full")),
+    ):
+        response = c.delete(f"/collections/{name}")
+
+    assert response.status_code == 500
+    assert app.state.config.collections == [*collections_before, added_while_waiting]
+    assert app.state.config.pinned_collections == pinned_before
+
+
+_BUSY_BODY = {"detail": "store busy; retry in 30 seconds"}
+
+
+@pytest.mark.parametrize(
+    ("meta_error", "lock_busy", "expected_status", "expected_body"),
+    [
+        (StoreBusyError(timeout_s=30.0), False, 503, _BUSY_BODY),
+        (ValueError("name taken"), False, 409, {"detail": "collection name already registered"}),
+        (None, True, 503, _BUSY_BODY),
+    ],
+    ids=["store-busy-503", "name-race-409", "ingest-lock-503"],
+)
+def test_add_collection_error_status_preserved_when_rollback_save_fails(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    meta_error: Exception | None,
+    lock_busy: bool,
+    expected_status: int,
+    expected_body: dict[str, str],
+) -> None:
+    """A StoreBusyError (503) or TOCTOU ValueError (409) on the stub meta write, or an ingest-lock timeout
+    (503, stub meta deleted), keeps its status even when the rollback config save raises."""
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock(side_effect=meta_error)
+    mock_store.delete_collection_meta = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    app.state.config_path = str(tmp_path / "archon-search.toml")
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"}, raise_server_exceptions=False)
+
+    calls = {"n": 0}
+
+    def _save(config: object, config_path: object) -> None:
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise OSError("disk full")
+
+    busy_response = JSONResponse({"detail": "busy"}, status_code=503, headers={"Retry-After": "30"})
+    acquire_patch = (
+        patch(
+            "archon_search.server.routes_collections.acquire_collection_lock_or_503",
+            new_callable=AsyncMock,
+            return_value=busy_response,
+        )
+        if lock_busy
+        else nullcontext()
+    )
+    with acquire_patch, patch("archon_search.server.routes_collections.save_config", side_effect=_save):
+        response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == expected_status
+    assert response.json() == expected_body
+    if expected_status == 503:
+        assert response.headers["Retry-After"] == "30"
+    assert calls["n"] == 2
+    assert app.state.config.collections == []
+    assert mock_store.delete_collection_meta.await_count == (1 if lock_busy else 0)
 
 
 # ---------------------------------------------------------------------------

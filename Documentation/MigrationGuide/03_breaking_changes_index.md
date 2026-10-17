@@ -1,7 +1,7 @@
 **Purpose**: Curated chronological index of breaking changes drawn directly from `BREAKING.md`, with a one-line migration step per entry and links back to the authoritative source.
 **Audience**: Operators planning an upgrade across multiple versions; maintainers scanning for surface-level impact before tagging.
 **Status**: Draft
-**Last reviewed**: 2026-10-12
+**Last reviewed**: 2026-10-17
 **Next review**: 2027-10-10
 
 # Breaking Changes Index
@@ -14,7 +14,7 @@
 2. **One row per published entry.** Releases with no contract change have no row.
 3. **`[next release]` entries are included.** They describe behavior already on `main`; consumers building against the development head are already affected.
 
-> **This index is incomplete, and knowingly so.** Principle 2 is the target state, not the current state. `BREAKING.md` carries **81** `### ` headings — every one of them a `[next release]` entry, since no tagged release has shipped a breaking change yet. Only **16** (NR-1 … NR-16) have a row below. The other **65** predate this index and have never been backfilled, so the `[next release]` table below is a sample, not a complete inventory: *do not* plan an upgrade from it alone. Read `BREAKING.md` itself.
+> **This index is incomplete, and knowingly so.** Principle 2 is the target state, not the current state. `BREAKING.md` carries **82** `### ` headings — every one of them a `[next release]` entry, since no tagged release has shipped a breaking change yet. Only **17** (NR-1 … NR-17) have a row below. The other **65** predate this index and have never been backfilled, so the `[next release]` table below is a sample, not a complete inventory: *do not* plan an upgrade from it alone. Read `BREAKING.md` itself.
 >
 > The gap does not grow. `tests/test_removed_engine_repo_guard.py` (S52) pins exactly those 65 headings on an allowlist and fails the build on any **new** `BREAKING.md` heading that lands without a row here. That allowlist is also self-tightening: backfilling a heading requires striking it from the list, so the 65 can only shrink. Backfilling them is tracked work, not something to do opportunistically alongside an unrelated change.
 
@@ -29,7 +29,7 @@
 
 ### `[next release]` (queued on `main`, not yet tagged)
 
-16 of the 81 `[next release]` entries in `BREAKING.md` are indexed here — see the incompleteness note under [Principles](#principles).
+17 of the 82 `[next release]` entries in `BREAKING.md` are indexed here — see the incompleteness note under [Principles](#principles).
 
 | ID | Surface | What changed | Who is affected | One-line migration | Source |
 | --- | --- | --- | --- | --- | --- |
@@ -49,6 +49,7 @@
 | NR-14 | REST (`GET /status` `model_validation`), CLI (`archon-search maintenance status` text and `--json` output) | Behaviour only, no schema change: while background model validation is pending, `model_validation` is now the all-null object (`embedder_ok`/`reranker_ok`/`llama_cpp_ok`/`validated_at` `null`, `provider_warnings` `[]`) instead of `null` (S488). `archon-search maintenance status` now prints its "Model validation" block with `pending` values meanwhile, and `--json` includes `model_validation`. | Clients that treated `model_validation == null` as "pending", or poll until it becomes non-null. | Check `model_validation.validated_at == null` for "pending"; poll until `validated_at` is non-null. | [BREAKING.md → "[next release] — `GET /status`: `model_validation` is always an object, never `null` while validation is pending (2026-10-12)"](../../BREAKING.md) |
 | NR-15 | REST (`GET /ready` status code and `ready`) | Behaviour only, no schema change: `/ready` now also answers `503` (`checks.models: "pending"`) while the background model validation is still running after warm-up finished; it previously answered `200 {"ready": true}` with `checks.models: "pending"`. `"warn"`/`"fail"` stay informational; a failed warm-up ends the models gate at once (`checks.models: "fail"`), before validation finishes. | Readiness probes and load balancers gating on `/ready`. | Allow startup grace for the validation: its startup probes (3 s llama-server reachability, the graph NER importability check, up to min(`[graph].extraction_timeout_seconds`, 75 s) extraction-model, each only when configured) plus `[database].validation_timeout_seconds` (default 60 s). Lowering that timeout shortens only the last part; a timeout reports `checks.models: "fail"`. Use `GET /health` for liveness. | [BREAKING.md → "[next release] — S631: `GET /ready` stays `503` while the background model validation is pending (2026-10-12)"](../../BREAKING.md) |
 | NR-16 | Linux systemd user unit written by `archon-search install` (`EnvironmentFile=`) | The unit loads `EnvironmentFile=-<data-dir>/.secrets.env` (the file the wizard creates) instead of `%h/.archon-search/.secrets.env` regardless of `ARCHON_SEARCH_DATA_DIR`. Default-data-dir installs are unchanged. | Linux installs with a custom `ARCHON_SEARCH_DATA_DIR` whose provider keys sit in `~/.archon-search/.secrets.env`. | Move the keys into `<data-dir>/.secrets.env`, then re-run `archon-search install` with the same `ARCHON_SEARCH_DATA_DIR`, passing `--config <path-to-your-archon-search.toml>` unless the config lives at `<data-dir>/archon-search.toml`. | [BREAKING.md → "[next release] — Linux systemd unit: `EnvironmentFile=` follows `ARCHON_SEARCH_DATA_DIR` (2026-10-17)"](../../BREAKING.md) |
+| NR-17 | Default config path (CLI commands without `--config`, `collection add/remove` writes, service unit, Docker image); `serve` startup log | With `ARCHON_SEARCH_CONFIG` unset, the default config is `<data-dir>/archon-search.toml` instead of always `~/.archon-search/archon-search.toml`; a legacy-config WARNING replaces the old `serve` warning; an invalid `ARCHON_SEARCH_DATA_DIR` exits `1`. | Custom `ARCHON_SEARCH_DATA_DIR`, no `ARCHON_SEARCH_CONFIG`, config at `~/.archon-search/archon-search.toml` (Docker: `/data/.archon-search/archon-search.toml`). | Move the config to `<data-dir>/archon-search.toml` or set `ARCHON_SEARCH_CONFIG` before re-running `wizard` / `install`. | [BREAKING.md → "[next release] — Default config path follows `ARCHON_SEARCH_DATA_DIR`; `serve` no longer warns about an unset `ARCHON_SEARCH_CONFIG` (2026-10-17)"](../../BREAKING.md) |
 
 NR-1 and NR-2 are tracked as paydown items in [`Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md) as **API-1** (MCP shape) and **API-2** (`top_k` ignored). The Pydantic schema for `SearchRequest` still declares `top_k`; this is intentional and documented as debt — it will be removed when the entry is promoted out of `[next release]`.
 

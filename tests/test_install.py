@@ -106,14 +106,40 @@ class TestSearchInstallerInit:
 
         assert installer.cfg is not None
 
-    def test_default_config_file_path(self) -> None:
-        """SearchInstaller default config_file must be None (uses archon_search.config default path)."""
+    def test_default_config_file_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SearchInstaller default config_file is None; it loads the default <data dir>/archon-search.toml."""
         from archon_search.install import create_installer
 
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         with patch("archon_search.install.installer.load_config", return_value=MagicMock()) as mock_load:
             installer = create_installer()
         assert installer.config_file is None
-        mock_load.assert_called_once_with(path=None)
+        assert installer.config_path == tmp_path / "archon-search.toml"
+        mock_load.assert_called_once_with(tmp_path / "archon-search.toml")
+
+    @pytest.mark.parametrize("config_arg", ["conf/archon-search.toml", "~/conf/archon-search.toml"])
+    def test_config_path_is_absolute_for_relative_or_tilde_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config_arg: str
+    ) -> None:
+        """A relative / ``~`` ``--config`` is made absolute: it is baked into the unit/plist, whose cwd differs."""
+        from archon_search.install import create_installer
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        with patch("archon_search.install.installer.load_config", return_value=MagicMock()):
+            installer = create_installer(config_file=config_arg)
+        assert installer.config_path == tmp_path / "conf" / "archon-search.toml"
+
+    def test_config_path_keeps_symlinks(self, tmp_path: Path) -> None:
+        """A ``--config`` through a symlinked directory is baked in as given, not as the link's target."""
+        from archon_search.install import create_installer
+
+        (tmp_path / "real").mkdir()
+        (tmp_path / "link").symlink_to(tmp_path / "real")
+        config_arg = tmp_path / "link" / "archon-search.toml"
+        with patch("archon_search.install.installer.load_config", return_value=MagicMock()):
+            installer = create_installer(config_file=str(config_arg))
+        assert installer.config_path == config_arg
 
 
 def _make_installer(tmp_path: Path, dry_run: bool = False) -> object:
@@ -344,7 +370,7 @@ class TestServiceDelegation:
         with patch("archon_search.install.installer.get_search_service", return_value=svc):
             installer.write_service_file()
 
-        svc.register.assert_called_once_with(dry_run=False, config_path=installer.config_file)
+        svc.register.assert_called_once_with(dry_run=False, config_path=str(tmp_path / "archon-search.toml"))
 
     def test_write_service_file_dry_run(self, tmp_path: Path) -> None:
         installer = _make_installer(tmp_path, dry_run=True)
@@ -353,7 +379,7 @@ class TestServiceDelegation:
         with patch("archon_search.install.installer.get_search_service", return_value=svc):
             installer.write_service_file()
 
-        svc.register.assert_called_once_with(dry_run=True, config_path=installer.config_file)
+        svc.register.assert_called_once_with(dry_run=True, config_path=str(tmp_path / "archon-search.toml"))
 
     def test_write_service_file_calls_pre_activate_cleanup_before_register(self, tmp_path: Path) -> None:
         """write_service_file() must call pre_activate_cleanup before register to stop legacy service."""
@@ -2170,7 +2196,7 @@ class TestDryRunGuardAgainstRealServiceCalls:
             installer.write_service_file()
 
         svc.pre_activate_cleanup.assert_called_once_with(dry_run=True)
-        svc.register.assert_called_once_with(dry_run=True, config_path=installer.config_file)
+        svc.register.assert_called_once_with(dry_run=True, config_path=str(tmp_path / "archon-search.toml"))
 
     def test_load_service_calls_service_with_dry_run_true(self, tmp_path: Path) -> None:
         installer = self._dry_run_installer(tmp_path)

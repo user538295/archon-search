@@ -18,7 +18,7 @@ from archon_search.constants import (
     LOG_FILE_DISABLED_WARNING,
     _validate_namespace,
 )
-from archon_search.paths import get_data_dir
+from archon_search.paths import DEFAULT_DATA_DIR_NAME, get_data_dir
 
 if TYPE_CHECKING:  # pragma: no cover — import cycle guard, typing only
     from archon_search.collection_meta import CollectionMeta
@@ -30,6 +30,9 @@ _VALID_LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERRO
 
 class ConfigError(Exception):
     """Raised on invalid configuration values."""
+
+
+_CONFIG_FILE_NAME = "archon-search.toml"
 
 
 _PROVIDER_REGISTRY: tuple[str, ...] = ("anthropic", "ollama", "openai", "claude_cli", "llama_cpp")
@@ -349,10 +352,10 @@ def save_config(config: SearchConfig, path: Path | str) -> None:
         text = path.read_text(encoding="utf-8")
         doc = tomlkit.parse(text)
     else:
-        # Create the parent directory: the default config path lives under a
-        # `.archon-search/` subdir (e.g. `/data/.archon-search/` in the Docker
-        # image, where HOME=/data) that nothing else creates, so a first-ever
-        # `collection add` would otherwise raise FileNotFoundError → 500.
+        # Create the parent directory: neither the data dir (default config
+        # location) nor an `ARCHON_SEARCH_CONFIG` / `--config` parent is
+        # guaranteed to exist yet, so a first-ever `collection add` would
+        # otherwise raise FileNotFoundError → 500.
         path.parent.mkdir(parents=True, exist_ok=True)
         doc = tomlkit.document()
 
@@ -367,16 +370,73 @@ def save_config(config: SearchConfig, path: Path | str) -> None:
     path.write_text(tomlkit.dumps(doc), encoding="utf-8")  # noqa: durable-write
 
 
+def _get_data_dir_or_config_error() -> Path:
+    """Return `get_data_dir()`, translating its `ValueError` into `ConfigError`.
+
+    `paths.py` raises `ValueError` to avoid importing this module; callers of
+    the config API only ever catch `ConfigError`.
+    """
+    try:
+        return get_data_dir()
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _config_env_override() -> str | None:
+    """Return the stripped `ARCHON_SEARCH_CONFIG` value, or ``None`` when it is unset or blank."""
+    return os.environ.get("ARCHON_SEARCH_CONFIG", "").strip() or None
+
+
 def get_default_config_path() -> Path:
-    env_val = os.environ.get("ARCHON_SEARCH_CONFIG")
-    if env_val:
+    """Return the config file path: `ARCHON_SEARCH_CONFIG` if set, else `get_data_dir()/archon-search.toml`.
+
+    A blank (empty or whitespace-only) `ARCHON_SEARCH_CONFIG` counts as unset — unlike
+    a blank `ARCHON_SEARCH_DATA_DIR`, which `get_data_dir()` rejects.
+
+    Raises:
+        ConfigError: when `ARCHON_SEARCH_CONFIG` is unset and `get_data_dir()`
+            rejects `ARCHON_SEARCH_DATA_DIR` (empty, relative, or HOME unset).
+    """
+    env_val = _config_env_override()
+    if env_val is not None:
         expanded = os.path.expanduser(env_val)
         path = Path(expanded)
         # Relative paths are resolved against cwd (not the home directory).
         if not path.is_absolute():
             path = (Path.cwd() / path).resolve()
         return path
-    return Path.home() / ".archon-search" / "archon-search.toml"
+    return _get_data_dir_or_config_error() / _CONFIG_FILE_NAME
+
+
+def warn_if_legacy_config_ignored(explicit_config: Path | str | None) -> None:
+    """Log a WARNING when an upgrade leaves the config at the pre-data-dir default location.
+
+    The default config used to be `~/.archon-search/archon-search.toml` whatever
+    `ARCHON_SEARCH_DATA_DIR` said; it now follows the data dir, so with a custom
+    data dir that old file is silently ignored. No-op when a config path was given
+    (`explicit_config`, i.e. `--config`, or `ARCHON_SEARCH_CONFIG`), when the default
+    config exists, or when HOME cannot be resolved.
+
+    Raises:
+        ConfigError: as `get_default_config_path()`.
+    """
+    if explicit_config or _config_env_override() is not None:
+        return
+    default_path = get_default_config_path()
+    if default_path.exists():
+        return
+    try:
+        legacy_path = Path.home() / DEFAULT_DATA_DIR_NAME / _CONFIG_FILE_NAME
+    except RuntimeError:
+        return
+    if legacy_path.exists():
+        _logger.warning(
+            "Ignoring legacy config %s: the default config is now %s (under ARCHON_SEARCH_DATA_DIR). "
+            "Move the file there, or set ARCHON_SEARCH_CONFIG=%s to keep using it.",
+            legacy_path,
+            default_path,
+            legacy_path,
+        )
 
 
 def _coerce_int(value: object, field_name: str) -> int:
@@ -962,7 +1022,7 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         raw_leiden_resolution = graph_cfg["leiden_resolution"]
         if isinstance(raw_leiden_resolution, bool):
             raise ConfigError(
-                f"Expected float for '[graph].leiden_resolution', got bool"
+                "Expected float for '[graph].leiden_resolution', got bool"
             )
         leiden_resolution = _coerce_float(raw_leiden_resolution, "[graph].leiden_resolution")
         if leiden_resolution <= 0:
@@ -1215,10 +1275,7 @@ def _apply_env_overrides(config: SearchConfig) -> None:
     # operator error worth surfacing. We translate `ValueError` →
     # `ConfigError` so callers of `load_config()` only catch one type.
     if os.environ.get("ARCHON_SEARCH_DATA_DIR") is not None:
-        try:
-            data_dir = get_data_dir()
-        except ValueError as exc:
-            raise ConfigError(str(exc)) from exc
+        data_dir = _get_data_dir_or_config_error()
         # Path suffixes must match `SearchConfig`'s dataclass defaults
         # (search / logs/archon-search.log / search-logs); the plan's
         # "Path derivations" table is the canonical source of truth.

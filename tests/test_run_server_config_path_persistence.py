@@ -1,24 +1,25 @@
 """Regression tests for S07 / S252 — the shared config-path-persistence bug.
 
-Root cause (already diagnosed): production ``run_server(config)``
-(``archon_search/server/app.py``) builds the app via
+Root cause (fixed): production ``run_server(config)``
+(``archon_search/server/app.py``) built the app via
 ``create_app(config, job_store, scheduler=scheduler)`` WITHOUT threading the
-config file path through. ``create_app`` therefore sets
-``app.state.config_path = None``, which makes ``_maybe_save_config`` in
+config file path through. ``create_app`` therefore set
+``app.state.config_path = None``, which made ``_maybe_save_config`` in
 ``routes_collections.py`` a silent no-op. Net effect: ``POST /collections/``
-appends the path to the in-memory ``config.collections`` but never writes the
-TOML — so on restart the path is lost and ``GET /collections/{name}`` /
-``GET /status`` report ``"path": ""``.
+appended the path to the in-memory ``config.collections`` but never wrote the
+TOML — so on restart the path was lost and ``GET /collections/{name}`` /
+``GET /status`` reported ``"path": ""``.
 
-Both tests build the app through the REAL production seam (``run_server`` with
-``uvicorn.run`` patched to a no-op) so the wiring defect is exercised exactly as
-it ships. ``ARCHON_SEARCH_CONFIG`` is pointed at ``tmp_path`` so the fix (which
-resolves the config path via ``get_default_config_path()`` regardless of its
-final shape) lands the TOML in a temp dir — the real ``~/.archon-search`` is
-never touched.
+The tests build the app through the REAL production seam (``run_server`` with
+``uvicorn.run`` patched to a no-op) so the wiring is exercised exactly as it
+ships. ``ARCHON_SEARCH_CONFIG`` / ``ARCHON_SEARCH_DATA_DIR`` point at
+``tmp_path``, so the TOML ``run_server`` resolves via ``get_default_config_path()``
+lands in a temp dir — the real ``~/.archon-search`` is never touched.
 """
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -84,8 +85,8 @@ def test_add_collection_persists_path_to_toml_via_production_build(
     """End-to-end: driving ``POST /collections/`` on an app built the way
     production builds it must write the added path into the on-disk TOML.
 
-    Fails today because ``config_path is None`` → ``_maybe_save_config`` no-ops
-    → the TOML is never written (the S07 user-visible symptom)."""
+    Failed before the fix because ``config_path`` was ``None`` → ``_maybe_save_config``
+    no-oped → the TOML was never written (the S07 user-visible symptom)."""
     toml_path = tmp_path / "archon-search.toml"
     collection_dir = tmp_path / "my_docs"
     collection_dir.mkdir()
@@ -113,3 +114,60 @@ def test_add_collection_persists_path_to_toml_via_production_build(
         "Added collection path did not round-trip through the persisted TOML — "
         "on restart the collection would be missing (S07/S252)."
     )
+
+
+@pytest.fixture
+def _restore_archon_logger() -> Iterator[None]:
+    """``run_server`` reconfigures the ``archon_search`` logger; put its handlers back afterwards."""
+    logger = logging.getLogger("archon_search")
+    saved = (logger.handlers[:], logger.level, logger.propagate)
+    yield
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        if handler not in saved[0]:
+            handler.close()
+    for handler in saved[0]:
+        logger.addHandler(handler)
+    logger.setLevel(saved[1])
+    logger.propagate = saved[2]
+
+
+@pytest.mark.usefixtures("_restore_archon_logger")
+@pytest.mark.parametrize("explicit", [False, True], ids=["default-config", "explicit-config"])
+def test_run_server_logs_legacy_config_warning_after_logging_is_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, explicit: bool
+) -> None:
+    """The ignored-legacy-config WARNING goes through the configured pipeline (lands in ``log_file``),
+    and is skipped when an explicit config path was given."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    legacy = tmp_path / ".archon-search" / "archon-search.toml"
+    legacy.parent.mkdir()
+    legacy.write_text("[server]\n", encoding="utf-8")
+    log_path = tmp_path / "logs" / "server.log"
+    cfg = _make_config(tmp_path)
+    cfg.log_file = str(log_path)
+    monkeypatch.setattr(app_module.uvicorn, "run", lambda app, **kwargs: None)
+
+    app_module.run_server(cfg, tmp_path / "explicit.toml" if explicit else None)
+
+    for handler in logging.getLogger("archon_search").handlers:
+        handler.flush()
+    assert (str(legacy) in log_path.read_text(encoding="utf-8")) is not explicit
+
+
+def test_run_server_defaults_config_path_under_data_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No config path + ARCHON_SEARCH_DATA_DIR set (container /data volume) → the app persists to
+    ``<data-dir>/archon-search.toml``."""
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(app_module.uvicorn, "run", lambda app, **kwargs: captured.setdefault("app", app))
+
+    app_module.run_server(_make_config(tmp_path))
+
+    assert Path(captured["app"].state.config_path) == data_dir / "archon-search.toml"

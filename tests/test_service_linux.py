@@ -8,6 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
+_CONFIG_PATH = "/etc/archon-search/archon-search.toml"
+
 
 def _ok(stdout: str = "") -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
@@ -227,7 +229,7 @@ def test_register_writes_unit_file(tmp_path: Path) -> None:
         patch.object(type(svc), "_unit_path", property(lambda self: unit)),
         patch.object(svc, "_run", return_value=_ok()),
     ):
-        svc.register()
+        svc.register(config_path=_CONFIG_PATH)
 
     assert unit.exists()
     content = unit.read_text()
@@ -245,7 +247,7 @@ def test_register_raises_on_permission_error(tmp_path: Path) -> None:
         patch("pathlib.Path.write_text", side_effect=PermissionError),
     ):
         with pytest.raises(RuntimeError):
-            svc.register()
+            svc.register(config_path=_CONFIG_PATH)
 
 
 def test_register_calls_daemon_reload_and_enable(tmp_path: Path) -> None:
@@ -263,7 +265,7 @@ def test_register_calls_daemon_reload_and_enable(tmp_path: Path) -> None:
         patch.object(type(svc), "_unit_path", property(lambda self: unit)),
         patch.object(svc, "_run", side_effect=mock_run),
     ):
-        svc.register()
+        svc.register(config_path=_CONFIG_PATH)
 
     cmds_flat = [" ".join(c) for c in calls]
     assert any("daemon-reload" in c for c in cmds_flat)
@@ -353,7 +355,7 @@ def test_register_raises_and_cleans_up_on_enable_failure(tmp_path: Path) -> None
         patch.object(svc, "_run", side_effect=mock_run),
     ):
         with pytest.raises(RuntimeError):
-            svc.register()
+            svc.register(config_path=_CONFIG_PATH)
 
     assert not unit.exists(), "unit file should have been deleted on rollback"
     daemon_reload_calls = [c for c in calls if "daemon-reload" in c]
@@ -375,7 +377,7 @@ def test_register_calls_loginctl_enable_linger(tmp_path: Path) -> None:
         patch.object(type(svc), "_unit_path", property(lambda self: unit)),
         patch.object(svc, "_run", side_effect=mock_run),
     ):
-        svc.register()
+        svc.register(config_path=_CONFIG_PATH)
 
     cmds_flat = [" ".join(c) for c in calls]
     assert any("enable-linger" in c for c in cmds_flat), "loginctl enable-linger must be called"
@@ -465,7 +467,7 @@ def test_cwd_is_archon_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         patch.object(type(svc), "_unit_path", property(lambda self: unit)),
         patch.object(svc, "_run", return_value=_ok()),
     ):
-        svc.register()
+        svc.register(config_path=_CONFIG_PATH)
     content = unit.read_text()
     expected_cwd = str(tmp_path / ".archon-search")
     assert expected_cwd in content
@@ -487,28 +489,11 @@ def _register_with_data_dir(
     return unit.read_text()
 
 
-def test_config_path_is_archon_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """register() must reference data_dir/archon-search.toml as config."""
-    from archon_search.platform.linux import SystemdSearchService
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / ".archon-search"))
-    svc = SystemdSearchService()
-    unit = tmp_path / "archon-search.service"
-    with (
-        patch.object(type(svc), "_unit_path", property(lambda self: unit)),
-        patch.object(svc, "_run", return_value=_ok()),
-    ):
-        svc.register()
-    content = unit.read_text()
-    expected_config = str(tmp_path / ".archon-search" / "archon-search.toml")
-    assert expected_config in content
-
-
 def test_register_writes_requested_config_path_into_unit(tmp_path: Path) -> None:
     """register(config_path=X) writes X into the unit's ARCHON_SEARCH_CONFIG (S206).
 
     The wizard's --config flag must reach the service it starts: the generated
-    systemd unit's Environment=ARCHON_SEARCH_CONFIG must point at the requested
-    config, not the hardcoded ~/.archon-search/archon-search.toml default.
+    systemd unit's Environment=ARCHON_SEARCH_CONFIG must point at the requested config.
     """
     from archon_search.platform.linux import SystemdSearchService
     svc = SystemdSearchService()
@@ -519,10 +504,7 @@ def test_register_writes_requested_config_path_into_unit(tmp_path: Path) -> None
         patch.object(svc, "_run", return_value=_ok()),
     ):
         svc.register(config_path=str(requested))
-    content = unit.read_text()
-    assert f"Environment=ARCHON_SEARCH_CONFIG={requested}" in content
-    hardcoded_default = str(Path.home() / ".archon-search" / "archon-search.toml")
-    assert f"ARCHON_SEARCH_CONFIG={hardcoded_default}" not in content
+    assert f"Environment=ARCHON_SEARCH_CONFIG={requested}" in unit.read_text()
 
 
 def test_register_unit_includes_data_dir_when_env_set(

@@ -6,7 +6,7 @@
 
 # Logging
 
-`archon-search` writes its own application logs (distinct from uvicorn's access log) through the `archon_search` logger hierarchy. The `[logging]` config section controls where those logs go, at what level, and in what format. The wiring lives in `archon_search/logging_setup.py` (`configure_logging()`), called as the first action of the server on startup.
+`archon-search` writes its own application logs (distinct from uvicorn's access log) through the `archon_search` logger hierarchy. The `[logging]` config section controls where those logs go, at what level, and in what format. The wiring lives in `archon_search/logging_setup.py` (`configure_logging()`), called by `run_server()` on startup before anything there logs.
 
 By default the server writes a rotating text log file under the data directory. Set the format to `json` to feed a log aggregator (ELK, Loki, Datadog); set `log_file = ""` to fall back to stderr only.
 

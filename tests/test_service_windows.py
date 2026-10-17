@@ -27,7 +27,7 @@ def test_restart_raises_not_implemented(service: WindowsSearchService) -> None:
 
 def test_register_raises_not_implemented(service: WindowsSearchService) -> None:
     with pytest.raises(NotImplementedError):
-        service.register()
+        service.register(config_path="/etc/archon-search/archon-search.toml")
 
 
 def test_unregister_raises_not_implemented(service: WindowsSearchService) -> None:

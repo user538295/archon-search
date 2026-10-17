@@ -27,7 +27,7 @@ class ConcreteService(SearchServiceLifecycle):
     def status(self) -> ServiceStatus:
         return ServiceStatus(running=True, pid=1, uptime_seconds=0.0)
 
-    def register(self, dry_run: bool = False) -> None:
+    def register(self, dry_run: bool = False, *, config_path: str) -> None:
         self.calls.append("register")
 
     def unregister(self, dry_run: bool = False) -> None:

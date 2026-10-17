@@ -54,15 +54,17 @@ class TestConfigureProviders:
     def test_configure_providers_fallback_path_warns_when_missing(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """configure_providers with config_file=None uses ~/.archon-search/archon-search.toml as fallback.
+        """configure_providers with config_file=None uses get_default_config_path() as fallback.
 
         When that file does not exist the method logs a warning and returns without writing.
         """
         import logging
         from unittest.mock import patch
 
+        from archon_search.config import get_default_config_path
+
         installer = create_installer(config_file=None)
-        expected_path = Path.home() / ".archon-search" / "archon-search.toml"
+        expected_path = get_default_config_path()
 
         # Patch Path.exists() only for the fallback path so it returns False (file absent).
         original_exists = Path.exists
@@ -78,8 +80,7 @@ class TestConfigureProviders:
         ):
             installer.configure_providers(GpuType.CUDA)
 
-        # A warning must have been emitted referencing the .archon-search path.
-        assert any(".archon-search" in r.message for r in caplog.records)
+        assert any(str(expected_path) in r.message for r in caplog.records)
 
     def test_configure_providers_skips_if_already_set(self, tmp_path: Path) -> None:
         toml_file = tmp_path / "archon-search.toml"

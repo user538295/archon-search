@@ -39,12 +39,12 @@ Each instance has its own:
 | Data directory | `~/.archon-search/` | `archon-dev-data` Docker volume (`/data`) |
 | API key file | `~/.archon-search/.search.env` | `/data/.search.env` inside volume |
 | LanceDB index | `~/.archon-search/search/` | `/data/search/` inside volume |
-| Config TOML | `~/.archon-search/archon-search.toml` | `/data/archon-search.toml` (if `ARCHON_SEARCH_CONFIG` set); otherwise the in-container default |
+| Config TOML | `~/.archon-search/archon-search.toml` | `/data/archon-search.toml` inside volume (`<ARCHON_SEARCH_DATA_DIR>/archon-search.toml`; `ARCHON_SEARCH_CONFIG` overrides) |
 | Fastembed model cache | `~/.archon-search/models/` (`<ARCHON_SEARCH_DATA_DIR>/models`; `FASTEMBED_CACHE_PATH` overrides) | `/data/fastembed-cache/` inside volume (image `FASTEMBED_CACHE_PATH`); mount `archon-model-cache:/data/fastembed-cache` to share one copy across services (see [`140_running_with_docker.md`](140_running_with_docker.md)) |
 | Host port | `8765` | `18765` |
 | MCP endpoint | `127.0.0.1:8765/mcp` | `127.0.0.1:18765/mcp` |
 
-> **One isolation boundary is NOT controlled by `ARCHON_SEARCH_DATA_DIR`:** the TOML config path (controlled by `ARCHON_SEARCH_CONFIG`). The fastembed embedding/reranker model cache follows `ARCHON_SEARCH_DATA_DIR` by default (`<ARCHON_SEARCH_DATA_DIR>/models`), but `FASTEMBED_CACHE_PATH` (fastembed's own env var, which archon-search honours via `paths.get_fastembed_cache_dir()`) overrides it and may point outside the data directory — the Docker image bakes `FASTEMBED_CACHE_PATH=/data/fastembed-cache`, so native and Docker defaults differ. For fastembed cache sharing across multiple Docker instances, see [Part 7 below](#part-7--sharing-the-fastembed-model-cache-optional) or the [shared cache section in `140_running_with_docker.md`](140_running_with_docker.md#sharing-the-fastembed-model-cache).
+> **Two isolation boundaries follow `ARCHON_SEARCH_DATA_DIR` only by default:** the TOML config path defaults to `<ARCHON_SEARCH_DATA_DIR>/archon-search.toml`, but `ARCHON_SEARCH_CONFIG` overrides it and may point anywhere. The fastembed embedding/reranker model cache follows `ARCHON_SEARCH_DATA_DIR` by default (`<ARCHON_SEARCH_DATA_DIR>/models`), but `FASTEMBED_CACHE_PATH` (fastembed's own env var, which archon-search honours via `paths.get_fastembed_cache_dir()`) overrides it and may point outside the data directory — the Docker image bakes `FASTEMBED_CACHE_PATH=/data/fastembed-cache`, so native and Docker defaults differ. For fastembed cache sharing across multiple Docker instances, see [Part 7 below](#part-7--sharing-the-fastembed-model-cache-optional) or the [shared cache section in `140_running_with_docker.md`](140_running_with_docker.md#sharing-the-fastembed-model-cache).
 
 ---
 

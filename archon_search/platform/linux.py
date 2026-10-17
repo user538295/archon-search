@@ -114,15 +114,11 @@ class SystemdSearchService(SearchServiceLifecycle):
         pid = int(match.group(1))
         return pid if pid != 0 else None
 
-    def register(self, dry_run: bool = False, config_path: str | None = None) -> None:
+    def register(self, dry_run: bool = False, *, config_path: str) -> None:
         if dry_run:
             return
         data_dir = get_data_dir()
         cwd = str(data_dir)
-        # Honor the caller-supplied config path (e.g. `wizard --config`) so the
-        # unit's ARCHON_SEARCH_CONFIG points at the config the installer just
-        # wrote, not the hardcoded default (S206).
-        config_path = config_path or str(data_dir / "archon-search.toml")
         # Same file the wizard writes and the macOS wrapper reads. systemd takes
         # the whole EnvironmentFile= value as one path (no unquoting, so spaces
         # stay verbatim), ignores it unless absolute and normalized (no ..), and

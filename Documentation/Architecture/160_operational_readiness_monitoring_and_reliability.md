@@ -74,7 +74,7 @@ The header name can be changed from the default `"X-Request-ID"` via `[observabi
 
 ### Log file
 
-`configure_logging()` (`archon_search/logging_setup.py`) is called as the first action in `run_server()`. When `[logging].log_file` is non-empty (the default is `~/.archon-search/logs/archon-search.log`), it opens a `TimedRotatingFileHandler` that rotates at UTC midnight and retains `[logging].backup_count` (default 7) rotated files. File logging is therefore **active by default** — no explicit opt-in is required.
+`configure_logging()` (`archon_search/logging_setup.py`) is called in `run_server()` right after the config path is resolved, before anything there logs. When `[logging].log_file` is non-empty (the default is `~/.archon-search/logs/archon-search.log`), it opens a `TimedRotatingFileHandler` that rotates at UTC midnight and retains `[logging].backup_count` (default 7) rotated files. File logging is therefore **active by default** — no explicit opt-in is required.
 
 Set `log_file = ""` to disable file logging and write to stderr only (recommended for containers and multi-worker deployments). For Docker the simpler path is to keep TOML at defaults and rely on `ARCHON_SEARCH_CONTAINER=1` (baked into the published image): `configure_logging()` then attaches a `StreamHandler(sys.stderr)` to the `archon_search` logger in addition to any file handler, so `docker logs` captures application output regardless of `log_file`. The container handler uses the same formatter as the file handler (text or JSON per `[logging].format`).
 
@@ -116,7 +116,7 @@ At the end of each handled request the structured log line emitted by the route 
 ```mermaid
 flowchart TB
   CLI[archon-search install] --> INST[cli/install_cmd.py::install]
-  INST --> CFG[Create ~/.archon-search/archon-search.toml<br/>if absent]
+  INST --> CFG[Create data-dir/archon-search.toml<br/>if absent]
   INST --> DIRS[mkdir db_path, logs/]
   INST --> LEGACY[Detect + remove legacy<br/>service definition]
   INST --> REG[service.register&#40;&#41;]
@@ -143,7 +143,7 @@ GPU detection (`platform/runtime.py::SearchRuntime.detect_gpu_type`) is **not ga
 
 ## Container deployment (C9)
 
-The Docker image bypasses the platform service lifecycle entirely: there is no `launchd` plist and no systemd unit. `tini` runs as PID 1 and execs `archon-search serve`, which calls `load_config(path, serve=True)` (host defaults to `0.0.0.0`) and then `run_server(config)` in the foreground. Lifecycle is the orchestrator's responsibility: `docker stop` sends `SIGTERM`, uvicorn drains in-flight HTTP requests, the FastAPI lifespan disconnects the store and drains telemetry, and the process exits; `docker-compose.yml` ships a 30-second `stop_grace_period` to give the lifespan room to finish.
+The Docker image bypasses the platform service lifecycle entirely: there is no `launchd` plist and no systemd unit. `tini` runs as PID 1 and execs `archon-search serve`, which calls `load_config(path, serve=True)` (host defaults to `0.0.0.0`) and then `run_server(config, config_path)` in the foreground. Lifecycle is the orchestrator's responsibility: `docker stop` sends `SIGTERM`, uvicorn drains in-flight HTTP requests, the FastAPI lifespan disconnects the store and drains telemetry, and the process exits; `docker-compose.yml` ships a 30-second `stop_grace_period` to give the lifespan room to finish.
 
 Two image variants are published to GHCR on every tag push by `.github/workflows/archon-search-release.yml`: `:latest` / `:<version>` (CPU, base `python:3.12-slim`) and `:gpu` / `:<version>-gpu` (NVIDIA CUDA + `onnxruntime-gpu`). Both bake the source commit into the `org.opencontainers.image.revision` label; `docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'` resolves which commit produced a given pulled tag, which matters because the `:gpu` floating tag is not deleted on a failed GPU build — operators may pull a stale `:gpu` and need to verify the SHA.
 

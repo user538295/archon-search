@@ -892,7 +892,9 @@ def test_run_guard_abort_does_not_remove_legacy_service(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_register_and_start_no_config_returns_1(tmp_path: Path) -> None:
+def test_run_register_and_start_no_config_returns_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     config_path = tmp_path / "archon-search.toml"
     assert not config_path.exists()
 
@@ -900,6 +902,28 @@ def test_run_register_and_start_no_config_returns_1(tmp_path: Path) -> None:
     rc = installer.run_register_and_start()
 
     assert rc == 1
+    assert f"No configuration found at {config_path}." in capsys.readouterr().err
+
+
+def test_run_register_and_start_warns_about_ignored_legacy_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Upgrade with a custom data dir: the legacy ~/.archon-search config is named, not silently skipped."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+    legacy = tmp_path / ".archon-search" / "archon-search.toml"
+    legacy.parent.mkdir()
+    legacy.write_text("[server]\n")
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        rc = create_installer().run_register_and_start()
+
+    assert rc == 1
+    assert any(
+        str(legacy) in r.getMessage() and str(data_dir / "archon-search.toml") in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_run_register_and_start_with_config_registers_and_starts(tmp_path: Path) -> None:
@@ -2675,3 +2699,52 @@ def test_write_service_file_passes_config_file_to_register(tmp_path: Path) -> No
         installer.write_service_file()
 
     fake_svc.register.assert_called_once_with(dry_run=False, config_path=str(config_path))
+
+
+def test_wizard_run_warns_about_ignored_legacy_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """run() (the wizard) names an ignored legacy config before any prompt or early exit."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    legacy = tmp_path / ".archon-search" / "archon-search.toml"
+    legacy.parent.mkdir()
+    legacy.write_text("[server]\n")
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.config"):
+        rc = create_installer(dry_run=True).run(non_interactive=True, force=True)
+
+    assert rc == 1  # --force without --delete-db: the first early exit after the warning
+    assert any(str(legacy) in r.getMessage() for r in caplog.records)
+
+
+def test_write_service_file_passes_default_config_path_to_register(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --config, register() receives the installer's resolved default (<data dir>/archon-search.toml)."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+
+    fake_svc = MagicMock()
+    with patch("archon_search.install.installer.get_search_service", return_value=fake_svc):
+        create_installer().write_service_file()
+
+    fake_svc.register.assert_called_once_with(
+        dry_run=False, config_path=str(tmp_path / "archon-search.toml")
+    )
+
+
+def test_write_service_file_passes_config_env_path_to_register(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --config, an install-time ARCHON_SEARCH_CONFIG is the installer's config_path and reaches register()."""
+    custom = tmp_path / "etc" / "archon-search.toml"
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", str(custom))
+
+    fake_svc = MagicMock()
+    with patch("archon_search.install.installer.get_search_service", return_value=fake_svc):
+        installer = create_installer()
+        installer.write_service_file()
+
+    assert installer.config_path == custom
+    fake_svc.register.assert_called_once_with(dry_run=False, config_path=str(custom))

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from archon_search.config import get_default_config_path
 from archon_search.profiles import InstallProfile, get_profile
 
 from .config_writer import WizardFeatures
@@ -84,6 +83,7 @@ def _render_summary(
     port: int = 8765,
     api_key_file: str = "",
     total_bytes: int = 0,
+    config_path: str,
 ) -> str:
     """Return an install summary block string. Does NOT print."""
     cap = _PROFILE_CAPS.get(profile_name, profile_name.capitalize())
@@ -121,7 +121,7 @@ def _render_summary(
                 "  Tune prose extraction for your corpus with [graph].ner_confidence"
             )
             feature_bullets.append(
-                f"  and [graph].relation_confidence in {get_default_config_path()}"
+                f"  and [graph].relation_confidence in {config_path}"
             )
         if features.install_multilingual_extra:
             feature_bullets.append("• Language detection (fasttext)")
@@ -220,7 +220,7 @@ def _mask_api_key(api_key_file: str) -> str:
     return "(not yet generated)"
 
 
-def _print_next_steps(host: str, port: int, api_key_file: str) -> None:
+def _print_next_steps(host: str, port: int, api_key_file: str, config_path: str) -> None:
     """Print post-install guidance to stdout."""
     from archon_search import key_manager
     key_path = Path(api_key_file) if api_key_file else key_manager.get_key_file()
@@ -232,4 +232,4 @@ def _print_next_steps(host: str, port: int, api_key_file: str) -> None:
     print("  archon-search stop                    # stop the service")
     print("  archon-search wizard --top-k 20       # increase results per query (default: 5)")
     print(f"\nAPI key: (full key: {key_path})")
-    print(f"Config:  {get_default_config_path()}")
+    print(f"Config:  {config_path}")

@@ -80,13 +80,9 @@ class LaunchdSearchService(SearchServiceLifecycle):
         except FileNotFoundError:
             return False
 
-    def register(self, dry_run: bool = False, config_path: str | None = None) -> None:
+    def register(self, dry_run: bool = False, *, config_path: str) -> None:
         data_dir = get_data_dir()
         cwd = str(data_dir)
-        # The service reads its config from ARCHON_SEARCH_CONFIG; honor the
-        # caller-supplied path (e.g. `wizard --config`) so the service the
-        # installer starts reads the config the installer just wrote (S206).
-        config_path = config_path or str(data_dir / "archon-search.toml")
         log_path = str(data_dir / "logs" / "archon-search.log")
         wrapper_path = data_dir / "run-server.sh"
         secrets_file = str(get_secrets_env_file())

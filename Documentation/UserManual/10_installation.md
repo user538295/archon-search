@@ -268,7 +268,7 @@ uv tool uninstall archon-search
 # checkout / dev install — delete the cloned directory
 ```
 
-**User data is not removed by either step.** `archon-search uninstall` only stops the OS service (launchd plist on macOS, systemd user unit on Linux) and unregisters it. The following paths are left on disk:
+**User data is not removed by either step.** `archon-search uninstall` only stops the OS service (launchd plist on macOS, systemd user unit on Linux) and unregisters it. The following paths are left on disk (shown for the default data dir; with `ARCHON_SEARCH_DATA_DIR` set they live under that dir instead, and `ARCHON_SEARCH_CONFIG`, when set, names the config):
 
 | Path | Contents |
 |------|----------|
@@ -297,7 +297,7 @@ rm -rf ~/.archon-search/
 | `~/.archon-search/models/lid.176.ftz` | **C2** — fasttext language identification model (only when installed with `--multilingual`). |
 | `~/.archon-search/models/graph/knowledgator--gliner-relex-multi-v1.0-<revision>/` | Hugging Face cache for the pinned GLiNER prose extraction checkpoint (only when the graph extra is in use). Written by the wizard's pre-warm, or lazily by the server on first graph ingest — `get_graph_models_dir()` in `archon_search/paths.py` builds this path from `GRAPH_NER_MODEL_NAME` and `GRAPH_NER_MODEL_REVISION`. |
 
-> The entire runtime tree relocates with a single env var: set `ARCHON_SEARCH_DATA_DIR` to move DB, models, keys, and logs off `~/.archon-search/`.
+> The entire runtime tree relocates with a single env var: set `ARCHON_SEARCH_DATA_DIR` to move DB, models, keys, logs, and the default `archon-search.toml` off `~/.archon-search/`.
 
 Once installed, richer file-type ingestion (Office and legacy document formats, PDFs, code) is covered in [`50_ingestion_and_collections.md`](./50_ingestion_and_collections.md).
 

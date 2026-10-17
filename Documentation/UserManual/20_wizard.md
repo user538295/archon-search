@@ -15,7 +15,7 @@
 4. Handles license acceptance for any third-party models that require it
 5. Detects GPU hardware and asks whether to enable acceleration
 6. Downloads model weights from Hugging Face
-7. Writes `~/.archon-search/archon-search.toml` with your choices
+7. Writes `<data-dir>/archon-search.toml` (`~/.archon-search/archon-search.toml` by default) with your choices
 8. Registers and starts the background service
 
 **When to use the wizard vs `archon-search install`:**
@@ -574,7 +574,7 @@ archon-search installed and running. Profile: Balanced · English.
 
 The wizard registers the service with your OS (launchd on macOS, systemd user unit on Linux) and starts it. It then polls `GET /health` for up to 60 seconds by default (longer when eager loading is enabled — see the note above). If the first launch crashes on an import-time error (`ModuleNotFoundError` / `ImportError`) — a fresh-install race where the service starts before its environment is fully materialised — the wizard detects that crash in the service log and extends the window once so it survives the supervisor's automatic restart. If the service still does not become ready, the wizard exits with an error and prints the last import-time error from the service log.
 
-After startup, the wizard prints a "Next steps" block with common follow-up commands, the full API key with its source label and a "keep this key private" note, and the paths to your API key file and config. The key is always shown in full — it already lives in a plaintext file you own, so terminal masking adds no security. The "Next steps" block is suppressed in `--dry-run` mode.
+After startup, the wizard prints a "Next steps" block with common follow-up commands, the full API key with its source label and a "keep this key private" note, and the paths to your API key file and config (the `--config` path when given, else the default `<data-dir>/archon-search.toml` or `ARCHON_SEARCH_CONFIG`). The key is always shown in full — it already lives in a plaintext file you own, so terminal masking adds no security. The "Next steps" block is suppressed in `--dry-run` mode.
 
 The API key line format depends on how the key was sourced:
 - Auto-generated on first install: `API key: <key>  (generated fresh — keep this key private; also stored at: <KEY_FILE>)`
@@ -598,7 +598,7 @@ All flags for the `wizard` command (verified against `archon_search/cli/install_
 | `--accept-fasttext-license` | False | Pre-accept the fasttext CC-BY-SA 3.0 license for multilingual installs. |
 | `--dry-run` | False | Print every action the wizard would take without executing any of them. |
 | `--non-interactive` | False | Skip all interactive prompts and use defaults. Combine with feature flags for full automation. |
-| `--config PATH` | `~/.archon-search/archon-search.toml` | Use a non-default config file path. |
+| `--config PATH` | `ARCHON_SEARCH_CONFIG`, else `<data-dir>/archon-search.toml` | Use a non-default config file path. |
 | `--code / --no-code` | Not set (interactive) | Install (`--code`) or skip (`--no-code`) tree-sitter code enrichment packages. |
 | `--watch / --no-watch` | Not set (interactive) | Enable (`--watch`) or disable (`--no-watch`) the filesystem watcher. Either flag writes `[collections].watch` (`true`/`false`), skipping the interactive prompt. |
 | `--telemetry / --no-telemetry` | Not set (interactive) | Enable (`--telemetry`) or disable (`--no-telemetry`) local query telemetry. Either flag writes `[telemetry].enabled` (`true`/`false`), skipping the interactive prompt. |
@@ -734,7 +734,7 @@ archon-search wizard \
 
 ## What Gets Configured
 
-The wizard writes to `~/.archon-search/archon-search.toml`. The following table maps each wizard choice to its TOML key. For the full config reference, see [`30_configuration.md`](./30_configuration.md).
+The wizard writes to `<data-dir>/archon-search.toml` (`~/.archon-search/archon-search.toml` by default; `--config` or `ARCHON_SEARCH_CONFIG` overrides). The following table maps each wizard choice to its TOML key. For the full config reference, see [`30_configuration.md`](./30_configuration.md).
 
 ### `[server]` section
 
@@ -808,7 +808,7 @@ GPU rows: `reranker_providers` is touched only on the paths where a check passes
 
 **Only the choices you actually made are written.** A default you never answered — a `--non-interactive` run without the matching flag — is not written to the file, so a fresh install with no optional answers holds only `[server].host`, the profile's `[database]` keys (`embedding_model`, `reranker_model`, `chunk_size`, `profile`, `multilingual`) and `[database].providers` when the GPU step writes it (a detected GPU, or `--disable-gpu`/a declined GPU prompt, which write `[]`) — keys such as `[server].port`, `[database].db_path`, the `[routing]` tuning keys, `[collections].collections`/`pinned_collections` and the `[logging]` keys are left out and resolve to their built-in defaults (`archon-search config show` prints them filled in). The one exception is `[server].host = "127.0.0.1"`, which a fresh install (and `--force --delete-db` without an existing config) always writes unless `--host` is passed: `archon-search serve` defaults the host to `0.0.0.0`, so without the key a wizard-written config would bind all interfaces. The host is written only when the wizard creates the file: a re-run, or `--force --delete-db` over an existing config, keeps whatever `[server].host` the file has (or lacks) unless `--host` is passed, and `archon-search serve` then binds `0.0.0.0` if the key is absent. For `[collections].watch`, `[telemetry].enabled`, `[database].eager_load_embedders`, `[routing].routing_strategy`, `[logging].format`, `[hyde].enabled`, and `[rag_fusion].enabled`, a re-run that leaves the question unanswered also removes the key a prior run wrote. An answer you actually gave *is* written, even when it matches the default: passing an explicit flag (e.g., `--port 8765`, `--routing-strategy centroid`, `--no-watch`) always writes the key, and so does answering the interactive `routing_strategy`, `log_format`, filesystem-watcher, telemetry, eager-load, or AI-query-expansion prompt (the last writes both `[hyde].enabled` and `[rag_fusion].enabled`) — including pressing Enter to accept the shown default, which counts as an answer (a declined y/n prompt is written as `false`). In an interactive run this also applies when stdin closes early (EOF, piped input): the wizard falls back to the shown default and records it as your answer, so `[routing].routing_strategy`, `[logging].format`, `[collections].watch`, `[telemetry].enabled`, `[database].eager_load_embedders`, `[hyde].enabled`, and `[rag_fusion].enabled` are still written. All other keys in `archon-search.toml` remain at their defaults.
 
-The wizard also backs up your existing config to `~/.archon-search/archon-search.toml.bak` before making any changes, and records the wizard-managed values it left in the config in `~/.archon-search/archon-search.toml.wizard.json` (used by the next re-run to tell its own values from hand edits — see [Same profile (idempotent re-run)](#same-profile-idempotent-re-run)). If the record cannot be updated, the wizard prints a warning naming the record file and finishes the run as it would otherwise; a later re-run may then misreport hand edits. `--dry-run` writes neither file.
+The wizard also backs up your existing config to `archon-search.toml.bak` beside it before making any changes, and records the wizard-managed values it left in the config in `archon-search.toml.wizard.json` beside it (used by the next re-run to tell its own values from hand edits — see [Same profile (idempotent re-run)](#same-profile-idempotent-re-run)). If the record cannot be updated, the wizard prints a warning naming the record file and finishes the run as it would otherwise; a later re-run may then misreport hand edits. `--dry-run` writes neither file.
 
 ---
 

@@ -55,7 +55,7 @@ The runtime is a layered pipeline; understanding the seam between these modules 
 - `watcher.py` + `sync.py` keep on-disk corpora and the index in sync (watchdog-driven).
 - `jobs/` is the async job store (model + store) used by long-running ingest/reindex operations exposed over the API.
 - `key_manager.py` owns the API-key bootstrap (auto-generates `~/.archon-search/.search.env` with mode 600 on first start; `ARCHON_SEARCH_API_KEY` env overrides; `ARCHON_SEARCH_KEY_FILE` redirects).
-- `config.py` + `constants.py` load `~/.archon-search/archon-search.toml` (see `archon-search.toml.example`).
+- `config.py` + `constants.py` load `<data-dir>/archon-search.toml` (default `~/.archon-search/archon-search.toml`; `ARCHON_SEARCH_CONFIG` overrides) (see `archon-search.toml.example`).
 - `platform/` (`runtime.py`, `service.py`, `macos.py`, `linux.py`, `windows.py`) handles OS-specific service install/uninstall; `install.py` + `cli/install_cmd.py` wire it to the CLI.
 
 ### Server (`archon_search/server/`)

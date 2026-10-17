@@ -1,6 +1,7 @@
 """Tests for the install and uninstall Click commands."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -421,3 +422,48 @@ def test_uninstall_cmd_unchanged(runner: CliRunner, tmp_path: Path) -> None:
     mock_service.stop.assert_called_once()
     mock_service.unregister.assert_called_once()
     assert not db_dir.exists()
+
+
+def test_uninstall_delete_db_warns_about_ignored_legacy_config(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """uninstall --delete-db without --config names an ignored legacy config: the DB it deletes is the data-dir default's."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    legacy = tmp_path / ".archon-search" / "archon-search.toml"
+    legacy.parent.mkdir()
+    legacy.write_text("[server]\n")
+
+    with (
+        patch("archon_search.cli.install_cmd._get_service", return_value=MagicMock()),
+        caplog.at_level(logging.WARNING, logger="archon_search.config"),
+    ):
+        result = runner.invoke(main, ["uninstall", "--delete-db"])
+
+    assert result.exit_code == 0, result.output
+    assert any(str(legacy) in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Misconfigured ARCHON_SEARCH_DATA_DIR → clean "Error:" + exit 1, no traceback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["wizard", "--non-interactive"], ["install"], ["uninstall", "--delete-db"]],
+)
+def test_invalid_data_dir_exits_cleanly(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, args: list[str]
+) -> None:
+    """A relative ARCHON_SEARCH_DATA_DIR with no --config fails with a clean error, not a ConfigError traceback."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", "relative/data")
+    monkeypatch.delenv("ARCHON_SEARCH_CONFIG", raising=False)
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    with patch("archon_search.cli.install_cmd._get_service", return_value=MagicMock()):
+        result = runner.invoke(main, args)
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert "Error: ARCHON_SEARCH_DATA_DIR must be an absolute path" in result.output

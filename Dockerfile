@@ -155,7 +155,7 @@ RUN useradd --uid 1000 --no-create-home --shell /usr/sbin/nologin appuser; \
 
 # Runtime configuration. `ARCHON_SEARCH_DATA_DIR` redirects every runtime
 # path (db, logs, telemetry, key file, jobs, fasttext models, ingest
-# history) onto the mounted volume. `ARCHON_SEARCH_CONTAINER=1` tells
+# history, default `archon-search.toml`) onto the mounted volume. `ARCHON_SEARCH_CONTAINER=1` tells
 # `configure_logging()` to attach a StreamHandler(sys.stderr) so
 # `docker logs` captures application logs. `FASTEMBED_CACHE_PATH` gives
 # fastembed's downloaded model weights their own directory on the same

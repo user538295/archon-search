@@ -178,6 +178,30 @@ def test_dry_run_branch_b_prints_dry_run_prefix(tmp_path: Path, capsys) -> None:
     assert "[DRY RUN]" in captured.out, "Expected [DRY RUN] in stdout for dry-run fresh install"
 
 
+def test_dry_run_summary_names_the_explicit_config_path(tmp_path: Path, capsys) -> None:
+    """--config reaches the printed install summary (installer → render), not the data-dir default."""
+    from archon_search.install.render import _render_summary
+    from archon_search.install.wizard import WizardFeatures
+
+    config_path = tmp_path / "custom" / "my-archon.toml"
+    default_path = tmp_path / "data" / "archon-search.toml"
+    installer = create_installer(config_file=str(config_path), dry_run=True)
+
+    with (
+        _patched_install(default_path, tmp_path / "fake.plist"),
+        patch(
+            "archon_search.install.installer._render_summary",
+            # Force the graph tuning hint on — it is the summary line that names the config file.
+            side_effect=lambda *a, **kw: _render_summary(*a[:4], WizardFeatures(install_graph_extra=True), **kw),
+        ) as render_spy,
+    ):
+        rc = installer.run(non_interactive=True, profile="minimal", skip_preload=True)
+
+    assert rc == 0
+    assert render_spy.call_args.kwargs["config_path"] == str(config_path)
+    assert f"[graph].relation_confidence in {config_path}" in capsys.readouterr().out
+
+
 def test_dry_run_branch_b_exits_zero(tmp_path: Path) -> None:
     """--dry-run on a clean fresh install must return exit code 0."""
     _, rc, _ = _run_dry_run_fresh(tmp_path)
@@ -385,7 +409,7 @@ def test_dry_run_does_not_register_or_start_service(tmp_path: Path, monkeypatch)
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
 
     # In production config_path.parent IS the data dir (get_default_config_path
-    # -> ~/.archon-search/archon-search.toml), so the config MUST live inside
+    # -> get_data_dir()/archon-search.toml), so the config MUST live inside
     # data_dir here — otherwise the fresh-install branch's parent.mkdir would
     # create tmp_path (already present) and the leak-guard below could not see it.
     config_path = data_dir / "archon-search.toml"

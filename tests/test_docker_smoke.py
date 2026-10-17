@@ -612,7 +612,6 @@ def test_graph_enabled_image_degrades_to_code_symbols_only(
             [
                 "-v", f"{tmp_dir}:/data",
                 "-e", f"ARCHON_SEARCH_API_KEY={SMOKE_API_KEY}",
-                "-e", "ARCHON_SEARCH_CONFIG=/data/archon-search.toml",
                 "-p", f"{host_port}:{CONTAINER_PORT}",
                 cpu_image,
             ]
