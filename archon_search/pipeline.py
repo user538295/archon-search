@@ -215,6 +215,18 @@ _BINARY_EXTENSIONS = frozenset(
 # with `---` by coincidence and must not be parsed for front matter.
 _FRONT_MATTER_EXTENSIONS = frozenset({".md", ".txt", ".rst", ".html"})
 _MAX_LOCAL_EXPLAIN_COMMUNITY_CANDIDATES = 200
+# Upper bound on search_with_context's context_window: neighbour chunks fetched on each
+# side of a hit, so at most 2 * MAX_CONTEXT_WINDOW chunks per hit (top_k_return hits),
+# each up to [database].chunk_size tokens. A chosen cap (10x the default window of 1),
+# not a measured limit.
+MAX_CONTEXT_WINDOW: int = 10
+
+
+def context_window_error(context_window: int) -> str | None:
+    """Return an error message if *context_window* is outside ``[0, MAX_CONTEXT_WINDOW]``, else ``None``."""
+    if 0 <= context_window <= MAX_CONTEXT_WINDOW:
+        return None
+    return f"context_window must be in [0, {MAX_CONTEXT_WINDOW}]; got {context_window}"
 
 
 def _doc_id_for(source_path: Path | str) -> str:
@@ -3641,7 +3653,17 @@ class SearchPipeline:
 
         The MCP ``search_with_context`` handler (Task 5.1) unpacks the
         ``pipeline_result`` field to include RAG Fusion metadata in its return dict.
+
+        ``context_window`` is the number of neighbour chunks fetched on each side of a
+        hit; ``0`` fetches none.
+
+        Raises:
+            ValueError: if ``context_window`` is outside ``[0, MAX_CONTEXT_WINDOW]``;
+                raised before any search runs.
         """
+        context_window_msg = context_window_error(context_window)
+        if context_window_msg is not None:
+            raise ValueError(context_window_msg)
         result_obj = await self.search(
             query, collection, namespace=namespace, embedder=embedder,
             filters=filters, query_vector=query_vector,

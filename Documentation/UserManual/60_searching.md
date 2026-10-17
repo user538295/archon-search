@@ -103,7 +103,7 @@ A typical workflow is: call `/route`, then call `/search` once per name in `pinn
 | Tool | Key inputs | Output |
 | --- | --- | --- |
 | `search` | `query`, `collection?` / `collections?`, filter params (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language`, `include_metadata`), `hyde`, `rag_fusion`, `graph_mode`, `scope_filter` | `{"results":[…], "acl_filtered":bool, "excluded_collections":[…], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null, "graph_expansion_applied":bool, "ppr_entities_matched":int\|null}` |
-| `search_with_context` | `query`, `collection?`, `context_window=1`, same filter/expansion params — but **`graph_mode` is rejected unconditionally** (`code="graph_mode_not_supported"`; use `search` for graph modes) | Results with `context_before` / `context_after` neighbours, plus `hyde_applied`, `expansion_used`, `expansion_warning` |
+| `search_with_context` | `query`, `collection?`, `context_window=1` (neighbour chunks on each side of a hit; must be in `[0, 10]`, else `code="validation_error"`), same filter/expansion params — but **`graph_mode` is rejected unconditionally** (`code="graph_mode_not_supported"`; use `search` for graph modes) | Results with `context_before` / `context_after` neighbours, plus `hyde_applied`, `expansion_used`, `expansion_warning` |
 
 Per-result `reranker_score`, on each `search` result and on the `result` object of each `search_with_context` item:
 

@@ -75,6 +75,8 @@ class FTSIndexNotFoundError(RuntimeError):
 if TYPE_CHECKING:
     import lancedb
     import pyarrow as pa
+    from archon_search.collection_meta import CollectionMeta
+    from archon_search.config import SearchConfig
     from archon_search.filters import SearchFilters
 
 logger = logging.getLogger(__name__)
@@ -2773,6 +2775,8 @@ class SearchStore:
         Chunk indices are addressed by the ``{doc_id}-{i:06d}`` naming scheme
         set at ingest time. Returns an empty list if *collection* does not
         exist, or if the window (after clamping the lower bound to 0) is empty.
+        Callers must bound *window*: it builds up to ``2 * window`` chunk ids and an
+        ``IN`` predicate of that size.
 
         Raises:
             RuntimeError: if the store is not connected.

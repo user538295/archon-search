@@ -15,6 +15,7 @@ import pytest
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, DocumentInfo, SearchResult
 from archon_search.embedder import Embedder
+from archon_search.pipeline import MAX_CONTEXT_WINDOW
 from archon_search.reranker import Reranker
 
 from .conftest import MockEmbedderBackend, MockRerankerBackend, make_embedder, make_reranker, make_pipeline
@@ -42,7 +43,6 @@ async def test_pipeline_search_returns_ranked_results(connected_store, col_name,
 
 @pytest.mark.asyncio
 async def test_pipeline_search_with_context_returns_neighbors(connected_store, col_name, tmp_path):
-    pipeline = make_pipeline(connected_store)
     # Use small chunk_size to force multiple chunks
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
@@ -226,6 +226,48 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
     assert results.results[0]["context_after"] == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "context_window",
+    [-1, MAX_CONTEXT_WINDOW + 1, 10**9],
+    ids=["negative", "just_above_max", "huge"],
+)
+async def test_pipeline_search_with_context_rejects_out_of_range_window(context_window: int) -> None:
+    """An out-of-range ``context_window`` raises ValueError before any search runs."""
+    pipeline = make_pipeline(MagicMock())
+
+    expected = rf"^context_window must be in \[0, {MAX_CONTEXT_WINDOW}\]; got {context_window}$"
+    with patch.object(pipeline, "search", new=AsyncMock()) as search_mock, pytest.raises(ValueError, match=expected):
+        await pipeline.search_with_context(
+            "query", "test-col", context_window=context_window, embedder=pipeline._global_embedder
+        )
+
+    search_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context_window", [0, MAX_CONTEXT_WINDOW], ids=["zero", "max"])
+async def test_pipeline_search_with_context_accepts_boundary_window(context_window: int) -> None:
+    """The inclusive bounds 0 and MAX_CONTEXT_WINDOW search and fetch neighbours with that window."""
+    from archon_search.pipeline import SearchPipelineResult
+
+    doc_id = "a" * 64
+    hit = SearchResult(doc_id=doc_id, chunk_id=f"{doc_id}-000005", text="hit", score=0.9, source_path="/x.md")
+    store = MagicMock()
+    store.fetch_adjacent_chunks = AsyncMock(return_value=[])
+    pipeline = make_pipeline(store)
+    search_result = SearchPipelineResult(results=[hit], acl_filtered=False)
+
+    with patch.object(pipeline, "search", new=AsyncMock(return_value=search_result)) as search_mock:
+        result = await pipeline.search_with_context(
+            "query", "test-col", context_window=context_window, embedder=pipeline._global_embedder
+        )
+
+    search_mock.assert_called_once()
+    store.fetch_adjacent_chunks.assert_called_once_with("test-col", doc_id, 5, context_window)
+    assert result.results == [{"result": hit, "context_before": [], "context_after": []}]
+
+
 # ===========================================================================
 # Task 2.1 — search() query_vector parameter
 # ===========================================================================
@@ -234,11 +276,10 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
 @pytest.mark.asyncio
 async def test_search_uses_provided_query_vector() -> None:
     """search() uses caller-provided query_vector; embed_one must NOT be called."""
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, patch
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline, SearchPipelineResult
-    from archon_search._types import SearchResult
 
     captured_vector: list[list[float]] = []
 
@@ -459,7 +500,7 @@ async def test_eval_trace_returns_pre_and_post_rerank_results(tmp_path):
 @pytest.mark.asyncio
 async def test_eval_trace_uses_service_query_path_with_trace_enabled(tmp_path):
     """collect_search_trace calls the pipeline's own store and reranker trace helpers."""
-    from unittest.mock import AsyncMock, MagicMock, patch, call
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from archon_search.chunker import DocumentChunker
     from archon_search.eval._tracing import collect_search_trace
@@ -548,7 +589,6 @@ async def test_eval_trace_fails_if_trace_path_diverges_from_search_components(tm
     from unittest.mock import MagicMock
 
     from archon_search.chunker import DocumentChunker
-    from archon_search.eval._tracing import collect_search_trace
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
@@ -708,7 +748,6 @@ async def test_get_collection_meta_namespace_param() -> None:
 
     from archon_search.chunker import DocumentChunker
     from archon_search.collection_meta import CollectionMeta
-    from archon_search.constants import DEFAULT_NAMESPACE
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
@@ -740,7 +779,7 @@ async def test_get_collection_meta_namespace_param() -> None:
 @pytest.mark.asyncio
 async def test_search_returns_pipeline_result(connected_store, col_name, tmp_path) -> None:
     """pipeline.search() returns a SearchPipelineResult instance, not a bare list."""
-    from archon_search.pipeline import SearchPipeline, SearchPipelineResult
+    from archon_search.pipeline import SearchPipelineResult
 
     pipeline = make_pipeline(connected_store)
     md_file = tmp_path / "result_type_doc.md"
@@ -757,12 +796,10 @@ async def test_search_returns_pipeline_result(connected_store, col_name, tmp_pat
 @pytest.mark.asyncio
 async def test_search_acl_filtered_true_when_chunks_filtered(tmp_path) -> None:
     """When ACL filter removes candidates, acl_filtered=True in the result."""
-    from unittest.mock import AsyncMock, MagicMock
 
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline, SearchPipelineResult
-    from archon_search._types import ChunkRecord, SearchResult
 
     # A candidate with a restricted ACL (only "tenantX" allowed)
     restricted_candidate = ScoredSearchCandidate(

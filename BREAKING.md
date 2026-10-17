@@ -8,6 +8,20 @@
 
 ## Changelog
 
+### [next release] — MCP `search_with_context`: `context_window` must be in `[0, 10]` (2026-10-17)
+
+**Surface**: the MCP tool `search_with_context` → its `context_window` argument.
+
+**Behaviour-only change — the tool's input schema keeps `context_window` as `int`, default `1`, with no `minimum` / `maximum`; only its `description` now states the `[0, 10]` bound. `GET /openapi.json` is unaffected (the tool has no REST counterpart).**
+
+**What changed:** any integer was accepted. A large value made the server build up to `2 * context_window` neighbour chunk ids per hit and query them all at once — an unbounded memory allocation and an equally oversized database query (the lower side is clamped at chunk `0`, so `10**9` still meant at least `10**9` ids); a negative value silently returned empty `context_before` / `context_after`. A value outside `[0, 10]` now returns `{"error": "context_window must be in [0, 10]; got N", "code": "validation_error"}` before any search runs. `0` stays valid and returns no neighbours.
+
+**Migration**: clients passing `context_window` above `10` must lower it to at most `10`; clients passing a negative value must pass `0` for the same empty-context result. Nothing else is needed.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — S631: `GET /ready` stays `503` while the background model validation is pending (2026-10-12)
 
 **Surface**: `GET /ready` → `ready` and the HTTP status.

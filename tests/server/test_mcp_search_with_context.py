@@ -1,11 +1,12 @@
 """Tests pinning that the MCP ``search_with_context`` tool strips the
 ``vector`` key from every neighbor chunk in ``context_before`` /
-``context_after``.
+``context_after``, and that it bounds ``context_window`` to ``[0, MAX_CONTEXT_WINDOW]``.
 
 Implements Task 5.1 of Documentation/Backlog/A1-metadata-schema-v1-plan.md.
 """
 from __future__ import annotations
 
+import inspect
 import sys
 import types
 from datetime import datetime, timezone
@@ -31,6 +32,8 @@ if "fastmcp" not in sys.modules:
         sys.modules["fastmcp"] = _fastmcp
 
 from archon_search._types import ChunkRecord, SearchResult
+from archon_search.pipeline import MAX_CONTEXT_WINDOW, SearchPipeline, SearchPipelineResult, SearchWithContextResult
+from tests._mcp_tools import registered_tools
 
 
 class _FakeApp:
@@ -88,21 +91,28 @@ def _result(idx: int, language: str = "") -> SearchResult:
     )
 
 
-async def _call_search_with_context(results_list, include_metadata: bool = False):
-    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
+def _make_pipeline(results_list: list[dict[str, Any]] | None = None) -> MagicMock:
     pipeline = MagicMock()
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(
-        results=results_list,
+        results=results_list or [],
         pipeline_result=SearchPipelineResult(results=[], acl_filtered=False),
     ))
+    return pipeline
 
+
+async def _call_tool(pipeline: MagicMock, **kwargs: Any) -> Any:
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         from archon_search.server import mcp as mcp_module
 
         app = mcp_module.create_app(pipeline, "default", writer=None)  # type: ignore[call-arg]
-        fn = app.tools["search_with_context"]
-        return await fn(query="hello", collection=None, context_window=1, include_metadata=include_metadata)
+        return await app.tools["search_with_context"](query="hello", **kwargs)
+
+
+async def _call_search_with_context(results_list, include_metadata: bool = False):
+    return await _call_tool(
+        _make_pipeline(results_list), collection=None, context_window=1, include_metadata=include_metadata
+    )
 
 
 @pytest.mark.asyncio
@@ -255,25 +265,8 @@ async def test_search_with_context_returns_hyde_applied_false_by_default() -> No
 @pytest.mark.asyncio
 async def test_mcp_search_with_context_expansion_warning_on_hyde_failure() -> None:
     """search_with_context returns expansion_warning='HyDE expansion failed' when resolve_hyde_vector returns (None, False) with hyde=True."""
-    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
-    import archon_search.server.mcp as mcp_module
-
-    pipeline = MagicMock()
-    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
-    pipeline.search_with_context = AsyncMock(
-        return_value=SearchWithContextResult(
-            results=[],
-            pipeline_result=SearchPipelineResult(results=[], acl_filtered=False),
-        )
-    )
-
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
-        "archon_search.server.mcp.resolve_hyde_vector",
-        new=AsyncMock(return_value=(None, False)),
-    ):
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
-        fn = fake_app.tools["search_with_context"]
-        result = await fn(query="hello", collection="col", hyde=True)
+    with patch("archon_search.server.mcp.resolve_hyde_vector", new=AsyncMock(return_value=(None, False))):
+        result = await _call_tool(_make_pipeline(), collection="col", hyde=True)
 
     assert isinstance(result, dict)
     assert result.get("expansion_used") is False
@@ -293,26 +286,10 @@ async def test_mcp_search_with_context_no_expansion_by_default() -> None:
 async def test_mcp_search_with_context_expansion_used_true_on_hyde_success() -> None:
     """search_with_context returns expansion_used=True when HyDE succeeds."""
     import numpy as np
-    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
-    import archon_search.server.mcp as mcp_module
-
-    pipeline = MagicMock()
-    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
-    pipeline.search_with_context = AsyncMock(
-        return_value=SearchWithContextResult(
-            results=[],
-            pipeline_result=SearchPipelineResult(results=[], acl_filtered=False),
-        )
-    )
 
     fake_vector = np.ones(384, dtype=np.float32)
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
-        "archon_search.server.mcp.resolve_hyde_vector",
-        new=AsyncMock(return_value=(fake_vector, True)),
-    ):
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
-        fn = fake_app.tools["search_with_context"]
-        result = await fn(query="hello", collection="col", hyde=True)
+    with patch("archon_search.server.mcp.resolve_hyde_vector", new=AsyncMock(return_value=(fake_vector, True))):
+        result = await _call_tool(_make_pipeline(), collection="col", hyde=True)
 
     assert isinstance(result, dict)
     assert result.get("expansion_used") is True
@@ -322,7 +299,6 @@ async def test_mcp_search_with_context_expansion_used_true_on_hyde_success() -> 
 @pytest.mark.asyncio
 async def test_mcp_search_with_context_expansion_warning_on_rag_fusion_timeout() -> None:
     """search_with_context returns expansion_warning='RAG Fusion timed out' when pipeline has rag_fusion_warning."""
-    from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
@@ -344,3 +320,102 @@ async def test_mcp_search_with_context_expansion_warning_on_rag_fusion_timeout()
     assert isinstance(result, dict)
     assert result.get("expansion_used") is False
     assert result.get("expansion_warning") == "RAG Fusion timed out"
+
+
+# ---------------------------------------------------------------------------
+# context_window bound: [0, MAX_CONTEXT_WINDOW] — an unbounded window made
+# SearchStore.fetch_adjacent_chunks build 2 * window chunk ids per hit.
+# ---------------------------------------------------------------------------
+
+
+def _passed_context_window(pipeline: MagicMock) -> int:
+    """``context_window`` as the tool passed it to the pipeline, positional or keyword."""
+    call = pipeline.search_with_context.call_args
+    bound = inspect.signature(SearchPipeline.search_with_context).bind(None, *call.args, **call.kwargs)
+    return bound.arguments["context_window"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "context_window",
+    [-1, MAX_CONTEXT_WINDOW + 1, 10**9],
+    ids=["negative", "just_above_max", "huge"],
+)
+async def test_search_with_context_rejects_out_of_range_context_window(context_window: int) -> None:
+    pipeline = _make_pipeline()
+    hyde_mock = AsyncMock(return_value=(None, False))
+
+    with patch("archon_search.server.mcp.resolve_hyde_vector", new=hyde_mock):
+        payload = await _call_tool(pipeline, context_window=context_window, hyde=True)
+
+    assert payload == {
+        "error": f"context_window must be in [0, {MAX_CONTEXT_WINDOW}]; got {context_window}",
+        "code": "validation_error",
+    }
+    hyde_mock.assert_not_awaited()
+    pipeline.get_collection_meta.assert_not_called()
+    pipeline.search_with_context.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context_window", [0, MAX_CONTEXT_WINDOW], ids=["zero", "max"])
+async def test_search_with_context_accepts_boundary_context_window(context_window: int) -> None:
+    pipeline = _make_pipeline()
+
+    payload = await _call_tool(pipeline, context_window=context_window)
+
+    assert "code" not in payload, payload
+    assert payload["results"] == []
+    pipeline.search_with_context.assert_called_once()
+    assert _passed_context_window(pipeline) == context_window
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_context_window_defaults_to_one() -> None:
+    pipeline = _make_pipeline()
+
+    await _call_tool(pipeline)
+
+    assert _passed_context_window(pipeline) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_graph_mode_checked_before_context_window() -> None:
+    pipeline = _make_pipeline()
+
+    payload = await _call_tool(pipeline, context_window=MAX_CONTEXT_WINDOW + 1, graph_mode="naive")
+
+    assert payload["code"] == "graph_mode_not_supported"
+    pipeline.search_with_context.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_scope_filter_checked_before_context_window() -> None:
+    pipeline = _make_pipeline()
+
+    payload = await _call_tool(pipeline, context_window=MAX_CONTEXT_WINDOW + 1, scope_filter="*")
+
+    assert payload["code"] == "invalid_scope_filter"
+    pipeline.search_with_context.assert_not_called()
+
+
+def test_search_with_context_docstring_states_the_bound() -> None:
+    import archon_search.server.mcp as mcp_module
+
+    with patch.object(mcp_module, "FastMCP", _FakeFastMCP):
+        tool = mcp_module.create_app(_make_pipeline(), "default", writer=None).tools["search_with_context"]
+
+    assert f"[0, {MAX_CONTEXT_WINDOW}]" in (tool.__doc__ or "")
+
+
+def test_search_with_context_published_schema_states_the_bound() -> None:
+    """The real FastMCP inputSchema documents the bound without minimum/maximum keys,
+    so out-of-range values reach the tool and return code="validation_error"."""
+    tool = registered_tools(None)["search_with_context"]
+    prop = tool.to_mcp_tool().inputSchema["properties"]["context_window"]
+
+    assert prop["type"] == "integer"
+    assert prop["default"] == 1
+    assert f"[0, {MAX_CONTEXT_WINDOW}]" in prop["description"]
+    assert "minimum" not in prop
+    assert "maximum" not in prop

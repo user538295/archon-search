@@ -25,6 +25,7 @@ from archon_search.filters import SearchFilters
 from archon_search.hyde import resolve_hyde_vector
 from archon_search.key_manager import KeyStore, load_or_generate_key
 from archon_search.pipeline import (
+    MAX_CONTEXT_WINDOW,
     CollectionNotFoundError,
     ExplainMultiCollectionNoRerankError,
     ExplainStageError,
@@ -32,6 +33,7 @@ from archon_search.pipeline import (
     GraphCommunitiesNotBuiltError,
     MetadataLookupError,
     SearchPipeline,
+    context_window_error,
 )
 from archon_search.progress import IndexingState, IndexingStatus
 from archon_search.router import MultiCollectionRouter
@@ -128,6 +130,21 @@ _LanguageParamSearchWithContext = Annotated[
     ),
 ]
 
+# Context window parameter for the ``search_with_context`` tool.
+# Defined at module level so FastMCP can resolve the Annotated type inside closures.
+# No ge/le: the bound is enforced by _validate_context_window so out-of-range values
+# return code="validation_error" rather than FastMCP's own argument error.
+_ContextWindowParam = Annotated[
+    int,
+    Field(
+        description=(
+            "Number of neighbour chunks returned on each side of a hit; "
+            f"must be in [0, {MAX_CONTEXT_WINDOW}] (0 returns no neighbours)."
+        ),
+        default=1,
+    ),
+]
+
 
 class McpErrorResponse(TypedDict):
     error: str
@@ -148,6 +165,18 @@ def _validate_scope_filter(scope_filter: str | None) -> "McpErrorResponse | None
     if msg is None:
         return None
     return McpErrorResponse(error=msg, code="invalid_scope_filter")
+
+
+def _validate_context_window(context_window: int) -> "McpErrorResponse | None":
+    """Validate search_with_context's context_window; wraps the shared pipeline check into a McpErrorResponse.
+
+    Checked before the pipeline call, so MCP clients get code="validation_error"
+    instead of the catch-all internal_error for the ValueError the pipeline raises.
+    """
+    msg = context_window_error(context_window)
+    if msg is None:
+        return None
+    return McpErrorResponse(error=msg, code="validation_error")
 
 
 def _validate_ttl_and_scopes(
@@ -663,7 +692,7 @@ def create_app(
     async def search_with_context(
         query: str,
         collection: str | None = None,
-        context_window: int = 1,
+        context_window: _ContextWindowParam = 1,
         include_metadata: bool = False,
         file_type: str | None = None,
         source_path_prefix: str | None = None,
@@ -689,6 +718,8 @@ def create_app(
 
         Invalid forms (bare ``*``, leading ``*``, mid-string ``*``, multiple ``*``,
         or empty string) return ``code="invalid_scope_filter"``.
+        ``context_window`` is the number of neighbour chunks returned on each side of
+        a hit; it must be in ``[0, 10]``, otherwise ``code="validation_error"``.
         Note: ``graph_mode`` is not supported on this tool and is rejected unconditionally.
         """
         # graph_mode on search_with_context is not supported; use the search tool instead.
@@ -702,6 +733,10 @@ def create_app(
         _swc_sf_err = _validate_scope_filter(scope_filter)
         if _swc_sf_err is not None:
             return _swc_sf_err
+
+        _swc_cw_err = _validate_context_window(context_window)
+        if _swc_cw_err is not None:
+            return _swc_cw_err
 
         _swc_ns = _get_request_namespace()
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
