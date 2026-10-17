@@ -10,7 +10,12 @@ import sys
 from pathlib import Path
 
 from archon_search.paths import get_data_dir
-from archon_search.platform.service import _STOP_WAIT_TIMEOUT_S, SearchServiceLifecycle, ServiceStatus
+from archon_search.platform.service import (
+    _STOP_WAIT_TIMEOUT_S,
+    SearchServiceLifecycle,
+    ServiceStatus,
+    get_secrets_env_file,
+)
 
 log = logging.getLogger(__name__)
 
@@ -26,7 +31,7 @@ ExecStart={python} -m archon_search.server
 WorkingDirectory={cwd}
 Environment=ARCHON_SEARCH_CONFIG={config_path}
 Environment=ARCHON_SEARCH_DATA_DIR={data_dir}
-EnvironmentFile=-%h/.archon-search/.secrets.env
+EnvironmentFile=-{secrets_file}
 Restart=always
 RestartSec=5
 Nice=10
@@ -118,12 +123,24 @@ class SystemdSearchService(SearchServiceLifecycle):
         # unit's ARCHON_SEARCH_CONFIG points at the config the installer just
         # wrote, not the hardcoded default (S206).
         config_path = config_path or str(data_dir / "archon-search.toml")
+        # Same file the wizard writes and the macOS wrapper reads. systemd takes
+        # the whole EnvironmentFile= value as one path (no unquoting, so spaces
+        # stay verbatim), ignores it unless absolute and normalized (no ..), and
+        # expands % specifiers. Only a path with .. is resolved: resolving any
+        # other would freeze a symlinked data dir to its install-time target,
+        # while Environment=ARCHON_SEARCH_DATA_DIR keeps the live link. A
+        # literal % becomes %%.
+        secrets_path = get_secrets_env_file()
+        if ".." in secrets_path.parts:
+            secrets_path = secrets_path.resolve()
+        secrets_file = str(secrets_path).replace("%", "%%")
 
         content = _UNIT_TEMPLATE.format(
             python=sys.executable,
             cwd=cwd,
             config_path=config_path,
             data_dir=str(data_dir),
+            secrets_file=secrets_file,
         )
 
         try:

@@ -4,6 +4,9 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
+
+from archon_search import paths
 
 # Bounds for stop() to wait for the OS to actually tear the service down.
 # `launchctl unload` / `systemctl --user stop` return before the process has
@@ -12,6 +15,17 @@ from dataclasses import dataclass
 # service reports not-running before returning.
 _STOP_WAIT_TIMEOUT_S = 10.0
 _STOP_POLL_INTERVAL_S = 0.2
+
+_SECRETS_ENV_FILENAME = ".secrets.env"
+
+
+def get_secrets_env_file() -> Path:
+    """Return the provider-key env file the wizard creates and the managed service loads.
+
+    Resolved fresh on every call from ``paths.get_data_dir()`` so
+    ``ARCHON_SEARCH_DATA_DIR`` relocates it with the rest of the runtime state.
+    """
+    return paths.get_data_dir() / _SECRETS_ENV_FILENAME
 
 
 @dataclass

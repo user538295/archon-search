@@ -632,6 +632,22 @@ def test_macos_wrapper_script_content_guards_missing_file(
     assert ".secrets.env" in content
 
 
+def test_wrapper_script_sources_secrets_env_under_custom_data_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With ARCHON_SEARCH_DATA_DIR away from home, the wrapper sources <data-dir>/.secrets.env."""
+    from archon_search.platform.macos import LaunchdSearchService
+    data_dir = tmp_path / "custom-data"
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+    svc = LaunchdSearchService()
+    with patch.object(Path, "home", return_value=tmp_path / "home"):
+        svc.register()
+    content = (data_dir / "run-server.sh").read_text()
+    secrets = f"{tmp_path}/custom-data/.secrets.env"
+    assert f'[ -f "{secrets}" ] && {{ set -a; . "{secrets}"; set +a; }}\n' in content, content
+    assert content.count(".secrets.env") == 2, content
+
+
 def test_register_writes_wrapper_script_on_macos(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

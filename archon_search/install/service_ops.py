@@ -11,8 +11,9 @@ import click
 def _create_secrets_env(secrets_path: Path, *, dry_run: bool = False) -> bool:
     """Create *secrets_path* as an empty file with mode 0o600, if absent.
 
-    Operators populate it with ``ANTHROPIC_API_KEY=<key>`` so the managed
-    service can source it at start time.  No-op when the file already exists
+    Operators populate it with the provider key (``ANTHROPIC_API_KEY=<key>``
+    or ``OPENAI_API_KEY=<key>``) so the managed service can load it at start
+    time.  No-op when the file already exists
     (preserves any content the operator has added) or when *dry_run* is True.
 
     Returns True when the file was created, False otherwise.

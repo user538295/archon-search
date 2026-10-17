@@ -28,6 +28,7 @@ from archon_search.key_manager import get_key_file, load_or_generate_key
 from archon_search.paths import get_data_dir, get_fasttext_models_dir
 from archon_search.pipeline import create_pipeline
 from archon_search.platform.runtime import get_runtime, get_search_service
+from archon_search.platform.service import get_secrets_env_file
 from archon_search.platform.types import GpuType
 from archon_search.profiles import InstallProfile, get_profile
 
@@ -998,13 +999,14 @@ class BaseInstaller(ABC):
             # Before Step 14b: create .secrets.env when AI query expansion is enabled
             if features.enable_hyde or features.enable_rag_fusion:
                 try:
-                    _secrets_env_path = get_data_dir() / ".secrets.env"
+                    _secrets_env_path = get_secrets_env_file()
                     _created = _create_secrets_env(_secrets_env_path, dry_run=self.dry_run)
                     if _created:
                         print(
                             f"  Created:    {_secrets_env_path}\n"
-                            "  Add ANTHROPIC_API_KEY=<key> to this file so the managed service\n"
-                            "  can source it at start time for AI query expansion."
+                            "  Add your provider API key (ANTHROPIC_API_KEY=<key> or\n"
+                            "  OPENAI_API_KEY=<key>) to this file so the managed service can\n"
+                            "  load it at start time for AI query expansion."
                         )
                 except OSError as exc:
                     print(f"Warning: could not create .secrets.env: {exc}", file=sys.stderr)

@@ -471,8 +471,11 @@ def test_cwd_is_archon_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert expected_cwd in content
 
 
-def test_linux_unit_template_contains_environment_file(tmp_path: Path) -> None:
-    """register() writes a unit file with EnvironmentFile=- directive for optional secrets loading."""
+def _register_with_data_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_dir: Path
+) -> str:
+    """Point ARCHON_SEARCH_DATA_DIR at ``data_dir``, run register(), return the unit text."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
     from archon_search.platform.linux import SystemdSearchService
     svc = SystemdSearchService()
     unit = tmp_path / "archon-search.service"
@@ -480,9 +483,8 @@ def test_linux_unit_template_contains_environment_file(tmp_path: Path) -> None:
         patch.object(type(svc), "_unit_path", property(lambda self: unit)),
         patch.object(svc, "_run", return_value=_ok()),
     ):
-        svc.register()
-    content = unit.read_text()
-    assert "EnvironmentFile=-%h/.archon-search/.secrets.env" in content
+        svc.register(config_path=str(data_dir / "archon-search.toml"))
+    return unit.read_text()
 
 
 def test_config_path_is_archon_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -549,3 +551,66 @@ def test_register_unit_includes_data_dir_when_env_set(
     assert str(tmp_path) in content, (
         f"unit file must propagate the overridden data dir {tmp_path}"
     )
+
+
+@pytest.mark.parametrize(
+    ("dir_name", "expected_suffix"),
+    [
+        # The wizard creates the secrets file under the data dir, so a hardcoded
+        # %h/.archon-search/.secrets.env would be silently ignored on a custom
+        # ARCHON_SEARCH_DATA_DIR.
+        ("custom-data", "/custom-data/.secrets.env"),
+        # systemd takes the whole value as one path without unquoting, so a space
+        # stays verbatim and unquoted (added quotes would fail the absolute-path
+        # check). Only EnvironmentFile= handles spaces; the Environment= and
+        # WorkingDirectory= lines are a known pre-existing gap, not covered here.
+        ("my data", "/my data/.secrets.env"),
+        # systemd expands % specifiers in EnvironmentFile=, so an unescaped %h
+        # would expand to the home dir and load the wrong file.
+        ("100%h-data", "/100%%h-data/.secrets.env"),
+        # systemd ignores a non-normalized path (one containing ..) with a warning,
+        # and get_data_dir() keeps .., so such a path is resolved before rendering.
+        ("a/../d", "/d/.secrets.env"),
+    ],
+    ids=["plain", "space", "percent", "dotdot"],
+)
+def test_register_environment_file_follows_data_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dir_name: str, expected_suffix: str
+) -> None:
+    """register() renders exactly one optional (``-``-prefixed) EnvironmentFile=-<data-dir>/.secrets.env line systemd accepts."""
+    content = _register_with_data_dir(tmp_path, monkeypatch, tmp_path / dir_name)
+    assert f"EnvironmentFile=-{tmp_path}{expected_suffix}\n" in content, content
+    assert content.count("EnvironmentFile=") == 1, content
+
+
+def test_register_environment_file_resolves_dotdot_through_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``..`` after a symlinked component resolves against the link's target, as the kernel does.
+
+    With ``a`` -> ``elsewhere/sub``, ``a/../d`` is ``elsewhere/d`` on disk; a lexical
+    ``os.path.normpath`` would wrongly render ``<tmp>/d``.
+    """
+    target = tmp_path / "elsewhere" / "sub"
+    target.mkdir(parents=True)
+    (tmp_path / "a").symlink_to(target)
+    content = _register_with_data_dir(tmp_path, monkeypatch, tmp_path / "a" / ".." / "d")
+    assert f"EnvironmentFile=-{tmp_path}/elsewhere/d/.secrets.env\n" in content, content
+    assert content.count("EnvironmentFile=") == 1, content
+
+
+def test_register_environment_file_keeps_symlinked_data_dir_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A symlinked data dir renders as the link, not its install-time target.
+
+    Environment=ARCHON_SEARCH_DATA_DIR and the macOS wrapper keep the link, so
+    retargeting it later must move the secrets file with the rest of the data dir.
+    """
+    target = tmp_path / "real-data"
+    target.mkdir()
+    link = tmp_path / "linked-data"
+    link.symlink_to(target)
+    content = _register_with_data_dir(tmp_path, monkeypatch, link)
+    assert f"EnvironmentFile=-{tmp_path}/linked-data/.secrets.env\n" in content, content
+    assert "real-data" not in content, content

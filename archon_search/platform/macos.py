@@ -8,7 +8,12 @@ import sys
 from pathlib import Path
 
 from archon_search.paths import get_data_dir
-from archon_search.platform.service import _STOP_WAIT_TIMEOUT_S, SearchServiceLifecycle, ServiceStatus
+from archon_search.platform.service import (
+    _STOP_WAIT_TIMEOUT_S,
+    SearchServiceLifecycle,
+    ServiceStatus,
+    get_secrets_env_file,
+)
 
 log = logging.getLogger(__name__)
 
@@ -84,7 +89,7 @@ class LaunchdSearchService(SearchServiceLifecycle):
         config_path = config_path or str(data_dir / "archon-search.toml")
         log_path = str(data_dir / "logs" / "archon-search.log")
         wrapper_path = data_dir / "run-server.sh"
-        secrets_file = str(data_dir / ".secrets.env")
+        secrets_file = str(get_secrets_env_file())
 
         if dry_run:
             return

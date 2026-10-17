@@ -1,9 +1,15 @@
 """Tests for SearchServiceLifecycle ABC."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from archon_search.platform.service import SearchServiceLifecycle, ServiceStatus
+from archon_search.platform.service import (
+    SearchServiceLifecycle,
+    ServiceStatus,
+    get_secrets_env_file,
+)
 
 
 class ConcreteService(SearchServiceLifecycle):
@@ -84,3 +90,13 @@ def test_wait_until_stopped_returns_false_on_timeout(monkeypatch) -> None:
 
     assert svc._wait_until_stopped(timeout=1.0) is False
     assert poll_count["n"] == 3  # polled each iteration until the deadline passed
+
+
+def test_get_secrets_env_file_lives_under_data_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """get_secrets_env_file() is <ARCHON_SEARCH_DATA_DIR>/.secrets.env, resolved at call time."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "first"))
+    assert get_secrets_env_file() == tmp_path / "first" / ".secrets.env"
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "second"))
+    assert get_secrets_env_file() == tmp_path / "second" / ".secrets.env"

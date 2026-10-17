@@ -165,7 +165,7 @@ This is the module-level map of `archon_search/`. One row per module, grouped by
 | Module | Purpose | Key public symbols |
 |---|---|---|
 | `archon_search/platform/runtime.py` | Resolve binary paths and runtime context. | `SearchRuntime`, `get_runtime`, `find_binary` |
-| `archon_search/platform/service.py` | Abstract service lifecycle. | `SearchServiceLifecycle`, `ServiceStatus` |
+| `archon_search/platform/service.py` | Abstract service lifecycle, plus the `.secrets.env` path the wizard creates and the managed service loads. | `SearchServiceLifecycle`, `ServiceStatus`, `get_secrets_env_file` |
 | `archon_search/platform/macos.py` | launchd implementation. | `LaunchdSearchService` |
 | `archon_search/platform/linux.py` | systemd implementation. | `SystemdSearchService` |
 | `archon_search/platform/windows.py` | Windows service implementation. | `WindowsSearchService` |

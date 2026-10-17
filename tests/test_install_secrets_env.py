@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import stat
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -132,6 +133,61 @@ def test_wizard_creates_secrets_env_and_wrapper_on_macos_positive(tmp_path: Path
     assert wrapper_path.exists(), "run-server.sh must be created when HyDE is enabled"
     wrapper_mode = stat.S_IMODE(wrapper_path.stat().st_mode)
     assert wrapper_mode == 0o755, f"run-server.sh must have mode 0o755, got 0o{wrapper_mode:o}"
+
+
+def test_wizard_systemd_unit_loads_the_secrets_env_it_creates_on_linux(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: on Linux with a custom data dir, the unit's EnvironmentFile= is the .secrets.env the wizard created."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.service"
+    data_dir = tmp_path / "custom-data"
+    data_dir.mkdir()
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+    unit_path = tmp_path / "systemd" / "archon-search.service"
+
+    installer = create_installer(config_file=str(config_path), dry_run=False)
+
+    from archon_search.platform.linux import SystemdSearchService
+
+    svc = SystemdSearchService()
+    ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+    with (
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._remove_legacy_service"),
+        patch("archon_search.install.installer._prewarm_models"),
+        patch("archon_search.install.installer._check_disk_space"),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(BaseInstaller, "validate_providers", return_value=False),
+        patch.object(RealInstaller, "configure_providers"),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
+        patch("archon_search.install.installer.get_search_service", return_value=svc),
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch.object(SystemdSearchService, "_unit_path", property(lambda self: unit_path)),
+        patch.object(svc, "_run", return_value=ok),
+        patch.object(svc, "start", return_value=0),
+        patch.object(svc, "pre_activate_cleanup"),
+    ):
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+            enable_hyde=True,
+        )
+
+    assert rc == 0, f"Expected exit code 0, got {rc}"
+    secrets_path = data_dir / ".secrets.env"
+    assert secrets_path.exists(), ".secrets.env must be created under the custom data dir"
+    mode = stat.S_IMODE(secrets_path.stat().st_mode)
+    assert mode == 0o600, f".secrets.env must have mode 0o600, got 0o{mode:o}"
+    env_file_lines = [
+        line for line in unit_path.read_text().splitlines() if line.startswith("EnvironmentFile=-")
+    ]
+    assert len(env_file_lines) == 1, env_file_lines
+    assert env_file_lines[0] == f"EnvironmentFile=-{secrets_path}"
 
 
 def test_wizard_creates_secrets_env_when_rag_fusion_only(tmp_path: Path) -> None:
@@ -348,6 +404,49 @@ def test_wizard_creates_secrets_env_both_flags_enabled(tmp_path: Path) -> None:
     assert secrets_path.exists(), ".secrets.env must be created when both flags are True"
     mode = stat.S_IMODE(secrets_path.stat().st_mode)
     assert mode == 0o600
+
+
+def test_wizard_secrets_env_created_hint_is_provider_neutral(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """The 'Created:' hint names both key-needing providers' variables, not only Anthropic's."""
+    config_path = tmp_path / "archon-search.toml"
+    fake_legacy = tmp_path / "fake.plist"
+    data_dir = tmp_path / ".archon-search"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    installer = create_installer(config_file=str(config_path), dry_run=False)
+
+    with (
+        patch("archon_search.install.installer.get_default_config_path", return_value=config_path),
+        patch("archon_search.install.installer._legacy_service_path", return_value=fake_legacy),
+        patch("archon_search.install.installer._remove_legacy_service"),
+        patch("archon_search.install.installer._prewarm_models"),
+        patch("archon_search.install.installer._check_disk_space"),
+        patch("archon_search.install.installer.get_data_dir", return_value=data_dir),
+        patch("archon_search.paths.get_data_dir", return_value=data_dir),
+        patch.object(BaseInstaller, "detect_gpu", return_value=GpuType.NONE),
+        patch.object(BaseInstaller, "validate_providers", return_value=False),
+        patch.object(RealInstaller, "configure_providers"),
+        patch.object(RealInstaller, "write_service_file"),
+        patch.object(RealInstaller, "load_service", return_value=0),
+        patch.object(BaseInstaller, "_wait_for_service", return_value=True),
+        patch.object(BaseInstaller, "_is_service_running", return_value=False),
+        patch("pathlib.Path.home", return_value=tmp_path),
+    ):
+        rc = installer.run(
+            non_interactive=True,
+            profile="minimal",
+            skip_preload=True,
+            enable_hyde=True,
+        )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"  Created:    {data_dir / '.secrets.env'}\n" in out, out
+    assert "ANTHROPIC_API_KEY=<key>" in out, out
+    assert "OPENAI_API_KEY=<key>" in out, out
+    assert "Add ANTHROPIC_API_KEY=<key> to this file" not in out, out
 
 
 def test_wizard_secrets_env_no_created_hint_on_reinstall(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:

@@ -170,7 +170,7 @@ Optional LLM-backed recall boosters, both **disabled by default**. They share th
 | `max_requests_per_minute` | `60` | Per-process rate limit (≥1); **not** enforced for `ollama`/`claude_cli`/`llama_cpp`. |
 | `num_queries` *(rag_fusion only)* | `2` | LLM-generated query variants, range `1–5`. Total searches = `num_queries + 1`. |
 
-> **Privacy warning:** with `provider = "anthropic"`, `"openai"`, or `"claude_cli"`, enabling these features sends raw query text to the provider on every boosted request. `provider = "ollama"` or `"llama_cpp"` keeps query text on the local host (zero-transmission). Enabling either feature causes the wizard to create `~/.archon-search/.secrets.env` (mode 0600) for provider API keys — not created for `ollama`/`claude_cli`/`llama_cpp`, which need none. See [`60_searching.md`](./60_searching.md) for worked examples and the residency caveats.
+> **Privacy warning:** with `provider = "anthropic"`, `"openai"`, or `"claude_cli"`, enabling these features sends raw query text to the provider on every boosted request. `provider = "ollama"` or `"llama_cpp"` keeps query text on the local host (zero-transmission). Enabling either feature causes the wizard to create `<data-dir>/.secrets.env` (`~/.archon-search/.secrets.env` by default; mode 0600) for provider API keys — created whatever the provider, though `ollama`/`claude_cli`/`llama_cpp` need none. See [`60_searching.md`](./60_searching.md) for worked examples and the residency caveats.
 
 ### `[maintenance]`
 

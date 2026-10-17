@@ -8,6 +8,18 @@
 
 ## Changelog
 
+### [next release] — Linux systemd unit: `EnvironmentFile=` follows `ARCHON_SEARCH_DATA_DIR` (2026-10-17)
+
+**Surface**: the systemd user unit `archon-search install` writes on Linux (`~/.config/systemd/user/archon-search.service`) → `EnvironmentFile=`.
+
+**What changed:** The unit loaded `EnvironmentFile=-%h/.archon-search/.secrets.env` regardless of `ARCHON_SEARCH_DATA_DIR`, while the wizard creates the file under the data dir — so with a custom data dir the service never saw the provider keys added there. The unit now loads `EnvironmentFile=-<data-dir>/.secrets.env` (`archon_search/platform/linux.py`, via `platform.service.get_secrets_env_file()`), the same file the wizard creates and the macOS launchd wrapper sources. Only Linux installs with a custom `ARCHON_SEARCH_DATA_DIR` are affected; with the default data dir the path is unchanged.
+
+**Migration**: Linux installs with a custom `ARCHON_SEARCH_DATA_DIR` whose keys sit in `~/.archon-search/.secrets.env`: move those keys into `<data-dir>/.secrets.env`, then re-run `archon-search install` with the same `ARCHON_SEARCH_DATA_DIR`, passing `--config <path-to-your-archon-search.toml>` unless the config lives at `<data-dir>/archon-search.toml`, to regenerate the unit. Without `--config`, `install` points the unit at `<data-dir>/archon-search.toml`, not at the wizard's default `~/.archon-search/archon-search.toml` (or `ARCHON_SEARCH_CONFIG`). Default-data-dir installs: no change.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — S631: `GET /ready` stays `503` while the background model validation is pending (2026-10-12)
 
 **Surface**: `GET /ready` → `ready` and the HTTP status.
