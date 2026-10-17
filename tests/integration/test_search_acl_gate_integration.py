@@ -65,7 +65,8 @@ def test_search_acl_context_false_no_gate(tmp_path, monkeypatch) -> None:
         data = resp.json()
         assert data["results"], "expected at least one result"
         for r in data["results"]:
-            assert r.get("acl_gate") is None, (
+            assert "acl_gate" in r, "acl_gate key must always be serialized, even when acl_context is False"
+            assert r["acl_gate"] is None, (
                 "acl_gate must be null when acl_context is False (C1: backward-compatible additive)"
             )
 

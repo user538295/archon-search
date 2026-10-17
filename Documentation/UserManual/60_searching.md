@@ -305,12 +305,12 @@ Each `acl_gate` (`AclGateSchema`) carries:
 
 | Field | Meaning |
 | --- | --- |
-| `allowed_principals` | The chunk's resolved ACL principal list (`null` when the collection has no ACL rule). |
-| `source` | `"frontmatter"`, `"sidecar"`, or `"collection_default"`. |
-| `sidecar_path` | Path of the `.acl` sidecar that supplied the ACL, when `source="sidecar"`. |
+| `allowed_principals` | The chunk's resolved ACL principal list (`null` when no ACL applies to the chunk, including fail-open cases reported in `warnings`). |
+| `source` | `"frontmatter"`, `"sidecar"`, `"collection_default"`, or `null` when provenance is unavailable (pre-G15 chunks, candidates sourced from graph communities or PPR). |
+| `sidecar_path` | Path of the `.acl` sidecar, when `source="sidecar"` (also set when that sidecar was ignored — see `warnings`). |
 | `warnings` | Structured warnings raised while resolving the ACL (malformed value, oversized sidecar, …). |
 
-`acl_gate` is omitted (`null`) when `acl_context` is `false`. `POST /explain` always populates `acl_gate` on its results regardless of this flag. ACL enforcement itself — how principals gate visibility, sidecar format, the `acl_filtered` response flag — lives in [`../SecurityGuide/03_authorization_and_acl.md`](../SecurityGuide/03_authorization_and_acl.md).
+`acl_gate` is `null` when `acl_context` is `false` — the key is still present on every result. `POST /explain` always populates `acl_gate` on its results regardless of this flag. ACL enforcement itself — how principals gate visibility, sidecar format, the `acl_filtered` response flag — lives in [`../SecurityGuide/03_authorization_and_acl.md`](../SecurityGuide/03_authorization_and_acl.md).
 
 ## Related documents
 
