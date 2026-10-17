@@ -103,7 +103,7 @@ A typical workflow is: call `/route`, then call `/search` once per name in `pinn
 | Tool | Key inputs | Output |
 | --- | --- | --- |
 | `search` | `query`, `collection?` / `collections?`, filter params (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language`, `include_metadata`), `hyde`, `rag_fusion`, `graph_mode`, `scope_filter` | `{"results":[…], "acl_filtered":bool, "excluded_collections":[…], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null, "graph_expansion_applied":bool, "ppr_entities_matched":int\|null}` |
-| `search_with_context` | `query`, `collection?`, `context_window=1`, same filter/expansion params — but **`graph_mode` is rejected unconditionally** (`code="graph_mode_not_supported"`; use `search` for graph modes) | Results with `context_before` / `context_after` neighbours, plus `hyde_applied`, `expansion_used`, `expansion_warning` |
+| `search_with_context` | `query`, `collection?`, `context_window=1`, same filter/expansion params — but **`graph_mode` is rejected unconditionally** (`code="graph_mode_not_supported"`; use `search` for graph modes) | `{"results":[{"result":{…}, "context_before":[…], "context_after":[…]}], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null}` — neighbour shape and selection in [`search_with_context` neighbours](#search_with_context-neighbours) |
 
 Per-result `reranker_score`, on each `search` result and on the `result` object of each `search_with_context` item:
 
@@ -119,6 +119,35 @@ Per-result `reranker_score`, on each `search` result and on the `result` object 
 When `collection` is omitted, the server uses the `default_collection` injected at app construction. The MCP `search` tool exposes filters as flat parameters rather than a nested `filters` object, and — unlike REST — does **not** echo `applied_filters` (track filters client-side).
 
 For MCP client setup and worked SDK examples, see [`../DeveloperGuide/05_mcp_integration.md`](../DeveloperGuide/05_mcp_integration.md). The endpoint is `POST /mcp` (streamable HTTP transport), mounted on the REST port when `[mcp].enabled = true` (default).
+
+### `search_with_context` neighbours
+
+Each `search_with_context` item is `{"result": …, "context_before": […], "context_after": […]}`: `result` has the same shape as a `search` result, and each neighbour in the two lists is a `ContextChunkSchema` (`server/mcp_schemas.py`) with exactly these fields:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `doc_id` | `string` | Always the hit's own `doc_id`. |
+| `chunk_id` | `string` | |
+| `text` | `string` | |
+| `source_path` | `string` | |
+| `indexed_at` | `string` | |
+| `file_type` | `string` | Default `""`. |
+| `language` | `string` | Default `""`. |
+| `metadata` | `object` (string → string) | `{}` unless `include_metadata=true`. |
+| `ingested_by` | `string` | Default `"cli"`. |
+| `updated_at` | `string` | Falls back to `indexed_at` when the stored value is empty. |
+| `acl` | `string[] \| null` | |
+
+A neighbour has no `score`, `reranker_score`, or `collection` — it was not ranked — and never carries the stored `vector`, `custom_score`, `expires_at`, `scopes`, the ACL provenance columns behind REST's `acl_gate`, or chunk offsets.
+
+How neighbours are selected (`SearchPipeline.search_with_context` in `pipeline.py`, `SearchStore.fetch_adjacent_chunks` in `store.py`):
+
+- **Same document only.** Neighbours are the hit's own document's chunks, addressed by chunk index (the numeric suffix of `chunk_id`): every index from `index − context_window` to `index + context_window`, excluding the hit itself.
+- **Clamped at the document edges.** The window stops at index 0 at the start of the document, and indices past the last chunk match nothing, so a hit near either edge gets fewer neighbours, not an error.
+- **Ordering.** `context_before` holds the lower indices and `context_after` the higher ones, each in ascending chunk order (document order): the nearest surviving chunk before the hit is the *last* entry of `context_before`, and the nearest after it is the *first* entry of `context_after`.
+- **ACL only.** Neighbours are ACL-filtered against the caller's namespace, and a denied neighbour is dropped silently (no flag). The search filters and `scope_filter` are not re-applied to neighbours.
+- **No validation of `context_window`.** It has no upper bound, `0` or a negative value returns empty lists, and so does a hit whose `chunk_id` has no numeric suffix.
+- **No de-duplication.** Each hit fetches its own neighbours, so the windows of nearby hits can overlap, and a neighbour can also appear as another hit.
 
 ## Filtering results (A2 + C2)
 
@@ -292,7 +321,7 @@ Same silent-fallback contract as HyDE (`rag_fusion_applied: false`), plus: `rag_
 
 ## Permission-aware snippets (`acl_context` → G15)
 
-Set `acl_context: true` on `POST /search` to attach an `acl_gate` object to every result — useful for a client that renders "who can see this" alongside each snippet:
+Set `acl_context: true` on REST `POST /search` to populate an `acl_gate` object on every result — useful for a client that renders "who can see this" alongside each snippet:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8765/search \
@@ -306,11 +335,11 @@ Each `acl_gate` (`AclGateSchema`) carries:
 | Field | Meaning |
 | --- | --- |
 | `allowed_principals` | The chunk's resolved ACL principal list (`null` when the collection has no ACL rule). |
-| `source` | `"frontmatter"`, `"sidecar"`, or `"collection_default"`. |
+| `source` | `"frontmatter"`, `"sidecar"`, `"collection_default"`, or `null` (chunks indexed before ACL provenance was recorded, or an unrecognised stored value). |
 | `sidecar_path` | Path of the `.acl` sidecar that supplied the ACL, when `source="sidecar"`. |
 | `warnings` | Structured warnings raised while resolving the ACL (malformed value, oversized sidecar, …). |
 
-`acl_gate` is omitted (`null`) when `acl_context` is `false`. `POST /explain` always populates `acl_gate` on its results regardless of this flag. ACL enforcement itself — how principals gate visibility, sidecar format, the `acl_filtered` response flag — lives in [`../SecurityGuide/03_authorization_and_acl.md`](../SecurityGuide/03_authorization_and_acl.md).
+When `acl_context` is `false` (the default), the `acl_gate` key is still present on every result, with the value `null` (`GET /openapi.json` lists the field as optional only because it defaults to `null`). `POST /explain` always populates `acl_gate` on its results regardless of this flag. `acl_context` and `acl_gate` are REST-only: the MCP `search` and `search_with_context` tools take no `acl_context` input, and their results carry no `acl_gate` key. ACL enforcement itself — how principals gate visibility, sidecar format, the `acl_filtered` response flag — lives in [`../SecurityGuide/03_authorization_and_acl.md`](../SecurityGuide/03_authorization_and_acl.md).
 
 ## Related documents
 

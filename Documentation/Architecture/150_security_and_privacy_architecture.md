@@ -120,7 +120,7 @@ Added via `migrate_acl_provenance` — an idempotent `IN_PLACE add_columns` migr
 
 ### `acl_gate` — per-result ACL audit object (g15)
 
-`POST /search` accepts `acl_context: bool = false`. When `true`, every result carries an `acl_gate: AclGateSchema` object:
+`POST /search` accepts `acl_context: bool = false`. When `false`, the `acl_gate` key is still serialized on every result, as `null` (OpenAPI lists it as optional only because it defaults to `null`). Neither MCP tool (`search`, `search_with_context`) has an `acl_context` input or an `acl_gate` result field. When `acl_context` is `true`, every REST result carries an `acl_gate: AclGateSchema` object:
 
 | Field | Type | Meaning |
 |-------|------|---------|

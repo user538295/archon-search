@@ -623,8 +623,10 @@ num_queries = 2
 # setting — never inherited from [database].providers. An empty list normalizes to null,
 # read by the engine as CPU. Written by the install wizard, which offers an accelerator
 # only after its two-stage device probe validates one against the pre-warmed model and
-# otherwise writes CPU; `archon-search wizard --graph-providers` supplies the candidates
-# for non-interactive installs. Guardrails are tuned for CPU; an accelerator is allowed
+# otherwise writes CPU. It leaves this key untouched under --skip-preload, or when no
+# accelerator was requested and the graph pre-warm produced no device.
+# `archon-search wizard --graph-providers` supplies the candidates for non-interactive
+# installs. Guardrails are tuned for CPU; an accelerator is allowed
 # but unmeasured.
 # providers = ["CoreMLExecutionProvider"]
 

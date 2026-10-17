@@ -531,14 +531,24 @@ If the pre-warm runs past its time limit (5 to 30 minutes, scaled to the profile
 
 If you enabled the graph (Step 5a), the prose extraction checkpoint is pre-warmed at the end of this step, into `<data-dir>/models/graph/`. This is the ~1218 MB download quoted in Step 5a and it dominates the step's wall time. A failure is non-fatal and logged, not fatal to the install — the model downloads on first graph ingest instead.
 
-Immediately after the pre-warm, and only when the graph extra was installed and `--skip-preload` was not passed, the wizard settles `[graph].providers`. The accelerator is offered only when both probe stages agreed — your GPU was detected and accepted in Step 3 (or `--graph-providers` named a device), *and* the pre-warm actually resolved the model onto that device:
+Immediately after the pre-warm, and only when the graph extra was installed and `--skip-preload` was not passed, the wizard settles `[graph].providers`. The accelerator is offered only when an accelerator was *requested* (defined below) and both probe stages agreed — stage 1 found the device available on this host, *and* the pre-warm actually resolved the model onto it:
 
 ```
 Graph extraction validated on cuda — use it? (accelerated but unmeasured;
 guardrails are tuned for CPU) [Y/n]:
 ```
 
-The accelerator is the default here: a bare Enter accepts it, `n` steps down to CPU. If either stage failed, no prompt is shown at all — the wizard logs the reason at WARNING and writes `[graph].providers = []` (CPU). If the pre-warm did not run, nothing is written, because unset already means CPU and there is no evidence to justify overwriting a list you may have set by hand. `--disable-gpu` forces CPU here even against an explicit `--graph-providers`, and `--graph-providers` is ignored outright when the graph extra is not being installed:
+The accelerator is the default here: a bare Enter accepts it, `n` steps down to CPU (`[graph].providers = []`), and a `--non-interactive` install accepts it without asking.
+
+An accelerator is *requested* when the first entry of the graph's candidate provider list is `CUDAExecutionProvider` or `CoreMLExecutionProvider`. The candidates are the `--graph-providers` value when that flag is passed; otherwise, in an interactive install, the provider of the GPU you accepted in Step 3 (`CUDAExecutionProvider` for NVIDIA, `CoreMLExecutionProvider` for Apple Silicon); otherwise none, so a `--non-interactive` install without `--graph-providers` requests nothing. `--disable-gpu`, or declining the Step 3 prompt, empties the candidates even against an explicit `--graph-providers`.
+
+Every other outcome settles without a prompt. Here "the pre-warm produced no device" means the graph NER pre-warm failed (download or load), the pre-warm time limit skipped it, or the run is a `--dry-run` (which pre-warms nothing):
+
+- **Accelerator requested, but the pre-warm landed the model on CPU or produced no device** — the wizard logs `Graph accelerator not validated (conflicting_onnx_runtimes) — writing [graph].providers = [] (CPU).` at WARNING and writes `[graph].providers = []` (CPU). Despite its name, `conflicting_onnx_runtimes` here only means the requested device was not usable.
+- **Nothing requested, and the pre-warm placed the model on CPU** — `[graph].providers = []` (CPU) is written, with no warning, replacing any list you set by hand.
+- **Nothing requested, and the pre-warm produced no device** — nothing is written. The wizard logs `Graph accelerator not validated (pre-warm did not run) — leaving CPU.` at WARNING; unset already means CPU, and there is no evidence to justify overwriting a list you may have set by hand — so a hand-set accelerator list survives despite the message.
+
+With `--skip-preload` the settle step does not run: the stage-1 availability check still runs (and can log a CPU step-down WARNING), but there is no stage-2 validation and `[graph].providers` is left as it was. A non-empty `--graph-providers` is ignored outright, with this note, when the graph extra is not being installed:
 
 ```
   Note: --graph-providers was ignored — graph extraction is not being installed,
@@ -606,8 +616,8 @@ All flags for the `wizard` command (verified against `archon_search/cli/install_
 | `--no-reranker` | False | Disable the cross-encoder reranker for lower latency. |
 | `--routing-strategy {centroid,hybrid}` | Not set (interactive) | Set the routing strategy directly, skipping the interactive prompt. |
 | `--log-format {text,json}` | Not set (interactive) | Set the log format directly, skipping the interactive prompt. |
-| `--disable-gpu` | False | Force CPU execution: skip the GPU confirmation prompt and write `[database].providers = []`. Also forces `[graph].providers` to CPU, overriding `--graph-providers`. |
-| `--graph-providers TEXT` | Not set | Comma-separated ONNX execution providers for the graph extraction engine (`[graph].providers`), e.g. `CUDAExecutionProvider`. Unknown names are rejected. An empty string forces CPU. This supplies *candidates* only: the value is written just when the install-time two-stage device probe validates it against the pre-warmed model — otherwise CPU. Without this flag a `--non-interactive` install never opts into an accelerator, since nobody is there to accept one the guardrails were not tuned for. Ignored (with a note) when graph extraction is not being installed. |
+| `--disable-gpu` | False | Force CPU execution: skip the GPU confirmation prompt and write `[database].providers = []`. Also empties the `[graph].providers` candidates, overriding `--graph-providers`, so no graph accelerator is requested. |
+| `--graph-providers TEXT` | Not set | Comma-separated ONNX execution providers for the graph extraction engine (`[graph].providers`), e.g. `CUDAExecutionProvider`. Unknown names are rejected. An empty string requests no accelerator. This supplies *candidates* only: an accelerator value is written just when the install-time two-stage device probe validates it against the pre-warmed model — otherwise `[]` (CPU) is written, except for the no-write cases in [Step 8](#step-8--model-download). Without this flag a `--non-interactive` install never opts into an accelerator, since nobody is there to accept one the guardrails were not tuned for. Ignored (with a note) when graph extraction is not being installed. |
 | **Tier 1 deployment flags** | | |
 | `--host TEXT` | Not set (uses `127.0.0.1`) | Bind address for the HTTP API. Use `0.0.0.0` for remote or Docker access. Non-loopback values print a security note reminding you to add a firewall or reverse proxy. Cannot be an empty string. |
 | `--port INTEGER` | Not set (uses `8765`) | HTTP port for the installed config (valid range 1–65535). This is an **install-time config flag** — it writes `[server].port`; there is no runtime `--port` flag on `serve`/`start`. Port conflicts are not detected at wizard time; the OS reports an error at service start. |
