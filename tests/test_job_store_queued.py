@@ -254,6 +254,19 @@ def test_update_progress_overwrites_previous(store: JobStore) -> None:
     assert updated.progress == {"processed": 150, "total": 200, "phase": "packaging"}
 
 
+def test_update_progress_persists_import_resume_position_outside_progress(tmp_path: Path) -> None:
+    """lines_consumed is saved with the checkpoint, survives a reload, and stays out of the wire-facing progress."""
+    jobs_path = tmp_path / "jobs.json"
+    job = JobStore(path=jobs_path).create_import(
+        collection="col", archive_path="/tmp/a.tar.gz", force_overwrite=False, ignore_schema_version=False, on_error="skip",
+    )
+    JobStore(path=jobs_path).update_progress(job.job_id, 2, 7, "ingesting", lines_consumed=4)
+
+    reloaded = JobStore(path=jobs_path).get(job.job_id)
+    assert isinstance(reloaded, ImportJob)
+    assert (reloaded.lines_consumed, reloaded.progress) == (4, {"processed": 2, "total": 7, "phase": "ingesting"})
+
+
 # ---------------------------------------------------------------------------
 # Serialization roundtrips
 # ---------------------------------------------------------------------------

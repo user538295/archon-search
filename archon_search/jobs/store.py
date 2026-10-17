@@ -281,9 +281,13 @@ class JobStore:
         )
         return self.create_job(job)  # type: ignore[return-value]
 
-    def update_progress(self, job_id: str, processed: int, total: int, phase: str) -> None:
-        """Set the progress dict on a job."""
-        self.update(job_id, progress={"processed": processed, "total": total, "phase": phase})
+    def update_progress(self, job_id: str, processed: int, total: int, phase: str, **fields: object) -> None:
+        """Set the progress dict on a job, plus any other job *fields* in the same atomic write.
+
+        *fields* keeps internal checkpoint state (``ImportJob.lines_consumed``) consistent
+        with ``progress`` across a crash, without adding keys to the wire-facing dict.
+        """
+        self.update(job_id, progress={"processed": processed, "total": total, "phase": phase}, **fields)
 
     def list_queued_bulk(self) -> list[ExportJob | ImportJob | MigrationJob]:
         """Return QUEUED ExportJob/ImportJob/MigrationJob instances sorted by (source_priority, created_at).

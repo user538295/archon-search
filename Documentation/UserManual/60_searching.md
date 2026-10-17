@@ -182,7 +182,7 @@ curl -s -X POST http://127.0.0.1:8765/search \
 - Collections whose stored embedding model differs from the live embedder are dropped and reported in the response `excluded_collections[]` (reason `embedding_model_mismatch`) rather than failing the whole request — even when *every* requested collection is excluded, you get a `200` with `results: []`.
 - On `/search`, a name that does not exist in your namespace fails the whole request with `404 collection not found`; a metadata-store failure is a `503`. `/explain` is deliberately more forgiving here: it reports unknown names in `excluded_collections[]` with reason `not_found` and only returns `404` when *every* requested name is unknown (see [`80_explain_and_debugging.md`](80_explain_and_debugging.md)).
 - Filters — including `language` (E0e) — apply across every collection in the fan-out.
-- `graph_mode` is **not** supported with multi-collection fan-out (`ppr` is rejected with `422`; single-collection only for graph modes).
+- On `/search`, `graph_mode` `naive`, `local` and `global` fan out across every collection; `ppr` is single-collection only and returns `422`. `/explain` rejects any `graph_mode` combined with `collections[]` (`422`).
 
 ## HyDE query expansion (C4)
 
@@ -306,7 +306,7 @@ Each `acl_gate` (`AclGateSchema`) carries:
 | Field | Meaning |
 | --- | --- |
 | `allowed_principals` | The chunk's resolved ACL principal list (`null` when the collection has no ACL rule). |
-| `source` | `"frontmatter"`, `"sidecar"`, or `"collection_default"`. |
+| `source` | `"frontmatter"`, `"sidecar"`, or `"collection_default"`; `null` when no provenance is stored (pre-G15 chunk, or a collection without the provenance columns) or the stored value is none of these. |
 | `sidecar_path` | Path of the `.acl` sidecar that supplied the ACL, when `source="sidecar"`. |
 | `warnings` | Structured warnings raised while resolving the ACL (malformed value, oversized sidecar, …). |
 

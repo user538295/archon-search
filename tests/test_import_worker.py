@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 import hashlib
 import io
 import json
@@ -266,6 +267,234 @@ async def test_import_task_roundtrip(
     assert finished.result["skipped"] == 0
 
 
+_ACL_FIELDS = ("acl", "scopes", "acl_source", "acl_sidecar_path", "acl_warning")
+#: Stands in for a key ``list_chunks_raw`` did not emit, so a missing field fails the equality, not a KeyError.
+_ABSENT = "<absent>"
+_PROV_SIDECAR_PATH = "secret.md.acl"
+_PROV_WARNINGS = ["acl sidecar entry 'deny-all' is not a valid namespace; ignored"]
+
+
+async def _acl_fields_by_chunk(search_store: SearchStore, collection: str) -> dict[str, dict[str, object]]:
+    return {
+        r["chunk_id"]: {k: r.get(k, _ABSENT) for k in _ACL_FIELDS}
+        async for r in search_store.list_chunks_raw(collection, DEFAULT_NAMESPACE)
+    }
+
+
+def _archived_doc_keys(archive_path: Path) -> set[str]:
+    """Union of the keys of every document in the archive's ``documents.jsonl``."""
+    with tarfile.open(archive_path, "r:gz") as tf:
+        member = tf.extractfile("documents.jsonl")
+        assert member is not None
+        return {key for line in member.read().decode().splitlines() if line for key in json.loads(line)}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_export_import_roundtrip_preserves_acl_provenance(
+    tmp_path: Path,
+    tmp_job_store: JobStore,
+    tmp_search_store: SearchStore,
+    search_config: SearchConfig,
+    mock_pipeline: MagicMock,
+    mock_embedder_cache: MagicMock,
+) -> None:
+    """An exported then imported chunk keeps its ACL, scopes and G15 ACL provenance."""
+    src_col = "acl-prov-src"
+    dst_col = "acl-prov-dst"
+    search_config.embedding_model = ""
+    doc_id = _doc_id()
+    chunks = [
+        dataclasses.replace(
+            _chunk(doc_id, 0),
+            acl=["default"],
+            scopes=["user:alice"],
+            acl_source="sidecar",
+            acl_sidecar_path=_PROV_SIDECAR_PATH,
+            acl_warning=list(_PROV_WARNINGS),
+        ),
+        _chunk(doc_id, 1),  # no ACL: provenance stays null / []
+    ]
+    await search_store_seed_partial(tmp_search_store, src_col, chunks)
+    source_fields = await _acl_fields_by_chunk(tmp_search_store, src_col)
+    # Absolute, so a source read path that drops provenance cannot pass by matching an equally empty import.
+    assert source_fields == {
+        chunks[0].chunk_id: {
+            "acl": ["default"],
+            "scopes": ["user:alice"],
+            "acl_source": "sidecar",
+            "acl_sidecar_path": _PROV_SIDECAR_PATH,
+            "acl_warning": _PROV_WARNINGS,
+        },
+        chunks[1].chunk_id: {
+            "acl": None, "scopes": None, "acl_source": None, "acl_sidecar_path": None, "acl_warning": [],
+        },
+    }
+
+    archive_path = tmp_path / "exports" / f"{src_col}.tar.gz"
+    export_job = tmp_job_store.create_export(
+        collection=src_col, output_path=str(archive_path), tmp_path=str(tmp_path / "exports" / ".prov.jsonl.tmp"),
+    )
+    await _export_task(export_job, tmp_job_store, tmp_search_store, search_config)
+    assert tmp_job_store.get(export_job.job_id).status == JobStatus.DONE
+
+    import_job = _make_import_job(dst_col, str(archive_path), tmp_job_store)
+    await _import_task(
+        import_job, tmp_job_store, tmp_search_store, mock_pipeline, mock_embedder_cache, search_config
+    )
+    assert tmp_job_store.get(import_job.job_id).status == JobStatus.DONE
+
+    assert await _acl_fields_by_chunk(tmp_search_store, dst_col) == source_fields
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_archive_without_acl_provenance_imports_null_provenance(
+    tmp_path: Path,
+    tmp_job_store: JobStore,
+    tmp_search_store: SearchStore,
+    search_config: SearchConfig,
+    mock_pipeline: MagicMock,
+    mock_embedder_cache: MagicMock,
+) -> None:
+    """An archive written before ACL provenance was exported still imports, with null provenance."""
+    dst_col = "acl-prov-legacy"
+    search_config.embedding_model = _DEFAULT_MODEL
+    doc_id = _doc_id()
+    archive_path = tmp_path / "legacy.tar.gz"
+    _make_archive(archive_path, "legacy", [_chunk(doc_id, 0)])
+    assert _archived_doc_keys(archive_path).isdisjoint(_ACL_FIELDS[1:]), "the archive must predate provenance"
+
+    import_job = _make_import_job(dst_col, str(archive_path), tmp_job_store)
+    await _import_task(
+        import_job, tmp_job_store, tmp_search_store, mock_pipeline, mock_embedder_cache, search_config
+    )
+    assert tmp_job_store.get(import_job.job_id).status == JobStatus.DONE
+
+    assert await _acl_fields_by_chunk(tmp_search_store, dst_col) == {
+        f"{doc_id}-000000": {
+            "acl": None, "scopes": None, "acl_source": None, "acl_sidecar_path": None, "acl_warning": [],
+        },
+    }
+
+
+_BAD_FIELD_INDEX = 1  # the middle of three docs: archive line 2
+#: Archive values of the wrong type for a list[str] / str field. JSON-legal, so only the importer can reject them.
+_MALFORMED_FIELD_VALUES = [
+    pytest.param("acl_warning", "oops", id="acl_warning-str"),
+    pytest.param("acl_warning", [1], id="acl_warning-non-str-item"),
+    pytest.param("acl", "default", id="acl-str"),
+    pytest.param("acl", {"ns": "default"}, id="acl-object"),
+    pytest.param("scopes", "user:alice", id="scopes-str"),
+    pytest.param("scopes", [None], id="scopes-null-item"),
+    pytest.param("acl_source", 7, id="acl_source-int"),
+    pytest.param("acl_sidecar_path", ["a.acl"], id="acl_sidecar_path-list"),
+    pytest.param("ingested_by", 7, id="ingested_by-int"),
+    pytest.param("ingested_by", ["http"], id="ingested_by-list"),
+]
+#: Two representative shapes (a list field holding a scalar, a str field holding a list): fail mode shares
+#: the skip-mode code path, which covers every case above.
+_MALFORMED_FIELD_VALUES_FAIL_MODE = [
+    pytest.param("acl", "default", id="acl-str"),
+    pytest.param("ingested_by", ["http"], id="ingested_by-list"),
+]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("field", "value"), _MALFORMED_FIELD_VALUES)
+async def test_import_skip_mode_skips_doc_with_wrongly_typed_field(
+    field: str,
+    value: object,
+    tmp_path: Path,
+    tmp_job_store: JobStore,
+    tmp_search_store: SearchStore,
+    search_config: SearchConfig,
+    mock_pipeline: MagicMock,
+    mock_embedder_cache: MagicMock,
+) -> None:
+    """A wrongly typed ACL or ingested_by field is rejected per doc, so on_error='skip' drops that doc only."""
+    col = "bad-acl-skip"
+    chunks = [_chunk(_doc_id(), i) for i in range(3)]
+    archive_path = tmp_path / "bad-acl-skip.tar.gz"
+    _make_archive(archive_path, col, chunks, doc_overrides={_BAD_FIELD_INDEX: {field: value}})
+
+    import_job = _make_import_job(col, str(archive_path), tmp_job_store, on_error="skip")
+    await _import_task(
+        import_job, tmp_job_store, tmp_search_store, mock_pipeline, mock_embedder_cache, search_config
+    )
+
+    finished = tmp_job_store.get(import_job.job_id)
+    assert finished.status == JobStatus.DONE, f"Expected DONE, got {finished.status}: {finished.error}"
+    assert (finished.result["imported"], finished.result["skipped"]) == (2, 1)
+    imported = await _acl_fields_by_chunk(tmp_search_store, col)
+    assert set(imported) == {c.chunk_id for i, c in enumerate(chunks) if i != _BAD_FIELD_INDEX}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("field", "value"), _MALFORMED_FIELD_VALUES_FAIL_MODE)
+async def test_import_fail_mode_rejects_doc_with_wrongly_typed_field(
+    field: str,
+    value: object,
+    tmp_path: Path,
+    tmp_job_store: JobStore,
+    tmp_search_store: SearchStore,
+    search_config: SearchConfig,
+    mock_pipeline: MagicMock,
+    mock_embedder_cache: MagicMock,
+) -> None:
+    """With on_error='fail' the job fails naming the archive line, never with the type error's text."""
+    finished = await _run_failing_import(
+        tmp_path, "bad-acl-fail", tmp_job_store, tmp_search_store, mock_pipeline, mock_embedder_cache,
+        search_config, doc_overrides={_BAD_FIELD_INDEX: {field: value}},
+    )
+
+    assert finished.error == (
+        f"malformed doc at line {_BAD_FIELD_INDEX + 1}: a required field is missing or has the wrong type"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("archived", "stored"),
+    [
+        pytest.param(_DROP, "cli", id="absent"),
+        pytest.param(None, "cli", id="null"),
+        pytest.param("", "cli", id="empty"),  # what an export of a null ingested_by column used to write
+        pytest.param("archon-search-cli", "cli", id="legacy"),
+        pytest.param("not-a-source", "cli", id="unknown"),
+        pytest.param("watcher", "watcher", id="canonical"),
+    ],
+)
+async def test_import_normalizes_ingested_by(
+    archived: object,
+    stored: str,
+    tmp_path: Path,
+    tmp_job_store: JobStore,
+    tmp_search_store: SearchStore,
+    search_config: SearchConfig,
+    mock_pipeline: MagicMock,
+    mock_embedder_cache: MagicMock,
+) -> None:
+    """An archived ingested_by is normalized like every stored-row read: only valid IngestedBy values are stored."""
+    col = "import-ingested-by"
+    archive_path = tmp_path / "import-ingested-by.tar.gz"
+    _make_archive(archive_path, col, [_chunk(_doc_id(), 0)], doc_overrides={0: {"ingested_by": archived}})
+
+    import_job = _make_import_job(col, str(archive_path), tmp_job_store)
+    await _import_task(
+        import_job, tmp_job_store, tmp_search_store, mock_pipeline, mock_embedder_cache, search_config
+    )
+    assert tmp_job_store.get(import_job.job_id).status == JobStatus.DONE
+
+    # The raw table, not list_chunks_raw: that read path normalizes too, which would mask what was stored.
+    table = await tmp_search_store._require_connected().open_table(col)
+    [row] = await table.query().to_list()
+    assert row["ingested_by"] == stored
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_import_task_force_overwrite(
@@ -519,6 +748,69 @@ async def test_import_task_resume_from_checkpoint(
     assert ingest_call_total[0] == expected_ingested, (
         f"Expected {expected_ingested} docs in second run, got {ingest_call_total[0]}"
     )
+
+
+class _CrashOnIngestCall:
+    """Wraps ``SearchStore.ingest_chunks`` and raises on the *crash_at*-th call (1-based), as a crash would."""
+
+    def __init__(self, ingest_chunks: object, crash_at: int) -> None:
+        self._ingest_chunks = ingest_chunks
+        self._crash_at = crash_at
+        self._calls = 0
+
+    async def __call__(self, *args: object, **kwargs: object) -> object:
+        self._calls += 1
+        if self._calls == self._crash_at:
+            raise RuntimeError("simulated crash mid-import")
+        return await self._ingest_chunks(*args, **kwargs)  # type: ignore[operator]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_import_resume_after_skipped_lines_does_not_duplicate_chunks(
+    tmp_path: Path,
+    tmp_job_store: JobStore,
+    tmp_search_store: SearchStore,
+    search_config: SearchConfig,
+    mock_pipeline: MagicMock,
+    mock_embedder_cache: MagicMock,
+) -> None:
+    """Resume continues after the last archive line consumed, not after ``processed`` lines.
+
+    A corrupt line and a malformed doc are skipped before the first checkpoint, so the checkpoint's
+    ``processed`` (imported docs) trails the archive lines already consumed. Resuming from ``processed``
+    would re-read an already-imported line and append its chunk a second time.
+    """
+    col = "resume-after-skip"
+    search_config.jobs.checkpoint_interval = 2
+    chunks = [_chunk(_doc_id(), i) for i in range(7)]
+    archive_path = tmp_path / "resume-after-skip.tar.gz"
+    # Line 2 is corrupt JSON (skipped by the reader), line 3 a malformed doc (skipped by the importer):
+    # the first checkpoint lands after line 4 with processed=2.
+    _make_archive(archive_path, col, chunks, corrupt_index=1, doc_overrides={2: {"acl": "default"}})
+    expected_chunk_ids = sorted(c.chunk_id for i, c in enumerate(chunks) if i not in (1, 2))
+
+    import_job = _make_import_job(col, str(archive_path), tmp_job_store, on_error="skip")
+    original_ingest = tmp_search_store.ingest_chunks
+    tmp_search_store.ingest_chunks = _CrashOnIngestCall(original_ingest, crash_at=2)  # type: ignore[method-assign]
+    await _import_task(
+        import_job, tmp_job_store, tmp_search_store, mock_pipeline, mock_embedder_cache, search_config
+    )
+    crashed = tmp_job_store.get(import_job.job_id)
+    assert (crashed.status, crashed.progress["processed"]) == (JobStatus.FAILED, 2)
+
+    tmp_search_store.ingest_chunks = original_ingest  # type: ignore[method-assign]
+    tmp_job_store.update(import_job.job_id, status=JobStatus.QUEUED)  # as POST /jobs/{id}/resume does
+    await _import_task(
+        import_job, tmp_job_store, tmp_search_store, mock_pipeline, mock_embedder_cache, search_config
+    )
+
+    finished = tmp_job_store.get(import_job.job_id)
+    assert finished.status == JobStatus.DONE, f"Expected DONE, got {finished.status}: {finished.error}"
+    stored_chunk_ids = sorted([r["chunk_id"] async for r in tmp_search_store.list_chunks_raw(col, DEFAULT_NAMESPACE)])
+    assert stored_chunk_ids == expected_chunk_ids
+    # The two lines skipped before the checkpoint still count, although the resumed run never re-reads them.
+    assert (finished.result["imported"], finished.result["skipped"]) == (5, 2)
 
 
 @pytest.mark.integration

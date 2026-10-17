@@ -146,7 +146,7 @@ def test_hybrid_search_with_trace_populates_ingested_by(tmp_path: Path) -> None:
     assert len(candidates) == 1
     assert candidates[0].ingested_by == "watcher"
 
-    # Absent ingested_by → _normalize_ingested_by(None) → "cli"
+    # Absent ingested_by → normalize_ingested_by(None) → "cli"
     store2 = _trace_store_with_row(tmp_path, "db7b", _row("ib_absent"))
     candidates2 = _run_trace(store2)
     assert candidates2[0].ingested_by == "cli"

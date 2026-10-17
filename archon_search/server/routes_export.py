@@ -43,7 +43,7 @@ from archon_search.paths import get_data_dir
 from archon_search.pipeline import SearchPipeline
 from archon_search.server._job_warmup import await_models_warm
 from archon_search.server.schemas import ErrorDetail, JobResponse
-from archon_search.store import SearchStore
+from archon_search.store import SearchStore, normalize_ingested_by
 from archon_search.types import ExportJob, ImportJob, JobStatus
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,27 @@ def _encode_vector(floats: list[float]) -> str:
     """Encode a list of floats as base64 little-endian float32 bytes."""
     packed = struct.pack(f"<{len(floats)}f", *floats)
     return base64.standard_b64encode(packed).decode("ascii")
+
+
+def _archived_optional_str(doc: dict[str, Any], field: str) -> str | None:
+    """Return the archive doc's *field* if it is a string or null; raise ``TypeError`` otherwise."""
+    value = doc.get(field)
+    if value is None or isinstance(value, str):
+        return value
+    raise TypeError(f"{field} must be a string or null")
+
+
+def _archived_optional_str_list(doc: dict[str, Any], field: str) -> list[str] | None:
+    """Return the archive doc's *field* if it is a list of strings or null; raise ``TypeError`` otherwise.
+
+    Checked per doc because pyarrow would otherwise accept a bare string for a
+    ``list<utf8>`` column (splitting it into characters) or fail later, inside
+    ``ingest_chunks``, where ``on_error="skip"`` can no longer skip the one doc.
+    """
+    value = doc.get(field)
+    if value is None or (isinstance(value, list) and all(isinstance(item, str) for item in value)):
+        return value
+    raise TypeError(f"{field} must be a list of strings or null")
 
 
 async def _export_task(
@@ -231,9 +252,14 @@ async def _import_task(
         # --- Phase: ingesting ---
         # Use initial_progress for checkpoint skip — the store progress was overwritten
         # by the "validating" update_progress call above.
-        skip = initial_progress["processed"] if initial_progress else 0
+        resumed_processed = initial_progress["processed"] if is_resume else 0
+        # Resume after the last archive line consumed, not after `processed` lines: lines
+        # skipped before the checkpoint would otherwise be re-read as already-imported docs
+        # and appended a second time. max() covers a checkpoint written without lines_consumed.
+        checkpoint_lines = initial_job.lines_consumed if isinstance(initial_job, ImportJob) else 0
+        skip = max(checkpoint_lines, resumed_processed) if is_resume else 0
 
-        processed = skip  # start from checkpoint
+        processed = resumed_processed  # start from checkpoint
         skipped = 0
         batch: list[ChunkRecord] = []
 
@@ -291,12 +317,17 @@ async def _import_task(
                     file_type=doc.get("file_type", ""),
                     language=doc.get("language", ""),
                     metadata=raw_meta,
-                    acl=doc.get("acl"),
+                    acl=_archived_optional_str_list(doc, "acl"),
                     custom_score=doc.get("custom_score"),
-                    ingested_by=doc.get("ingested_by", "import"),  # type: ignore[arg-type]
+                    # Older exports wrote "" for a null column; legacy / unknown values normalize as on every read.
+                    ingested_by=normalize_ingested_by(_archived_optional_str(doc, "ingested_by")),
                     updated_at=doc.get("updated_at", ""),
                     expires_at=doc.get("expires_at"),
-                    scopes=doc.get("scopes"),
+                    scopes=_archived_optional_str_list(doc, "scopes"),
+                    # Absent from archives exported before ACL provenance was included.
+                    acl_source=_archived_optional_str(doc, "acl_source"),
+                    acl_sidecar_path=_archived_optional_str(doc, "acl_sidecar_path"),
+                    acl_warning=_archived_optional_str_list(doc, "acl_warning") or [],
                 )
             except (KeyError, TypeError, ValueError) as exc:
                 if job.on_error == "skip":
@@ -315,7 +346,11 @@ async def _import_task(
                 )
                 processed += len(batch)
                 batch = []
-                store.update_progress(job_id, processed, manifest["doc_count"], "ingesting")
+                # Every line read so far is now either stored or skipped: the resume position.
+                lines_consumed = skip + (processed - resumed_processed) + skipped + reader.skipped_lines
+                store.update_progress(
+                    job_id, processed, manifest["doc_count"], "ingesting", lines_consumed=lines_consumed,
+                )
 
                 # Cancellation check
                 current = store.get(job_id)
@@ -351,9 +386,9 @@ async def _import_task(
             # Empty archive: table was never created; nothing to index or recompute.
             logger.info("_import_task: archive for %r is empty; skipping FTS rebuild and centroid recompute", job.collection)
 
-        # Total skipped = JSON-parse errors (handled by iter_docs) + vector/doc
-        # errors (handled locally in the while loop above).
-        total_skipped = skipped + reader.skipped_lines
+        # Total skipped = lines skipped before a resumed checkpoint + JSON-parse errors
+        # (handled by iter_docs) + vector/doc errors (handled locally in the loop above).
+        total_skipped = (skip - resumed_processed) + skipped + reader.skipped_lines
 
         # A DELETE /jobs/{id} may have landed during the indexing phase (the warm-up
         # can take minutes on a cold server); honour it rather than overwrite it.

@@ -6915,6 +6915,33 @@ async def test_list_chunks_raw_includes_vector(
 
 
 @pytest.mark.asyncio
+async def test_list_chunks_raw_includes_acl_provenance(
+    connected_store: SearchStore, col_name: str
+) -> None:
+    """list_chunks_raw carries the G15 ACL provenance columns, so an export keeps them."""
+    chunk = dataclasses.replace(
+        _chunk(_doc_id(), 0),
+        acl=["default"],
+        scopes=["user:alice"],
+        acl_source="sidecar",
+        acl_sidecar_path="docs/a.md.acl",
+        acl_warning=["acl sidecar entry 'deny-all' is not a valid namespace; ignored"],
+    )
+    await connected_store.ensure_collection(col_name, _DIM)
+    await connected_store.ingest_chunks(col_name, [chunk])
+
+    [row] = [r async for r in connected_store.list_chunks_raw(col_name, "default")]
+
+    assert {k: row[k] for k in ("acl", "scopes", "acl_source", "acl_sidecar_path", "acl_warning")} == {
+        "acl": chunk.acl,
+        "scopes": chunk.scopes,
+        "acl_source": chunk.acl_source,
+        "acl_sidecar_path": chunk.acl_sidecar_path,
+        "acl_warning": chunk.acl_warning,
+    }
+
+
+@pytest.mark.asyncio
 async def test_list_chunks_raw_empty_collection_yields_nothing(
     connected_store: SearchStore, col_name: str
 ) -> None:

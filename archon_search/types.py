@@ -69,6 +69,9 @@ class ImportJob(IngestJob):
     ignore_schema_version: bool = False
     on_error: str = "fail"  # "fail" | "skip"
     source: Literal["user", "backup"] = "user"
+    # Non-empty archive lines read (imported or skipped) at the last checkpoint: the resume
+    # position. Persisted in jobs.json only; job_to_dict does not expose it.
+    lines_consumed: int = 0
 
 
 # UPPER_CASE names follow the convention of JobStatus and IndexingStatus.
