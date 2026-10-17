@@ -100,3 +100,52 @@ def test_get_secrets_env_file_lives_under_data_dir(
     assert get_secrets_env_file() == tmp_path / "first" / ".secrets.env"
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "second"))
     assert get_secrets_env_file() == tmp_path / "second" / ".secrets.env"
+
+
+# ── validate_registration / replace_registration ───────────────────────────────
+
+def test_validate_registration_default_accepts_any_config_path() -> None:
+    """The base hook accepts everything and has no side effects; only platforms that validate override it."""
+    svc = ConcreteService()
+    assert svc.validate_registration(config_path="bad\n\udcff path\\") is None
+    assert svc.calls == []
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["real", "dry-run"])
+def test_replace_registration_validates_then_stops_then_registers(
+    monkeypatch: pytest.MonkeyPatch, dry_run: bool
+) -> None:
+    """replace_registration() validates, then stops, then registers, passing ``dry_run`` to both side-effecting steps.
+
+    Dropping ``dry_run`` would make ``install --dry-run`` stop the real service.
+    """
+    svc = ConcreteService()
+    steps: list[tuple[str, object]] = []
+    monkeypatch.setattr(svc, "validate_registration", lambda *, config_path: steps.append(("validate", config_path)))
+    monkeypatch.setattr(svc, "stop", lambda dry_run=False: steps.append(("stop", dry_run)) or 0)
+    monkeypatch.setattr(
+        svc, "register", lambda dry_run=False, *, config_path: steps.append(("register", (dry_run, config_path)))
+    )
+
+    svc.replace_registration(dry_run=dry_run, config_path="/etc/a.toml")
+
+    assert steps == [
+        ("validate", "/etc/a.toml"),
+        ("stop", dry_run),
+        ("register", (dry_run, "/etc/a.toml")),
+    ]
+
+
+def test_replace_registration_refused_leaves_running_service_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A registration validate_registration() refuses raises before anything is stopped or registered."""
+    svc = ConcreteService()
+
+    def refuse(*, config_path: str) -> None:
+        raise RuntimeError("unit cannot hold this path")
+
+    monkeypatch.setattr(svc, "validate_registration", refuse)
+
+    with pytest.raises(RuntimeError, match="unit cannot hold this path"):
+        svc.replace_registration(config_path="/etc/a.toml")
+
+    assert svc.calls == []

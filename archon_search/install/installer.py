@@ -625,6 +625,15 @@ class BaseInstaller(ABC):
         if force and not delete_db:
             print("--force requires --delete-db. To force a reinstall, use both flags together.")
             return 1
+        # Fail before any download or config write if the service could never be
+        # registered (Step 15 always registers): a path the platform refuses, or an
+        # unsupported platform (NotImplementedError is a RuntimeError).
+        # write_service_file() re-checks right before stopping the service.
+        try:
+            get_search_service().validate_registration(config_path=str(self.config_path))
+        except RuntimeError as exc:
+            print(f"Error during install: {exc}", file=sys.stderr)
+            return 1
 
         # A dry-run serializes against nothing (it writes no config/db), so it
         # skips the install lock — whose parent.mkdir would otherwise leave the
@@ -1220,9 +1229,7 @@ class DryRunInstaller(BaseInstaller):
         print("[DRY RUN] Would create the search data directory.")
 
     def write_service_file(self) -> None:
-        svc = get_search_service()
-        svc.pre_activate_cleanup(dry_run=True)
-        svc.register(dry_run=True, config_path=str(self.config_path))
+        get_search_service().replace_registration(dry_run=True, config_path=str(self.config_path))
 
     def load_service(self) -> int:
         return get_search_service().start(dry_run=True)
@@ -1397,15 +1404,14 @@ class RealInstaller(BaseInstaller):
         db_path.mkdir(parents=True, exist_ok=True)
 
     def write_service_file(self) -> None:
-        """Stop legacy service then register the new search service.
+        """Replace the registered service (validate, stop the running instance, register).
 
         Threads the installer's config_path into register() so the service the
         installer starts reads the config just written, not a default the
-        service resolves on its own (S206).
+        service resolves on its own (S206). A registration the platform rejects
+        fails before the running service is stopped, so it keeps running.
         """
-        svc = get_search_service()
-        svc.pre_activate_cleanup(dry_run=False)
-        svc.register(dry_run=False, config_path=str(self.config_path))
+        get_search_service().replace_registration(dry_run=False, config_path=str(self.config_path))
 
     def load_service(self) -> int:
         """Delegate to get_search_service().start()."""

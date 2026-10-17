@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, call, patch
@@ -355,47 +356,44 @@ class TestCreateDataDir:
 
 
 class TestServiceDelegation:
-    def _mock_rag_service(self) -> MagicMock:
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["real", "dry-run"])
+    def test_write_service_file_replaces_registration_via_platform(self, tmp_path: Path, dry_run: bool) -> None:
+        """write_service_file() hands validate → stop → register to the platform's replace_registration()."""
+        installer = _make_installer(tmp_path, dry_run=dry_run)
         svc = MagicMock()
-        svc.register.return_value = 0
-        svc.start.return_value = 0
-        svc.stop.return_value = 0
-        svc.unregister.return_value = 0
-        return svc
-
-    def test_write_service_file_delegates_to_platform(self, tmp_path: Path) -> None:
-        installer = _make_installer(tmp_path)
-        svc = self._mock_rag_service()
 
         with patch("archon_search.install.installer.get_search_service", return_value=svc):
             installer.write_service_file()
 
-        svc.register.assert_called_once_with(dry_run=False, config_path=str(tmp_path / "archon-search.toml"))
+        svc.replace_registration.assert_called_once_with(
+            dry_run=dry_run, config_path=str(tmp_path / "archon-search.toml")
+        )
 
-    def test_write_service_file_dry_run(self, tmp_path: Path) -> None:
-        installer = _make_installer(tmp_path, dry_run=True)
-        svc = self._mock_rag_service()
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["real", "dry-run"])
+    def test_write_service_file_refused_systemd_registration_leaves_service_running(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dry_run: bool
+    ) -> None:
+        """The real systemd service refuses an interpreter path it cannot run before stopping anything or writing a unit."""
+        from archon_search.platform.linux import SystemdSearchService
 
-        with patch("archon_search.install.installer.get_search_service", return_value=svc):
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setattr(sys, "executable", str(tmp_path / "py$env" / "bin" / "python3"))
+        installer = _make_installer(tmp_path, dry_run=dry_run)
+        svc = SystemdSearchService()
+        unit = tmp_path / "archon-search.service"
+
+        with (
+            patch("archon_search.install.installer.get_search_service", return_value=svc),
+            patch.object(SystemdSearchService, "_unit_path", property(lambda self: unit)),
+            patch.object(svc, "_run") as run,
+            patch.object(svc, "stop") as stop,
+            pytest.raises(RuntimeError, match="interpreter path"),
+        ):
             installer.write_service_file()
 
-        svc.register.assert_called_once_with(dry_run=True, config_path=str(tmp_path / "archon-search.toml"))
-
-    def test_write_service_file_calls_pre_activate_cleanup_before_register(self, tmp_path: Path) -> None:
-        """write_service_file() must call pre_activate_cleanup before register to stop legacy service."""
-        installer = _make_installer(tmp_path)
-        svc = self._mock_rag_service()
-        svc.pre_activate_cleanup.return_value = 0
-        call_order: list[str] = []
-        svc.pre_activate_cleanup.side_effect = lambda **_: call_order.append("pre_activate_cleanup") or 0
-        svc.register.side_effect = lambda **_: call_order.append("register") or 0
-
-        with patch("archon_search.install.installer.get_search_service", return_value=svc):
-            installer.write_service_file()
-
-        assert "pre_activate_cleanup" in call_order
-        assert "register" in call_order
-        assert call_order.index("pre_activate_cleanup") < call_order.index("register")
+        stop.assert_not_called()
+        run.assert_not_called()
+        assert not unit.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -2195,8 +2193,9 @@ class TestDryRunGuardAgainstRealServiceCalls:
         with patch("archon_search.install.installer.get_search_service", return_value=svc):
             installer.write_service_file()
 
-        svc.pre_activate_cleanup.assert_called_once_with(dry_run=True)
-        svc.register.assert_called_once_with(dry_run=True, config_path=str(tmp_path / "archon-search.toml"))
+        svc.replace_registration.assert_called_once_with(
+            dry_run=True, config_path=str(tmp_path / "archon-search.toml")
+        )
 
     def test_load_service_calls_service_with_dry_run_true(self, tmp_path: Path) -> None:
         installer = self._dry_run_installer(tmp_path)

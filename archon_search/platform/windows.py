@@ -16,6 +16,10 @@ class WindowsSearchService(SearchServiceLifecycle):
     def restart(self, dry_run: bool = False) -> None:
         raise NotImplementedError(_MSG)
 
+    def validate_registration(self, *, config_path: str) -> None:
+        # Refuse up front, so the installer fails before any download instead of at register().
+        raise NotImplementedError(_MSG)
+
     def register(self, dry_run: bool = False, *, config_path: str) -> None:
         raise NotImplementedError(_MSG)
 

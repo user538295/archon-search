@@ -96,7 +96,7 @@ archon-search stop
 
 **Linux — what gets created:**
 
-- `~/.config/systemd/user/archon-search.service` — systemd user unit with `ExecStart` pointing at the installed Python, `Environment=ARCHON_SEARCH_CONFIG=<path-to-toml>` and `Environment=ARCHON_SEARCH_DATA_DIR=<data-dir>`. It does not carry `FASTEMBED_CACHE_PATH`; to relocate the service's fastembed cache, set it in `<data-dir>/.secrets.env`, the unit's `EnvironmentFile`.
+- `~/.config/systemd/user/archon-search.service` — systemd user unit with `ExecStart` pointing at the installed Python, `Environment="ARCHON_SEARCH_CONFIG=<path-to-toml>"` and `Environment="ARCHON_SEARCH_DATA_DIR=<data-dir>"`. It does not carry `FASTEMBED_CACHE_PATH`; to relocate the service's fastembed cache, set it in `<data-dir>/.secrets.env`, the unit's `EnvironmentFile`.
 
 **Port conflict (native service):**
 

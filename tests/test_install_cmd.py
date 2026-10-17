@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -340,6 +341,36 @@ def test_install_systemctl_absent_emits_clean_message_exits_1(
         result = runner.invoke(main, ["install"], catch_exceptions=False)
     assert result.exit_code == 1
     assert _CONTAINER_MSG in result.output
+
+
+def test_install_service_runtime_error_emits_clean_message_exits_1(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """install: a RuntimeError from service registration prints one clean error line, never a traceback."""
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    err = RuntimeError("service registration refused")
+    with patch("archon_search.cli.install_cmd.create_installer") as installer_cls:
+        installer_cls.return_value.run_register_and_start.side_effect = err
+        result = runner.invoke(main, ["install"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert f"Error during install: {err}" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_wizard_refused_interpreter_path_emits_clean_message_exits_1(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """wizard: run() refuses a systemd-unrunnable interpreter path up front with one clean line, never a traceback."""
+    from archon_search.platform.linux import SystemdSearchService
+
+    bad_python = str(tmp_path / "py$env" / "bin" / "python3")
+    monkeypatch.setattr(sys, "executable", bad_python)
+    with patch("archon_search.install.installer.get_search_service", return_value=SystemdSearchService()):
+        result = runner.invoke(main, ["wizard", "--non-interactive", "--dry-run"], catch_exceptions=False)
+    assert result.exit_code == 1
+    refusal = f"systemd cannot run an interpreter path containing quotes, backslashes, $ or *?[: {bad_python!r}"
+    assert f"Error during install: {refusal}" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_uninstall_container_env_emits_clean_message_exits_1(

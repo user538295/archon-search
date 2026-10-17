@@ -75,6 +75,23 @@ class SearchServiceLifecycle(ABC):
     @abstractmethod
     def unregister(self, dry_run: bool = False) -> None: ...
 
+    def validate_registration(self, *, config_path: str) -> None:
+        """Raise ``RuntimeError`` if ``register(config_path=...)`` would write a service the OS cannot run.
+
+        Side-effect free, so callers run it before stopping the current service.
+        The default accepts everything; platforms that validate override it.
+        """
+
+    def replace_registration(self, dry_run: bool = False, *, config_path: str) -> None:
+        """Replace the registered service: validate, stop any running instance, then register.
+
+        A registration ``validate_registration()`` refuses raises before anything is
+        stopped, so the running service is left untouched.
+        """
+        self.validate_registration(config_path=config_path)
+        self.pre_activate_cleanup(dry_run=dry_run)
+        self.register(dry_run=dry_run, config_path=config_path)
+
     def pre_activate_cleanup(self, dry_run: bool = False) -> None:
         """Stop any running instance before registering a new service file."""
         try:
