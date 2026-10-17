@@ -128,6 +128,10 @@ fanout_timeout_seconds = 30.0
 # Requests exceeding this limit are rejected, protecting the server from
 # expensive large-k reranking requests. Default: 100.
 # top_k_max = 100
+# Operator ceiling on context_window (neighbour chunks returned on each side of a
+# hit) accepted by the MCP search_with_context tool. Each hit fetches up to
+# 2 * context_window_max neighbour chunks. Integer >= 1. Default: 10.
+# context_window_max = 10
 
 [routing]
 # Number of collections considered by the router before parallel search.

@@ -9,7 +9,7 @@
 
 1. **Hybrid search by default.** Every `/search` query runs dense vector + FTS retrieval, then a cross-encoder reranker (`archon_search/pipeline.py:SearchPipeline.search`). Three exceptions: the reranker is skipped when `[database].reranker_model` is empty, or when the cross-encoder is still cold after the request's bounded warm-up wait; the vector leg is dropped when the query embedder is still cold (both cold cases: `server/_search_budget.py:warmup_for_search`).
 2. **The collection is part of the request.** `POST /search` requires either a `collection` or a `collections[]` list — the server does not auto-pick. Use `POST /route` to discover which collections to query.
-3. **Result count is server-configured.** Per-request `top_k` is validated (`1..[database].top_k_max`) but does not set the returned count — the pipeline returns `[database].top_k_return` results. See [`/BREAKING.md`](../../BREAKING.md).
+3. **Result count is server-configured.** Per-request `top_k` is validated (`1..[search].top_k_max`) but does not set the returned count — the pipeline returns `[database].top_k_return` results. See [`/BREAKING.md`](../../BREAKING.md).
 4. **REST and MCP share one pipeline.** The MCP tools wrap the same pipeline calls, but the surfaces differ in places — see [Difference vs REST](../DeveloperGuide/05_mcp_integration.md#difference-vs-rest). Choose REST for HTTP clients, MCP for MCP-native clients.
 
 For graph-aware retrieval (`graph_mode`), the `/explain` provenance trace, and the OpenAI-compatible shim, this guide gives only pointers — those topics moved to their own files (see [Related documents](#related-documents)).
@@ -33,7 +33,7 @@ Key request fields (see `GET /openapi.json` for the exhaustive schema):
 | `collection` | `string` | Single-collection search. **XOR** with `collections`. Non-empty after strip. |
 | `collections` | `string[]` | Multi-collection fan-out. **XOR** with `collection`. De-duplicated; length capped at `[search].max_fanout` (default 8). |
 | `query` | `string` | Required, non-empty after strip. |
-| `top_k` | `int` | `>= 1`; rejected with `422` when above `[database].top_k_max` (default 100). Does not set the returned count (see principle 3). |
+| `top_k` | `int` | `>= 1`; rejected with `422` when above `[search].top_k_max` (default 100). Does not set the returned count (see principle 3). |
 | `filters` | `object \| null` | `SearchFilters` — see [Filtering results](#filtering-results-a2--c2). |
 | `hyde` | `bool` | HyDE query expansion — see [HyDE](#hyde-query-expansion-c4). |
 | `rag_fusion` | `bool` | RAG Fusion multi-query recall — see [RAG Fusion](#rag-fusion-multi-query-recall-c5). |
@@ -103,7 +103,7 @@ A typical workflow is: call `/route`, then call `/search` once per name in `pinn
 | Tool | Key inputs | Output |
 | --- | --- | --- |
 | `search` | `query`, `collection?` / `collections?`, filter params (`file_type`, `source_path_prefix`, `source_path_glob`, `indexed_after`, `indexed_before`, `language`, `include_metadata`), `hyde`, `rag_fusion`, `graph_mode`, `scope_filter` | `{"results":[…], "acl_filtered":bool, "excluded_collections":[…], "hyde_applied":bool, "expansion_used":bool, "expansion_warning":str\|null, "graph_expansion_applied":bool, "ppr_entities_matched":int\|null}` |
-| `search_with_context` | `query`, `collection?`, `context_window=1` (neighbour chunks on each side of a hit; must be in `[0, 10]`, else `code="validation_error"`), same filter/expansion params — but **`graph_mode` is rejected unconditionally** (`code="graph_mode_not_supported"`; use `search` for graph modes) | Results with `context_before` / `context_after` neighbours, plus `hyde_applied`, `expansion_used`, `expansion_warning` |
+| `search_with_context` | `query`, `collection?`, `context_window=1` (neighbour chunks on each side of a hit; must be in `[0, [search].context_window_max]` (default 10), else `code="validation_error"`), same filter/expansion params — but **`graph_mode` is rejected unconditionally** (`code="graph_mode_not_supported"`; use `search` for graph modes) | Results with `context_before` / `context_after` neighbours, plus `hyde_applied`, `expansion_used`, `expansion_warning` |
 
 Per-result `reranker_score`, on each `search` result and on the `result` object of each `search_with_context` item:
 

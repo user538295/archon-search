@@ -21,6 +21,8 @@ from archon_search.acl import apply_acl_filter, resolve_acl
 from archon_search.observability import record_stage
 from archon_search.filters import SearchFilters
 from archon_search.constants import (
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_CONTEXT_WINDOW_MAX,
     DEFAULT_NAMESPACE,
     INLINE_CHUNK_METADATA_KEY,
     INLINE_CHUNK_METADATA_VALUE,
@@ -215,18 +217,13 @@ _BINARY_EXTENSIONS = frozenset(
 # with `---` by coincidence and must not be parsed for front matter.
 _FRONT_MATTER_EXTENSIONS = frozenset({".md", ".txt", ".rst", ".html"})
 _MAX_LOCAL_EXPLAIN_COMMUNITY_CANDIDATES = 200
-# Upper bound on search_with_context's context_window: neighbour chunks fetched on each
-# side of a hit, so at most 2 * MAX_CONTEXT_WINDOW chunks per hit (top_k_return hits),
-# each up to [database].chunk_size tokens. A chosen cap (10x the default window of 1),
-# not a measured limit.
-MAX_CONTEXT_WINDOW: int = 10
 
 
-def context_window_error(context_window: int) -> str | None:
-    """Return an error message if *context_window* is outside ``[0, MAX_CONTEXT_WINDOW]``, else ``None``."""
-    if 0 <= context_window <= MAX_CONTEXT_WINDOW:
+def context_window_error(context_window: int, context_window_max: int) -> str | None:
+    """Return an error message if *context_window* is outside ``[0, context_window_max]``, else ``None``."""
+    if 0 <= context_window <= context_window_max:
         return None
-    return f"context_window must be in [0, {MAX_CONTEXT_WINDOW}]; got {context_window}"
+    return f"context_window must be in [0, {context_window_max}]; got {context_window}"
 
 
 def _doc_id_for(source_path: Path | str) -> str:
@@ -365,6 +362,7 @@ class SearchPipeline:
         language_detector: LanguageDetector | None = None,
         language_detection_confidence_threshold: float = 0.7,
         max_file_mb: int = 0,
+        context_window_max: int = DEFAULT_CONTEXT_WINDOW_MAX,
         graph_extractor: GraphExtractor | None = None,
         graph_store: GraphStore | None = None,
         graph_config: GraphConfig | None = None,
@@ -397,6 +395,7 @@ class SearchPipeline:
         self._language_detector = language_detector
         self._language_detection_confidence_threshold = language_detection_confidence_threshold
         self._max_file_mb = max_file_mb
+        self._context_window_max = context_window_max
         self._graph_extractor = graph_extractor
         self._graph_store = graph_store
         self._graph_config = graph_config
@@ -430,6 +429,11 @@ class SearchPipeline:
     @property
     def embedder_is_warm(self) -> bool:
         return self._global_embedder.is_warm
+
+    @property
+    def context_window_max(self) -> int:
+        """Inclusive upper bound on ``search_with_context``'s ``context_window``."""
+        return self._context_window_max
 
     async def warmup_models(
         self,
@@ -3634,7 +3638,7 @@ class SearchPipeline:
         self,
         query: str,
         collection: str,
-        context_window: int = 1,
+        context_window: int = DEFAULT_CONTEXT_WINDOW,
         namespace: str = DEFAULT_NAMESPACE,
         *,
         embedder: Embedder,
@@ -3658,10 +3662,11 @@ class SearchPipeline:
         hit; ``0`` fetches none.
 
         Raises:
-            ValueError: if ``context_window`` is outside ``[0, MAX_CONTEXT_WINDOW]``;
-                raised before any search runs.
+            ValueError: if ``context_window`` is outside ``[0, context_window_max]`` (the
+                constructor's bound, ``[search].context_window_max``); raised before any
+                search runs.
         """
-        context_window_msg = context_window_error(context_window)
+        context_window_msg = context_window_error(context_window, self._context_window_max)
         if context_window_msg is not None:
             raise ValueError(context_window_msg)
         result_obj = await self.search(
@@ -3980,6 +3985,7 @@ def create_pipeline(
         language_detector=language_detector,
         language_detection_confidence_threshold=cfg.language_detection_confidence_threshold,
         max_file_mb=cfg.ingest.max_file_mb,
+        context_window_max=cfg.context_window_max,
         graph_extractor=graph_extractor,
         graph_store=graph_store,
         graph_config=cfg.graph,

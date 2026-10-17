@@ -19,6 +19,7 @@ if "fastmcp" not in sys.modules:
     _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
     sys.modules["fastmcp"] = _fastmcp
 
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search._types import SearchResult
 from archon_search.pipeline import SearchPipelineResult
 
@@ -84,6 +85,7 @@ async def test_search_error_returns_structured_error() -> None:
 async def test_search_with_context_error_returns_structured_error() -> None:
     """When pipeline.search_with_context() raises, tool returns structured error dict."""
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search_with_context = AsyncMock(side_effect=RuntimeError("swc boom"))
     app = _make_app(pipeline)

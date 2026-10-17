@@ -3559,8 +3559,12 @@
         "type": "object"
       },
       "SearchStatusDetail": {
-        "description": "Search configuration status sub-object for GET /status (E0c BE-4 / C4).\n\nExposes the operator-configured search limits so clients can introspect\nthe active ceiling without reading TOML directly.  Both fields always\nreflect the live ``SearchConfig`` values \u2014 defaults or TOML overrides.",
+        "description": "Search configuration status sub-object for GET /status (E0c BE-4 / C4).\n\nExposes the operator-configured search limits so clients can introspect\nthe active ceiling without reading TOML directly.  ``max_fanout`` and\n``top_k_max`` reflect the live ``SearchConfig`` values \u2014 defaults or TOML\noverrides.  ``context_window_max`` is the bound the served ``SearchPipeline``\nenforces on ``search_with_context``, set from ``[search].context_window_max``.",
         "properties": {
+          "context_window_max": {
+            "title": "Context Window Max",
+            "type": "integer"
+          },
           "max_fanout": {
             "title": "Max Fanout",
             "type": "integer"
@@ -3572,7 +3576,8 @@
         },
         "required": [
           "max_fanout",
-          "top_k_max"
+          "top_k_max",
+          "context_window_max"
         ],
         "title": "SearchStatusDetail",
         "type": "object"

@@ -33,6 +33,7 @@ if "fastmcp" not in sys.modules:
         _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
         sys.modules["fastmcp"] = _fastmcp
 
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.pipeline import SearchPipelineResult
 
 
@@ -62,6 +63,7 @@ def _make_pipeline(
     graph_expansion_applied: bool = False,
 ) -> Any:
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search = AsyncMock(
         return_value=SearchPipelineResult(

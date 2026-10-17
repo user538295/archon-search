@@ -195,7 +195,7 @@ First start auto-generates a key and writes it to `~/.archon-search/.search.env`
 Everything server-side lives in one file: `~/.archon-search/archon-search.toml`.
 
 - `[database]` — `db_path`, `embedding_model`, `chunk_size`, `top_k_return`, model paths, per-collection embedder pool sizing (`embedder_cache_size`, default `3`; `eager_load_embedders`, default `false` — startup always pre-warms `embedding_model` and the reranker cross-encoder; setting it `true` extends that to every distinct per-collection model)
-- `[search]` — multi-collection fan-out bounds (`max_fanout`, `fanout_timeout_seconds`)
+- `[search]` — multi-collection fan-out bounds (`max_fanout`, `fanout_leg_trim`, `fanout_timeout_seconds`) and request ceilings (`top_k_max`, `context_window_max`)
 - `[routing]` — `routing_shortlist_size`, `routing_confidence_threshold`, routing strategy
 - `[collections]` — `pinned_collections`, static collection definitions, watcher settings
 - `[telemetry]` — opt-in local query logging, covered below

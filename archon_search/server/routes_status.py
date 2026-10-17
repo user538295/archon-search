@@ -185,7 +185,9 @@ async def status(request: Request) -> StatusResponse:
     hyde_detail = _build_hyde_status(request, config)
     rag_fusion_detail = _build_rag_fusion_status(request, config)
     failed_expired_count = _count_failed_expired_ingest_jobs(request, ns)
-    search_detail = _build_search_status(config)
+    search_detail = _build_search_status(
+        config, context_window_max=request.app.state.pipeline.context_window_max
+    )
     graph_detail = await _build_graph_status(request, config, sorted(ns_names))
     code_parsers_detail = _build_code_parsers_status(config)
     return StatusResponse(
@@ -235,15 +237,17 @@ def _count_failed_expired_ingest_jobs(request: Request, ns: str) -> int:
     )
 
 
-def _build_search_status(config: SearchConfig) -> SearchStatusDetail:
+def _build_search_status(config: SearchConfig, *, context_window_max: int) -> SearchStatusDetail:
     """Return the search config status sub-object (E0c BE-4 / C4).
 
-    Always returns a non-null ``SearchStatusDetail`` populated from the live
-    ``SearchConfig`` values — either the TOML-configured values or defaults.
+    Always returns a non-null ``SearchStatusDetail``: ``max_fanout`` and ``top_k_max``
+    from the live ``SearchConfig`` (TOML-configured values or defaults), and
+    ``context_window_max`` as the bound the served ``SearchPipeline`` enforces.
     """
     return SearchStatusDetail(
         max_fanout=config.max_fanout,
         top_k_max=config.top_k_max,
+        context_window_max=context_window_max,
     )
 
 

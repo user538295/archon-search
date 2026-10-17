@@ -1,6 +1,6 @@
 """Tests pinning that the MCP ``search_with_context`` tool strips the
 ``vector`` key from every neighbor chunk in ``context_before`` /
-``context_after``, and that it bounds ``context_window`` to ``[0, MAX_CONTEXT_WINDOW]``.
+``context_after``, and that it bounds ``context_window`` to ``[0, [search].context_window_max]``.
 
 Implements Task 5.1 of Documentation/Backlog/A1-metadata-schema-v1-plan.md.
 """
@@ -32,7 +32,8 @@ if "fastmcp" not in sys.modules:
         sys.modules["fastmcp"] = _fastmcp
 
 from archon_search._types import ChunkRecord, SearchResult
-from archon_search.pipeline import MAX_CONTEXT_WINDOW, SearchPipeline, SearchPipelineResult, SearchWithContextResult
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW_MAX
+from archon_search.pipeline import SearchPipeline, SearchPipelineResult, SearchWithContextResult
 from tests._mcp_tools import registered_tools
 
 
@@ -93,6 +94,7 @@ def _result(idx: int, language: str = "") -> SearchResult:
 
 def _make_pipeline(results_list: list[dict[str, Any]] | None = None) -> MagicMock:
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(
         results=results_list or [],
@@ -302,6 +304,7 @@ async def test_mcp_search_with_context_expansion_warning_on_rag_fusion_timeout()
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     pipeline.search_with_context = AsyncMock(
         return_value=SearchWithContextResult(
@@ -323,7 +326,7 @@ async def test_mcp_search_with_context_expansion_warning_on_rag_fusion_timeout()
 
 
 # ---------------------------------------------------------------------------
-# context_window bound: [0, MAX_CONTEXT_WINDOW] — an unbounded window made
+# context_window bound: [0, [search].context_window_max] — an unbounded window made
 # SearchStore.fetch_adjacent_chunks build 2 * window chunk ids per hit.
 # ---------------------------------------------------------------------------
 
@@ -338,7 +341,7 @@ def _passed_context_window(pipeline: MagicMock) -> int:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "context_window",
-    [-1, MAX_CONTEXT_WINDOW + 1, 10**9],
+    [-1, DEFAULT_CONTEXT_WINDOW_MAX + 1, 10**9],
     ids=["negative", "just_above_max", "huge"],
 )
 async def test_search_with_context_rejects_out_of_range_context_window(context_window: int) -> None:
@@ -349,7 +352,7 @@ async def test_search_with_context_rejects_out_of_range_context_window(context_w
         payload = await _call_tool(pipeline, context_window=context_window, hyde=True)
 
     assert payload == {
-        "error": f"context_window must be in [0, {MAX_CONTEXT_WINDOW}]; got {context_window}",
+        "error": f"context_window must be in [0, {DEFAULT_CONTEXT_WINDOW_MAX}]; got {context_window}",
         "code": "validation_error",
     }
     hyde_mock.assert_not_awaited()
@@ -358,7 +361,7 @@ async def test_search_with_context_rejects_out_of_range_context_window(context_w
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("context_window", [0, MAX_CONTEXT_WINDOW], ids=["zero", "max"])
+@pytest.mark.parametrize("context_window", [0, DEFAULT_CONTEXT_WINDOW_MAX], ids=["zero", "max"])
 async def test_search_with_context_accepts_boundary_context_window(context_window: int) -> None:
     pipeline = _make_pipeline()
 
@@ -368,6 +371,56 @@ async def test_search_with_context_accepts_boundary_context_window(context_windo
     assert payload["results"] == []
     pipeline.search_with_context.assert_called_once()
     assert _passed_context_window(pipeline) == context_window
+
+
+_LOWERED_CONTEXT_WINDOW_MAX = 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "context_window",
+    [_LOWERED_CONTEXT_WINDOW_MAX + 1, -1],
+    ids=["just_above_lowered_max", "negative"],
+)
+async def test_search_with_context_rejects_window_outside_lowered_pipeline_max(context_window: int) -> None:
+    """The bound is the pipeline's context_window_max, and the error cites that value."""
+    pipeline = _make_pipeline()
+    pipeline.context_window_max = _LOWERED_CONTEXT_WINDOW_MAX
+
+    payload = await _call_tool(pipeline, context_window=context_window)
+
+    assert payload == {
+        "error": f"context_window must be in [0, {_LOWERED_CONTEXT_WINDOW_MAX}]; got {context_window}",
+        "code": "validation_error",
+    }
+    pipeline.search_with_context.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_accepts_window_up_to_raised_pipeline_max() -> None:
+    """A raised ceiling admits windows the default would reject."""
+    context_window = DEFAULT_CONTEXT_WINDOW_MAX + 1
+    pipeline = _make_pipeline()
+    pipeline.context_window_max = context_window
+
+    payload = await _call_tool(pipeline, context_window=context_window)
+
+    assert "code" not in payload, payload
+    assert "results" in payload, payload
+    assert _passed_context_window(pipeline) == context_window
+
+
+@pytest.mark.asyncio
+async def test_search_with_context_default_window_accepted_at_minimum_pipeline_max() -> None:
+    """At the config floor (max == DEFAULT_CONTEXT_WINDOW) a call omitting context_window still searches."""
+    pipeline = _make_pipeline()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW
+
+    payload = await _call_tool(pipeline)
+
+    assert "code" not in payload, payload
+    assert "results" in payload, payload
+    assert _passed_context_window(pipeline) == DEFAULT_CONTEXT_WINDOW
 
 
 @pytest.mark.asyncio
@@ -383,7 +436,7 @@ async def test_search_with_context_context_window_defaults_to_one() -> None:
 async def test_search_with_context_graph_mode_checked_before_context_window() -> None:
     pipeline = _make_pipeline()
 
-    payload = await _call_tool(pipeline, context_window=MAX_CONTEXT_WINDOW + 1, graph_mode="naive")
+    payload = await _call_tool(pipeline, context_window=DEFAULT_CONTEXT_WINDOW_MAX + 1, graph_mode="naive")
 
     assert payload["code"] == "graph_mode_not_supported"
     pipeline.search_with_context.assert_not_called()
@@ -393,7 +446,7 @@ async def test_search_with_context_graph_mode_checked_before_context_window() ->
 async def test_search_with_context_scope_filter_checked_before_context_window() -> None:
     pipeline = _make_pipeline()
 
-    payload = await _call_tool(pipeline, context_window=MAX_CONTEXT_WINDOW + 1, scope_filter="*")
+    payload = await _call_tool(pipeline, context_window=DEFAULT_CONTEXT_WINDOW_MAX + 1, scope_filter="*")
 
     assert payload["code"] == "invalid_scope_filter"
     pipeline.search_with_context.assert_not_called()
@@ -405,7 +458,9 @@ def test_search_with_context_docstring_states_the_bound() -> None:
     with patch.object(mcp_module, "FastMCP", _FakeFastMCP):
         tool = mcp_module.create_app(_make_pipeline(), "default", writer=None).tools["search_with_context"]
 
-    assert f"[0, {MAX_CONTEXT_WINDOW}]" in (tool.__doc__ or "")
+    doc = tool.__doc__ or ""
+    assert "[0, [search].context_window_max]" in doc
+    assert f"default {DEFAULT_CONTEXT_WINDOW_MAX}" in doc
 
 
 def test_search_with_context_published_schema_states_the_bound() -> None:
@@ -415,7 +470,8 @@ def test_search_with_context_published_schema_states_the_bound() -> None:
     prop = tool.to_mcp_tool().inputSchema["properties"]["context_window"]
 
     assert prop["type"] == "integer"
-    assert prop["default"] == 1
-    assert f"[0, {MAX_CONTEXT_WINDOW}]" in prop["description"]
+    assert prop["default"] == DEFAULT_CONTEXT_WINDOW
+    assert "[0, [search].context_window_max]" in prop["description"]
+    assert f"default {DEFAULT_CONTEXT_WINDOW_MAX}" in prop["description"]
     assert "minimum" not in prop
     assert "maximum" not in prop

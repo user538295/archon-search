@@ -1115,6 +1115,7 @@ def create_app(
         language_detector=_lang_detector,
         language_detection_confidence_threshold=config.language_detection_confidence_threshold,
         max_file_mb=config.ingest.max_file_mb,
+        context_window_max=config.context_window_max,
         graph_extractor=_graph_extractor,
         graph_store=_graph_store,
         graph_config=config.graph,

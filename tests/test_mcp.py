@@ -59,6 +59,7 @@ if _FASTMCP_MODULE not in sys.modules:
 else:
     sys.modules[_FASTMCP_MODULE].FastMCP = _StubFastMCP  # type: ignore[attr-defined]
 
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.progress import CollectionProgress, IndexingState, IndexingStatus, IndexingStateStore
 from archon_search.server.mcp import _needs_install_trigger
 
@@ -383,6 +384,7 @@ def _make_hyde_pipeline_mock(search_result=None, search_many_result=None, swc_re
         )
 
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     pipeline._global_embedder = MagicMock()
     pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
     pipeline.search = AsyncMock(return_value=search_result)
@@ -633,6 +635,7 @@ def _make_rag_fusion_pipeline_mock(
         )
 
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     pipeline._global_embedder = MagicMock()
     pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
     pipeline.search = AsyncMock(return_value=search_result)
@@ -1072,6 +1075,7 @@ def _make_swc_pipeline_with_result(result=None, hyde_applied=False, with_context
     )
 
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     pipeline._global_embedder = MagicMock()
     pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())

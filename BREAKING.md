@@ -8,15 +8,19 @@
 
 ## Changelog
 
-### [next release] — MCP `search_with_context`: `context_window` must be in `[0, 10]` (2026-10-17)
+### [next release] — MCP `search_with_context`: `context_window` must be in `[0, [search].context_window_max]` (default 10); `GET /status` `search` gains `context_window_max` (2026-10-17)
 
-**Surface**: the MCP tool `search_with_context` → its `context_window` argument.
+**Surface**: the MCP tool `search_with_context` → its `context_window` argument; the new config key `[search].context_window_max`; `GET /status` → `search` (`SearchStatusDetail`).
 
-**Behaviour-only change — the tool's input schema keeps `context_window` as `int`, default `1`, with no `minimum` / `maximum`; only its `description` now states the `[0, 10]` bound. `GET /openapi.json` is unaffected (the tool has no REST counterpart).**
+**The tool's input schema keeps `context_window` as `int`, default `1`, with no `minimum` / `maximum`; only its `description` now states the `[0, [search].context_window_max]` bound. In `GET /openapi.json`, `SearchStatusDetail` gains the required integer `context_window_max` (additive; the tool itself has no REST counterpart).**
 
-**What changed:** any integer was accepted. A large value made the server build up to `2 * context_window` neighbour chunk ids per hit and query them all at once — an unbounded memory allocation and an equally oversized database query (the lower side is clamped at chunk `0`, so `10**9` still meant at least `10**9` ids); a negative value silently returned empty `context_before` / `context_after`. A value outside `[0, 10]` now returns `{"error": "context_window must be in [0, 10]; got N", "code": "validation_error"}` before any search runs. `0` stays valid and returns no neighbours.
+**What changed:**
 
-**Migration**: clients passing `context_window` above `10` must lower it to at most `10`; clients passing a negative value must pass `0` for the same empty-context result. Nothing else is needed.
+- Any `context_window` integer was accepted. A large value made the server build up to `2 * context_window` neighbour chunk ids per hit and query them all at once — an unbounded memory allocation and an equally oversized database query (the lower side is clamped at chunk `0`, so `10**9` still meant at least `10**9` ids); a negative value silently returned empty `context_before` / `context_after`. A value outside `[0, context_window_max]` now returns `{"error": "context_window must be in [0, N]; got M", "code": "validation_error"}` before any search runs, where `N` is the configured bound. `0` stays valid and returns no neighbours.
+- The bound is the operator setting `[search].context_window_max` (integer, default `10`, must be `>= 1` so the tool's default window of `1` stays valid; a value below `1`, a boolean, a fractional or a non-numeric value is a `ConfigError` at load time).
+- `GET /status` → `search` reports the live value as `context_window_max`, next to `max_fanout` and `top_k_max`.
+
+**Migration**: clients passing `context_window` above the bound (`10` unless the operator set `[search].context_window_max`) must lower it, or the operator must raise the setting; clients passing a negative value must pass `0` for the same empty-context result. Clients with strict `StatusResponse` type stubs add `context_window_max: int` to `search`. Nothing else is needed.
 
 **Announced in**: this release.
 

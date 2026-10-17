@@ -20,12 +20,11 @@ import tarfile
 
 from archon_search._path_safety import PathUnsafeError, validate_archive_members, validate_export_path, validate_ingest_path
 from archon_search.config import resolve_active_model
-from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW_MAX, DEFAULT_NAMESPACE
 from archon_search.filters import SearchFilters
 from archon_search.hyde import resolve_hyde_vector
 from archon_search.key_manager import KeyStore, load_or_generate_key
 from archon_search.pipeline import (
-    MAX_CONTEXT_WINDOW,
     CollectionNotFoundError,
     ExplainMultiCollectionNoRerankError,
     ExplainStageError,
@@ -139,9 +138,10 @@ _ContextWindowParam = Annotated[
     Field(
         description=(
             "Number of neighbour chunks returned on each side of a hit; "
-            f"must be in [0, {MAX_CONTEXT_WINDOW}] (0 returns no neighbours)."
+            "must be in [0, [search].context_window_max] (operator setting, "
+            f"default {DEFAULT_CONTEXT_WINDOW_MAX}); 0 returns no neighbours."
         ),
-        default=1,
+        default=DEFAULT_CONTEXT_WINDOW,
     ),
 ]
 
@@ -167,13 +167,13 @@ def _validate_scope_filter(scope_filter: str | None) -> "McpErrorResponse | None
     return McpErrorResponse(error=msg, code="invalid_scope_filter")
 
 
-def _validate_context_window(context_window: int) -> "McpErrorResponse | None":
+def _validate_context_window(context_window: int, context_window_max: int) -> "McpErrorResponse | None":
     """Validate search_with_context's context_window; wraps the shared pipeline check into a McpErrorResponse.
 
     Checked before the pipeline call, so MCP clients get code="validation_error"
     instead of the catch-all internal_error for the ValueError the pipeline raises.
     """
-    msg = context_window_error(context_window)
+    msg = context_window_error(context_window, context_window_max)
     if msg is None:
         return None
     return McpErrorResponse(error=msg, code="validation_error")
@@ -692,7 +692,7 @@ def create_app(
     async def search_with_context(
         query: str,
         collection: str | None = None,
-        context_window: _ContextWindowParam = 1,
+        context_window: _ContextWindowParam = DEFAULT_CONTEXT_WINDOW,
         include_metadata: bool = False,
         file_type: str | None = None,
         source_path_prefix: str | None = None,
@@ -719,7 +719,8 @@ def create_app(
         Invalid forms (bare ``*``, leading ``*``, mid-string ``*``, multiple ``*``,
         or empty string) return ``code="invalid_scope_filter"``.
         ``context_window`` is the number of neighbour chunks returned on each side of
-        a hit; it must be in ``[0, 10]``, otherwise ``code="validation_error"``.
+        a hit; it must be in ``[0, [search].context_window_max]`` (operator setting,
+        default 10), otherwise ``code="validation_error"``.
         Note: ``graph_mode`` is not supported on this tool and is rejected unconditionally.
         """
         # graph_mode on search_with_context is not supported; use the search tool instead.
@@ -734,7 +735,7 @@ def create_app(
         if _swc_sf_err is not None:
             return _swc_sf_err
 
-        _swc_cw_err = _validate_context_window(context_window)
+        _swc_cw_err = _validate_context_window(context_window, pipeline.context_window_max)
         if _swc_cw_err is not None:
             return _swc_cw_err
 

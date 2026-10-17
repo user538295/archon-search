@@ -115,6 +115,8 @@ def test_all_defaults_snapshot(_isolated_env: None, tmp_path: Path) -> None:
         "fanout_timeout_seconds": 30.0,
         # [search] — E0c operator-configurable top_k ceiling
         "top_k_max": 100,
+        # [search] — ceiling on MCP search_with_context's context_window
+        "context_window_max": 10,
         # [routing]
         "routing_shortlist_size": 8,
         "routing_confidence_threshold": 0.30,

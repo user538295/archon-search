@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from archon_search.config import SearchConfig
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
+from archon_search.pipeline import SearchPipelineResult
 from archon_search.server.app import _check_multilingual_deps
 
 
@@ -259,3 +261,77 @@ class TestCreateAppPipelineWiring:
             "create_app did not pass fanout_leg_trim to SearchPipeline; "
             f"pipeline uses {pipeline._fanout_leg_trim!r} instead of 7"
         )
+
+    @pytest.mark.asyncio
+    async def test_create_app_wires_context_window_max_into_pipeline(self, tmp_path):
+        """[search].context_window_max from TOML is the bound the served pipeline enforces."""
+        from archon_search.config import load_config
+        from archon_search.jobs import JobStore
+
+        toml_file = tmp_path / "archon-search.toml"
+        toml_file.write_text("[search]\ncontext_window_max = 2\n", encoding="utf-8")
+        cfg = load_config(toml_file)
+        cfg.db_path = str(tmp_path / "test.db")
+
+        app = _create_app_with_stubbed_deps(cfg, JobStore())
+
+        with pytest.raises(ValueError, match=r"^context_window must be in \[0, 2\]; got 3$"):
+            await app.state.pipeline.search_with_context("query", "col", context_window=3, embedder=MagicMock())
+
+    @pytest.mark.asyncio
+    async def test_create_app_context_window_max_reaches_mcp_search_with_context(self, tmp_path):
+        """End to end: TOML [search].context_window_max bounds the MCP tool built on the served pipeline."""
+        from fastmcp.server.server import FastMCP as _RealFastMCP
+
+        from archon_search.config import load_config
+        from archon_search.jobs import JobStore
+        from archon_search.server import mcp as mcp_module
+
+        toml_file = tmp_path / "archon-search.toml"
+        toml_file.write_text("[search]\ncontext_window_max = 2\n", encoding="utf-8")
+        cfg = load_config(toml_file)
+        cfg.db_path = str(tmp_path / "test.db")
+        app = _create_app_with_stubbed_deps(cfg, JobStore())
+
+        # Pinned like tests/_mcp_tools.py: sibling tests may leave a stub FastMCP on the module.
+        with patch.object(mcp_module, "FastMCP", _RealFastMCP):
+            mcp_app = mcp_module.create_app(app.state.pipeline, "default", config=cfg)
+        result = await mcp_app.call_tool("search_with_context", {"query": "q", "context_window": 3})
+
+        assert result.structured_content == {
+            "error": "context_window must be in [0, 2]; got 3",
+            "code": "validation_error",
+        }
+
+    @pytest.mark.asyncio
+    async def test_create_app_raised_context_window_max_admits_window_above_default(self, tmp_path):
+        """TOML [search].context_window_max = 11 lets the MCP tool accept a window the default (10) rejects."""
+        from fastmcp.server.server import FastMCP as _RealFastMCP
+
+        from archon_search.config import load_config
+        from archon_search.jobs import JobStore
+        from archon_search.server import mcp as mcp_module
+
+        raised_max = DEFAULT_CONTEXT_WINDOW_MAX + 1
+        toml_file = tmp_path / "archon-search.toml"
+        toml_file.write_text(f"[search]\ncontext_window_max = {raised_max}\n", encoding="utf-8")
+        cfg = load_config(toml_file)
+        cfg.db_path = str(tmp_path / "test.db")
+        app = _create_app_with_stubbed_deps(cfg, JobStore())
+
+        pipeline = app.state.pipeline
+        empty = SearchPipelineResult(results=[], acl_filtered=False)
+        with (
+            patch.object(mcp_module, "FastMCP", _RealFastMCP),
+            # Stub only the store-backed lookups: the real search_with_context bound check still runs.
+            patch.object(pipeline, "get_collection_meta", new=AsyncMock(return_value=MagicMock())),
+            patch.object(pipeline, "search", new=AsyncMock(return_value=empty)) as search_mock,
+        ):
+            mcp_app = mcp_module.create_app(pipeline, "default", config=cfg)
+            result = await mcp_app.call_tool("search_with_context", {"query": "q", "context_window": raised_max})
+
+        payload = result.structured_content
+        assert payload is not None
+        assert "code" not in payload, payload
+        assert payload["results"] == []
+        search_mock.assert_awaited_once()

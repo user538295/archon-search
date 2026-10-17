@@ -34,6 +34,7 @@ if "fastmcp" not in sys.modules:
         _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
         sys.modules["fastmcp"] = _fastmcp
 
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search._types import SearchResult
 from archon_search.pipeline import SearchPipelineResult
 
@@ -187,6 +188,7 @@ async def test_mcp_search_with_context_forwards_filters_to_pipeline() -> None:
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
     from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
     pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
@@ -239,6 +241,7 @@ async def test_mcp_search_with_context_invalid_filter_surfaces_validator_error()
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
     pipeline.search_with_context = AsyncMock(return_value=SearchWithContextResult(results=[], pipeline_result=SearchPipelineResult(results=[], acl_filtered=False)))
 

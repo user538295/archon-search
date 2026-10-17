@@ -73,7 +73,7 @@ Vector store location, models, chunking, and provider/GPU wiring.
 
 ### `[search]`
 
-Multi-collection fan-out execution bounds and the top-k ceiling.
+Multi-collection fan-out execution bounds, the top-k ceiling, and the context-window ceiling.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -81,6 +81,7 @@ Multi-collection fan-out execution bounds and the top-k ceiling.
 | `fanout_leg_trim` | `40` | Per-leg candidate pool kept by local RRF score before the global merge (≥1). |
 | `fanout_timeout_seconds` | `30.0` | Whole-fan-out timeout; exceeding it returns HTTP 504 (>0). |
 | `top_k_max` | `100` | Operator ceiling on `top_k` accepted by `POST /search` and `POST /explain` (>0). |
+| `context_window_max` | `10` | Operator ceiling on `context_window` (neighbour chunks per side of a hit) accepted by the MCP `search_with_context` tool; a larger value returns `code="validation_error"` (integer ≥1, so the tool's default window of `1` stays valid). No upper limit, like `top_k_max`: each hit fetches up to `2 * context_window_max` neighbour chunks in one query, so raise it with care. |
 
 ### `[routing]`
 

@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 import tomlkit
 
 from archon_search.constants import (
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_CONTEXT_WINDOW_MAX,
     DEFAULT_DOCLING_MAX_TASKS_PER_CHILD,
     DEFAULT_FAST_MODEL,
     DEFAULT_ROUTING_DESCRIPTION_WEIGHT,
@@ -270,6 +272,8 @@ class SearchConfig:
     fanout_timeout_seconds: float = 30.0
     # [search] — E0c operator-configurable top_k ceiling
     top_k_max: int = 100
+    # [search] — ceiling on MCP search_with_context's context_window
+    context_window_max: int = DEFAULT_CONTEXT_WINDOW_MAX
     # [routing]
     routing_shortlist_size: int = 8
     routing_confidence_threshold: float = 0.30
@@ -632,6 +636,13 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         if top_k_max <= 0:
             raise ConfigError(f"top_k_max must be > 0, got {top_k_max}")
         config.top_k_max = top_k_max
+    if "context_window_max" in search:
+        context_window_max = _coerce_int(search["context_window_max"], "context_window_max")
+        # Floor is DEFAULT_CONTEXT_WINDOW, not 0: a ceiling below the default context_window
+        # would reject every call that omits the argument.
+        if context_window_max < DEFAULT_CONTEXT_WINDOW:
+            raise ConfigError(f"context_window_max must be >= {DEFAULT_CONTEXT_WINDOW}, got {context_window_max}")
+        config.context_window_max = context_window_max
 
     routing = doc.get("routing", {})
     if "routing_shortlist_size" in routing:

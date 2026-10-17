@@ -26,6 +26,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
+
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("mcp")]
 
 
@@ -92,6 +94,7 @@ def _make_explain_result() -> Any:
 def _make_search_pipeline() -> Any:
     """Return a mock pipeline suitable for search/search_with_context calls."""
     pipeline = MagicMock()
+    pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     pipeline.warmup_models = AsyncMock(return_value=True)
     pipeline._global_embedder = MagicMock()
     pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])

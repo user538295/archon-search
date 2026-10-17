@@ -15,7 +15,7 @@ import pytest
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord, DocumentInfo, SearchResult
 from archon_search.embedder import Embedder
-from archon_search.pipeline import MAX_CONTEXT_WINDOW
+from archon_search.constants import DEFAULT_CONTEXT_WINDOW_MAX
 from archon_search.reranker import Reranker
 
 from .conftest import MockEmbedderBackend, MockRerankerBackend, make_embedder, make_reranker, make_pipeline
@@ -229,14 +229,14 @@ async def test_pipeline_search_with_context_malformed_chunk_id(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "context_window",
-    [-1, MAX_CONTEXT_WINDOW + 1, 10**9],
+    [-1, DEFAULT_CONTEXT_WINDOW_MAX + 1, 10**9],
     ids=["negative", "just_above_max", "huge"],
 )
 async def test_pipeline_search_with_context_rejects_out_of_range_window(context_window: int) -> None:
     """An out-of-range ``context_window`` raises ValueError before any search runs."""
     pipeline = make_pipeline(MagicMock())
 
-    expected = rf"^context_window must be in \[0, {MAX_CONTEXT_WINDOW}\]; got {context_window}$"
+    expected = rf"^context_window must be in \[0, {DEFAULT_CONTEXT_WINDOW_MAX}\]; got {context_window}$"
     with patch.object(pipeline, "search", new=AsyncMock()) as search_mock, pytest.raises(ValueError, match=expected):
         await pipeline.search_with_context(
             "query", "test-col", context_window=context_window, embedder=pipeline._global_embedder
@@ -246,9 +246,9 @@ async def test_pipeline_search_with_context_rejects_out_of_range_window(context_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("context_window", [0, MAX_CONTEXT_WINDOW], ids=["zero", "max"])
+@pytest.mark.parametrize("context_window", [0, DEFAULT_CONTEXT_WINDOW_MAX], ids=["zero", "max"])
 async def test_pipeline_search_with_context_accepts_boundary_window(context_window: int) -> None:
-    """The inclusive bounds 0 and MAX_CONTEXT_WINDOW search and fetch neighbours with that window."""
+    """The inclusive bounds 0 and the default ceiling search and fetch neighbours with that window."""
     from archon_search.pipeline import SearchPipelineResult
 
     doc_id = "a" * 64
@@ -266,6 +266,71 @@ async def test_pipeline_search_with_context_accepts_boundary_window(context_wind
     search_mock.assert_called_once()
     store.fetch_adjacent_chunks.assert_called_once_with("test-col", doc_id, 5, context_window)
     assert result.results == [{"result": hit, "context_before": [], "context_after": []}]
+
+
+_LOWERED_CONTEXT_WINDOW_MAX = 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context_window", [-1, _LOWERED_CONTEXT_WINDOW_MAX + 1], ids=["negative", "just_above_max"])
+async def test_pipeline_search_with_context_rejects_window_outside_configured_max(context_window: int) -> None:
+    """The constructor's ``context_window_max`` is the bound, and the error cites it."""
+    pipeline = make_pipeline(MagicMock(), context_window_max=_LOWERED_CONTEXT_WINDOW_MAX)
+
+    expected = rf"^context_window must be in \[0, {_LOWERED_CONTEXT_WINDOW_MAX}\]; got {context_window}$"
+    with patch.object(pipeline, "search", new=AsyncMock()) as search_mock, pytest.raises(ValueError, match=expected):
+        await pipeline.search_with_context("query", "test-col", context_window=context_window, embedder=make_embedder())
+
+    search_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_search_with_context_accepts_window_up_to_raised_max() -> None:
+    """A window equal to a raised ceiling fetches neighbours, though the default ceiling would reject it."""
+    from archon_search.pipeline import SearchPipelineResult
+
+    context_window = DEFAULT_CONTEXT_WINDOW_MAX + 1
+    doc_id = "a" * 64
+    hit = SearchResult(doc_id=doc_id, chunk_id=f"{doc_id}-000005", text="hit", score=0.9, source_path="/x.md")
+    store = MagicMock()
+    store.fetch_adjacent_chunks = AsyncMock(return_value=[])
+    pipeline = make_pipeline(store, context_window_max=context_window)
+    search_result = SearchPipelineResult(results=[hit], acl_filtered=False)
+
+    with patch.object(pipeline, "search", new=AsyncMock(return_value=search_result)) as search_mock:
+        await pipeline.search_with_context("query", "test-col", context_window=context_window, embedder=make_embedder())
+
+    search_mock.assert_called_once()
+    store.fetch_adjacent_chunks.assert_called_once_with("test-col", doc_id, 5, context_window)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_search_with_context_default_window_passes_floor_max() -> None:
+    """The lowest valid ceiling still admits a call that omits context_window."""
+    from archon_search.constants import DEFAULT_CONTEXT_WINDOW
+    from archon_search.pipeline import SearchPipelineResult
+
+    doc_id = "a" * 64
+    hit = SearchResult(doc_id=doc_id, chunk_id=f"{doc_id}-000005", text="hit", score=0.9, source_path="/x.md")
+    store = MagicMock()
+    store.fetch_adjacent_chunks = AsyncMock(return_value=[])
+    pipeline = make_pipeline(store, context_window_max=DEFAULT_CONTEXT_WINDOW)
+    search_result = SearchPipelineResult(results=[hit], acl_filtered=False)
+
+    with patch.object(pipeline, "search", new=AsyncMock(return_value=search_result)):
+        await pipeline.search_with_context("query", "test-col", embedder=make_embedder())
+
+    store.fetch_adjacent_chunks.assert_called_once_with("test-col", doc_id, 5, DEFAULT_CONTEXT_WINDOW)
+
+
+def test_pipeline_context_window_max_returns_constructor_value() -> None:
+    """``context_window_max`` exposes the constructor bound."""
+    assert make_pipeline(MagicMock(), context_window_max=_LOWERED_CONTEXT_WINDOW_MAX).context_window_max == _LOWERED_CONTEXT_WINDOW_MAX
+
+
+def test_pipeline_context_window_max_defaults_to_default_constant() -> None:
+    """Without the keyword the bound is ``DEFAULT_CONTEXT_WINDOW_MAX``."""
+    assert make_pipeline(MagicMock()).context_window_max == DEFAULT_CONTEXT_WINDOW_MAX
 
 
 # ===========================================================================
