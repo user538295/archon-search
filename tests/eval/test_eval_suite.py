@@ -598,8 +598,9 @@ async def test_eval_hyde_regression_scenario(tmp_path: Path) -> None:
     ``recall@5`` with HyDE must equal the baseline recall@5 because the vector
     used for ANN lookup is identical.
 
-    Then also tests with ``resolve_hyde_vector(hyde=True, ...)`` to verify the
-    full resolution chain (not just ``pipeline.search()`` directly).
+    The vector is resolved through ``RequestHyDE.resolve`` — the path every route
+    handler takes — to verify the full resolution chain (not just
+    ``pipeline.search()`` directly).
 
     The deterministic embedder cannot measure semantic improvement; this scenario
     only verifies HyDE does not *break* recall.  Measuring recall *improvement*
@@ -613,10 +614,12 @@ async def test_eval_hyde_regression_scenario(tmp_path: Path) -> None:
     from archon_search.eval.fixtures import build_doc_collection_map, load_eval_corpus
     from archon_search.eval.metrics import compute_recall_at_k
     from archon_search.eval.types import EvalSearchResult, QueryEvalTrace
-    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
+    from archon_search.hyde import HyDEGenerator
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
     from archon_search.reranker import Reranker
+    from archon_search.server._hyde import RequestHyDE
+    from archon_search.server._search_budget import SEARCH_TIMEOUT_SECONDS
     from archon_search.store import SearchStore
 
     try:
@@ -702,7 +705,7 @@ async def test_eval_hyde_regression_scenario(tmp_path: Path) -> None:
         hyde_config = HyDEConfig(enabled=True, max_requests_per_minute=60)
         mock_generator = MagicMock(spec=HyDEGenerator)
 
-        async def _identity_generate(query: str) -> list[float]:
+        async def _identity_generate(query: str, *, embedder: Embedder) -> list[float]:
             return await embedder.embed_one(query)
 
         mock_generator.generate = AsyncMock(side_effect=_identity_generate)
@@ -716,19 +719,20 @@ async def test_eval_hyde_regression_scenario(tmp_path: Path) -> None:
         hyde_traces: list[QueryEvalTrace] = []
         for q in retrieval_queries:
             assert q.collection is not None
-            # Full HyDE resolution chain: resolve_hyde_vector → pipeline.search
-            hyde_vector, hyde_applied = await resolve_hyde_vector(
-                q.text, True, mock_generator, hyde_config
-            )
-            assert hyde_applied is True, (
+            # Full HyDE resolution chain: RequestHyDE.resolve → pipeline.search
+            hyde_outcome = await RequestHyDE(
+                query=q.text, requested=True, suppressed=False, generator=mock_generator,
+                config=hyde_config, timeout=SEARCH_TIMEOUT_SECONDS,
+            ).resolve(embedder, embedder_warm=True)
+            assert hyde_outcome.applied is True, (
                 f"Expected hyde_applied=True for query {q.query_id!r}, "
-                f"got {hyde_applied!r} (generator returned None)"
+                f"got {hyde_outcome.applied!r} (generator returned None)"
             )
             result = await pipeline.search(
                 q.text,
                 q.collection,
                 embedder=embedder,
-                query_vector=hyde_vector,
+                query_vector=hyde_outcome.vector,
             )
             # Map chunk results back to fixture doc_ids
             mapped = []
@@ -773,7 +777,7 @@ async def test_eval_hyde_regression_scenario(tmp_path: Path) -> None:
 
 @pytest.mark.eval
 async def test_eval_hyde_false_fast_path_no_overhead(tmp_path: Path) -> None:
-    """``resolve_hyde_vector(hyde=False, ...)`` fast-path executes and returns (None, False).
+    """``RequestHyDE(requested=False, ...).resolve`` fast-path executes and applies nothing.
 
     Verifies that the HyDE fast-path (hyde=False) neither crashes nor calls
     the generator — confirming zero overhead for non-HyDE requests.
@@ -781,18 +785,21 @@ async def test_eval_hyde_false_fast_path_no_overhead(tmp_path: Path) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
     from archon_search.config import HyDEConfig
-    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
+    from archon_search.hyde import HyDEGenerator
+    from archon_search.server._hyde import RequestHyDE
+    from archon_search.server._search_budget import SEARCH_TIMEOUT_SECONDS
 
     config = HyDEConfig(enabled=True, max_requests_per_minute=60)
     mock_generator = MagicMock(spec=HyDEGenerator)
     mock_generator.generate = AsyncMock(return_value=[0.1] * 128)
 
-    vector, applied = await resolve_hyde_vector(
-        "how do I uninstall the CLI?", False, mock_generator, config
-    )
+    outcome = await RequestHyDE(
+        query="how do I uninstall the CLI?", requested=False, suppressed=False,
+        generator=mock_generator, config=config, timeout=SEARCH_TIMEOUT_SECONDS,
+    ).resolve(MagicMock(), embedder_warm=True)
 
-    assert vector is None, "Expected None vector for hyde=False fast path"
-    assert applied is False, "Expected hyde_applied=False for hyde=False fast path"
+    assert outcome.vector is None, "Expected None vector for hyde=False fast path"
+    assert outcome.applied is False, "Expected hyde_applied=False for hyde=False fast path"
     mock_generator.generate.assert_not_called()
 
 
@@ -1005,7 +1012,6 @@ def test_bench_search_rag_fusion_disabled_latency(tmp_path_factory) -> None:  # 
 
     Threshold: [search_rag_fusion_disabled].p95_ms in tests/eval/thresholds.toml.
     """
-    import asyncio
     import statistics
     import time
     import tomllib
@@ -1139,7 +1145,6 @@ def test_bench_search_rag_fusion_enabled_latency(tmp_path_factory) -> None:  # t
 
     Threshold: [search_rag_fusion_enabled].p95_ms in tests/eval/thresholds.toml.
     """
-    import asyncio
     import statistics
     import time
     import tomllib
@@ -1296,7 +1301,6 @@ def test_ingest_latency_p95_single_file_on_large_corpus(tmp_path_factory) -> Non
     Uses the deterministic EvalEmbedderBackend — no real model weights needed.
     Threshold: [ingest_latency].single_file_p95_ms in tests/eval/thresholds.toml.
     """
-    import asyncio
     import hashlib
     import statistics
     import time

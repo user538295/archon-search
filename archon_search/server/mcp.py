@@ -5,7 +5,6 @@ import asyncio
 import logging
 import time
 from contextlib import ExitStack
-from functools import partial
 from time import monotonic
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
@@ -22,7 +21,7 @@ from archon_search._path_safety import PathUnsafeError, validate_archive_members
 from archon_search.config import resolve_active_model
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.filters import SearchFilters
-from archon_search.hyde import resolve_hyde_vector
+from archon_search.hyde import HYDE_DEPENDENCY_CODE, HYDE_DEPENDENCY_DETAIL, HyDEDependencyError
 from archon_search.key_manager import KeyStore, load_or_generate_key
 from archon_search.pipeline import (
     CollectionNotFoundError,
@@ -43,12 +42,11 @@ from archon_search.server.routes_explain import (
     RoutingCandidate,
     RoutingExplain,
 )
-from archon_search.server.routes_search import _HYDE_EXPANSION_FAILED_WARNING
+from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_CODE, RAG_FUSION_DEPENDENCY_DETAIL
+from archon_search.server._hyde import RequestHyDE
 from archon_search.server._search_budget import (
     SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
     SearchBudgetExceeded,
-    hyde_may_embed,
-    resolve_hyde_within_budget,
     run_within_budget,
     warmup_for_search,
 )
@@ -89,7 +87,7 @@ if TYPE_CHECKING:
     from archon_search.graph_store import GraphStore
     from archon_search.hyde import HyDEGenerator
     from archon_search.jobs.store import JobStore
-    from archon_search.rag_fusion import RAGFusionGenerator
+    from archon_search.rag_fusion import RAGFusionDependencyError, RAGFusionGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -135,11 +133,61 @@ class McpErrorResponse(TypedDict):
 
 
 _ERR_SCHEMA = "schema_validation_error"
+# Wire-safe error pair for an unexpected search / search_with_context failure. Never
+# str(exc): store and model errors embed internals (e.g. LanceDB's vector-dimension
+# message); the full exception is logged server-side by logger.exception.
+_SEARCH_FAILED_DETAIL = "search failed"
+_SEARCH_FAILED_CODE = "internal_error"
+# Same for search / search_with_context Pydantic failures: a ValidationError's text
+# embeds the rejected input values, so neither the filter nor the response-schema
+# failure is echoed (mirrors explain's "invalid explain request").
+_INVALID_SEARCH_FILTERS_DETAIL = "invalid search filters"
+_INVALID_SEARCH_RESPONSE_DETAIL = "search response failed schema validation"
+# Wire-safe error pair for an unexpected explain failure (logged by logger.exception).
+_EXPLAIN_FAILED_DETAIL = "explain failed"
+_EXPLAIN_FAILED_CODE = "internal_error"
+# explain's response-schema failure, for the same reason as search's above.
+_INVALID_EXPLAIN_RESPONSE_DETAIL = "explain response failed schema validation"
 _VALID_GRAPH_MODES: tuple[None | str, ...] = (None, "naive", "local", "global", "ppr")
 # E2a — ingest TTL and scope validation limits (same constraints as routes_jobs.py IngestRequest validators)
 _INT32_MAX: int = 2**31 - 1
 _MAX_SCOPE_LIST_ITEMS: int = 100
 _MAX_SCOPE_ITEM_LEN: int = 255
+
+
+def _enqueue_internal_error(writer: TelemetryWriter | None, endpoint: str, start: float) -> None:
+    """Enqueue the ``internal_error`` telemetry entry for a failed *endpoint* call begun at *start*."""
+    if writer is None:
+        return
+    try:
+        writer.enqueue(
+            TelemetryEntry.from_error(
+                endpoint=endpoint,
+                status="internal_error",
+                error_kind="other",
+                latency_ms=(monotonic() - start) * 1000.0,
+                correlation_id=_correlation_id.get(),
+            )
+        )
+    except Exception:
+        logger.warning("telemetry: %s error entry enqueue failed", endpoint, exc_info=True)
+
+
+def _dependency_error_response(
+    tool: str, exc: HyDEDependencyError | RAGFusionDependencyError
+) -> McpErrorResponse:
+    """Answer a missing HyDE or RAG Fusion package with its fixed wire pair.
+
+    The two branches are exhaustive over *exc*'s type.  The RAG Fusion one is not
+    ``isinstance``-checked: callers catch the class ``create_app`` bound lazily, which a
+    reloaded ``archon_search.rag_fusion`` no longer matches by identity.  The message
+    carries this interpreter's install command, so it is logged, never sent.
+    """
+    if isinstance(exc, HyDEDependencyError):
+        logger.warning("%s: HyDE unavailable — %s", tool, exc)
+        return McpErrorResponse(error=HYDE_DEPENDENCY_DETAIL, code=HYDE_DEPENDENCY_CODE)
+    logger.warning("%s: RAG Fusion unavailable — %s", tool, exc)
+    return McpErrorResponse(error=RAG_FUSION_DEPENDENCY_DETAIL, code=RAG_FUSION_DEPENDENCY_CODE)
 
 
 def _validate_scope_filter(scope_filter: str | None) -> "McpErrorResponse | None":
@@ -360,34 +408,21 @@ def create_app(
                 code="scope_filter_graph_mode_incompatible",
             )
 
-        # Mutual exclusion: rag_fusion=True suppresses HyDE entirely — but only when
-        # RAG Fusion can actually run (config kill-switch) — S272.
         _rf_config = getattr(config, "rag_fusion", None)
         if _rf_config is None:
             from archon_search.config import RAGFusionConfig  # noqa: PLC0415
             _rf_config = RAGFusionConfig()
-        if rag_fusion and _rf_config.enabled:
-            hyde_vector, hyde_applied = None, False
-            _search_hyde_expansion_warning: str | None = None
-        else:
-            _hyde_config = getattr(config, "hyde", None)
-            if _hyde_config is None:
-                from archon_search.config import HyDEConfig  # noqa: PLC0415
-                _hyde_config = HyDEConfig()
-            try:
-                # Same budget bound as the REST search path (S582) — the provider's
-                # [hyde].timeout_seconds is unclamped and unrelated to this budget.
-                hyde_vector, hyde_applied = await resolve_hyde_within_budget(
-                    resolve_hyde_vector(
-                        query, hyde, hyde_generator, _hyde_config,
-                        may_embed=partial(hyde_may_embed, pipeline),
-                    ),
-                    timeout=_SEARCH_TIMEOUT_SECONDS,
-                )
-            except RuntimeError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
-            # HyDE failure: requested but returned no vector
-            _search_hyde_expansion_warning = _HYDE_EXPANSION_FAILED_WARNING if (hyde and not hyde_applied) else None
+
+        _request_hyde = RequestHyDE.for_request(
+            query,
+            requested=hyde,
+            rag_fusion=rag_fusion,
+            rag_fusion_enabled=_rf_config.enabled,
+            graph_mode=graph_mode,
+            generator=hyde_generator,
+            config=getattr(config, "hyde", None),
+            timeout=_SEARCH_TIMEOUT_SECONDS,
+        )
 
         # Multi-collection fan-out path (B3). The single-collection path below is
         # unchanged; when neither field is set it falls back to default_collection.
@@ -439,8 +474,8 @@ def create_app(
                         indexed_before=indexed_before,
                         language=language,
                     )
-                except ValidationError as exc:
-                    return McpErrorResponse(error=str(exc), code="validation_error")
+                except ValidationError:
+                    return McpErrorResponse(error=_INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
             else:
                 _multi_filters = None
             # Same warm-up as the REST fan-out route: the global embedder (which
@@ -449,12 +484,18 @@ def create_app(
             # degrades to the fused ranking (S288) or the FTS leg alone (S290).
             _warmup = await warmup_for_search(pipeline)
             try:
+                # search_many embeds with the global embedder and excludes every
+                # collection pinned to another model (embedding_model_mismatch), so
+                # HyDE embeds with it too.
+                hyde_outcome = await _request_hyde.resolve(
+                    pipeline.global_embedder, embedder_warm=not _warmup.fts_only
+                )
                 # search_many's own _fanout_timeout_seconds bounds the per-collection
                 # leg gathers only — the meta lookup, embed_one, graph-store calls and
                 # the global rerank pass sit outside it, so bound the whole call.
                 result_obj = await run_within_budget(
                     pipeline.search_many(
-                        query, deduped, namespace=ns, query_vector=hyde_vector,
+                        query, deduped, namespace=ns, query_vector=hyde_outcome.vector,
                         rag_fusion=rag_fusion,
                         rag_fusion_generator=rag_fusion_generator,
                         rag_fusion_config=_rf_config,
@@ -466,8 +507,8 @@ def create_app(
                     ),
                     timeout=_SEARCH_TIMEOUT_SECONDS,
                 )
-            except RAGFusionDependencyError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+            except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+                return _dependency_error_response("search", exc)
             except GraphCommunitiesNotBuiltError as exc:
                 return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
             except CollectionNotFoundError:
@@ -482,9 +523,10 @@ def create_app(
                 # Transient infrastructure error (store unavailable); mirror REST's
                 # 503 semantics with a clean message rather than leaking the cause.
                 return McpErrorResponse(error="service unavailable: metadata store could not be reached", code="metadata_store_error")
-            except Exception as exc:
+            except Exception:
+                _enqueue_internal_error(writer, "search", start)
                 logger.exception("multi-collection search failed")
-                return McpErrorResponse(error=str(exc), code="internal_error")
+                return McpErrorResponse(error=_SEARCH_FAILED_DETAIL, code=_SEARCH_FAILED_CODE)
             if writer is not None:
                 try:
                     excluded_count = len(result_obj.excluded_collections)
@@ -509,7 +551,7 @@ def create_app(
                     if not include_metadata:
                         rs.metadata = {}
                     result_schemas.append(rs)
-                _multi_expansion_warning = _search_hyde_expansion_warning or result_obj.rag_fusion_warning
+                _multi_expansion_warning = hyde_outcome.expansion_warning or result_obj.rag_fusion_warning
                 _multi_graph_expansion_applied = result_obj.graph_expansion_applied
                 response = McpSearchResponse(
                     results=result_schemas,
@@ -518,15 +560,15 @@ def create_app(
                         ExcludedCollectionMcpSchema(name=e.name, reason=e.reason)
                         for e in result_obj.excluded_collections
                     ],
-                    hyde_applied=hyde_applied,
-                    expansion_used=hyde_applied or result_obj.rag_fusion_applied or _multi_graph_expansion_applied,
+                    hyde_applied=hyde_outcome.applied,
+                    expansion_used=hyde_outcome.applied or result_obj.rag_fusion_applied or _multi_graph_expansion_applied,
                     expansion_warning=_multi_expansion_warning,
                     graph_expansion_applied=_multi_graph_expansion_applied,
                     ppr_entities_matched=result_obj.ppr_entities_matched,
                 )
                 return response.model_dump(mode="json")
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
+            except ValidationError:
+                return McpErrorResponse(error=_INVALID_SEARCH_RESPONSE_DETAIL, code=_ERR_SCHEMA)
 
         try:
             try:
@@ -539,8 +581,8 @@ def create_app(
                     language=language,
                     include_metadata=include_metadata,
                 )
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+            except ValidationError:
+                return McpErrorResponse(error=_INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
             _col = collection or default_collection
             # Namespace gate: collection must exist in the caller's namespace.
             # Mirrors the REST search route's get_collection_meta check (routes_search.py)
@@ -555,12 +597,15 @@ def create_app(
             # rerank=False degrades to the fused vector+FTS ranking, fts_only=True to
             # the FTS leg alone.
             _warmup = await warmup_for_search(pipeline, _search_embedder)
+            # Resolved only now that the collection's embedder is known, so the
+            # hypothesis lands in that collection's vector space.
+            hyde_outcome = await _request_hyde.resolve(_search_embedder, embedder_warm=not _warmup.fts_only)
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 result_obj = await run_within_budget(
                     pipeline.search(
-                        query, _col, ns, embedder=_search_embedder, filters=filters, query_vector=hyde_vector,
+                        query, _col, ns, embedder=_search_embedder, filters=filters, query_vector=hyde_outcome.vector,
                         rag_fusion=rag_fusion,
                         rag_fusion_generator=rag_fusion_generator,
                         rag_fusion_config=_rf_config,
@@ -572,7 +617,7 @@ def create_app(
                     timeout=_SEARCH_TIMEOUT_SECONDS,
                 )
                 if recorder is not None:
-                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                    recorder.record_total(t0)
                     logger.info(
                         "stage timings",
                         extra={
@@ -607,7 +652,7 @@ def create_app(
                     if not include_metadata:
                         rs.metadata = {}
                     result_schemas.append(rs)
-                _single_expansion_warning = _search_hyde_expansion_warning or result_obj.rag_fusion_warning
+                _single_expansion_warning = hyde_outcome.expansion_warning or result_obj.rag_fusion_warning
                 _single_graph_expansion_applied = result_obj.graph_expansion_applied
                 response = McpSearchResponse(
                     results=result_schemas,
@@ -616,17 +661,17 @@ def create_app(
                         ExcludedCollectionMcpSchema(name=e.name, reason=e.reason)
                         for e in result_obj.excluded_collections
                     ],
-                    hyde_applied=hyde_applied,
-                    expansion_used=hyde_applied or result_obj.rag_fusion_applied or _single_graph_expansion_applied,
+                    hyde_applied=hyde_outcome.applied,
+                    expansion_used=hyde_outcome.applied or result_obj.rag_fusion_applied or _single_graph_expansion_applied,
                     expansion_warning=_single_expansion_warning,
                     graph_expansion_applied=_single_graph_expansion_applied,
                     ppr_entities_matched=result_obj.ppr_entities_matched,
                 )
                 return response.model_dump(mode="json")
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
-        except RAGFusionDependencyError as exc:
-            return McpErrorResponse(error=str(exc), code="validation_error")
+            except ValidationError:
+                return McpErrorResponse(error=_INVALID_SEARCH_RESPONSE_DETAIL, code=_ERR_SCHEMA)
+        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+            return _dependency_error_response("search", exc)
         except GraphCommunitiesNotBuiltError as exc:
             return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
         except EmbedderNotReadyError as exc:
@@ -642,22 +687,10 @@ def create_app(
                 extra={"event_type": "search_timeout", "collection": _col},
             )
             return McpErrorResponse(error="search timed out", code="timeout")
-        except Exception as exc:
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_error(
-                            endpoint="search",
-                            status="internal_error",
-                            error_kind="other",
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            correlation_id=_correlation_id.get(),
-                        )
-                    )
-                except Exception:
-                    logger.warning("telemetry: search error entry enqueue failed", exc_info=True)
+        except Exception:
+            _enqueue_internal_error(writer, "search", start)
             logger.exception("search failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+            return McpErrorResponse(error=_SEARCH_FAILED_DETAIL, code=_SEARCH_FAILED_CODE)
 
     @app.tool()
     async def search_with_context(
@@ -707,28 +740,10 @@ def create_app(
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         start = monotonic()
 
-        # Mutual exclusion: rag_fusion=True suppresses HyDE entirely — but only when
-        # RAG Fusion can actually run (config kill-switch) — S272.
         _swc_rf_config = getattr(config, "rag_fusion", None)
         if _swc_rf_config is None:
             from archon_search.config import RAGFusionConfig  # noqa: PLC0415
             _swc_rf_config = RAGFusionConfig()
-        if rag_fusion and _swc_rf_config.enabled:
-            swc_hyde_vector, swc_hyde_applied = None, False
-            _swc_hyde_expansion_warning: str | None = None
-        else:
-            _swc_hyde_config = getattr(config, "hyde", None)
-            if _swc_hyde_config is None:
-                from archon_search.config import HyDEConfig  # noqa: PLC0415
-                _swc_hyde_config = HyDEConfig()
-            try:
-                swc_hyde_vector, swc_hyde_applied = await resolve_hyde_vector(
-                    query, hyde, hyde_generator, _swc_hyde_config
-                )
-            except RuntimeError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
-            # HyDE failure: requested but returned no vector
-            _swc_hyde_expansion_warning = _HYDE_EXPANSION_FAILED_WARNING if (hyde and not swc_hyde_applied) else None
 
         try:
             try:
@@ -741,27 +756,43 @@ def create_app(
                     language=language,
                     include_metadata=include_metadata,
                 )
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+            except ValidationError:
+                return McpErrorResponse(error=_INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
             _swc_col = collection or default_collection
             # Namespace gate: collection must exist in the caller's namespace.
             _swc_meta = await pipeline.get_collection_meta(_swc_col, namespace=_swc_ns)
             if _swc_meta is None:
                 return McpErrorResponse(error=f"collection {_swc_col!r} not found", code="not_found")
             _swc_embedder = await _resolve_embedder(pipeline, embedder_cache, _swc_col, config, namespace=_swc_ns, meta=_swc_meta)
+            # Resolved only now that the collection's embedder is known, so the
+            # hypothesis lands in that collection's vector space. search_with_context
+            # has no FTS-only degrade: its retrieval embeds on this model however cold,
+            # so HyDE embeds too (embedder_warm=True) and the build is waited on once,
+            # by whichever embeds first — never skipped for nothing (C2-I-1).
+            swc_hyde = await RequestHyDE.for_request(
+                query,
+                requested=hyde,
+                rag_fusion=rag_fusion,
+                rag_fusion_enabled=_swc_rf_config.enabled,
+                # graph_mode was rejected above, so only RAG Fusion can win here.
+                graph_mode=graph_mode,
+                generator=hyde_generator,
+                config=getattr(config, "hyde", None),
+                timeout=_SEARCH_TIMEOUT_SECONDS,
+            ).resolve(_swc_embedder, embedder_warm=True)
             with ExitStack() as stack:
                 recorder = stack.enter_context(bind_stage_recorder()) if timings_enabled else None
                 t0 = time.perf_counter()
                 swc_result = await pipeline.search_with_context(
                     query, _swc_col, context_window, namespace=_swc_ns, embedder=_swc_embedder, filters=filters,
-                    query_vector=swc_hyde_vector,
+                    query_vector=swc_hyde.vector,
                     rag_fusion=rag_fusion,
                     rag_fusion_generator=rag_fusion_generator,
                     rag_fusion_config=_swc_rf_config,
                     scope_filter=scope_filter,
                 )
                 if recorder is not None:
-                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                    recorder.record_total(t0)
                     logger.info(
                         "stage timings",
                         extra={
@@ -815,39 +846,27 @@ def create_app(
                             context_after=context_after,
                         )
                     )
-                _swc_expansion_warning = _swc_hyde_expansion_warning or _swc_pipeline_result.rag_fusion_warning
+                _swc_expansion_warning = swc_hyde.expansion_warning or _swc_pipeline_result.rag_fusion_warning
                 _swc_graph_expansion_applied = _swc_pipeline_result.graph_expansion_applied
                 response = SearchWithContextResponse(
                     results=items,
-                    hyde_applied=swc_hyde_applied,
-                    expansion_used=swc_hyde_applied or _swc_pipeline_result.rag_fusion_applied or _swc_graph_expansion_applied,
+                    hyde_applied=swc_hyde.applied,
+                    expansion_used=swc_hyde.applied or _swc_pipeline_result.rag_fusion_applied or _swc_graph_expansion_applied,
                     expansion_warning=_swc_expansion_warning,
                 )
                 return response.model_dump(mode="json")
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
-        except RAGFusionDependencyError as exc:
-            return McpErrorResponse(error=str(exc), code="validation_error")
+            except ValidationError:
+                return McpErrorResponse(error=_INVALID_SEARCH_RESPONSE_DETAIL, code=_ERR_SCHEMA)
+        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+            return _dependency_error_response("search_with_context", exc)
         except EmbedderNotReadyError as exc:
             # The model is still loading (or its load is wedged) — retryable.
             logger.warning("search_with_context: embedder not ready — %s", exc)
             return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
-        except Exception as exc:
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_error(
-                            endpoint="search_with_context",
-                            status="internal_error",
-                            error_kind="other",
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            correlation_id=_correlation_id.get(),
-                        )
-                    )
-                except Exception:
-                    logger.warning("telemetry: search_with_context error entry enqueue failed", exc_info=True)
+        except Exception:
+            _enqueue_internal_error(writer, "search_with_context", start)
             logger.exception("search_with_context failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+            return McpErrorResponse(error=_SEARCH_FAILED_DETAIL, code=_SEARCH_FAILED_CODE)
 
     @app.tool()
     async def explain(
@@ -919,27 +938,21 @@ def create_app(
                 code="scope_filter_graph_mode_incompatible",
             )
 
-        # Mutual exclusion: graph_mode wins over HyDE — skip the LLM call entirely.
-        # rag_fusion=True also suppresses HyDE, but only when RAG Fusion can actually
-        # run (config kill-switch) — S272. graph_mode check comes first so the HyDE LLM
-        # call is never made when graph_mode is set (mirrors rag_fusion pattern).
         _explain_rf_config = getattr(config, "rag_fusion", None)
         if _explain_rf_config is None:
             from archon_search.config import RAGFusionConfig  # noqa: PLC0415
             _explain_rf_config = RAGFusionConfig()
-        if graph_mode is not None or (rag_fusion and _explain_rf_config.enabled):
-            explain_hyde_vector, explain_hyde_applied = None, False
-        else:
-            _explain_hyde_config = getattr(config, "hyde", None)
-            if _explain_hyde_config is None:
-                from archon_search.config import HyDEConfig  # noqa: PLC0415
-                _explain_hyde_config = HyDEConfig()
-            try:
-                explain_hyde_vector, explain_hyde_applied = await resolve_hyde_vector(
-                    query, hyde, hyde_generator, _explain_hyde_config
-                )
-            except RuntimeError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+
+        _explain_hyde = RequestHyDE.for_request(
+            query,
+            requested=hyde,
+            rag_fusion=rag_fusion,
+            rag_fusion_enabled=_explain_rf_config.enabled,
+            graph_mode=graph_mode,
+            generator=hyde_generator,
+            config=getattr(config, "hyde", None),
+            timeout=_SEARCH_TIMEOUT_SECONDS,
+        )
 
         # graph_mode with multi-collection fanout is not supported in E1c — each collection
         # has independent graph tables; cross-collection graph merge is out of scope.
@@ -979,16 +992,23 @@ def create_app(
                     code="validation_error",
                 )
             try:
+                # pipeline.explain fans out with the global embedder and excludes every
+                # collection pinned to another model (embedding_model_mismatch), so HyDE
+                # embeds with it too. pipeline.explain has no FTS-only degrade: its
+                # retrieval embeds on the serving model however cold, so HyDE embeds too
+                # (embedder_warm=True) and the build is waited on once, by whichever
+                # embeds first (C2-I-1).
+                explain_hyde_outcome = await _explain_hyde.resolve(pipeline.global_embedder, embedder_warm=True)
                 result = await pipeline.explain(
                     query, collections=deduped, top_k=top_k, rerank=rerank, namespace=_explain_ns,
-                    query_vector=explain_hyde_vector,
+                    query_vector=explain_hyde_outcome.vector,
                     rag_fusion=rag_fusion,
                     rag_fusion_generator=rag_fusion_generator,
                     rag_fusion_config=_explain_rf_config,
                     scope_filter=scope_filter,
                 )
-            except RAGFusionDependencyError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+            except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+                return _dependency_error_response("explain", exc)
             except GraphCommunitiesNotBuiltError as exc:
                 return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
             except CollectionNotFoundError:
@@ -1000,17 +1020,19 @@ def create_app(
             except ExplainMultiCollectionNoRerankError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
             except ExplainStageError as exc:
+                _enqueue_internal_error(writer, "explain", start)
                 logger.warning("explain stage %s failed: %s", exc.stage, exc.original, exc_info=exc.original)
                 return McpErrorResponse(
                     error=f"{exc.stage} error: {type(exc.original).__name__}", code="internal_error"
                 )
             except Exception:
+                _enqueue_internal_error(writer, "explain", start)
                 logger.exception("multi-collection explain failed")
-                return McpErrorResponse(error="explain failed", code="internal_error")
+                return McpErrorResponse(error=_EXPLAIN_FAILED_DETAIL, code=_EXPLAIN_FAILED_CODE)
             try:
                 response = ExplainResponse.from_pipeline_result(
                     rerank=rerank, collection="", routing=None, result=result, stage_timings_ms=None,
-                    hyde_applied=explain_hyde_applied,
+                    hyde_applied=explain_hyde_outcome.applied,
                     rag_fusion_applied=result.rag_fusion_applied,
                     rag_fusion_queries_used=result.rag_fusion_queries_used,
                     rag_fusion_attempted=result.rag_fusion_attempted,
@@ -1022,8 +1044,8 @@ def create_app(
                 result_dict = response.model_dump(mode="json", exclude_none=False)
                 result_dict.pop("stage_timings_ms", None)
                 return result_dict
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
+            except ValidationError:
+                return McpErrorResponse(error=_INVALID_EXPLAIN_RESPONSE_DETAIL, code=_ERR_SCHEMA)
 
         try:
             req = ExplainRequest(query=query, collection=collection, top_k=top_k, rerank=rerank)
@@ -1035,7 +1057,7 @@ def create_app(
 
         ns = _explain_ns
         routing: RoutingExplain | None = None
-        query_vector: list[float] | None = explain_hyde_vector
+        routing_vector: list[float] | None = None
         timings_enabled: bool = getattr(getattr(config, "observability", None), "stage_timings_enabled", False)
         try:
             with ExitStack() as stack:
@@ -1056,17 +1078,17 @@ def create_app(
                     all_meta = await pipeline.get_all_collections_meta(namespace=ns)
                     if not all_meta:
                         return McpErrorResponse(error="no collections available", code="not_found")
-                    # Use HyDE vector for routing if available, otherwise embed the query.
-                    if query_vector is None:
-                        query_vector = await pipeline._global_embedder.embed_one(req.query)
+                    # Route on the plain query embedding, as REST /explain does: the
+                    # router's centroids live in the global model's space.
+                    routing_vector = await pipeline.global_embedder.embed_one(req.query)
                     col_router = MultiCollectionRouter(
                         search_url="http://mcp",
-                        embedder=pipeline._global_embedder,
+                        embedder=pipeline.global_embedder,
                         shortlist_size=config.routing_shortlist_size,
                         confidence_threshold=config.routing_confidence_threshold,
                         embedding_model=config.embedding_model,
                     )
-                    ranked = col_router.rank_with_scores(query_vector, all_meta)
+                    ranked = col_router.rank_with_scores(routing_vector, all_meta)
                     chosen_meta, chosen_score = ranked[0]
                     chosen = chosen_meta.name
                     _explain_active_model = resolve_active_model(chosen_meta, config)
@@ -1082,19 +1104,22 @@ def create_app(
                 _explain_embedder = await _resolve_embedder_by_model(
                     pipeline, embedder_cache, _explain_active_model
                 )
-                # If the chosen collection uses a different model from the global
-                # embedder, the pre-computed query_vector is in the wrong space.
-                # Nullify it so the pipeline re-embeds with _explain_embedder.
-                # Also update explain_hyde_applied: if we discard the HyDE vector,
-                # it was not actually used for retrieval.
-                if _explain_embedder is not pipeline._global_embedder:
-                    query_vector = None
-                    explain_hyde_applied = False
-                # graph_mode: null the query_vector so routing-computed vectors do not
-                # leak into graph retrieval (explain_hyde_applied is already False from
-                # the early HyDE suppression block above).
-                if graph_mode is not None:
-                    query_vector = None
+                # Resolved only now that the chosen collection's embedder is known, so
+                # the hypothesis lands in that collection's vector space. embedder_warm=True:
+                # no FTS-only degrade here either (see the fan-out branch above).
+                explain_hyde_outcome = await _explain_hyde.resolve(_explain_embedder, embedder_warm=True)
+                query_vector = explain_hyde_outcome.vector
+                # Without a HyDE vector, retrieval would re-embed the plain query: reuse
+                # the routing vector instead when the chosen collection is on the model
+                # it was embedded with. graph_mode retrieval never takes a query vector.
+                # (REST /explain does not reuse it — its retrieval re-embeds the query.)
+                if (
+                    query_vector is None
+                    and routing_vector is not None
+                    and graph_mode is None
+                    and _explain_active_model == config.embedding_model
+                ):
+                    query_vector = routing_vector
                 result = await pipeline.explain(
                     req.query, chosen, top_k=req.top_k, rerank=req.rerank, namespace=ns,
                     query_vector=query_vector, embedder=_explain_embedder,
@@ -1105,7 +1130,7 @@ def create_app(
                     scope_filter=scope_filter,
                 )
                 if recorder is not None:
-                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                    recorder.record_total(t0)
                     logger.info(
                         "stage timings",
                         extra={
@@ -1121,7 +1146,7 @@ def create_app(
             try:
                 response = ExplainResponse.from_pipeline_result(
                     rerank=req.rerank, collection=chosen, routing=routing, result=result,
-                    stage_timings_ms=stage_timings, hyde_applied=explain_hyde_applied,
+                    stage_timings_ms=stage_timings, hyde_applied=explain_hyde_outcome.applied,
                     rag_fusion_applied=result.rag_fusion_applied,
                     rag_fusion_queries_used=result.rag_fusion_queries_used,
                     rag_fusion_attempted=result.rag_fusion_attempted,
@@ -1148,26 +1173,14 @@ def create_app(
                 if stage_timings is None:
                     result_dict.pop("stage_timings_ms", None)
                 return result_dict
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
-        except RAGFusionDependencyError as exc:
-            return McpErrorResponse(error=str(exc), code="validation_error")
+            except ValidationError:
+                return McpErrorResponse(error=_INVALID_EXPLAIN_RESPONSE_DETAIL, code=_ERR_SCHEMA)
+        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+            return _dependency_error_response("explain", exc)
         except GraphCommunitiesNotBuiltError as exc:
             return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
         except ExplainStageError as exc:
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_error(
-                            endpoint="explain",
-                            status="internal_error",
-                            error_kind="other",
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            correlation_id=_correlation_id.get(),
-                        )
-                    )
-                except Exception:
-                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
+            _enqueue_internal_error(writer, "explain", start)
             # Sanitize: the original message could echo the query (e.g. an FTS error).
             logger.warning("explain stage %s failed: %s", exc.stage, exc.original, exc_info=exc.original)
             return McpErrorResponse(error=f"{exc.stage} error: {type(exc.original).__name__}", code="internal_error")
@@ -1176,21 +1189,9 @@ def create_app(
             logger.warning("explain: embedder not ready — %s", exc)
             return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
         except Exception:
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_error(
-                            endpoint="explain",
-                            status="internal_error",
-                            error_kind="other",
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            correlation_id=_correlation_id.get(),
-                        )
-                    )
-                except Exception:
-                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
+            _enqueue_internal_error(writer, "explain", start)
             logger.exception("explain failed")
-            return McpErrorResponse(error="explain failed", code="internal_error")
+            return McpErrorResponse(error=_EXPLAIN_FAILED_DETAIL, code=_EXPLAIN_FAILED_CODE)
 
     @app.tool()
     async def ingest_file(
@@ -1222,7 +1223,7 @@ def create_app(
                     chunk_scopes=chunk_scopes,
                 )
                 if recorder is not None:
-                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                    recorder.record_total(t0)
                     logger.info(
                         "stage timings",
                         extra={
@@ -1290,7 +1291,7 @@ def create_app(
                     chunk_scopes=chunk_scopes,
                 )
                 if recorder is not None:
-                    recorder.record("total", (time.perf_counter() - t0) * 1000.0)
+                    recorder.record_total(t0)
                     aggregated = recorder.stage_sums_ms
                     logger.info(
                         "stage timings",

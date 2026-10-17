@@ -24,6 +24,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests._hyde_stubs import stub_hyde_generator
+
 pytestmark = pytest.mark.xdist_group("mcp")
 
 # Stub fastmcp so mcp.py can be imported without the real package interfering.
@@ -99,17 +101,18 @@ def _make_pipeline(*, graph_mode_applied: str | None = None) -> Any:
     return pipeline
 
 
-def _make_mcp_app(pipeline: Any, *, graph_enabled: bool = True) -> _FakeApp:
-    """Create an MCP app with optional graph_enabled flag."""
+def _make_mcp_app(pipeline: Any, *, graph_enabled: bool = True, hyde_generator: Any = None) -> _FakeApp:
+    """Create an MCP app with optional graph_enabled flag; a *hyde_generator* also enables HyDE."""
     from unittest.mock import patch
     from archon_search.config import GraphConfig, SearchConfig
 
     config = SearchConfig()
     config.graph = GraphConfig(enabled=graph_enabled)
+    config.hyde.enabled = hyde_generator is not None
 
     with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
         from archon_search.server import mcp as mcp_module
-        app = mcp_module.create_app(pipeline, "default", config=config)
+        app = mcp_module.create_app(pipeline, "default", config=config, hyde_generator=hyde_generator)
     return app  # type: ignore[return-value]
 
 
@@ -309,9 +312,13 @@ async def test_mcp_explain_graph_mode_suppresses_hyde() -> None:
     graph_mode wins over HyDE — the HyDE LLM call is skipped entirely (early suppression),
     and query_vector is nulled before the pipeline call so routing-computed vectors do not
     leak into graph retrieval. (S15 equivalent for MCP)
+
+    HyDE is enabled and wired to a generator that would produce a vector, so only the
+    graph_mode suppression keeps the LLM call from running (C3-T-1).
     """
     pipeline = _make_pipeline(graph_mode_applied="naive")
-    app = _make_mcp_app(pipeline, graph_enabled=True)
+    generator = stub_hyde_generator(return_value=[0.5, 0.5, 0.5, 0.5])
+    app = _make_mcp_app(pipeline, graph_enabled=True, hyde_generator=generator)
     explain_fn = app.tools["explain"]
 
     result = await explain_fn(
@@ -319,6 +326,7 @@ async def test_mcp_explain_graph_mode_suppresses_hyde() -> None:
     )
 
     assert "error" not in result, f"Unexpected error: {result}"
+    generator.generate.assert_not_awaited()
     # HyDE must not have been applied — graph_mode takes precedence
     assert result.get("hyde_applied") is False, (
         f"Expected hyde_applied=False when graph_mode is set; got: {result.get('hyde_applied')}"

@@ -15,9 +15,8 @@ import asyncio
 import sys
 import time
 import types
-from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -36,6 +35,7 @@ if "fastmcp" not in sys.modules:
 
 from archon_search._types import SearchResult
 from archon_search.pipeline import SearchPipelineResult
+from tests._hyde_stubs import hyde_enabled_config, stub_hyde_generator
 
 
 class _FakeApp:
@@ -226,11 +226,12 @@ async def test_mcp_search_invalid_filter_surfaces_validator_error() -> None:
         fn = fake_app.tools["search"]
         # empty file_type is rejected by the validator
         result = await fn(query="hello", collection=None, file_type="")
+        # Same on the fan-out branch, which builds its own SearchFilters.
+        fanout_result = await fn(query="hello", collections=["a", "b"], file_type="")
 
-    assert isinstance(result, dict)
-    assert "code" in result
-    assert result["code"] == "validation_error"
-    assert "error" in result
+    # Fixed text: a pydantic ValidationError embeds the rejected input values.
+    assert result == {"error": "invalid search filters", "code": "validation_error"}
+    assert fanout_result == {"error": "invalid search filters", "code": "validation_error"}
 
 
 @pytest.mark.asyncio
@@ -253,9 +254,7 @@ async def test_mcp_search_with_context_invalid_filter_surfaces_validator_error()
             indexed_before="2025-01-01",
         )
 
-    assert isinstance(result, dict)
-    assert "code" in result
-    assert result["code"] == "validation_error"
+    assert result == {"error": "invalid search filters", "code": "validation_error"}
 
 
 @pytest.mark.asyncio
@@ -434,14 +433,16 @@ async def test_mcp_search_single_collection_bounds_warmup_and_reranks() -> None:
 
 
 async def _call_mcp_search_hyde(*, embedder_is_warm: bool):
-    """Invoke the MCP search tool with ``hyde=True`` and a real resolve_hyde_vector."""
+    """Invoke the MCP search tool with ``hyde=True`` and a real ``RequestHyDE.resolve``."""
     from archon_search.config import SearchConfig
     from archon_search.hyde import HyDEGenerator
 
     pipeline = MagicMock()
     pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
     pipeline.warmup_models = AsyncMock(return_value=True)
-    pipeline.embedder_is_warm = embedder_is_warm
+    # No embedder cache: the global embedder serves the collection, so it is the
+    # one HyDE embeds with and the one whose warmth gates it.
+    pipeline._global_embedder.is_warm = embedder_is_warm
     pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
 
     config = SearchConfig()
@@ -463,8 +464,8 @@ async def _call_mcp_search_hyde(*, embedder_is_warm: bool):
 async def test_mcp_search_hyde_is_skipped_while_the_embedder_is_cold() -> None:
     """C1-I-1 (S290): MCP parity — a cold embedder must not reach ``generate``.
 
-    ``HyDEGenerator.generate`` ends in ``embed_one`` on the pipeline's global
-    embedder, outside any request budget, so a cold one would park the MCP call
+    ``HyDEGenerator.generate`` ends in ``embed_one`` on the embedder serving the
+    collection, outside any request budget, so a cold one would park the MCP call
     for the whole ONNX build.
     """
     pipeline, generator, result = await _call_mcp_search_hyde(embedder_is_warm=False)
@@ -486,6 +487,45 @@ async def test_mcp_search_hyde_still_runs_once_the_embedder_is_warm() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_search_hyde_is_skipped_when_the_collection_embedder_is_cold_but_the_global_one_is_warm() -> None:
+    """HyDE's warmth gate reads the collection's embedder — the one it would embed with."""
+    from archon_search.config import SearchConfig
+    from archon_search.hyde import HyDEGenerator
+
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+    pipeline.warmup_models = AsyncMock(return_value=True)
+    pipeline._global_embedder.is_warm = True
+    pipeline.global_embedder.is_warm = True
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock(active_embedding_model="other/model"))
+    cold_collection_embedder = MagicMock(is_warm=False)
+    embedder_cache = MagicMock(get_or_load=AsyncMock(return_value=cold_collection_embedder))
+
+    config = SearchConfig()
+    config.hyde.enabled = True
+    generator = MagicMock(spec=HyDEGenerator)
+    generator.generate = AsyncMock(return_value=[0.1, 0.2, 0.3])
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(
+            pipeline, "default", writer=None, config=config, hyde_generator=generator,
+            embedder_cache=embedder_cache,
+        )
+        result = await app.tools["search"](query="hello", collection="col", hyde=True)
+
+    generator.generate.assert_not_awaited()
+    assert result["hyde_applied"] is False
+    assert result["expansion_warning"] == "HyDE expansion failed"
+    search_kwargs = pipeline.search.await_args.kwargs
+    assert search_kwargs["embedder"] is cold_collection_embedder
+    assert search_kwargs["fts_only"] is True
+    # One bounded warm-up per call, not one for HyDE and another for the search (S290).
+    pipeline.warmup_models.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_mcp_search_bounds_hyde_by_the_search_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -496,7 +536,10 @@ async def test_mcp_search_bounds_hyde_by_the_search_budget(
     """
     import archon_search.server.mcp as mcp_module
 
-    async def _never_answers(*_args: Any, **_kwargs: Any) -> tuple[list[float] | None, bool]:
+    generation_started = asyncio.Event()
+
+    async def _never_answers(*_args: Any, **_kwargs: Any) -> list[float] | None:
+        generation_started.set()
         await asyncio.sleep(30)
         raise AssertionError("the HyDE call was not cancelled by the search budget")
 
@@ -508,14 +551,17 @@ async def test_mcp_search_bounds_hyde_by_the_search_budget(
     pipeline.warmup_models = AsyncMock(return_value=True)
 
     monkeypatch.setattr(mcp_module, "_SEARCH_TIMEOUT_SECONDS", 0.05)
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
-        "archon_search.server.mcp.resolve_hyde_vector", new=_never_answers
-    ):
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(
+            pipeline, "default", writer=None, config=hyde_enabled_config(),
+            hyde_generator=stub_hyde_generator(side_effect=_never_answers),
+        )
         started = time.monotonic()
         result = await fake_app.tools["search"](query="hello", collection="col", hyde=True)
         elapsed = time.monotonic() - started
 
+    # Presence anchor: the budget cut a generation that started, not a skipped one.
+    assert generation_started.is_set(), "HyDE generation never started"
     assert elapsed < 5.0, f"the MCP search tool waited {elapsed:.1f}s on the HyDE call"
     assert result["expansion_used"] is False
     assert result["expansion_warning"] == "HyDE expansion failed"
@@ -732,7 +778,7 @@ async def test_mcp_search_language_with_collections_is_now_accepted() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_search_tool_returns_expansion_fields_on_hyde_failure() -> None:
-    """MCP search tool returns expansion_warning='HyDE expansion failed' when resolve_hyde_vector returns (None, False) with hyde=True."""
+    """MCP search tool returns expansion_warning='HyDE expansion failed' when HyDE generates no vector with hyde=True."""
     import archon_search.server.mcp as mcp_module
 
     pipeline = MagicMock()
@@ -742,14 +788,16 @@ async def test_mcp_search_tool_returns_expansion_fields_on_hyde_failure() -> Non
     )
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
-        "archon_search.server.mcp.resolve_hyde_vector",
-        new=AsyncMock(return_value=(None, False)),
-    ):
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+    generator = stub_hyde_generator(return_value=None)
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(
+            pipeline, "default", writer=None, config=hyde_enabled_config(),
+            hyde_generator=generator,
+        )
         fn = fake_app.tools["search"]
         result = await fn(query="hello", collection="col", hyde=True)
 
+    generator.generate.assert_awaited_once()
     assert isinstance(result, dict)
     assert result.get("expansion_used") is False
     assert result.get("expansion_warning") == "HyDE expansion failed"
@@ -769,11 +817,11 @@ async def test_mcp_search_tool_expansion_used_true_on_hyde_success() -> None:
     pipeline.warmup_models = AsyncMock(return_value=True)
 
     fake_vector = np.ones(384, dtype=np.float32)
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
-        "archon_search.server.mcp.resolve_hyde_vector",
-        new=AsyncMock(return_value=(fake_vector, True)),
-    ):
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(
+            pipeline, "default", writer=None, config=hyde_enabled_config(),
+            hyde_generator=stub_hyde_generator(return_value=fake_vector),
+        )
         fn = fake_app.tools["search"]
         result = await fn(query="hello", collection="col", hyde=True)
 
@@ -815,14 +863,16 @@ async def test_mcp_search_multi_collection_expansion_warning_on_hyde_failure() -
     )
     pipeline.warmup_models = AsyncMock(return_value=True)
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
-        "archon_search.server.mcp.resolve_hyde_vector",
-        new=AsyncMock(return_value=(None, False)),
-    ):
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+    generator = stub_hyde_generator(return_value=None)
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(
+            pipeline, "default", writer=None, config=hyde_enabled_config(),
+            hyde_generator=generator,
+        )
         fn = fake_app.tools["search"]
         result = await fn(query="hello", collections=["col1", "col2"], hyde=True)
 
+    generator.generate.assert_awaited_once()
     assert isinstance(result, dict)
     assert result.get("expansion_used") is False
     assert result.get("expansion_warning") == "HyDE expansion failed"

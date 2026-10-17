@@ -348,8 +348,8 @@ def test_post_explain_collectionless_router_failure_returns_503(
     pipeline.get_all_collections_meta = AsyncMock(
         return_value=[CollectionMeta(name="col", namespace="default")]
     )
-    pipeline._global_embedder = MagicMock()
-    pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
+    pipeline.global_embedder = MagicMock()
+    pipeline.global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
     app.state.pipeline = pipeline
 
     monkeypatch.setattr(
@@ -437,8 +437,8 @@ async def test_post_explain_concurrent_collectionless_requests(tmp_path: Path) -
     pipeline = MagicMock()
     meta_list = [CollectionMeta(name="col", centroid=[0.1, 0.2, 0.3, 0.4], active_embedding_model=config.embedding_model, namespace="default")]
     pipeline.get_all_collections_meta = AsyncMock(return_value=meta_list)
-    pipeline._global_embedder = MagicMock()
-    pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
+    pipeline.global_embedder = MagicMock()
+    pipeline.global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
     pipeline.explain = AsyncMock(return_value=_make_explain_result())
     app.state.pipeline = pipeline
 
@@ -1797,16 +1797,7 @@ async def test_mcp_explain_emits_stage_timings_log_record(
 ) -> None:
     """MCP explain with valid request emits a log record with event_type=='stage_timings'
     containing 'total' in stage_timings_ms."""
-    import sys
-    import types
     from unittest.mock import patch
-
-    # Stub fastmcp if not present
-    if "fastmcp" not in sys.modules:
-        _fastmcp = types.ModuleType("fastmcp")
-        _fastmcp.FastMCP = type("FastMCP", (), {})
-        _fastmcp.Context = type("Context", (), {})
-        sys.modules["fastmcp"] = _fastmcp
 
     from archon_search.store import SearchStore
 
@@ -1949,15 +1940,7 @@ async def test_explain_stage_timings_fts_absent_degradation(tmp_path: Path) -> N
 @pytest.mark.asyncio
 async def test_rest_mcp_explain_key_parity(tmp_path: Path) -> None:
     """For identical inputs, set(REST stage_timings_ms keys) == set(MCP stage_timings_ms keys)."""
-    import sys
-    import types
     from unittest.mock import patch
-
-    if "fastmcp" not in sys.modules:
-        _fastmcp = types.ModuleType("fastmcp")
-        _fastmcp.FastMCP = type("FastMCP", (), {})
-        _fastmcp.Context = type("Context", (), {})
-        sys.modules["fastmcp"] = _fastmcp
 
     from archon_search.store import SearchStore
 

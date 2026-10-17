@@ -419,6 +419,11 @@ class SearchPipeline:
     def embedder_is_warm(self) -> bool:
         return self._global_embedder.is_warm
 
+    @property
+    def global_embedder(self) -> Embedder:
+        """The pipeline's global embedder — the one the fan-outs embed the query with."""
+        return self._global_embedder
+
     async def warmup_models(
         self,
         embedder: Embedder | None = None,

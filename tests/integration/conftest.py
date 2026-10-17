@@ -477,6 +477,7 @@ def mcp_tool_call(
     assert body.get("jsonrpc") == "2.0"
 
     rpc_result = body.get("result", {})
+    assert not rpc_result.get("isError"), f"Tool '{tool_name}' returned isError: {rpc_result!r}"
     content = rpc_result.get("content", [])
     assert content, f"Tool '{tool_name}' returned empty content list: {rpc_result!r}"
     text = content[0].get("text", "")

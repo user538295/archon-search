@@ -52,7 +52,7 @@ HyDE and RAG Fusion add a synchronous LLM call to the query path before retrieva
 | Knob (`[hyde]` / `[rag_fusion]`) | Default | Effect |
 | --- | --- | --- |
 | `max_requests_per_minute` | 60 | Client-side rate limit on LLM calls; excess requests fall back to plain search. |
-| `timeout_seconds` | 10.0 | Per-call deadline; on timeout the query proceeds without the LLM augmentation. Accepted unclamped, so on `/search` (REST and the MCP `search` tool) HyDE is additionally capped by the ~30 s search budget (S582) — a value above it cannot park the request. |
+| `timeout_seconds` | 10.0 | Per-call deadline; on timeout the query proceeds without the LLM augmentation. Accepted unclamped, so HyDE is additionally capped at ~30 s (S582) on every surface that runs it — REST `/search` and `/explain`, MCP `search`, `search_with_context` and `explain` — so a value above it cannot park the HyDE call. That cap is HyDE's own window, spent before the search budget starts: on REST `/search` and MCP `search` a `hyde=true` request can take ~60 s (≈30 s HyDE + 30 s search) before its `504`. |
 | `[rag_fusion] num_queries` | 2 | Query variants generated (1–5); each variant adds a fan-out leg. |
 
 Cost is one LLM round-trip per search (plus provider latency), gated by the rate limit. Provider is `anthropic` by default (also `ollama` / `openai` / `claude_cli`). See [`../UserManual/60_searching.md`](../UserManual/60_searching.md) for usage and provider setup.

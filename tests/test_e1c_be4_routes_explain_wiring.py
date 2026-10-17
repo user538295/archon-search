@@ -6,21 +6,22 @@ Covers:
   ``pipeline.explain()`` call site
 - ``ExplainResponse.from_pipeline_result()`` receives
   ``graph_mode_applied=result.graph_mode_applied`` at both call sites
-- HyDE invariant: when ``body.graph_mode is not None``, ``hyde_applied=False``
-  regardless of what ``resolve_hyde_vector()`` returned (S15)
+- HyDE invariant: when ``body.graph_mode is not None``, HyDE is suppressed — no LLM
+  call, ``hyde_applied=False`` — even with HyDE enabled and a generator wired (S15)
 - ``ExplainNearMiss`` carries no ``graph_provenance`` field (S9)
 
 Scenarios: S1, S9, S13, S15.
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from archon_search.pipeline import ExplainPipelineResult
 from archon_search.server.routes_explain import ExplainNearMiss
 from tests._graph_engine_stub import install_graph_engine_stub
+from tests._hyde_stubs import rest_hyde_generating
 
 
 # ---------------------------------------------------------------------------
@@ -187,15 +188,13 @@ def test_explain_route_graph_mode_and_hyde_true_returns_hyde_applied_false(
 ) -> None:
     """graph_mode='naive' + hyde=True → response.hyde_applied=False; graph_mode_applied='naive' (S15).
 
-    When graph_mode is non-null, the route must pass hyde_applied=False to
-    ExplainResponse.from_pipeline_result() regardless of what resolve_hyde_vector()
-    returned. Additionally, the HyDE vector must be nulled out so it does not
-    drive retrieval via query_vector even in the stub path.
+    When graph_mode is non-null, HyDE is suppressed (C2-A-1): the generator is never
+    called, the response reports hyde_applied=False and pipeline.explain receives no
+    HyDE vector.
 
-    resolve_hyde_vector is patched to return (b"fakevector", True) to simulate
-    the case where a non-null HyDE vector was produced; without BE-4's override,
-    both hyde_applied=True and query_vector=b"fakevector" would reach the pipeline
-    — this test fails before the fix.
+    HyDE is enabled and wired to a generator that would produce a vector, so without
+    the graph_mode suppression the LLM call would run and both hyde_applied=True and
+    query_vector would reach the pipeline — this test fails without it.
 
     graph_enabled=True is required so the BE-5 guard (graph_not_enabled) does not
     fire before the mocked pipeline.explain is reached.
@@ -213,12 +212,9 @@ def test_explain_route_graph_mode_and_hyde_true_returns_hyde_applied_false(
             return_value=_minimal_pipeline_result(graph_mode_applied="naive")
         )
 
-        # Simulate HyDE returning a non-null vector with hyde_applied=True (would cause
-        # misleading response and HyDE-driven retrieval without BE-4's forced override)
-        with patch(
-            "archon_search.server.routes_explain.resolve_hyde_vector",
-            new=AsyncMock(return_value=(b"fakevector", True)),
-        ):
+        # HyDE enabled with a generator that would produce a vector: only the graph_mode
+        # suppression keeps it from running.
+        with rest_hyde_generating(client.app, return_value=[0.5, 0.5, 0.5, 0.5]) as generate:
             response = client.post(
                 "/explain",
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -231,6 +227,7 @@ def test_explain_route_graph_mode_and_hyde_true_returns_hyde_applied_false(
             )
 
         assert response.status_code == 200
+        generate.assert_not_awaited()
         data = response.json()
         # HyDE invariant: hyde_applied must be False when graph_mode is non-null
         assert data["hyde_applied"] is False

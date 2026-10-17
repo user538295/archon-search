@@ -253,25 +253,30 @@ async def test_mcp_explain_rerank_false_multi_collections_returns_error() -> Non
 async def test_mcp_search_with_context_hyde_dependency_absent_returns_error() -> None:
     """MCP search_with_context with hyde=True and missing anthropic dep returns error.
 
-    Monkeypatches a hyde_generator.generate() to raise RuntimeError (mimicking
+    Monkeypatches a hyde_generator.generate() to raise HyDEDependencyError (mimicking
     the behavior of HyDEGenerator when the anthropic package is absent).
-    The MCP tool catches RuntimeError from resolve_hyde_vector and returns
-    code='validation_error'.
+    The MCP tool catches it and returns the fixed message with code='validation_error'.
     """
     pipeline = MagicMock()
     embedder = MagicMock()
     embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4])
     pipeline._global_embedder = embedder
+    # HyDE resolves after the collection lookup: it embeds with the collection's embedder.
+    pipeline.get_collection_meta = AsyncMock(return_value=MagicMock())
+    pipeline.warmup_models = AsyncMock(return_value=True)
 
-    # Mock a hyde_generator whose generate() raises RuntimeError (dependency absent)
+    # Mock a hyde_generator whose generate() raises HyDEDependencyError (dependency
+    # absent) — the class mcp.py itself catches, whatever reloads ran before.
+    from archon_search.server import mcp as mcp_module
+
     hyde_generator = MagicMock()
     hyde_generator.generate = AsyncMock(
-        side_effect=RuntimeError(
+        side_effect=mcp_module.HyDEDependencyError(
             "Install archon-search[hyde] to use HyDE (pip install 'archon-search[hyde]')"
         )
     )
 
-    # hyde config must have enabled=True for resolve_hyde_vector to call generate()
+    # hyde config must have enabled=True for RequestHyDE.resolve to call generate()
     from archon_search.config import HyDEConfig
 
     config = MagicMock()
@@ -294,13 +299,8 @@ async def test_mcp_search_with_context_hyde_dependency_absent_returns_error() ->
     assert result.get("code") == "validation_error", (
         f"expected validation_error for missing HyDE dependency, got: {result}"
     )
-    assert "error" in result
-    # The error message should reference the missing dependency
-    error_msg = result["error"]
-    assert any(
-        kw in error_msg.lower()
-        for kw in ("install", "hyde", "dependency", "archon-search")
-    ), f"expected dependency hint in error, got: {error_msg!r}"
+    # The fixed dependency message: the exception's install command stays in the log.
+    assert result["error"] == "Install archon-search[hyde] to use HyDE"
 
 
 # ---------------------------------------------------------------------------

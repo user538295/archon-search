@@ -377,7 +377,9 @@ async def test_httpx_target_base_url_matches_configured_llama_cpp_base_url() -> 
 async def test_hyde_end_to_end_with_llama_cpp() -> None:
     """S1: HyDEGenerator wired with LlamaCppQueryExpansionProvider produces a vector, hyde_applied=True."""
     from archon_search.config import HyDEConfig
-    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
+    from archon_search.hyde import HyDEGenerator
+    from archon_search.server._hyde import RequestHyDE
+    from archon_search.server._search_budget import SEARCH_TIMEOUT_SECONDS
     from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
 
     response = _make_response(_choices_body("A hypothetical passage about archon search."))
@@ -389,13 +391,16 @@ async def test_hyde_end_to_end_with_llama_cpp() -> None:
     fake_embedder = MagicMock()
     fake_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3])
 
-    generator = HyDEGenerator(embedder=fake_embedder, config=config, provider=provider)
+    generator = HyDEGenerator(config=config, provider=provider)
 
     with patch("archon_search.providers.llama_cpp_provider.httpx.AsyncClient", mock_cls):
-        vector, hyde_applied = await resolve_hyde_vector("archon search query", True, generator, config)
+        outcome = await RequestHyDE(
+            query="archon search query", requested=True, suppressed=False,
+            generator=generator, config=config, timeout=SEARCH_TIMEOUT_SECONDS,
+        ).resolve(fake_embedder, embedder_warm=True)
 
-    assert hyde_applied is True
-    assert vector == [0.1, 0.2, 0.3]
+    assert outcome.applied is True
+    assert outcome.vector == [0.1, 0.2, 0.3]
     fake_embedder.embed_one.assert_awaited_once_with("A hypothetical passage about archon search.")
 
 
@@ -428,7 +433,9 @@ async def test_rag_fusion_end_to_end_with_llama_cpp() -> None:
 async def test_llama_cpp_fallback_on_unreachable() -> None:
     """S6: llama-server unreachable → provider returns None, HyDE falls back with no exception."""
     from archon_search.config import HyDEConfig
-    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
+    from archon_search.hyde import HyDEGenerator
+    from archon_search.server._hyde import RequestHyDE
+    from archon_search.server._search_budget import SEARCH_TIMEOUT_SECONDS
     from archon_search.providers.llama_cpp_provider import LlamaCppQueryExpansionProvider
 
     mock_cls = _make_async_client_cls(post_side_effect=httpx.ConnectError("connection refused"))
@@ -439,11 +446,14 @@ async def test_llama_cpp_fallback_on_unreachable() -> None:
     fake_embedder = MagicMock()
     fake_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2, 0.3])
 
-    generator = HyDEGenerator(embedder=fake_embedder, config=config, provider=provider)
+    generator = HyDEGenerator(config=config, provider=provider)
 
     with patch("archon_search.providers.llama_cpp_provider.httpx.AsyncClient", mock_cls):
-        vector, hyde_applied = await resolve_hyde_vector("archon search query", True, generator, config)
+        outcome = await RequestHyDE(
+            query="archon search query", requested=True, suppressed=False,
+            generator=generator, config=config, timeout=SEARCH_TIMEOUT_SECONDS,
+        ).resolve(fake_embedder, embedder_warm=True)
 
-    assert vector is None
-    assert hyde_applied is False
+    assert outcome.vector is None
+    assert outcome.applied is False
     fake_embedder.embed_one.assert_not_awaited()

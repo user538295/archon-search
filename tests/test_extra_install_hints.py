@@ -17,8 +17,13 @@ import pytest
 
 from archon_search.community_builder import _run_leiden_partition_sync
 from archon_search.config import HyDEConfig, RAGFusionConfig
-from archon_search.hyde import HyDEGenerator
-from archon_search.rag_fusion import RAGFusionDependencyError, RAGFusionGenerator
+# Module, not names: tests/test_hyde.py reloads archon_search.hyde, rebinding
+# HyDEDependencyError (same reason as rag_fusion below).
+import archon_search.hyde as hyde_mod
+# Module, not names: tests/test_rag_fusion.py reloads archon_search.rag_fusion, which
+# rebinds RAGFusionDependencyError — a name imported here at collection time would then
+# no longer match the class the generator raises when both run on one xdist worker.
+import archon_search.rag_fusion as rag_fusion_mod
 
 _INSTALL_METHODS = pytest.mark.parametrize(
     ("prefix_fixture", "command"),
@@ -63,10 +68,12 @@ async def test_missing_hyde_provider_names_the_install_command(
 ) -> None:
     request.getfixturevalue(prefix_fixture)
     with patch.dict(sys.modules, _NO_ANTHROPIC_PROVIDER):
-        generator = HyDEGenerator(MagicMock(), HyDEConfig(enabled=True))
-    with pytest.raises(RuntimeError) as excinfo:
-        await generator.generate("query")
+        generator = hyde_mod.HyDEGenerator(HyDEConfig(enabled=True))
+    with pytest.raises(hyde_mod.HyDEDependencyError) as excinfo:
+        await generator.generate("query", embedder=MagicMock())
     assert str(excinfo.value) == f"Install archon-search[hyde] to use HyDE ({command} 'archon-search[hyde]')"
+    # The wire-safe half is the message minus the install command (C2-T-1).
+    assert str(excinfo.value).startswith(f"{hyde_mod.HYDE_DEPENDENCY_DETAIL} (")
 
 
 @_INSTALL_METHODS
@@ -75,9 +82,11 @@ async def test_missing_rag_fusion_provider_names_the_install_command(
 ) -> None:
     request.getfixturevalue(prefix_fixture)
     with patch.dict(sys.modules, _NO_ANTHROPIC_PROVIDER):
-        generator = RAGFusionGenerator(RAGFusionConfig(enabled=True))
-    with pytest.raises(RAGFusionDependencyError) as excinfo:
+        generator = rag_fusion_mod.RAGFusionGenerator(RAGFusionConfig(enabled=True))
+    with pytest.raises(rag_fusion_mod.RAGFusionDependencyError) as excinfo:
         await generator.generate_variants("query")
     assert str(excinfo.value) == (
         f"Install archon-search[rag_fusion] to use RAG Fusion ({command} 'archon-search[rag_fusion]')"
     )
+    # The wire-safe half is the message minus the install command (G2).
+    assert str(excinfo.value).startswith(f"{rag_fusion_mod.RAG_FUSION_DEPENDENCY_DETAIL} (")

@@ -40,8 +40,8 @@ REST (`ExplainRequest`, `routes_explain.py`):
 | `collections` | list \| null | null | Multi-collection fanout. Mutually exclusive with `collection`; capped at `[search] max_fanout`. |
 | `top_k` | int | 5 | `>= 1`; must be `<= [database] top_k_max`. |
 | `rerank` | bool | true | Set `false` to see the raw RRF ordering before the cross-encoder. |
-| `hyde` | bool | false | Run HyDE query expansion. |
-| `rag_fusion` | bool | false | Run RAG-Fusion. Suppresses HyDE. |
+| `hyde` | bool | false | Run HyDE query expansion. Suppressed (no LLM call, `hyde_applied: false`) by any `graph_mode`, and by `rag_fusion` when RAG Fusion is enabled. The hypothesis is embedded with the explained collection's own embedding model — the global model on a `collections` fanout ([NR-17](../MigrationGuide/03_breaking_changes_index.md)). |
+| `rag_fusion` | bool | false | Run RAG-Fusion. Suppresses HyDE only when `[rag_fusion] enabled = true`; with RAG Fusion disabled, `hyde` still runs. |
 | `graph_mode` | `naive`\|`local`\|`global`\|`ppr`\|null | null | Graph retrieval. Requires `[graph] enabled=true`. Mutually exclusive with `scope_filter` and with multi-collection fanout. |
 | `scope_filter` | string \| null | null | Same semantics as `/search` (exact scope or trailing-`*` wildcard). |
 

@@ -1,10 +1,10 @@
-"""Tests for archon_search.hyde — TDD for HyDEGenerator and resolve_hyde_vector."""
+"""Tests for archon_search.hyde — TDD for HyDEGenerator."""
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import logging
-import os
+from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,6 +16,23 @@ from archon_search.config import HyDEConfig
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _restore_hyde_module() -> Iterator[None]:
+    """Undo the ``importlib.reload(archon_search.hyde)`` calls below after each test.
+
+    A reload rebinds every name in the module — ``HyDEDependencyError`` included — to a
+    new object, while the server modules keep the names they imported. Left in place, a
+    later test on the same xdist worker gets a ``HyDEGenerator`` that raises a
+    ``HyDEDependencyError`` the routes do not catch (a 500 instead of the 422).
+    """
+    import archon_search.hyde as hyde_mod
+
+    original = dict(vars(hyde_mod))
+    yield
+    vars(hyde_mod).clear()
+    vars(hyde_mod).update(original)
 
 
 def _make_embedder(dim: int = 4) -> Any:
@@ -99,7 +116,7 @@ def test_generator_init_without_anthropic_package() -> None:
         import archon_search.hyde as hyde_mod
 
         importlib.reload(hyde_mod)
-        gen = hyde_mod.HyDEGenerator(_make_embedder(), _make_config())
+        gen = hyde_mod.HyDEGenerator(_make_config())
         assert gen._provider_available is False
         # Reset module to normal
         importlib.reload(hyde_mod)
@@ -115,7 +132,7 @@ def test_generator_init_with_anthropic_package(monkeypatch: pytest.MonkeyPatch) 
         import archon_search.hyde as hyde_mod
 
         importlib.reload(hyde_mod)
-        gen = hyde_mod.HyDEGenerator(_make_embedder(), _make_config())
+        gen = hyde_mod.HyDEGenerator(_make_config())
         assert gen._provider_available is True
         importlib.reload(hyde_mod)
 
@@ -127,7 +144,7 @@ def test_generator_init_with_anthropic_package(monkeypatch: pytest.MonkeyPatch) 
 
 @pytest.mark.asyncio
 async def test_generate_package_not_installed() -> None:
-    """generate() raises RuntimeError when anthropic is not installed."""
+    """generate() raises HyDEDependencyError — the class every transport maps to its fixed 422 — when anthropic is missing."""
     # G10 BE-1: must also patch the provider module so the try/except ImportError
     # in HyDEGenerator.__init__ fires (the provider is lazy-imported there).
     with patch.dict(  # type: ignore[dict-item]
@@ -142,9 +159,10 @@ async def test_generate_package_not_installed() -> None:
         import archon_search.hyde as hyde_mod
 
         importlib.reload(hyde_mod)
-        gen = hyde_mod.HyDEGenerator(_make_embedder(), _make_config())
-        with pytest.raises(RuntimeError, match="Install archon-search\\[hyde\\]"):
-            await gen.generate("test query")
+        gen = hyde_mod.HyDEGenerator(_make_config())
+        # hyde_mod.HyDEDependencyError, read after the reload: the class gen raises.
+        with pytest.raises(hyde_mod.HyDEDependencyError, match="Install archon-search\\[hyde\\]"):
+            await gen.generate("test query", embedder=_make_embedder())
         importlib.reload(hyde_mod)
 
 
@@ -177,13 +195,14 @@ async def test_generate_success(monkeypatch: pytest.MonkeyPatch) -> None:
         import archon_search.hyde as hyde_mod
 
         importlib.reload(hyde_mod)
-        gen = hyde_mod.HyDEGenerator(embedder, config)
-        result = await gen.generate("how do I do X?")
+        gen = hyde_mod.HyDEGenerator(config)
+        result = await gen.generate("how do I do X?", embedder=embedder)
         importlib.reload(hyde_mod)
 
     assert result is not None
     assert isinstance(result, list)
     assert len(result) == dim
+    embedder.embed_one.assert_awaited_once_with("A hypothetical passage.")
 
 
 # ---------------------------------------------------------------------------
@@ -214,9 +233,9 @@ async def test_generate_timeout_fallback(
         import archon_search.hyde as hyde_mod
 
         importlib.reload(hyde_mod)
-        gen = hyde_mod.HyDEGenerator(embedder, config)
+        gen = hyde_mod.HyDEGenerator(config)
         with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
-            result = await gen.generate("how do I do X?")
+            result = await gen.generate("how do I do X?", embedder=embedder)
         importlib.reload(hyde_mod)
 
     assert result is None
@@ -247,8 +266,8 @@ async def test_generate_api_error_fallback(monkeypatch: pytest.MonkeyPatch) -> N
         import archon_search.hyde as hyde_mod
 
         importlib.reload(hyde_mod)
-        gen = hyde_mod.HyDEGenerator(embedder, config)
-        result = await gen.generate("test query")
+        gen = hyde_mod.HyDEGenerator(config)
+        result = await gen.generate("test query", embedder=embedder)
         importlib.reload(hyde_mod)
 
     assert result is None
@@ -279,9 +298,9 @@ async def test_generate_empty_response_fallback(
         import archon_search.hyde as hyde_mod
 
         importlib.reload(hyde_mod)
-        gen = hyde_mod.HyDEGenerator(embedder, config)
+        gen = hyde_mod.HyDEGenerator(config)
         with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
-            result = await gen.generate("test query")
+            result = await gen.generate("test query", embedder=embedder)
         importlib.reload(hyde_mod)
 
     assert result is None
@@ -307,11 +326,11 @@ async def test_generate_no_api_key(
         import archon_search.hyde as hyde_mod
 
         importlib.reload(hyde_mod)
-        gen = hyde_mod.HyDEGenerator(embedder, config)
+        gen = hyde_mod.HyDEGenerator(config)
 
         with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
-            result1 = await gen.generate("query 1")
-            result2 = await gen.generate("query 2")
+            result1 = await gen.generate("query 1", embedder=embedder)
+            result2 = await gen.generate("query 2", embedder=embedder)
         importlib.reload(hyde_mod)
 
     assert result1 is None
@@ -351,13 +370,13 @@ async def test_rate_limit_fallback(
         import archon_search.hyde as hyde_mod
 
         importlib.reload(hyde_mod)
-        gen = hyde_mod.HyDEGenerator(embedder, config)
+        gen = hyde_mod.HyDEGenerator(config)
 
         # First call should succeed (1 token available)
-        result1 = await gen.generate("query 1")
+        result1 = await gen.generate("query 1", embedder=embedder)
         # Second call should be rate-limited (0 tokens left)
         with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
-            result2 = await gen.generate("query 2")
+            result2 = await gen.generate("query 2", embedder=embedder)
         importlib.reload(hyde_mod)
 
     assert result1 is not None, "First call should succeed with 1 token"
@@ -376,10 +395,10 @@ async def test_rate_limit_skip_includes_llama_cpp_hyde() -> None:
 
     from archon_search.hyde import HyDEGenerator  # noqa: PLC0415
 
-    gen = HyDEGenerator(embedder, config, provider=mock_provider)
+    gen = HyDEGenerator(config, provider=mock_provider)
 
-    result1 = await gen.generate("query 1")
-    result2 = await gen.generate("query 2")
+    result1 = await gen.generate("query 1", embedder=embedder)
+    result2 = await gen.generate("query 2", embedder=embedder)
 
     assert result1 is not None, "First call should succeed"
     assert result2 is not None, "llama_cpp must skip rate limiting like ollama/claude_cli"
@@ -414,13 +433,13 @@ async def test_fingerprint_no_raw_query(
         import archon_search.hyde as hyde_mod
 
         importlib.reload(hyde_mod)
-        gen = hyde_mod.HyDEGenerator(embedder, config)
+        gen = hyde_mod.HyDEGenerator(config)
         fp = hyde_mod._query_fingerprint(query)
         assert len(fp) == 16
         assert all(c in "0123456789abcdef" for c in fp)
 
         with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
-            await gen.generate(query)
+            await gen.generate(query, embedder=embedder)
         importlib.reload(hyde_mod)
 
     log_text = " ".join(r.getMessage() for r in caplog.records)
@@ -465,8 +484,8 @@ async def test_query_truncated_to_2000_chars(monkeypatch: pytest.MonkeyPatch) ->
         import archon_search.hyde as hyde_mod
 
         importlib.reload(hyde_mod)
-        gen = hyde_mod.HyDEGenerator(embedder, config)
-        await gen.generate(long_query)
+        gen = hyde_mod.HyDEGenerator(config)
+        await gen.generate(long_query, embedder=embedder)
         importlib.reload(hyde_mod)
 
     assert prompt_capture, "No prompt was captured"
@@ -477,150 +496,3 @@ async def test_query_truncated_to_2000_chars(monkeypatch: pytest.MonkeyPatch) ->
     assert "x" * 2000 in prompt_capture[0], (
         "Truncated query (2000 chars) not found in prompt"
     )
-
-
-# ---------------------------------------------------------------------------
-# resolve_hyde_vector
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_resolve_hyde_vector_hyde_false() -> None:
-    """resolve_hyde_vector with hyde=False returns (None, False) without calling generate."""
-    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
-
-    config = _make_config(enabled=True)
-    generator = MagicMock(spec=HyDEGenerator)
-    generator.generate = AsyncMock(return_value=[0.1, 0.2])
-
-    result = await resolve_hyde_vector("query", False, generator, config)
-
-    assert result == (None, False)
-    generator.generate.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_resolve_hyde_vector_no_generator() -> None:
-    """resolve_hyde_vector with generator=None returns (None, False)."""
-    from archon_search.hyde import resolve_hyde_vector
-
-    config = _make_config(enabled=True)
-    result = await resolve_hyde_vector("query", True, None, config)
-    assert result == (None, False)
-
-
-@pytest.mark.asyncio
-async def test_resolve_hyde_vector_enabled_false_kill_switch() -> None:
-    """resolve_hyde_vector with config.enabled=False returns (None, False) without calling generate."""
-    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
-
-    config = _make_config(enabled=False)
-    generator = MagicMock(spec=HyDEGenerator)
-    generator.generate = AsyncMock(return_value=[0.1, 0.2])
-
-    result = await resolve_hyde_vector("query", True, generator, config)
-
-    assert result == (None, False)
-    generator.generate.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_resolve_hyde_vector_success() -> None:
-    """resolve_hyde_vector with enabled=True and generator returning a vector returns (vector, True)."""
-    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
-
-    vector = [0.1, 0.2, 0.3, 0.4]
-    config = _make_config(enabled=True)
-    generator = MagicMock(spec=HyDEGenerator)
-    generator.generate = AsyncMock(return_value=vector)
-
-    result = await resolve_hyde_vector("query", True, generator, config)
-
-    assert result == (vector, True)
-    generator.generate.assert_called_once_with("query")
-
-
-@pytest.mark.asyncio
-async def test_resolve_hyde_vector_generate_returns_none() -> None:
-    """resolve_hyde_vector when generate() returns None gives (None, False)."""
-    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
-
-    config = _make_config(enabled=True)
-    generator = MagicMock(spec=HyDEGenerator)
-    generator.generate = AsyncMock(return_value=None)
-
-    result = await resolve_hyde_vector("query", True, generator, config)
-
-    assert result == (None, False)
-
-
-# ---------------------------------------------------------------------------
-# C1-I-1 — the may_embed gate (S290)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_resolve_hyde_vector_skips_generation_when_may_embed_is_false() -> None:
-    """A cold embedder must skip HyDE outright, not embed the hypothesis (S290).
-
-    ``HyDEGenerator.generate`` ends in ``embed_one`` on the pipeline's global
-    embedder, and it runs *before* the search enters any budget — so on a cold
-    embedder it would park the connection for the whole ONNX build.
-    """
-    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
-
-    config = _make_config(enabled=True)
-    generator = MagicMock(spec=HyDEGenerator)
-    generator.generate = AsyncMock(return_value=[0.1, 0.2])
-
-    result = await resolve_hyde_vector(
-        "query", True, generator, config, may_embed=AsyncMock(return_value=False)
-    )
-
-    assert result == (None, False)
-    generator.generate.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_resolve_hyde_vector_generates_normally_when_may_embed_is_true() -> None:
-    """A warm embedder leaves the HyDE path exactly as it was."""
-    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
-
-    vector = [0.1, 0.2, 0.3, 0.4]
-    config = _make_config(enabled=True)
-    generator = MagicMock(spec=HyDEGenerator)
-    generator.generate = AsyncMock(return_value=vector)
-
-    result = await resolve_hyde_vector(
-        "query", True, generator, config, may_embed=AsyncMock(return_value=True)
-    )
-
-    assert result == (vector, True)
-    generator.generate.assert_awaited_once_with("query")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("hyde", "with_generator", "enabled"),
-    [(False, True, True), (True, False, True), (True, True, False)],
-)
-async def test_resolve_hyde_vector_does_not_warm_when_hyde_cannot_run(
-    hyde: bool, with_generator: bool, enabled: bool
-) -> None:
-    """``may_embed`` is a warm-up; the cheap guards must short-circuit ahead of it.
-
-    ``hyde=False`` is the default of every search request, so paying a bounded
-    embedder warm-up there would put the S290 cost back on the common path.
-    """
-    from archon_search.hyde import HyDEGenerator, resolve_hyde_vector
-
-    config = _make_config(enabled=enabled)
-    generator = MagicMock(spec=HyDEGenerator) if with_generator else None
-    if generator is not None:
-        generator.generate = AsyncMock(return_value=[0.1, 0.2])
-    may_embed = AsyncMock(return_value=True)
-
-    result = await resolve_hyde_vector("query", hyde, generator, config, may_embed=may_embed)
-
-    assert result == (None, False)
-    may_embed.assert_not_awaited()

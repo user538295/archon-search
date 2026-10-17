@@ -33,13 +33,17 @@ this refactor.
 ## Scope of work (measured 2026-08-19)
 
 - `pipeline.py` alone: **36** `_global_embedder` uses to rethread.
+- Plus the public read-only property `SearchPipeline.global_embedder` (`pipeline.py`, added 2026-10-17
+  for the HyDE fan-out paths) and its server-layer callers (`routes_search.py`, `routes_explain.py`,
+  `mcp.py` — `pipeline.global_embedder`). A grep for `_global_embedder` alone misses them.
 - 10 source files reference the global: `pipeline.py`, `server/app.py`, `server/mcp.py`,
   `server/routes_search.py`, `server/routes_explain.py`, `server/routes_openai_shim.py`,
   `server/readiness.py`, `sync.py`, `eval/runner.py`, `eval/_tracing.py`.
 - **76** test files touch it.
 - Up-front design decision: pipeline holds the cache and resolves per collection internally,
   vs. every caller passes a resolved embedder (HTTP routes already do the latter —
-  `routes_search.py:341-348`).
+  `routes_search.py:450-454` resolves it from `embedder_cache`, `:531` passes it as
+  `pipeline.search(embedder=...)`).
 - `/status` warm-flag semantics need redefining (warm *which* model?) — possible wire-contract
   change; `GET /openapi.json` is authoritative, record breaking changes in `BREAKING.md`.
 - Behavioral change: graph/PPR modes start embedding with each collection's own model —
@@ -55,7 +59,10 @@ lands; the sequencing and probe-skip work survives unchanged.
 ## Verification
 
 - The suspected-bug repro above turned into a permanent regression test.
-- `grep -rn "_global_embedder\|app\.state\.embedder" archon_search/` returns nothing.
+- `grep -rn "global_embedder\|app\.state\.embedder" archon_search/` returns nothing — the pattern has no
+  leading underscore so it also catches the public `pipeline.global_embedder` property and its callers
+  (and the `global_embedder` parameter of `SearchPipeline.recompute_collection_meta`, which the
+  refactor renames or removes too).
 - Full eval suite within thresholds (`tests/eval/thresholds.toml`).
 - `/status` and `/ready` behavior matches the redefined contract; OpenAPI snapshot regenerated.
 

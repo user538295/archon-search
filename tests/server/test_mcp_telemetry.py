@@ -137,6 +137,32 @@ async def test_search_tool_logs_error_entry_on_exception(caplog: pytest.LogCaptu
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "pipeline_method", "endpoint"),
+    [("search", "search_many", "search"), ("explain", "explain", "explain")],
+)
+async def test_fan_out_failure_enqueues_an_internal_error_entry(
+    tool_name: str, pipeline_method: str, endpoint: str
+) -> None:
+    """C3-I-3: a fan-out catch-all reports telemetry like the single-collection path."""
+    pipeline = MagicMock()
+    pipeline.warmup_models = AsyncMock(return_value=True)
+    setattr(pipeline, pipeline_method, AsyncMock(side_effect=RuntimeError("boom")))
+    writer = MagicMock(spec=TelemetryWriter)
+
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        from archon_search.server import mcp as mcp_module
+
+        app = mcp_module.create_app(pipeline, "default", writer=writer)  # type: ignore[call-arg]
+        result = await app.tools[tool_name](query="boom test", collections=["a", "b"])  # type: ignore[attr-defined]
+
+    assert result["code"] == "internal_error"
+    writer.enqueue.assert_called_once()
+    entry: TelemetryEntry = writer.enqueue.call_args[0][0]
+    assert (entry.endpoint, entry.status, entry.error_kind) == (endpoint, "internal_error", "other")
+
+
+@pytest.mark.asyncio
 async def test_search_tool_query_text_never_in_factory_args() -> None:
     """The query string must never reach TelemetryEntry factories."""
     sentinel = "SUPER_SECRET_QUERY_12345"

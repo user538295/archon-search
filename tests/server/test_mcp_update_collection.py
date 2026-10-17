@@ -15,8 +15,6 @@ Verifies:
 """
 from __future__ import annotations
 
-import sys
-import types
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -25,14 +23,8 @@ import pytest
 pytestmark = pytest.mark.xdist_group("mcp")
 
 # ---------------------------------------------------------------------------
-# FastMCP stub — same pattern as test_mcp_embedder_dispatch.py
+# FastMCP stub — _make_mcp_app patches archon_search.server.mcp.FastMCP with it
 # ---------------------------------------------------------------------------
-if "fastmcp" not in sys.modules:
-    _fastmcp = types.ModuleType("fastmcp")
-    _fastmcp.FastMCP = type("FastMCP", (), {})  # type: ignore[attr-defined]
-    _fastmcp.Context = type("Context", (), {})  # type: ignore[attr-defined]
-    sys.modules["fastmcp"] = _fastmcp
-
 
 class _FakeApp:
     def __init__(self, name: str) -> None:

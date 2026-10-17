@@ -8,6 +8,42 @@
 
 ## Changelog
 
+### [next release] — `POST /search` and MCP `search`: any `graph_mode` now suppresses HyDE (2026-10-17)
+
+**Surface**: REST `POST /search` and MCP tool `search` (single- and multi-collection) → `hyde_applied`, `expansion_used` and `expansion_warning` of a `hyde=true` call that also sets `graph_mode`.
+
+**What changed:** Behaviour only, no schema change. A `hyde=true` request with any non-null `graph_mode` used to call the HyDE LLM (sending the query to the provider) and report `hyde_applied: true` even where the vector was dropped: the single-collection `"ppr"`, `"local"` and `"global"` paths never used it, `"naive"` dropped it whenever the graph expansion added terms, and the fan-out's `"naive"` always re-embedded. Any `graph_mode` now suppresses HyDE the way it already did on `POST /explain` and MCP `explain`: no LLM call, `hyde_applied: false`, no `expansion_warning`. The paths that did use the vector — a single-collection `"naive"` search whose expansion adds nothing, the fan-out `"local"` legs, and a fan-out `"global"` search that falls through to the standard path — now search with the plain query embedding instead.
+
+**Migration**: clients that combined `hyde=true` with `graph_mode` must expect `hyde_applied: false`; send `graph_mode: null` to use HyDE.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — HyDE on MCP `explain` and REST `POST /explain` embeds with the explained collection's model and is bounded by the search budget; MCP auto-routing no longer routes on the HyDE vector (2026-10-17)
+
+**Surface**: MCP tool `explain` and REST `POST /explain` → `hyde_applied`, the results of a `hyde=true` call, and (MCP) `routing` of a collectionless (auto-routed) `hyde=true` call; MCP `search_with_context` → `hyde_applied` of a slow-LLM `hyde=true` call.
+
+**What changed:** Behaviour only, no schema change. On MCP `explain` the HyDE vector used to be embedded with the global model and then discarded whenever the explained collection was not served by the pipeline's own global embedder instance — which, with the embedder cache every shipped server runs, was every call — so `hyde_applied` came back `false` and the trace was the plain-query one. On REST `POST /explain` the global-model vector was used even for a collection pinned to another model, so it searched the wrong vector space (or failed on a dimension mismatch). On both, the hypothesis is now embedded with the explained collection's model (the global model on a `collections` fan-out, which excludes collections on another model) and used, so `hyde_applied` is `true` whenever HyDE produced a vector and the results reflect it; HyDE is also resolved only after the collection is found, so an unknown collection no longer triggers the LLM call. A collectionless MCP call now routes on the plain query embedding (as REST `POST /explain` always has) instead of the HyDE vector, so `routing.candidates` scores and the chosen collection can differ from before. HyDE on both `explain` surfaces and on MCP `search_with_context` is now bounded by HyDE's own ~30 s cap (S582; these surfaces have no search budget) and skipped (`hyde_applied: false`) when the LLM does not answer within it. It is not skipped while the serving embedder is still cold: these surfaces have no FTS-only degrade, so their retrieval embeds on that model regardless and the build is waited on once.
+
+**Migration**: none required for clients that read `hyde_applied`; clients that compared `hyde=true` `explain` traces with plain ones must expect them to differ now, and an auto-routed MCP `hyde=true` call to pick the collection a plain call picks.
+
+**Announced in**: this release.
+
+---
+
+### [next release] — MCP `search` / `search_with_context` / `explain` errors and the HyDE / RAG Fusion missing-package `422` no longer echo exception or input text (2026-10-17)
+
+**Surface**: MCP tools `search` (single- and multi-collection) and `search_with_context` → the `error` field of `internal_error`, `validation_error` (filter arguments) and `schema_validation_error` responses; MCP tool `explain` → the `error` field of `schema_validation_error` responses; the HyDE and RAG Fusion missing-package errors on REST `POST /search` and `POST /explain` (`422` `detail`) and on the MCP `search`, `search_with_context` and `explain` tools (`validation_error`).
+
+**What changed:** An unexpected pipeline failure returned `{"error": str(exc), "code": "internal_error"}`, leaking internals such as LanceDB's `Invalid input, No vector column found to match with the query vector dimension: 384`. It now returns the fixed `{"error": "search failed", "code": "internal_error"}`; the full exception is still logged server-side. A Pydantic `ValidationError` — whose text embeds the rejected input values — likewise no longer reaches the wire: an invalid filter argument returns `{"error": "invalid search filters", "code": "validation_error"}` and response-schema drift `{"error": "search response failed schema validation", "code": "schema_validation_error"}` (mirroring `explain`'s existing `"invalid explain request"`); MCP `explain`'s response-schema drift likewise answers `{"error": "explain response failed schema validation", "code": "schema_validation_error"}`. A missing HyDE provider package now answers the fixed `"Install archon-search[hyde] to use HyDE"`, and a missing RAG Fusion package the fixed `"Install archon-search[rag_fusion] to use RAG Fusion"`, without the parenthesised install command for the server's own environment, which goes to the server log; any other failure while resolving HyDE (e.g. the embedding model failing to load) is no longer reported as a `validation_error` carrying its raw text but falls to the generic sanitized failure (`"search failed"` / `"explain failed"` on MCP, `500` on REST).
+
+**Migration**: clients that parsed the `error` text of these responses must key on `code` instead; the text carries no diagnostic detail any more — read the server log.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — S631: `GET /ready` stays `503` while the background model validation is pending (2026-10-12)
 
 **Surface**: `GET /ready` → `ready` and the HTTP status.

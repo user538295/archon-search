@@ -105,7 +105,7 @@ When `telemetry.enabled = true` in `~/.archon-search/archon-search.toml`:
 
 ### Stage-latency surface (`stage_timings_ms`)
 
-When `[observability].stage_timings_enabled = true` (the default), `bind_stage_recorder()` wraps the active request with a `StageRecorder` (`archon_search/observability.py`). Individual pipeline stages — embedder, router, store, reranker — are each wrapped with `record_stage("<stage_name>")`, which records blocked-coroutine wall time using `time.perf_counter()`.
+When `[observability].stage_timings_enabled = true` (the default), `bind_stage_recorder()` wraps the active request with a `StageRecorder` (`archon_search/observability.py`). Individual pipeline stages — embedder, router, store, reranker — are each wrapped with `record_stage("<stage_name>")`, which records blocked-coroutine wall time using `time.perf_counter()`. HyDE generation is excluded: it runs under `paused_stage_recorder()`, so neither its LLM call nor its hypothesis `embed` appears, and `total` omits its wall time — including any wait for a cold embedding model that the hypothesis embed absorbs on `search_with_context` / `explain` (there HyDE embeds first, so the retrieval embed that follows finds the model warm). The bounded `warmup_for_search` wait is never paused: on single-collection `POST /search` it runs inside the timed window and stays in `total`.
 
 At the end of each handled request the structured log line emitted by the route includes a `stage_timings_ms` key with a `dict[str, float]` of stage names to milliseconds. For `POST /explain` (REST) and the `explain` MCP tool, `stage_timings_ms` is also **included in the response body** when timings are enabled; when `stage_timings_enabled = false` the field is absent from the response entirely.
 

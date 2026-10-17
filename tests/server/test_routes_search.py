@@ -8,12 +8,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
-from archon_search._types import SearchResult
+from archon_search._types import ExcludedCollection, SearchResult
 from archon_search.config import SearchConfig
+from archon_search.filters import SearchFilters
 from archon_search.jobs.store import JobStore
-from archon_search.pipeline import SearchPipeline, SearchPipelineResult
+from archon_search.pipeline import (
+    CollectionNotFoundError,
+    FanoutTimeoutError,
+    MetadataLookupError,
+    SearchPipeline,
+    SearchPipelineResult,
+)
 from archon_search.server.app import create_app
+from archon_search.server.routes_search import SearchRequest
+from archon_search.server.schemas import ExcludedCollectionSchema  # noqa: F401
+from tests._hyde_stubs import rest_hyde_generating, stub_hyde_generator
 
 
 def _make_app(tmp_path: Path) -> tuple:
@@ -456,7 +467,6 @@ def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCa
 
 def test_post_search_with_file_type_filter_returns_filtered_results(tmp_path: Path) -> None:
     """filters field reaches pipeline.search() as a SearchFilters instance."""
-    from archon_search.filters import SearchFilters
 
     results = [_make_search_result(1)]
     app, client = _make_app(tmp_path)
@@ -477,7 +487,6 @@ def test_post_search_with_file_type_filter_returns_filtered_results(tmp_path: Pa
 
 def test_post_search_all_filter_types_forwarded(tmp_path: Path) -> None:
     """source_path_prefix, source_path_glob, indexed_after, indexed_before all reach pipeline."""
-    from archon_search.filters import SearchFilters
 
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock()
@@ -841,21 +850,6 @@ async def test_search_end_to_end(tmp_path: Path) -> None:
 # B3 Task 4.1: multi-collection search (SearchRequest validator + handler)
 # ---------------------------------------------------------------------------
 
-from pydantic import ValidationError
-
-from archon_search._types import ExcludedCollection
-from archon_search.filters import SearchFilters
-from archon_search.pipeline import (
-    CollectionNotFoundError,
-    FanoutTimeoutError,
-    MetadataLookupError,
-)
-from archon_search.server.routes_search import (
-    SearchRequest,
-)
-from archon_search.server.schemas import ExcludedCollectionSchema  # noqa: F401
-
-
 # --- validator unit tests --------------------------------------------------
 
 
@@ -1050,6 +1044,21 @@ def test_search_handler_fanout_timeout_returns_504(tmp_path: Path) -> None:
     assert response.json()["detail"] == "Search timed out"
 
 
+def test_search_handler_fanout_timeout_enqueues_timeout_telemetry(tmp_path: Path) -> None:
+    """C3-I-4: the fan-out 504 is reported like the single-collection one — a ``timeout`` entry."""
+    app, client = _make_app(tmp_path)
+    app.state.pipeline = _make_multi_pipeline_mock(search_many_raises=FanoutTimeoutError())
+    writer = MagicMock()
+    app.state.telemetry_writer = writer
+
+    response = client.post("/search", json={"collections": ["a", "b"], "query": "q"})
+
+    assert response.status_code == 504
+    writer.enqueue.assert_called_once()
+    entry = writer.enqueue.call_args.args[0]
+    assert (entry.endpoint, entry.status, entry.error_kind) == ("search", "timeout", "timeout")
+
+
 def test_search_handler_meta_lookup_failure_returns_503(tmp_path: Path) -> None:
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_multi_pipeline_mock(
@@ -1174,22 +1183,19 @@ def test_search_response_has_hyde_applied() -> None:
 
 
 # ---------------------------------------------------------------------------
-# C4 Task 4.2: routes_search.py handler wiring for resolve_hyde_vector
+# C4 Task 4.2: routes_search.py handler wiring for HyDE
 # ---------------------------------------------------------------------------
 
 
 def test_search_hyde_true_passes_vector_to_pipeline(tmp_path: Path) -> None:
-    """hyde=true: resolve_hyde_vector returns a vector → pipeline.search called with it; response hyde_applied=True."""
+    """hyde=true: HyDE generates a vector → pipeline.search called with it; response hyde_applied=True."""
     app, client = _make_app(tmp_path)
     results = [_make_search_result(1)]
     pipeline_mock = _make_pipeline_mock(results=results)
     app.state.pipeline = pipeline_mock
 
     hyde_vector = [0.1, 0.2, 0.3]
-    with patch(
-        "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(return_value=(hyde_vector, True)),
-    ):
+    with rest_hyde_generating(app, return_value=hyde_vector):
         response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
 
     assert response.status_code == 200
@@ -1200,40 +1206,36 @@ def test_search_hyde_true_passes_vector_to_pipeline(tmp_path: Path) -> None:
 
 
 def test_search_hyde_fallback_passes_none(tmp_path: Path) -> None:
-    """hyde=true but resolve_hyde_vector returns (None, False) → pipeline.search called with query_vector=None; hyde_applied=False."""
+    """hyde=true but HyDE generates no vector → pipeline.search called with query_vector=None; hyde_applied=False."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock()
 
-    with patch(
-        "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(return_value=(None, False)),
-    ):
+    with rest_hyde_generating(app, return_value=None) as generate:
         response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
 
     assert response.status_code == 200
+    generate.assert_awaited_once()
     assert response.json()["hyde_applied"] is False
     call_kwargs = app.state.pipeline.search.call_args.kwargs
     assert call_kwargs["query_vector"] is None
 
 
 def _make_hyde_app(tmp_path: Path, *, embedder_is_warm: bool) -> tuple:
-    """App wired for a real ``resolve_hyde_vector`` call, with a tracked generator."""
-    from archon_search.hyde import HyDEGenerator
-
+    """App wired for a real ``RequestHyDE.resolve`` call, with a tracked generator."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(results=[_make_search_result(1)])
-    app.state.pipeline.embedder_is_warm = embedder_is_warm
+    # No embedder cache (lifespan not run): the global embedder serves the
+    # collection, so it is the one HyDE embeds with and whose warmth gates it.
+    app.state.pipeline.global_embedder.is_warm = embedder_is_warm
     app.state.config.hyde.enabled = True
-    generator = MagicMock(spec=HyDEGenerator)
-    generator.generate = AsyncMock(return_value=[0.1, 0.2, 0.3])
-    app.state.hyde_generator = generator
-    return app, client, generator
+    app.state.hyde_generator = stub_hyde_generator(return_value=[0.1, 0.2, 0.3])
+    return app, client, app.state.hyde_generator
 
 
 def test_search_hyde_is_skipped_while_the_embedder_is_cold(tmp_path: Path) -> None:
     """C1-I-1 (S290): a cold embedder must not reach ``HyDEGenerator.generate``.
 
-    ``generate`` ends in ``embed_one`` on the pipeline's global embedder and runs
+    ``generate`` ends in ``embed_one`` on the embedder serving the collection and runs
     before the search enters any budget, so on a cold embedder it parks the
     connection for the whole ONNX build — the very defect S290 is about. The
     request must still answer, reporting the standard HyDE-failure warning.
@@ -1261,19 +1263,209 @@ def test_search_hyde_still_runs_once_the_embedder_is_warm(tmp_path: Path) -> Non
     assert response.json()["hyde_applied"] is True
 
 
-def test_search_hyde_package_not_installed_returns_422(tmp_path: Path) -> None:
-    """resolve_hyde_vector raises RuntimeError (package missing) → 422 response."""
-    app, client = _make_app(tmp_path)
-    app.state.pipeline = _make_pipeline_mock()
+def test_search_hyde_is_skipped_while_the_collection_embedder_load_is_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pending cache load serves FTS-only behind a global-embedder placeholder.
 
-    with patch(
-        "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(side_effect=RuntimeError("Install archon-search[hyde] to use HyDE")),
+    HyDE must not embed the hypothesis with that placeholder: it is not the
+    collection's model, and a vector would cancel the FTS-only degrade.
+    """
+    import asyncio
+
+    import archon_search.server.routes_search as routes_search_mod
+
+    app, client, generator = _make_hyde_app(tmp_path, embedder_is_warm=True)
+
+    async def _never_finishing_load(_model: str) -> MagicMock:
+        await asyncio.Event().wait()  # never set: the load outlives any bound
+        raise AssertionError("unreachable")
+
+    app.state.embedder_cache = MagicMock(get_or_load=_never_finishing_load)
+    monkeypatch.setattr(routes_search_mod, "_EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS", 0.01)
+
+    response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
+
+    assert response.status_code == 200, response.text
+    generator.generate.assert_not_awaited()
+    data = response.json()
+    assert data["hyde_applied"] is False
+    assert data["expansion_warning"] == "HyDE expansion failed"
+    search_kwargs = app.state.pipeline.search.await_args.kwargs
+    assert search_kwargs["query_vector"] is None
+    assert search_kwargs["fts_only"] is True
+
+
+def test_search_hyde_is_skipped_when_the_collection_embedder_is_cold_but_the_global_one_is_warm(
+    tmp_path: Path,
+) -> None:
+    """HyDE's warmth gate reads the collection's embedder — the one it would embed with.
+
+    A warm global embedder must not let HyDE run against a cold per-collection one.
+    """
+    app, client, generator = _make_hyde_app(tmp_path, embedder_is_warm=True)
+    cold_collection_embedder = MagicMock(is_warm=False)
+    app.state.embedder_cache = MagicMock(get_or_load=AsyncMock(return_value=cold_collection_embedder))
+
+    response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
+
+    assert response.status_code == 200, response.text
+    generator.generate.assert_not_awaited()
+    data = response.json()
+    assert data["hyde_applied"] is False
+    assert data["expansion_warning"] == "HyDE expansion failed"
+    search_kwargs = app.state.pipeline.search.await_args.kwargs
+    assert search_kwargs["embedder"] is cold_collection_embedder
+    assert search_kwargs["fts_only"] is True
+    # One bounded warm-up per request, not one for HyDE and another for the search (S290).
+    app.state.pipeline.warmup_models.assert_awaited_once()
+
+
+_LEAKY_INSTALL_HINT = "printf '%s\\n' secret-exclude | uv tool install /opt/private/wheelhouse"
+
+
+@pytest.mark.parametrize("target", [{"collection": "col"}, {"collections": ["a", "b"]}])
+def test_search_hyde_package_not_installed_returns_422(
+    tmp_path: Path, target: dict, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A missing HyDE package → 422 with the fixed install message, not the exception's install command.
+
+    The install command stays in the server log (C2-T-10), and the single-collection 422
+    still emits its stage timings.
+    """
+    import archon_search.server.routes_search as routes_search_mod
+
+    app, client = _make_app(tmp_path)
+    app.state.config.observability.stage_timings_enabled = True
+    app.state.pipeline = _make_pipeline_mock()
+    app.state.pipeline.search_many = AsyncMock()
+    # The class routes_search catches, whatever module reloads ran before.
+    dependency_error = routes_search_mod.HyDEDependencyError(
+        f"Install archon-search[hyde] to use HyDE ({_LEAKY_INSTALL_HINT})"
+    )
+
+    with rest_hyde_generating(app, side_effect=dependency_error), caplog.at_level(
+        logging.INFO, logger="archon_search.server.routes_search"
     ):
-        response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
+        response = client.post("/search", json={"query": "q", "hyde": True, **target})
 
     assert response.status_code == 422
-    assert "hyde" in response.json()["detail"].lower() or "install" in response.json()["detail"].lower()
+    assert response.json() == {"detail": "Install archon-search[hyde] to use HyDE"}
+    assert _LEAKY_INSTALL_HINT in caplog.text
+    app.state.pipeline.search.assert_not_awaited()
+    app.state.pipeline.search_many.assert_not_awaited()
+    if "collection" in target:
+        assert len(_stage_timing_records(caplog)) == 1
+
+
+def _fan_out_ready(app) -> None:
+    app.state.pipeline.search_many = AsyncMock(return_value=SearchPipelineResult(results=[], acl_filtered=False))
+
+
+@pytest.mark.parametrize(
+    ("graph_mode", "target"),
+    [
+        ("naive", {"collection": "col"}),
+        ("local", {"collection": "col"}),
+        ("global", {"collection": "col"}),
+        ("ppr", {"collection": "col"}),
+        ("naive", {"collections": ["a", "b"]}),
+        ("local", {"collections": ["a", "b"]}),
+        ("global", {"collections": ["a", "b"]}),
+    ],
+)
+def test_search_graph_mode_suppresses_hyde(tmp_path: Path, graph_mode: str, target: dict) -> None:
+    """C2-A-1: graph_mode wins over HyDE (most graph paths drop the vector) — no LLM call, no hyde_applied=true lie."""
+    app, client, generator = _make_hyde_app(tmp_path, embedder_is_warm=True)
+    _fan_out_ready(app)
+    app.state.config.graph.enabled = True
+
+    response = client.post("/search", json={"query": "q", "hyde": True, "graph_mode": graph_mode, **target})
+
+    assert response.status_code == 200, response.text
+    generator.generate.assert_not_awaited()
+    data = response.json()
+    assert data["hyde_applied"] is False
+    assert data["expansion_warning"] is None
+    called = app.state.pipeline.search_many if "collections" in target else app.state.pipeline.search
+    assert called.await_args.kwargs["query_vector"] is None
+
+
+def test_search_fan_out_skips_hyde_on_a_cold_global_embedder_with_one_warmup(tmp_path: Path) -> None:
+    """C2-T-4: the fan-out's own bounded warm-up answers HyDE's warmth — no second wait."""
+    app, client, generator = _make_hyde_app(tmp_path, embedder_is_warm=False)
+    _fan_out_ready(app)
+    app.state.pipeline.embedder_is_warm = False
+
+    response = client.post("/search", json={"collections": ["a", "b"], "query": "q", "hyde": True})
+
+    assert response.status_code == 200, response.text
+    generator.generate.assert_not_awaited()
+    app.state.pipeline.warmup_models.assert_awaited_once()
+    assert response.json()["expansion_warning"] == "HyDE expansion failed"
+    search_many_kwargs = app.state.pipeline.search_many.await_args.kwargs
+    assert search_many_kwargs["query_vector"] is None
+    assert search_many_kwargs["fts_only"] is True
+
+
+_LEAKY_HYDE_FAILURE = "ONNXRuntimeError: /Users/ops/.archon-search/models/onnx/model.onnx failed to load"
+
+
+@pytest.mark.parametrize("target", [{"collection": "col"}, {"collections": ["a", "b"]}])
+def test_search_non_dependency_hyde_failure_is_a_logged_sanitized_500(
+    tmp_path: Path, target: dict, caplog: pytest.LogCaptureFixture
+) -> None:
+    """C2-T-2/C2-I-8: any other HyDE exception is a pipeline failure — telemetry, log, plain 500.
+
+    On the fan-out it used to escape before any try: a bare 500 with no log or telemetry.
+    """
+    app, client, generator = _make_hyde_app(tmp_path, embedder_is_warm=True)
+    _fan_out_ready(app)
+    generator.generate = AsyncMock(side_effect=RuntimeError(_LEAKY_HYDE_FAILURE))
+    writer = MagicMock()
+    app.state.telemetry_writer = writer
+
+    with caplog.at_level(logging.ERROR, logger="archon_search"):
+        response = client.post("/search", json={"query": "q", "hyde": True, **target})
+
+    assert response.status_code == 500
+    assert _LEAKY_HYDE_FAILURE not in response.text
+    entry = writer.enqueue.call_args.args[0]
+    assert (entry.status, entry.error_kind) == ("internal_error", "other")
+    failures = [r for r in caplog.records if getattr(r, "event_type", None) == "search_pipeline_failure"]
+    assert len(failures) == 1
+    app.state.pipeline.search.assert_not_awaited()
+    app.state.pipeline.search_many.assert_not_awaited()
+
+
+_SLOW_HYDE_SECONDS = 0.3
+_SLOW_HYDE_MS = _SLOW_HYDE_SECONDS * 1000.0
+
+
+def _stage_timing_records(caplog: pytest.LogCaptureFixture) -> list:
+    return [r for r in caplog.records if getattr(r, "event_type", None) == "stage_timings"]
+
+
+def test_search_stage_total_excludes_hyde_time(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """C2-T-6: the single-collection ``total`` covers retrieval, not HyDE's LLM call."""
+    import asyncio
+
+    app, client, generator = _make_hyde_app(tmp_path, embedder_is_warm=True)
+    app.state.config.observability.stage_timings_enabled = True
+
+    async def _slow_generate(*_args: object, **_kwargs: object) -> list[float]:
+        await asyncio.sleep(_SLOW_HYDE_SECONDS)
+        return [0.1, 0.2, 0.3]
+
+    generator.generate = _slow_generate
+
+    with caplog.at_level(logging.INFO, logger="archon_search.server.routes_search"):
+        response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["hyde_applied"] is True
+    (record,) = _stage_timing_records(caplog)
+    assert 0 <= record.stage_timings_ms["total"] < _SLOW_HYDE_MS
 
 
 def test_search_many_hyde_true(tmp_path: Path) -> None:
@@ -1285,10 +1477,7 @@ def test_search_many_hyde_true(tmp_path: Path) -> None:
     app.state.pipeline = pipeline_mock
 
     hyde_vector = [0.5, 0.6, 0.7]
-    with patch(
-        "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(return_value=(hyde_vector, True)),
-    ):
+    with rest_hyde_generating(app, return_value=hyde_vector):
         response = client.post("/search", json={"collections": ["a", "b"], "query": "q", "hyde": True})
 
     assert response.status_code == 200
@@ -1331,7 +1520,7 @@ def test_search_response_has_rag_fusion_fields() -> None:
 
 
 def test_search_rag_fusion_true_skips_hyde(tmp_path: Path) -> None:
-    """rag_fusion=True (and enabled in config) must suppress HyDE: resolve_hyde_vector NOT called; response hyde_applied=False.
+    """rag_fusion=True (and enabled in config) must suppress HyDE: generate NOT called; response hyde_applied=False.
 
     Mutual exclusion only holds when RAG Fusion can actually run (config kill-switch on).
     When config.rag_fusion.enabled=False, HyDE still applies — see the parallel
@@ -1349,10 +1538,7 @@ def test_search_rag_fusion_true_skips_hyde(tmp_path: Path) -> None:
     pipeline_mock.warmup_models = AsyncMock(return_value=True)
     app.state.pipeline = pipeline_mock
 
-    with patch(
-        "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(return_value=([0.1, 0.2], True)),
-    ) as mock_hyde:
+    with rest_hyde_generating(app, return_value=[0.1, 0.2]) as mock_hyde:
         response = client.post("/search", json={"collection": "col", "query": "q", "rag_fusion": True, "hyde": True})
 
     assert response.status_code == 200
@@ -1384,10 +1570,7 @@ def test_search_rag_fusion_requested_but_disabled_hyde_still_applies(tmp_path: P
     pipeline_mock.warmup_models = AsyncMock(return_value=True)
     app.state.pipeline = pipeline_mock
 
-    with patch(
-        "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(return_value=([0.1, 0.2], True)),
-    ) as mock_hyde:
+    with rest_hyde_generating(app, return_value=[0.1, 0.2]) as mock_hyde:
         response = client.post(
             "/search",
             json={"collection": "col", "query": "q", "rag_fusion": True, "hyde": True},
@@ -1415,8 +1598,7 @@ def test_search_rag_fusion_true_passes_to_pipeline(tmp_path: Path) -> None:
     pipeline_mock.warmup_models = AsyncMock(return_value=True)
     app.state.pipeline = pipeline_mock
 
-    with patch("archon_search.server.routes_search.resolve_hyde_vector", new=AsyncMock(return_value=(None, False))):
-        response = client.post("/search", json={"collection": "col", "query": "q", "rag_fusion": True})
+    response = client.post("/search", json={"collection": "col", "query": "q", "rag_fusion": True})
 
     assert response.status_code == 200
     data = response.json()
@@ -1431,15 +1613,12 @@ def test_search_rag_fusion_true_passes_to_pipeline(tmp_path: Path) -> None:
 
 
 def test_search_rag_fusion_false_hyde_still_works(tmp_path: Path) -> None:
-    """rag_fusion=False + hyde=True: resolve_hyde_vector IS called normally."""
+    """rag_fusion=False + hyde=True: HyDE generate IS called normally."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock()
 
     hyde_vector = [0.5, 0.6, 0.7]
-    with patch(
-        "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(return_value=(hyde_vector, True)),
-    ) as mock_hyde:
+    with rest_hyde_generating(app, return_value=hyde_vector) as mock_hyde:
         response = client.post("/search", json={"collection": "col", "query": "q", "rag_fusion": False, "hyde": True})
 
     assert response.status_code == 200
@@ -1447,26 +1626,41 @@ def test_search_rag_fusion_false_hyde_still_works(tmp_path: Path) -> None:
     assert response.json()["hyde_applied"] is True
 
 
-def test_search_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> None:
-    """pipeline.search() raises RAGFusionDependencyError → 422 response."""
-    from archon_search.rag_fusion import RAGFusionDependencyError
+_LEAKY_RAG_FUSION_HINT = "uv tool install /opt/private/wheelhouse 'archon-search[rag_fusion]'"
+
+
+@pytest.mark.parametrize("target", [{"collection": "col"}, {"collections": ["a", "b"]}])
+def test_search_rag_fusion_package_not_installed_returns_422(
+    tmp_path: Path, target: dict, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RAGFusionDependencyError → 422 with fixed text; the install command goes to the log only (G2)."""
+    import archon_search.server.routes_search as routes_search_mod
 
     app, client = _make_app(tmp_path)
     pipeline_mock = _make_pipeline_mock()
-    pipeline_mock.search = AsyncMock(side_effect=RAGFusionDependencyError("Install archon-search[rag_fusion]"))
-    pipeline_mock.warmup_models = AsyncMock(return_value=True)
+    # The class routes_search catches, whatever module reloads ran before.
+    dependency_error = routes_search_mod.RAGFusionDependencyError(
+        f"{routes_search_mod.RAG_FUSION_DEPENDENCY_DETAIL} ({_LEAKY_RAG_FUSION_HINT})"
+    )
+    pipeline_mock.search = AsyncMock(side_effect=dependency_error)
+    pipeline_mock.search_many = AsyncMock(side_effect=dependency_error)
     app.state.pipeline = pipeline_mock
 
-    with patch("archon_search.server.routes_search.resolve_hyde_vector", new=AsyncMock(return_value=(None, False))):
-        response = client.post("/search", json={"collection": "col", "query": "q", "rag_fusion": True})
+    with caplog.at_level(logging.WARNING, logger="archon_search.server.routes_search"):
+        response = client.post("/search", json={"query": "q", "rag_fusion": True, **target})
 
     assert response.status_code == 422
-    assert "rag_fusion" in response.json()["detail"].lower() or "install" in response.json()["detail"].lower()
+    assert response.json() == {"detail": "Install archon-search[rag_fusion] to use RAG Fusion"}
+    assert _LEAKY_RAG_FUSION_HINT in caplog.text
 
 
 def test_search_many_rag_fusion_true(tmp_path: Path) -> None:
-    """Multi-collection path with rag_fusion=True passes rag_fusion params to search_many."""
+    """Multi-collection path with rag_fusion=True passes rag_fusion params to search_many.
+
+    HyDE is requested too: an enabled RAG Fusion wins over it (S272), so no LLM call is made.
+    """
     app, client = _make_app(tmp_path)
+    app.state.config.rag_fusion.enabled = True
     pipeline_mock = _make_multi_pipeline_mock(
         search_many_return=SearchPipelineResult(
             results=[], acl_filtered=False, rag_fusion_applied=True, rag_fusion_queries_used=2
@@ -1474,18 +1668,22 @@ def test_search_many_rag_fusion_true(tmp_path: Path) -> None:
     )
     app.state.pipeline = pipeline_mock
 
-    with patch("archon_search.server.routes_search.resolve_hyde_vector", new=AsyncMock(return_value=(None, False))):
-        response = client.post("/search", json={"collections": ["a", "b"], "query": "q", "rag_fusion": True})
+    with rest_hyde_generating(app, return_value=[0.1, 0.2, 0.3]) as generate:
+        response = client.post(
+            "/search", json={"collections": ["a", "b"], "query": "q", "rag_fusion": True, "hyde": True}
+        )
 
     assert response.status_code == 200
+    generate.assert_not_awaited()
     data = response.json()
+    assert data["hyde_applied"] is False
     assert data["rag_fusion_applied"] is True
     assert data["rag_fusion_queries_used"] == 2
     call_kwargs = pipeline_mock.search_many.call_args.kwargs
     assert call_kwargs.get("rag_fusion") is True
     assert call_kwargs.get("rag_fusion_generator") is not None
     assert call_kwargs.get("rag_fusion_config") is not None
-    # HyDE must be suppressed: query_vector=None when rag_fusion=True
+    # HyDE is suppressed, so the fan-out embeds the plain query.
     assert call_kwargs.get("query_vector") is None
 
 
@@ -1505,10 +1703,7 @@ def test_search_response_expansion_used_true_on_hyde_success(tmp_path: Path) -> 
     )
     # HyDE returns a valid vector — hyde_applied=True
     fake_vector = np.ones(384, dtype=np.float32)
-    with patch(
-        "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(return_value=(fake_vector, True)),
-    ):
+    with rest_hyde_generating(app, return_value=fake_vector):
         response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
 
     assert response.status_code == 200
@@ -1518,17 +1713,15 @@ def test_search_response_expansion_used_true_on_hyde_success(tmp_path: Path) -> 
 
 
 def test_search_response_expansion_warning_on_hyde_failure(tmp_path: Path) -> None:
-    """When HyDE was requested but resolve_hyde_vector returns (None, False), expansion_warning='HyDE expansion failed'."""
+    """When HyDE was requested but generated no vector, expansion_warning='HyDE expansion failed'."""
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock(results=[], acl_filtered=False)
-    # HyDE fails: returns (None, False) with hyde=True requested
-    with patch(
-        "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(return_value=(None, False)),
-    ):
+    # HyDE fails: the stub generate returns None with hyde=True requested
+    with rest_hyde_generating(app, return_value=None) as generate:
         response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
 
     assert response.status_code == 200
+    generate.assert_awaited_once()
     data = response.json()
     assert data["expansion_used"] is False
     assert data["expansion_warning"] == "HyDE expansion failed"
@@ -1542,10 +1735,7 @@ def test_search_response_expansion_used_or_logic(tmp_path: Path) -> None:
     # Case 1: HyDE succeeds → expansion_used=True
     app.state.pipeline = _make_pipeline_mock(results=[], acl_filtered=False)
     fake_vector = np.ones(384, dtype=np.float32)
-    with patch(
-        "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(return_value=(fake_vector, True)),
-    ):
+    with rest_hyde_generating(app, return_value=fake_vector):
         resp1 = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
     assert resp1.status_code == 200
     assert resp1.json()["expansion_used"] is True
@@ -1553,12 +1743,10 @@ def test_search_response_expansion_used_or_logic(tmp_path: Path) -> None:
 
     # Case 2: HyDE fails → expansion_used=False
     app.state.pipeline = _make_pipeline_mock(results=[], acl_filtered=False)
-    with patch(
-        "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(return_value=(None, False)),
-    ):
+    with rest_hyde_generating(app, return_value=None) as generate:
         resp2 = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
     assert resp2.status_code == 200
+    generate.assert_awaited_once()
     assert resp2.json()["expansion_used"] is False
     assert resp2.json()["expansion_warning"] == "HyDE expansion failed"
 
@@ -1640,10 +1828,7 @@ def test_search_multi_collection_expansion_used_true_on_hyde_success(tmp_path: P
         search_many_return=SearchPipelineResult(results=[], acl_filtered=False)
     )
     fake_vector = np.ones(384, dtype=np.float32)
-    with patch(
-        "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(return_value=(fake_vector, True)),
-    ):
+    with rest_hyde_generating(app, return_value=fake_vector):
         response = client.post("/search", json={"collections": ["a", "b"], "query": "q", "hyde": True})
 
     assert response.status_code == 200
@@ -1658,13 +1843,11 @@ def test_search_multi_collection_expansion_warning_on_hyde_failure(tmp_path: Pat
     app.state.pipeline = _make_multi_pipeline_mock(
         search_many_return=SearchPipelineResult(results=[], acl_filtered=False)
     )
-    with patch(
-        "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(return_value=(None, False)),
-    ):
+    with rest_hyde_generating(app, return_value=None) as generate:
         response = client.post("/search", json={"collections": ["a", "b"], "query": "q", "hyde": True})
 
     assert response.status_code == 200
+    generate.assert_awaited_once()
     data = response.json()
     assert data["expansion_used"] is False
     assert data["expansion_warning"] == "HyDE expansion failed"

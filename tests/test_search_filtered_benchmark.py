@@ -16,7 +16,7 @@ Three benchmarks:
     vs an unfiltered baseline measured in the same run.
 
 - test_hyde_false_search_p95_under_threshold:
-    hyde=False fast path (resolve_hyde_vector returns immediately), 100 iterations, top_k=10.
+    hyde=False fast path (RequestHyDE.resolve returns immediately), 100 iterations, top_k=10.
     Asserts p95 ≤ [search_hyde_false].p95_ms from tests/eval/thresholds.toml.
     Confirms the HyDE fast-path adds no measurable overhead over unfiltered search.
 """
@@ -258,26 +258,39 @@ def test_prefix_filtered_search_p95_regression_under_threshold(bench_store) -> N
 def test_hyde_false_search_p95_under_threshold(bench_store) -> None:  # type: ignore[no-untyped-def]
     """HyDE fast-path (hyde=False) hybrid search p95 must stay under the configured ceiling.
 
-    ``resolve_hyde_vector(hyde=False, ...)`` returns immediately without calling
-    the LLM — this benchmark confirms that wiring HyDE through the route handler
-    adds no measurable overhead over an unfiltered search.
+    ``RequestHyDE(requested=False, ...).resolve(...)`` — the path every route handler
+    takes — returns immediately without calling the LLM or starting a budget task;
+    this benchmark confirms that wiring HyDE through the route handler adds no
+    measurable overhead over an unfiltered search.
 
     Threshold: [search_hyde_false].p95_ms in tests/eval/thresholds.toml.
     """
-    from archon_search.config import HyDEConfig
-    from archon_search.hyde import resolve_hyde_vector
+    from unittest.mock import MagicMock
 
-    config = HyDEConfig(enabled=True, max_requests_per_minute=60)
+    from archon_search.config import HyDEConfig
+    from archon_search.server._hyde import RequestHyDE
+    from archon_search.server._search_budget import SEARCH_TIMEOUT_SECONDS
+
+    query_text = "benchmark query for hyde fast path"
+    request_hyde = RequestHyDE(
+        query=query_text,
+        requested=False,
+        suppressed=False,
+        generator=None,
+        config=HyDEConfig(enabled=True, max_requests_per_minute=60),
+        timeout=SEARCH_TIMEOUT_SECONDS,
+    )
+    # Never embedded with: the hyde=False fast path returns before generation.
+    embedder = MagicMock()
 
     async def _measure_with_hyde_false(store, n_iters: int, warmup: int) -> list[float]:
-        """Run hybrid_search with resolve_hyde_vector(hyde=False) and return latencies."""
-        query_text = "benchmark query for hyde fast path"
+        """Run hybrid_search after a hyde=False RequestHyDE.resolve and return latencies."""
 
         warmup_rng = np.random.default_rng(8888)
         for _ in range(warmup):
             qv = warmup_rng.random(_DIM, dtype=np.float32).tolist()
-            # Resolve HyDE vector — fast path, returns (None, False) immediately
-            await resolve_hyde_vector(query_text, False, None, config)
+            # Resolve HyDE — fast path, returns the not-requested outcome immediately
+            await request_hyde.resolve(embedder, embedder_warm=True)
             # Use query embedding (None vector → normal search)
             await store.hybrid_search("bench", qv, query_text, _TOP_K, None)
 
@@ -285,8 +298,8 @@ def test_hyde_false_search_p95_under_threshold(bench_store) -> None:  # type: ig
         for i in range(n_iters):
             qv = np.random.default_rng(i + 10000).random(_DIM, dtype=np.float32).tolist()
             t0 = time.process_time()
-            # Full round-trip: resolve_hyde_vector + hybrid_search (as the route handler does)
-            hyde_vector, _ = await resolve_hyde_vector(query_text, False, None, config)
+            # Full round-trip: RequestHyDE.resolve + hybrid_search (as the route handler does)
+            await request_hyde.resolve(embedder, embedder_warm=True)
             await store.hybrid_search("bench", qv, query_text, _TOP_K, None)
             latencies.append((time.process_time() - t0) * 1000)
 
@@ -306,6 +319,6 @@ def test_hyde_false_search_p95_under_threshold(bench_store) -> None:  # type: ig
     ceiling = thresholds["search_hyde_false"]["p95_ms"]
     assert p95 <= ceiling, (
         f"hyde=false fast-path p95 {p95:.1f} ms exceeds ceiling {ceiling} ms. "
-        "The HyDE fast-path (resolve_hyde_vector with hyde=False) should not add "
+        "The HyDE fast-path (RequestHyDE.resolve with hyde=False) should not add "
         "measurable latency over unfiltered hybrid search."
     )

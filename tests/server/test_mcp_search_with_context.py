@@ -31,6 +31,7 @@ if "fastmcp" not in sys.modules:
         sys.modules["fastmcp"] = _fastmcp
 
 from archon_search._types import ChunkRecord, SearchResult
+from tests._hyde_stubs import hyde_enabled_config, stub_hyde_generator
 
 
 class _FakeApp:
@@ -254,7 +255,7 @@ async def test_search_with_context_returns_hyde_applied_false_by_default() -> No
 
 @pytest.mark.asyncio
 async def test_mcp_search_with_context_expansion_warning_on_hyde_failure() -> None:
-    """search_with_context returns expansion_warning='HyDE expansion failed' when resolve_hyde_vector returns (None, False) with hyde=True."""
+    """search_with_context returns expansion_warning='HyDE expansion failed' when HyDE generates no vector with hyde=True."""
     from archon_search.pipeline import SearchPipelineResult, SearchWithContextResult
     import archon_search.server.mcp as mcp_module
 
@@ -267,14 +268,16 @@ async def test_mcp_search_with_context_expansion_warning_on_hyde_failure() -> No
         )
     )
 
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
-        "archon_search.server.mcp.resolve_hyde_vector",
-        new=AsyncMock(return_value=(None, False)),
-    ):
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+    generator = stub_hyde_generator(return_value=None)
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(
+            pipeline, "default", writer=None, config=hyde_enabled_config(),
+            hyde_generator=generator,
+        )
         fn = fake_app.tools["search_with_context"]
         result = await fn(query="hello", collection="col", hyde=True)
 
+    generator.generate.assert_awaited_once()
     assert isinstance(result, dict)
     assert result.get("expansion_used") is False
     assert result.get("expansion_warning") == "HyDE expansion failed"
@@ -306,11 +309,11 @@ async def test_mcp_search_with_context_expansion_used_true_on_hyde_success() -> 
     )
 
     fake_vector = np.ones(384, dtype=np.float32)
-    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP), patch(
-        "archon_search.server.mcp.resolve_hyde_vector",
-        new=AsyncMock(return_value=(fake_vector, True)),
-    ):
-        fake_app = mcp_module.create_app(pipeline, "default", writer=None)
+    with patch("archon_search.server.mcp.FastMCP", new=_FakeFastMCP):
+        fake_app = mcp_module.create_app(
+            pipeline, "default", writer=None, config=hyde_enabled_config(),
+            hyde_generator=stub_hyde_generator(return_value=fake_vector),
+        )
         fn = fake_app.tools["search_with_context"]
         result = await fn(query="hello", collection="col", hyde=True)
 

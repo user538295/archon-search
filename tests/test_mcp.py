@@ -385,6 +385,8 @@ def _make_hyde_pipeline_mock(search_result=None, search_many_result=None, swc_re
     pipeline = MagicMock()
     pipeline._global_embedder = MagicMock()
     pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
+    # The public property and the private attribute are one object on a real pipeline (C2-T-9).
+    pipeline.global_embedder = pipeline._global_embedder
     pipeline.search = AsyncMock(return_value=search_result)
     pipeline.search_many = AsyncMock(return_value=search_many_result)
     pipeline.warmup_models = AsyncMock(return_value=True)
@@ -471,21 +473,68 @@ def test_mcp_search_tool_hyde_applied_false_when_hyde_false() -> None:
     assert result.get("hyde_applied") is False
 
 
-def test_mcp_search_tool_hyde_package_not_installed_returns_error() -> None:
-    """search tool returns error dict when HyDE package not installed (RuntimeError)."""
+_LEAKY_INSTALL_HINT = "printf '%s\\n' secret-exclude | uv tool install /opt/private/wheelhouse"
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "kwargs"),
+    [
+        ("search", {"collection": "col1"}),
+        ("search", {"collections": ["col1", "col2"]}),
+        ("search_with_context", {"collection": "col1"}),
+        ("explain", {"collection": "col1"}),
+        ("explain", {"collections": ["col1", "col2"]}),
+    ],
+)
+def test_mcp_hyde_package_not_installed_returns_the_fixed_dependency_error(tool_name: str, kwargs: dict) -> None:
+    """A missing HyDE package answers the fixed install message, never the exception's install command."""
+    import asyncio
+
+    import archon_search.hyde as hyde_mod
+
+    pipeline = _make_hyde_pipeline_mock()
+    gen = _make_hyde_generator_mock()
+    tool_fn = _get_hyde_tool_fn(tool_name, pipeline, config=_make_config_with_hyde(enabled=True), hyde_generator=gen)
+    # Looked up after the reload in _get_hyde_tool_fn, so it is the class mcp.py catches.
+    gen.generate = AsyncMock(
+        side_effect=hyde_mod.HyDEDependencyError(f"{hyde_mod.HYDE_DEPENDENCY_DETAIL} ({_LEAKY_INSTALL_HINT})")
+    )
+
+    result = asyncio.run(tool_fn(query="test query", hyde=True, **kwargs))
+
+    assert result == {"error": "Install archon-search[hyde] to use HyDE", "code": "validation_error"}
+
+
+_LEAKY_EMBED_ERROR = "ONNXRuntimeError: /Users/ops/.archon-search/models/onnx/model.onnx failed to load"
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "kwargs", "expected"),
+    [
+        ("search", {"collection": "col1"}, {"error": "search failed", "code": "internal_error"}),
+        ("search", {"collections": ["col1", "col2"]}, {"error": "search failed", "code": "internal_error"}),
+        ("search_with_context", {"collection": "col1"}, {"error": "search failed", "code": "internal_error"}),
+        ("explain", {"collection": "col1"}, {"error": "explain failed", "code": "internal_error"}),
+        ("explain", {"collections": ["col1", "col2"]}, {"error": "explain failed", "code": "internal_error"}),
+    ],
+)
+def test_mcp_hyde_embed_failure_does_not_leak_its_text(tool_name: str, kwargs: dict, expected: dict) -> None:
+    """Any other RuntimeError during HyDE (the embedder's embed_one) is sanitized like a pipeline failure.
+
+    Only ``HyDEDependencyError`` is a client-facing HyDE error; the fan-out paths used to
+    resolve HyDE outside the catch-all, echoing the raw text as a ``validation_error``.
+    """
     import asyncio
 
     pipeline = _make_hyde_pipeline_mock()
-    config = _make_config_with_hyde(enabled=True)
     gen = _make_hyde_generator_mock()
-    gen.generate = AsyncMock(side_effect=RuntimeError("Install archon-search[hyde]"))
+    gen.generate = AsyncMock(side_effect=RuntimeError(_LEAKY_EMBED_ERROR))
+    tool_fn = _get_hyde_tool_fn(tool_name, pipeline, config=_make_config_with_hyde(enabled=True), hyde_generator=gen)
 
-    tool_fn = _get_hyde_tool_fn("search", pipeline, config=config, hyde_generator=gen)
+    result = asyncio.run(tool_fn(query="test query", hyde=True, **kwargs))
 
-    result = asyncio.run(tool_fn(query="test query", collection="col1", hyde=True))
-
-    assert isinstance(result, dict)
-    assert "error" in result
+    assert result == expected
+    gen.generate.assert_awaited_once()
 
 
 def test_mcp_search_with_context_hyde() -> None:
@@ -584,6 +633,355 @@ def test_mcp_explain_hyde_false_returns_hyde_applied_false() -> None:
     assert result.get("hyde_applied") is False
 
 
+def test_mcp_explain_hyde_applies_with_the_cached_embedder_of_the_global_model() -> None:
+    """explain must apply HyDE when the embedder cache serves the collection.
+
+    The cache holds its own Embedder instance even for ``config.embedding_model``, so
+    an identity check against ``pipeline._global_embedder`` used to discard the HyDE
+    vector on every cached request. The hypothesis must instead be embedded with the
+    embedder that serves the collection, and that vector must reach the pipeline.
+    """
+    import asyncio
+    import importlib
+
+    import archon_search.server.mcp as mcp_mod
+
+    importlib.reload(mcp_mod)
+    pipeline = _make_hyde_pipeline_mock()
+    cached_embedder = MagicMock(name="cached-embedder")
+    embedder_cache = MagicMock()
+    embedder_cache.get_or_load = AsyncMock(return_value=cached_embedder)
+    hyde_vector = [0.5] * 5
+    gen = _make_hyde_generator_mock(vector=hyde_vector)
+    app = mcp_mod.create_app(
+        pipeline, "col1", config=_make_config_with_hyde(enabled=True),
+        embedder_cache=embedder_cache, hyde_generator=gen,
+    )
+
+    result = asyncio.run(app._tools["explain"](query="test query", collection="col1", hyde=True))
+
+    assert result.get("hyde_applied") is True, result
+    assert gen.generate.await_args.kwargs["embedder"] is cached_embedder
+    explain_kwargs = pipeline.explain.await_args.kwargs
+    assert explain_kwargs["query_vector"] == hyde_vector
+    assert explain_kwargs["embedder"] is cached_embedder
+
+
+_SHORT_SEARCH_BUDGET_SECONDS = 0.05
+_SILENT_PROVIDER_SECONDS = 30.0
+_BOUNDED_CALL_CEILING_SECONDS = 5.0
+
+
+@pytest.mark.parametrize("tool_name", ["search_with_context", "explain"])
+def test_mcp_hyde_is_bounded_by_the_search_budget_on_swc_and_explain(
+    tool_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S582 on the remaining HyDE surfaces: a silent LLM must not park the tool call.
+
+    ``search`` already wrapped HyDE in ``resolve_hyde_within_budget``; ``search_with_context``
+    and ``explain`` awaited the provider for the whole unclamped ``[hyde].timeout_seconds``.
+    """
+    import asyncio
+    import time
+
+    generation_started = asyncio.Event()
+
+    async def _never_answers(*_args: object, **_kwargs: object) -> list[float]:
+        generation_started.set()
+        await asyncio.sleep(_SILENT_PROVIDER_SECONDS)
+        raise AssertionError("the HyDE call was not cancelled by the search budget")
+
+    pipeline = _make_hyde_pipeline_mock()
+    gen = _make_hyde_generator_mock()
+    gen.generate = _never_answers
+    tool_fn = _get_hyde_tool_fn(tool_name, pipeline, config=_make_config_with_hyde(enabled=True), hyde_generator=gen)
+    monkeypatch.setattr(sys.modules["archon_search.server.mcp"], "_SEARCH_TIMEOUT_SECONDS", _SHORT_SEARCH_BUDGET_SECONDS)
+
+    started = time.monotonic()
+    result = asyncio.run(tool_fn(query="test query", collection="col1", hyde=True))
+    elapsed = time.monotonic() - started
+
+    # Presence anchor: the budget cut a generation that started, not a skipped one.
+    assert generation_started.is_set(), "HyDE generation never started"
+    assert elapsed < _BOUNDED_CALL_CEILING_SECONDS, f"{tool_name} waited {elapsed:.1f}s on the HyDE call"
+    assert result["hyde_applied"] is False, result
+
+
+@pytest.mark.parametrize("tool_name", ["search_with_context", "explain"])
+def test_mcp_hyde_on_swc_and_explain_still_runs_while_the_embedder_is_cold(tool_name: str) -> None:
+    """C2-I-1: these tools have no FTS-only degrade — retrieval embeds on the cold model anyway.
+
+    Skipping HyDE there saved no wait and only dropped the expansion, so HyDE runs (bounded
+    by the search budget) and no extra bounded warm-up is spent on its behalf.
+    """
+    import asyncio
+
+    pipeline = _make_hyde_pipeline_mock()
+    pipeline._global_embedder.is_warm = False
+    gen = _make_hyde_generator_mock(vector=[0.5] * 5)
+    tool_fn = _get_hyde_tool_fn(tool_name, pipeline, config=_make_config_with_hyde(enabled=True), hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", collection="col1", hyde=True))
+
+    gen.generate.assert_awaited_once()
+    assert gen.generate.await_args.kwargs["embedder"] is pipeline._global_embedder
+    assert result["hyde_applied"] is True, result
+    pipeline.warmup_models.assert_not_awaited()
+
+
+@pytest.mark.parametrize("kwargs", [{"collection": "col1"}, {"collections": ["col1", "col2"]}])
+@pytest.mark.parametrize("graph_mode", ["naive", "local", "global", "ppr"])
+def test_mcp_search_graph_mode_suppresses_hyde(graph_mode: str, kwargs: dict) -> None:
+    """C2-A-1: graph_mode wins over HyDE (most graph paths drop the vector), so the LLM is never called.
+
+    It used to be: the query went off-host, ``hyde_applied`` read ``true``, and the vector
+    was dropped by the graph path.
+    """
+    import asyncio
+
+    if graph_mode == "ppr" and "collections" in kwargs:
+        pytest.skip("ppr + collections is rejected before HyDE")
+    pipeline = _make_hyde_pipeline_mock()
+    gen = _make_hyde_generator_mock(vector=[0.5] * 5)
+    tool_fn = _get_hyde_tool_fn("search", pipeline, config=_make_config_with_hyde(enabled=True), hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", hyde=True, graph_mode=graph_mode, **kwargs))
+
+    assert "error" not in result, result
+    gen.generate.assert_not_awaited()
+    assert result["hyde_applied"] is False
+    assert result["expansion_warning"] is None
+    called = pipeline.search_many if "collections" in kwargs else pipeline.search
+    assert called.await_args.kwargs["query_vector"] is None
+
+
+def test_mcp_search_fan_out_hyde_embeds_with_the_global_embedder() -> None:
+    """C2-T-9: search_many embeds with the global embedder, so HyDE embeds with that object too."""
+    import asyncio
+
+    pipeline = _make_hyde_pipeline_mock()
+    gen = _make_hyde_generator_mock(vector=[0.5] * 5)
+    tool_fn = _get_hyde_tool_fn("search", pipeline, config=_make_config_with_hyde(enabled=True), hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", collections=["col1", "col2"], hyde=True))
+
+    assert result["hyde_applied"] is True, result
+    assert gen.generate.await_args.kwargs["embedder"] is pipeline.global_embedder
+    assert pipeline.search_many.await_args.kwargs["query_vector"] == [0.5] * 5
+
+
+def test_mcp_search_fan_out_skips_hyde_on_a_cold_global_embedder_with_one_warmup() -> None:
+    """C2-T-4: the fan-out's own bounded warm-up answers HyDE's warmth — no second wait."""
+    import asyncio
+
+    pipeline = _make_hyde_pipeline_mock()
+    pipeline._global_embedder.is_warm = False
+    pipeline.embedder_is_warm = False
+    gen = _make_hyde_generator_mock(vector=[0.5] * 5)
+    tool_fn = _get_hyde_tool_fn("search", pipeline, config=_make_config_with_hyde(enabled=True), hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", collections=["col1", "col2"], hyde=True))
+
+    gen.generate.assert_not_awaited()
+    pipeline.warmup_models.assert_awaited_once()
+    assert result["hyde_applied"] is False, result
+    assert result["expansion_warning"] == "HyDE expansion failed"
+    assert pipeline.search_many.await_args.kwargs["fts_only"] is True
+
+
+_LEAKY_RAG_FUSION_HINT = "uv tool install /opt/private/wheelhouse 'archon-search[rag_fusion]'"
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "pipeline_method", "kwargs"),
+    [
+        ("search", "search", {"collection": "col1"}),
+        ("search", "search_many", {"collections": ["col1", "col2"]}),
+        ("search_with_context", "search_with_context", {"collection": "col1"}),
+        ("explain", "explain", {"collection": "col1"}),
+        ("explain", "explain", {"collections": ["col1", "col2"]}),
+    ],
+)
+def test_mcp_rag_fusion_package_not_installed_returns_the_fixed_dependency_error(
+    tool_name: str, pipeline_method: str, kwargs: dict, caplog: pytest.LogCaptureFixture
+) -> None:
+    """G2: a missing RAG Fusion package answers fixed text; the install command stays in the log."""
+    import asyncio
+    import logging
+
+    pipeline = _make_hyde_pipeline_mock()
+    tool_fn = _get_hyde_tool_fn(tool_name, pipeline, config=_make_config_with_hyde(enabled=False))
+    # Looked up after the reload in _get_hyde_tool_fn: create_app imports the class lazily.
+    rag_fusion_mod = sys.modules["archon_search.rag_fusion"]
+    setattr(pipeline, pipeline_method, AsyncMock(side_effect=rag_fusion_mod.RAGFusionDependencyError(
+        f"{rag_fusion_mod.RAG_FUSION_DEPENDENCY_DETAIL} ({_LEAKY_RAG_FUSION_HINT})"
+    )))
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.server.mcp"):
+        result = asyncio.run(tool_fn(query="test query", rag_fusion=True, **kwargs))
+
+    assert result == {"error": "Install archon-search[rag_fusion] to use RAG Fusion", "code": "validation_error"}
+    assert _LEAKY_RAG_FUSION_HINT in caplog.text
+
+
+def _schema_drift(*_args: object, **_kwargs: object) -> None:
+    """Raise a real pydantic ValidationError whose text embeds a would-be leaked value."""
+    from pydantic import TypeAdapter
+
+    TypeAdapter(int).validate_python("LEAKED-INPUT-VALUE")
+
+
+@pytest.mark.parametrize("kwargs", [{"collection": "col1"}, {"collections": ["col1", "col2"]}])
+def test_mcp_explain_response_schema_drift_does_not_echo_validation_text(kwargs: dict) -> None:
+    """G3: a response-schema ValidationError answers fixed text, like search / search_with_context."""
+    import asyncio
+    from unittest.mock import patch
+
+    pipeline = _make_hyde_pipeline_mock()
+    tool_fn = _get_hyde_tool_fn("explain", pipeline, config=_make_config_with_hyde(enabled=False))
+    explain_response = sys.modules["archon_search.server.mcp"].ExplainResponse
+
+    with patch.object(explain_response, "from_pipeline_result", side_effect=_schema_drift):
+        result = asyncio.run(tool_fn(query="test query", **kwargs))
+
+    assert result == {"error": "explain response failed schema validation", "code": "schema_validation_error"}
+
+
+_SLOW_HYDE_SECONDS = 0.3
+_SLOW_HYDE_MS = _SLOW_HYDE_SECONDS * 1000.0
+
+
+def test_mcp_explain_stage_total_excludes_hyde_time() -> None:
+    """C2-T-6: ``stage_timings_ms.total`` covers retrieval, not HyDE's LLM call."""
+    import asyncio
+
+    async def _slow_generate(*_args: object, **_kwargs: object) -> list[float]:
+        await asyncio.sleep(_SLOW_HYDE_SECONDS)
+        return [0.5] * 5
+
+    pipeline = _make_hyde_pipeline_mock()
+    config = _make_config_with_hyde(enabled=True)
+    config.observability.stage_timings_enabled = True
+    gen = _make_hyde_generator_mock()
+    gen.generate = _slow_generate
+    tool_fn = _get_hyde_tool_fn("explain", pipeline, config=config, hyde_generator=gen)
+
+    result = asyncio.run(tool_fn(query="test query", collection="col1", hyde=True))
+
+    assert result["hyde_applied"] is True, result
+    assert 0 <= result["stage_timings_ms"]["total"] < _SLOW_HYDE_MS
+
+
+_ROUTING_VECTOR = [0.1, 0.2]
+_OTHER_MODEL = "other/collection-model"
+
+
+def _routed_explain(*, chosen_model: str, hyde: bool, hyde_vector: list[float] | None = None, graph_mode: str | None = None):
+    """Run a collectionless (auto-routed) MCP explain over one collection on *chosen_model*."""
+    import asyncio
+
+    from archon_search.collection_meta import CollectionMeta
+
+    pipeline = _make_hyde_pipeline_mock()
+    pipeline.get_all_collections_meta = AsyncMock(
+        return_value=[CollectionMeta(name="col1", active_embedding_model=chosen_model)]
+    )
+    embedders: dict[str, MagicMock] = {}
+
+    async def _get_or_load(model: str) -> MagicMock:
+        return embedders.setdefault(model, MagicMock(name=f"embedder-{model}"))
+
+    embedder_cache = MagicMock(get_or_load=_get_or_load)
+    gen = _make_hyde_generator_mock()
+    gen.generate = AsyncMock(return_value=hyde_vector)  # None: HyDE requested but failed
+    import importlib
+
+    import archon_search.server.mcp as mcp_mod
+
+    importlib.reload(mcp_mod)
+    app = mcp_mod.create_app(
+        pipeline, "col1", config=_make_config_with_hyde(enabled=True),
+        embedder_cache=embedder_cache, hyde_generator=gen,
+    )
+    result = asyncio.run(app._tools["explain"](query="test query", hyde=hyde, graph_mode=graph_mode))
+    return pipeline, gen, embedders, result
+
+
+def test_mcp_explain_routes_on_the_plain_query_and_reuses_that_vector_without_hyde() -> None:
+    """Routing embeds the plain query once; on the global model that vector also drives retrieval."""
+    pipeline, gen, _embedders, result = _routed_explain(chosen_model="test-model", hyde=False)
+
+    assert result["routing"]["chosen_collection"] == "col1", result
+    pipeline._global_embedder.embed_one.assert_awaited_once_with("test query")
+    gen.generate.assert_not_awaited()
+    assert pipeline.explain.await_args.kwargs["query_vector"] == _ROUTING_VECTOR
+
+
+def test_mcp_explain_does_not_reuse_the_routing_vector_for_a_collection_on_another_model() -> None:
+    """The routing vector is in the global model's space — useless to a collection on another model."""
+    pipeline, _gen, embedders, _result = _routed_explain(chosen_model=_OTHER_MODEL, hyde=False)
+
+    explain_kwargs = pipeline.explain.await_args.kwargs
+    assert explain_kwargs["query_vector"] is None
+    assert explain_kwargs["embedder"] is embedders[_OTHER_MODEL]
+
+
+def test_mcp_explain_routed_hyde_embeds_with_the_chosen_collections_embedder() -> None:
+    """Routing still runs on the plain query; HyDE then embeds with the routed collection's embedder."""
+    pipeline, gen, embedders, result = _routed_explain(chosen_model=_OTHER_MODEL, hyde=True, hyde_vector=[0.9] * 5)
+
+    pipeline._global_embedder.embed_one.assert_awaited_once_with("test query")
+    assert gen.generate.await_args.kwargs["embedder"] is embedders[_OTHER_MODEL]
+    assert pipeline.explain.await_args.kwargs["query_vector"] == [0.9] * 5
+    assert result["hyde_applied"] is True
+
+
+def test_mcp_explain_reuses_the_routing_vector_when_hyde_was_requested_but_failed() -> None:
+    """C2-T-5: a failed HyDE on the global model falls back to the routing vector, not a re-embed."""
+    pipeline, gen, _embedders, result = _routed_explain(chosen_model="test-model", hyde=True)
+
+    gen.generate.assert_awaited_once()
+    assert result["hyde_applied"] is False, result
+    pipeline._global_embedder.embed_one.assert_awaited_once_with("test query")
+    assert pipeline.explain.await_args.kwargs["query_vector"] == _ROUTING_VECTOR
+
+
+def test_mcp_explain_does_not_reuse_the_routing_vector_with_graph_mode() -> None:
+    """C2-T-5: graph-mode retrieval takes no query vector, so the routing vector is not handed over."""
+    pipeline, gen, _embedders, result = _routed_explain(chosen_model="test-model", hyde=False, graph_mode="naive")
+
+    assert "error" not in result, result
+    assert pipeline.explain.await_args.kwargs["graph_mode"] == "naive"
+    assert pipeline.explain.await_args.kwargs["query_vector"] is None
+    gen.generate.assert_not_awaited()
+
+
+_LEAKY_SEARCH_ERROR = "Invalid input, No vector column found to match with the query vector dimension: 384"
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "pipeline_method", "kwargs"),
+    [
+        ("search", "search", {"collection": "col1"}),
+        ("search", "search_many", {"collections": ["col1", "col2"]}),
+        ("search_with_context", "search_with_context", {"collection": "col1"}),
+    ],
+)
+def test_mcp_search_internal_error_does_not_leak_exception_text(
+    tool_name: str, pipeline_method: str, kwargs: dict
+) -> None:
+    """An unexpected pipeline failure must answer a fixed message, never ``str(exc)``."""
+    import asyncio
+
+    pipeline = _make_hyde_pipeline_mock()
+    setattr(pipeline, pipeline_method, AsyncMock(side_effect=ValueError(_LEAKY_SEARCH_ERROR)))
+    tool_fn = _get_hyde_tool_fn(tool_name, pipeline, config=_make_config_with_hyde(enabled=False))
+
+    result = asyncio.run(tool_fn(query="test query", **kwargs))
+
+    assert result == {"error": "search failed", "code": "internal_error"}
+
+
 # ---------------------------------------------------------------------------
 # Task 5.1 — MCP RAG Fusion wiring tests
 # ---------------------------------------------------------------------------
@@ -635,6 +1033,8 @@ def _make_rag_fusion_pipeline_mock(
     pipeline = MagicMock()
     pipeline._global_embedder = MagicMock()
     pipeline._global_embedder.embed_one = AsyncMock(return_value=[0.1, 0.2])
+    # The public property and the private attribute are one object on a real pipeline (C2-T-9).
+    pipeline.global_embedder = pipeline._global_embedder
     pipeline.search = AsyncMock(return_value=search_result)
     pipeline.search_many = AsyncMock(return_value=search_many_result)
     pipeline.warmup_models = AsyncMock(return_value=True)
@@ -723,12 +1123,12 @@ def test_mcp_search_tool_rag_fusion_applied_in_result() -> None:
 
 
 def test_mcp_search_tool_rag_fusion_true_skips_hyde() -> None:
-    """search tool with rag_fusion=True skips HyDE: resolve_hyde_vector NOT called."""
+    """search tool with rag_fusion=True skips HyDE: generate NOT called."""
     import asyncio
-    from unittest.mock import patch
 
     pipeline = _make_rag_fusion_pipeline_mock()
     config = _make_config_with_rag_fusion(enabled=True)
+    config.hyde.enabled = True  # only the rag_fusion suppression may keep HyDE off
     rf_gen = _make_rag_fusion_generator_mock()
     hyde_gen = MagicMock()
     hyde_gen.generate = AsyncMock(return_value=[0.5] * 5)
@@ -742,11 +1142,10 @@ def test_mcp_search_tool_rag_fusion_true_skips_hyde() -> None:
     )
     tool_fn = app._tools["search"]
 
-    with patch("archon_search.server.mcp.resolve_hyde_vector", new=AsyncMock(return_value=([0.5] * 5, True))) as mock_resolve:
-        result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True, hyde=True))
+    result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True, hyde=True))
 
-    # resolve_hyde_vector must NOT have been called when rag_fusion=True
-    mock_resolve.assert_not_called()
+    # HyDE must NOT have been generated when rag_fusion=True
+    hyde_gen.generate.assert_not_awaited()
     assert isinstance(result, dict)
     assert result.get("hyde_applied") is False
 
@@ -822,12 +1221,12 @@ def test_mcp_explain_rag_fusion() -> None:
 
 
 def test_mcp_search_with_context_rag_fusion_true_skips_hyde() -> None:
-    """search_with_context with rag_fusion=True skips HyDE: resolve_hyde_vector NOT called."""
+    """search_with_context with rag_fusion=True skips HyDE: generate NOT called."""
     import asyncio
-    from unittest.mock import patch
 
     pipeline = _make_rag_fusion_pipeline_mock()
     config = _make_config_with_rag_fusion(enabled=True)
+    config.hyde.enabled = True  # only the rag_fusion suppression may keep HyDE off
     rf_gen = _make_rag_fusion_generator_mock()
     hyde_gen = MagicMock()
     hyde_gen.generate = AsyncMock(return_value=[0.5] * 5)
@@ -841,10 +1240,9 @@ def test_mcp_search_with_context_rag_fusion_true_skips_hyde() -> None:
     )
     tool_fn = app._tools["search_with_context"]
 
-    with patch("archon_search.server.mcp.resolve_hyde_vector", new=AsyncMock(return_value=([0.5] * 5, True))) as mock_resolve:
-        result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True, hyde=True))
+    result = asyncio.run(tool_fn(query="test query", collection="col1", rag_fusion=True, hyde=True))
 
-    mock_resolve.assert_not_called()
+    hyde_gen.generate.assert_not_awaited()
     assert isinstance(result, dict)
     assert result.get("hyde_applied") is False
     # rag_fusion_applied is excluded from the MCP response (Task 2.2 narrowing)
@@ -999,6 +1397,7 @@ def test_search_schema_drift_returns_schema_validation_error() -> None:
         _fake_err = e
 
     pipeline = _make_search_pipeline_with_result()
+    pipeline.search_many = pipeline.search
     tool_fn = _get_search_tool_fn(pipeline)
 
     with patch(
@@ -1006,9 +1405,11 @@ def test_search_schema_drift_returns_schema_validation_error() -> None:
         side_effect=_fake_err,
     ):
         result = asyncio.run(tool_fn(query="hello", collection="col1"))
+        fanout_result = asyncio.run(tool_fn(query="hello", collections=["col1", "col2"]))
 
-    assert isinstance(result, dict)
-    assert result.get("code") == _ERR_SCHEMA
+    # Fixed text: a pydantic ValidationError embeds the offending values.
+    assert result == {"error": "search response failed schema validation", "code": _ERR_SCHEMA}
+    assert fanout_result == {"error": "search response failed schema validation", "code": _ERR_SCHEMA}
 
 
 # ---------------------------------------------------------------------------
@@ -1187,8 +1588,7 @@ def test_search_with_context_schema_drift_returns_schema_validation_error() -> N
     ):
         result = asyncio.run(tool_fn(query="hello", collection="col1"))
 
-    assert isinstance(result, dict)
-    assert result.get("code") == _ERR_SCHEMA
+    assert result == {"error": "search response failed schema validation", "code": _ERR_SCHEMA}
 
 
 # ---------------------------------------------------------------------------

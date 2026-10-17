@@ -1,7 +1,7 @@
 """E0b / T-1 — e2e: POST /search expansion warning in all cases.
 
 Scenarios covered:
-  S3: HyDE requested, resolve_hyde_vector returns (None, False) →
+  S3: HyDE requested, generation returns no vector →
       expansion_used=false, expansion_warning contains 'HyDE expansion failed'
   S5: Neither HyDE nor RAG Fusion requested →
       expansion_used=false, expansion_warning=null
@@ -19,10 +19,9 @@ mocked pipeline used by the BE-3 tests.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
-
 import pytest
 
+from tests._hyde_stubs import rest_hyde_generating
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
@@ -33,7 +32,7 @@ def _auth(api_key: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# S3: HyDE requested → resolve_hyde_vector returns (None, False) →
+# S3: HyDE requested → generation returns no vector →
 #     expansion_used=false, expansion_warning contains 'HyDE expansion failed'
 # ---------------------------------------------------------------------------
 
@@ -41,13 +40,13 @@ def _auth(api_key: str) -> dict[str, str]:
 def test_e2e_search_expansion_failure_warning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Real app via TestClient; force resolve_hyde_vector() to return (None, False) with HyDE
+    """Real app via TestClient; force HyDE generation to return no vector with HyDE
     requested; assert response has expansion_used=false, expansion_warning is non-null and
     equals 'HyDE expansion failed'.
 
-    Covers scenario S3: HyDE timeout/failure detection at the route level. resolve_hyde_vector
+    Covers scenario S3: HyDE timeout/failure detection at the route level. The generator
     is stubbed, so this verifies route-level warning mapping when HyDE resolution returns
-    failure — not the HyDE resolution logic itself.
+    failure — not the HyDE generation logic itself.
     """
     doc = tmp_path / "e0b_t1_hyde_test.md"
     doc.write_text(
@@ -58,14 +57,10 @@ def test_e2e_search_expansion_failure_warning(
     with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
         ingest_file_via_path(client, col, str(doc), api_key=api_key)
 
-        # Force resolve_hyde_vector to return (None, False) — simulates all HyDE failure
-        # modes (timeout, API error, missing key, empty response) which are indistinguishable
-        # at the route level. config.hyde.enabled is irrelevant: the mock replaces the
-        # function entirely, so the config parameter is never read.
-        with patch(
-            "archon_search.server.routes_search.resolve_hyde_vector",
-            new=AsyncMock(return_value=(None, False)),
-        ):
+        # Force generation to return None — simulates all HyDE failure modes (timeout,
+        # API error, missing key, empty response), which are indistinguishable at the
+        # route level. HyDE is enabled with a stub generator so the request reaches it.
+        with rest_hyde_generating(client.app, return_value=None):
             resp = client.post(
                 "/search",
                 json={"collection": col, "query": "expansion test content", "hyde": True},
