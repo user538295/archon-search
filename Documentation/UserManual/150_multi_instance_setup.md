@@ -90,7 +90,7 @@ archon-search stop
 
 **macOS — what gets created:**
 
-- `~/Library/LaunchAgents/com.archon.search.plist` — launchd plist with `Label=com.archon.search` and `WorkingDirectory` set to the fully-expanded home path (e.g., `/Users/<username>/.archon-search` — the plist stores the expanded path, not the tilde form), and an `EnvironmentVariables` dict with `ARCHON_SEARCH_CONFIG=<path-to-toml>` and `ARCHON_SEARCH_DATA_DIR=<data-dir>`. It does not carry `FASTEMBED_CACHE_PATH`; to relocate the service's fastembed cache, set it in `<data-dir>/.secrets.env`, which the plist's wrapper script sources.
+- `~/Library/LaunchAgents/com.archon.search.plist` — launchd plist with `Label=com.archon.search` and `WorkingDirectory` set to the fully-expanded home path (e.g., `/Users/<username>/.archon-search` — the plist stores the expanded path, not the tilde form), and an `EnvironmentVariables` dict with `ARCHON_SEARCH_CONFIG=<path-to-toml>` and `ARCHON_SEARCH_DATA_DIR=<data-dir>`, every value XML-escaped. It does not carry `FASTEMBED_CACHE_PATH`; to relocate the service's fastembed cache, set it in `<data-dir>/.secrets.env`, which the plist's wrapper script sources.
 - Prod data directory: `~/.archon-search/`
 - Config TOML: `~/.archon-search/archon-search.toml`
 

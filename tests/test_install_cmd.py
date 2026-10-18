@@ -373,6 +373,77 @@ def test_wizard_refused_interpreter_path_emits_clean_message_exits_1(
     assert "Traceback" not in result.output
 
 
+def test_wizard_refused_launchd_interpreter_path_emits_clean_message_exits_1(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """wizard (macOS): run() refuses an interpreter path the launchd wrapper cannot carry with one clean line."""
+    from archon_search.platform.macos import LaunchdSearchService
+
+    bad_python = str(tmp_path / "py\udcffenv" / "bin" / "python3")
+    monkeypatch.setattr(sys, "executable", bad_python)
+    # Safety net only: --dry-run never writes the plist, so the redirect keeps a regression off the real one.
+    plist = tmp_path / "LaunchAgents" / "com.archon.search.plist"
+    with (
+        patch("archon_search.install.installer.get_search_service", return_value=LaunchdSearchService()),
+        patch.object(LaunchdSearchService, "_plist_path", property(lambda self: plist)),
+    ):
+        result = runner.invoke(main, ["wizard", "--non-interactive", "--dry-run"], catch_exceptions=False)
+    assert result.exit_code == 1
+    refusal = f"wrapper script cannot hold an interpreter path that is not valid UTF-8: {bad_python!r}"
+    error_lines = [line for line in result.output.splitlines() if "Error during install:" in line]
+    assert error_lines == [f"Error during install: {refusal}"], result.output
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["real", "dry-run"])
+@pytest.mark.parametrize(
+    ("config_dir", "config_name", "refusal"),
+    [
+        ("conf", "archon-search.toml ", "archon-search would strip a config path with leading or trailing whitespace"),
+        (
+            "bad\x01conf",
+            "archon-search.toml",
+            "launchd plist cannot hold a config path containing a C0 control character other than tab and newline",
+        ),
+    ],
+    ids=["whitespace", "control-char"],
+)
+def test_install_refused_launchd_config_path_emits_clean_message_exits_1(
+    runner: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    dry_run: bool,
+    config_dir: str,
+    config_name: str,
+    refusal: str,
+) -> None:
+    """install (macOS): the real launchd service refuses an existing config at a path it cannot carry, in one line.
+
+    The refusal comes before the running service is stopped, so launchctl is never run and no plist is written.
+    """
+    from archon_search.platform.macos import LaunchdSearchService
+
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    config = tmp_path / config_dir / config_name
+    config.parent.mkdir()
+    config.write_text("[database]\n")
+    svc = LaunchdSearchService()
+    plist = tmp_path / "LaunchAgents" / "com.archon.search.plist"
+    args = ["install", "--config", str(config), *(["--dry-run"] if dry_run else [])]
+    with (
+        patch("archon_search.install.installer.get_search_service", return_value=svc),
+        patch.object(LaunchdSearchService, "_plist_path", property(lambda self: plist)),
+        patch.object(svc, "_run") as run,
+    ):
+        result = runner.invoke(main, args, catch_exceptions=False)
+    assert result.exit_code == 1
+    error_lines = [line for line in result.output.splitlines() if "Error during install:" in line]
+    assert error_lines == [f"Error during install: {refusal}: {str(config)!r}"], result.output
+    assert "Traceback" not in result.output
+    run.assert_not_called()
+    assert not plist.exists()
+
+
 def test_uninstall_container_env_emits_clean_message_exits_1(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -16,6 +16,7 @@ from archon_search.platform.service import (
     SearchServiceLifecycle,
     ServiceStatus,
     get_secrets_env_file,
+    write_errors_naming,
 )
 
 log = logging.getLogger(__name__)
@@ -243,13 +244,9 @@ class SystemdSearchService(SearchServiceLifecycle):
             return
         content = _UNIT_TEMPLATE.format(**{name: field.rendered() for name, field in fields.items()})
 
-        try:
+        with write_errors_naming(str(self._unit_path)):
             self._unit_path.parent.mkdir(parents=True, exist_ok=True)
             self._unit_path.write_text(content, encoding=_UNIT_ENCODING)  # noqa: durable-write
-        except PermissionError as e:
-            raise RuntimeError(f"Permission denied writing {self._unit_path}") from e
-        except OSError as e:
-            raise RuntimeError(f"Could not write {self._unit_path}") from e
 
         try:
             reload = self._run(["systemctl", "--user", "daemon-reload"])

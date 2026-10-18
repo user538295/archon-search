@@ -1,6 +1,7 @@
 """Tests for — SystemdSearchService (Linux)."""
 from __future__ import annotations
 
+import errno
 import re
 import subprocess
 import sys
@@ -245,16 +246,18 @@ def test_register_writes_unit_file(tmp_path: Path) -> None:
 
 
 def test_register_raises_on_permission_error(tmp_path: Path) -> None:
-    """register() raises RuntimeError when it cannot write the unit file."""
+    """register() raises a RuntimeError naming the unit, chained to the PermissionError, when it cannot write it."""
     from archon_search.platform.linux import SystemdSearchService
     svc = SystemdSearchService()
     unit = tmp_path / "archon-search.service"
+    denied = PermissionError(errno.EACCES, "Permission denied")
     with (
         patch.object(type(svc), "_unit_path", property(lambda self: unit)),
-        patch("pathlib.Path.write_text", side_effect=PermissionError),
+        patch("pathlib.Path.write_text", side_effect=denied),
+        pytest.raises(RuntimeError, match=f"^{re.escape(f'Permission denied writing {unit}')}$") as excinfo,
     ):
-        with pytest.raises(RuntimeError):
-            svc.register(config_path=_CONFIG_PATH)
+        svc.register(config_path=_CONFIG_PATH)
+    assert excinfo.value.__cause__ is denied
 
 
 def test_register_calls_daemon_reload_and_enable(tmp_path: Path) -> None:
@@ -1016,9 +1019,11 @@ def test_register_wraps_unit_write_os_error(tmp_path: Path) -> None:
     from archon_search.platform.linux import SystemdSearchService
     svc = SystemdSearchService()
     unit = tmp_path / "archon-search.service"
+    read_only = OSError(errno.EROFS, "Read-only file system")
     with (
         patch.object(type(svc), "_unit_path", property(lambda self: unit)),
-        patch("pathlib.Path.write_text", side_effect=OSError(30, "Read-only file system")),
-        pytest.raises(RuntimeError, match=re.escape(f"Could not write {unit}")),
+        patch("pathlib.Path.write_text", side_effect=read_only),
+        pytest.raises(RuntimeError, match=f"^{re.escape(f'Could not write {unit}')}$") as excinfo,
     ):
         svc.register(config_path=_CONFIG_PATH)
+    assert excinfo.value.__cause__ is read_only

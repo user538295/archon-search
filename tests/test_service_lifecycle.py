@@ -1,6 +1,7 @@
 """Tests for SearchServiceLifecycle ABC."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from archon_search.platform.service import (
     SearchServiceLifecycle,
     ServiceStatus,
     get_secrets_env_file,
+    write_errors_naming,
 )
 
 
@@ -149,3 +151,57 @@ def test_replace_registration_refused_leaves_running_service_untouched(monkeypat
         svc.replace_registration(config_path="/etc/a.toml")
 
     assert svc.calls == []
+
+
+def test_pre_activate_cleanup_logs_and_swallows_a_failed_stop(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A stop failure must not block registering the replacement; it is logged at DEBUG with its traceback.
+
+    DEBUG, not WARNING: systemd's stop() raises when the unit is not loaded yet, as on every fresh install.
+    """
+    svc = ConcreteService()
+    failure = RuntimeError("launchctl binary not found")
+
+    def failing_stop(dry_run: bool = False) -> int:
+        raise failure
+
+    monkeypatch.setattr(svc, "stop", failing_stop)
+    with caplog.at_level(logging.DEBUG, logger="archon_search.platform.service"):
+        svc.pre_activate_cleanup()
+
+    [record] = [r for r in caplog.records if r.name == "archon_search.platform.service"]
+    assert record.levelno == logging.DEBUG
+    assert record.getMessage() == "Could not stop the running service before re-registering it"
+    assert record.exc_info is not None
+    assert record.exc_info[1] is failure
+
+
+_WRITE_TARGET = "/srv/archon/run-server.sh"
+
+
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (PermissionError("denied"), f"Permission denied writing {_WRITE_TARGET}"),
+        (IsADirectoryError("is a directory"), f"Could not write {_WRITE_TARGET}"),
+    ],
+    ids=["permission", "other-oserror"],
+)
+def test_write_errors_naming_wraps_oserror_naming_the_target(error: OSError, message: str) -> None:
+    """An OSError becomes a RuntimeError naming the target, chained to the original error."""
+    with pytest.raises(RuntimeError) as excinfo, write_errors_naming(_WRITE_TARGET):
+        raise error
+
+    assert str(excinfo.value) == message
+    assert excinfo.value.__cause__ is error
+
+
+def test_write_errors_naming_passes_non_oserror_through_unchanged() -> None:
+    """Only write failures are translated; any other exception propagates as raised."""
+    failure = ValueError("not a write error")
+
+    with pytest.raises(ValueError) as excinfo, write_errors_naming(_WRITE_TARGET):
+        raise failure
+
+    assert excinfo.value is failure

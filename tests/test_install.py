@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 import time
 from pathlib import Path
@@ -394,6 +395,51 @@ class TestServiceDelegation:
         stop.assert_not_called()
         run.assert_not_called()
         assert not unit.exists()
+
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["real", "dry-run"])
+    @pytest.mark.parametrize(
+        ("config_dir", "data_name", "python", "refusal"),
+        [
+            ("bad\x01conf", "data", sys.executable, "launchd plist cannot hold a config path"),
+            ("conf", "bad\x01data", sys.executable, "launchd plist cannot hold a data directory"),
+            ("conf", "data", "/opt/py\x00thon/bin/python3", "wrapper script cannot hold an interpreter path"),
+        ],
+        ids=["config-path", "data-dir", "interpreter"],
+    )
+    def test_write_service_file_refused_launchd_registration_leaves_service_running(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        dry_run: bool,
+        config_dir: str,
+        data_name: str,
+        python: str,
+        refusal: str,
+    ) -> None:
+        """The real launchd service refuses a value the plist or wrapper cannot carry before stopping anything or writing."""
+        from archon_search.platform.macos import LaunchdSearchService
+
+        data_dir = tmp_path / data_name
+        monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(data_dir))
+        monkeypatch.setattr(sys, "executable", python)
+        installer = _make_installer(tmp_path, dry_run=dry_run)
+        installer.config_file = str(tmp_path / config_dir / "archon-search.toml")
+        svc = LaunchdSearchService()
+        plist = tmp_path / "LaunchAgents" / "com.archon.search.plist"
+
+        with (
+            patch("archon_search.install.installer.get_search_service", return_value=svc),
+            patch.object(LaunchdSearchService, "_plist_path", property(lambda self: plist)),
+            patch.object(svc, "_run") as run,
+            patch.object(svc, "stop") as stop,
+            pytest.raises(RuntimeError, match=f"^{re.escape(refusal)} "),
+        ):
+            installer.write_service_file()
+
+        stop.assert_not_called()
+        run.assert_not_called()
+        assert not plist.exists()
+        assert not data_dir.exists()
 
 
 # ---------------------------------------------------------------------------

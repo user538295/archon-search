@@ -1,12 +1,17 @@
 """SearchServiceLifecycle ABC for archon-search platform management."""
 from __future__ import annotations
 
+import logging
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from archon_search import paths
+
+log = logging.getLogger(__name__)
 
 # Bounds for stop() to wait for the OS to actually tear the service down.
 # `launchctl unload` / `systemctl --user stop` return before the process has
@@ -26,6 +31,17 @@ def get_secrets_env_file() -> Path:
     ``ARCHON_SEARCH_DATA_DIR`` relocates it with the rest of the runtime state.
     """
     return paths.get_data_dir() / _SECRETS_ENV_FILENAME
+
+
+@contextmanager
+def write_errors_naming(target: str) -> Iterator[None]:
+    """Turn an ``OSError`` raised while writing ``target`` into a ``RuntimeError`` that names it."""
+    try:
+        yield
+    except PermissionError as e:
+        raise RuntimeError(f"Permission denied writing {target}") from e
+    except OSError as e:
+        raise RuntimeError(f"Could not write {target}") from e
 
 
 @dataclass
@@ -97,4 +113,5 @@ class SearchServiceLifecycle(ABC):
         try:
             self.stop(dry_run=dry_run)
         except Exception:
-            pass
+            # Best effort: a failed stop must not block registering the replacement service.
+            log.debug("Could not stop the running service before re-registering it", exc_info=True)
