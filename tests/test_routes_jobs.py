@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
+from typing import Any
 from unittest import mock
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,8 +18,17 @@ from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.jobs.model import JobStatus, job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
-from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _run_pipeline
+from archon_search.embedder_cache import EmbedderNotReadyError
+from archon_search.server.routes_jobs import (
+    REINDEX_FAILED_DETAIL,
+    IngestRequest,
+    _default_ingest_task,
+    _default_ingest_task_with_lock,
+    _reindex_task,
+    _run_pipeline,
+)
 from archon_search.types import IngestJob, ReindexJob
+from tests._internal_error_leak import assert_logged_with_traceback
 
 
 @pytest.fixture
@@ -360,8 +371,6 @@ def test_delete_job_cross_namespace_404(tmp_path: Path, auth_headers: dict[str, 
 
 def test_delete_job_same_namespace_proceeds(tmp_path: Path) -> None:
     """DELETE /jobs/{id} with matching namespace → 202 and store.transition called."""
-    from unittest.mock import MagicMock, patch
-
     tenant_key = "b" * 64
     store = JobStore(path=tmp_path / "jobs.json")
     job = store.create(namespace="tenantA")
@@ -487,6 +496,59 @@ def test_ingest_uses_validator_returned_path(
 
     assert response.status_code == 202
     assert captured == [str(Path("/sentinel/value"))]
+
+
+def test_ingest_keeps_submitted_path_beside_resolved_one(
+    tmp_path: Path, auth_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C2-I-103: the task gets the resolved ``path`` plus the caller's raw string for error text."""
+    home = tmp_path / "server-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    store = JobStore(path=tmp_path / "jobs.json")
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    c = TestClient(create_app(config, store), headers=auth_headers)
+    # Await-free capture: it completes before the response returns (see the test above).
+    captured: list[IngestRequest] = []
+
+    async def _capturing_ingest_task(job_id, store, body, **kwargs):  # type: ignore[no-untyped-def]
+        captured.append(body)
+
+    monkeypatch.setattr("archon_search.server.routes_jobs._default_ingest_task", _capturing_ingest_task)
+    monkeypatch.setattr("archon_search.server.routes_jobs._default_ingest_task_with_lock", _capturing_ingest_task)
+
+    response = c.post("/ingest", json={"collection": "c", "path": "~/corpus"})
+
+    assert response.status_code == 202
+    [body] = captured
+    assert body.path == str((home / "corpus").resolve())
+    assert body.submitted_path == "~/corpus"
+
+
+def test_with_resolved_path_returns_resolved_copy_keeping_submitted_path() -> None:
+    """The resolved request carries both strings; the caller's request is left untouched."""
+    submitted = IngestRequest(collection="c", path="~/corpus", ingested_by="cli", chunk_scopes=["a"])
+
+    resolved = submitted.with_resolved_path("/srv/home/corpus")
+
+    assert resolved is not submitted
+    assert resolved.path == "/srv/home/corpus"
+    assert resolved.submitted_path == "~/corpus"
+    assert (resolved.collection, resolved.ingested_by, resolved.chunk_scopes) == ("c", "cli", ["a"])
+    assert submitted.path == "~/corpus"
+    assert submitted.submitted_path == "~/corpus"
+
+
+def test_submitted_path_equals_path_when_never_resolved() -> None:
+    """A request built directly (e.g. by a test or the documents mode) echoes its own ``path``."""
+    assert IngestRequest(collection="c", path="/data/corpus").submitted_path == "/data/corpus"
+
+
+def test_submitted_path_of_a_pathless_request_raises_instead_of_echoing_none() -> None:
+    """Only a ``path`` request has a submitted path: never let ``None`` become the text "None"."""
+    with pytest.raises(ValueError, match="no path"):
+        _ = IngestRequest(collection="c").submitted_path
 
 
 def test_ingest_rejects_nul_byte_path(client: TestClient) -> None:
@@ -648,11 +710,16 @@ async def test_background_ingest_oserror_logs_and_marks_failed(
     assert any("failed" in r.message.lower() for r in caplog.records)
 
 
+_INGEST_TASK_FNS = [_default_ingest_task, _default_ingest_task_with_lock]
+_INGEST_TASK_IDS = ["plain", "with_lock"]
+
+
 @pytest.mark.anyio
+@pytest.mark.parametrize("task_fn", _INGEST_TASK_FNS, ids=_INGEST_TASK_IDS)
 async def test_background_ingest_double_oserror_suppressed(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, task_fn: Any
 ) -> None:
-    """If EVERY store.update raises OSError, no exception escapes _default_ingest_task."""
+    """If EVERY store.update raises OSError, no exception escapes either ingest task."""
     real_store = JobStore(path=tmp_path / "jobs.json")
     job = real_store.create()
 
@@ -664,7 +731,7 @@ async def test_background_ingest_double_oserror_suppressed(
     body = IngestRequest(collection="docs")
     with caplog.at_level("ERROR"):
         # Must return normally — no OSError escapes.
-        await _default_ingest_task(job.job_id, store, body, pipeline_fn=None)
+        await task_fn(job.job_id, store, body, pipeline_fn=None)
 
     # The secondary-failure path (could not persist FAILED) is logged.
     assert any(
@@ -673,8 +740,9 @@ async def test_background_ingest_double_oserror_suppressed(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_fn", _INGEST_TASK_FNS, ids=_INGEST_TASK_IDS)
 async def test_background_ingest_cancelled_oserror_suppressed_and_reraises_cancelled(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, task_fn: Any
 ) -> None:
     """If persisting CANCELLED status raises OSError during cancellation, the OSError
     is logged and suppressed, and CancelledError is still re-raised (not OSError)."""
@@ -694,7 +762,7 @@ async def test_background_ingest_cancelled_oserror_suppressed_and_reraises_cance
     body = IngestRequest(collection="docs")
     with caplog.at_level("ERROR"):
         task = asyncio.create_task(
-            _default_ingest_task("job-1", store, body, pipeline_fn=pipeline_fn)
+            task_fn("job-1", store, body, pipeline_fn=pipeline_fn)
         )
         # Let the task start and reach the cancellable await point.
         await asyncio.sleep(0)
@@ -709,6 +777,85 @@ async def test_background_ingest_cancelled_oserror_suppressed_and_reraises_cance
     assert any(
         "could not persist CANCELLED status" in r.message for r in caplog.records
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("task_fn", _INGEST_TASK_FNS, ids=_INGEST_TASK_IDS)
+async def test_background_ingest_done_write_failure_never_marks_the_ingest_failed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, task_fn: Any
+) -> None:
+    """The ingest succeeded: a failing DONE write is logged, never turned into FAILED (C5-B-4)."""
+    real_store = JobStore(path=tmp_path / "jobs.json")
+    job = real_store.create()
+    attempted: list[JobStatus] = []
+
+    def update(job_id: str, **kwargs: Any) -> Any:
+        attempted.append(kwargs["status"])
+        if kwargs["status"] == JobStatus.DONE:
+            raise OSError("disk full")
+        return real_store.update(job_id, **kwargs)
+
+    store = MagicMock()
+    store.update.side_effect = update
+    store.get.side_effect = real_store.get
+
+    with caplog.at_level(logging.ERROR):
+        await task_fn(job.job_id, store, IngestRequest(collection="docs"), pipeline_fn=AsyncMock())
+
+    assert attempted == [JobStatus.RUNNING, JobStatus.DONE]
+    assert any("could not persist DONE status" in r.getMessage() for r in caplog.records)
+    assert not any(r.getMessage().startswith("Ingest task") for r in caplog.records), "the ingest did not fail"
+
+
+_NON_IO_STORE_ERROR = "job store backend exploded"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("task_fn", _INGEST_TASK_FNS, ids=_INGEST_TASK_IDS)
+async def test_background_ingest_any_failed_write_error_is_logged_not_raised(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, task_fn: Any
+) -> None:
+    """A non-I/O error persisting FAILED must not escape the background task either."""
+    real_store = JobStore(path=tmp_path / "jobs.json")
+    job = real_store.create()
+    store = MagicMock()
+    store.update.side_effect = RuntimeError(_NON_IO_STORE_ERROR)
+    store.get.side_effect = real_store.get
+
+    with caplog.at_level(logging.ERROR):
+        await task_fn(job.job_id, store, IngestRequest(collection="docs"), pipeline_fn=None)
+
+    assert any("could not persist FAILED status" in r.getMessage() for r in caplog.records)
+    assert_logged_with_traceback(caplog, _NON_IO_STORE_ERROR)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task_fn", _INGEST_TASK_FNS, ids=_INGEST_TASK_IDS)
+async def test_background_ingest_any_cancelled_write_error_still_reraises_cancelled(
+    caplog: pytest.LogCaptureFixture, task_fn: Any
+) -> None:
+    """A non-I/O error persisting CANCELLED is logged; CancelledError still propagates."""
+
+    def update_side_effect(job_id: str, **kwargs: object) -> None:
+        if kwargs.get("status") == JobStatus.CANCELLED:
+            raise RuntimeError(_NON_IO_STORE_ERROR)
+
+    store = MagicMock(spec=JobStore)
+    store.update.side_effect = update_side_effect
+
+    async def pipeline_fn(*a: object, **k: object) -> None:
+        await asyncio.Event().wait()
+
+    with caplog.at_level(logging.ERROR):
+        task = asyncio.create_task(task_fn("job-1", store, IngestRequest(collection="docs"), pipeline_fn=pipeline_fn))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert any("could not persist CANCELLED status" in r.getMessage() for r in caplog.records)
+    assert_logged_with_traceback(caplog, _NON_IO_STORE_ERROR)
 
 
 # ---------------------------------------------------------------------------
@@ -1175,6 +1322,133 @@ async def test_reindex_task_embedder_cache_failure_marks_job_failed(tmp_path: Pa
     # status must be FAILED
     update_calls = [str(c) for c in job_store.update.call_args_list]
     assert any("FAILED" in c for c in update_calls)
+
+
+# ---------------------------------------------------------------------------
+# _reindex_task — job-store write failures never escape the task (C2-I-3)
+# ---------------------------------------------------------------------------
+
+_JOB_STORE_WRITE_ERROR = "job store write failed"
+
+
+def _failing_writes_job_store(
+    tmp_path: Path, fail_on: JobStatus, *, error: Exception | None = None, times: int | None = None
+) -> tuple[JobStore, ReindexJob, list[JobStatus]]:
+    """A real JobStore whose ``update`` to ``fail_on`` raises (``times`` times, or always)."""
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    job = job_store.create_reindex(namespace=DEFAULT_NAMESPACE, target_embedding_model="model-B")
+    real_update = job_store.update
+    attempted: list[JobStatus] = []
+    remaining = [times]
+
+    def _update(job_id: str, **kwargs: object) -> IngestJob:
+        status = kwargs.get("status")
+        if isinstance(status, JobStatus):
+            attempted.append(status)
+        if status == fail_on and remaining[0] != 0:
+            if remaining[0] is not None:
+                remaining[0] -= 1
+            raise error if error is not None else OSError(_JOB_STORE_WRITE_ERROR)
+        return real_update(job_id, **kwargs)
+
+    job_store.update = _update  # type: ignore[method-assign]
+    return job_store, job, attempted
+
+
+async def _run_reindex(job_store: JobStore, job_id: str, tmp_path: Path, embedder_cache: Any, pipeline: Any) -> Any:
+    search_store = MagicMock()
+    search_store.get_collection_meta = AsyncMock(return_value=_make_collection_meta(reindex_job_id=job_id))
+    search_store.update_collection_meta = AsyncMock(return_value=None)
+    await _reindex_task(
+        job_id=job_id, store=search_store, job_store=job_store, embedder_cache=embedder_cache, pipeline=pipeline,
+        collection="col", namespace=DEFAULT_NAMESPACE, collection_path=tmp_path, config=SearchConfig(),
+    )
+    return search_store
+
+
+def _embedder_cache(error: Exception | None = None) -> MagicMock:
+    cache = MagicMock()
+    cache.get_or_load = AsyncMock(side_effect=error) if error is not None else AsyncMock(return_value=MagicMock())
+    return cache
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("embedder_error", "store_error"),
+    [
+        (EmbedderNotReadyError("still loading"), OSError(_JOB_STORE_WRITE_ERROR)),
+        (RuntimeError("model load failed"), KeyError(_JOB_STORE_WRITE_ERROR)),
+    ],
+    ids=["not_ready-oserror", "load_failure-keyerror"],
+)
+async def test_reindex_task_failed_write_after_embedder_failure_is_logged_not_raised(
+    tmp_path: Path, embedder_error: Exception, store_error: Exception, caplog: pytest.LogCaptureFixture
+) -> None:
+    job_store, job, attempted = _failing_writes_job_store(tmp_path, JobStatus.FAILED, error=store_error)
+
+    with caplog.at_level(logging.ERROR):
+        search_store = await _run_reindex(job_store, job.job_id, tmp_path, _embedder_cache(embedder_error), MagicMock())
+
+    assert attempted == [JobStatus.FAILED]
+    assert search_store.update_collection_meta.call_args[0][0].reindex_job_id is None
+    assert_logged_with_traceback(caplog, _JOB_STORE_WRITE_ERROR)
+
+
+@pytest.mark.anyio
+async def test_reindex_task_running_write_failure_marks_job_failed_without_ingesting(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A transient RUNNING write failure must not leave the job PENDING or ingest untracked."""
+    job_store, job, attempted = _failing_writes_job_store(tmp_path, JobStatus.RUNNING, times=1)
+    pipeline = MagicMock()
+    pipeline.ingest_directory = AsyncMock(return_value=[])
+
+    with caplog.at_level(logging.ERROR):
+        search_store = await _run_reindex(job_store, job.job_id, tmp_path, _embedder_cache(), pipeline)
+
+    assert attempted == [JobStatus.RUNNING, JobStatus.FAILED]
+    final = job_store.get(job.job_id)
+    assert final is not None and final.status == JobStatus.FAILED and final.error == REINDEX_FAILED_DETAIL
+    pipeline.ingest_directory.assert_not_awaited()
+    assert search_store.update_collection_meta.call_args[0][0].reindex_job_id is None
+    assert_logged_with_traceback(caplog, _JOB_STORE_WRITE_ERROR)
+
+
+@pytest.mark.anyio
+async def test_reindex_task_cancelled_write_failure_after_ingest_is_logged_not_raised(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    job_store, job, attempted = _failing_writes_job_store(tmp_path, JobStatus.CANCELLED)
+
+    async def _cancel_mid_ingest(*args: object, **kwargs: object) -> list[IngestResult]:
+        job_store.update(job.job_id, status=JobStatus.CANCELLING)
+        return []
+
+    pipeline = MagicMock()
+    pipeline.ingest_directory = AsyncMock(side_effect=_cancel_mid_ingest)
+
+    with caplog.at_level(logging.ERROR):
+        search_store = await _run_reindex(job_store, job.job_id, tmp_path, _embedder_cache(), pipeline)
+
+    assert attempted == [JobStatus.RUNNING, JobStatus.CANCELLING, JobStatus.CANCELLED]
+    assert search_store.update_collection_meta.call_args[0][0].reindex_job_id is None
+    assert_logged_with_traceback(caplog, _JOB_STORE_WRITE_ERROR)
+
+
+@pytest.mark.anyio
+async def test_reindex_task_wrong_job_type_failed_write_is_logged_not_raised(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    job = job_store.create(collection="col")
+    job_store.update = MagicMock(side_effect=OSError(_JOB_STORE_WRITE_ERROR))  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.ERROR):
+        search_store = await _run_reindex(job_store, job.job_id, tmp_path, _embedder_cache(), MagicMock())
+
+    job_store.update.assert_called_once_with(job.job_id, status=JobStatus.FAILED, error="not a ReindexJob")
+    assert search_store.update_collection_meta.call_args[0][0].reindex_job_id is None
+    assert_logged_with_traceback(caplog, _JOB_STORE_WRITE_ERROR)
 
 
 # ---------------------------------------------------------------------------

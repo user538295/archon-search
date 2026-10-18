@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -93,16 +92,9 @@ def test_generator_init_without_anthropic_package() -> None:
             "archon_search.providers.anthropic_provider": None,
         },
     ):
-        # Re-import to pick up the patched sys.modules
-        import importlib
-
         import archon_search.hyde as hyde_mod
-
-        importlib.reload(hyde_mod)
         gen = hyde_mod.HyDEGenerator(_make_embedder(), _make_config())
         assert gen._provider_available is False
-        # Reset module to normal
-        importlib.reload(hyde_mod)
 
 
 def test_generator_init_with_anthropic_package(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,14 +102,9 @@ def test_generator_init_with_anthropic_package(monkeypatch: pytest.MonkeyPatch) 
     mock_anthropic = MagicMock()
     mock_anthropic.AsyncAnthropic = MagicMock(return_value=MagicMock())
     with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
-        import importlib
-
         import archon_search.hyde as hyde_mod
-
-        importlib.reload(hyde_mod)
         gen = hyde_mod.HyDEGenerator(_make_embedder(), _make_config())
         assert gen._provider_available is True
-        importlib.reload(hyde_mod)
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +114,7 @@ def test_generator_init_with_anthropic_package(monkeypatch: pytest.MonkeyPatch) 
 
 @pytest.mark.asyncio
 async def test_generate_package_not_installed() -> None:
-    """generate() raises RuntimeError when anthropic is not installed."""
+    """generate() raises HyDEDependencyError when anthropic is not installed."""
     # G10 BE-1: must also patch the provider module so the try/except ImportError
     # in HyDEGenerator.__init__ fires (the provider is lazy-imported there).
     with patch.dict(  # type: ignore[dict-item]
@@ -137,15 +124,10 @@ async def test_generate_package_not_installed() -> None:
             "archon_search.providers.anthropic_provider": None,
         },
     ):
-        import importlib
-
         import archon_search.hyde as hyde_mod
-
-        importlib.reload(hyde_mod)
         gen = hyde_mod.HyDEGenerator(_make_embedder(), _make_config())
-        with pytest.raises(RuntimeError, match="Install archon-search\\[hyde\\]"):
+        with pytest.raises(hyde_mod.HyDEDependencyError, match="Install archon-search\\[hyde\\]"):
             await gen.generate("test query")
-        importlib.reload(hyde_mod)
 
 
 # ---------------------------------------------------------------------------
@@ -172,14 +154,9 @@ async def test_generate_success(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import importlib
-
         import archon_search.hyde as hyde_mod
-
-        importlib.reload(hyde_mod)
         gen = hyde_mod.HyDEGenerator(embedder, config)
         result = await gen.generate("how do I do X?")
-        importlib.reload(hyde_mod)
 
     assert result is not None
     assert isinstance(result, list)
@@ -209,15 +186,10 @@ async def test_generate_timeout_fallback(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import importlib
-
         import archon_search.hyde as hyde_mod
-
-        importlib.reload(hyde_mod)
         gen = hyde_mod.HyDEGenerator(embedder, config)
         with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
             result = await gen.generate("how do I do X?")
-        importlib.reload(hyde_mod)
 
     assert result is None
     assert any("WARNING" in r.levelname or r.levelno >= logging.WARNING for r in caplog.records)
@@ -242,14 +214,9 @@ async def test_generate_api_error_fallback(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import importlib
-
         import archon_search.hyde as hyde_mod
-
-        importlib.reload(hyde_mod)
         gen = hyde_mod.HyDEGenerator(embedder, config)
         result = await gen.generate("test query")
-        importlib.reload(hyde_mod)
 
     assert result is None
 
@@ -274,15 +241,10 @@ async def test_generate_empty_response_fallback(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import importlib
-
         import archon_search.hyde as hyde_mod
-
-        importlib.reload(hyde_mod)
         gen = hyde_mod.HyDEGenerator(embedder, config)
         with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
             result = await gen.generate("test query")
-        importlib.reload(hyde_mod)
 
     assert result is None
 
@@ -302,17 +264,12 @@ async def test_generate_no_api_key(
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import importlib
-
         import archon_search.hyde as hyde_mod
-
-        importlib.reload(hyde_mod)
         gen = hyde_mod.HyDEGenerator(embedder, config)
 
         with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
             result1 = await gen.generate("query 1")
             result2 = await gen.generate("query 2")
-        importlib.reload(hyde_mod)
 
     assert result1 is None
     assert result2 is None
@@ -346,11 +303,7 @@ async def test_rate_limit_fallback(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import importlib
-
         import archon_search.hyde as hyde_mod
-
-        importlib.reload(hyde_mod)
         gen = hyde_mod.HyDEGenerator(embedder, config)
 
         # First call should succeed (1 token available)
@@ -358,7 +311,6 @@ async def test_rate_limit_fallback(
         # Second call should be rate-limited (0 tokens left)
         with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
             result2 = await gen.generate("query 2")
-        importlib.reload(hyde_mod)
 
     assert result1 is not None, "First call should succeed with 1 token"
     assert result2 is None, "Second call should be rate-limited"
@@ -409,11 +361,7 @@ async def test_fingerprint_no_raw_query(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import importlib
-
         import archon_search.hyde as hyde_mod
-
-        importlib.reload(hyde_mod)
         gen = hyde_mod.HyDEGenerator(embedder, config)
         fp = hyde_mod._query_fingerprint(query)
         assert len(fp) == 16
@@ -421,7 +369,6 @@ async def test_fingerprint_no_raw_query(
 
         with caplog.at_level(logging.WARNING, logger="archon_search.hyde"):
             await gen.generate(query)
-        importlib.reload(hyde_mod)
 
     log_text = " ".join(r.getMessage() for r in caplog.records)
     # Raw query must NOT appear in logs
@@ -460,14 +407,9 @@ async def test_query_truncated_to_2000_chars(monkeypatch: pytest.MonkeyPatch) ->
     long_query = "x" * 3000
 
     with patch.dict("sys.modules", {"anthropic": mock_anthropic_mod}):
-        import importlib
-
         import archon_search.hyde as hyde_mod
-
-        importlib.reload(hyde_mod)
         gen = hyde_mod.HyDEGenerator(embedder, config)
         await gen.generate(long_query)
-        importlib.reload(hyde_mod)
 
     assert prompt_capture, "No prompt was captured"
     # The prompt should contain at most 2000 chars of the query (it's truncated to 2000)

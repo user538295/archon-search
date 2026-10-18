@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from archon_search.jobs.scheduler import JobScheduler, _SCHEDULER_TICK_SECONDS
+from archon_search.jobs.scheduler import DISPATCH_FAILED_DETAIL, JobScheduler, _SCHEDULER_TICK_SECONDS
 from archon_search.jobs.store import JobStore
 from archon_search.types import ExportJob, ImportJob, JobStatus
 
@@ -219,5 +218,9 @@ def test_dispatch_failure_transitions_job_to_failed(tmp_path: Path) -> None:
     scheduler._tick()  # should not raise
 
     assert call_count == 1
-    assert store.get(job.job_id).status == JobStatus.FAILED  # type: ignore[union-attr]
-    assert "dispatch_failed" in (store.get(job.job_id).error or "")  # type: ignore[union-attr]
+    failed = store.get(job.job_id)
+    assert failed is not None
+    assert failed.status == JobStatus.FAILED
+    error = failed.error or ""
+    assert error == DISPATCH_FAILED_DETAIL
+    assert "worker_unavailable" not in error

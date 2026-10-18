@@ -9,7 +9,7 @@ from unittest import mock
 
 import pytest
 
-from archon_search._durable_io import atomic_write_bytes, atomic_write_json
+from archon_search._durable_io import DurabilityUnconfirmedError, atomic_write_bytes, atomic_write_json
 
 
 class TestAtomicWriteJson:
@@ -66,6 +66,16 @@ class TestAtomicWriteJson:
         assert excinfo.value.errno == errno.EXDEV
         assert not tmp.exists()
 
+    def test_atomic_write_json_unlinks_tmp_on_serialization_error(self, tmp_path):
+        path = tmp_path / "data.json"
+        tmp = path.with_suffix(path.suffix + ".tmp")
+
+        with pytest.raises(TypeError):
+            atomic_write_json(path, {"k": object()})
+
+        assert not tmp.exists()
+        assert not path.exists()
+
     def test_atomic_write_json_does_not_retry_fsync(self, tmp_path):
         path = tmp_path / "data.json"
 
@@ -109,8 +119,9 @@ class TestAtomicWriteJson:
             with pytest.raises(OSError) as excinfo:
                 atomic_write_json(path, {"new": True})
 
-        # (a) the OSError propagates out of the function.
+        # (a) the OSError propagates out of the function, typed as "written, durability unconfirmed".
         assert excinfo.value.errno == errno.EIO
+        assert isinstance(excinfo.value, DurabilityUnconfirmedError)
         # (b) replace happened before the dir fsync: the new data is committed.
         assert json.loads(path.read_text()) == {"new": True}
         # (c) the dir fd was still closed despite the fsync failure (no leak).
@@ -196,6 +207,27 @@ class TestAtomicWriteBytes:
         assert excinfo.value.errno == errno.EXDEV
         assert not tmp.exists()
 
+    def test_atomic_write_bytes_unlinks_tmp_on_non_oserror(self, tmp_path):
+        path = tmp_path / "blob.bin"
+        tmp = path.with_suffix(path.suffix + ".tmp")
+
+        with mock.patch("os.replace", side_effect=TypeError("not a path")):
+            with pytest.raises(TypeError):
+                atomic_write_bytes(path, b"secret")
+
+        assert not tmp.exists()
+        assert not path.exists()
+
+    def test_atomic_write_bytes_mock_path_leaves_no_stray_file(self, tmp_path, monkeypatch):
+        """A non-Path ``path`` (e.g. a MagicMock) must not leave a CWD-relative temp file holding the payload."""
+        monkeypatch.chdir(tmp_path)
+
+        # The mock's no-op ``unlink`` must not be what cleanup relies on; os.replace fails on the mock path.
+        with pytest.raises((OSError, TypeError)):
+            atomic_write_bytes(mock.MagicMock(), b"ARCHON_SEARCH_API_KEY=secret\n")
+
+        assert list(tmp_path.iterdir()) == []
+
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits")
     def test_atomic_write_bytes_custom_mode(self, tmp_path):
         path = tmp_path / "blob.bin"
@@ -229,8 +261,9 @@ class TestAtomicWriteBytes:
             with pytest.raises(OSError) as excinfo:
                 atomic_write_bytes(path, b"new")
 
-        # (a) the OSError propagates out of the function.
+        # (a) the OSError propagates out of the function, typed as "written, durability unconfirmed".
         assert excinfo.value.errno == errno.EIO
+        assert isinstance(excinfo.value, DurabilityUnconfirmedError)
         # (b) replace happened before the dir fsync: the new data is committed.
         assert path.read_bytes() == b"new"
         # (c) the dir fd was still closed despite the fsync failure (no leak).
@@ -238,6 +271,43 @@ class TestAtomicWriteBytes:
         #     to be among the closed fds.
         dir_fd = opened_fds[-1]
         assert dir_fd in closed_fds
+
+
+class TestDurabilityAndCleanup:
+    """A failure before os.replace is a plain OSError; cleanup never replaces it or touches a file it did not open."""
+
+    @pytest.mark.parametrize("write", [atomic_write_json, atomic_write_bytes])
+    def test_pre_replace_failure_is_not_durability_unconfirmed(self, tmp_path, write):
+        payload = {"k": "v"} if write is atomic_write_json else b"data"
+        with mock.patch("os.replace", side_effect=OSError(errno.EXDEV, "xdev")):
+            with pytest.raises(OSError) as excinfo:
+                write(tmp_path / "data.bin", payload)
+
+        assert not isinstance(excinfo.value, DurabilityUnconfirmedError)
+
+    @pytest.mark.parametrize("write", [atomic_write_json, atomic_write_bytes])
+    def test_cleanup_oserror_never_replaces_the_original_exception(self, tmp_path, write):
+        payload = {"k": "v"} if write is atomic_write_json else b"data"
+        with mock.patch("os.replace", side_effect=OSError(errno.EXDEV, "xdev")), mock.patch(
+            "os.unlink", side_effect=PermissionError(errno.EACCES, "cleanup denied")
+        ) as unlink:
+            with pytest.raises(OSError) as excinfo:
+                write(tmp_path / "data.bin", payload)
+
+        unlink.assert_called_once()
+        assert excinfo.value.errno == errno.EXDEV
+
+    def test_atomic_write_json_open_failure_leaves_a_preexisting_tmp_alone(self, tmp_path):
+        """The temp file is opened outside the cleanup scope: a failed open never unlinks someone else's file."""
+        path = tmp_path / "data.json"
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text("not ours")
+
+        with mock.patch("builtins.open", side_effect=PermissionError(errno.EACCES, "denied")):
+            with pytest.raises(PermissionError):
+                atomic_write_json(path, {"k": "v"})
+
+        assert tmp.read_text() == "not ours"
 
 
 class TestFsyncTree:

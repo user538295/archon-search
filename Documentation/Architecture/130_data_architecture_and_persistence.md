@@ -1,7 +1,7 @@
 **Purpose**: Document where `archon-search` keeps state on disk, the LanceDB schemas it writes, and how ingest mutates that state.
 **Audience**: Maintainers and operators of an `archon-search` install.
 **Status**: Draft
-**Last reviewed**: 2026-08-20
+**Last reviewed**: 2026-10-17
 **Next review**: 2026-08-20
 
 # Data Architecture and Persistence
@@ -54,21 +54,31 @@ Every durable JSON/bytes write of runtime state routes through a single helper m
 - `fsync_dir(path)` — fsync one directory entry. The primitive both writers above use for their parent-directory sync.
 - `fsync_tree(root)` — fsync every file under `root`, then every directory deepest-first, then `root`. For publishing a whole extracted directory with one same-filesystem rename: the rename is atomic, but only durable once its contents are. Nested directories matter — syncing only `root` can survive a crash as a valid-looking top-level file beside empty subdirectories (2026-08-19-030).
 
-The crucial property is that the helper fsyncs **both the file and the parent directory**: the parent-directory fsync is what makes the `os.replace` rename itself durable. fsync is never retried — on `EIO` the kernel may already have marked the page clean (POSIX "fsyncgate"), so a retry is unsafe. The helper is **not internally synchronized**; callers must serialize writes to the same path.
+The crucial property is that the helper fsyncs **both the file and the parent directory**: the parent-directory fsync is what makes the `os.replace` rename itself durable. fsync is never retried — on `EIO` the kernel may already have marked the page clean (POSIX "fsyncgate"), so a retry is unsafe. The helper is **not internally synchronized**; callers must serialize writes to the same path. Both writers remove their temp file on **any** exception raised before `os.replace` completes — not only `OSError`, so a serialization `TypeError` or a `KeyboardInterrupt` cannot leave a half-written (for `.search.env`, secret-bearing) temp file behind — and then re-raise; the cleanup suppresses its own `OSError`, so the original exception is the one that propagates. `atomic_write_json` opens its temp file before that cleanup scope, so a failed open never unlinks a file the call did not create, and `atomic_write_bytes` leaves alone a pre-existing temp file that made its `O_EXCL` open fail — such a leftover (from a crash mid-write) makes every later `atomic_write_bytes` to that path fail with `FileExistsError` until it is removed.
 
-The nine durable-write sites that use the helper are (the tenth, the graph model's tree-publishing site, went away with the wizard's model provisioning — the GLiNER checkpoint is now written by `huggingface_hub`, outside this codebase; `_durable_io.fsync_tree` consequently has no production caller today, only `tests/test_durable_io.py`):
+**`DurabilityUnconfirmedError`** (an `OSError` subclass that keeps the cause's `errno`) is what both writers raise when the parent-directory fsync fails **after** `os.replace` succeeded: the new file is published and readable, only the rename's crash durability is unconfirmed. Any other `OSError` from a writer means nothing was published. A caller that cares about the difference catches `DurabilityUnconfirmedError` first; every other caller handles it like any `OSError` (see the matrix below).
+
+The production call sites of the helper (the graph model's tree-publishing site went away with the wizard's model provisioning — the GLiNER checkpoint is now written by `huggingface_hub`, outside this codebase; `_durable_io.fsync_tree` consequently has no production caller today, only `tests/test_durable_io.py`):
 
 | Site | Helper | File written |
 |------|--------|--------------|
 | `progress.IndexingStateStore.write` | `atomic_write_json` | indexing-state JSON |
-| `sync._write_manifest` | `atomic_write_json` | sync manifest |
+| `sync.SearchCollectionSync._write_manifest` | `atomic_write_json` | sync manifest |
 | `sync.manifest_remove_entry` | `atomic_write_json` | sync manifest |
 | `jobs/store.py::JobStore._write_atomic` | `atomic_write_json` | `archon-search-jobs.json` |
 | `sync_suppression.write_sync_suppressed_sentinel` | `atomic_write_json` | `archon-search-sync-suppressed.json` |
-| `key_manager._generate_and_write` | `atomic_write_bytes` | `.search.env` (mode `0600`) |
+| `key_manager._generate_and_write` | `atomic_write_bytes` | `.search.env` (mode `0600`) — bootstrap and `persist_key` |
+| `key_manager._write_key_file` | `atomic_write_bytes` (in `asyncio.to_thread`) | `.search.env` (mode `0600`) — key rotation |
 | `key_manager.KeyStore._write` | `atomic_write_bytes` | `keys.json` (mode `0600`) |
-| `maintenance_loop._save_state` | `atomic_write_json` | `.maintenance-state.json` |
-| `backup_loop._save_state` | `atomic_write_json` | `.backup-state.json` |
+| `telemetry/hasher.load_or_create_salt` | `atomic_write_bytes` | `.telemetry-salt` (mode `0600`) |
+| `maintenance_loop.MaintenanceLoop._save_state` | `atomic_write_json` | `.maintenance-state.json` |
+| `backup_loop.BackupLoop._save_state` | `atomic_write_json` | `.backup-state.json` |
+| `install/installer.py::RealInstaller` — `configure_providers`, `configure_reranker_providers`, `clear_reranker_providers`, `persist_fresh_config`, `write_gpu_providers_disabled` | `atomic_write_bytes` | `archon-search.toml` (mode `0600`) |
+| `install/installer.py::RealInstaller.write_server_key` | `atomic_write_bytes` | `.search.env` (mode `0600`) |
+| `install/config_writer.py` — `_write_profile_config`, `_revert_graph_enabled_flag`, `_revert_multilingual_flag`; `install/extras.py` — `_revert_query_expansion_flags`, `_revert_graph_enrichment_flags` | `atomic_write_bytes` | `archon-search.toml` (mode `0600`) |
+| `install/config_writer.py::_record_wizard_values` | `atomic_write_bytes` | `archon-search.toml.wizard.json` (mode `0600`) |
+| `install/licenses.py::_download_fasttext_model` | `atomic_write_bytes` | `lid.176.ftz` (mode `0644`) |
+| `eval/live_report.py` — `write_live_report_json`, `write_live_report_markdown` | `atomic_write_bytes` | live-eval report (mode `0644`) |
 
 A CI lint gate, `tests/test_no_raw_durable_writes.py`, scans `archon_search/**/*.py` (excluding the helper itself) for raw write patterns and fails the build on new ones; a handful of out-of-scope one-shot writes carry a `# noqa: durable-write` allow-list comment — the two TOML config writers (`config.py`, `cli/config_cmd.py`), the OS service-unit files (`platform/macos.py` ×2, `platform/linux.py`), the install lock's `O_EXCL` open (`install/lock.py`) and the telemetry writer's own append handle (`telemetry/writer.py`). The gate matches the marker string only; it does not validate the justification, so a stale one survives a green run — read the justification when reviewing a waiver.
 
@@ -85,10 +95,13 @@ Per-call-site `OSError` handling is deliberate, not uniform:
 | `sync._write_manifest` + progress writes invoked through sync | **Swallowed** by `sync.py::_safe_state_update` (`except Exception`); partial state is recoverable on the next sync pass. |
 | `sync.manifest_remove_entry` | **Swallowed** by its own local `except (json.JSONDecodeError, OSError): pass`. |
 | `key_manager._generate_and_write` | **Propagates** — fatal at startup; the operator must intervene. Concurrent-bootstrap `FileExistsError` is recovered (the other writer won the race). |
-| Route-driven `jobs/store` writes (`routes_jobs.py` ingest + `delete_job`; `routes_collections.py` add_collection + reindex_collection) | **Propagates** to the route's narrow `except OSError`, which returns `JSONResponse({"detail": "internal error"}, status_code=500)`. The background ingest task logs and marks the job `FAILED`, suppressing a secondary `OSError`. |
+| `key_manager._write_key_file` (rotation) | `DurabilityUnconfirmedError` is logged as a WARNING and treated as written. Any other `OSError` (directory creation included) is logged with its traceback and raised as `KeyFileWriteError` (`ROTATE_WRITE_FAILED_DETAIL`); `keys.json` is not touched. |
+| `key_manager.KeyStore._write` | `DurabilityUnconfirmedError` is logged as a WARNING and the mutation succeeds. Any other `OSError` propagates: inside a rotation it becomes `RotationIncompleteError` (`ROTATE_KEYS_JSON_FAILED_DETAIL`); from `POST /keys` / `DELETE /keys/{key_id}` a plain-text `500`, from MCP `create_key` / `revoke_key` `internal_error`; from the startup write of the TOML records it fails the lifespan, so the server does not start. |
+| `telemetry/hasher.load_or_create_salt` | **Swallowed**: logged as an ERROR and doc-id hashing is disabled for the session. |
+| Route-driven `jobs/store` writes (`routes_jobs.py` ingest + `delete_job`; `routes_collections.py` add_collection + reindex_collection) | **Propagates** to the route's narrow `except OSError`, which returns `JSONResponse({"detail": "internal error"}, status_code=500)`. The background ingest and reindex tasks log a failure and mark the job `FAILED` through `routes_jobs._persist_job_status`, which logs any job-store write error with its traceback and never raises, so a failing job store cannot replace the task's own outcome. A successful ingest records `DONE` (or `CANCELLED`, when a cancel was requested) the same way, via `_persist_ingest_outcome` outside the failure handlers, so a failed status write after a successful ingest is logged (`could not persist DONE status`) and never turns the job `FAILED`. |
 | Telemetry `_append` | **Swallowed** by `_run`'s `except (OSError, ValueError)`; the entry is dropped (best-effort). |
 
-The OSError-to-`500` mapping for the route-driven sites is recorded in [140_error_handling_strategy.md](140_error_handling_strategy.md).
+`DurabilityUnconfirmedError` is an `OSError`, so every site above other than the two `key_manager` rotation/`KeyStore` writers treats a post-rename directory-fsync failure as a failed write, although the file was published. The OSError-to-`500` mapping for the route-driven sites is recorded in [140_error_handling_strategy.md](140_error_handling_strategy.md).
 
 ### Known limits
 

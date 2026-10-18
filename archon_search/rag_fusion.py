@@ -38,10 +38,19 @@ _CONTROL_CHARS_RE = re.compile(
 )
 
 
+# Wire-safe pair for RAGFusionDependencyError. The exception message also carries the
+# install command for this interpreter (``extra_install_hint``), which describes the
+# server's own install — it is logged, never sent to the client.
+RAG_FUSION_DEPENDENCY_DETAIL = "Install archon-search[rag_fusion] to use RAG Fusion"
+RAG_FUSION_DEPENDENCY_CODE = "validation_error"
+
+
 class RAGFusionDependencyError(RuntimeError):
     """Raised when the ``anthropic`` package is not installed.
 
-    Install with: ``pip install 'archon-search[rag_fusion]'``
+    Install with: ``pip install 'archon-search[rag_fusion]'``. Transports answer it
+    with :data:`RAG_FUSION_DEPENDENCY_DETAIL` / :data:`RAG_FUSION_DEPENDENCY_CODE`,
+    never ``str(exc)``.
     """
 
 
@@ -122,7 +131,7 @@ class RAGFusionGenerator:
         """
         if not self._provider_available:
             raise RAGFusionDependencyError(
-                f"Install archon-search[rag_fusion] to use RAG Fusion ({extra_install_hint('rag_fusion')})"
+                f"{RAG_FUSION_DEPENDENCY_DETAIL} ({extra_install_hint('rag_fusion')})"
             )
 
         fp = _query_fingerprint(query)

@@ -155,7 +155,7 @@ async def resolve_hyde_within_budget(
     On overrun the call is cancelled and ``(None, False)`` is returned: the caller
     already surfaces that as its standard HyDE-failure warning and the search runs
     on the plain query.  Everything the coroutine itself raises — notably the
-    ``RuntimeError`` for a missing provider package — propagates unchanged.
+    ``HyDEDependencyError`` for a missing provider package — propagates unchanged.
     """
     try:
         return await run_within_budget(coro, timeout=timeout)

@@ -22,11 +22,27 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from archon_search.graph_types import RelationshipType
+from archon_search.uv_tool import extra_install_hint
 
 if TYPE_CHECKING:
     from archon_search.graph_store import GraphStore
 
 logger = logging.getLogger(__name__)
+
+
+class GraphMLDependencyError(ImportError):
+    """Raised by ``to_graphml`` when ``networkx`` is not installed.
+
+    Its message embeds :func:`~archon_search.uv_tool.extra_install_hint` (possibly index
+    credentials in a uv tool env): log it, answer the caller ``GRAPHML_DEPENDENCY_DETAIL``.
+    """
+
+
+# Wire-facing ``500`` ``detail`` for ``GraphMLDependencyError``.
+GRAPHML_DEPENDENCY_DETAIL = (
+    "GraphML export requires the archon-search[graph] extra; see the server log for the install command"
+)
+
 
 # Safety valve against OOM on pathologically large mention tables; adjust via
 # operator-level config if needed.
@@ -633,14 +649,14 @@ def to_graphml(view: CollectionGraphView | CrossCollectionGraphView) -> bytes:
         GraphML XML as UTF-8 encoded bytes.
 
     Raises:
-        ImportError: If networkx is not installed.
+        GraphMLDependencyError: If networkx is not installed.
     """
     try:
         import networkx as nx  # type: ignore[import-untyped]
-    except ImportError:
-        raise ImportError(
-            "GraphML export requires networkx; install archon-search[graph]"
-        )
+    except ImportError as exc:
+        raise GraphMLDependencyError(
+            f"GraphML export requires networkx. Install it with: {extra_install_hint('graph')}"
+        ) from exc
 
     import tempfile
     import os

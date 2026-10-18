@@ -7,9 +7,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import os
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -105,162 +104,117 @@ def test_rag_fusion_dependency_error_is_runtime_error() -> None:
 
 def test_validate_variant_valid() -> None:
     """Normal text ≤500 chars returns stripped text."""
-    from archon_search.rag_fusion import RAGFusionGenerator
 
     config = _make_config()
     with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = gen._validate_variant("  hello world  ")
-        importlib.reload(rf_mod)
 
     assert result == "hello world"
 
 
 def test_validate_variant_too_long() -> None:
     """Variant of 501 chars returns None."""
-    from archon_search.rag_fusion import RAGFusionGenerator
 
     config = _make_config()
     with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = gen._validate_variant("a" * 501)
-        importlib.reload(rf_mod)
 
     assert result is None
 
 
 def test_validate_variant_exactly_500_chars() -> None:
     """Variant of exactly 500 chars is valid."""
-    from archon_search.rag_fusion import RAGFusionGenerator
 
     config = _make_config()
     with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = gen._validate_variant("a" * 500)
-        importlib.reload(rf_mod)
 
     assert result == "a" * 500
 
 
 def test_validate_variant_control_sequences() -> None:
     """Variant containing \\x00 returns None."""
-    from archon_search.rag_fusion import RAGFusionGenerator
 
     config = _make_config()
     with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = gen._validate_variant("hello\x00world")
-        importlib.reload(rf_mod)
 
     assert result is None
 
 
 def test_validate_variant_del_char_rejected() -> None:
     """Variant containing \\x7F (DEL) returns None."""
-    from archon_search.rag_fusion import RAGFusionGenerator
 
     config = _make_config()
     with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = gen._validate_variant("hello\x7fworld")
-        importlib.reload(rf_mod)
 
     assert result is None
 
 
 def test_validate_variant_c1_control_rejected() -> None:
     """Variant containing \\x80 (C1 control) returns None."""
-    from archon_search.rag_fusion import RAGFusionGenerator
 
     config = _make_config()
     with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = gen._validate_variant("hello\x80world")
-        importlib.reload(rf_mod)
 
     assert result is None
 
 
 def test_validate_variant_tab_allowed() -> None:
     """Variant containing \\t returns stripped text (not rejected)."""
-    from archon_search.rag_fusion import RAGFusionGenerator
 
     config = _make_config()
     with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = gen._validate_variant("hello\tworld")
-        importlib.reload(rf_mod)
 
     assert result == "hello\tworld"
 
 
 def test_validate_variant_newline_in_content() -> None:
     """Single line with trailing \\n strips to valid text."""
-    from archon_search.rag_fusion import RAGFusionGenerator
 
     config = _make_config()
     with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = gen._validate_variant("hello world\n")
-        importlib.reload(rf_mod)
 
     assert result == "hello world"
 
 
 def test_validate_variant_empty_after_strip() -> None:
     """Variant of only whitespace returns None."""
-    from archon_search.rag_fusion import RAGFusionGenerator
 
     config = _make_config()
     with patch.dict("sys.modules", {"anthropic": _make_mock_anthropic_module()}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = gen._validate_variant("   \n\t  ")
-        importlib.reload(rf_mod)
 
     assert result is None
 
@@ -282,15 +236,11 @@ async def test_generate_variants_package_not_installed() -> None:
             "archon_search.providers.anthropic_provider": None,
         },
     ):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(_make_config())
         with pytest.raises(rf_mod.RAGFusionDependencyError, match="Install archon-search\\[rag_fusion\\]"):
             await gen.generate_variants("test query")
-        importlib.reload(rf_mod)
 
 
 # ---------------------------------------------------------------------------
@@ -308,14 +258,10 @@ async def test_generate_variants_success(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = await gen.generate_variants("original query")
-        importlib.reload(rf_mod)
 
     assert isinstance(result, list)
     assert len(result) == 2
@@ -345,17 +291,11 @@ async def test_generate_variants_timeout_fallback(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
-        import archon_search.providers.anthropic_provider as ap_mod
 
-        importlib.reload(ap_mod)
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         with caplog.at_level(logging.WARNING):
             result = await gen.generate_variants("original query")
-        importlib.reload(rf_mod)
 
     assert result == [], f"expected [] on timeout, got: {result!r}"
     warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
@@ -386,16 +326,10 @@ async def test_generate_variants_api_error_fallback(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
-        import archon_search.providers.anthropic_provider as ap_mod
 
-        importlib.reload(ap_mod)
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = await gen.generate_variants("test query")
-        importlib.reload(rf_mod)
 
     assert result == [], f"expected [] on API error, got: {result!r}"
 
@@ -409,14 +343,10 @@ async def test_generate_variants_empty_response(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = await gen.generate_variants("test query")
-        importlib.reload(rf_mod)
 
     assert result == []
 
@@ -432,16 +362,12 @@ async def test_generate_variants_no_api_key(
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         with caplog.at_level(logging.WARNING, logger="archon_search.rag_fusion"):
             result1 = await gen.generate_variants("query 1")
             result2 = await gen.generate_variants("query 2")
-        importlib.reload(rf_mod)
 
     assert result1 == []
     assert result2 == []
@@ -468,11 +394,8 @@ async def test_rate_limit_fallback(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
 
         # First call should succeed (1 token available)
@@ -480,7 +403,6 @@ async def test_rate_limit_fallback(
         # Second call should be rate-limited (0 tokens left)
         with caplog.at_level(logging.WARNING, logger="archon_search.rag_fusion"):
             result2 = await gen.generate_variants("query 2")
-        importlib.reload(rf_mod)
 
     assert result1 == ["v1", "v2"] or len(result1) > 0, "First call should succeed"
     assert result2 == [], "Second call should be rate-limited"
@@ -518,15 +440,11 @@ async def test_concurrent_generate_variants_respects_token_limit(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
 
         results = await asyncio.gather(*[gen.generate_variants(f"query {i}") for i in range(5)])
-        importlib.reload(rf_mod)
 
     successful = [r for r in results if r]
     rate_limited = [r for r in results if not r]
@@ -549,14 +467,10 @@ async def test_generate_variants_malformed_dropped(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = await gen.generate_variants("original query")
-        importlib.reload(rf_mod)
 
     assert result == ["valid variant"]
 
@@ -573,14 +487,10 @@ async def test_generate_variants_more_than_requested_truncated(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         result = await gen.generate_variants("test query")
-        importlib.reload(rf_mod)
 
     assert len(result) <= 2
 
@@ -607,13 +517,8 @@ async def test_fingerprint_no_raw_query_in_log(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import importlib
-
-        import archon_search.providers.anthropic_provider as ap_mod
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(ap_mod)
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         fp = rf_mod._query_fingerprint(query)
         assert len(fp) == 16
@@ -621,7 +526,6 @@ async def test_fingerprint_no_raw_query_in_log(
 
         with caplog.at_level(logging.WARNING):
             result = await gen.generate_variants(query)
-        importlib.reload(rf_mod)
 
     assert result == [], f"expected [] on timeout, got: {result!r}"
     log_text = " ".join(r.getMessage() for r in caplog.records)
@@ -655,14 +559,10 @@ async def test_query_truncated_to_2000_chars(monkeypatch: pytest.MonkeyPatch) ->
     long_query = "x" * 3000
 
     with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         await gen.generate_variants(long_query)
-        importlib.reload(rf_mod)
 
     assert prompt_capture, "No prompt was captured"
     messages = prompt_capture[0].get("messages", [])
@@ -701,14 +601,10 @@ async def test_generate_variants_prompt_contains_query_and_num_queries(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        import importlib
-
         import archon_search.rag_fusion as rf_mod
 
-        importlib.reload(rf_mod)
         gen = rf_mod.RAGFusionGenerator(config)
         await gen.generate_variants("my query")
-        importlib.reload(rf_mod)
 
     assert prompt_capture, "No prompt captured"
     messages = prompt_capture[0].get("messages", [])

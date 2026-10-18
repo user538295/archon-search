@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from archon_search._types import IngestedBy
 from archon_search.config import resolve_active_model
-from archon_search.hyde import resolve_hyde_vector
+from archon_search.hyde import HyDEDependencyError, resolve_hyde_vector
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.pipeline import (
     CollectionNotFoundError,
@@ -35,6 +35,7 @@ from archon_search.pipeline import (
     MetadataLookupError,
 )
 from archon_search.router import MultiCollectionRouter
+from archon_search.server.routes_search import dependency_error_response
 from archon_search.server.schemas import AclGateSchema, ErrorDetail, ExcludedCollectionSchema
 from archon_search.server._validators import validate_scope_filter as _check_scope_filter
 from archon_search.telemetry.entry import TelemetryEntry
@@ -50,6 +51,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Catch-all ``500`` ``detail``: the caught exception's message may embed internals, so
+# it goes to the server log only. Same text as MCP ``explain``'s ``_EXPLAIN_FAILED_DETAIL``.
+EXPLAIN_FAILED_DETAIL = "explain failed"
 
 _VALID_ACL_SOURCES = frozenset({"frontmatter", "sidecar", "collection_default"})
 
@@ -499,8 +504,13 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             hyde_vector, hyde_applied = await resolve_hyde_vector(
                 body.query, body.hyde, generator, config.hyde
             )
-        except RuntimeError as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=422)
+        except HyDEDependencyError as exc:
+            return dependency_error_response("explain", exc, log=logger)
+        except Exception:
+            # Any other HyDE failure may embed internals: answer like this route's own catch-all.
+            logger.exception("explain: HyDE resolution failed")
+            _emit_err()
+            return JSONResponse({"detail": EXPLAIN_FAILED_DETAIL}, status_code=500)
 
     # graph_mode and HyDE are mutually exclusive — graph_mode wins.
     # Null the vector so HyDE does not drive retrieval even in the stub path.
@@ -531,8 +541,8 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                     rag_fusion_config=config.rag_fusion,
                     scope_filter=body.scope_filter,
                 )
-            except RAGFusionDependencyError as exc:
-                return JSONResponse({"detail": str(exc)}, status_code=422)
+            except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+                return dependency_error_response("explain", exc, log=logger)
             except GraphCommunitiesNotBuiltError as exc:
                 # Defensive: the S14 guard above prevents graph_mode+collections from
                 # reaching this path, and the multi-collection call does not currently
@@ -562,7 +572,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             except Exception as exc:
                 logger.error("multi-collection explain failed: %s", exc, exc_info=True)
                 _emit_err()
-                return JSONResponse({"detail": "explain failed"}, status_code=500)
+                return JSONResponse({"detail": EXPLAIN_FAILED_DETAIL}, status_code=500)
 
             if recorder is not None:
                 recorder.record("total", (time.perf_counter() - t0) * 1000.0)
@@ -684,8 +694,8 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 graph_mode=body.graph_mode,
                 scope_filter=body.scope_filter,
             )
-        except RAGFusionDependencyError as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=422)
+        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+            return dependency_error_response("explain", exc, log=logger)
         except GraphCommunitiesNotBuiltError as exc:
             return JSONResponse(
                 {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
@@ -702,7 +712,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
         except Exception as exc:
             logger.error("explain failed for %r: %s", chosen, exc, exc_info=True)
             _emit_err()
-            return JSONResponse({"detail": "explain failed"}, status_code=500)
+            return JSONResponse({"detail": EXPLAIN_FAILED_DETAIL}, status_code=500)
 
         if recorder is not None:
             recorder.record("total", (time.perf_counter() - t0) * 1000.0)

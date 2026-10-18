@@ -844,7 +844,6 @@ async def test_search_end_to_end(tmp_path: Path) -> None:
 from pydantic import ValidationError
 
 from archon_search._types import ExcludedCollection
-from archon_search.filters import SearchFilters
 from archon_search.pipeline import (
     CollectionNotFoundError,
     FanoutTimeoutError,
@@ -1262,18 +1261,20 @@ def test_search_hyde_still_runs_once_the_embedder_is_warm(tmp_path: Path) -> Non
 
 
 def test_search_hyde_package_not_installed_returns_422(tmp_path: Path) -> None:
-    """resolve_hyde_vector raises RuntimeError (package missing) → 422 response."""
+    """resolve_hyde_vector raises HyDEDependencyError (package missing) → 422 response."""
+    from archon_search.hyde import HYDE_DEPENDENCY_DETAIL, HyDEDependencyError
+
     app, client = _make_app(tmp_path)
     app.state.pipeline = _make_pipeline_mock()
 
     with patch(
         "archon_search.server.routes_search.resolve_hyde_vector",
-        new=AsyncMock(side_effect=RuntimeError("Install archon-search[hyde] to use HyDE")),
+        new=AsyncMock(side_effect=HyDEDependencyError("Install archon-search[hyde] to use HyDE")),
     ):
         response = client.post("/search", json={"collection": "col", "query": "q", "hyde": True})
 
     assert response.status_code == 422
-    assert "hyde" in response.json()["detail"].lower() or "install" in response.json()["detail"].lower()
+    assert response.json() == {"detail": HYDE_DEPENDENCY_DETAIL}
 
 
 def test_search_many_hyde_true(tmp_path: Path) -> None:
@@ -1449,7 +1450,7 @@ def test_search_rag_fusion_false_hyde_still_works(tmp_path: Path) -> None:
 
 def test_search_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> None:
     """pipeline.search() raises RAGFusionDependencyError → 422 response."""
-    from archon_search.rag_fusion import RAGFusionDependencyError
+    from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
 
     app, client = _make_app(tmp_path)
     pipeline_mock = _make_pipeline_mock()
@@ -1461,7 +1462,7 @@ def test_search_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> 
         response = client.post("/search", json={"collection": "col", "query": "q", "rag_fusion": True})
 
     assert response.status_code == 422
-    assert "rag_fusion" in response.json()["detail"].lower() or "install" in response.json()["detail"].lower()
+    assert response.json() == {"detail": RAG_FUSION_DEPENDENCY_DETAIL}
 
 
 def test_search_many_rag_fusion_true(tmp_path: Path) -> None:

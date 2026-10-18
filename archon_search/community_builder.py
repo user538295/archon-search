@@ -32,6 +32,25 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
+
+class CommunityDependencyError(ImportError):
+    """Raised when ``leidenalg``/``igraph`` are not installed.
+
+    Its message embeds :func:`~archon_search.uv_tool.extra_install_hint` (possibly index
+    credentials in a uv tool env): log it, record ``COMMUNITY_DEPENDENCY_DETAIL`` on the job.
+    """
+
+
+# Wire-facing job ``error`` for ``CommunityDependencyError``.
+COMMUNITY_DEPENDENCY_DETAIL = (
+    "community detection requires the archon-search[graph] extra; see the server log for the install command"
+)
+
+
+class NoGraphNodesError(ValueError):
+    """Raised by ``CommunityBuilder.build`` when the collection has no entity graph nodes."""
+
+
 # Maximum recursion depth for oversized-community splitting.
 _MAX_SPLIT_DEPTH: int = 5
 
@@ -173,7 +192,7 @@ def _run_leiden_partition_sync(
         import igraph as ig  # noqa: PLC0415
         import leidenalg  # noqa: PLC0415
     except (ImportError, TypeError) as exc:
-        raise ImportError(
+        raise CommunityDependencyError(
             "leidenalg is required for community detection. "
             f"Install it with: {extra_install_hint('graph')}"
         ) from exc
@@ -451,10 +470,10 @@ class CommunityBuilder:
             May be empty when Leiden produces no communities on a valid graph.
 
         Raises:
-            ValueError: When no graph nodes exist for *collection* (ingest with
-                ``graph.enabled=true`` must be run first).
-            ImportError: When ``leidenalg``/``igraph`` are not installed
-                (``pip install archon-search[graph]``).
+            NoGraphNodesError: When no graph nodes exist for *collection* (ingest
+                with ``graph.enabled=true`` must be run first).
+            CommunityDependencyError: When ``leidenalg``/``igraph`` are not
+                installed (``pip install archon-search[graph]``).
             RuntimeError: When the graph store encounters an unexpected I/O or
                 storage error while loading nodes or edges.
         """
@@ -468,7 +487,7 @@ class CommunityBuilder:
 
         nodes = await self._store.get_all_nodes(collection, ns=ns)
         if not nodes:
-            raise ValueError(
+            raise NoGraphNodesError(
                 f"No entity graph nodes found for collection {collection!r}. "
                 "Run ingest with graph.enabled=true first."
             )

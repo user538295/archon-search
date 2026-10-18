@@ -1,7 +1,7 @@
 **Purpose**: Document the threat model, authentication, ACL semantics, and privacy guarantees of `archon-search`.
 **Audience**: Operators and security reviewers of a local `archon-search` deployment.
 **Status**: Draft
-**Last reviewed**: 2026-08-27
+**Last reviewed**: 2026-10-17
 **Next review**: 2026-11-27
 
 # Security and Privacy Architecture
@@ -50,9 +50,10 @@ D7 introduces `KeyStore`, a durable multi-key store backed by `get_data_dir() / 
 - `active_keys()` re-reads `keys.json` from disk on every call (no in-memory cache). Managed keys are checked before TOML namespace tokens in the middleware dispatch order.
 - Expiry is enforced via wall-clock comparison: `expires_at > now` (strict). A key at exactly its expiry instant is considered expired.
 - The first INFO log for an expired key is emitted once per key ID per process lifetime (suppressed by `_logged_expired_ids: set[str]`).
-- A corrupted `keys.json` (unparseable JSON, non-array JSON, or any record failing Pydantic validation) triggers an ERROR log and the server starts with an empty managed key store — the default env/file key still works.
+- A `keys.json` that exists but cannot be read or parsed (an `OSError`, empty, unparseable JSON, non-array JSON, or any record failing Pydantic validation) triggers an ERROR log. Reads (`load()`, `active_keys()`, `list_keys()`) treat it as an empty store, so the server starts and the default env/file key and TOML `[namespaces]` tokens still authenticate. Mutations fail closed (`KeyStore._load_for_update` raises `KeyStoreUnreadableError`): `create()`, `revoke()`, the rotation and the startup write of the TOML records refuse to write rather than overwrite the file with only their own records, which would delete every managed key. REST answers `500` and MCP `internal_error` with `KEY_STORE_UNREADABLE_DETAIL`; startup logs an ERROR and leaves the file unchanged.
 - TOML `[namespaces]` tokens are loaded at startup as synthetic `KeyRecord` objects (no `id`, `status="active"`, no expiry). They cannot be revoked via the CLI/API; manage them by editing `archon-search.toml` and restarting.
-- **Rotation guard**: after `POST /keys/rotate`, the old default token's SHA-256 is stored in `keys.json` with `status="revoked"`. The middleware performs a negative check before accepting the token via the legacy `api_key` fallback: if the token hash matches a revoked managed key record, the request is rejected even if the raw token still matches `APIKeyMiddleware._api_key`.
+- **Rotation guard**: after `POST /keys/rotate`, an old default token that had a managed record is marked `status="revoked"` (or grace-expired) in `keys.json`; one that never had a record (auto-generated or installer-written) gets a grace record only when `grace_seconds > 0` (`KeyStore.record_rotation`). The middleware performs a negative check before accepting the token via the legacy `api_key` fallback: if the token hash matches a revoked or expired managed key record, the request is rejected even if the raw token still matches the legacy default key.
+- **One current default key for REST and MCP**: the legacy fallback compares against `app.state.api_key`, which both the REST middleware and the mounted `/mcp` middleware read per request (`APIKeyMiddleware(api_key_state=app.state)` via `create_mcp_http_app`). A rotation through `POST /keys/rotate` or MCP `rotate_key` replaces it only after `.search.env` and `keys.json` are written, so the old default key stops authenticating on both transports at once (or when its grace window ends), record or not. `KeyStore.rotation_lock` serializes rotations within the process.
 - **`ARCHON_SEARCH_API_KEY` wins unconditionally**: when the env var is set, `POST /keys/rotate` returns `409`. The env var cannot be overridden by `keys.json` state.
 
 ### File permissions

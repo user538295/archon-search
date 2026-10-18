@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.datastructures import State
 from starlette.requests import Request
-from starlette.responses import Response
 
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
@@ -115,7 +115,7 @@ class TestAPIKeyMiddlewareAuth:
         # /health/ is NOT the same as /health — must not pass auth for free
         resp = client.get("/health/", follow_redirects=False)
         # Must NOT be 200 (unauthenticated access must never succeed on /health/)
-        assert resp.status_code != 200, f"GET /health/ returned 200 without auth — exempt path too broad"
+        assert resp.status_code != 200, "GET /health/ returned 200 without auth — exempt path too broad"
 
     def test_docs_trailing_slash_not_exempt(self, client: TestClient) -> None:
         # /docs/ is NOT the same as /docs — must not pass auth for free
@@ -404,6 +404,68 @@ class TestNamespaceResolution:
         resp = client.get("/me", headers={"Authorization": f"Bearer {DISTINCT_API_KEY}"})
         assert resp.status_code == 200
         assert resp.json()["namespace"] == DEFAULT_NAMESPACE
+
+
+# ===========================================================================
+# api_key_state — where the legacy default key is read per request
+# ===========================================================================
+
+KEY_SERVING_APP = "c" * 64
+KEY_SHARED_STATE = "d" * 64
+KEY_ROTATED = "e" * 64
+
+
+def _status(app: FastAPI, token: str) -> int:
+    client = TestClient(app, raise_server_exceptions=False)
+    return client.get("/search", headers={"Authorization": f"Bearer {token}"}).status_code
+
+
+def _make_state_app(api_key_state: State | None, serving_app_key: str | None = None) -> FastAPI:
+    app = FastAPI()
+    if serving_app_key is not None:
+        app.state.api_key = serving_app_key
+    app.add_middleware(APIKeyMiddleware, api_key=VALID_KEY, api_key_state=api_key_state)
+
+    @app.get("/search")
+    async def search() -> dict:
+        return {"results": []}
+
+    return app
+
+
+class TestApiKeyState:
+    def test_api_key_state_wins_over_the_constructor_key_and_the_serving_app_state(self) -> None:
+        app = _make_state_app(State({"api_key": KEY_SHARED_STATE}), serving_app_key=KEY_SERVING_APP)
+
+        assert _status(app, KEY_SHARED_STATE) == 200
+        assert _status(app, VALID_KEY) == 401
+        assert _status(app, KEY_SERVING_APP) == 401
+
+    def test_a_key_published_to_api_key_state_is_accepted_on_the_next_request(self) -> None:
+        """A rotation publishes to the shared state; the middleware must not cache the old key."""
+        shared = State({"api_key": KEY_SHARED_STATE})
+        app = _make_state_app(shared)
+        assert _status(app, KEY_SHARED_STATE) == 200, "precondition: the old key served a request first"
+
+        shared.api_key = KEY_ROTATED
+
+        assert _status(app, KEY_ROTATED) == 200
+        assert _status(app, KEY_SHARED_STATE) == 401
+
+    def test_without_api_key_state_the_serving_app_state_key_is_read(self) -> None:
+        app = _make_state_app(None, serving_app_key=KEY_SERVING_APP)
+
+        assert _status(app, KEY_SERVING_APP) == 200
+        assert _status(app, VALID_KEY) == 401
+
+    @pytest.mark.parametrize("api_key_state", [None, State()], ids=["no-state", "state-without-api-key"])
+    def test_the_constructor_key_is_the_fallback_when_the_state_has_no_api_key(
+        self, api_key_state: State | None
+    ) -> None:
+        app = _make_state_app(api_key_state)
+
+        assert _status(app, VALID_KEY) == 200
+        assert _status(app, KEY_SHARED_STATE) == 401
 
 
 # ===========================================================================

@@ -26,7 +26,7 @@ import os
 import sys
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -44,7 +44,6 @@ from archon_search.types import (
 )
 
 if TYPE_CHECKING:
-    from archon_search.community_builder import CommunityBuilder
     from archon_search.config import GraphConfig, MaintenanceConfig
     from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
     from archon_search.graph_store import GraphStore
@@ -54,6 +53,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SECONDS_PER_HOUR: int = 3600
+
+# Per-policy names: the log label and the stem of the policy's ``last_error`` text.
+_FTS_OPTIMIZE = "fts_optimize"
+_ORPHAN_CLEANUP = "orphan_cleanup"
+_EXPIRED_CHUNK_PRUNING = "expired_chunk_pruning"
+_GRAPH_GC = "graph_gc"
+
+
+def _policy_failed_detail(policy: str) -> str:
+    return f"{policy} failed; see the server log for details"
+
+
+# Per-policy ``last_error`` text (wire-facing via GET /status): the caught
+# exception's message may embed internals, so it goes to the server log only.
+FTS_OPTIMIZE_FAILED_DETAIL = _policy_failed_detail(_FTS_OPTIMIZE)
+ORPHAN_CLEANUP_FAILED_DETAIL = _policy_failed_detail(_ORPHAN_CLEANUP)
+EXPIRED_CHUNK_PRUNING_FAILED_DETAIL = _policy_failed_detail(_EXPIRED_CHUNK_PRUNING)
+GRAPH_GC_FAILED_DETAIL = _policy_failed_detail(_GRAPH_GC)
 
 # Empty health entry shape written per collection each pass.
 _EMPTY_HEALTH_ENTRY: dict[str, Any] = {
@@ -478,7 +495,7 @@ class MaintenanceLoop:
         stale_count = await self._graph_store.count_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
 
         # Phase 3: Prune stale mentions
-        pruned_count = await self._graph_store.prune_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
+        await self._graph_store.prune_stale_mentions(collection, live_chunk_ids_frozen, ns=namespace)
 
         # Phase 4: Delete orphan nodes and edges
         gc_result = await self._graph_store.delete_orphan_nodes_and_edges(collection, ns=namespace)
@@ -1164,38 +1181,29 @@ class MaintenanceLoop:
             self._current_health = col_health
 
             # Per-policy try/except: failures in one policy do not abort others.
-            try:
-                await self._run_fts_optimize(col, ns)
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "MaintenanceLoop: _run_fts_optimize failed for %s: %s", key, exc
-                )
-                col_health["last_error"] = str(exc)
-
-            try:
-                await self._run_orphan_cleanup(col, ns)
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "MaintenanceLoop: _run_orphan_cleanup failed for %s: %s", key, exc
-                )
-                col_health["last_error"] = str(exc)
-
-            try:
-                await self._run_expired_chunk_pruning(col, ns)
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "MaintenanceLoop: _run_expired_chunk_pruning failed for %s: %s", key, exc
-                )
-                col_health["last_error"] = str(exc)
+            # Each runs in this order, with a fixed log label and the ``last_error``
+            # its failure records; a later failure overwrites an earlier one (graph
+            # GC runs separately: it is gated and returns a count).
+            collection_policies = (
+                (_FTS_OPTIMIZE, self._run_fts_optimize, FTS_OPTIMIZE_FAILED_DETAIL),
+                (_ORPHAN_CLEANUP, self._run_orphan_cleanup, ORPHAN_CLEANUP_FAILED_DETAIL),
+                (_EXPIRED_CHUNK_PRUNING, self._run_expired_chunk_pruning, EXPIRED_CHUNK_PRUNING_FAILED_DETAIL),
+            )
+            for label, policy, failed_detail in collection_policies:
+                try:
+                    await policy(col, ns)
+                except Exception:  # noqa: BLE001
+                    logger.exception("MaintenanceLoop: %s failed for %s", label, key)
+                    col_health["last_error"] = failed_detail
 
             if self._graph_gc_active:
                 try:
                     per_collection_stale_counts.append(
                         await self._run_collection_graph_gc(col, ns, col_health)
                     )
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("MaintenanceLoop: graph GC failed for %s: %s", key, exc)
-                    col_health["last_error"] = str(exc)
+                except Exception:  # noqa: BLE001
+                    logger.exception("MaintenanceLoop: %s failed for %s", _GRAPH_GC, key)
+                    col_health["last_error"] = GRAPH_GC_FAILED_DETAIL
             else:
                 # GC is off, but a community rebuild (e.g. drained after synonym
                 # enrichment) may have finished; consuming it clears the flag.

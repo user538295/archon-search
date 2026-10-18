@@ -1,7 +1,7 @@
 **Purpose**: Configure `archon-search` via `archon-search.toml` and environment variables.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-08-20 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-10-17 / **Next review**: 2027-07-29
 
 # Configuration
 
@@ -144,7 +144,7 @@ Correlation-ID propagation and per-stage latency recording.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `rotate_grace_seconds` | `0` | Grace window (seconds) after a key rotation before the old key is rejected; `0` = immediate revocation. The `POST /keys/rotate` body's `grace_seconds` overrides this per call. |
+| `rotate_grace_seconds` | `0` | Grace window (seconds) after a key rotation before the old key is rejected; `0` = immediate revocation. Range `0`…`3153600000` (100 years; the cap only keeps the old key's expiry inside the representable date range), else config load fails. The `POST /keys/rotate` body's `grace_seconds` (same range) overrides this per call. |
 
 Full key lifecycle and rotation are in [`../SecurityGuide/02_authentication_and_keys.md`](../SecurityGuide/02_authentication_and_keys.md).
 

@@ -625,3 +625,21 @@ def test_explain_result_graph_provenance_in_spec(app) -> None:
     # graph_provenance must be optional (not required)
     assert "graph_provenance" not in result_schema.get("required", []), \
         "graph_provenance must be optional (nullable) in ExplainResult"
+
+
+@pytest.mark.parametrize(
+    ("path", "method"),
+    [
+        ("/search", "post"),
+        ("/keys", "post"),
+        ("/keys/{key_id}", "delete"),
+        ("/keys/rotate", "post"),
+    ],
+)
+def test_internal_error_responses_declare_error_detail(app, path: str, method: str) -> None:  # type: ignore[no-untyped-def]
+    """Routes that answer a sanitized JSON 500 declare it as ErrorDetail in the authoritative contract."""
+    schema = app.openapi()
+    responses = schema["paths"][path][method]["responses"]
+    assert "500" in responses, f"{method.upper()} {path} must declare its 500 response"
+    json_schema = responses["500"]["content"]["application/json"]["schema"]
+    assert json_schema.get("$ref", "").endswith("/ErrorDetail"), f"{method.upper()} {path} 500 must be ErrorDetail"

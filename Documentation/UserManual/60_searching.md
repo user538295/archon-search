@@ -1,7 +1,7 @@
 **Purpose**: Query the index over REST and MCP.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-10-12 / **Next review**: 2027-10-12
+**Last reviewed**: 2026-10-17 / **Next review**: 2027-10-12
 
 # Searching
 
@@ -50,7 +50,7 @@ Status codes:
 - `404` — collection not found in the caller's namespace.
 - `422` — invalid selection (both/neither of `collection`/`collections`), fan-out over `max_fanout`, `top_k` over `top_k_max`, or an invalid model/parameter. A missing HyDE/RAG-Fusion provider package prevents startup entirely (see `160_troubleshooting.md`).
 - `503` — internal metadata lookup failed.
-- `500` — pipeline stage exception (embedder, store, or reranker raised).
+- `500` — pipeline stage exception (embedder, store, or reranker raised), or an unexpected exception during HyDE generation (see [HyDE query expansion](#hyde-query-expansion-c4)).
 - `504` — pipeline call timed out (~30 s). The timer starts after a bounded model warm-up wait (`0.5 s` per model), and a model still cold after it degrades the request instead (no reranking, or FTS only — see Principle 1), so a cold model no longer causes this on the first search after a restart.
 
 ### `curl` example
@@ -248,7 +248,7 @@ The response sets `hyde_applied: true` when HyDE was used, or `false` on fallbac
 
 ### Fallback behaviour
 
-HyDE never degrades availability. It falls back silently (`hyde_applied: false`) when: `[hyde] enabled = false`; the required API key is absent (WARNING logged once); the provider call times out (`timeout_seconds`) or errors; or the per-process rate limit is exhausted. On `/search` (REST and the MCP `search` tool) the whole expansion is additionally bounded by the server's ~30 s search budget (S582), so a provider that accepts the connection but never answers can no longer hold the request open for the full `timeout_seconds` — it falls back the same way. The one non-silent case is `[hyde] enabled = true` with the provider package uninstalled — the server refuses to start with a `ConfigError` naming the missing package (see `160_troubleshooting.md`). The rate limit is per-process: with N workers the effective call rate is up to `N × max_requests_per_minute`.
+A provider-side HyDE failure never degrades availability. It falls back silently (`hyde_applied: false`) when: `[hyde] enabled = false`; the required API key is absent (WARNING logged once); the provider call times out (`timeout_seconds`) or errors; or the per-process rate limit is exhausted. On `/search` (REST and the MCP `search` tool) the whole expansion is additionally bounded by the server's ~30 s search budget (S582), so a provider that accepts the connection but never answers can no longer hold the request open for the full `timeout_seconds` — it falls back the same way. The non-silent cases: `[hyde] enabled = true` with the provider package uninstalled makes the server refuse to start with a `ConfigError` naming the missing package (see `160_troubleshooting.md`); and an unexpected exception during HyDE generation outside the provider call (e.g. embedding the hypothesis) fails the request — REST `500` with `{"detail": "search failed"}` (`/explain`: `explain failed`), MCP `internal_error` with the same text (`search` / `search_with_context`: `search failed`, `explain`: `explain failed`) — with the cause in the server log. The rate limit is per-process: with N workers the effective call rate is up to `N × max_requests_per_minute`.
 
 ## RAG Fusion multi-query recall (C5)
 

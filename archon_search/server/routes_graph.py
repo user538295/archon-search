@@ -11,18 +11,24 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 if TYPE_CHECKING:
-    from archon_search.config import GraphConfig, SearchConfig
+    from archon_search.config import GraphConfig
     from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
     from archon_search.graph_store import GraphStore
     from archon_search.jobs.store import JobStore
-    from archon_search.pipeline import SearchPipeline
     from archon_search.store import SearchStore
     from archon_search.types import CommunityRebuildJob
 
-from archon_search.community_builder import CommunityBuilder
+from archon_search.community_builder import (
+    COMMUNITY_DEPENDENCY_DETAIL,
+    CommunityBuilder,
+    CommunityDependencyError,
+    NoGraphNodesError,
+)
 from archon_search.graph_inspector import (
     CollectionGraphView,
     CrossCollectionGraphView,
+    GRAPHML_DEPENDENCY_DETAIL,
+    GraphMLDependencyError,
     inspect_collection,
     inspect_cross_collection,
     to_graphml,
@@ -49,6 +55,12 @@ from archon_search.types import JobStatus
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Job ``error`` for a community rebuild that failed with an exception whose message
+# may embed internals (GraphStore / LanceDB I/O). Only the builder's curated
+# NoGraphNodesError message reaches the job record; CommunityDependencyError records
+# COMMUNITY_DEPENDENCY_DETAIL (its message embeds the install command).
+COMMUNITY_REBUILD_FAILED_DETAIL = "community rebuild failed; see the server log for details"
 
 # Error map for rebuild_communities: 401 (auth), 404 (collection not found),
 # 409 (rebuild already in progress), 422 (graph disabled).
@@ -87,8 +99,9 @@ async def _community_rebuild_task(
       1. Construct a fresh ``CommunityBuilder``.
       2. ``await build(collection, ns)``.
       3. Transition to DONE with ``result={"communities_built": N}`` on success.
-      4. Transition to FAILED with the error string on
-         ``ValueError``/``ImportError``/``RuntimeError``.
+      4. Transition to FAILED on any exception: the builder's curated message for
+         ``NoGraphNodesError``, ``COMMUNITY_DEPENDENCY_DETAIL`` for
+         ``CommunityDependencyError``, else ``COMMUNITY_REBUILD_FAILED_DETAIL``.
 
     BE-5: on every terminal exit (DONE and FAILED), actively clears
     ``CollectionMeta.community_rebuild_job_id`` (mirrors ``_reindex_task``'s
@@ -102,13 +115,21 @@ async def _community_rebuild_task(
         graph_store, graph_config, search_store=search_store, enrichment_client=enrichment_client
     )
 
-    build_exc: Exception | None = None
+    failure_error: str | None = None
     communities = None
     try:
         communities = await builder.build(job.collection, job.namespace)
-    except (ValueError, ImportError, RuntimeError) as exc:
+    except NoGraphNodesError as exc:
+        # Curated, expected outcome: no traceback.
+        logger.warning("_community_rebuild_task: job %s failed: %s", job_id, exc)
+        failure_error = str(exc)  # the builder's curated message
+    except CommunityDependencyError as exc:
+        logger.warning("_community_rebuild_task: job %s failed: %s", job_id, exc)  # the install command: operator-only
+        failure_error = COMMUNITY_DEPENDENCY_DETAIL
+    except Exception:  # noqa: BLE001
+        # Catch everything: an exception escaping here would leave the job RUNNING forever.
         logger.exception("_community_rebuild_task: job %s failed", job_id)
-        build_exc = exc
+        failure_error = COMMUNITY_REBUILD_FAILED_DETAIL
 
     # Clear community_rebuild_job_id BEFORE transitioning to a terminal state
     # so any observer that sees DONE/FAILED is guaranteed to also see it cleared.
@@ -125,9 +146,9 @@ async def _community_rebuild_task(
                 job_id,
             )
 
-    if build_exc is not None:
+    if failure_error is not None:
         try:
-            job_store.update(job_id, status=JobStatus.FAILED, error=str(build_exc))
+            job_store.update(job_id, status=JobStatus.FAILED, error=failure_error)
         except (KeyError, OSError):
             logger.error(
                 "_community_rebuild_task: could not persist FAILED status for job %s", job_id
@@ -482,10 +503,11 @@ async def get_graph_cross_collection(
     if format == "graphml":
         try:
             graphml_bytes = to_graphml(view)
-        except ImportError as e:
+        except GraphMLDependencyError as e:
+            logger.warning("get_graph_cross_collection: GraphML export unavailable: %s", e)
             raise HTTPException(
                 status_code=500,
-                detail=str(e),
+                detail=GRAPHML_DEPENDENCY_DETAIL,
             )
         return Response(content=graphml_bytes, media_type="application/xml")
     else:
@@ -569,10 +591,11 @@ async def get_graph(
     if format == "graphml":
         try:
             graphml_bytes = to_graphml(view)
-        except ImportError as e:
+        except GraphMLDependencyError as e:
+            logger.warning("get_graph: GraphML export unavailable: %s", e)
             raise HTTPException(
                 status_code=500,
-                detail=str(e),
+                detail=GRAPHML_DEPENDENCY_DETAIL,
             )
         return Response(content=graphml_bytes, media_type="application/xml")
     else:

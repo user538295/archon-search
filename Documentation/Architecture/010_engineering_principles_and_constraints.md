@@ -1,7 +1,7 @@
 **Purpose**: Define the engineering constraints that every change to `archon-search` must respect — language baseline, tooling, versioning, coverage, structural invariants, and contract surfaces.
 **Audience**: Contributors writing code, reviewers approving PRs, release engineers cutting tags.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
+**Last reviewed**: 2026-10-17
 **Next review**: 2026-08-20
 
 # Engineering Principles and Constraints
@@ -69,6 +69,12 @@ The companion runtime guarantees are enforced in `archon_search/config.py` (the 
 - Telemetry is opt-in (`[telemetry].enabled = false` by default).
 - `[telemetry].export_enabled = true` logs a warning at config load and is coerced back to `false` (`config.py`); there is no remote sink in v1.
 - `doc_id`s are path-derived; when telemetry is on, log files may reveal filesystem paths. This is documented as accepted operator risk; a hashed-doc-id mode is on the roadmap. #Unverified
+
+### Wire errors: never `str(exc)`
+
+A caught exception whose message can embed internals (server paths, library internals, an install command, the rejected input) never reaches a REST `detail`, an MCP `error`, a job `error` or a maintenance `last_error`. The exception is logged server-side with its traceback, and the wire carries one sanitized `DETAIL` constant — with a `CODE` constant where MCP needs one — defined next to the exception (e.g. `HYDE_DEPENDENCY_DETAIL` / `HYDE_DEPENDENCY_CODE` in `hyde.py`). A curated exception whose message archon-search builds itself (e.g. `KeyRotationInputError`, `IngestPathNotFoundError`) may surface its own message. The per-surface texts are in [140_error_handling_strategy.md](140_error_handling_strategy.md) (Principle 6 and the status-code mapping).
+
+`tests/test_no_wire_str_exc.py` enforces this by shape for `archon_search/server/` and `archon_search/jobs/`: a `str()` / `repr()` / f-string of a caught exception, or a `traceback.format_exc()` / `traceback.format_exception[_only]()` of it, outside a logging call fails the build unless its (file, function, `except` type, ordinal) is listed in the test's `_ALLOWLIST` — one entry per handler, the ordinal counting that function's stringifying handlers of that type. The scan is syntactic; its documented blind spots are in the test's module docstring. The runtime leak tests `tests/server/test_no_internal_error_leak_rest.py`, `tests/server/test_no_internal_error_leak_mcp.py` and `tests/test_no_internal_error_leak_jobs.py` assert the fixed text on the wire.
 
 ### Logger names: always `__name__`
 

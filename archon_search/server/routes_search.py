@@ -7,7 +7,7 @@ import time
 from contextlib import ExitStack
 from functools import partial
 from time import monotonic
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -21,14 +21,14 @@ from archon_search.embedder_cache import (
     EmbedderNotReadyError,
 )
 from archon_search.filters import SearchFilters
-from archon_search.hyde import resolve_hyde_vector
+from archon_search.hyde import HYDE_DEPENDENCY_DETAIL, HyDEDependencyError, resolve_hyde_vector
 from archon_search.pipeline import (
     CollectionNotFoundError,
     FanoutTimeoutError,
     GraphCommunitiesNotBuiltError,
     MetadataLookupError,
 )
-from archon_search.rag_fusion import RAGFusionDependencyError
+from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
 from archon_search.server.schemas import AclGateSchema, ErrorDetail, ExcludedCollectionSchema
 from archon_search.server._search_budget import (
     EMBEDDER_WARMUP_WAIT_SECONDS,
@@ -42,6 +42,9 @@ from archon_search.server._search_budget import (
 from archon_search.server._validators import validate_scope_filter as _check_scope_filter
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
+
+if TYPE_CHECKING:
+    from archon_search.telemetry.writer import TelemetryWriter
 
 # Upper bound on how long a single POST /search request waits on
 # embedder_cache.get_or_load() before degrading to the FTS leg alone.
@@ -61,6 +64,11 @@ from archon_search.telemetry.entry import FilterFlags, TelemetryEntry
 # to prevent). The load itself is shielded, so it keeps running and populates the
 # cache for later requests.
 _EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS = EMBEDDER_WARMUP_WAIT_SECONDS
+
+# ``500`` ``detail`` for a HyDE failure other than ``HyDEDependencyError``: the caught
+# exception's message may embed internals (model paths), so it goes to the server log
+# only. Same text as MCP ``search``'s ``_SEARCH_FAILED_DETAIL``.
+SEARCH_FAILED_DETAIL = "search failed"
 
 _VALID_ACL_SOURCES = frozenset({"frontmatter", "sidecar", "collection_default"})
 
@@ -83,6 +91,66 @@ def _discard_abandoned_load(task: "asyncio.Future[object]") -> None:
     exc = task.exception()
     if exc is not None:
         logger.warning("search: abandoned embedder load failed — %s", exc)
+
+
+def _enqueue_error(
+    writer: TelemetryWriter | None,
+    start: float,
+    *,
+    status: Literal["internal_error", "timeout"],
+    error_kind: Literal["other", "timeout"],
+) -> None:
+    """Enqueue the error telemetry entry for a ``/search`` request begun at *start*."""
+    if writer is None:
+        return
+    try:
+        writer.enqueue(
+            TelemetryEntry.from_error(
+                endpoint="search",
+                status=status,
+                error_kind=error_kind,
+                latency_ms=(monotonic() - start) * 1000.0,
+                correlation_id=_correlation_id.get(),
+            )
+        )
+    except Exception as tel_exc:
+        logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+
+
+def _report_pipeline_failure(writer: TelemetryWriter | None, start: float, exc: Exception) -> None:
+    """Enqueue the ``internal_error`` telemetry entry and log ``search_pipeline_failure`` for *exc*.
+
+    The caller re-raises *exc*, so the client gets Starlette's plain ``500`` — never the
+    exception text.
+    """
+    _enqueue_error(writer, start, status="internal_error", error_kind="other")
+    logger.error(
+        "search pipeline failed: %s",
+        type(exc).__name__,
+        extra={"event_type": "search_pipeline_failure"},
+        exc_info=exc,
+    )
+
+
+def dependency_error_response(
+    endpoint: str,
+    exc: HyDEDependencyError | RAGFusionDependencyError,
+    *,
+    log: logging.Logger = logger,
+) -> JSONResponse:
+    """Answer a missing HyDE or RAG Fusion package with its fixed ``422`` detail (REST ``/search``, ``/explain``).
+
+    The REST twin of ``mcp._dependency_error_response``. The two branches are exhaustive
+    over *exc*'s type; the RAG Fusion one is not ``isinstance``-checked because
+    ``routes_explain`` catches the lazily imported class, which a reloaded
+    ``archon_search.rag_fusion`` no longer matches by identity. The message carries this
+    interpreter's install command, so it is logged, never sent.
+    """
+    if isinstance(exc, HyDEDependencyError):
+        log.warning("%s: HyDE unavailable — %s", endpoint, exc)
+        return JSONResponse({"detail": HYDE_DEPENDENCY_DETAIL}, status_code=422)
+    log.warning("%s: RAG Fusion unavailable — %s", endpoint, exc)
+    return JSONResponse({"detail": RAG_FUSION_DEPENDENCY_DETAIL}, status_code=422)
 
 
 class SearchRequest(BaseModel):
@@ -208,7 +276,17 @@ class SearchResponse(BaseModel):
     ppr_entities_matched: int | None = None
 
 
-@router.post("/search", response_model=SearchResponse, responses={503: {"model": ErrorDetail}})
+@router.post(
+    "/search",
+    response_model=SearchResponse,
+    responses={
+        500: {
+            "model": ErrorDetail,
+            "description": "HyDE generation failure (JSON detail); a pipeline failure is a plain-text 500",
+        },
+        503: {"model": ErrorDetail},
+    },
+)
 async def search(body: SearchRequest, request: Request) -> SearchResponse | JSONResponse:
     pipeline = request.app.state.pipeline
     ns = request.state.namespace
@@ -278,8 +356,13 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 ),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
-        except RuntimeError as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=422)
+        except HyDEDependencyError as exc:
+            return dependency_error_response("search", exc)
+        except Exception:
+            # Any other HyDE failure may embed internals: answer like /explain's HyDE catch-all.
+            logger.exception("search: HyDE resolution failed")
+            _enqueue_error(writer, start, status="internal_error", error_kind="other")
+            return JSONResponse({"detail": SEARCH_FAILED_DETAIL}, status_code=500)
         # HyDE failure: requested but returned no vector
         hyde_expansion_warning = _HYDE_EXPANSION_FAILED_WARNING if (body.hyde and not hyde_applied) else None
 
@@ -312,8 +395,8 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 ),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
-        except RAGFusionDependencyError as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=422)
+        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+            return dependency_error_response("search", exc)
         except GraphCommunitiesNotBuiltError as exc:
             return JSONResponse(
                 {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
@@ -544,19 +627,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             # also emits stage timings for the recorder bound above — the generic
             # handler has no access to that ExitStack-scoped recorder.
             _emit_timings()
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_error(
-                            endpoint="search",
-                            status="internal_error",
-                            error_kind="other",
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            correlation_id=_correlation_id.get(),
-                        )
-                    )
-                except Exception as tel_exc:
-                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+            _enqueue_error(writer, start, status="internal_error", error_kind="other")
             logger.warning("search: embedder not ready — %s", exc)
             return JSONResponse(
                 {"detail": EMBEDDER_NOT_READY_DETAIL, "code": EMBEDDER_NOT_READY_CODE},
@@ -565,7 +636,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             )
         except RAGFusionDependencyError as exc:
             _emit_timings()
-            return JSONResponse({"detail": str(exc)}, status_code=422)
+            return dependency_error_response("search", exc)
         except GraphCommunitiesNotBuiltError as exc:
             _emit_timings()
             return JSONResponse(
@@ -573,19 +644,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             )
         except SearchBudgetExceeded:
             _emit_timings()
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_error(
-                            endpoint="search",
-                            status="timeout",
-                            error_kind="timeout",
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            correlation_id=_correlation_id.get(),
-                        )
-                    )
-                except Exception as tel_exc:
-                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
+            _enqueue_error(writer, start, status="timeout", error_kind="timeout")
             logger.error(
                 "search pipeline timed out",
                 extra={"event_type": "search_timeout", "collection": body.collection},
@@ -593,23 +652,5 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             raise HTTPException(status_code=504, detail="Search timed out")
         except Exception as exc:
             _emit_timings()
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_error(
-                            endpoint="search",
-                            status="internal_error",
-                            error_kind="other",
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            correlation_id=_correlation_id.get(),
-                        )
-                    )
-                except Exception as tel_exc:
-                    logger.warning("telemetry enqueue failed: %s", type(tel_exc).__name__)
-            logger.error(
-                "search pipeline failed: %s",
-                type(exc).__name__,
-                extra={"event_type": "search_pipeline_failure"},
-                exc_info=True,
-            )
+            _report_pipeline_failure(writer, start, exc)
             raise

@@ -1,16 +1,18 @@
 """Tests for key_manager.py — key loading and auto-generation ."""
 from __future__ import annotations
 
+import asyncio
 import os
 import stat
 import sys
-import time
+import threading
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import archon_search.key_manager as km
+from archon_search._durable_io import DurabilityUnconfirmedError
 
 
 # ---------------------------------------------------------------------------
@@ -18,6 +20,12 @@ import archon_search.key_manager as km
 # ---------------------------------------------------------------------------
 
 VALID_HEX_64 = "a" * 64
+_THREAD_WAIT_SECONDS = 10
+_LOOP_TURNS = 5
+# Past CPython's 4300-digit int-conversion limit: json.loads raises a plain ValueError.
+_OVERSIZED_INT_DIGITS = 5000
+# Past the recursion limit: json.loads raises RecursionError.
+_EXCESSIVE_NESTING_DEPTH = 100_000
 
 
 def _write_key_file(path: Path, content: str) -> None:
@@ -241,7 +249,6 @@ class TestAutoGenerate:
         import logging
 
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
-        key_file = tmp_path / ".search.env"
         monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
         with caplog.at_level(logging.DEBUG):
             key, _ = km.load_or_generate_key()
@@ -559,3 +566,428 @@ class TestLoadKey:
         monkeypatch.delenv("ARCHON_SEARCH_API_KEY", raising=False)
         monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", str(tmp_path / "missing.env"))
         assert km.load_key() is None
+
+
+# ---------------------------------------------------------------------------
+# rotate_and_persist_default_key — the rotate use case shared by REST and MCP
+# ---------------------------------------------------------------------------
+
+
+def _reader(token: str) -> AsyncMock:
+    """A ``read_current_token`` stand-in answering *token*."""
+    return AsyncMock(return_value=token)
+
+
+class TestRotateAndPersistDefaultKey:
+    @pytest.fixture
+    def key_file(self, tmp_path: Path) -> Path:
+        return tmp_path / "keys" / ".search.env"
+
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> km.KeyStore:
+        return km.KeyStore(path=tmp_path / "keys.json")
+
+    @staticmethod
+    async def _rotate(
+        store: km.KeyStore,
+        key_file: Path,
+        *,
+        token: str = VALID_HEX_64,
+        grace: int = 0,
+        reader: AsyncMock | None = None,
+        publish: list[str] | None = None,
+    ) -> dict:
+        return await km.rotate_and_persist_default_key(
+            store,
+            key_file=key_file,
+            read_current_token=reader if reader is not None else _reader(token),
+            grace_seconds=grace,
+            publish_new_token=publish.append if publish is not None else None,
+        )
+
+    async def test_writes_the_new_key_file_then_records_it(self, store: km.KeyStore, key_file: Path) -> None:
+        published: list[str] = []
+        result = await self._rotate(store, key_file, publish=published)
+
+        new_token = result["new_token"]
+        assert key_file.read_text() == f"{km.ENV_VAR}={new_token}\n"
+        assert [r.id for r in await store.active_keys()] == [result["new_key_id"]]
+        assert result["old_record"] is None  # unmanaged old key, no grace window
+        assert published == [new_token]
+
+    async def test_blank_current_token_is_rejected_before_anything_is_written(
+        self, store: km.KeyStore, key_file: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with patch.object(km, "atomic_write_bytes") as write, caplog.at_level("ERROR"):
+            with pytest.raises(km.BlankCurrentKeyError, match="current_token must not be empty"):
+                await self._rotate(store, key_file, token="   ")
+
+        write.assert_not_called()
+        assert not (tmp_path / "keys.json").exists()
+        assert "rotate: rejected before writing .search.env: current_token must not be empty" in caplog.text
+
+    @pytest.mark.parametrize("grace", [-1, km.MAX_ROTATE_GRACE_SECONDS + 1])
+    async def test_out_of_range_grace_is_rejected_before_the_current_key_is_read(
+        self, store: km.KeyStore, key_file: Path, tmp_path: Path, grace: int, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        reader = _reader(VALID_HEX_64)
+        with patch.object(km, "atomic_write_bytes") as write, caplog.at_level("WARNING"):
+            with pytest.raises(km.KeyRotationInputError, match="grace_seconds must be") as exc_info:
+                await self._rotate(store, key_file, grace=grace, reader=reader)
+
+        rejected = [r for r in caplog.records if r.getMessage().startswith("rotate: rejected before writing .search.env")]
+        assert [r.levelname for r in rejected] == ["WARNING"], "an out-of-range grace is logged WARNING, not ERROR"
+        assert not isinstance(exc_info.value, km.BlankCurrentKeyError)
+        reader.assert_not_awaited()
+        write.assert_not_called()
+        assert not key_file.parent.exists()
+        assert not (tmp_path / "keys.json").exists()
+
+    async def test_key_file_write_failure_raises_key_file_write_error_and_leaves_keys_json(
+        self, store: km.KeyStore, key_file: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cause = PermissionError(13, "Permission denied", str(key_file))
+        with patch.object(km, "atomic_write_bytes", side_effect=cause), caplog.at_level("ERROR"):
+            with pytest.raises(km.KeyFileWriteError) as exc_info:
+                await self._rotate(store, key_file)
+
+        assert str(exc_info.value) == km.ROTATE_WRITE_FAILED_DETAIL
+        assert exc_info.value.__cause__ is cause
+        assert any(r.exc_info is not None and r.exc_info[1] is cause for r in caplog.records)
+        assert not (tmp_path / "keys.json").exists()
+
+    async def test_key_file_dir_creation_failure_raises_key_file_write_error(
+        self, store: km.KeyStore, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("a regular file where the key file's directory belongs")
+        published: list[str] = []
+
+        with caplog.at_level("ERROR"):
+            with pytest.raises(km.KeyFileWriteError) as exc_info:
+                await self._rotate(store, blocker / "sub" / ".search.env", publish=published)
+
+        assert isinstance(exc_info.value.__cause__, OSError)
+        assert str(blocker) in caplog.text and "Traceback" in caplog.text
+        assert not (tmp_path / "keys.json").exists()
+        assert published == []
+
+    async def test_key_file_durability_unconfirmed_counts_as_written(
+        self, store: km.KeyStore, key_file: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """os.replace landed the new key: a failed dir fsync must not claim "rotation aborted"."""
+        real_write = km.atomic_write_bytes
+
+        def write_then_fail_dir_fsync(path: Path, data: bytes, mode: int = 0o600) -> None:
+            real_write(path, data, mode=mode)
+            if path == key_file:
+                raise DurabilityUnconfirmedError(5, "dir fsync failed", str(path.parent))
+
+        with patch.object(km, "atomic_write_bytes", side_effect=write_then_fail_dir_fsync), caplog.at_level("WARNING"):
+            result = await self._rotate(store, key_file)
+
+        assert key_file.read_text() == f"{km.ENV_VAR}={result['new_token']}\n"
+        assert [r.id for r in await store.active_keys()] == [result["new_key_id"]]
+        assert any(r.levelname == "WARNING" and "durability" in r.getMessage() for r in caplog.records)
+
+    async def test_unreadable_keys_json_fails_closed_before_the_key_file_is_written(
+        self, store: km.KeyStore, key_file: Path, tmp_path: Path
+    ) -> None:
+        corrupt = b"{ not json"
+        (tmp_path / "keys.json").write_bytes(corrupt)
+        published: list[str] = []
+
+        with pytest.raises(km.KeyStoreUnreadableError) as exc_info:
+            await self._rotate(store, key_file, publish=published)
+
+        assert str(exc_info.value) == km.KEY_STORE_UNREADABLE_DETAIL
+        assert not key_file.exists()
+        assert (tmp_path / "keys.json").read_bytes() == corrupt
+        assert published == []
+
+    async def test_keys_json_failure_after_the_write_raises_rotation_incomplete_error(
+        self, store: km.KeyStore, key_file: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cause = km.KeyStoreUnreadableError(km.KEY_STORE_UNREADABLE_DETAIL)  # keys.json broke after verify_readable
+        with patch.object(store, "record_rotation", side_effect=cause), caplog.at_level("ERROR"):
+            with pytest.raises(km.RotationIncompleteError) as exc_info:
+                await self._rotate(store, key_file)
+
+        assert str(exc_info.value) == km.ROTATE_KEYS_JSON_FAILED_DETAIL
+        assert exc_info.value.__cause__ is cause
+        assert any(r.exc_info is not None and r.exc_info[1] is cause for r in caplog.records)
+        assert key_file.exists(), "the new key was written before keys.json"
+
+    async def test_keys_json_write_oserror_is_an_incomplete_rotation(
+        self, store: km.KeyStore, key_file: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A real keys.json write failure, after .search.env landed, never claims nothing changed."""
+        real_write = km.atomic_write_bytes
+        cause = PermissionError(13, "Permission denied", str(tmp_path / "keys.json"))
+        published: list[str] = []
+
+        def fail_keys_json(path: Path, data: bytes, mode: int = 0o600) -> None:
+            if path == tmp_path / "keys.json":
+                raise cause
+            real_write(path, data, mode=mode)
+
+        with patch.object(km, "atomic_write_bytes", side_effect=fail_keys_json), caplog.at_level("ERROR"):
+            with pytest.raises(km.RotationIncompleteError) as exc_info:
+                await self._rotate(store, key_file, publish=published)
+
+        assert exc_info.value.__cause__ is cause
+        assert key_file.read_text().startswith(f"{km.ENV_VAR}=")
+        assert not (tmp_path / "keys.json").exists()
+        assert published == []
+
+    async def test_keys_json_durability_unconfirmed_counts_as_written(
+        self, store: km.KeyStore, key_file: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        real_write = km.atomic_write_bytes
+
+        def write_then_fail_dir_fsync(path: Path, data: bytes, mode: int = 0o600) -> None:
+            real_write(path, data, mode=mode)
+            if path == tmp_path / "keys.json":
+                raise DurabilityUnconfirmedError(5, "dir fsync failed", str(path.parent))
+
+        with patch.object(km, "atomic_write_bytes", side_effect=write_then_fail_dir_fsync), caplog.at_level("WARNING"):
+            result = await self._rotate(store, key_file)
+
+        assert [r.id for r in await store.active_keys()] == [result["new_key_id"]]
+        assert any(r.levelname == "WARNING" and "durability" in r.getMessage() for r in caplog.records)
+
+    async def test_token_mismatch_after_both_writes_is_an_incomplete_rotation(
+        self, store: km.KeyStore, key_file: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        recorded = {"new_key_id": "id", "new_token": "f" * 64, "old_record": None}
+        published: list[str] = []
+        with patch.object(store, "record_rotation", AsyncMock(return_value=recorded)), caplog.at_level("ERROR"):
+            with pytest.raises(km.RotationIncompleteError) as exc_info:
+                await self._rotate(store, key_file, publish=published)
+
+        assert str(exc_info.value) == km.ROTATE_KEYS_JSON_FAILED_DETAIL
+        assert "unexpected token" in caplog.text
+        assert published == []
+
+    async def test_concurrent_rotations_are_serialised(self, store: km.KeyStore, key_file: Path) -> None:
+        """Each rotation reads the key the previous one published: no orphaned active key."""
+        state = {"current": VALID_HEX_64}
+
+        async def read() -> str:
+            current = state["current"]
+            await asyncio.sleep(0)  # let the other rotation run if nothing serialises them
+            return current
+
+        def publish(token: str) -> None:
+            state["current"] = token
+
+        async def rotate() -> dict:
+            return await km.rotate_and_persist_default_key(
+                store, key_file=key_file, read_current_token=read, grace_seconds=0, publish_new_token=publish
+            )
+
+        await asyncio.gather(rotate(), rotate())
+
+        active = await store.active_keys()
+        assert len(active) == 1, "the first rotation's key must be revoked by the second"
+        assert key_file.read_text() == f"{km.ENV_VAR}={state['current']}\n"
+
+    async def _cancel_during_the_key_file_write(
+        self, store: km.KeyStore, key_file: Path, published: list[str], *, cancels: int = 1
+    ) -> None:
+        """Cancel a rotation *cancels* times while its key-file write blocks.
+
+        After each cancel, assert the caller still waits under the lock; then it sees the cancel.
+        """
+        real_write = km.atomic_write_bytes
+        write_started = threading.Event()
+        release_write = threading.Event()
+
+        def blocking_write(path: Path, data: bytes, mode: int = 0o600) -> None:
+            if path == key_file:
+                write_started.set()
+                release_write.wait(timeout=_THREAD_WAIT_SECONDS)
+            real_write(path, data, mode=mode)
+
+        with patch.object(km, "atomic_write_bytes", side_effect=blocking_write):
+            rotation = asyncio.create_task(self._rotate(store, key_file, publish=published))
+            try:
+                assert await asyncio.to_thread(write_started.wait, _THREAD_WAIT_SECONDS)
+                for _ in range(cancels):
+                    rotation.cancel()
+                    for _ in range(_LOOP_TURNS):
+                        await asyncio.sleep(0)
+                    assert not rotation.done(), "the caller must wait for the in-flight rotation"
+                    assert store.rotation_lock.locked(), "the lock must be held until the rotation ends"
+            finally:
+                release_write.set()
+            with pytest.raises(asyncio.CancelledError):
+                await rotation
+
+    async def test_a_cancel_during_the_key_file_write_still_completes_the_rotation_under_the_lock(
+        self, store: km.KeyStore, key_file: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The write thread cannot be cancelled: the rotation finishes, then the cancel propagates (C5-I-2)."""
+        published: list[str] = []
+        with caplog.at_level("WARNING"):
+            await self._cancel_during_the_key_file_write(store, key_file, published)
+
+        assert len(published) == 1
+        assert key_file.read_text() == f"{km.ENV_VAR}={published[0]}\n"
+        assert len(await store.active_keys()) == 1, "keys.json must record the key .search.env now holds"
+        assert not store.rotation_lock.locked()
+        assert f"rotate: cancelled mid-rotation, but it completed: {key_file} holds the new key" in caplog.text
+
+    async def test_repeated_cancels_during_the_key_file_write_still_complete_the_rotation_under_the_lock(
+        self, store: km.KeyStore, key_file: Path
+    ) -> None:
+        """A second cancel, delivered while the caller waits for the commit, is ignored too (C7-I-202)."""
+        published: list[str] = []
+        await self._cancel_during_the_key_file_write(store, key_file, published, cancels=2)
+
+        assert len(published) == 1
+        assert key_file.read_text() == f"{km.ENV_VAR}={published[0]}\n"
+        assert len(await store.active_keys()) == 1, "keys.json must record the key .search.env now holds"
+        assert not store.rotation_lock.locked()
+
+    async def test_a_cancel_during_the_key_file_write_then_a_keys_json_failure_logs_the_failed_rotation(
+        self, store: km.KeyStore, key_file: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        published: list[str] = []
+        cause = OSError("keys.json write failed")
+        with patch.object(store, "record_rotation", side_effect=cause), caplog.at_level("ERROR"):
+            await self._cancel_during_the_key_file_write(store, key_file, published)
+
+        failed = [r for r in caplog.records if r.getMessage() == "rotate: cancelled mid-rotation, and the rotation failed"]
+        assert len(failed) == 1 and failed[0].levelname == "ERROR"
+        assert isinstance(failed[0].exc_info[1], km.RotationIncompleteError)
+        assert failed[0].exc_info[1].__cause__ is cause
+        assert published == [], "a failed rotation must publish nothing"
+        assert not (tmp_path / "keys.json").exists()
+        assert not store.rotation_lock.locked()
+
+    async def test_a_cancel_during_the_key_file_write_then_a_cancelled_rotation_task_logs_an_unknown_outcome(
+        self, store: km.KeyStore, key_file: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        published: list[str] = []
+        with patch.object(store, "record_rotation", side_effect=asyncio.CancelledError), caplog.at_level("ERROR"):
+            await self._cancel_during_the_key_file_write(store, key_file, published)
+
+        message = f"rotate: cancelled mid-rotation and the rotation task was cancelled too; check {key_file} and keys.json"
+        assert [r.levelname for r in caplog.records if r.getMessage() == message] == ["ERROR"]
+        assert published == []
+        assert not (tmp_path / "keys.json").exists()
+        assert not store.rotation_lock.locked()
+
+
+class TestResolveRotationKeyFile:
+    def test_returns_the_key_file(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", str(tmp_path / ".search.env"))
+        assert km.resolve_rotation_key_file() == tmp_path / ".search.env"
+
+    def test_bad_key_file_env_answers_the_fixed_write_failure(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv("ARCHON_SEARCH_KEY_FILE", "relative/.search.env")
+        with caplog.at_level("ERROR"):
+            with pytest.raises(km.KeyFileWriteError) as exc_info:
+                km.resolve_rotation_key_file()
+
+        assert str(exc_info.value) == km.ROTATE_WRITE_FAILED_DETAIL
+        assert isinstance(exc_info.value.__cause__, ValueError)
+        assert "relative/.search.env" in caplog.text and "Traceback" in caplog.text
+
+
+class TestKeyStoreFailsClosed:
+    """A keys.json that exists but cannot be read is never overwritten by a mutation (C4-I-102)."""
+
+    @pytest.fixture
+    def path(self, tmp_path: Path) -> Path:
+        return tmp_path / "keys.json"
+
+    @staticmethod
+    def _mutate(store: km.KeyStore, mutation: str):
+        if mutation == "create":
+            return store.create(ns="default", label=None, expires_at=None)
+        if mutation == "revoke":
+            return store.revoke("some-id")
+        if mutation == "record_rotation":
+            return store.record_rotation(current_token=VALID_HEX_64, grace_seconds=0, new_token="b" * 64)
+        return store.load_synthetic_records([])
+
+    @pytest.mark.parametrize("mutation", ["create", "revoke", "record_rotation", "load_synthetic_records"])
+    @pytest.mark.parametrize(
+        "content",
+        [
+            b"{ not json",
+            b"",
+            b'{"a": 1}',
+            b'[{"id": "x"}]',
+            b"\xff",
+            b"[" + b"1" * _OVERSIZED_INT_DIGITS + b"]",
+            b"[" * _EXCESSIVE_NESTING_DEPTH,
+        ],
+        ids=["invalid-json", "empty", "not-an-array", "invalid-record", "not-utf8", "oversized-int", "deep-nesting"],
+    )
+    async def test_corrupt_keys_json_is_never_overwritten(self, path: Path, mutation: str, content: bytes) -> None:
+        path.write_bytes(content)
+        store = km.KeyStore(path)
+
+        with pytest.raises(km.KeyStoreUnreadableError) as exc_info:
+            await self._mutate(store, mutation)
+
+        assert str(exc_info.value) == km.KEY_STORE_UNREADABLE_DETAIL
+        assert path.read_bytes() == content
+        assert await store.load() == [], "auth reads keep degrading to an empty key list"
+
+    async def test_unreadable_keys_json_is_never_overwritten(self, path: Path) -> None:
+        path.write_bytes(b"[]")
+        store = km.KeyStore(path)
+        cause = PermissionError(13, "Permission denied", str(path))
+
+        with patch.object(Path, "read_bytes", side_effect=cause):
+            with pytest.raises(km.KeyStoreUnreadableError) as exc_info:
+                await store.create(ns="default", label=None, expires_at=None)
+            assert await store.load() == []
+
+        assert exc_info.value.__cause__ is cause
+        assert path.read_bytes() == b"[]"
+
+    async def test_missing_keys_json_is_created(self, path: Path) -> None:
+        store = km.KeyStore(path)
+        created = await store.create(ns="default", label=None, expires_at=None)
+        assert [r.id for r in await store.load()] == [created["id"]]
+
+    async def test_write_durability_unconfirmed_is_logged_and_the_mutation_succeeds(
+        self, path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        real_write = km.atomic_write_bytes
+
+        def write_then_fail_dir_fsync(target: Path, data: bytes, mode: int = 0o600) -> None:
+            real_write(target, data, mode=mode)
+            raise DurabilityUnconfirmedError(5, "dir fsync failed", str(target.parent))
+
+        store = km.KeyStore(path)
+        with patch.object(km, "atomic_write_bytes", side_effect=write_then_fail_dir_fsync), caplog.at_level("WARNING"):
+            created = await store.create(ns="default", label=None, expires_at=None)
+
+        assert [r.id for r in await store.load()] == [created["id"]]
+        assert any(r.levelname == "WARNING" and "durability" in r.getMessage() for r in caplog.records)
+
+
+class TestRotationErrorTypes:
+    def test_blank_current_key_and_input_errors_are_unrelated_siblings(self) -> None:
+        """A server fault and a caller input error: neither handler may catch the other (C5-B-3)."""
+        assert not issubclass(km.BlankCurrentKeyError, km.KeyRotationInputError)
+        assert not issubclass(km.KeyRotationInputError, km.BlankCurrentKeyError)
+
+
+class TestValidateRotationGrace:
+    @pytest.mark.parametrize("grace", [-1, km.MAX_ROTATE_GRACE_SECONDS + 1])
+    def test_rejects_out_of_range_grace(self, grace: int) -> None:
+        with pytest.raises(km.KeyRotationInputError, match="grace_seconds must be"):
+            km.validate_rotation_grace(grace)
+
+    @pytest.mark.parametrize("grace", [0, km.MAX_ROTATE_GRACE_SECONDS])
+    def test_accepts_in_range_grace(self, grace: int) -> None:
+        km.validate_rotation_grace(grace)

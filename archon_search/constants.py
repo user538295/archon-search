@@ -33,6 +33,12 @@ DEFAULT_MODEL: str = "claude-sonnet-4-6"
 # Default namespace used when no explicit namespace is specified.
 DEFAULT_NAMESPACE: str = "default"
 
+# Upper bound for a key-rotation grace period (``POST /keys/rotate`` / MCP ``rotate_key``
+# ``grace_seconds``, TOML ``[auth].rotate_grace_seconds``). It exists only so
+# ``now + timedelta(seconds=grace)`` cannot overflow ``datetime`` (year 9999, reached at
+# ~2.5e11 s from now); 100 years (365-day years) restricts no realistic grace window.
+MAX_ROTATE_GRACE_SECONDS: Final[int] = 100 * 365 * 24 * 60 * 60
+
 # Default blend weight for description-embedding cosine in hybrid routing.
 # Shared by router.py, config.py, and eval/runner.py to avoid hardcoding 0.3.
 DEFAULT_ROUTING_DESCRIPTION_WEIGHT: Final[float] = 0.3

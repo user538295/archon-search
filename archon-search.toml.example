@@ -24,7 +24,8 @@ enabled = true
 # Grace period for key rotation (seconds). When > 0, the old default key gets
 # expires_at = now + rotate_grace_seconds after a successful `key rotate` or
 # POST /keys/rotate call, allowing in-flight requests to drain before rejection.
-# Set to 0 (the default) for immediate revocation of the old key.
+# Set to 0 (the default) for immediate revocation of the old key. Maximum
+# 3153600000 (100 years) — only so the expiry stays a representable date.
 # The POST /keys/rotate request body grace_seconds field overrides this default
 # for an individual rotation call.
 # rotate_grace_seconds = 0

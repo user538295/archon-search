@@ -2467,6 +2467,7 @@
           "grace_seconds": {
             "anyOf": [
               {
+                "maximum": 3153600000.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -6277,6 +6278,16 @@
               }
             },
             "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "keys.json could not be read; no key changes were made"
           }
         },
         "security": [
@@ -6344,6 +6355,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Rotation failed or incomplete; see the server log for details"
           }
         },
         "security": [
@@ -6412,6 +6433,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "keys.json could not be read; no key changes were made"
           }
         },
         "security": [
@@ -6568,6 +6599,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "HyDE generation failure (JSON detail); a pipeline failure is a plain-text 500"
           },
           "503": {
             "content": {

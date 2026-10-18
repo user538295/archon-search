@@ -9,6 +9,7 @@ import secrets
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Callable
 
+from starlette.datastructures import State
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -105,17 +106,27 @@ async def validate_token_and_get_namespace(
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
+    """Bearer-token auth; the legacy default key is read per request from ``<state>.api_key``.
+
+    ``<state>`` is ``api_key_state`` when given — the mounted MCP app passes the REST app's
+    ``app.state`` so both transports accept the same current default key after a rotation —
+    else the serving app's own ``request.app.state``; ``api_key`` is the fallback when that
+    state has no ``api_key``.
+    """
+
     def __init__(
         self,
         app: object,
         api_key: str,
         namespaces: dict[str, str] | None = None,
         key_store: "KeyStore | None" = None,
+        api_key_state: State | None = None,
     ) -> None:
         super().__init__(app)  # type: ignore[arg-type]
         self._api_key = api_key
         self._namespaces = namespaces or {}
         self._key_store = key_store
+        self._api_key_state = api_key_state
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if request.url.path in _EXEMPT_PATHS:
@@ -149,9 +160,10 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             # request.state.namespace itself.  Skip header-presence check.
             return await call_next(request)
 
+        key_state = self._api_key_state if self._api_key_state is not None else request.app.state
         result = await validate_token_and_get_namespace(
             token,
-            api_key=getattr(request.app.state, "api_key", self._api_key),
+            api_key=getattr(key_state, "api_key", self._api_key),
             namespaces=self._namespaces,
             key_store=self._key_store,
         )

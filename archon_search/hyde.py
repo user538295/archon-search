@@ -28,6 +28,20 @@ from archon_search.uv_tool import extra_install_hint
 
 _logger = logging.getLogger(__name__)
 
+# Wire-safe pair for HyDEDependencyError. The exception message also carries the
+# install command for this interpreter (``extra_install_hint``), which describes the
+# server's own install — it is logged, never sent to the client.
+HYDE_DEPENDENCY_DETAIL = "Install archon-search[hyde] to use HyDE"
+HYDE_DEPENDENCY_CODE = "validation_error"
+
+
+class HyDEDependencyError(RuntimeError):
+    """Raised when HyDE is requested but its default provider package is not installed.
+
+    Install with: ``pip install 'archon-search[hyde]'``. Transports answer it with
+    :data:`HYDE_DEPENDENCY_DETAIL` / :data:`HYDE_DEPENDENCY_CODE`, never ``str(exc)``.
+    """
+
 
 class HyDEGenerator:
     """Generates hypothetical document embeddings for HyDE query expansion.
@@ -38,7 +52,7 @@ class HyDEGenerator:
     ``archon_search.providers.anthropic_provider``).
 
     Callers that invoke ``generate()`` with a missing provider package receive
-    a ``RuntimeError``.
+    a ``HyDEDependencyError``.
     """
 
     def __init__(
@@ -87,10 +101,10 @@ class HyDEGenerator:
         (timeout, API error, rate limit, missing key, empty response).
 
         Raises:
-            RuntimeError: if the ``anthropic`` package is not installed.
+            HyDEDependencyError: if the ``anthropic`` package is not installed.
         """
         if not self._provider_available:
-            raise RuntimeError(f"Install archon-search[hyde] to use HyDE ({extra_install_hint('hyde')})")
+            raise HyDEDependencyError(f"{HYDE_DEPENDENCY_DETAIL} ({extra_install_hint('hyde')})")
 
         # Token bucket pre-flight (under lock).
         # Ollama, claude_cli, and llama_cpp are local/free paths with no API cap —

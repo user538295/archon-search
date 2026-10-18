@@ -472,20 +472,23 @@ def test_mcp_search_tool_hyde_applied_false_when_hyde_false() -> None:
 
 
 def test_mcp_search_tool_hyde_package_not_installed_returns_error() -> None:
-    """search tool returns error dict when HyDE package not installed (RuntimeError)."""
+    """search tool returns validation_error with the fixed HYDE_DEPENDENCY_DETAIL when HyDE package not installed."""
     import asyncio
+
+    from archon_search.hyde import HYDE_DEPENDENCY_DETAIL, HyDEDependencyError
 
     pipeline = _make_hyde_pipeline_mock()
     config = _make_config_with_hyde(enabled=True)
     gen = _make_hyde_generator_mock()
-    gen.generate = AsyncMock(side_effect=RuntimeError("Install archon-search[hyde]"))
+    gen.generate = AsyncMock(side_effect=HyDEDependencyError("Install archon-search[hyde]"))
 
     tool_fn = _get_hyde_tool_fn("search", pipeline, config=config, hyde_generator=gen)
 
     result = asyncio.run(tool_fn(query="test query", collection="col1", hyde=True))
 
     assert isinstance(result, dict)
-    assert "error" in result
+    assert result.get("code") == "validation_error"
+    assert result.get("error") == HYDE_DEPENDENCY_DETAIL
 
 
 def test_mcp_search_with_context_hyde() -> None:

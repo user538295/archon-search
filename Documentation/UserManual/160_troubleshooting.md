@@ -1,7 +1,7 @@
 **Purpose**: Diagnose common runtime failures.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-08-20 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-10-17 / **Next review**: 2027-07-29
 
 # Troubleshooting
 
@@ -226,7 +226,7 @@ See [`90_export_import.md`](./90_export_import.md) for the full export/import wo
 
 `GET /status` reports `failed_expired_ingest_count > 0`, or `archon-search status` shows a count with a re-ingest hint. A `FAILED_EXPIRED` job failed and either aged past `retry_max_age_hours` or exhausted `retry_max_attempts`; it is never retried automatically.
 
-1. **List them**: `GET /jobs?status=FAILED_EXPIRED`. Each job's `error` is the failure message; `source_path` is the original file. (`result` is `null` for failed jobs.)
+1. **List them**: `GET /jobs?status=FAILED_EXPIRED`. Each job's `error` is a short failure summary — an unexpected failure reads `ingest failed; see the server log for details`, so look up the job id in the server log for the cause; `source_path` is the original file. (`result` is `null` for failed jobs.)
 2. **Re-ingest** after fixing the root cause: `archon-search ingest <path>` (or `POST /ingest`).
 3. **Tune retry policy**: raise `[maintenance].retry_max_age_hours` (default 72) or `retry_max_attempts` (default 3). Changes take effect on the next maintenance pass.
 

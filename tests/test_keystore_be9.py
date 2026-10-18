@@ -12,6 +12,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import importlib
 import secrets
 import sys
 import types
@@ -74,7 +75,7 @@ else:
 # Force-reload the MCP module so it picks up the stub.
 sys.modules.pop(_MCP_MODULE, None)
 
-from archon_search.server.mcp import create_app as _mcp_create_app  # noqa: E402
+importlib.import_module(_MCP_MODULE)  # must import under the stub
 
 # Restore the real FastMCP so other test modules are not broken.
 if _real_fastmcp_class is not None:
@@ -403,7 +404,7 @@ def test_mcp_rotate_key_returns_new_token(tmp_path, monkeypatch):
     tools = mcp._tools
     assert "rotate_key" in tools
 
-    with TestClient(http_app) as client:
+    with TestClient(http_app):
         # First rotation: auto-generated key → creates a managed record.
         result1 = asyncio.run(tools["rotate_key"](grace_seconds=None))
         assert "token" in result1
@@ -528,26 +529,29 @@ def test_mcp_rotate_key_write_failure_aborts(tmp_path, monkeypatch):
     initial_records = asyncio.run(key_store.list_keys())
     initial_count = len(initial_records)
 
-    # Patch asyncio.to_thread to raise OSError on the first call (the .search.env write).
+    # Patch asyncio.to_thread to raise OSError for the .search.env write only.
     # The rotate_key tool calls _asyncio.to_thread where _asyncio is the asyncio module
     # bound at block-execution time — patching asyncio.to_thread globally affects it.
-    call_count = [0]
+    from archon_search._durable_io import atomic_write_bytes
+
+    real_to_thread = asyncio.to_thread
+    write_attempts: list[object] = []
 
     async def _mock_to_thread(func, *args, **kwargs):
-        call_count[0] += 1
-        if call_count[0] == 1:  # first call is the .search.env write
+        if func is atomic_write_bytes:
+            write_attempts.append(args[0])
             raise OSError("disk full")
-        import asyncio as _std_asyncio
-        return await _std_asyncio.to_thread(func, *args, **kwargs)
+        return await real_to_thread(func, *args, **kwargs)
 
     with patch("asyncio.to_thread", _mock_to_thread):
         result = asyncio.run(tools["rotate_key"](grace_seconds=None))
 
+    assert len(write_attempts) == 1
     assert "error" in result
     assert result.get("code") == "internal_error"
     assert "rotation aborted" in result["error"]
 
-    # keys.json must be unchanged (rotate_default_key was never called).
+    # keys.json must be unchanged (record_rotation was never called).
     after_records = asyncio.run(key_store.list_keys())
     assert len(after_records) == initial_count
 
@@ -561,7 +565,7 @@ def test_mcp_list_keys_status_revoked_and_all_filters(tmp_path, monkeypatch):
     """list_keys returns correct sets for status='revoked' and status='all'."""
     tools, key_store, _ = _get_tools(tmp_path, monkeypatch)
 
-    r1 = asyncio.run(key_store.create(ns="default", label=None, expires_at=None))
+    asyncio.run(key_store.create(ns="default", label=None, expires_at=None))
     r2 = asyncio.run(key_store.create(ns="default", label=None, expires_at=None))
     asyncio.run(key_store.revoke(r2["id"]))
 
@@ -603,8 +607,51 @@ def test_mcp_rotate_key_negative_grace_returns_error(tmp_path, monkeypatch):
     """rotate_key with grace_seconds < 0 returns a validation_error."""
     tools, _, _ = _get_tools(tmp_path, monkeypatch)
     result = asyncio.run(tools["rotate_key"](grace_seconds=-1))
-    assert "error" in result
-    assert result.get("code") == "validation_error"
+    assert result == {"error": "grace_seconds must be >= 0, got -1", "code": "validation_error"}
+
+
+def test_mcp_rotate_key_grace_above_max_returns_error_without_writing(tmp_path, monkeypatch):
+    """rotate_key with an overflowing grace_seconds returns validation_error before .search.env is written."""
+    from archon_search.constants import MAX_ROTATE_GRACE_SECONDS
+
+    from archon_search.key_manager import ENV_VAR
+
+    tools, _, _ = _get_tools(tmp_path, monkeypatch)
+    key_file = tmp_path / ".search.env"
+    before = f"{ENV_VAR}={secrets.token_hex(32)}\n"
+    key_file.write_text(before)
+    over = MAX_ROTATE_GRACE_SECONDS + 1
+
+    result = asyncio.run(tools["rotate_key"](grace_seconds=over))
+
+    assert result == {
+        "error": f"grace_seconds must be <= {MAX_ROTATE_GRACE_SECONDS}, got {over}",
+        "code": "validation_error",
+    }
+    assert key_file.read_text() == before
+
+
+def test_mcp_key_mutations_fail_closed_on_an_unreadable_keys_json(tmp_path, monkeypatch):
+    """A corrupt keys.json is never overwritten: every MCP key mutation answers the fixed internal_error."""
+    from archon_search.key_manager import ENV_VAR, KEY_STORE_UNREADABLE_DETAIL
+
+    tools, _, _ = _get_tools(tmp_path, monkeypatch)
+    corrupt = b"{ not json"
+    (tmp_path / "keys.json").write_bytes(corrupt)
+    key_file = tmp_path / ".search.env"
+    key_file.write_text(f"{ENV_VAR}={secrets.token_hex(32)}\n")
+    key_file_before = key_file.read_bytes()
+
+    results = {
+        "create_key": asyncio.run(tools["create_key"](namespace="default")),
+        "revoke_key": asyncio.run(tools["revoke_key"](key_id="k1")),
+        "rotate_key": asyncio.run(tools["rotate_key"](grace_seconds=None)),
+    }
+
+    for name, result in results.items():
+        assert result == {"error": KEY_STORE_UNREADABLE_DETAIL, "code": "internal_error"}, name
+    assert (tmp_path / "keys.json").read_bytes() == corrupt
+    assert key_file.read_bytes() == key_file_before, "a rotation that fails closed writes nothing"
 
 
 # ---------------------------------------------------------------------------
@@ -752,26 +799,7 @@ def test_mcp_create_key_exception_path(tmp_path, monkeypatch):
     result = asyncio.run(tools["create_key"](namespace="default"))
     assert result.get("code") == "internal_error"
     assert "boom" not in result.get("error", ""), "exception detail must not leak"
-    assert result["error"] == "Failed to create key"
-
-
-# ---------------------------------------------------------------------------
-# Unit: T6 — rotate_key ValueError from rotate_default_key
-# ---------------------------------------------------------------------------
-
-
-def test_mcp_rotate_key_valueerror_from_rotate_default(tmp_path, monkeypatch):
-    """rotate_key returns validation_error when rotate_default_key raises ValueError."""
-    tools, key_store, _ = _get_tools(tmp_path, monkeypatch)
-
-    async def _raise(*args, **kwargs):
-        raise ValueError("bad input from store")
-
-    key_store.rotate_default_key = _raise
-
-    result = asyncio.run(tools["rotate_key"](grace_seconds=None))
-    assert result.get("code") == "validation_error"
-    assert result["error"] == "bad input from store"
+    assert result["error"] == "key creation failed; see the server log for details"
 
 
 # ---------------------------------------------------------------------------

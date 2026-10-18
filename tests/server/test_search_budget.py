@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from archon_search.hyde import HyDEDependencyError
 from archon_search.server._search_budget import (
     EMBEDDER_WARMUP_WAIT_SECONDS,
     RERANKER_WARMUP_WAIT_SECONDS,
@@ -255,15 +256,16 @@ async def test_resolve_hyde_within_budget_cancels_and_degrades_on_overrun(
 
 
 @pytest.mark.asyncio
-async def test_resolve_hyde_within_budget_propagates_a_runtimeerror() -> None:
-    """The missing-provider-package ``RuntimeError`` still reaches the 422 mapping."""
+async def test_resolve_hyde_within_budget_propagates_a_hyde_dependency_error() -> None:
+    """The missing-provider-package ``HyDEDependencyError`` still reaches the routes' 422 mapping."""
+    message = "Install archon-search[hyde] to use HyDE (pip install 'archon-search[hyde]')"
 
     async def _missing_package() -> tuple[list[float] | None, bool]:
-        raise RuntimeError("hyde provider 'openai' requires the openai package")
+        raise HyDEDependencyError(message)
 
-    with pytest.raises(RuntimeError) as excinfo:
+    with pytest.raises(HyDEDependencyError) as excinfo:
         await resolve_hyde_within_budget(_missing_package(), timeout=5.0)
-    assert "requires the openai package" in str(excinfo.value)
+    assert str(excinfo.value) == message
 
 
 @pytest.mark.asyncio

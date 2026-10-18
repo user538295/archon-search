@@ -118,7 +118,6 @@ def test_explain_routing_path_uses_chosen_collection_model(tmp_path: Path) -> No
     from archon_search.collection_meta import CollectionMeta
 
     app, client = _make_app(tmp_path)
-    config = app.state.config
     pipeline = MagicMock()
     meta = CollectionMeta(name="col", namespace="default", active_embedding_model="model-X", centroid=[1.0, 0.0])
     pipeline.get_all_collections_meta = AsyncMock(return_value=[meta])
@@ -265,8 +264,10 @@ def test_explain_hyde_false_passes_none(tmp_path: Path) -> None:
 
 
 def test_explain_hyde_package_not_installed_returns_422(tmp_path: Path) -> None:
-    """If resolve_hyde_vector raises RuntimeError (package not installed), respond with 422."""
-    from unittest.mock import patch, AsyncMock as AM
+    """If resolve_hyde_vector raises HyDEDependencyError (package not installed), respond with 422."""
+    from unittest.mock import patch
+
+    from archon_search.hyde import HYDE_DEPENDENCY_DETAIL, HyDEDependencyError
 
     app, client = _make_app(tmp_path)
     pipeline = MagicMock()
@@ -276,12 +277,12 @@ def test_explain_hyde_package_not_installed_returns_422(tmp_path: Path) -> None:
 
     with patch(
         "archon_search.server.routes_explain.resolve_hyde_vector",
-        side_effect=RuntimeError("Install archon-search[hyde] to use HyDE"),
+        side_effect=HyDEDependencyError("Install archon-search[hyde] to use HyDE"),
     ):
         response = client.post("/explain", json={"collection": "col", "query": "test", "hyde": True})
 
     assert response.status_code == 422
-    assert "archon-search[hyde]" in response.json()["detail"]
+    assert response.json() == {"detail": HYDE_DEPENDENCY_DETAIL}
 
 
 def test_explain_multi_collection_hyde_true_passes_vector(tmp_path: Path) -> None:
@@ -613,7 +614,7 @@ def test_explain_rag_fusion_sub_queries_mapped_to_schema(tmp_path: Path) -> None
 
 def test_explain_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> None:
     """Pipeline raises RAGFusionDependencyError (package not installed): response is 422."""
-    from archon_search.rag_fusion import RAGFusionDependencyError
+    from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
 
     pipeline = MagicMock()
     meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
@@ -626,7 +627,7 @@ def test_explain_rag_fusion_package_not_installed_returns_422(tmp_path: Path) ->
 
     response = client.post("/explain", json={"collection": "col", "query": "test", "rag_fusion": True})
     assert response.status_code == 422
-    assert "rag_fusion" in response.json()["detail"].lower()
+    assert response.json() == {"detail": RAG_FUSION_DEPENDENCY_DETAIL}
 
 
 def test_explain_rag_fusion_false_hyde_still_works(tmp_path: Path) -> None:
@@ -680,7 +681,7 @@ def test_explain_multi_collection_rag_fusion_passes_to_pipeline(tmp_path: Path) 
 
 def test_explain_multi_collection_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> None:
     """Multi-collection path: RAGFusionDependencyError from pipeline returns 422."""
-    from archon_search.rag_fusion import RAGFusionDependencyError
+    from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
 
     app, client = _make_app(tmp_path)
     pipeline = MagicMock()
@@ -692,4 +693,4 @@ def test_explain_multi_collection_rag_fusion_package_not_installed_returns_422(t
         json={"collections": ["col1", "col2"], "query": "test", "rag_fusion": True},
     )
     assert response.status_code == 422
-    assert "rag_fusion" in response.json()["detail"].lower()
+    assert response.json() == {"detail": RAG_FUSION_DEPENDENCY_DETAIL}

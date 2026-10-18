@@ -1,7 +1,7 @@
 **Purpose**: Operational runbook for issuing, listing, revoking, and rotating API keys against a running server — no restart required.
 **Audience**: Operators running `archon-search` in production.
 **Status**: Draft
-**Last reviewed**: 2026-07-29
+**Last reviewed**: 2026-10-17
 **Next review**: 2027-07-29
 
 # Key Management and Rotation
@@ -105,10 +105,7 @@ always pass `--yes` in automation.
 
 ## Rotating the default key
 
-Rotation mints a **new** default key, writes its raw token to the key file
-(`.search.env` under the data dir), updates the live server's in-memory key, and
-retires the old key — all under a lock so concurrent rotations can't strand an
-orphaned active key.
+Rotation mints a **new** default key, writes its raw token to the key file (`.search.env` under the data dir), records it in `keys.json`, retires the old key, and only then makes the new key the server's current default key (`app.state.api_key`). REST and the mounted `/mcp` endpoint share that one current key: `POST /keys/rotate`, `archon-search key rotate` and MCP `rotate_key` all retire it, and `/mcp`, like REST, accepts the new key immediately and rejects the retired one as soon as it is revoked or its grace ends — no restart. Rotations run one at a time under `KeyStore.rotation_lock`, which the REST routes and the mounted MCP app share, so two concurrent rotations cannot both retire the same key and leave the first one's new key active; the lock covers one server process only (`key_manager.rotate_and_persist_default_key`).
 
 ```bash
 archon-search key rotate            # old key revoked immediately
@@ -121,7 +118,9 @@ archon-search key rotate --grace 1h # old key stays valid for 1 hour, then expir
   old key is revoked the instant rotation completes.
 - **Default grace comes from config.** `[auth].rotate_grace_seconds` (default
   `0`, in `config.py`) is the fallback when you don't pass `--grace`. A per-call
-  `grace_seconds` in the request body / `--grace` flag overrides it.
+  `grace_seconds` in the request body / `--grace` flag overrides it. Both are
+  capped at 3153600000 seconds (100 years) so the expiry stays a representable
+  date; a larger request body value is a `422`.
 - **Env-var lock-out.** If `ARCHON_SEARCH_API_KEY` is set in the server's
   environment it always overrides the key file, so rotation would be a silent
   no-op — the server returns `409`. Unset the env var and restart before using
@@ -153,6 +152,61 @@ Zero-downtime rotation of the default key with a grace window:
 
 Pick `--grace 0s` (or plain `rotate`) only when you can update every client
 atomically — e.g. a single container reading `.search.env`.
+
+### Recovering from an incomplete rotation
+
+Rotation writes the new token to `.search.env` first and updates `keys.json` second. If the second step fails, `POST /keys/rotate` (and so `archon-search key rotate`) answers `500` and MCP `rotate_key` answers `internal_error`, both with `Rotation incomplete: .search.env holds the new key but keys.json was not updated; see the server log for details`. The server log names the cause: `rotate: keys.json update failed after <key file> was written`, with its traceback (the same line for REST and MCP).
+
+Causes (`key_manager.rotate_and_persist_default_key`):
+
+- **`keys.json` could not be written**: its directory is not writable (only possible when `ARCHON_SEARCH_KEY_FILE` puts `.search.env` in another directory, since otherwise the `.search.env` write fails first and nothing changes), or the disk filled up between the two writes (`ENOSPC`).
+- **A leftover `keys.json.tmp`** from a process killed during a `keys.json` write. The write refuses to overwrite it (`FileExistsError`). A server killed this way cannot start again until the file is removed (see [Leftover temp files](#leftover-temp-files)), so a running server meets one only when another process writing the same `keys.json` (a second server on the same data directory) was killed mid-write.
+- **`keys.json` became unreadable after the pre-write check.** Rotation checks that `keys.json` is readable before it writes `.search.env`; a `keys.json` that is already unreadable is refused with nothing written (see [When `keys.json` cannot be read](#when-keysjson-cannot-be-read)), so this cause needs the file to break during the rotation itself.
+- **A recorded token that differs from the one written to `.search.env`** — a defensive check for a bug. Its log line is `rotate: keys.json recorded an unexpected token after <key file> was written — BUG`, without a traceback.
+
+A directory fsync that fails after `keys.json` or `.search.env` was renamed into place is **not** a cause: the file is written, so rotation logs a WARNING (`... written but its rename durability is unconfirmed`) and completes normally. Nor is a cancelled rotation request; see [A rotation cancelled mid-way](#a-rotation-cancelled-mid-way).
+
+What that leaves behind:
+
+- **`keys.json` is unchanged.** The old default key's record, if it had one, is still `active` with no grace expiry.
+- **`.search.env` holds a token no `keys.json` record matches**, and the running server does not accept it on REST or `/mcp`: its current default key (`app.state.api_key`) is still the old one, because the new key is published only after both writes succeed. Clients that send the old key keep working. The local CLI does not: without `--api-key` it reads the orphaned token from `.search.env` and gets `401`.
+- **Do not restart the server before you recover.** On restart the server takes the orphaned token from `.search.env` as its default key, and the old key keeps working only if it has an active `keys.json` record. A default key that was never rotated before (auto-generated or written by the installer) has none, so every client still holding it gets `401` from then on.
+
+To recover, fix the cause first (free disk space, make the `keys.json` directory writable, remove a leftover `keys.json.tmp`), then:
+
+1. **Server not restarted since the failure:** rotate again, authenticating with the old key. Without `--api-key` the CLI reads the orphaned token from `.search.env` and gets `401`.
+   ```bash
+   archon-search key rotate --api-key <OLD_KEY> --grace 1h
+   ```
+   The server's own copy of `<OLD_KEY>` is gone from `.search.env`, and no endpoint returns the in-memory one, so take it from wherever it was handed out: a client or CI configuration, an MCP connector's settings, or your secret store. Alternatively, call MCP `rotate_key` from a client still configured with the old key; on the mounted `/mcp` endpoint it retires the same current key as `POST /keys/rotate`. Either way the old key is retired as in a normal rotation and `.search.env` is overwritten with a fresh token; the orphaned token is never recorded.
+2. **Server restarted since the failure:** the orphaned token is now the current default key, so `archon-search key rotate` (or MCP `rotate_key`) works, but it retires the orphaned token, not the old key, whose record (if it had one) stays `active`. Find the old key with `archon-search key list` and run `archon-search key revoke <OLD_ID>` once clients have moved to the new key.
+
+### A rotation cancelled mid-way
+
+If the task handling a rotation request is cancelled mid-rotation, that is **not** an incomplete rotation by itself. Once the rotation has passed its pre-write checks (grace value, current key, readable `keys.json`), its writes run to completion before the cancellation goes on, so cancelling the request alone never leaves `.search.env` ahead of `keys.json`. The caller gets no response, and the server log says how the rotation ended:
+
+- WARNING `rotate: cancelled mid-rotation, but it completed: <key file> holds the new key (new_key_id=<id>); the caller did not receive its token` — the rotation took effect: the old key is retired (or in its grace window) and the new key is current on REST and `/mcp`. The caller never got the token, but `.search.env` on the server host holds it: read it there (the local CLI already uses it when run without `--api-key`) and distribute it as after a normal rotation.
+- ERROR `rotate: cancelled mid-rotation, and the rotation failed`, with the traceback — the rotation failed as described on this page: an [incomplete rotation](#recovering-from-an-incomplete-rotation) when the traceback is a `RotationIncompleteError`, otherwise nothing changed.
+- ERROR `rotate: cancelled mid-rotation and the rotation task was cancelled too; check <key file> and keys.json` — the rotation's own task was cancelled too, so its outcome is unknown; compare `.search.env` with `keys.json` and, if `.search.env` holds a token `keys.json` does not record, treat it as an [incomplete rotation](#recovering-from-an-incomplete-rotation).
+
+### When `keys.json` cannot be read
+
+If `keys.json` exists but cannot be read or parsed (unreadable, empty, not valid UTF-8 JSON — an integer over Python's 4300-digit limit or nesting past its recursion limit included — not a JSON array, or holding an invalid record), the server logs an ERROR naming the problem and:
+
+- **refuses every key change** — `POST /keys`, `DELETE /keys/{key_id}` and `POST /keys/rotate` answer `500` and MCP `create_key`, `revoke_key` and `rotate_key` answer `internal_error`, all with `keys.json could not be read; no key changes were made; see the server log for details`. Nothing is written, so the managed keys in the file are not overwritten with only the new record. A rotation refused this way has not touched `.search.env`.
+- **authenticates as if `keys.json` were empty**: managed keys stop working, while the default key and the TOML `[namespaces]` tokens still authenticate. `GET /keys` lists no keys at all, since the TOML records are stored in `keys.json` too.
+- **at startup** logs `keys.json is unreadable — TOML namespace keys not persisted; keys.json left unchanged` and starts anyway.
+
+Restore `keys.json` from a backup or repair it by hand, then retry; no restart is needed, since every request re-reads the file. One exception: if `keys.json` was already unreadable at startup, the TOML `[namespaces]` records were not written to it, so they stay out of `GET /keys` / `list_keys` until the next restart (the server writes them only at startup, `create_app` lifespan in `server/app.py`). Those tokens still authenticate in the meantime.
+
+### Leftover temp files
+
+Both key files are written through a temp file next to them (`.search.env.tmp`, `keys.json.tmp`), created exclusively and removed on any error. Only a crash or kill in the middle of a write leaves one behind, and the next write to that file then fails instead of overwriting it:
+
+- **`.search.env.tmp`**: every rotation fails with `Failed to write .search.env — rotation aborted; keys.json unchanged.` and changes nothing. Rotation never removes the temp file, and a restart removes it only when `.search.env` holds no valid key.
+- **`keys.json.tmp`**: every key change fails — a rotation as an [incomplete rotation](#recovering-from-an-incomplete-rotation), `POST /keys` and a revoking `DELETE /keys/{key_id}` as a plain-text `500`, MCP `create_key` / `revoke_key` as `internal_error` — and the server cannot start, because its startup write of the TOML key records fails too.
+
+Delete the temp file (it can hold a token that was never recorded, so do not keep a copy), then retry. Default locations: `~/.archon-search/.search.env.tmp` (`<key file>.tmp` when `ARCHON_SEARCH_KEY_FILE` is set) and `~/.archon-search/keys.json.tmp` (under `ARCHON_SEARCH_DATA_DIR` when set).
 
 ## Related documents
 

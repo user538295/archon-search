@@ -1,18 +1,18 @@
 """FastMCP HTTP server for RAG search."""
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from contextlib import ExitStack
 from functools import partial
 from time import monotonic
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
 
 from fastmcp import Context, FastMCP
 from pydantic import Field, ValidationError
 from starlette.applications import Starlette
+from starlette.datastructures import State
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -22,8 +22,21 @@ from archon_search._path_safety import PathUnsafeError, validate_archive_members
 from archon_search.config import resolve_active_model
 from archon_search.constants import DEFAULT_NAMESPACE
 from archon_search.filters import SearchFilters
-from archon_search.hyde import resolve_hyde_vector
-from archon_search.key_manager import KeyStore, load_or_generate_key
+from archon_search.hyde import HYDE_DEPENDENCY_CODE, HYDE_DEPENDENCY_DETAIL, HyDEDependencyError, resolve_hyde_vector
+from archon_search.key_manager import (
+    KEY_STORE_UNREADABLE_DETAIL,
+    ROTATE_KEYS_JSON_FAILED_DETAIL,
+    ROTATE_WRITE_FAILED_DETAIL,
+    BlankCurrentKeyError,
+    KeyFileWriteError,
+    KeyRotationInputError,
+    KeyStore,
+    KeyStoreUnreadableError,
+    RotationIncompleteError,
+    load_or_generate_key,
+    resolve_rotation_key_file,
+    rotate_and_persist_default_key,
+)
 from archon_search.pipeline import (
     CollectionNotFoundError,
     ExplainMultiCollectionNoRerankError,
@@ -44,6 +57,7 @@ from archon_search.server.routes_explain import (
     RoutingExplain,
 )
 from archon_search.server.routes_search import _HYDE_EXPANSION_FAILED_WARNING
+from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_CODE, RAG_FUSION_DEPENDENCY_DETAIL
 from archon_search.server._search_budget import (
     SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
     SearchBudgetExceeded,
@@ -89,17 +103,9 @@ if TYPE_CHECKING:
     from archon_search.graph_store import GraphStore
     from archon_search.hyde import HyDEGenerator
     from archon_search.jobs.store import JobStore
-    from archon_search.rag_fusion import RAGFusionGenerator
+    from archon_search.rag_fusion import RAGFusionDependencyError, RAGFusionGenerator
 
 logger = logging.getLogger(__name__)
-
-# Module-level lock serialising the MCP key rotation sequence (read current_token →
-# write .search.env → rotate_default_key). Prevents concurrent MCP rotate_key calls
-# from creating orphaned active key records (mirrors _rotate_lock in routes_keys.py).
-# NOTE: This lock is INDEPENDENT of _rotate_lock in routes_keys.py. Concurrent calls
-# to REST POST /keys/rotate and MCP rotate_key are NOT serialised against each other.
-# This is an accepted limitation: cross-surface concurrent rotation is unsupported.
-_mcp_rotate_lock = asyncio.Lock()
 
 # Language filter parameter for the ``search`` tool.
 # Defined at module level so FastMCP can resolve the Annotated type inside closures.
@@ -135,11 +141,61 @@ class McpErrorResponse(TypedDict):
 
 
 _ERR_SCHEMA = "schema_validation_error"
+# Wire-safe error pair for an unexpected search / search_with_context failure. Never
+# str(exc): store and model errors embed internals (e.g. LanceDB's vector-dimension
+# message); the full exception is logged server-side by logger.exception.
+_SEARCH_FAILED_DETAIL = "search failed"
+_SEARCH_FAILED_CODE = "internal_error"
+# Same for search / search_with_context Pydantic failures: a ValidationError's text
+# embeds the rejected input values, so neither the filter nor the response-schema
+# failure is echoed (mirrors explain's "invalid explain request").
+_INVALID_SEARCH_FILTERS_DETAIL = "invalid search filters"
+_INVALID_SEARCH_RESPONSE_DETAIL = "search response failed schema validation"
+# Wire-safe error pair for an unexpected explain failure (logged by logger.exception).
+_EXPLAIN_FAILED_DETAIL = "explain failed"
+_EXPLAIN_FAILED_CODE = "internal_error"
+# explain's response-schema failure, for the same reason as search's above.
+_INVALID_EXPLAIN_RESPONSE_DETAIL = "explain response failed schema validation"
 _VALID_GRAPH_MODES: tuple[None | str, ...] = (None, "naive", "local", "global", "ppr")
 # E2a — ingest TTL and scope validation limits (same constraints as routes_jobs.py IngestRequest validators)
 _INT32_MAX: int = 2**31 - 1
 _MAX_SCOPE_LIST_ITEMS: int = 100
 _MAX_SCOPE_ITEM_LEN: int = 255
+
+
+def _enqueue_internal_error(writer: TelemetryWriter | None, endpoint: str, start: float) -> None:
+    """Enqueue the ``internal_error`` telemetry entry for a failed *endpoint* call begun at *start*."""
+    if writer is None:
+        return
+    try:
+        writer.enqueue(
+            TelemetryEntry.from_error(
+                endpoint=endpoint,
+                status="internal_error",
+                error_kind="other",
+                latency_ms=(monotonic() - start) * 1000.0,
+                correlation_id=_correlation_id.get(),
+            )
+        )
+    except Exception:
+        logger.warning("telemetry: %s error entry enqueue failed", endpoint, exc_info=True)
+
+
+def _dependency_error_response(
+    tool: str, exc: HyDEDependencyError | RAGFusionDependencyError
+) -> McpErrorResponse:
+    """Answer a missing HyDE or RAG Fusion package with its fixed wire pair.
+
+    The two branches are exhaustive over *exc*'s type.  The RAG Fusion one is not
+    ``isinstance``-checked: callers catch the class ``create_app`` bound lazily, which a
+    reloaded ``archon_search.rag_fusion`` no longer matches by identity.  The message
+    carries this interpreter's install command, so it is logged, never sent.
+    """
+    if isinstance(exc, HyDEDependencyError):
+        logger.warning("%s: HyDE unavailable — %s", tool, exc)
+        return McpErrorResponse(error=HYDE_DEPENDENCY_DETAIL, code=HYDE_DEPENDENCY_CODE)
+    logger.warning("%s: RAG Fusion unavailable — %s", tool, exc)
+    return McpErrorResponse(error=RAG_FUSION_DEPENDENCY_DETAIL, code=RAG_FUSION_DEPENDENCY_CODE)
 
 
 def _validate_scope_filter(scope_filter: str | None) -> "McpErrorResponse | None":
@@ -148,6 +204,54 @@ def _validate_scope_filter(scope_filter: str | None) -> "McpErrorResponse | None
     if msg is None:
         return None
     return McpErrorResponse(error=msg, code="invalid_scope_filter")
+
+
+_ERR_INTERNAL = "internal_error"
+_ERR_VALIDATION = "validation_error"
+# Sanitized wire text for the other tools' caught exceptions whose message may embed
+# internals (store paths, model paths, pydantic ``input_value`` of server-built data).
+# The full exception goes to the server log only — CLAUDE.md hard invariant.
+INTERNAL_ERROR_DETAIL = "internal error; see the server log for details"
+SCHEMA_VALIDATION_DETAIL = "response schema validation failed; see the server log for details"
+CREATE_KEY_FAILED_DETAIL = "key creation failed; see the server log for details"
+JOB_STORE_NOT_CONFIGURED_DETAIL = "job store not configured"
+
+
+def _internal_error(log_message: str) -> McpErrorResponse:
+    """Log the exception being handled (with traceback) and return the sanitized error."""
+    logger.exception(log_message)
+    return McpErrorResponse(error=INTERNAL_ERROR_DETAIL, code=_ERR_INTERNAL)
+
+
+def _schema_error(tool: str) -> McpErrorResponse:
+    """Log the response-schema ValidationError being handled and return the sanitized error."""
+    logger.exception("%s: response schema validation failed", tool)
+    return McpErrorResponse(error=SCHEMA_VALIDATION_DETAIL, code=_ERR_SCHEMA)
+
+
+async def _resolve_hyde_or_error(
+    tool: str,
+    resolution: Awaitable[tuple[list[float] | None, bool]],
+    *,
+    writer: TelemetryWriter | None,
+    start: float,
+    failure: McpErrorResponse,
+) -> tuple[list[float] | None, bool] | McpErrorResponse:
+    """Await a HyDE resolution, mapping its failure to a coded MCP error.
+
+    ``HyDEDependencyError`` answers its fixed wire pair (``_dependency_error_response``;
+    the install command is logged only); any other exception may embed internals, so it
+    is logged, recorded as an error telemetry entry for ``tool`` (like the tool's own
+    catch-all) and answered with *failure*, the tool's own sanitized catch-all pair.
+    """
+    try:
+        return await resolution
+    except HyDEDependencyError as exc:
+        return _dependency_error_response(tool, exc)
+    except Exception:
+        _enqueue_internal_error(writer, tool, start)
+        logger.exception("%s: HyDE resolution failed", tool)
+        return failure
 
 
 def _validate_ttl_and_scopes(
@@ -281,6 +385,7 @@ def create_app(
     key_store: "KeyStore | None" = None,
     doc_id_hasher: Callable[[str], str] | None = None,
     graph_store: "GraphStore | None" = None,
+    api_key_state: State | None = None,
 ) -> FastMCP:
     """Create a FastMCP app with 16 RAG tools + up to 4 optional key-management tools.
 
@@ -294,13 +399,23 @@ def create_app(
     ``key_store`` — when provided, the four key-management tools (``create_key``,
     ``list_keys``, ``revoke_key``, ``rotate_key``) are registered and can
     create/list/revoke/rotate managed API keys stored in ``keys.json``.
+
+    ``api_key_state`` — the object whose ``api_key`` attribute holds the server's current
+    default key (the REST app's ``app.state`` when mounted). ``rotate_key`` reads the key to
+    retire from it and publishes the new key to it, exactly like ``POST /keys/rotate``. When
+    omitted, ``rotate_key`` re-reads ``.search.env`` and publishes nothing.
     """
     # Late-bound import: archon_search.rag_fusion may be reloaded in tests,
     # so we import lazily here (inside create_app) so the closures below always
     # capture the current class from sys.modules at app-creation time.
     from archon_search.rag_fusion import RAGFusionDependencyError  # noqa: PLC0415
 
-    app = FastMCP("archon-search")
+    # An ordinary exception escaping a tool reaches the client as a bare "Error calling
+    # tool <name>" instead of "<name>: <exception text>". Not a full safety net: FastMCP
+    # re-raises a pydantic ValidationError and any FastMCPError (ToolError, ...) unmasked,
+    # and the MCP server then sends str(exc) — so the tools' own handlers still catch
+    # their response-schema ValidationErrors and return the coded McpErrorResponse.
+    app = FastMCP("archon-search", mask_error_details=True)
 
     @app.tool()
     async def search(
@@ -374,18 +489,24 @@ def create_app(
             if _hyde_config is None:
                 from archon_search.config import HyDEConfig  # noqa: PLC0415
                 _hyde_config = HyDEConfig()
-            try:
-                # Same budget bound as the REST search path (S582) — the provider's
-                # [hyde].timeout_seconds is unclamped and unrelated to this budget.
-                hyde_vector, hyde_applied = await resolve_hyde_within_budget(
+            # Same budget bound as the REST search path (S582) — the provider's
+            # [hyde].timeout_seconds is unclamped and unrelated to this budget.
+            hyde_resolution = await _resolve_hyde_or_error(
+                "search",
+                resolve_hyde_within_budget(
                     resolve_hyde_vector(
                         query, hyde, hyde_generator, _hyde_config,
                         may_embed=partial(hyde_may_embed, pipeline),
                     ),
                     timeout=_SEARCH_TIMEOUT_SECONDS,
-                )
-            except RuntimeError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+                ),
+                writer=writer,
+                start=start,
+                failure=McpErrorResponse(error=_SEARCH_FAILED_DETAIL, code=_SEARCH_FAILED_CODE),
+            )
+            if isinstance(hyde_resolution, dict):
+                return hyde_resolution
+            hyde_vector, hyde_applied = hyde_resolution
             # HyDE failure: requested but returned no vector
             _search_hyde_expansion_warning = _HYDE_EXPANSION_FAILED_WARNING if (hyde and not hyde_applied) else None
 
@@ -439,8 +560,8 @@ def create_app(
                         indexed_before=indexed_before,
                         language=language,
                     )
-                except ValidationError as exc:
-                    return McpErrorResponse(error=str(exc), code="validation_error")
+                except ValidationError:
+                    return McpErrorResponse(error=_INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
             else:
                 _multi_filters = None
             # Same warm-up as the REST fan-out route: the global embedder (which
@@ -466,8 +587,8 @@ def create_app(
                     ),
                     timeout=_SEARCH_TIMEOUT_SECONDS,
                 )
-            except RAGFusionDependencyError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+            except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+                return _dependency_error_response("search", exc)
             except GraphCommunitiesNotBuiltError as exc:
                 return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
             except CollectionNotFoundError:
@@ -482,9 +603,10 @@ def create_app(
                 # Transient infrastructure error (store unavailable); mirror REST's
                 # 503 semantics with a clean message rather than leaking the cause.
                 return McpErrorResponse(error="service unavailable: metadata store could not be reached", code="metadata_store_error")
-            except Exception as exc:
+            except Exception:
+                _enqueue_internal_error(writer, "search", start)
                 logger.exception("multi-collection search failed")
-                return McpErrorResponse(error=str(exc), code="internal_error")
+                return McpErrorResponse(error=_SEARCH_FAILED_DETAIL, code=_SEARCH_FAILED_CODE)
             if writer is not None:
                 try:
                     excluded_count = len(result_obj.excluded_collections)
@@ -525,8 +647,10 @@ def create_app(
                     ppr_entities_matched=result_obj.ppr_entities_matched,
                 )
                 return response.model_dump(mode="json")
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
+            except ValidationError:
+                # The ValidationError text embeds the rejected values: log it, never send it.
+                logger.exception("search: response schema validation failed")
+                return McpErrorResponse(error=_INVALID_SEARCH_RESPONSE_DETAIL, code=_ERR_SCHEMA)
 
         try:
             try:
@@ -539,8 +663,8 @@ def create_app(
                     language=language,
                     include_metadata=include_metadata,
                 )
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+            except ValidationError:
+                return McpErrorResponse(error=_INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
             _col = collection or default_collection
             # Namespace gate: collection must exist in the caller's namespace.
             # Mirrors the REST search route's get_collection_meta check (routes_search.py)
@@ -623,10 +747,12 @@ def create_app(
                     ppr_entities_matched=result_obj.ppr_entities_matched,
                 )
                 return response.model_dump(mode="json")
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
-        except RAGFusionDependencyError as exc:
-            return McpErrorResponse(error=str(exc), code="validation_error")
+            except ValidationError:
+                # The ValidationError text embeds the rejected values: log it, never send it.
+                logger.exception("search: response schema validation failed")
+                return McpErrorResponse(error=_INVALID_SEARCH_RESPONSE_DETAIL, code=_ERR_SCHEMA)
+        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+            return _dependency_error_response("search", exc)
         except GraphCommunitiesNotBuiltError as exc:
             return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
         except EmbedderNotReadyError as exc:
@@ -642,22 +768,10 @@ def create_app(
                 extra={"event_type": "search_timeout", "collection": _col},
             )
             return McpErrorResponse(error="search timed out", code="timeout")
-        except Exception as exc:
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_error(
-                            endpoint="search",
-                            status="internal_error",
-                            error_kind="other",
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            correlation_id=_correlation_id.get(),
-                        )
-                    )
-                except Exception:
-                    logger.warning("telemetry: search error entry enqueue failed", exc_info=True)
+        except Exception:
+            _enqueue_internal_error(writer, "search", start)
             logger.exception("search failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+            return McpErrorResponse(error=_SEARCH_FAILED_DETAIL, code=_SEARCH_FAILED_CODE)
 
     @app.tool()
     async def search_with_context(
@@ -721,12 +835,16 @@ def create_app(
             if _swc_hyde_config is None:
                 from archon_search.config import HyDEConfig  # noqa: PLC0415
                 _swc_hyde_config = HyDEConfig()
-            try:
-                swc_hyde_vector, swc_hyde_applied = await resolve_hyde_vector(
-                    query, hyde, hyde_generator, _swc_hyde_config
-                )
-            except RuntimeError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+            swc_hyde_resolution = await _resolve_hyde_or_error(
+                "search_with_context",
+                resolve_hyde_vector(query, hyde, hyde_generator, _swc_hyde_config),
+                writer=writer,
+                start=start,
+                failure=McpErrorResponse(error=_SEARCH_FAILED_DETAIL, code=_SEARCH_FAILED_CODE),
+            )
+            if isinstance(swc_hyde_resolution, dict):
+                return swc_hyde_resolution
+            swc_hyde_vector, swc_hyde_applied = swc_hyde_resolution
             # HyDE failure: requested but returned no vector
             _swc_hyde_expansion_warning = _HYDE_EXPANSION_FAILED_WARNING if (hyde and not swc_hyde_applied) else None
 
@@ -741,8 +859,8 @@ def create_app(
                     language=language,
                     include_metadata=include_metadata,
                 )
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+            except ValidationError:
+                return McpErrorResponse(error=_INVALID_SEARCH_FILTERS_DETAIL, code="validation_error")
             _swc_col = collection or default_collection
             # Namespace gate: collection must exist in the caller's namespace.
             _swc_meta = await pipeline.get_collection_meta(_swc_col, namespace=_swc_ns)
@@ -824,30 +942,20 @@ def create_app(
                     expansion_warning=_swc_expansion_warning,
                 )
                 return response.model_dump(mode="json")
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
-        except RAGFusionDependencyError as exc:
-            return McpErrorResponse(error=str(exc), code="validation_error")
+            except ValidationError:
+                # The ValidationError text embeds the rejected values: log it, never send it.
+                logger.exception("search_with_context: response schema validation failed")
+                return McpErrorResponse(error=_INVALID_SEARCH_RESPONSE_DETAIL, code=_ERR_SCHEMA)
+        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+            return _dependency_error_response("search_with_context", exc)
         except EmbedderNotReadyError as exc:
             # The model is still loading (or its load is wedged) — retryable.
             logger.warning("search_with_context: embedder not ready — %s", exc)
             return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
-        except Exception as exc:
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_error(
-                            endpoint="search_with_context",
-                            status="internal_error",
-                            error_kind="other",
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            correlation_id=_correlation_id.get(),
-                        )
-                    )
-                except Exception:
-                    logger.warning("telemetry: search_with_context error entry enqueue failed", exc_info=True)
+        except Exception:
+            _enqueue_internal_error(writer, "search_with_context", start)
             logger.exception("search_with_context failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+            return McpErrorResponse(error=_SEARCH_FAILED_DETAIL, code=_SEARCH_FAILED_CODE)
 
     @app.tool()
     async def explain(
@@ -934,12 +1042,16 @@ def create_app(
             if _explain_hyde_config is None:
                 from archon_search.config import HyDEConfig  # noqa: PLC0415
                 _explain_hyde_config = HyDEConfig()
-            try:
-                explain_hyde_vector, explain_hyde_applied = await resolve_hyde_vector(
-                    query, hyde, hyde_generator, _explain_hyde_config
-                )
-            except RuntimeError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+            explain_hyde_resolution = await _resolve_hyde_or_error(
+                "explain",
+                resolve_hyde_vector(query, hyde, hyde_generator, _explain_hyde_config),
+                writer=writer,
+                start=start,
+                failure=McpErrorResponse(error=_EXPLAIN_FAILED_DETAIL, code=_EXPLAIN_FAILED_CODE),
+            )
+            if isinstance(explain_hyde_resolution, dict):
+                return explain_hyde_resolution
+            explain_hyde_vector, explain_hyde_applied = explain_hyde_resolution
 
         # graph_mode with multi-collection fanout is not supported in E1c — each collection
         # has independent graph tables; cross-collection graph merge is out of scope.
@@ -987,8 +1099,8 @@ def create_app(
                     rag_fusion_config=_explain_rf_config,
                     scope_filter=scope_filter,
                 )
-            except RAGFusionDependencyError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+            except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+                return _dependency_error_response("explain", exc)
             except GraphCommunitiesNotBuiltError as exc:
                 return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
             except CollectionNotFoundError:
@@ -1000,13 +1112,15 @@ def create_app(
             except ExplainMultiCollectionNoRerankError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
             except ExplainStageError as exc:
+                _enqueue_internal_error(writer, "explain", start)
                 logger.warning("explain stage %s failed: %s", exc.stage, exc.original, exc_info=exc.original)
                 return McpErrorResponse(
                     error=f"{exc.stage} error: {type(exc.original).__name__}", code="internal_error"
                 )
             except Exception:
+                _enqueue_internal_error(writer, "explain", start)
                 logger.exception("multi-collection explain failed")
-                return McpErrorResponse(error="explain failed", code="internal_error")
+                return McpErrorResponse(error=_EXPLAIN_FAILED_DETAIL, code=_EXPLAIN_FAILED_CODE)
             try:
                 response = ExplainResponse.from_pipeline_result(
                     rerank=rerank, collection="", routing=None, result=result, stage_timings_ms=None,
@@ -1022,8 +1136,10 @@ def create_app(
                 result_dict = response.model_dump(mode="json", exclude_none=False)
                 result_dict.pop("stage_timings_ms", None)
                 return result_dict
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
+            except ValidationError:
+                # The ValidationError text embeds the rejected values: log it, never send it.
+                logger.exception("explain: response schema validation failed")
+                return McpErrorResponse(error=_INVALID_EXPLAIN_RESPONSE_DETAIL, code=_ERR_SCHEMA)
 
         try:
             req = ExplainRequest(query=query, collection=collection, top_k=top_k, rerank=rerank)
@@ -1148,26 +1264,16 @@ def create_app(
                 if stage_timings is None:
                     result_dict.pop("stage_timings_ms", None)
                 return result_dict
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
-        except RAGFusionDependencyError as exc:
-            return McpErrorResponse(error=str(exc), code="validation_error")
+            except ValidationError:
+                # The ValidationError text embeds the rejected values: log it, never send it.
+                logger.exception("explain: response schema validation failed")
+                return McpErrorResponse(error=_INVALID_EXPLAIN_RESPONSE_DETAIL, code=_ERR_SCHEMA)
+        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+            return _dependency_error_response("explain", exc)
         except GraphCommunitiesNotBuiltError as exc:
             return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
         except ExplainStageError as exc:
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_error(
-                            endpoint="explain",
-                            status="internal_error",
-                            error_kind="other",
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            correlation_id=_correlation_id.get(),
-                        )
-                    )
-                except Exception:
-                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
+            _enqueue_internal_error(writer, "explain", start)
             # Sanitize: the original message could echo the query (e.g. an FTS error).
             logger.warning("explain stage %s failed: %s", exc.stage, exc.original, exc_info=exc.original)
             return McpErrorResponse(error=f"{exc.stage} error: {type(exc.original).__name__}", code="internal_error")
@@ -1176,21 +1282,9 @@ def create_app(
             logger.warning("explain: embedder not ready — %s", exc)
             return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
         except Exception:
-            if writer is not None:
-                try:
-                    writer.enqueue(
-                        TelemetryEntry.from_error(
-                            endpoint="explain",
-                            status="internal_error",
-                            error_kind="other",
-                            latency_ms=(monotonic() - start) * 1000.0,
-                            correlation_id=_correlation_id.get(),
-                        )
-                    )
-                except Exception:
-                    logger.warning("telemetry: explain error entry enqueue failed", exc_info=True)
+            _enqueue_internal_error(writer, "explain", start)
             logger.exception("explain failed")
-            return McpErrorResponse(error="explain failed", code="internal_error")
+            return McpErrorResponse(error=_EXPLAIN_FAILED_DETAIL, code=_EXPLAIN_FAILED_CODE)
 
     @app.tool()
     async def ingest_file(
@@ -1236,17 +1330,16 @@ def create_app(
             try:
                 schema = IngestResultSchema.from_result(result)
                 return schema.model_dump(mode="json")
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
+            except ValidationError:
+                return _schema_error("ingest_file")
         except StoreBusyError as exc:
             return McpErrorResponse(error=str(exc), code="store_busy")
         except EmbedderNotReadyError as exc:
             # The model is still loading (or its load is wedged) — retryable.
             logger.warning("ingest_file: embedder not ready — %s", exc)
             return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
-        except Exception as exc:
-            logger.exception("ingest_file failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+        except Exception:
+            return _internal_error("ingest_file failed")
 
     @app.tool()
     async def ingest_directory(
@@ -1304,17 +1397,16 @@ def create_app(
                     )
             try:
                 return [IngestResultSchema.from_result(r).model_dump(mode="json") for r in results]
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
+            except ValidationError:
+                return _schema_error("ingest_directory")
         except StoreBusyError as exc:
             return McpErrorResponse(error=str(exc), code="store_busy")
         except EmbedderNotReadyError as exc:
             # The model is still loading (or its load is wedged) — retryable.
             logger.warning("ingest_directory: embedder not ready — %s", exc)
             return McpErrorResponse(error=EMBEDDER_NOT_READY_DETAIL, code=EMBEDDER_NOT_READY_CODE)
-        except Exception as exc:
-            logger.exception("ingest_directory failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+        except Exception:
+            return _internal_error("ingest_directory failed")
 
     @app.tool()
     async def list_collections() -> list[dict[str, Any]]:
@@ -1323,11 +1415,10 @@ def create_app(
             results = await pipeline.get_all_collections_meta(_get_request_namespace())
             try:
                 return [CollectionListItemSchema.from_result(r).model_dump(mode="json") for r in results]
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
-        except Exception as exc:
-            logger.exception("list_collections failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+            except ValidationError:
+                return _schema_error("list_collections")
+        except Exception:
+            return _internal_error("list_collections failed")
 
     @app.tool()
     async def get_collections_meta(
@@ -1348,11 +1439,10 @@ def create_app(
                     ).model_dump(mode="json")
                     for r in results
                 ]
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
-        except Exception as exc:
-            logger.exception("get_collections_meta failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+            except ValidationError:
+                return _schema_error("get_collections_meta")
+        except Exception:
+            return _internal_error("get_collections_meta failed")
 
     @app.tool()
     async def get_collection_meta(name: str) -> dict[str, Any]:
@@ -1364,11 +1454,10 @@ def create_app(
             try:
                 schema = CollectionDetailSchema.from_result(meta)
                 return schema.model_dump(mode="json")
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
-        except Exception as exc:
-            logger.exception("get_collection_meta failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+            except ValidationError:
+                return _schema_error("get_collection_meta")
+        except Exception:
+            return _internal_error("get_collection_meta failed")
 
     @app.tool()
     async def list_documents(
@@ -1383,11 +1472,10 @@ def create_app(
             )
             try:
                 return [DocumentInfoSchema.from_result(r).model_dump(mode="json") for r in items]
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
-        except Exception as exc:
-            logger.exception("list_documents failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+            except ValidationError:
+                return _schema_error("list_documents")
+        except Exception:
+            return _internal_error("list_documents failed")
 
     @app.tool()
     async def delete_document(
@@ -1410,14 +1498,13 @@ def create_app(
             try:
                 schema = DeleteDocumentSchema(deleted=count)
                 return schema.model_dump(mode="json")
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
+            except ValidationError:
+                return _schema_error("delete_document")
         except StoreBusyError as exc:
             logger.warning("delete_document store busy: %s", exc)
             return McpErrorResponse(error=str(exc), code="store_busy")
-        except Exception as exc:
-            logger.exception("delete_document failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+        except Exception:
+            return _internal_error("delete_document failed")
 
     @app.tool()
     async def update_collection(
@@ -1453,7 +1540,7 @@ def create_app(
             try:
                 new_dim = await validate_embedding_model(embedding_model)
             except ModelValidationError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+                return McpErrorResponse(error=str(exc), code=_ERR_VALIDATION)
 
             # Dimension mismatch guard
             stored_dim = await store.get_stored_vector_dimension(collection_name, namespace=ns)
@@ -1461,7 +1548,7 @@ def create_app(
                 return McpErrorResponse(
                     error=f"dimension mismatch: stored vectors have dimension {stored_dim}, "
                     f"but model {embedding_model!r} produces dimension {new_dim}",
-                    code="validation_error",
+                    code=_ERR_VALIDATION,
                 )
 
             # 409 guard: check if reindex job is still active (after validation, before state machine)
@@ -1512,11 +1599,10 @@ def create_app(
             try:
                 schema = CollectionDetailSchema.from_result(meta)
                 return schema.model_dump(mode="json")
-            except ValidationError as exc:
-                return McpErrorResponse(error=str(exc), code=_ERR_SCHEMA)
-        except Exception as exc:
-            logger.exception("update_collection failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+            except ValidationError:
+                return _schema_error("update_collection")
+        except Exception:
+            return _internal_error("update_collection failed")
 
     @app.tool()
     async def export_collection(
@@ -1530,7 +1616,7 @@ def create_app(
         If omitted, defaults to ``<data_dir>/exports/``.
         """
         if job_store is None:
-            return McpErrorResponse(error="job store not configured", code="internal_error")
+            return McpErrorResponse(error=JOB_STORE_NOT_CONFIGURED_DETAIL, code=_ERR_INTERNAL)
 
         _export_ns = _get_request_namespace()
         exports_dir = get_data_dir() / "exports"
@@ -1543,7 +1629,10 @@ def create_app(
                 error=_path_unsafe_message(exc.reason), code="path_unsafe"
             )
 
-        meta = await pipeline.store.get_collection_meta(collection, _export_ns)
+        try:
+            meta = await pipeline.store.get_collection_meta(collection, _export_ns)
+        except Exception:
+            return _internal_error("export_collection: collection lookup failed")
         if meta is None:
             return McpErrorResponse(
                 error=f"Collection {collection!r} not found", code="not_found"
@@ -1557,12 +1646,15 @@ def create_app(
         archive_path = resolved_dir / f"{collection}-{timestamp}.tar.gz"
         tmp_path_val = resolved_dir / f".export-{job_uuid}.jsonl.tmp"
 
-        job = job_store.create_export(
-            collection=collection,
-            output_path=str(archive_path),
-            tmp_path=str(tmp_path_val),
-            namespace=_export_ns,
-        )
+        try:
+            job = job_store.create_export(
+                collection=collection,
+                output_path=str(archive_path),
+                tmp_path=str(tmp_path_val),
+                namespace=_export_ns,
+            )
+        except Exception:
+            return _internal_error("export_collection: job creation failed")
         return job_to_dict(job)
 
     @app.tool()
@@ -1580,13 +1672,13 @@ def create_app(
         ``on_error`` must be ``"fail"`` (abort on corrupt line) or ``"skip"`` (skip corrupt lines).
         """
         if job_store is None:
-            return McpErrorResponse(error="job store not configured", code="internal_error")
+            return McpErrorResponse(error=JOB_STORE_NOT_CONFIGURED_DETAIL, code=_ERR_INTERNAL)
 
         _import_ns = _get_request_namespace()
 
         if on_error not in {"fail", "skip"}:
             return McpErrorResponse(
-                error="on_error must be 'fail' or 'skip'", code="validation_error"
+                error="on_error must be 'fail' or 'skip'", code=_ERR_VALIDATION
             )
 
         try:
@@ -1614,7 +1706,7 @@ def create_app(
         except Exception as exc:  # noqa: BLE001
             # tarfile/gzip error text can reflect the archive's own bytes: log it, send a fixed detail.
             logger.warning("import archive %s could not be opened: %s", archive_path, exc, exc_info=exc)
-            return McpErrorResponse(error=INVALID_ARCHIVE_DETAIL, code="validation_error")
+            return McpErrorResponse(error=INVALID_ARCHIVE_DETAIL, code=_ERR_VALIDATION)
 
         try:
             reader = ImportArchiveReader(archive_path)
@@ -1622,7 +1714,7 @@ def create_app(
         except (ValueError, PathUnsafeError) as exc:
             return McpErrorResponse(
                 error=f"invalid manifest: {manifest_error_detail(exc, archive_path)}",
-                code="validation_error",
+                code=_ERR_VALIDATION,
             )
 
         # The mismatch texts below match POST /collections/{name}/import's `detail` verbatim.
@@ -1637,7 +1729,10 @@ def create_app(
                 code="embedding_model_mismatch",
             )
 
-        existing_meta = await pipeline.store.get_collection_meta(collection, _import_ns)
+        try:
+            existing_meta = await pipeline.store.get_collection_meta(collection, _import_ns)
+        except Exception:
+            return _internal_error("import_collection: collection lookup failed")
         if existing_meta is not None and not force_overwrite:
             return McpErrorResponse(
                 error=f"collection {collection!r} already exists; use force_overwrite=True to overwrite",
@@ -1655,31 +1750,32 @@ def create_app(
                 code="schema_version_mismatch",
             )
 
-        job = job_store.create_import(
-            collection=collection,
-            archive_path=path,
-            force_overwrite=force_overwrite,
-            ignore_schema_version=ignore_schema_version,
-            on_error=on_error,
-            namespace=_import_ns,
-        )
+        try:
+            job = job_store.create_import(
+                collection=collection,
+                archive_path=path,
+                force_overwrite=force_overwrite,
+                ignore_schema_version=ignore_schema_version,
+                on_error=on_error,
+                namespace=_import_ns,
+            )
+        except Exception:
+            return _internal_error("import_collection: job creation failed")
         return job_to_dict(job)
 
     # -----------------------------------------------------------------------
     # Key-management tools (D7 BE-9) — registered only when key_store is set.
     # These tools mirror the REST /keys endpoints but are exposed over MCP.
-    # rotate_key writes .search.env via the same atomic_write_bytes helper used
-    # by POST /keys/rotate — it does NOT call the REST endpoint internally.
+    # rotate_key runs the same key_manager.rotate_and_persist_default_key use case as
+    # POST /keys/rotate — it does NOT call the REST endpoint internally.
     # -----------------------------------------------------------------------
 
     if key_store is not None:
         import asyncio as _asyncio  # noqa: PLC0415
         import os as _os  # noqa: PLC0415
-        import secrets as _secrets  # noqa: PLC0415
 
         from archon_search.constants import _validate_namespace  # noqa: PLC0415
-        from archon_search._durable_io import atomic_write_bytes as _atomic_write  # noqa: PLC0415
-        from archon_search.key_manager import ENV_VAR as _ENV_VAR, get_key_file as _get_key_file  # noqa: PLC0415
+        from archon_search.key_manager import ENV_VAR as _ENV_VAR  # noqa: PLC0415
 
         @app.tool()
         async def create_key(
@@ -1698,7 +1794,7 @@ def create_app(
             try:
                 _validate_namespace(namespace)
             except ValueError as exc:
-                return McpErrorResponse(error=str(exc), code="validation_error")
+                return McpErrorResponse(error=str(exc), code=_ERR_VALIDATION)
 
             from datetime import datetime  # noqa: PLC0415
 
@@ -1710,12 +1806,12 @@ def create_app(
                     )
                 except ValueError as exc:
                     return McpErrorResponse(
-                        error=f"invalid expires_at: {exc}", code="validation_error"
+                        error=f"invalid expires_at: {exc}", code=_ERR_VALIDATION
                     )
                 if parsed_expires_at.tzinfo is None:
                     return McpErrorResponse(
                         error="expires_at must be timezone-aware (include UTC offset or Z suffix)",
-                        code="validation_error",
+                        code=_ERR_VALIDATION,
                     )
 
             try:
@@ -1724,8 +1820,11 @@ def create_app(
                     label=label,
                     expires_at=parsed_expires_at,
                 )
+            except KeyStoreUnreadableError:
+                return McpErrorResponse(error=KEY_STORE_UNREADABLE_DETAIL, code=_ERR_INTERNAL)
             except Exception:
-                return McpErrorResponse(error="Failed to create key", code="internal_error")
+                logger.exception("create_key failed")
+                return McpErrorResponse(error=CREATE_KEY_FAILED_DETAIL, code=_ERR_INTERNAL)
             return {
                 "id": result["id"],
                 "token": result["token"],
@@ -1750,7 +1849,7 @@ def create_app(
             if status not in {"active", "revoked", "all"}:
                 return McpErrorResponse(
                     error="status must be 'active', 'revoked', or 'all'",
-                    code="validation_error",
+                    code=_ERR_VALIDATION,
                 )
 
             all_records = await key_store.list_keys()
@@ -1809,6 +1908,10 @@ def create_app(
                 return McpErrorResponse(
                     error=f"Key not found: {key_id!r}", code="not_found"
                 )
+            except KeyStoreUnreadableError:
+                return McpErrorResponse(error=KEY_STORE_UNREADABLE_DETAIL, code=_ERR_INTERNAL)
+            except Exception:
+                return _internal_error("revoke_key failed")
 
             return {"id": key_id, "status": "revoked"}
 
@@ -1828,90 +1931,89 @@ def create_app(
             the env var overrides ``.search.env``, so rotation would be a silent
             no-op (same behaviour as ``POST /keys/rotate``, S23).
 
-            Note: the MCP server's in-memory ``api_key`` is NOT hot-reloaded after
-            rotation (S24 documented limitation) — the old token remains valid for
-            the MCP auth path until the server restarts.
+            Retires the server's current default key and makes the new key current for
+            this MCP endpoint. When MCP is mounted on the REST server (``/mcp``), that is
+            the key ``POST /keys/rotate`` would retire, and the new key is current for REST too.
             """
             # Determine grace_seconds: argument wins over config default.
             _grace: int
             if grace_seconds is not None:
-                if grace_seconds < 0:
-                    return McpErrorResponse(
-                        error="grace_seconds must be >= 0", code="validation_error"
-                    )
                 _grace = grace_seconds
             else:
                 _grace = getattr(getattr(config, "auth", None), "rotate_grace_seconds", 0)
 
-            # Serialise the full rotate sequence under a module-level lock to
-            # prevent concurrent MCP rotate_key calls from creating orphaned keys.
-            async with _mcp_rotate_lock:
-                # Guard: if ARCHON_SEARCH_API_KEY is set, the env var overrides
-                # .search.env so rotation is silently ineffective (S23 parity).
-                if _os.environ.get(_ENV_VAR):
-                    return McpErrorResponse(
-                        error=(
-                            "Cannot rotate: ARCHON_SEARCH_API_KEY env var is set; "
-                            "unset it first and restart the server to use managed key rotation."
-                        ),
-                        code="conflict",
-                    )
-
-                # Read the current default key from .search.env (re-read on each call
-                # so that a prior REST rotation is visible here without restart).
-                current_token, _ = load_or_generate_key()
-
-                # Generate the new raw token here so we can write .search.env FIRST
-                # (same crash-safe write order as POST /keys/rotate in routes_keys.py).
-                new_raw_token = _secrets.token_hex(32)  # 64 hex chars
-
-                key_file = _get_key_file()
-                key_file.parent.mkdir(parents=True, exist_ok=True)
-                payload = f"{_ENV_VAR}={new_raw_token}\n".encode()
-                try:
-                    await _asyncio.to_thread(_atomic_write, key_file, payload, mode=0o600)
-                except OSError as exc:
-                    return McpErrorResponse(
-                        error=f"Failed to write .search.env — rotation aborted: {exc}",
-                        code="internal_error",
-                    )
-
-                try:
-                    result = await key_store.rotate_default_key(
-                        current_token=current_token,
-                        grace_seconds=_grace,
-                        new_token=new_raw_token,
-                    )
-                except ValueError as exc:
-                    return McpErrorResponse(error=str(exc), code="validation_error")
-
-                # Defensive: rotate_default_key must echo back the token we passed in.
-                # If this ever diverges, .search.env and keys.json would be out of sync.
-                if result["new_token"] != new_raw_token:
-                    raise RuntimeError("rotate_default_key returned unexpected token — BUG")
-
-                new_key_id: str = result["new_key_id"]  # type: ignore[assignment]
-                old_record = result["old_record"]
-
-                old_key_id_str = old_record.id if old_record is not None else None
-                old_key_expires_at = old_record.expires_at if old_record is not None else None
-                old_key_status = old_record.status if old_record is not None else None
-
-                logger.info(
-                    "mcp rotate_key: new_key_id=%s old_key_id=%s grace_seconds=%d",
-                    new_key_id,
-                    old_key_id_str,
-                    _grace,
+            # Guard: if ARCHON_SEARCH_API_KEY is set, the env var overrides
+            # .search.env so rotation is silently ineffective (S23 parity).
+            if _os.environ.get(_ENV_VAR):
+                return McpErrorResponse(
+                    error=(
+                        "Cannot rotate: ARCHON_SEARCH_API_KEY env var is set; "
+                        "unset it first and restart the server to use managed key rotation."
+                    ),
+                    code="conflict",
                 )
 
-                return {
-                    "new_key_id": new_key_id,
-                    "token": new_raw_token,
-                    "status": "active",
-                    "old_key_id": old_key_id_str,
-                    "old_key_expires_at": str(old_key_expires_at) if old_key_expires_at is not None else None,
-                    "old_key_status": old_key_status,
-                }
+            async def read_current_token() -> str:
+                if api_key_state is not None:
+                    # The same current default key POST /keys/rotate reads and publishes.
+                    return api_key_state.api_key
+                # No server-held key: re-read .search.env. The use case validates
+                # grace_seconds before calling this, because load_or_generate_key may
+                # create .search.env.
+                current_token, _ = await _asyncio.to_thread(load_or_generate_key)
+                return current_token
+
+            def publish_new_token(new_token: str) -> None:
+                # Runs inside the rotation lock, only after both writes succeeded.
+                if api_key_state is not None:
+                    api_key_state.api_key = new_token
+
+            # The use case serialises the whole rotation under key_store.rotation_lock,
+            # shared with POST /keys/rotate. An out-of-range grace_seconds argument is the
+            # caller's error; a blank current key comes from server state (a server fault).
+            try:
+                result = await rotate_and_persist_default_key(
+                    key_store,
+                    key_file=resolve_rotation_key_file(),
+                    read_current_token=read_current_token,
+                    grace_seconds=_grace,
+                    publish_new_token=publish_new_token,
+                )
+            except BlankCurrentKeyError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_INTERNAL)
+            except KeyRotationInputError as exc:
+                return McpErrorResponse(error=str(exc), code=_ERR_VALIDATION)
+            except KeyStoreUnreadableError:
+                return McpErrorResponse(error=KEY_STORE_UNREADABLE_DETAIL, code=_ERR_INTERNAL)
+            except KeyFileWriteError:
+                return McpErrorResponse(error=ROTATE_WRITE_FAILED_DETAIL, code=_ERR_INTERNAL)
+            except RotationIncompleteError:
+                return McpErrorResponse(error=ROTATE_KEYS_JSON_FAILED_DETAIL, code=_ERR_INTERNAL)
+            except Exception:
+                return _internal_error("rotate_key failed")
+
+            new_key_id: str = result["new_key_id"]  # type: ignore[assignment]
+            old_record = result["old_record"]
+
+            old_key_id_str = old_record.id if old_record is not None else None
+            old_key_expires_at = old_record.expires_at if old_record is not None else None
+            old_key_status = old_record.status if old_record is not None else None
+
+            logger.info(
+                "mcp rotate_key: new_key_id=%s old_key_id=%s grace_seconds=%d",
+                new_key_id,
+                old_key_id_str,
+                _grace,
+            )
+
+            return {
+                "new_key_id": new_key_id,
+                "token": result["new_token"],
+                "status": "active",
+                "old_key_id": old_key_id_str,
+                "old_key_expires_at": str(old_key_expires_at) if old_key_expires_at is not None else None,
+                "old_key_status": old_key_status,
+            }
 
     # -----------------------------------------------------------------------
     # Graph inspection tools (E2b) — always registered; guard at runtime.
@@ -2040,9 +2142,8 @@ def create_app(
                 "top_nodes": top_nodes,
                 "top_edges": top_edges,
             }
-        except Exception as exc:
-            logger.exception("get_graph failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+        except Exception:
+            return _internal_error("get_graph failed")
 
     @app.tool()
     async def get_graph_cross_collection(
@@ -2074,7 +2175,7 @@ def create_app(
             if not collections or len(collections) < 2:
                 return McpErrorResponse(
                     error="collections must contain at least 2 distinct collection names",
-                    code="validation_error",
+                    code=_ERR_VALIDATION,
                 )
 
             # Deduplicate collection names
@@ -2088,7 +2189,7 @@ def create_app(
             if len(deduped_collections) < 2:
                 return McpErrorResponse(
                     error="collections must contain at least 2 distinct collection names after deduplication",
-                    code="validation_error",
+                    code=_ERR_VALIDATION,
                 )
 
             # Fetch metadata for each collection and build total_chunk_counts
@@ -2146,9 +2247,8 @@ def create_app(
                 "top_nodes": top_nodes,
                 "top_edges": top_edges,
             }
-        except Exception as exc:
-            logger.exception("get_graph_cross_collection failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+        except Exception:
+            return _internal_error("get_graph_cross_collection failed")
 
     def _impact_edge_to_dict(e: Any) -> dict[str, Any]:
         """Convert one impact-traversal edge entry to a dict — E2g BE-9."""
@@ -2204,7 +2304,7 @@ def create_app(
                 return McpErrorResponse(error=f"collection {collection!r} not found", code="not_found")
 
             if depth is not None and depth < 1:
-                return McpErrorResponse(error="depth must be >= 1", code="validation_error")
+                return McpErrorResponse(error="depth must be >= 1", code=_ERR_VALIDATION)
 
             # BE-9 fills depth/direction defaults at this surface's Presentation->Adapter boundary
             effective_depth = depth if depth is not None else DEFAULT_IMPACT_DEPTH
@@ -2215,7 +2315,7 @@ def create_app(
             except ValueError:
                 return McpErrorResponse(
                     error=f"invalid direction {direction!r}; must be one of 'callers', 'callees', 'both'",
-                    code="validation_error",
+                    code=_ERR_VALIDATION,
                 )
 
             result = await graph_store.compute_impact(
@@ -2234,9 +2334,8 @@ def create_app(
                 "callees": _impact_group_to_dict(result.callees),
                 "depth_used": result.depth_used,
             }
-        except Exception as exc:
-            logger.exception("graph_impact failed")
-            return McpErrorResponse(error=str(exc), code="internal_error")
+        except Exception:
+            return _internal_error("graph_impact failed")
 
     @app.custom_route("/health", methods=["GET"])
     async def health_check(request: Request) -> JSONResponse:
@@ -2258,6 +2357,7 @@ def create_mcp_http_app(
     key_store: "KeyStore | None" = None,
     doc_id_hasher: Callable[[str], str] | None = None,
     graph_store: "GraphStore | None" = None,
+    api_key_state: State | None = None,
 ) -> Starlette:
     """Return a Starlette HTTP app wrapping the FastMCP server with auth middleware.
 
@@ -2276,20 +2376,27 @@ def create_mcp_http_app(
     first to populate ``keys.json``.  TOML tokens are also accepted via the
     ``namespaces=config.namespaces`` path (defense-in-depth fallback when the
     ``key_store`` path is absent or unavailable).
+
+    ``api_key_state`` — the object whose ``api_key`` attribute holds the server's current
+    default key; ``create_app`` (REST) passes its ``app.state``, so the auth middleware and
+    ``rotate_key`` here read, and ``rotate_key`` publishes, the same key as ``POST /keys/rotate``.
+    When omitted, a private ``State`` seeded with ``load_or_generate_key()`` plays that role.
     """
     from archon_search.server.middleware_context import RequestContextMiddleware
 
-    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator, key_store=key_store, doc_id_hasher=doc_id_hasher, graph_store=graph_store)
+    if api_key_state is None:
+        api_key_state = State({"api_key": load_or_generate_key()[0]})
+    fastmcp_app = create_app(pipeline, default_collection, writer=writer, config=config, embedder_cache=embedder_cache, job_store=job_store, hyde_generator=hyde_generator, rag_fusion_generator=rag_fusion_generator, key_store=key_store, doc_id_hasher=doc_id_hasher, graph_store=graph_store, api_key_state=api_key_state)
     # FastMCP 3.4.x renamed ``streamable_http_app()`` to ``http_app()``; ``path='/'``
     # exposes the JSON-RPC endpoint at the sub-app root so it is reachable at the
     # ``/mcp`` mount point without an extra suffix (see ADR 09, K-1 spike).
     starlette_app: Starlette = fastmcp_app.http_app(path="/")
-    api_key, _ = load_or_generate_key()
     starlette_app.add_middleware(
         APIKeyMiddleware,
-        api_key=api_key,
+        api_key=api_key_state.api_key,
         namespaces=config.namespaces if config is not None else {},
         key_store=key_store,
+        api_key_state=api_key_state,
     )
     starlette_app.add_middleware(RequestContextMiddleware, header_name=request_id_header)
     return starlette_app

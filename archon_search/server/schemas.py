@@ -17,6 +17,8 @@ from pydantic import (
     field_validator,
 )
 
+from archon_search.constants import MAX_ROTATE_GRACE_SECONDS
+
 
 # Inclusive valid range for TTL seconds — shared by IngestRequest and PatchCollectionBody.
 _TTL_MIN: int = 1
@@ -696,7 +698,7 @@ class KeyRotateRequest(BaseModel):
     If absent, the TOML default is used.  If both are 0, rotation is immediate.
     """
 
-    grace_seconds: int | None = Field(default=None, ge=0)
+    grace_seconds: int | None = Field(default=None, ge=0, le=MAX_ROTATE_GRACE_SECONDS)
 
 
 class KeyRotateResponse(BaseModel):
