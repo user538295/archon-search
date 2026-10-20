@@ -4382,7 +4382,7 @@
                 }
               }
             },
-            "description": "Config file could not be saved (code config_persist_failed); change rolled back"
+            "description": "Config file could not be saved (code config_persist_failed); change rolled back; or the table drop or meta-row delete failed (code collection_drop_failed); a failed table drop rolls the config change back"
           },
           "503": {
             "content": {
@@ -5143,6 +5143,16 @@
             },
             "description": "Not Found"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "A reindex of this collection is already in progress"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -5152,6 +5162,26 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Creating the reindex job or recording it on the collection meta failed (body {\"detail\": \"internal error\"})"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Service not ready \u2014 the embedder cache or pipeline is not initialised"
           }
         },
         "security": [
@@ -5830,7 +5860,24 @@
             },
             "description": "Validation Error"
           },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Creating the ingest job failed (body {\"detail\": \"internal error\"})"
+          },
           "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
             "description": "Store busy \u2014 reindex in progress"
           }
         },

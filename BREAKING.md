@@ -8,6 +8,24 @@
 
 ## Changelog
 
+### [next release] — ingest/reindex jobs report fixed `error` text; `DELETE /collections/{name}` returns `500 collection_drop_failed` when the table drop fails; a `503` creates no job (2026-10-18)
+
+**Surface**: `GET /jobs` / `GET /jobs/{id}` → `error` of ingest jobs (`POST /ingest`, `POST /collections/`, `archon-search collection add --wait`, `archon-search ingest --wait`) and reindex jobs (`POST /collections/{name}/reindex`, `archon-search collection reindex --wait`); `DELETE /collections/{name}` status and body; the job list after a `503` from `POST /ingest` or `POST /collections/{name}/reindex`.
+
+**Behaviour-only change — no schema field was added, removed or retyped.**
+
+**What changed:**
+
+- **Unexpected ingest or reindex failure**: the job's `error` is now the fixed `"ingest failed; see the server log for details"` / `"reindex failed; see the server log for details"` instead of the exception's own text, which could embed server paths and library internals — in every unexpected-failure case, including a reindex job that `POST /collections/{name}/reindex` marks `FAILED` because recording it on the collection meta failed (its `error` used to be `null`). The exception is logged server-side with its traceback. Unchanged: `path does not exist or is not a file/directory: <path>` for an ingest path that does not exist, and `service unavailable: embedding model still loading`.
+- **`DELETE /collections/{name}`**: a `RuntimeError` from the table drop (store not connected, LanceDB failure) was treated as "no table" — the meta row was deleted, `200` returned, and the table orphaned. It is now a failed drop: `500` `{"detail": "could not remove the collection from the store; see the server log for details", "code": "collection_drop_failed"}`, the config change rolled back, the meta row kept. Only a missing table is still ignored. Any other drop failure, or a failed meta-row delete after the drop, also returns this `500` instead of a plain-text `500 Internal Server Error`.
+- **`503` responses create no job**: `POST /ingest` acquires the per-collection lock before creating its job, so a lock-timeout `503` no longer leaves a `PENDING` job that never runs; `POST /collections/{name}/reindex` answers `503 service not ready` before creating a job (it used to leave a `FAILED` reindex job and point the collection's `reindex_job_id` at it).
+
+**Migration:** clients that parsed exception text out of a failed ingest or reindex job's `error` should read the server log instead. `DELETE /collections/{name}` callers should treat `500` with `code == "collection_drop_failed"` as "not removed" (after a failed meta-row delete, the table and config entry are already gone; retry the `DELETE`). Nothing to do for the `503` change.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — Default config path follows `ARCHON_SEARCH_DATA_DIR`; `serve` no longer warns about an unset `ARCHON_SEARCH_CONFIG` (2026-10-17)
 
 **What changed:** With `ARCHON_SEARCH_CONFIG` unset, the default config (`config.get_default_config_path()`, via `paths.get_data_dir()`) is now `<data-dir>/archon-search.toml` instead of always `~/.archon-search/archon-search.toml`, so it follows `ARCHON_SEARCH_DATA_DIR`; with the default data dir the path is unchanged. In the Docker image (`ARCHON_SEARCH_DATA_DIR=/data`, `HOME=/data`, no `ARCHON_SEARCH_CONFIG`) it moves from `/data/.archon-search/archon-search.toml` to `/data/archon-search.toml`. Without `--config`, the plist/unit written by `install` / `wizard` already pointed at `<data-dir>/archon-search.toml` while the wizard wrote its config to `~/.archon-search/archon-search.toml`; both now use the same default, and the plist/unit also honours an `ARCHON_SEARCH_CONFIG` set at install time (`platform/macos.py`, `platform/linux.py`). `archon-search serve` no longer logs the `ARCHON_SEARCH_DATA_DIR is set but ARCHON_SEARCH_CONFIG is not` warning.

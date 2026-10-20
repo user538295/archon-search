@@ -12,6 +12,7 @@ import pytest
 
 from archon_search.jobs.model import IngestJob, JobStatus, get_jobs_file
 from archon_search.jobs.store import JobStore
+from archon_search.types import MigrationKind
 
 
 UUID4_RE = re.compile(
@@ -325,6 +326,77 @@ def test_write_atomic_failure_reraises(tmp_path: Path) -> None:
     with patch("archon_search.jobs.store.atomic_write_json", side_effect=OSError("simulated write failure")):
         with pytest.raises(OSError, match="simulated write failure"):
             s.create()
+
+
+@pytest.mark.parametrize(
+    "create_call",
+    [
+        pytest.param(lambda s: s.create(), id="create"),
+        pytest.param(lambda s: s.create_reindex(), id="create_reindex"),
+        pytest.param(lambda s: s.create_job(IngestJob(
+            job_id=str(uuid.uuid4()), status=JobStatus.PENDING, created_at="", updated_at="",
+        )), id="create_job"),
+        pytest.param(lambda s: s.create_export("c", "/out", "/tmp-out"), id="create_export"),
+        pytest.param(lambda s: s.create_import("c", "/in.tar", False, False, "abort"), id="create_import"),
+        pytest.param(lambda s: s.create_migration("c", MigrationKind.IN_PLACE, None), id="create_migration"),
+        pytest.param(lambda s: s.create_community_rebuild("c"), id="create_community_rebuild"),
+        pytest.param(lambda s: s.create_sync(), id="create_sync"),
+        pytest.param(lambda s: s.create_metadata_reindex("c"), id="create_metadata_reindex"),
+    ],
+)
+def test_create_write_failure_leaves_no_ghost_job(tmp_path: Path, create_call) -> None:
+    """A failed persist must not leave the never-saved job in memory (no ghost PENDING/QUEUED job),
+    and must not drop an already-saved job (in memory or on disk)."""
+    from unittest.mock import patch
+
+    s = JobStore(path=tmp_path / "jobs.json")
+    saved = s.create()
+
+    with patch("archon_search.jobs.store.atomic_write_json", side_effect=OSError("simulated write failure")):
+        with pytest.raises(OSError, match="simulated write failure"):
+            create_call(s)
+
+    assert s.list() == [saved]
+    assert JobStore(path=tmp_path / "jobs.json").list() == [saved]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        pytest.param(lambda s, job_id: s.update(job_id, status=JobStatus.DONE), {"status": JobStatus.DONE}, id="update"),
+        pytest.param(
+            lambda s, job_id: s.transition(job_id, from_statuses={JobStatus.PENDING}, to_status=JobStatus.CANCELLED),
+            {"status": JobStatus.CANCELLED},
+            id="transition",
+        ),
+        pytest.param(
+            lambda s, job_id: s.update_progress(job_id, 1, 2, "embed"),
+            {"progress": {"processed": 1, "total": 2, "phase": "embed"}},
+            id="update_progress",
+        ),
+    ],
+)
+def test_update_write_failure_keeps_update_and_next_write_persists_it(
+    tmp_path: Path, mutate, expected: dict[str, object]
+) -> None:
+    """A failed persist re-raises but keeps the update in memory, so the next successful write
+    flushes it to disk (self-heals) instead of pinning the job to its last-saved state forever."""
+    from unittest.mock import patch
+
+    s = JobStore(path=tmp_path / "jobs.json")
+    job = s.create()
+
+    with patch("archon_search.jobs.store.atomic_write_json", side_effect=OSError("simulated write failure")):
+        with pytest.raises(OSError, match="simulated write failure"):
+            mutate(s, job.job_id)
+
+    in_memory = s.get(job.job_id)
+    assert in_memory is not None
+    assert {field: getattr(in_memory, field) for field in expected} == expected
+
+    s.create()  # next successful write
+
+    assert JobStore(path=tmp_path / "jobs.json").get(job.job_id) == in_memory
 
 
 # ---------------------------------------------------------------------------

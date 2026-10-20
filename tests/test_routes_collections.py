@@ -1455,8 +1455,9 @@ def test_delete_collection_lock_released_on_exception(
     c = TestClient(app, raise_server_exceptions=False, headers={"Authorization": f"Bearer {key}"})
     response = c.delete(f"/collections/{name}")
 
-    # The exception propagates as 500
+    # The store failure maps to the sanitized collection_drop_failed 500
     assert response.status_code == 500
+    assert response.json()["code"] == "collection_drop_failed"
     # Lock MUST be released despite the exception
     assert not real_lock.locked(), "Lock must be released even when delete_collection_meta raises"
 
@@ -2121,6 +2122,557 @@ def test_add_collection_error_status_preserved_when_rollback_save_fails(
     assert mock_store.delete_collection_meta.await_count == (1 if lock_busy else 0)
 
 
+_SECRET_EXC_TEXT = "/very/secret/internal/path/store.lance"
+
+
+def _authed_client(app: object) -> TestClient:
+    """TestClient sending the test API key; server exceptions surface as 500 responses."""
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"}, raise_server_exceptions=False)
+
+
+def _stateful_meta_store(initial: list[CollectionMeta]) -> tuple[MagicMock, dict[str, CollectionMeta]]:
+    """Mock search_store whose meta rows live in a dict, so a stub left behind stays observable."""
+    rows = {m.name: m for m in initial}
+
+    async def _update(meta: CollectionMeta) -> None:
+        rows[meta.name] = meta
+
+    async def _delete(name: str, namespace: str) -> None:
+        rows.pop(name, None)
+
+    async def _get(name: str, namespace: str = "default") -> CollectionMeta | None:
+        meta = rows.get(name)
+        return meta if meta is not None and meta.namespace == namespace else None
+
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(side_effect=lambda: list(rows.values()))
+    mock_store.get_collection_meta = AsyncMock(side_effect=_get)
+    mock_store.update_collection_meta = AsyncMock(side_effect=_update)
+    mock_store.delete_collection_meta = AsyncMock(side_effect=_delete)
+    mock_store.drop_collection = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=asyncio.Lock())
+    return mock_store, rows
+
+
+# (failure patch, whether the real JobStore.create runs — only then can a ghost job be left behind)
+_JOB_CREATE_FAILURES = [
+    pytest.param(
+        lambda store: patch.object(store, "create", side_effect=OSError(28, "No space left on device", _SECRET_EXC_TEXT)),
+        False,
+        id="create-oserror",
+    ),
+    pytest.param(
+        lambda store: patch.object(store, "create", side_effect=TypeError(_SECRET_EXC_TEXT)),
+        False,
+        id="create-non-oserror",
+    ),
+    pytest.param(
+        lambda store: patch(
+            "archon_search.jobs.store.atomic_write_json",
+            side_effect=OSError(28, "No space left on device", _SECRET_EXC_TEXT),
+        ),
+        True,
+        id="real-jobstore-write-oserror",
+    ),
+]
+
+
+@pytest.mark.parametrize(("job_create_failure", "real_create_runs"), _JOB_CREATE_FAILURES)
+def test_add_collection_job_create_failure_rolls_back_config_and_meta(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture, job_create_failure, real_create_runs: bool
+) -> None:
+    """JobStore.create raising (OSError, any other exception, or a real JobStore persist failure) after
+    the config persist and stub meta write → sanitized 500, config restored in memory AND on disk, stub
+    meta row deleted, no ghost job, lock released, and a retry of the same path is accepted (not 409
+    "collection already registered")."""
+    from archon_search.config import load_config, save_config
+
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg_file = tmp_path / "archon-search.toml"
+    save_config(cfg, cfg_file)
+    name = path_to_collection_name(str(src.resolve()))
+
+    mock_store, meta_rows = _stateful_meta_store([])
+    lock = mock_store.lock_for.return_value
+    held_at_discard: list[bool] = []
+    mock_store.discard_lock.side_effect = lambda collection: held_at_discard.append(lock.locked())
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    app.state.config_path = str(cfg_file)
+    c = _authed_client(app)
+
+    with job_create_failure(tmp_store), caplog.at_level("ERROR", logger="archon_search.server.routes_collections"):
+        response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+    assert _SECRET_EXC_TEXT not in response.text
+    [record] = [r for r in caplog.records if r.getMessage() == f"Failed to create the ingest job for collection {name}"]
+    assert record.exc_info is not None and _SECRET_EXC_TEXT in str(record.exc_info[1])
+    assert app.state.config.collections == []
+    assert load_config(cfg_file).collections == []
+    assert name not in meta_rows
+    if real_create_runs:
+        assert tmp_store.list() == []
+    assert not lock.locked()
+    # The rolled-back collection's lock entry is discarded — only after the release, mirroring DELETE.
+    mock_store.discard_lock.assert_called_once_with(name)
+    assert held_at_discard == [False]
+
+    with patch(
+        "archon_search.server.routes_collections.asyncio.create_task",
+        side_effect=lambda coro: (coro.close(), MagicMock())[1],
+    ):
+        retry = c.post("/collections/", json={"path": str(src)})
+
+    assert retry.status_code == 202, retry.text
+
+
+def test_add_collection_rollback_meta_delete_failure_still_returns_500_and_releases_lock(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A delete_collection_meta failure inside the job-creation rollback is logged, never raised:
+    the 500 internal-error response survives, the config entry is still rolled back, the lock released."""
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    mock_store, _meta_rows = _stateful_meta_store([])
+    mock_store.delete_collection_meta.side_effect = OSError(5, "Input/output error", _SECRET_EXC_TEXT)
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    c = _authed_client(app)
+
+    with (
+        patch.object(tmp_store, "create", side_effect=OSError("disk full")),
+        caplog.at_level("ERROR", logger="archon_search.server.routes_collections"),
+    ):
+        response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+    assert app.state.config.collections == []
+    mock_store.delete_collection_meta.assert_awaited_once()
+    assert any(r.getMessage() == "Failed to rollback meta after job creation failure" for r in caplog.records)
+    assert not mock_store.lock_for.return_value.locked()
+
+
+def _raise_after_concurrent_delete(app: object, resolved: str, error: Exception):
+    """Side effect simulating a concurrent DELETE that already removed *resolved* from the config."""
+
+    def _side_effect(*args: object, **kwargs: object) -> None:
+        app.state.config.collections.remove(resolved)
+        raise error
+
+    return _side_effect
+
+
+@pytest.mark.parametrize(
+    ("failure_point", "expected_status", "expected_body", "expected_meta_deletes"),
+    [
+        ("stub-meta-store-busy", 503, _BUSY_BODY, 0),
+        ("stub-meta-name-race", 409, {"detail": "collection name already registered"}, 0),
+        ("stub-meta-other", 500, {"detail": "internal error"}, 0),
+        ("ingest-lock-busy", 503, _BUSY_BODY, 1),
+        ("job-create", 500, {"detail": "internal error"}, 1),
+    ],
+)
+def test_add_collection_rollback_tolerates_entry_already_removed_by_concurrent_delete(
+    tmp_path: Path,
+    tmp_store: JobStore,
+    failure_point: str,
+    expected_status: int,
+    expected_body: dict[str, str],
+    expected_meta_deletes: int,
+) -> None:
+    """When a concurrent DELETE already removed the config entry, the rollback must not raise
+    ValueError: the intended status/body is returned and the meta rollback is still attempted."""
+    src = tmp_path / "myproject"
+    src.mkdir()
+    resolved = str(src.resolve())
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    mock_store, _meta_rows = _stateful_meta_store([])
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    c = _authed_client(app)
+
+    stub_meta_errors = {
+        "stub-meta-store-busy": StoreBusyError(timeout_s=30.0),
+        "stub-meta-name-race": ValueError("name taken"),
+        "stub-meta-other": RuntimeError("disk error"),
+    }
+    busy_response = JSONResponse({"detail": "busy"}, status_code=503, headers={"Retry-After": "30"})
+    if failure_point in stub_meta_errors:
+        mock_store.update_collection_meta.side_effect = _raise_after_concurrent_delete(
+            app, resolved, stub_meta_errors[failure_point]
+        )
+        failure_patch = nullcontext()
+    elif failure_point == "ingest-lock-busy":
+
+        async def _busy_after_concurrent_delete(*args: object, **kwargs: object) -> JSONResponse:
+            app.state.config.collections.remove(resolved)
+            return busy_response
+
+        failure_patch = patch(
+            "archon_search.server.routes_collections.acquire_collection_lock_or_503",
+            new=_busy_after_concurrent_delete,
+        )
+    else:
+        failure_patch = patch.object(
+            tmp_store, "create", side_effect=_raise_after_concurrent_delete(app, resolved, OSError("disk full"))
+        )
+
+    with failure_patch:
+        response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == expected_status
+    assert response.json() == expected_body
+    assert app.state.config.collections == []
+    assert mock_store.delete_collection_meta.await_count == expected_meta_deletes
+
+
+def test_add_collection_stub_meta_failure_is_logged(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An unexpected stub-meta write failure is logged with its traceback before the 500."""
+    src = tmp_path / "myproject"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+
+    meta_error = RuntimeError("disk error")
+    mock_store, _meta_rows = _stateful_meta_store([])
+    mock_store.update_collection_meta.side_effect = meta_error
+    app = _make_app_with_mock_store(cfg, tmp_store, mock_store)
+    c = _authed_client(app)
+
+    with caplog.at_level("ERROR", logger="archon_search.server.routes_collections"):
+        response = c.post("/collections/", json={"path": str(src)})
+
+    assert response.status_code == 500
+    [record] = [r for r in caplog.records if r.getMessage().startswith("Failed to write the stub meta row")]
+    assert record.exc_info is not None and record.exc_info[1] is meta_error
+
+
+@pytest.mark.parametrize(
+    ("stored", "re_added"),
+    [("absolute", "absolute"), ("absolute", "tilde"), ("tilde", "absolute")],
+    ids=["same-spelling", "re-added-as-tilde", "stored-as-tilde"],
+)
+def test_drop_path_from_config_restore_skips_an_entry_already_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stored: str, re_added: str
+) -> None:
+    """Defensive unit test of the restore callback: through the API a re-add of the dropped path cannot
+    happen before restore runs (the meta row still exists, so POST /collections/ answers 409), but if an
+    entry resolving to the same path is already in the list, restore skips it rather than duplicating it —
+    matching by resolved path like the drop does, so ``~/x`` and its absolute spelling count as one entry.
+    Entries still missing are re-inserted at their original index."""
+    from archon_search.server.routes_collections import _drop_path_from_config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    dropped = str((tmp_path / "dropped").resolve())
+    kept = str((tmp_path / "kept").resolve())
+    spelling = {"absolute": dropped, "tilde": "~/dropped"}
+    cfg = SearchConfig()
+    cfg.collections = [spelling[stored], kept]
+    cfg.pinned_collections = [spelling[stored]]
+
+    restore = _drop_path_from_config(cfg, dropped)
+    assert cfg.collections == [kept]
+    assert cfg.pinned_collections == []
+    cfg.collections.append(spelling[re_added])
+
+    restore()
+
+    assert cfg.collections == [kept, spelling[re_added]]
+    assert cfg.pinned_collections == [spelling[stored]]
+
+
+def _drop_failed_body() -> dict[str, str]:
+    from archon_search.server.routes_collections import COLLECTION_DROP_FAILED_CODE, COLLECTION_DROP_FAILED_DETAIL
+
+    return {"detail": COLLECTION_DROP_FAILED_DETAIL, "code": COLLECTION_DROP_FAILED_CODE}
+
+
+def test_remove_collection_drop_failure_restores_config(tmp_path: Path, tmp_store: JobStore) -> None:
+    """drop_collection raising after the config was persisted → the table data is intact, so the config
+    removal is rolled back (in memory AND on disk, both lists), the meta row is left alone, and the
+    sanitized collection_drop_failed 500 is returned without the exception text; lock released."""
+    from archon_search.config import load_config
+
+    app, mock_store, name, collections_before, pinned_before = _remove_app(tmp_path, tmp_store, with_meta=True)
+    mock_store.drop_collection.side_effect = OSError(5, "Input/output error", _SECRET_EXC_TEXT)
+
+    response = _authed_client(app).delete(f"/collections/{name}")
+
+    assert response.status_code == 500
+    assert response.json() == _drop_failed_body()
+    assert _SECRET_EXC_TEXT not in response.text
+    assert app.state.config.collections == collections_before
+    assert app.state.config.pinned_collections == pinned_before
+    on_disk = load_config(Path(app.state.config_path))
+    assert on_disk.collections == collections_before
+    assert on_disk.pinned_collections == pinned_before
+    mock_store.delete_collection_meta.assert_not_awaited()
+    mock_store.discard_lock.assert_not_called()
+    assert not mock_store.lock_for.return_value.locked()
+
+
+def test_remove_collection_meta_delete_failure_keeps_config_removal(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """delete_collection_meta raising after drop_collection succeeded → the table is gone, so the config
+    removal stays (in memory AND on disk) instead of re-registering a path without data; the sanitized
+    collection_drop_failed 500 is still returned and the failure logged; lock released, then its entry
+    discarded (the table is gone)."""
+    from archon_search.config import load_config
+
+    app, mock_store, name, _collections_before, _pinned_before = _remove_app(tmp_path, tmp_store, with_meta=True)
+    meta_error = OSError(5, "Input/output error", _SECRET_EXC_TEXT)
+    mock_store.delete_collection_meta.side_effect = meta_error
+    lock = mock_store.lock_for.return_value
+    held_at_discard: list[bool] = []
+    mock_store.discard_lock.side_effect = lambda collection: held_at_discard.append(lock.locked())
+
+    with caplog.at_level("ERROR", logger="archon_search.server.routes_collections"):
+        response = _authed_client(app).delete(f"/collections/{name}")
+
+    [record] = [r for r in caplog.records if r.getMessage().startswith("Failed to delete the meta row")]
+    assert record.exc_info is not None and record.exc_info[1] is meta_error
+    mock_store.discard_lock.assert_called_once_with(name)
+    assert held_at_discard == [False]
+    assert response.status_code == 500
+    assert response.json() == _drop_failed_body()
+    assert _SECRET_EXC_TEXT not in response.text
+    mock_store.drop_collection.assert_awaited_once_with(name, _locked_by_caller=True)
+    assert app.state.config.collections == []
+    assert app.state.config.pinned_collections == []
+    on_disk = load_config(Path(app.state.config_path))
+    assert on_disk.collections == []
+    assert on_disk.pinned_collections == []
+    assert not mock_store.lock_for.return_value.locked()
+
+
+def test_remove_collection_drop_runtime_error_restores_config_and_keeps_meta(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """drop_collection raising RuntimeError (store not connected, or a LanceDB failure) is a failed drop,
+    NOT "table missing": the config removal is rolled back, the meta row is kept (no orphaned table), the
+    failure is logged, and the sanitized collection_drop_failed 500 is returned; lock entry not discarded."""
+    from archon_search.config import load_config
+
+    app, mock_store, name, collections_before, pinned_before = _remove_app(tmp_path, tmp_store, with_meta=True)
+    drop_error = RuntimeError(f"lance error at {_SECRET_EXC_TEXT}")
+    mock_store.drop_collection.side_effect = drop_error
+
+    with caplog.at_level("ERROR", logger="archon_search.server.routes_collections"):
+        response = _authed_client(app).delete(f"/collections/{name}")
+
+    assert response.status_code == 500
+    assert response.json() == _drop_failed_body()
+    assert _SECRET_EXC_TEXT not in response.text
+    [record] = [r for r in caplog.records if r.getMessage().startswith("Failed to drop collection")]
+    assert record.exc_info is not None and record.exc_info[1] is drop_error
+    assert app.state.config.collections == collections_before
+    assert app.state.config.pinned_collections == pinned_before
+    assert load_config(Path(app.state.config_path)).collections == collections_before
+    mock_store.delete_collection_meta.assert_not_awaited()
+    mock_store.discard_lock.assert_not_called()
+    assert not mock_store.lock_for.return_value.locked()
+
+
+def test_remove_collection_missing_table_still_deletes_meta_and_discards_lock(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """drop_collection raising KeyError (table already gone) is fine: the meta row is deleted, 200 returned,
+    and the lock entry discarded after release."""
+    app, mock_store, name, _collections_before, _pinned_before = _remove_app(tmp_path, tmp_store, with_meta=True)
+    mock_store.drop_collection.side_effect = KeyError(name)
+
+    response = _authed_client(app).delete(f"/collections/{name}")
+
+    assert response.status_code == 200
+    assert app.state.config.collections == []
+    mock_store.delete_collection_meta.assert_awaited_once_with(name, "default")
+    mock_store.discard_lock.assert_called_once_with(name)
+    assert not mock_store.lock_for.return_value.locked()
+
+
+def test_remove_collection_drop_failure_keeps_status_when_rollback_save_fails(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """A failing rollback config save after a drop failure is logged only: the response stays the
+    sanitized collection_drop_failed 500 and the in-memory config is still restored."""
+    app, mock_store, name, collections_before, pinned_before = _remove_app(tmp_path, tmp_store, with_meta=True)
+    mock_store.drop_collection.side_effect = OSError("disk failure")
+    calls = {"n": 0}
+
+    def _save(config: object, config_path: object) -> None:
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise OSError("disk full")
+
+    with patch("archon_search.server.routes_collections.save_config", side_effect=_save):
+        response = _authed_client(app).delete(f"/collections/{name}")
+
+    assert response.status_code == 500
+    assert response.json() == _drop_failed_body()
+    assert calls["n"] == 2
+    assert app.state.config.collections == collections_before
+    assert app.state.config.pinned_collections == pinned_before
+    assert not mock_store.lock_for.return_value.locked()
+
+
+def test_remove_collection_drop_failure_rollback_keeps_concurrent_config_change(
+    tmp_path: Path, tmp_store: JobStore
+) -> None:
+    """A path another request appends while DELETE awaits the drop survives the rollback, and the
+    removed entry is re-inserted at its original index."""
+    from archon_search.config import load_config
+
+    app, mock_store, name, collections_before, pinned_before = _remove_app(tmp_path, tmp_store, with_meta=True)
+    added_during_drop = str(tmp_path / "added-during-drop")
+
+    async def _append_then_fail(*args: object, **kwargs: object) -> None:
+        app.state.config.collections.append(added_during_drop)
+        raise OSError("disk failure")
+
+    mock_store.drop_collection.side_effect = _append_then_fail
+
+    response = _authed_client(app).delete(f"/collections/{name}")
+
+    assert response.status_code == 500
+    assert response.json() == _drop_failed_body()
+    assert app.state.config.collections == [*collections_before, added_during_drop]
+    assert app.state.config.pinned_collections == pinned_before
+    assert load_config(Path(app.state.config_path)).collections == [*collections_before, added_during_drop]
+
+
+def test_remove_collection_success_discards_lock_after_release(tmp_path: Path, tmp_store: JobStore) -> None:
+    """After a successful drop the route forgets the collection's lock entry — only once it has
+    released the lock, so the store never hands out a second lock while the first is held."""
+    app, mock_store, name, _collections_before, _pinned_before = _remove_app(tmp_path, tmp_store, with_meta=True)
+    lock = mock_store.lock_for.return_value
+    held_at_discard: list[bool] = []
+    mock_store.discard_lock.side_effect = lambda collection: held_at_discard.append(lock.locked())
+
+    response = _authed_client(app).delete(f"/collections/{name}")
+
+    assert response.status_code == 200
+    mock_store.discard_lock.assert_called_once_with(name)
+    assert held_at_discard == [False]
+
+
+def _reindex_app(tmp_path: Path, tmp_store: JobStore) -> tuple[object, MagicMock, str]:
+    """App with one configured collection whose meta row exists, for POST /collections/{name}/reindex."""
+    src = tmp_path / "docs"
+    src.mkdir()
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    cfg.collections = [str(src)]
+    name = path_to_collection_name(str(src))
+
+    search_store = MagicMock()
+    search_store.get_collection_meta = AsyncMock(return_value=CollectionMeta(name=name, namespace="default"))
+    search_store.update_collection_meta = AsyncMock()
+    search_store.migrate_namespace = AsyncMock()
+    search_store.migrate_acl = AsyncMock()
+    search_store.connect = AsyncMock()
+    search_store.disconnect = AsyncMock()
+
+    with mock.patch("archon_search.server.app.DocumentChunker"):
+        app = create_app(cfg, tmp_store)
+    app.state.search_store = search_store
+    app.state.embedder_cache = MagicMock()
+    app.state.pipeline = MagicMock()
+    return app, search_store, name
+
+
+def test_reindex_meta_write_failure_marks_job_failed(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failing meta write after the reindex job was created → logged, 500, and the job ends FAILED
+    (not PENDING) with the sanitized REINDEX_FAILED_DETAIL, no error text leaked."""
+    from archon_search.server.routes_jobs import REINDEX_FAILED_DETAIL
+
+    app, search_store, name = _reindex_app(tmp_path, tmp_store)
+    meta_error = RuntimeError(_SECRET_EXC_TEXT)
+    search_store.update_collection_meta.side_effect = meta_error
+
+    with caplog.at_level("ERROR", logger="archon_search.server.routes_collections"):
+        response = _authed_client(app).post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+    [job] = tmp_store.list()
+    assert job.status == JobStatus.FAILED
+    assert job.error == REINDEX_FAILED_DETAIL
+    [record] = [r for r in caplog.records if r.getMessage().startswith("Failed to record the reindex job")]
+    assert record.exc_info is not None and record.exc_info[1] is meta_error
+
+
+@pytest.mark.parametrize("update_error", [OSError(28, "No space left on device", _SECRET_EXC_TEXT), KeyError("job")])
+def test_reindex_meta_write_failure_keeps_500_when_marking_job_failed_raises(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture, update_error: Exception
+) -> None:
+    """If marking the job FAILED itself raises, the handler logs it and still returns the sanitized 500."""
+    app, search_store, name = _reindex_app(tmp_path, tmp_store)
+    search_store.update_collection_meta.side_effect = RuntimeError("disk error")
+
+    with (
+        patch.object(tmp_store, "update", side_effect=update_error),
+        caplog.at_level("ERROR", logger="archon_search.server.routes_jobs"),
+    ):
+        response = _authed_client(app).post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+    [record] = [r for r in caplog.records if r.getMessage().startswith("reindex_collection: could not persist FAILED status for job ")]
+    assert record.exc_info is not None and record.exc_info[1] is update_error
+
+
+@pytest.mark.parametrize("create_error", [OSError("disk full"), TypeError(_SECRET_EXC_TEXT)], ids=["oserror", "non-oserror"])
+def test_reindex_job_create_failure_returns_sanitized_500(
+    tmp_path: Path, tmp_store: JobStore, caplog: pytest.LogCaptureFixture, create_error: Exception
+) -> None:
+    """create_reindex raising anything → logged, sanitized 500, meta row untouched."""
+    app, search_store, name = _reindex_app(tmp_path, tmp_store)
+
+    with (
+        patch.object(tmp_store, "create_reindex", side_effect=create_error),
+        caplog.at_level("ERROR", logger="archon_search.server.routes_collections"),
+    ):
+        response = _authed_client(app).post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+    [record] = [r for r in caplog.records if r.getMessage().startswith("Failed to create the reindex job")]
+    assert record.exc_info is not None and record.exc_info[1] is create_error
+    search_store.update_collection_meta.assert_not_awaited()
+
+
+@pytest.mark.parametrize("missing_dependency", ["embedder_cache", "pipeline"])
+def test_reindex_service_not_ready_creates_no_job(tmp_path: Path, tmp_store: JobStore, missing_dependency: str) -> None:
+    """No embedder cache or pipeline yet → 503 before anything is written: no reindex job (not even a
+    FAILED one) and no meta write pointing reindex_job_id at it."""
+    app, search_store, name = _reindex_app(tmp_path, tmp_store)
+    setattr(app.state, missing_dependency, None)
+
+    response = _authed_client(app).post(f"/collections/{name}/reindex")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "service not ready"}
+    assert tmp_store.list() == []
+    search_store.update_collection_meta.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # POST /collections/ — path safety validation (Task 1.2 / A5a)
 # ---------------------------------------------------------------------------
@@ -2320,6 +2872,17 @@ def test_add_collection_openapi_lists_400_response(
     assert schema_ref.endswith("ErrorDetail")
 
 
+def test_reindex_openapi_lists_every_error_status_it_returns(tmp_path: Path, tmp_store: JobStore) -> None:
+    """POST /collections/{name}/reindex declares the 409, 503 and 500 it returns, each with ErrorDetail."""
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    spec = create_app(cfg, tmp_store).openapi()
+
+    responses = spec["paths"]["/collections/{name}/reindex"]["post"]["responses"]
+    for status in ("401", "404", "409", "500", "503"):
+        assert responses[status]["content"]["application/json"]["schema"]["$ref"].endswith("ErrorDetail"), status
+
+
 # ---------------------------------------------------------------------------
 # OSError on JobStore writes → 500 envelope (Task 2.6)
 # ---------------------------------------------------------------------------
@@ -2357,46 +2920,6 @@ def test_collection_add_oserror_returns_500_envelope(
     c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
     response = c.post("/collections/", json={"path": str(src)})
-
-    assert response.status_code == 500
-    assert response.json() == {"detail": "internal error"}
-
-
-def test_collection_reindex_oserror_returns_500_envelope(
-    tmp_path: Path,
-) -> None:
-    """POST /collections/{name}/reindex returns the 500 envelope when store.create raises OSError."""
-    from archon_search.collection_meta import CollectionMeta
-
-    src = tmp_path / "docs"
-    src.mkdir()
-    cfg = SearchConfig()
-    cfg.db_path = str(tmp_path / "search")
-    cfg.collections = [str(src)]
-
-    name = path_to_collection_name(str(src))
-    meta = CollectionMeta(name=name, namespace="default")
-
-    job_store = MagicMock()
-    job_store.create_reindex.side_effect = OSError("disk full")
-
-    search_store = MagicMock()
-    search_store.get_collection_meta = AsyncMock(return_value=meta)
-    search_store.migrate_namespace = AsyncMock()
-    search_store.migrate_acl = AsyncMock()
-    search_store.connect = AsyncMock()
-    search_store.disconnect = AsyncMock()
-
-    with mock.patch("archon_search.server.app.DocumentChunker"):
-        app = create_app(cfg, job_store)
-    app.state.search_store = search_store
-    app.state.embedder_cache = MagicMock()
-    app.state.pipeline = MagicMock()
-
-    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
-    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
-
-    response = c.post(f"/collections/{name}/reindex")
 
     assert response.status_code == 500
     assert response.json() == {"detail": "internal error"}
@@ -3838,7 +4361,6 @@ def test_reindex_endpoint_creates_reindex_job_not_ingest_job(
 ) -> None:
     """POST /collections/{name}/reindex stores a ReindexJob (not a plain IngestJob)."""
     from archon_search.types import ReindexJob
-    from archon_search.jobs.model import IngestJob
 
     c, name, meta, mock_store = _make_reindex_app(tmp_path, tmp_store)
 
@@ -4009,7 +4531,6 @@ def test_get_migrations_pending_unauthenticated_returns_401(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """GET /collections/{name}/migrations/pending returns 401 for unauthenticated request."""
-    import os
     from archon_search.sync import path_to_collection_name as _ptn
 
     src = tmp_path / "docs"
@@ -4368,7 +4889,6 @@ def test_post_migrate_unauthenticated_returns_401(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/{name}/migrate returns 401 for unauthenticated request."""
-    import os
     from archon_search.sync import path_to_collection_name as _ptn
 
     src = tmp_path / "docs"

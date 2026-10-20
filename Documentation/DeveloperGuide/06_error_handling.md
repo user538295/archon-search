@@ -28,12 +28,17 @@ Verified against the route modules under `archon_search/server/`:
 | `400` | `POST /route` — empty query, `slots < 1`; `POST /collections/` and `POST /ingest` — `path` fails safety validation (`"path is unsafe: <reason>"`: empty/whitespace-only/NUL/non-absolute/`..`-traversal) | `{"detail": "..."}` | Fix the request; never retry as-is. Use an absolute path with no `..` segments. |
 | `401` | `APIKeyMiddleware` rejected the token | (empty) | Reload the key file; if it rotated, re-read `.search.env`. |
 | `404` | Unknown collection, unknown job, cross-namespace access | `{"detail": "..."}` | Treat as logical "not visible to me". Do not retry. |
-| `409` | `POST /collections/` — path or name already registered; `DELETE /collections/{name}` — pinned-only | `{"detail": "..."}` | Reconcile config; do not retry blindly. |
+| `409` | `POST /collections/` — path or name already registered; `DELETE /collections/{name}` — pinned-only; `POST /collections/{name}/reindex` — a reindex of the collection is already `PENDING`/`RUNNING` (`{"detail": "reindex already in progress"}`) | `{"detail": "..."}` | Reconcile config; do not retry blindly. |
 | `422` | FastAPI body validation (e.g. empty `collection` / `query` in `/search`) | FastAPI's structured error body | Fix the request; never retry as-is. |
-| `500` | Unmapped internal failure; `POST /search` — pipeline stage exception (embedder, store, reranker) (`routes_search.py`); `APIKeyMiddleware` returns a bare `500` (no body) if the resolved namespace fails revalidation (`middleware_auth.py:55-59`) | `{"detail": "..."}` for the routes that build a `JSONResponse({"detail": ...}, status_code=500)` (e.g. `routes_collections.py`, `routes_jobs.py`). **Exception: `POST /search` pipeline-failure 500 has a plain-text body `Internal Server Error` (Content-Type `text/plain`)** — the route bare-re-raises and Starlette's `ServerErrorMiddleware` renders the default response, not a JSON envelope. `APIKeyMiddleware`'s 500 path returns an empty body. | Backoff + retry once; surface to operator if it recurs. |
-| `503` | `POST /search` — any exception raised by `pipeline.get_collection_meta` (`routes_search.py:67-71`) | `{"detail": "service unavailable"}` | Retry with exponential backoff. |
+| `500` | Unmapped internal failure; `POST /search` — pipeline stage exception (embedder, store, reranker) (`routes_search.py`); `APIKeyMiddleware` returns a bare `500` (no body) if the resolved namespace fails revalidation (`middleware_auth.py:55-59`) | `{"detail": "..."}` for the routes that build a `JSONResponse({"detail": ...}, status_code=500)` (e.g. `routes_collections.py`, `routes_jobs.py`); the collection add/remove failures in the next two rows also carry a `code`. **Exception: `POST /search` pipeline-failure 500 has a plain-text body `Internal Server Error` (Content-Type `text/plain`)** — the route bare-re-raises and Starlette's `ServerErrorMiddleware` renders the default response, not a JSON envelope. `APIKeyMiddleware`'s 500 path returns an empty body. | Backoff + retry once; surface to operator if it recurs. |
+| `500` | `POST /collections/`, `DELETE /collections/{name}` — the config file could not be saved; the in-memory change is rolled back | `{"detail": "could not save the collection change to the config file; see the server log for details", "code": "config_persist_failed"}` | Fix the config file (permissions, TOML syntax), then retry. |
+| `500` | `DELETE /collections/{name}` — the table drop or the meta-row delete failed; a failed table drop restores the config entry, a failed meta delete after a successful drop does not | `{"detail": "could not remove the collection from the store; see the server log for details", "code": "collection_drop_failed"}` | Retry once; surface to operator if it recurs. |
+| `503` | `POST /search` — the collection-metadata lookup failed: any exception from `pipeline.get_collection_meta` on the single-`collection` path, or, on the multi-`collections` path, the `MetadataLookupError` that `search_many` raises for any `get_all_collections_meta` failure (`routes_search.py`) | `{"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"}` | Retry with exponential backoff. |
+| `503` | `POST /search` (single `collection`) — the collection's embedding model is still loading: its cache load stayed wedged past the cache's 120 s wait (`EmbedderNotReadyError`; a merely slow load degrades the request to FTS-only instead) | `{"detail": "service unavailable: embedding model still loading", "code": "embedder_not_ready"}` + header `Retry-After: 30` | Honour `Retry-After`, then retry. |
 | `503` | `POST /collections/` — a reindex holds the per-collection ingest lock | `{"detail": "store busy; retry in N seconds"}` + header `Retry-After: N` | Honour `Retry-After`, then retry. Ingest to a *different* collection is unaffected. |
-| `503` | `POST /ingest` — a reindex holds the per-collection ingest lock | `{"error": "store_busy", "detail": "..."}` + header `Retry-After: 30` (note: `error` key, not `detail`-only — normalisation deferred) | Honour `Retry-After`, then retry. |
+| `503` | `POST /ingest` — a reindex holds the per-collection ingest lock | `{"detail": "reindex in progress; retry after Retry-After seconds", "code": "store_busy"}` + header `Retry-After: 30` (`code` is `ErrorDetail`'s optional field) | Honour `Retry-After`, then retry. |
+| `503` | `DELETE /collections/{name}` — another write holds the per-collection lock, or an ingest job on the collection is `RUNNING`/`CANCELLING` | `{"detail": "reindex in progress; retry after Retry-After seconds", "code": "store_busy"}` or `{"detail": "ingest job <id> is in progress; retry after it completes", "code": "store_busy"}`, both + header `Retry-After: 30` | Honour `Retry-After`, then retry. |
+| `503` | `POST /collections/{name}/reindex` — the embedder cache or pipeline is not initialised yet; no job is created | `{"detail": "service not ready"}` | Retry with backoff once startup completes. |
 | `504` | `POST /route` — 30 s routing timeout; `POST /search` — pipeline call timed out (~30 s) | `{"detail": "routing timed out"}` / `{"detail": "Search timed out"}` | Retry at most once; if persistent, check CPU pressure or model load. On `/search`, model load is no longer a cause — the reranker is warmed before the timer starts (S184). |
 
 The full server-side mapping with file:line citations is in `Architecture/140_error_handling_strategy.md`.
@@ -45,7 +50,7 @@ The full server-side mapping with file:line citations is in `Architecture/140_er
 | Transient network | connection reset, `httpx.RemoteProtocolError` | Yes — short backoff (e.g. 200ms, 500ms, 1s). |
 | `503` from `/search` | Meta lookup race during reindex | Yes — same backoff. |
 | `503` from `POST /collections/` (store busy) | Reindex holds the per-collection lock | Yes — honour `Retry-After`, then retry. Body: `{"detail": "store busy; retry in N seconds"}`. |
-| `503` `store_busy` from `POST /ingest` | Reindex holds the per-collection lock | Yes — honour `Retry-After` (30s), then retry. Body: `{"error": "store_busy", ...}`. |
+| `503` `store_busy` from `POST /ingest` or `DELETE /collections/{name}` | Another write holds the per-collection lock (or, on `DELETE`, an ingest is running) | Yes — honour `Retry-After` (30s), then retry. Body: `{"detail": ..., "code": "store_busy"}`. |
 | `504` from `/route` | Embedder warm-up, slow centroid load | Once, then surface. |
 | `500` | Unhandled exception | Once, then surface — log the response. |
 | `401` | Token rotated underneath the client | Reload key, retry once. After that, fail loudly. |
@@ -66,7 +71,7 @@ There are three exceptions to that envelope:
 2. **`422`** — FastAPI's Pydantic-v2 validation shape, where `detail` is a **list** of structured error objects (see the example below), not a string.
 3. **`POST /search` `500` on pipeline failure** — plain-text body `Internal Server Error` with `Content-Type: text/plain`. The route bare-re-raises the pipeline exception and Starlette's `ServerErrorMiddleware` renders the default response; there is no `detail` key and the body is not JSON. Branch on `response.status_code` (and `Content-Type`) before parsing.
 
-`schemas.ErrorDetail` is registered on the `responses=` map of routes in `routes_collections.py` and `routes_jobs.py`, so the OpenAPI schema documents this envelope per route for the statuses they declare (typically `401`, and where relevant `404` / `409`). `routes_search.py` and `routes_route.py` do **not** register a `responses=` map — the envelope shape is the same on the wire for the `JSONResponse`-built statuses, but is not documented in OpenAPI for those endpoints.
+`schemas.ErrorDetail` is registered on the `responses=` map of routes in `routes_collections.py` and `routes_jobs.py`, so the OpenAPI schema documents this envelope per route for the statuses they declare (typically `401`, and where relevant `404` / `409`). `routes_search.py` declares only `503`; `routes_route.py` registers no `responses=` map — the envelope shape is the same on the wire for the `JSONResponse`-built statuses, but the undeclared ones are not documented in OpenAPI. `ErrorDetail` also has an optional `code` field, set on errors a client should branch on (e.g. `store_busy`, `config_persist_failed`, `collection_drop_failed`).
 
 `422` follows FastAPI's default Pydantic-v2 validation-error shape. The exact `msg` is prefixed with `"Value error, "` and the body includes an `input` field; the simplified example below shows the relevant fields only:
 
@@ -133,16 +138,16 @@ Background ingest is async. Submitting `POST /ingest` returns `202` even if the 
   "job_id": "...",
   "status": "FAILED",
   "result": null,
-  "error": "FileNotFoundError: /path/that/does/not/exist",
+  "error": "path does not exist or is not a file/directory: /path/that/does/not/exist",
   ...
 }
 ```
 
-The `error` field is a short string — never a stack trace. If you need a full diagnosis, read the server's stderr; the route logged `exception("Ingest task %s failed", job_id)` at the time of failure (`routes_jobs.py:81`).
+For ingest and reindex jobs the `error` field is a short string — never a stack trace or exception text. The full set: the missing-path refusal above (its `<path>` is the request path as resolved by `validate_ingest_path`, the same value as the job's `source_path`), the retryable `"service unavailable: embedding model still loading"` (`EMBEDDER_NOT_READY_DETAIL`), `"process_restart"` (the server restarted while the job was `RUNNING`/`CANCELLING`; `JobStore._load`), `"not a ReindexJob"` (`_reindex_task` handed a job id of another type), and otherwise the fixed `"ingest failed; see the server log for details"` (`INGEST_FAILED_DETAIL`; reindex: `"reindex failed; see the server log for details"`, `REINDEX_FAILED_DETAIL`). Other job types are not covered by this rule: e.g. a bulk export/import/migration job whose dispatch raises reports `dispatch_failed: <exception text>` (`archon_search/jobs/scheduler.py`) — see `Documentation/Architecture/140_error_handling_strategy.md`. For a full diagnosis, read the server log; the task logged `exception("Ingest task %s failed", job_id)` at the time of failure (`routes_jobs.py` `_default_ingest_task`).
 
 `DELETE /jobs/{id}` is idempotent:
 
-`JobStatus` is a `str` enum with upper-case wire values (`PENDING`, `RUNNING`, `DONE`, `FAILED`, `CANCELLED`, `CANCELLING`; see `archon_search/types.py:10-16`):
+`JobStatus` is a `str` enum with upper-case wire values (`PENDING`, `QUEUED`, `RUNNING`, `DONE`, `FAILED`, `FAILED_EXPIRED`, `CANCELLED`, `CANCELLING`; see `archon_search/types.py:13-21`):
 
 - Terminal job (`DONE` / `FAILED` / `CANCELLED`) → `200` with the unchanged record.
 - Active job (`PENDING` / `RUNNING`) → `202`; status becomes `CANCELLING` and eventually `CANCELLED`.

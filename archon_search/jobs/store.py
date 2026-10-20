@@ -105,9 +105,7 @@ class JobStore:
             source_path=path,
             collection=collection,
         )
-        self._jobs[job.job_id] = job
-        self._write_atomic()
-        return job
+        return self.create_job(job)
 
     def create_reindex(self, namespace: str = DEFAULT_NAMESPACE, target_embedding_model: str | None = None) -> ReindexJob:
         now = _now_iso()
@@ -119,17 +117,30 @@ class JobStore:
             namespace=namespace,
             target_embedding_model=target_embedding_model,
         )
-        self._jobs[job.job_id] = job
-        self._write_atomic()
-        return job
+        return self.create_job(job)
 
-    def create_job(self, job: IngestJob) -> IngestJob:
-        """Store a pre-constructed job (subclass-aware, used for ReindexJob/DeleteJob)."""
+    def create_job[J: IngestJob](self, job: J) -> J:
+        """Store and persist a pre-constructed job (subclass-aware); every ``create*`` method funnels here.
+
+        A failed persist removes the job from memory again before re-raising, so memory never keeps a job
+        whose persist raised. The file may still hold it: ``atomic_write_json`` can raise after its rename
+        (the directory fsync), so a job whose create raised can reappear on the next load.
+        """
         self._jobs[job.job_id] = job
-        self._write_atomic()
+        try:
+            self._write_atomic()
+        except BaseException:
+            self._jobs.pop(job.job_id, None)
+            raise
         return job
 
     def update(self, job_id: str, **kwargs: object) -> IngestJob:
+        """Apply *kwargs* to the job and persist it.
+
+        A failed persist re-raises but keeps the update in memory, so readers in this process see it at
+        once. Every write serializes all in-memory jobs, so the next successful write of any job persists
+        it too; if the process restarts before such a write, the file holds the status last saved.
+        """
         if job_id not in self._jobs:
             raise KeyError(job_id)
         job = self._jobs[job_id]
@@ -181,7 +192,7 @@ class JobStore:
             tmp_path=tmp_path,
             source=source,
         )
-        return self.create_job(job)  # type: ignore[return-value]
+        return self.create_job(job)
 
     def create_import(
         self,
@@ -208,7 +219,7 @@ class JobStore:
             on_error=on_error,
             source=source,
         )
-        return self.create_job(job)  # type: ignore[return-value]
+        return self.create_job(job)
 
     def create_migration(
         self,
@@ -229,7 +240,7 @@ class JobStore:
             kind=kind,
             backup_confirmed=backup_confirmed,
         )
-        return self.create_job(job)  # type: ignore[return-value]
+        return self.create_job(job)
 
     def create_community_rebuild(
         self,
@@ -246,7 +257,7 @@ class JobStore:
             namespace=namespace,
             collection=collection,
         )
-        return self.create_job(job)  # type: ignore[return-value]
+        return self.create_job(job)
 
     def create_sync(
         self,
@@ -262,7 +273,7 @@ class JobStore:
             namespace=namespace,
             collection="",
         )
-        return self.create_job(job)  # type: ignore[return-value]
+        return self.create_job(job)
 
     def create_metadata_reindex(
         self,
@@ -279,7 +290,7 @@ class JobStore:
             namespace=namespace,
             collection=collection,
         )
-        return self.create_job(job)  # type: ignore[return-value]
+        return self.create_job(job)
 
     def update_progress(self, job_id: str, processed: int, total: int, phase: str) -> None:
         """Set the progress dict on a job."""

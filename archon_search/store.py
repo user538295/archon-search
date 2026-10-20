@@ -309,6 +309,21 @@ class SearchStore:
             self._collection_locks[collection] = lock
         return lock
 
+    def discard_lock(self, collection: str) -> None:
+        """Forget *collection*'s lock entry (no leak for a dropped collection); never one still in use.
+
+        A lock is in use while held OR while a task waits on it: right after ``release()`` a woken
+        waiter has not re-acquired yet (``locked()`` is False), so dropping the entry then would hand a
+        later ``lock_for`` a second lock — two concurrent holders. ``asyncio.Lock`` exposes no public
+        waiter count; ``_waiters`` (None or a deque that keeps each waiter's future until that waiter
+        resumes) is the stdlib's own bookkeeping — private, verified on the supported CPython versions
+        (3.12 in CI, 3.13, 3.14) and guarded by
+        ``test_discard_lock_keeps_a_lock_a_woken_waiter_has_not_yet_acquired`` in ``tests/test_store_lock.py``.
+        """
+        lock = self._collection_locks.get(collection)
+        if lock is not None and not lock.locked() and not lock._waiters:
+            del self._collection_locks[collection]
+
     @property
     def supports_incremental_fts_delete(self) -> bool:
         """True when ``table.optimize()`` removes deleted rows from FTS (Plan A).
@@ -486,7 +501,9 @@ class SearchStore:
         ----------
         _locked_by_caller:
             When True, assumes ``lock_for(name)`` is already held by the caller
-            and skips acquiring it internally (the lock is not reentrant).
+            and skips acquiring it internally (the lock is not reentrant). The
+            lock entry is then kept: the caller calls ``discard_lock(name)``
+            after releasing it.
 
         Raises:
             RuntimeError: if the store is not connected.
@@ -506,9 +523,10 @@ class SearchStore:
         finally:
             if lock is not None:
                 lock.release()
-        # Avoid leaking lock entries for dropped collections. Must happen after
-        # the lock is released — never pop a lock that is still held.
-        self._collection_locks.pop(name, None)
+                # Avoid leaking lock entries for dropped (or missing) collections. Only
+                # after the release, and discard_lock keeps a lock a waiter still queues
+                # on; a caller holding the lock discards the entry itself once it releases.
+                self.discard_lock(name)
 
     async def rename_collection(self, old: str, new: str) -> None:
         """Rename a LanceDB table from *old* to *new*.

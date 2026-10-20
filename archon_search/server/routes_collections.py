@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import logging
 from collections.abc import Callable
@@ -22,9 +23,9 @@ from archon_search.jobs.store import JobStore
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
-from archon_search.server.routes_jobs import IngestRequest, _default_ingest_task, _default_ingest_task_with_lock, _reindex_task
+from archon_search.server.routes_jobs import _REINDEX_COLLECTION_LOG_CONTEXT, INTERNAL_ERROR_DETAIL, REINDEX_FAILED_DETAIL, IngestRequest, _default_ingest_task, _default_ingest_task_with_lock, _persist_job_status, _reindex_task
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, DocumentInfoItem, DocumentListResponse, ErrorDetail, ExpiringChunkItem, ExpiringChunksResponse, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
-from archon_search.store import STORE_SCHEMA_VERSION, StoreBusyError
+from archon_search.store import STORE_SCHEMA_VERSION, SearchStore, StoreBusyError
 from archon_search.sync import path_to_collection_name
 from archon_search.types import IngestJob, JobStatus, MetadataReindexJob, MigrationJob, MigrationKind, MigrationSpec
 
@@ -36,6 +37,10 @@ router = APIRouter(prefix="/collections")
 #: (read-only file, hand-corrupted TOML, ...); the exception text embeds filesystem paths, so it is logged only.
 CONFIG_PERSIST_FAILED_DETAIL = "could not save the collection change to the config file; see the server log for details"
 CONFIG_PERSIST_FAILED_CODE = "config_persist_failed"
+#: Wire-facing body when DELETE's table drop or meta-row delete fails after the config was persisted
+#: (a failed table drop also rolls the config change back); the exception text (store paths) is logged only.
+COLLECTION_DROP_FAILED_DETAIL = "could not remove the collection from the store; see the server log for details"
+COLLECTION_DROP_FAILED_CODE = "collection_drop_failed"
 
 
 # ---------------------------------------------------------------------------
@@ -102,21 +107,36 @@ def _persist_config_or_500(config: SearchConfig, request: Request, rollback: Cal
 
 
 def _drop_path_from_config(config: SearchConfig, resolved: str) -> Callable[[], None]:
-    """Remove *resolved* from both config path lists; return a callback restoring them as they were.
+    """Remove *resolved* from both config path lists; return a callback re-inserting the removed entries.
 
-    Call it with no ``await`` before the matching persist, so the restore cannot discard a
-    change another request made in between.
+    The callback re-inserts only the removed entries at their original indexes, so running it after
+    an ``await`` cannot discard a change another request made to the lists in between. Defensively, an
+    entry is skipped rather than duplicated when its list already holds an entry resolving to the same
+    path (matched like the removal, so ``~/x`` and its absolute spelling are one entry).
     """
-    collections_before = list(config.collections)
-    pinned_before = list(config.pinned_collections)
-    config.collections = [p for p in config.collections if str(Path(p).expanduser().resolve()) != resolved]
-    config.pinned_collections = [
-        p for p in config.pinned_collections if str(Path(p).expanduser().resolve()) != resolved
-    ]
+
+    def _resolve(path: str) -> str:
+        return str(Path(path).expanduser().resolve())
+
+    def _split(paths: list[str]) -> tuple[list[str], list[tuple[int, str]]]:
+        kept: list[str] = []
+        removed: list[tuple[int, str]] = []
+        for index, p in enumerate(paths):
+            if _resolve(p) == resolved:
+                removed.append((index, p))
+            else:
+                kept.append(p)
+        return kept, removed
+
+    config.collections, removed_collections = _split(config.collections)
+    config.pinned_collections, removed_pinned = _split(config.pinned_collections)
 
     def _restore() -> None:
-        config.collections = collections_before
-        config.pinned_collections = pinned_before
+        for paths, removed in ((config.collections, removed_collections), (config.pinned_collections, removed_pinned)):
+            present = {_resolve(p) for p in paths}
+            for index, p in removed:
+                if _resolve(p) not in present:
+                    paths.insert(index, p)
 
     return _restore
 
@@ -127,6 +147,35 @@ def _save_config_after_rollback(config: SearchConfig, request: Request, reason: 
         _maybe_save_config(config, request)
     except Exception:  # noqa: BLE001 — must not mask the caller's own error response
         logger.exception("Failed to rollback config after %s", reason)
+
+
+def _rollback_config_entry(config: SearchConfig, request: Request, resolved: str, reason: str) -> None:
+    """Remove *resolved* from ``config.collections`` if still there (a concurrent DELETE may have removed it), then save best-effort."""
+    if resolved in config.collections:
+        config.collections.remove(resolved)
+    _save_config_after_rollback(config, request, reason)
+
+
+async def _rollback_add(
+    config: SearchConfig,
+    request: Request,
+    *,
+    search_store: SearchStore,
+    resolved: str,
+    collection_name: str,
+    ns: str,
+    reason: str,
+) -> None:
+    """Undo add_collection's config entry and stub meta row; failures are logged, never raised."""
+    _rollback_config_entry(config, request, resolved, reason)
+    try:
+        await search_store.delete_collection_meta(collection_name, ns)
+    except Exception:  # noqa: BLE001 — must not mask the caller's own error response
+        logger.exception("Failed to rollback meta after %s", reason)
+
+
+def _collection_drop_failed_response() -> JSONResponse:
+    return JSONResponse({"detail": COLLECTION_DROP_FAILED_DETAIL, "code": COLLECTION_DROP_FAILED_CODE}, status_code=500)
 
 
 # ---------------------------------------------------------------------------
@@ -209,13 +258,21 @@ _ERROR_400_401_409_503 = {
     503: {"model": ErrorDetail, "description": "Store busy — reindex in progress"},
 }
 _CONFIG_PERSIST_500_DESCRIPTION = "Config file could not be saved (code config_persist_failed); change rolled back"
-_ERROR_500_CONFIG_PERSIST = {500: {"model": ErrorDetail, "description": _CONFIG_PERSIST_500_DESCRIPTION}}
+_ERROR_500_REMOVE_COLLECTION = {
+    500: {
+        "model": ErrorDetail,
+        "description": (
+            f"{_CONFIG_PERSIST_500_DESCRIPTION}; or the table drop or meta-row delete failed "
+            f"(code {COLLECTION_DROP_FAILED_CODE}); a failed table drop rolls the config change back"
+        ),
+    },
+}
 _ERROR_500_ADD_COLLECTION = {
     500: {
         "model": ErrorDetail,
         "description": (
             f"{_CONFIG_PERSIST_500_DESCRIPTION}; or the collection meta write / job creation failed "
-            '(body {"detail": "internal error"})'
+            f'(body {{"detail": "{INTERNAL_ERROR_DETAIL}"}})'
         ),
     },
 }
@@ -283,8 +340,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
             )
         )
     except StoreBusyError as e:
-        config.collections.remove(resolved)
-        _save_config_after_rollback(config, request, "stub meta write store-busy")
+        _rollback_config_entry(config, request, resolved, "stub meta write store-busy")
         retry_after = str(math.ceil(e.timeout_s))
         return JSONResponse(
             {"detail": f"store busy; retry in {retry_after} seconds"},
@@ -293,24 +349,21 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
         )
     except ValueError:
         # TOCTOU race: name claimed by another namespace between check and write
-        config.collections.remove(resolved)
-        _save_config_after_rollback(config, request, "stub meta write name race")
+        _rollback_config_entry(config, request, resolved, "stub meta write name race")
         return JSONResponse({"detail": "collection name already registered"}, status_code=409)
-    except Exception:
-        config.collections.remove(resolved)
-        _save_config_after_rollback(config, request, "stub meta write failure")
-        return JSONResponse({"detail": "internal error"}, status_code=500)
+    except Exception:  # noqa: BLE001 — any other store failure maps to one sanitized 500
+        logger.exception("Failed to write the stub meta row for collection %s", collection_name)
+        _rollback_config_entry(config, request, resolved, "stub meta write failure")
+        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
     # Pre-acquire the per-collection lock for the ingest task.
     lock_result = await acquire_collection_lock_or_503(search_store, collection_name)
     if isinstance(lock_result, JSONResponse):
         # Lock busy for ingest task — roll back config and meta to leave clean state.
-        config.collections.remove(resolved)
-        _save_config_after_rollback(config, request, "ingest-lock timeout")
-        try:
-            await search_store.delete_collection_meta(collection_name, ns)
-        except Exception:
-            logger.exception("Failed to rollback meta after ingest-lock timeout")
+        await _rollback_add(
+            config, request, search_store=search_store, resolved=resolved, collection_name=collection_name, ns=ns,
+            reason="ingest-lock timeout",
+        )
         retry_after_val = lock_result.headers.get("Retry-After", "")
         return JSONResponse(
             {"detail": f"store busy; retry in {retry_after_val} seconds"},
@@ -321,10 +374,19 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
     ingested_by = parse_ingested_by_header(request.headers.get("X-Ingested-By"))
     try:
         job = store.create(namespace=ns, collection=collection_name)
-    except OSError:
-        if isinstance(lock_result, asyncio.Lock) and lock_result.locked():
-            lock_result.release()
-        return JSONResponse({"detail": "internal error"}, status_code=500)
+    except Exception:  # noqa: BLE001 — any failure must roll back and release the pre-acquired lock
+        logger.exception("Failed to create the ingest job for collection %s", collection_name)
+        try:
+            await _rollback_add(
+                config, request, search_store=search_store, resolved=resolved, collection_name=collection_name, ns=ns,
+                reason="job creation failure",
+            )
+        finally:
+            if isinstance(lock_result, asyncio.Lock) and lock_result.locked():
+                lock_result.release()
+            # Only after the release (as in DELETE): discard_lock keeps an entry a queued waiter still needs.
+            search_store.discard_lock(collection_name)
+        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
     ingest_body = IngestRequest(
         collection=collection_name, path=resolved, ingested_by=ingested_by
     )
@@ -361,7 +423,7 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
         404: {"model": ErrorDetail},
         409: {"model": ErrorDetail},
         503: {"model": ErrorDetail},
-        **_ERROR_500_CONFIG_PERSIST,
+        **_ERROR_500_REMOVE_COLLECTION,
     },
 )
 async def remove_collection(name: str, request: Request) -> DeleteResponse | JSONResponse:
@@ -480,26 +542,40 @@ async def remove_collection(name: str, request: Request) -> DeleteResponse | JSO
     if isinstance(lock_result, JSONResponse):
         return lock_result
 
+    table_gone = False
     try:
-        # Snapshot + mutate only now, under the lock: a snapshot taken before the lock
-        # wait would make a rollback discard config changes made during that wait.
+        # Mutate the config only now, under the lock. The returned rollback re-inserts just
+        # the entries it removed, so it never discards config changes made by others meanwhile.
         restore_config_lists = _drop_path_from_config(config, resolved)
         persist_error = _persist_config_or_500(config, request, restore_config_lists)
         if persist_error is not None:
             return persist_error
 
-        # Drop LanceDB table and meta row
         if search_store is not None:
             try:
                 # lock_for(name) is already held above (search_store is not None
                 # ⇒ acquire_collection_lock_or_503 returned the acquired lock).
-                await search_store.drop_collection(name, _locked_by_caller=True)
-            except (KeyError, RuntimeError):
-                pass  # table doesn't exist — that's fine
-            await search_store.delete_collection_meta(name, ns)
+                # KeyError: the table doesn't exist — that's fine. RuntimeError (store
+                # not connected, LanceDB failure) is a failed drop, handled below.
+                with contextlib.suppress(KeyError):
+                    await search_store.drop_collection(name, _locked_by_caller=True)
+            except Exception:  # noqa: BLE001 — the table data is intact, so the config removal is undone
+                logger.exception("Failed to drop collection %s; rolling back the config change", name)
+                restore_config_lists()
+                _save_config_after_rollback(config, request, "collection drop failure")
+                return _collection_drop_failed_response()
+            table_gone = True
+            try:
+                await search_store.delete_collection_meta(name, ns)
+            except Exception:  # noqa: BLE001 — the table is already gone, so the config removal stays
+                logger.exception("Failed to delete the meta row of dropped collection %s", name)
+                return _collection_drop_failed_response()
     finally:
         if isinstance(lock_result, asyncio.Lock) and lock_result.locked():
             lock_result.release()
+        if table_gone and search_store is not None:
+            # Only after the release: discard_lock keeps an entry a queued waiter still needs.
+            search_store.discard_lock(name)
 
     return DeleteResponse(name=name, deleted=True)
 
@@ -819,7 +895,21 @@ async def patch_collection(name: str, body: PatchCollectionBody, request: Reques
     )
 
 
-@router.post("/{name}/reindex", status_code=202, response_model=JobResponse, responses=_ERROR_401_404)
+_ERROR_REINDEX = {
+    **_ERROR_401_404,
+    409: {"model": ErrorDetail, "description": "A reindex of this collection is already in progress"},
+    500: {
+        "model": ErrorDetail,
+        "description": (
+            "Creating the reindex job or recording it on the collection meta failed "
+            f'(body {{"detail": "{INTERNAL_ERROR_DETAIL}"}})'
+        ),
+    },
+    503: {"model": ErrorDetail, "description": "Service not ready — the embedder cache or pipeline is not initialised"},
+}
+
+
+@router.post("/{name}/reindex", status_code=202, response_model=JobResponse, responses=_ERROR_REINDEX)
 async def reindex_collection(name: str, request: Request) -> JobResponse | JSONResponse:
     """Start a reindex job for an existing collection. 404 if not found."""
     config: SearchConfig = request.app.state.config
@@ -849,23 +939,25 @@ async def reindex_collection(name: str, request: Request) -> JobResponse | JSONR
         # Stale: job missing or terminal — clear and proceed
         meta.reindex_job_id = None
 
+    # Readiness is checked before anything is written: no job, no meta pointer on a 503.
+    embedder_cache = getattr(request.app.state, "embedder_cache", None)
+    pipeline_obj = getattr(request.app.state, "pipeline", None)
+    if embedder_cache is None or pipeline_obj is None:
+        return JSONResponse({"detail": "service not ready"}, status_code=503)
+
     try:
         job = store.create_reindex(namespace=ns, target_embedding_model=meta.pending_embedding_model)
-    except OSError:
-        return JSONResponse({"detail": "internal error"}, status_code=500)
+    except Exception:  # noqa: BLE001 — any failure maps to one sanitized 500
+        logger.exception("Failed to create the reindex job for collection %s", name)
+        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
     meta.reindex_job_id = job.job_id
     try:
         await search_store.update_collection_meta(meta)
-    except Exception:
-        store.update(job.job_id, JobStatus.FAILED)
-        return JSONResponse({"detail": "internal error"}, status_code=500)
-
-    embedder_cache = getattr(request.app.state, "embedder_cache", None)
-    pipeline_obj = getattr(request.app.state, "pipeline", None)
-    if embedder_cache is None or pipeline_obj is None:
-        store.update(job.job_id, JobStatus.FAILED)
-        return JSONResponse({"detail": "service not ready"}, status_code=503)
+    except Exception:  # noqa: BLE001 — any store failure maps to one sanitized 500
+        logger.exception("Failed to record the reindex job %s on collection %s", job.job_id, name)
+        _persist_job_status(store, job.job_id, JobStatus.FAILED, context=_REINDEX_COLLECTION_LOG_CONTEXT, error=REINDEX_FAILED_DETAIL)
+        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
     task = asyncio.create_task(
         _reindex_task(
@@ -1121,7 +1213,7 @@ async def migrate_collection(
                 namespace=ns,
             )
         except OSError:
-            return JSONResponse({"detail": "internal error"}, status_code=500)
+            return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
         # Transition to RUNNING before spawning the task so the scheduler never
         # sees this job in QUEUED state (scheduler only promotes QUEUED → RUNNING).
@@ -1129,7 +1221,7 @@ async def migrate_collection(
         if running_job is None:
             # Should not happen (we just created this job), but guard defensively.
             logger.error("_migration_task route: failed to transition job %s to RUNNING", migration_job.job_id)
-            return JSONResponse({"detail": "internal error"}, status_code=500)
+            return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
         # Use the first rewrite spec (D3 scope: one rewrite migration at a time).
         spec = rewrite_specs[0]
@@ -1291,7 +1383,7 @@ async def reindex_metadata(
     try:
         job = job_store.create_metadata_reindex(collection=name, namespace=ns)
     except OSError:
-        return JSONResponse({"detail": "internal error"}, status_code=500)
+        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
     # Transition to RUNNING before spawning the task so the response never
     # reports QUEUED (mirrors rebuild_communities' pre-transition pattern).
@@ -1300,7 +1392,7 @@ async def reindex_metadata(
         logger.error(
             "reindex_metadata: failed to transition job %s to RUNNING", job.job_id
         )
-        return JSONResponse({"detail": "internal error"}, status_code=500)
+        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
     # Set metadata_reindex_job_id AFTER the QUEUED->RUNNING transition so the
     # guard above can detect and reject a duplicate submission while this one is active.

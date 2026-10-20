@@ -1,7 +1,11 @@
 """Pre-acquire per-collection ingest lock for REST handlers.
 
-Factored out so both POST /ingest and POST /collections/ share the same
-lock-acquisition logic and 503 response shape.
+Shared lock-acquisition logic of POST /ingest, POST /collections/ and DELETE /collections/{name}.
+On timeout it builds a 503 with a ``Retry-After`` header and the body
+``{"detail": "reindex in progress; retry after Retry-After seconds", "code": "store_busy"}``:
+POST /ingest and DELETE /collections/{name} return that response unchanged, while
+POST /collections/ rolls back its config entry and stub meta row and answers with its own
+body ``{"detail": "store busy; retry in N seconds"}`` (N = the same ``Retry-After`` value).
 """
 from __future__ import annotations
 
