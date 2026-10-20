@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from archon_search._types import ChunkRecord
-from archon_search.store import SearchStore, parse_metadata, validate_metadata
+from archon_search.store import SearchStore, is_valid_chunk_id, parse_metadata, validate_metadata
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ async def test_ingested_chunk_has_chunk_id(tmp_path):
     try:
         row = await _read_first_row(store, col)
         assert row["chunk_id"] == chunk_id
-        assert re.match(r"^[a-f0-9]{64}-\d{6}$", row["chunk_id"])
+        assert is_valid_chunk_id(row["chunk_id"])
     finally:
         await store.disconnect()
 

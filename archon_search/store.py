@@ -81,7 +81,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_CHUNK_ID_RE = re.compile(r"^[a-f0-9]{64}-\d{6}$")
+_CHUNK_ID_RE = re.compile(r"[a-f0-9]{64}-[0-9]{6}")  # matched with fullmatch: no trailing "\n"
 _DOC_ID_RE = re.compile(r"^[a-f0-9]{64}$")
 _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 _ARCHON_PREFIX = "_archon_"
@@ -236,6 +236,11 @@ def elementwise_sum(vectors: list[list[float]]) -> list[float]:
     return [sum(v[i] for v in vectors) for i in range(dim)]
 
 
+def is_valid_chunk_id(chunk_id: object) -> bool:
+    """Return whether *chunk_id* is a ``str`` of the ``<64 hex doc_id>-<6-digit index>`` form ``ingest_chunks`` accepts."""
+    return isinstance(chunk_id, str) and _CHUNK_ID_RE.fullmatch(chunk_id) is not None
+
+
 def validate_metadata(metadata: dict[str, str]) -> None:
     """Validate metadata dict against size constraints.
 
@@ -252,6 +257,35 @@ def validate_metadata(metadata: dict[str, str]) -> None:
             raise ValueError(f"metadata key too long: max {_META_MAX_KEY_LEN} chars (got {len(key)})")
         if len(value) > _META_MAX_VAL_LEN:
             raise ValueError(f"metadata value too long: max {_META_MAX_VAL_LEN} chars (got {len(value)})")
+
+
+def validate_chunk_record(chunk: ChunkRecord) -> None:
+    """Raise if ``ingest_chunks`` would fail its batch on *chunk*, whatever else the batch holds.
+
+    Covers the ``chunk_id`` form, the metadata limits, the ``custom_score`` float conversion and the ``expires_at``
+    ISO-8601 normalization. It checks by running ``_do_ingest``'s conversions and discarding their results, so the two
+    must stay in step. Column types are not covered: pyarrow's handling of a non-str value in a string column depends
+    on the rest of the batch, so callers passing untyped records check those themselves. Neither is the vector, whose
+    length the table fixes.
+
+    Raises:
+        ValueError: a malformed ``chunk_id``, metadata over its limits or with a non-str key or value, or a
+            ``custom_score`` / ``expires_at`` string that does not convert.
+        TypeError: a non-dict metadata, or a ``custom_score`` / ``expires_at`` of a type that does not convert.
+        OverflowError: an int ``custom_score`` too large for a float, or an ``expires_at`` that falls before year 1
+            once converted to UTC (e.g. ``0001-01-01T00:00:00+05:00``).
+    """
+    if not is_valid_chunk_id(chunk.chunk_id):
+        raise ValueError(f"malformed chunk_id: {chunk.chunk_id!r}")
+    if not isinstance(chunk.metadata, dict):
+        raise TypeError(f"metadata must be a dict (got {type(chunk.metadata).__name__})")
+    validate_metadata(chunk.metadata)
+    if chunk.custom_score is not None:
+        float(chunk.custom_score)
+    if chunk.expires_at is not None:
+        if not isinstance(chunk.expires_at, (str, datetime)):
+            raise TypeError(f"expires_at must be an ISO-8601 string (got {type(chunk.expires_at).__name__})")
+        normalize_iso_utc(chunk.expires_at)
 
 
 def parse_metadata(raw: str) -> dict[str, str]:
@@ -1958,9 +1992,7 @@ class SearchStore:
         self._validate_collection(collection)
         db = self._require_connected()
         for chunk in chunks:
-            if not _CHUNK_ID_RE.match(chunk.chunk_id):
-                raise ValueError(f"malformed chunk_id: {chunk.chunk_id!r}")
-            validate_metadata(chunk.metadata)
+            validate_chunk_record(chunk)
 
         if not chunks:
             return ChunkIngestResult(chunks_ingested=0, needs_recompute=False)
@@ -2918,11 +2950,30 @@ class SearchStore:
         without making any DB call.
 
         Used by ``CommunityBuilder`` and ``SearchPipeline._search_graph_mode()``
-        to materialise representative chunks from stored community data.
-        Both callers must treat the result as unordered — LanceDB does not
-        guarantee insertion-order recall.
+        to materialise representative chunks from stored community data, and
+        by the import worker's resume ownership check, which compares a stored
+        row's ``indexed_at`` with the archived one. Callers must treat the
+        result as unordered — LanceDB does not guarantee insertion-order recall.
 
         SQL predicates use ``_where_in`` from ``store_filters`` — never f-strings.
+        """
+        return await self._query_rows_by_chunk_ids(collection, chunk_ids)
+
+    async def stored_chunk_ids(self, collection: str, chunk_ids: list[str]) -> set[str]:
+        """Return the subset of *chunk_ids* stored in *collection*, reading only the ``chunk_id`` column.
+
+        Returns an empty set for an empty *chunk_ids* list (without a DB call) or a missing collection.
+        Used by the import worker to skip chunks a failed run already stored.
+        """
+        rows = await self._query_rows_by_chunk_ids(collection, chunk_ids, columns=["chunk_id"])
+        return {row["chunk_id"] for row in rows}
+
+    async def _query_rows_by_chunk_ids(
+        self, collection: str, chunk_ids: list[str], columns: list[str] | None = None,
+    ) -> list[dict]:
+        """Return the rows of *collection* whose ``chunk_id`` is in *chunk_ids*, only *columns* when given.
+
+        Returns ``[]`` for an empty *chunk_ids* list (without a DB call) or a missing collection.
         """
         if not chunk_ids:
             return []
@@ -2932,9 +2983,11 @@ class SearchStore:
             table = await db.open_table(collection)
         except (ValueError, FileNotFoundError):
             return []
-        # chunk_ids are supplied by the caller (community store); _where_in is defense-in-depth
-        rows = await table.query().where(_where_in("chunk_id", chunk_ids)).to_list()
-        return list(rows)
+        # chunk_ids are supplied by the caller; _where_in is defense-in-depth
+        query = table.query().where(_where_in("chunk_id", chunk_ids))
+        if columns is not None:
+            query = query.select(columns)
+        return list(await query.to_list())
 
     async def get_chunks_for_doc(
         self,

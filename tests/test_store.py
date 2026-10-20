@@ -9,13 +9,22 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pyarrow as pa
 import pytest
 import pytest_asyncio
 
 from archon_search._types import ChunkRecord
-from archon_search.store import SearchStore, _batch_vectors_valid, _centroid_sum_valid, elementwise_sum
+from archon_search.constants import DEFAULT_NAMESPACE
+from archon_search.store import (
+    SearchStore,
+    _batch_vectors_valid,
+    _centroid_sum_valid,
+    elementwise_sum,
+    is_valid_chunk_id,
+    validate_chunk_record,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -8294,3 +8303,185 @@ async def test_ingest_chunks_cross_namespace_update_uses_owner_meta(tmp_path: Pa
         )
     finally:
         await store.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# stored_chunk_ids — the import worker's resume lookup
+# ---------------------------------------------------------------------------
+
+
+def test_stored_chunk_ids_empty_input_returns_empty_set(tmp_path: Path) -> None:
+    """stored_chunk_ids with an empty list returns an empty set without a DB call."""
+    store = SearchStore(tmp_path / "db")
+    store._db = AsyncMock()
+
+    assert asyncio.run(store.stored_chunk_ids("testcol", [])) == set()
+    store._db.open_table.assert_not_called()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_stored_chunk_ids_returns_only_stored_ids(connected_store: SearchStore, col_name: str) -> None:
+    """stored_chunk_ids returns the requested IDs that are stored; unknown IDs are left out."""
+    _, chunks = await _ingest_doc(connected_store, col_name, n_chunks=4)
+    unknown_id = f"{_doc_id()}-000000"
+
+    stored = await connected_store.stored_chunk_ids(col_name, [chunks[0].chunk_id, chunks[2].chunk_id, unknown_id])
+
+    assert stored == {chunks[0].chunk_id, chunks[2].chunk_id}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_query_rows_by_chunk_ids_projects_requested_columns(connected_store: SearchStore, col_name: str) -> None:
+    """Given columns, the chunk_id lookup reads only those columns, not the full rows with their vectors and text."""
+    _, chunks = await _ingest_doc(connected_store, col_name, n_chunks=2)
+
+    rows = await connected_store._query_rows_by_chunk_ids(col_name, [chunks[0].chunk_id], columns=["chunk_id"])
+
+    assert rows == [{"chunk_id": chunks[0].chunk_id}]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_stored_chunk_ids_missing_collection_returns_empty_set(connected_store: SearchStore, col_name: str) -> None:
+    """stored_chunk_ids on a collection with no table returns an empty set instead of raising."""
+    assert await connected_store.stored_chunk_ids(col_name, [f"{_doc_id()}-000000"]) == set()
+
+
+_NON_ASCII_DIGIT_INDEX = "٠" * 5 + "١"  # Arabic-Indic "000001": \d matches it, [0-9] does not
+
+
+@pytest.mark.parametrize(
+    ("chunk_id", "valid"),
+    [
+        pytest.param(f"{'a' * 64}-000001", True, id="canonical"),
+        pytest.param(f"{'A' * 64}-000001", False, id="upper-hex"),
+        pytest.param(f"{'a' * 64}-1", False, id="short-index"),
+        pytest.param(f"{'a' * 64}-000001\n", False, id="trailing-newline"),
+        pytest.param(f"{'a' * 64}-{_NON_ASCII_DIGIT_INDEX}", False, id="non-ascii-digits"),
+        pytest.param("not-a-chunk-id", False, id="malformed"),
+        pytest.param(7, False, id="not-a-string"),
+        pytest.param(None, False, id="none"),
+    ],
+)
+def test_is_valid_chunk_id(chunk_id: object, valid: bool) -> None:
+    """is_valid_chunk_id accepts only a str of the <64 hex>-<6 digits> form, and never raises on another type."""
+    assert is_valid_chunk_id(chunk_id) is valid
+
+
+# ---------------------------------------------------------------------------
+# validate_chunk_record — the per-chunk checks ingest_chunks applies to its whole batch
+# ---------------------------------------------------------------------------
+
+#: Decimal digits of an int too large for float() (float64 tops out near 1.8e308).
+_FLOAT_OVERFLOW_DIGITS = 400
+#: An ISO-8601 timestamp that parses but falls before year 1 once converted to UTC.
+_EXPIRES_AT_BEFORE_UTC_YEAR_1 = "0001-01-01T00:00:00+05:00"
+
+_INVALID_CHUNK_FIELDS = [
+    pytest.param("chunk_id", f"{'a' * 64}-000001\n", ValueError, "malformed chunk_id", id="chunk_id-trailing-newline"),
+    pytest.param("chunk_id", f"{'a' * 64}-000001x", ValueError, "malformed chunk_id", id="chunk_id-trailing-junk"),
+    pytest.param(
+        "chunk_id", f"{'a' * 64}-{_NON_ASCII_DIGIT_INDEX}", ValueError, "malformed chunk_id",
+        id="chunk_id-non-ascii-digits",
+    ),
+    pytest.param("chunk_id", 7, ValueError, "malformed chunk_id", id="chunk_id-int"),
+    pytest.param("metadata", None, TypeError, "metadata must be a dict", id="metadata-none"),
+    pytest.param("metadata", ["k"], TypeError, "metadata must be a dict", id="metadata-list"),
+    pytest.param("metadata", {"k": 1}, ValueError, "metadata value must be a string", id="metadata-non-str-value"),
+    pytest.param("custom_score", "high", ValueError, "could not convert", id="custom_score-non-numeric-str"),
+    pytest.param("custom_score", [1.0], TypeError, r"float\(\) argument", id="custom_score-list"),
+    pytest.param(
+        "custom_score", 10**_FLOAT_OVERFLOW_DIGITS, OverflowError, "too large", id="custom_score-float-overflow",
+    ),
+    pytest.param("expires_at", "next week", ValueError, "isoformat", id="expires_at-not-iso"),
+    pytest.param("expires_at", 7, TypeError, "expires_at must be an ISO-8601 string", id="expires_at-int"),
+    pytest.param(
+        "expires_at", _EXPIRES_AT_BEFORE_UTC_YEAR_1, OverflowError, "out of range", id="expires_at-before-utc-year-1",
+    ),
+]
+
+
+def _valid_chunk(**overrides: object) -> ChunkRecord:
+    return dataclasses.replace(_chunk(_doc_id(), 0), **overrides)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(("field", "value", "error", "message"), _INVALID_CHUNK_FIELDS)
+def test_validate_chunk_record_rejects_value_ingest_chunks_cannot_store(
+    field: str, value: object, error: type[Exception], message: str,
+) -> None:
+    """A value ingest_chunks fails its batch on, whatever else the batch holds, is rejected for the one chunk."""
+    with pytest.raises(error, match=message):
+        validate_chunk_record(_valid_chunk(**{field: value}))
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({}, id="canonical"),
+        # A non-str scalar in a string column is stringified when the whole batch holds one there, and fails a batch
+        # it shares with str values: batch-dependent, so not a per-chunk rejection.
+        pytest.param({"text": 7}, id="text-int"),
+        pytest.param({"doc_id": None}, id="doc_id-null"),
+        pytest.param({"custom_score": "1.5"}, id="custom_score-numeric-str"),
+        pytest.param({"custom_score": True}, id="custom_score-bool"),
+        pytest.param({"expires_at": "2030-01-02T03:04:05Z"}, id="expires_at-iso"),
+        pytest.param({"expires_at": datetime(2030, 1, 2, tzinfo=timezone.utc)}, id="expires_at-datetime"),
+        pytest.param({"acl": ["default"]}, id="acl-list"),
+        pytest.param({"metadata": {"k": "v"}}, id="metadata-dict"),
+    ],
+)
+def test_validate_chunk_record_accepts_value_ingest_chunks_stores(overrides: dict[str, object]) -> None:
+    """Every value ingest_chunks stores for a lone chunk passes, so ingest_chunks rejects nothing it stored before."""
+    validate_chunk_record(_valid_chunk(**overrides))
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chunk_id_suffix",
+    [
+        pytest.param("\n", id="trailing-newline"),
+        pytest.param("x", id="trailing-junk"),
+    ],
+)
+async def test_ingest_chunks_rejects_chunk_id_with_trailing_characters(
+    connected_store: SearchStore, col_name: str, chunk_id_suffix: str,
+) -> None:
+    """ingest_chunks rejects a chunk_id with anything after its 6-digit index, storing nothing of the batch."""
+    await connected_store.ensure_collection(col_name, _DIM)
+    valid = _chunk(_doc_id(), 0)
+    bad = dataclasses.replace(valid, chunk_id=valid.chunk_id + chunk_id_suffix)
+
+    with pytest.raises(ValueError, match="malformed chunk_id"):
+        await connected_store.ingest_chunks(col_name, [valid, bad])
+
+    assert await connected_store.count_chunks(col_name, DEFAULT_NAMESPACE) == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ingest_chunks_rejects_chunk_id_with_non_ascii_digits(connected_store: SearchStore, col_name: str) -> None:
+    """ingest_chunks rejects a chunk_id whose index uses non-ASCII digits, which a \\d pattern would match."""
+    await connected_store.ensure_collection(col_name, _DIM)
+    doc_id = _doc_id()
+    bad = dataclasses.replace(_chunk(doc_id, 0), chunk_id=f"{doc_id}-{_NON_ASCII_DIGIT_INDEX}")
+
+    with pytest.raises(ValueError, match="malformed chunk_id"):
+        await connected_store.ingest_chunks(col_name, [bad])
+
+    assert await connected_store.count_chunks(col_name, DEFAULT_NAMESPACE) == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ingest_chunks_still_stores_lone_chunk_with_int_text(connected_store: SearchStore, col_name: str) -> None:
+    """A lone chunk with a non-str scalar text is stored stringified, as before validate_chunk_record existed."""
+    await connected_store.ensure_collection(col_name, _DIM)
+    chunk = _valid_chunk(text=7)
+
+    await connected_store.ingest_chunks(col_name, [chunk])
+
+    [row] = await connected_store.get_chunks_by_ids(col_name, [chunk.chunk_id])
+    assert row["text"] == "7"

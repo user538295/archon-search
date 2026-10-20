@@ -86,7 +86,7 @@ def _assert_loop_was_free(probe: _LoopProbe, method: str) -> None:
 
 def _chunks(source_path: str, count: int) -> list[ChunkRecord]:
     """``count`` chunks of one document, all sharing *source_path*."""
-    # 64 hex chars: the store validates chunk_id against ``^[a-f0-9]{64}-\d{6}$``.
+    # 64 hex chars: the store requires chunk_id to fully match ``[a-f0-9]{64}-[0-9]{6}``.
     did = uuid.uuid4().hex + uuid.uuid4().hex
     return [
         ChunkRecord(

@@ -284,7 +284,7 @@ class JobStore:
     def update_progress(self, job_id: str, processed: int, total: int, phase: str, **fields: object) -> None:
         """Set the progress dict on a job, plus any other job *fields* in the same atomic write.
 
-        *fields* keeps internal checkpoint state (``ImportJob.lines_consumed``) consistent
+        *fields* keeps a job's internal checkpoint state (e.g. ``ImportJob.lines_consumed``) consistent
         with ``progress`` across a crash, without adding keys to the wire-facing dict.
         """
         self.update(job_id, progress={"processed": processed, "total": total, "phase": phase}, **fields)
