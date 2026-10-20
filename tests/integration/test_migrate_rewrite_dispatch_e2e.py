@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,6 +23,7 @@ import pytest
 import archon_search.constants as _constants
 import archon_search.jobs.scheduler as _scheduler_module
 from archon_search.types import JobStatus, MigrationJob
+from tests._job_store_faults import JOB_WRITE_FAILURES
 from tests.integration.conftest import make_real_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("benchmark")]
@@ -54,13 +57,12 @@ def test_migration_job_dispatched_and_reaches_done(
     apply_rewrite_migration to succeed immediately (no-op transform, 0 chunks).
     The test verifies:
       - POST /migrate returns 202 with job_id
-      - job transitions QUEUED → RUNNING (route) → DONE (task) — no scheduler involvement
+      - the route creates the job RUNNING → DONE (task) — no scheduler involvement
       - job.result contains migrated_chunks
     """
     monkeypatch.setattr(_scheduler_module, "_SCHEDULER_TICK_SECONDS", 0.1)
 
     from archon_search.types import MigrationKind, MigrationSpec
-    from archon_search.store import SearchStore
 
     dummy_spec = MigrationSpec(
         name="dummy_rewrite",
@@ -88,8 +90,6 @@ def test_migration_job_dispatched_and_reaches_done(
 
         # Patch pending_migrations to return the dummy REWRITE spec.
         # Patch apply_rewrite_migration to succeed with 0 chunks.
-        original_pending = search_store.pending_migrations
-        original_apply_rewrite = search_store.apply_rewrite_migration
 
         async def _fake_pending_migrations(collection, namespace):
             return [dummy_spec]
@@ -587,7 +587,6 @@ def test_concurrent_ingest_503_during_rewrite_e2e(
                 # Verify that a DIFFERENT collection is NOT blocked (per-collection lock isolation).
                 other_col_path = tmp_path / "other_docs"
                 other_col_path.mkdir()
-                other_col_name = path_to_collection_name(str(other_col_path))
                 other_resp = client.post(
                     "/collections/",
                     json={"path": str(other_col_path)},
@@ -775,3 +774,80 @@ def test_empty_collection_rewrite_completes_immediately_e2e(
     assert final_job.migrations_applied == ["empty_rewrite"], (
         f"expected migrations_applied=['empty_rewrite'], got: {final_job.migrations_applied!r}"
     )
+
+
+@contextmanager
+def _dummy_rewrite_patches(search_store) -> Iterator[None]:
+    """Patch *search_store* so one no-op rewrite migration is pending."""
+    from archon_search.types import MigrationKind, MigrationSpec
+
+    dummy_spec = MigrationSpec(
+        name="dummy_rewrite",
+        kind=MigrationKind.REWRITE,
+        description="no-op rewrite for testing",
+        introduced_at=999,
+    )
+
+    async def _fake_pending_migrations(collection, namespace):
+        return [dummy_spec]
+
+    async def _fake_apply_rewrite(collection, namespace, spec, progress_cb=None):
+        return 0
+
+    with patch.object(search_store, "pending_migrations", _fake_pending_migrations), \
+         patch.object(search_store, "apply_rewrite_migration", _fake_apply_rewrite):
+        yield
+
+
+def _add_collection(client, tmp_path: Path, api_key: str) -> str:
+    from archon_search.sync import path_to_collection_name
+
+    col_path = tmp_path / "test_docs"
+    col_path.mkdir()
+    resp = client.post("/collections/", json={"path": str(col_path)}, headers=_auth(api_key))
+    assert resp.status_code == 202, f"add_collection failed: {resp.status_code} {resp.text}"
+    return path_to_collection_name(str(col_path))
+
+
+def test_migrate_rewrite_persists_job_only_as_running(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The route runs the rewrite itself, so the MigrationJob's first persisted status is RUNNING: a QUEUED row
+    would be the scheduler's to run (a second _migration_task, or after a restart one whose caller got 500)."""
+    from tests._job_store_faults import recording_job_writes
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        col_name = _add_collection(client, tmp_path, api_key)
+        with _dummy_rewrite_patches(client.app.state.search_store), recording_job_writes() as writes:
+            resp = client.post(f"/collections/{col_name}/migrate", json={"backup_confirmed": True}, headers=_auth(api_key))
+
+        assert resp.status_code == 202, resp.text
+        statuses = writes.statuses_of(resp.json()["job_id"])
+        assert statuses, "the migration job was never persisted"
+        assert statuses[0] == "RUNNING", f"migration job persisted as {statuses}"
+        assert "QUEUED" not in statuses
+
+
+
+
+@pytest.mark.parametrize("write_error", JOB_WRITE_FAILURES)
+def test_migrate_rewrite_job_write_failure_returns_sanitized_500_and_never_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_error: Exception
+) -> None:
+    """A failed job persist on POST /migrate answers the sanitized 500 envelope (never the raw exception), leaves
+    no MigrationJob, and the rewrite never runs: the route builds no task coroutine, and nothing is QUEUED for
+    the scheduler (``list_queued_bulk`` is exactly what its tick claims from)."""
+    import archon_search.server.routes_collections as routes_collections_mod
+    from tests._job_store_faults import failing_job_writes
+
+    with make_real_app(tmp_path, monkeypatch) as (client, cfg, api_key):
+        job_store = client.app.state.job_store
+        col_name = _add_collection(client, tmp_path, api_key)
+        with _dummy_rewrite_patches(client.app.state.search_store), \
+             patch.object(routes_collections_mod, "_migration_task") as migration_spy, \
+             failing_job_writes(exc=write_error):
+            resp = client.post(f"/collections/{col_name}/migrate", json={"backup_confirmed": True}, headers=_auth(api_key))
+
+        assert resp.status_code == 500
+        assert resp.json() == {"detail": "internal error"}
+        assert [j for j in job_store.list() if isinstance(j, MigrationJob)] == []
+        assert job_store.list_queued_bulk() == []
+        migration_spy.assert_not_called()

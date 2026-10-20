@@ -11,11 +11,10 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 if TYPE_CHECKING:
-    from archon_search.config import GraphConfig, SearchConfig
+    from archon_search.config import GraphConfig
     from archon_search.graph_enrichment_protocol import LLMEnrichmentClientProtocol
     from archon_search.graph_store import GraphStore
     from archon_search.jobs.store import JobStore
-    from archon_search.pipeline import SearchPipeline
     from archon_search.store import SearchStore
     from archon_search.types import CommunityRebuildJob
 
@@ -29,6 +28,7 @@ from archon_search.graph_inspector import (
 )
 from archon_search.graph_types import DEFAULT_IMPACT_DEPTH, ImpactDirection, ImpactResult
 from archon_search.jobs.model import job_to_dict
+from archon_search.server.routes_jobs import INTERNAL_ERROR_DETAIL, JOB_SUPERSEDED_DETAIL, _persist_job_status
 from archon_search.server.schemas import (
     CrossCollectionGraphInspectionResponse,
     ErrorDetail,
@@ -51,20 +51,31 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Error map for rebuild_communities: 401 (auth), 404 (collection not found),
-# 409 (rebuild already in progress), 422 (graph disabled).
+# 409 (rebuild already in progress), 422 (graph disabled), 500 (job could not be saved).
 _REBUILD_ERROR_RESPONSES = {
     401: {"model": ErrorDetail},
     404: {"model": ErrorDetail},
     409: {"model": ErrorDetail},
     422: {"model": ErrorDetail},
+    500: {
+        "model": ErrorDetail,
+        "description": f'Creating the community rebuild job failed (body {{"detail": "{INTERNAL_ERROR_DETAIL}"}})',
+    },
 }
 
 # Pinned "in progress" status set for the community_rebuild_job_id guard
-# (BE-5, CM-3). This route creates the job then transitions QUEUED -> RUNNING
-# before returning, same shape as the migrate route's reindex_job_id conflict
-# check (routes_collections.py ~915-924) -- QUEUED/PENDING only cover the
-# narrow window between job creation and the transition call.
-_REBUILD_ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.QUEUED, JobStatus.PENDING}
+# (BE-5, CM-3). This route creates the job RUNNING and runs it itself; DELETE
+# /jobs/{id} moves it to CANCELLING without stopping the task, so that still
+# counts. QUEUED/PENDING are deliberately absent: nothing schedules a
+# CommunityRebuildJob, so such a row (written by an older server, which created
+# it QUEUED first) never runs — it is stale: lazily cleared and marked FAILED, not a 409.
+_REBUILD_ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.CANCELLING}
+
+#: Wire-facing job ``error`` (served by GET /jobs) when ``build()`` raises an exception outside
+#: ``(ValueError, ImportError, RuntimeError)``; its text can embed internals, so it is logged only.
+COMMUNITY_REBUILD_FAILED_DETAIL = "community rebuild failed; see the server log for details"
+#: Log-line prefix for ``_community_rebuild_task``'s best-effort job status writes (``_persist_job_status``).
+_REBUILD_TASK_LOG_CONTEXT = "_community_rebuild_task"
 
 
 async def _community_rebuild_task(
@@ -79,16 +90,17 @@ async def _community_rebuild_task(
 
     Mirrors ``_migration_task`` (``routes_collections.py``). The caller is
     responsible for ensuring the job is already in RUNNING state before
-    invoking this coroutine (the route transitions QUEUED -> RUNNING
-    immediately after creating the job, then passes it to
-    ``asyncio.create_task``).
+    invoking this coroutine (the route creates the job RUNNING, then passes
+    it to ``asyncio.create_task``).
 
     Lifecycle (caller sets RUNNING -> this task drives to terminal):
       1. Construct a fresh ``CommunityBuilder``.
       2. ``await build(collection, ns)``.
       3. Transition to DONE with ``result={"communities_built": N}`` on success.
       4. Transition to FAILED with the error string on
-         ``ValueError``/``ImportError``/``RuntimeError``.
+         ``ValueError``/``ImportError``/``RuntimeError``, and with the fixed
+         ``COMMUNITY_REBUILD_FAILED_DETAIL`` on any other ``Exception`` (so an
+         unexpected error never leaves the job RUNNING and the collection 409-wedged).
 
     BE-5: on every terminal exit (DONE and FAILED), actively clears
     ``CollectionMeta.community_rebuild_job_id`` (mirrors ``_reindex_task``'s
@@ -102,13 +114,16 @@ async def _community_rebuild_task(
         graph_store, graph_config, search_store=search_store, enrichment_client=enrichment_client
     )
 
-    build_exc: Exception | None = None
+    build_error: str | None = None
     communities = None
     try:
         communities = await builder.build(job.collection, job.namespace)
     except (ValueError, ImportError, RuntimeError) as exc:
         logger.exception("_community_rebuild_task: job %s failed", job_id)
-        build_exc = exc
+        build_error = str(exc)
+    except Exception:
+        logger.exception("_community_rebuild_task: job %s failed unexpectedly", job_id)
+        build_error = COMMUNITY_REBUILD_FAILED_DETAIL
 
     # Clear community_rebuild_job_id BEFORE transitioning to a terminal state
     # so any observer that sees DONE/FAILED is guaranteed to also see it cleared.
@@ -125,17 +140,16 @@ async def _community_rebuild_task(
                 job_id,
             )
 
-    if build_exc is not None:
-        try:
-            job_store.update(job_id, status=JobStatus.FAILED, error=str(build_exc))
-        except (KeyError, OSError):
-            logger.error(
-                "_community_rebuild_task: could not persist FAILED status for job %s", job_id
-            )
+    # Both terminal writes are best-effort: a persist failure is logged and suppressed, never escaping this
+    # fire-and-forget task.
+    if build_error is not None:
+        _persist_job_status(job_store, job_id, JobStatus.FAILED, context=_REBUILD_TASK_LOG_CONTEXT, error=build_error)
     else:
-        job_store.update(
+        _persist_job_status(
+            job_store,
             job_id,
-            status=JobStatus.DONE,
+            JobStatus.DONE,
+            context=_REBUILD_TASK_LOG_CONTEXT,
             result={"communities_built": len(communities)},
         )
 
@@ -155,10 +169,10 @@ async def rebuild_communities(
     """Enqueue an async Leiden community rebuild for a collection — BE-2.
 
     Follows the migrate route's pattern (``routes_collections.py``,
-    ``migrate_collection``): validate -> create job QUEUED -> transition
-    QUEUED -> RUNNING -> spawn task -> return 202 with the full JobResponse
-    body (``job_to_dict(running_job)``), so the response reports RUNNING,
-    not PENDING (S1).
+    ``migrate_collection``): validate -> create the job RUNNING in one write
+    -> spawn task -> return 202 with the full JobResponse body
+    (``job_to_dict(running_job)``), so the response reports RUNNING, not
+    PENDING (S1).
 
     Auth is handled solely by ``APIKeyMiddleware`` — this route does not
     implement its own ``?token=`` fallback (unlike ``get_graph_view``, whose
@@ -176,6 +190,7 @@ async def rebuild_communities(
     - 404: Collection not found in the caller's namespace.
     - 409: A rebuild is already in progress for this collection (BE-5).
     - 422: graph.enabled=false, or ?namespace= does not match token namespace.
+    - 500: The job could not be saved (sanitized ``{"detail": "internal error"}``).
     """
     pipeline = request.app.state.pipeline
     config = request.app.state.config
@@ -202,8 +217,10 @@ async def rebuild_communities(
 
     # Guard 1b: graph_store may be None if graph.enabled=true but connect()
     # failed at startup. Without this guard the task below would spawn with
-    # graph_store=None and raise AttributeError outside its caught exception
-    # tuple, wedging the job at RUNNING forever.
+    # graph_store=None and every rebuild would fail inside build() with an
+    # AttributeError (caught by the task's ``except Exception``: the job goes
+    # FAILED with the generic COMMUNITY_REBUILD_FAILED_DETAIL) — this answers
+    # the request with a clear 422 instead of creating a job that cannot succeed.
     if graph_store is None:
         raise HTTPException(
             status_code=422,
@@ -217,10 +234,14 @@ async def rebuild_communities(
 
     # Guard 3 (BE-5, C2/CM-1): reject a duplicate rebuild already in progress,
     # mirroring the reindex/migrate reindex_job_id conflict checks
-    # (routes_collections.py). If the referenced job is missing or terminal,
-    # the id is stale -- clear it and proceed (lazy clear; this is what
-    # unwedges a collection after a server crash mid-rebuild, S16, since
-    # JobStore._load's crash-status flip never touches CollectionMeta).
+    # (routes_collections.py). If the referenced job is missing, terminal, or a
+    # legacy QUEUED/PENDING row (an older server created rebuild jobs QUEUED
+    # first; nothing schedules them, so one never runs), the id is stale --
+    # clear it and proceed (lazy clear; this is what unwedges a collection
+    # after a server crash mid-rebuild, S16, since JobStore._load's
+    # crash-status flip never touches CollectionMeta). A legacy row is also
+    # marked FAILED (best-effort) so it does not stay non-terminal — never
+    # evicted, DELETE answering 500 — forever.
     if collection_meta.community_rebuild_job_id is not None:
         existing_job = job_store.get(collection_meta.community_rebuild_job_id)
         if existing_job is not None and existing_job.status in _REBUILD_ACTIVE_STATUSES:
@@ -228,19 +249,19 @@ async def rebuild_communities(
                 {"detail": "community rebuild already in progress for this collection"},
                 status_code=409,
             )
+        if existing_job is not None and existing_job.status in (JobStatus.QUEUED, JobStatus.PENDING):
+            _persist_job_status(
+                job_store, existing_job.job_id, JobStatus.FAILED, context="rebuild_communities", error=JOB_SUPERSEDED_DETAIL
+            )
         collection_meta.community_rebuild_job_id = None
 
     try:
-        job = job_store.create_community_rebuild(collection=collection, namespace=ns)
-    except OSError:
-        return JSONResponse({"detail": "internal error"}, status_code=500)
-
-    # Transition to RUNNING before spawning the task so the response never
-    # reports QUEUED (mirrors migrate_collection's pre-transition pattern, S1).
-    running_job = job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
-    if running_job is None:
-        logger.error("rebuild_communities: failed to transition job %s to RUNNING", job.job_id)
-        return JSONResponse({"detail": "internal error"}, status_code=500)
+        # Created RUNNING in one write: the route runs the task itself, so the response
+        # never reports QUEUED (mirrors migrate_collection, S1).
+        running_job = job_store.create_community_rebuild(collection=collection, namespace=ns)
+    except Exception:  # noqa: BLE001 — no job exists; any persist failure maps to one sanitized 500
+        logger.exception("rebuild_communities: failed to persist a community rebuild job for %r", collection)
+        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
     # Set on enqueue (BE-5, C2) so the guard above can detect and reject a
     # duplicate rebuild request while this one is active.

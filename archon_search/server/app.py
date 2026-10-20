@@ -110,10 +110,6 @@ _STARTUP_SYNC_TIMEOUT_SECONDS: float = 1800.0
 _STARTUP_SYNC_ERROR_PARTIAL = "startup sync completed with per-collection errors"
 _STARTUP_SYNC_ERROR_TIMEOUT = "startup sync exceeded its time limit"
 _STARTUP_SYNC_ERROR_FAILED = "startup sync failed"
-# The job was created but never reached RUNNING (the QUEUED -> RUNNING
-# transition itself failed) — see the orphan-prevention fix in
-# _start_startup_sync_job below.
-_STARTUP_SYNC_ERROR_NEVER_STARTED = "startup sync job could not be marked running"
 
 
 def _start_startup_sync_job(job_store: JobStore) -> str | None:
@@ -129,40 +125,24 @@ def _start_startup_sync_job(job_store: JobStore) -> str | None:
     Returns ``None`` when the job store could not be written: the sync then runs
     unmarked (exactly the previous behavior) rather than failing startup.
 
-    When ``create_sync`` succeeds but the QUEUED -> RUNNING transition is
-    rejected (job store race), the job would otherwise be left QUEUED forever —
-    ``QUEUED`` is non-terminal, so ``JobStore._evict_old`` never reclaims it and
-    every such boot leaks another row. Mark it ``FAILED`` instead so it is
-    evictable; the mark itself is best-effort and never raises.
+    The job is created RUNNING in one write, never QUEUED: ``QUEUED`` is
+    non-terminal, so a QUEUED row whose claim failed would never be evicted
+    (``JobStore._evict_old``) and every such boot would leak another row.
+
+    Residual: ``atomic_write_json`` can raise after its rename, leaving the
+    RUNNING row on disk although the create raised; ``create_job`` then rewrites
+    the file without it. Only if that corrective rewrite fails too does the row
+    stay, and the next boot reloads it as ``FAILED / "process_restart"`` — a
+    false crash signal for the crash-loop guard although no sync was marked.
     """
     try:
-        job = job_store.create_sync(namespace=DEFAULT_NAMESPACE)
-        running = job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
+        job = job_store.create_sync(namespace=DEFAULT_NAMESPACE, status=JobStatus.RUNNING)
     except Exception:
         logger.warning(
             "startup sync: could not record a job; running unmarked (a crash during "
             "this sync will not be detected on the next boot)",
             exc_info=True,
         )
-        return None
-    if running is None:
-        logger.warning(
-            "startup sync: job %s could not be moved to RUNNING; running unmarked",
-            job.job_id,
-        )
-        try:
-            job_store.update(
-                job.job_id,
-                status=JobStatus.FAILED,
-                error=_STARTUP_SYNC_ERROR_NEVER_STARTED,
-            )
-        except Exception:
-            logger.warning(
-                "startup sync: could not mark orphaned job %s FAILED; it will "
-                "remain QUEUED forever",
-                job.job_id,
-                exc_info=True,
-            )
         return None
     return job.job_id
 

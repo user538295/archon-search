@@ -43,13 +43,13 @@ def test_create_sync_job_starts_queued(tmp_path):
     assert job.collection == ""  # SyncJob is whole-server, no collection
 
 
-def test_create_metadata_reindex_job_starts_queued(tmp_path):
-    """Factory returns MetadataReindexJob with status=QUEUED and correct collection."""
+def test_create_metadata_reindex_job_starts_running(tmp_path):
+    """Factory returns MetadataReindexJob with status=RUNNING (its route runs it; nothing schedules it)."""
     store = _make_job_store(tmp_path)
     job = store.create_metadata_reindex(collection="mycol", namespace="default")
 
     assert type(job) is MetadataReindexJob
-    assert job.status == JobStatus.QUEUED
+    assert job.status == JobStatus.RUNNING
     assert job.kind == JobKind.metadata_reindex
     assert job.collection == "mycol"
 
@@ -73,6 +73,8 @@ def test_sync_and_metadata_reindex_jobs_round_trip_through_store(tmp_path):
     store = _make_job_store(tmp_path)
     sync_job = store.create_sync(namespace="default")
     meta_job = store.create_metadata_reindex(collection="col", namespace="default")
+    # Created RUNNING (a reload would crash-recover it): finish it so a non-crash status round-trips.
+    store.update(meta_job.job_id, status=JobStatus.DONE)
 
     # Simulate server restart: new store instance reads from the same file
     store2 = _make_job_store(tmp_path)
@@ -93,9 +95,9 @@ def test_sync_and_metadata_reindex_jobs_round_trip_through_store(tmp_path):
     assert isinstance(loaded_meta.kind, JobKind), f"Expected JobKind, got {type(loaded_meta.kind)}"
     assert loaded_meta.kind == JobKind.metadata_reindex
 
-    # Status must survive (QUEUED — verify crash-recovery did NOT fire)
+    # Status must survive (non-crash statuses — verify crash-recovery did NOT fire)
     assert loaded_sync.status == JobStatus.QUEUED
-    assert loaded_meta.status == JobStatus.QUEUED
+    assert loaded_meta.status == JobStatus.DONE
 
     # Collection must survive
     assert loaded_sync.collection == ""

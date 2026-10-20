@@ -57,12 +57,12 @@ def test_write_atomic_tags_community_rebuild(tmp_path: Path) -> None:
     assert raw[0]["job_type"] == "community_rebuild"
 
 
-def test_create_community_rebuild_creates_queued_job(store: JobStore) -> None:
-    """The factory creates a QUEUED job carrying collection + namespace."""
+def test_create_community_rebuild_creates_running_job(store: JobStore) -> None:
+    """The factory creates a RUNNING job (its route runs it; nothing schedules it) carrying collection + namespace."""
     job = store.create_community_rebuild(collection="col1", namespace="tenant-x")
 
     assert isinstance(job, CommunityRebuildJob)
-    assert job.status == JobStatus.QUEUED
+    assert job.status == JobStatus.RUNNING
     assert job.collection == "col1"
     assert job.namespace == "tenant-x"
 

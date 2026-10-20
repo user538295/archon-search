@@ -52,6 +52,9 @@ INGEST_FAILED_DETAIL = "ingest failed; see the server log for details"
 REINDEX_FAILED_DETAIL = "reindex failed; see the server log for details"
 #: Wire-facing body of a sanitized 500 whose cause is logged only.
 INTERNAL_ERROR_DETAIL = "internal error"
+#: Wire-facing job ``error`` for a legacy QUEUED/PENDING community-rebuild / metadata-reindex job (an older
+#: server created those QUEUED first; nothing schedules either kind) that a newer request of its route supersedes.
+JOB_SUPERSEDED_DETAIL = "never started; superseded by a newer request"
 #: Log-line prefixes naming the writer of a best-effort job status write (see ``_persist_job_status``).
 _INGEST_LOG_CONTEXT = "background ingest"
 _REINDEX_LOG_CONTEXT = "_reindex_task"
@@ -738,6 +741,7 @@ async def get_job(job_id: str, request: Request) -> JobResponse:
         404: {"model": ErrorDetail},
         409: {"model": ErrorDetail},
         422: {"model": ErrorDetail},
+        500: {"model": ErrorDetail, "description": f'Persisting the resume failed (body {{"detail": "{INTERNAL_ERROR_DETAIL}"}})'},
     },
 )
 async def resume_job(job_id: str, request: Request) -> JobResponse | JSONResponse:
@@ -773,7 +777,11 @@ async def resume_job(job_id: str, request: Request) -> JobResponse | JSONRespons
             return JSONResponse({"error": "source_not_found"}, status_code=422)
 
     # Atomically transition FAILED → QUEUED
-    updated = store.transition(job_id, {JobStatus.FAILED}, JobStatus.QUEUED)
+    try:
+        updated = store.transition(job_id, {JobStatus.FAILED}, JobStatus.QUEUED)
+    except Exception:  # noqa: BLE001 — the job stays FAILED; any failure maps to one sanitized 500
+        logger.exception("Failed to persist the resume of job %s", job_id)
+        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
     if updated is None:
         # Race: status changed between our check and transition
         job = store.get(job_id)
@@ -796,6 +804,13 @@ async def resume_job(job_id: str, request: Request) -> JobResponse | JSONRespons
         401: {"model": ErrorDetail},
         404: {"model": ErrorDetail},
         409: {"model": ErrorDetail},
+        500: {
+            "model": ErrorDetail,
+            "description": (
+                f'Persisting the cancel failed (body {{"detail": "{INTERNAL_ERROR_DETAIL}"}}), or the job is in a '
+                'status DELETE does not handle, e.g. QUEUED (body {"detail": "Unknown job status: <status>"})'
+            ),
+        },
     },
 )
 async def delete_job(job_id: str, request: Request, response: Response) -> JobResponse | JSONResponse:
@@ -816,7 +831,8 @@ async def delete_job(job_id: str, request: Request, response: Response) -> JobRe
         # Use transition() to avoid TOCTOU race: only updates if still active
         try:
             updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING)
-        except OSError:
+        except Exception:  # noqa: BLE001 — the job keeps its status; any failure maps to one sanitized 500
+            logger.exception("Failed to persist the cancel of job %s", job_id)
             return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
         if updated is None:
             # Race: job became terminal between get() and transition() — idempotent 200
@@ -832,6 +848,6 @@ async def delete_job(job_id: str, request: Request, response: Response) -> JobRe
     else:
         logger.error("DELETE /jobs/%s: unknown status %s", job_id, job.status)
         return JSONResponse(
-            content={"detail": f"Unknown job status: {job.status}"},
+            content={"detail": f"Unknown job status: {job.status.value}"},
             status_code=500,
         )

@@ -122,15 +122,17 @@ class JobStore:
     def create_job[J: IngestJob](self, job: J) -> J:
         """Store and persist a pre-constructed job (subclass-aware); every ``create*`` method funnels here.
 
-        A failed persist removes the job from memory again before re-raising, so memory never keeps a job
-        whose persist raised. The file may still hold it: ``atomic_write_json`` can raise after its rename
-        (the directory fsync), so a job whose create raised can reappear on the next load.
+        A failed persist removes the job from memory again and re-raises, so memory never keeps a job whose
+        persist raised. ``atomic_write_json`` can raise after its rename (the directory fsync), leaving the
+        job in the file, so a best-effort corrective rewrite of memory follows (``_rewrite_after_failed_persist``
+        has the limits): if that rewrite fails too, the job reappears on the next load.
         """
         self._jobs[job.job_id] = job
         try:
             self._write_atomic()
         except BaseException:
             self._jobs.pop(job.job_id, None)
+            self._rewrite_after_failed_persist()
             raise
         return job
 
@@ -162,11 +164,50 @@ class JobStore:
 
         Returns the updated job, or None if the transition was rejected
         (job not found or status not in from_statuses).
+
+        A failed persist restores the job in memory to its old status and re-raises: the transition did
+        not happen. ``atomic_write_json`` can raise after its rename (the directory fsync), leaving the new
+        status in the file, so a best-effort corrective rewrite of memory follows (``_rewrite_after_failed_persist``
+        has the limits). This deliberately differs from ``update()``: an update
+        records the outcome of work already done (e.g. a terminal status), and rolling it back would pin
+        the job to a stale state such as RUNNING. A transition is a compare-and-set claim — when its write
+        fails the claim was never made and nothing has started, so the old status is the truthful state.
+        The rollback also restores the job's old ``updated_at``, so the corrective rewrite's age eviction
+        can drop a terminal job whose old ``updated_at`` is more than 7 days old.
         """
         job = self._jobs.get(job_id)
         if job is None or job.status not in from_statuses:
             return None
-        return self.update(job_id, status=to_status)
+        try:
+            return self.update(job_id, status=to_status)
+        except BaseException:
+            self._jobs[job_id] = job
+            self._rewrite_after_failed_persist()
+            raise
+
+    def _rewrite_after_failed_persist(self) -> None:
+        """Best-effort: rewrite the file from memory after a rolled-back persist.
+
+        When the rewrite succeeds, the file's content matches memory; durability across a crash is not
+        guaranteed: after a failed directory fsync, a later fsync that succeeds does not prove the earlier
+        rename reached the disk (``_durable_io.atomic_write_json``: do not retry fsync), so a crash can still
+        leave either version. When it fails too, the file keeps what the failed persist left until the next
+        successful write of any job. Under a persistent write failure every rolled-back persist (e.g. each
+        failed scheduler claim, once per tick) thus costs one extra write attempt and one WARNING line.
+
+        Catches any ``Exception`` from the rewrite and logs it as one WARNING line without a traceback, so
+        the caller's re-raised original persist error is not masked and a persistent disk failure does not
+        emit a second traceback per failed persist. A ``BaseException`` that is not an ``Exception`` (e.g.
+        ``asyncio.CancelledError``, ``KeyboardInterrupt``) propagates and replaces the original error.
+        """
+        try:
+            self._write_atomic()
+        except Exception as exc:
+            logger.warning(
+                "JobStore: corrective rewrite after a failed persist also failed: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
 
     def list(self) -> list[IngestJob]:
         return list(self._jobs.values())
@@ -227,12 +268,14 @@ class JobStore:
         kind: MigrationKind,
         backup_confirmed: bool | None,
         namespace: str = DEFAULT_NAMESPACE,
+        *,
+        status: JobStatus = JobStatus.QUEUED,
     ) -> MigrationJob:
-        """Create a MigrationJob with QUEUED status and persist it."""
+        """Create a MigrationJob with *status* (QUEUED: for the scheduler to run) and persist it."""
         now = _now_iso()
         job = MigrationJob(
             job_id=str(uuid.uuid4()),
-            status=JobStatus.QUEUED,
+            status=status,
             created_at=now,
             updated_at=now,
             namespace=namespace,
@@ -247,11 +290,14 @@ class JobStore:
         collection: str,
         namespace: str = DEFAULT_NAMESPACE,
     ) -> CommunityRebuildJob:
-        """Create a CommunityRebuildJob with QUEUED status and persist it."""
+        """Create a CommunityRebuildJob directly RUNNING (one write) and persist it.
+
+        Its route runs the task itself and nothing schedules this kind, so a QUEUED one would never run.
+        """
         now = _now_iso()
         job = CommunityRebuildJob(
             job_id=str(uuid.uuid4()),
-            status=JobStatus.QUEUED,
+            status=JobStatus.RUNNING,
             created_at=now,
             updated_at=now,
             namespace=namespace,
@@ -262,12 +308,14 @@ class JobStore:
     def create_sync(
         self,
         namespace: str = DEFAULT_NAMESPACE,
+        *,
+        status: JobStatus = JobStatus.QUEUED,
     ) -> SyncJob:
-        """Create a SyncJob with QUEUED status and persist it."""
+        """Create a SyncJob with *status* and persist it."""
         now = _now_iso()
         job = SyncJob(
             job_id=str(uuid.uuid4()),
-            status=JobStatus.QUEUED,
+            status=status,
             created_at=now,
             updated_at=now,
             namespace=namespace,
@@ -280,11 +328,14 @@ class JobStore:
         collection: str,
         namespace: str = DEFAULT_NAMESPACE,
     ) -> MetadataReindexJob:
-        """Create a MetadataReindexJob with QUEUED status and persist it."""
+        """Create a MetadataReindexJob directly RUNNING (one write) and persist it.
+
+        Its route runs the task itself and nothing schedules this kind, so a QUEUED one would never run.
+        """
         now = _now_iso()
         job = MetadataReindexJob(
             job_id=str(uuid.uuid4()),
-            status=JobStatus.QUEUED,
+            status=JobStatus.RUNNING,
             created_at=now,
             updated_at=now,
             namespace=namespace,

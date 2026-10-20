@@ -4195,8 +4195,6 @@ def test_reindex_endpoint_sets_reindex_job_id(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST reindex sets meta.reindex_job_id before spawning the task."""
-    from archon_search.collection_meta import CollectionMeta
-
     c, name, meta, mock_store = _make_reindex_app(tmp_path, tmp_store)
 
     with patch("archon_search.server.routes_collections.asyncio.create_task",
@@ -5625,19 +5623,22 @@ def test_reindex_metadata_404_meta_row_absent(
     assert response.status_code == 404
 
 
+@pytest.mark.parametrize("active_status", [JobStatus.RUNNING, JobStatus.CANCELLING])
 def test_reindex_metadata_409_duplicate_submission(
-    tmp_path: Path, tmp_store: JobStore
+    tmp_path: Path, tmp_store: JobStore, active_status: JobStatus
 ) -> None:
-    """POST /collections/{name}/reindex-metadata → 409 when metadata_reindex_job_id is active."""
+    """POST /collections/{name}/reindex-metadata → 409 when metadata_reindex_job_id is active.
+
+    CANCELLING counts: DELETE /jobs/{id} does not stop the running task.
+    """
     from archon_search.types import MetadataReindexJob, JobKind
-    from archon_search.jobs.model import JobStatus
     import uuid
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc).isoformat()
     running_job = MetadataReindexJob(
         job_id=str(uuid.uuid4()),
-        status=JobStatus.RUNNING,
+        status=active_status,
         created_at=now,
         updated_at=now,
         namespace="default",
@@ -5757,22 +5758,26 @@ def test_reindex_metadata_task_failed_path(
     )
 
 
+@pytest.mark.parametrize("stale_status", [JobStatus.DONE, JobStatus.QUEUED, JobStatus.PENDING])
 def test_reindex_metadata_stale_job_id_clears_and_returns_202(
-    tmp_path: Path, tmp_store: JobStore
+    tmp_path: Path, tmp_store: JobStore, stale_status: JobStatus
 ) -> None:
     """Stale metadata_reindex_job_id pointing at a DONE job is lazy-cleared; 202 returned.
 
-    T3: the stale-job lazy-clear path (guard 3) is exercised.
+    T3: the stale-job lazy-clear path (guard 3) is exercised. A QUEUED/PENDING job (written by an older
+    server, which created it QUEUED first) is stale too: nothing schedules a MetadataReindexJob, so it
+    would never run and would otherwise answer 409 forever. Such a job is also marked FAILED, so it
+    becomes terminal (evictable, deletable).
     """
     from archon_search.types import MetadataReindexJob, JobKind
     import uuid
     from datetime import datetime, timezone
 
-    # Create a job and transition it to DONE (terminal).
+    # Create a job in a status that will never run again.
     now = datetime.now(timezone.utc).isoformat()
     done_job = MetadataReindexJob(
         job_id=str(uuid.uuid4()),
-        status=JobStatus.DONE,
+        status=stale_status,
         created_at=now,
         updated_at=now,
         namespace="default",
@@ -5798,6 +5803,17 @@ def test_reindex_metadata_stale_job_id_clears_and_returns_202(
     )
     new_job_id = response.json()["job_id"]
     assert new_job_id != done_job.job_id, "New job must have a fresh job_id"
+    # A legacy QUEUED/PENDING row is marked FAILED so it does not stay non-terminal (never evicted) forever;
+    # a terminal job is left untouched.
+    from archon_search.server.routes_jobs import JOB_SUPERSEDED_DETAIL
+
+    old_job = tmp_store.get(done_job.job_id)
+    if stale_status is JobStatus.DONE:
+        assert old_job.status is JobStatus.DONE
+        assert old_job.error is None
+    else:
+        assert old_job.status is JobStatus.FAILED
+        assert old_job.error == JOB_SUPERSEDED_DETAIL
 
 
 # ---------------------------------------------------------------------------

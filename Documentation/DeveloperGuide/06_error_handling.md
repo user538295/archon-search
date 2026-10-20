@@ -143,15 +143,16 @@ Background ingest is async. Submitting `POST /ingest` returns `202` even if the 
 }
 ```
 
-For ingest and reindex jobs the `error` field is a short string — never a stack trace or exception text. The full set: the missing-path refusal above (its `<path>` is the request path as resolved by `validate_ingest_path`, the same value as the job's `source_path`), the retryable `"service unavailable: embedding model still loading"` (`EMBEDDER_NOT_READY_DETAIL`), `"process_restart"` (the server restarted while the job was `RUNNING`/`CANCELLING`; `JobStore._load`), `"not a ReindexJob"` (`_reindex_task` handed a job id of another type), and otherwise the fixed `"ingest failed; see the server log for details"` (`INGEST_FAILED_DETAIL`; reindex: `"reindex failed; see the server log for details"`, `REINDEX_FAILED_DETAIL`). Other job types are not covered by this rule: e.g. a bulk export/import/migration job whose dispatch raises reports `dispatch_failed: <exception text>` (`archon_search/jobs/scheduler.py`) — see `Documentation/Architecture/140_error_handling_strategy.md`. For a full diagnosis, read the server log; the task logged `exception("Ingest task %s failed", job_id)` at the time of failure (`routes_jobs.py` `_default_ingest_task`).
+For ingest and reindex jobs the `error` field is a short string — never a stack trace or exception text. The full set: the missing-path refusal above (its `<path>` is the request path as resolved by `validate_ingest_path`, the same value as the job's `source_path`), the retryable `"service unavailable: embedding model still loading"` (`EMBEDDER_NOT_READY_DETAIL`), `"process_restart"` (the server restarted while the job was `RUNNING`/`CANCELLING`; `JobStore._load`), `"not a ReindexJob"` (`_reindex_task` handed a job id of another type), and otherwise the fixed `"ingest failed; see the server log for details"` (`INGEST_FAILED_DETAIL`; reindex: `"reindex failed; see the server log for details"`, `REINDEX_FAILED_DETAIL`). A bulk export/import/migration job whose dispatch raises reports the fixed `"dispatch failed; see the server log for details"` (`DISPATCH_FAILED_DETAIL`, `archon_search/jobs/scheduler.py`). Other job types are not covered by this rule (e.g. the metadata-reindex, migration and community-rebuild runners) — see `Documentation/Architecture/140_error_handling_strategy.md`. For a full diagnosis, read the server log; the task logged `exception("Ingest task %s failed", job_id)` at the time of failure (`routes_jobs.py` `_default_ingest_task`).
 
 `DELETE /jobs/{id}` is idempotent:
 
 `JobStatus` is a `str` enum with upper-case wire values (`PENDING`, `QUEUED`, `RUNNING`, `DONE`, `FAILED`, `FAILED_EXPIRED`, `CANCELLED`, `CANCELLING`; see `archon_search/types.py:13-21`):
 
-- Terminal job (`DONE` / `FAILED` / `CANCELLED`) → `200` with the unchanged record.
-- Active job (`PENDING` / `RUNNING`) → `202`; status becomes `CANCELLING` and eventually `CANCELLED`.
+- Terminal job (`DONE` / `FAILED` / `FAILED_EXPIRED` / `CANCELLED`) → `200` with the unchanged record.
+- Active job (`PENDING` / `RUNNING`) → `202`; status becomes `CANCELLING` and eventually `CANCELLED`. If that cancel cannot be saved → `500` `{"detail": "internal error"}` and the job keeps its status.
 - Already `CANCELLING` → `202` with the current record.
+- Any other status (`QUEUED`) → `500` `{"detail": "Unknown job status: QUEUED"}`.
 
 ## Privacy in error responses
 

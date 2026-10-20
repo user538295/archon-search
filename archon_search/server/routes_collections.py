@@ -23,7 +23,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.model_validation import ModelValidationError, validate_embedding_model
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._ingested_by import parse_ingested_by_header
-from archon_search.server.routes_jobs import _REINDEX_COLLECTION_LOG_CONTEXT, INTERNAL_ERROR_DETAIL, REINDEX_FAILED_DETAIL, IngestRequest, _default_ingest_task, _default_ingest_task_with_lock, _persist_job_status, _reindex_task
+from archon_search.server.routes_jobs import _REINDEX_COLLECTION_LOG_CONTEXT, INTERNAL_ERROR_DETAIL, JOB_SUPERSEDED_DETAIL, REINDEX_FAILED_DETAIL, IngestRequest, _default_ingest_task, _default_ingest_task_with_lock, _persist_job_status, _reindex_task
 from archon_search.server.schemas import CollectionDetail, CollectionSummary, DeleteResponse, DocumentInfoItem, DocumentListResponse, ErrorDetail, ExpiringChunkItem, ExpiringChunksResponse, JobResponse, MigrateInPlaceResponse, MigrateRequest, MigrationPendingResponse, MigrationSpecSchema, PatchCollectionBody
 from archon_search.store import STORE_SCHEMA_VERSION, SearchStore, StoreBusyError
 from archon_search.sync import path_to_collection_name
@@ -992,9 +992,9 @@ async def _migration_task(
     before invoking this coroutine.  Both the route handler and the scheduler
     dispatch function satisfy this contract:
 
-    - **Route path**: ``migrate_collection`` calls
-      ``job_store.transition({QUEUED}, RUNNING)`` immediately after creating
-      the job, then passes the already-RUNNING job to ``asyncio.create_task``.
+    - **Route path**: ``migrate_collection`` creates the job directly as
+      RUNNING (``create_migration(status=RUNNING)``), then passes it to
+      ``asyncio.create_task``.
     - **Scheduler path**: ``JobScheduler._tick()`` calls
       ``store.transition({QUEUED}, RUNNING)`` before calling ``dispatch_fn``,
       which creates this task.
@@ -1109,9 +1109,9 @@ async def migrate_collection(
     ``{migrations_applied: [...]}``.  No ``MigrationJob`` is created.
 
     **Rewrite migrations:** requires ``backup_confirmed: true``; creates a
-    ``MigrationJob``, transitions it immediately to RUNNING, and returns 202
-    with ``{job_id, status: "RUNNING"}``.  The job is transitioned before the
-    task is spawned so the scheduler never sees it in QUEUED state.
+    ``MigrationJob`` directly as RUNNING in one write, spawns its task, and
+    returns 202 with ``{job_id, status: "RUNNING"}``.  The job is never QUEUED,
+    so the scheduler never runs it.
 
     **export_rebuild migrations:** always returns 422 — D3 does not execute
     export_rebuild; operators must re-ingest manually.
@@ -1120,6 +1120,8 @@ async def migrate_collection(
     Returns 409 if a ReindexJob is active for the same collection.
     Returns 422 if rewrite/export_rebuild migrations are pending without
     ``backup_confirmed: true``, or if export_rebuild migrations are present.
+    Returns 500 (sanitized ``{"detail": "internal error"}``) if the rewrite's
+    job could not be saved.
     """
     config: SearchConfig = request.app.state.config
     search_store = request.app.state.search_store
@@ -1201,26 +1203,20 @@ async def migrate_collection(
                 logger.exception("apply_in_place_migrations failed before rewrite dispatch for collection %r", name)
                 return JSONResponse({"detail": "migration failed: internal error"}, status_code=500)
 
-        # Create the MigrationJob and immediately transition it to RUNNING.
-        # The route dispatches the task directly (not via the scheduler), so the
-        # job must NOT sit in QUEUED state — otherwise the scheduler would pick it
-        # up on its next tick and dispatch a second _migration_task for the same job.
+        # Create the MigrationJob directly as RUNNING in one write. The route dispatches
+        # the task itself (not via the scheduler), so the job must never be QUEUED —
+        # in memory or on disk — or the scheduler would run a second _migration_task
+        # for it (or, after a restart, run one whose caller was answered 500).
         try:
-            migration_job = job_store.create_migration(
+            running_job = job_store.create_migration(
                 collection=name,
                 kind=MigrationKind.REWRITE,
                 backup_confirmed=body.backup_confirmed,
                 namespace=ns,
+                status=JobStatus.RUNNING,
             )
-        except OSError:
-            return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
-
-        # Transition to RUNNING before spawning the task so the scheduler never
-        # sees this job in QUEUED state (scheduler only promotes QUEUED → RUNNING).
-        running_job = job_store.transition(migration_job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
-        if running_job is None:
-            # Should not happen (we just created this job), but guard defensively.
-            logger.error("_migration_task route: failed to transition job %s to RUNNING", migration_job.job_id)
+        except Exception:  # noqa: BLE001 — no job exists; any persist failure maps to one sanitized 500
+            logger.exception("migrate_collection: failed to persist a rewrite MigrationJob for %r", name)
             return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
         # Use the first rewrite spec (D3 scope: one rewrite migration at a time).
@@ -1259,13 +1255,21 @@ async def migrate_collection(
 # ---------------------------------------------------------------------------
 
 # Active job statuses for the metadata_reindex_job_id 409 guard.
-# Mirrors _REBUILD_ACTIVE_STATUSES from routes_graph.py.
-_REINDEX_METADATA_ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.QUEUED, JobStatus.PENDING}
+# Mirrors _REBUILD_ACTIVE_STATUSES from routes_graph.py: the route creates the
+# job RUNNING and runs it itself; DELETE /jobs/{id} moves it to CANCELLING
+# without stopping the task, so that still counts. QUEUED/PENDING are absent:
+# nothing schedules a MetadataReindexJob, so such a row (written by an older
+# server) never runs — it is stale: lazily cleared and marked FAILED, not a 409.
+_REINDEX_METADATA_ACTIVE_STATUSES = {JobStatus.RUNNING, JobStatus.CANCELLING}
 
-_ERROR_401_404_409 = {
+_ERROR_401_404_409_500 = {
     401: {"model": ErrorDetail},
     404: {"model": ErrorDetail},
     409: {"model": ErrorDetail},
+    500: {
+        "model": ErrorDetail,
+        "description": f'Creating the metadata reindex job failed (body {{"detail": "{INTERNAL_ERROR_DETAIL}"}})',
+    },
 }
 
 
@@ -1279,8 +1283,8 @@ async def _reindex_metadata_task(
     """Coroutine that drives a MetadataReindexJob to completion.
 
     The caller is responsible for ensuring the job is already in RUNNING state
-    before invoking this coroutine (the route transitions QUEUED -> RUNNING
-    immediately after creating the job).
+    before invoking this coroutine (the route creates the job RUNNING in one
+    write).
 
     Lifecycle (caller sets RUNNING -> this task drives to terminal):
       1. Call ``search_store.reindex_metadata(collection, dry_run=..., normalize_timestamps=...)``.
@@ -1338,7 +1342,7 @@ async def _reindex_metadata_task(
     name="reindex_metadata",
     status_code=202,
     response_model=JobResponse,
-    responses=_ERROR_401_404_409,
+    responses=_ERROR_401_404_409_500,
 )
 async def reindex_metadata(
     name: str, body: ReindexMetadataRequest, request: Request
@@ -1346,13 +1350,14 @@ async def reindex_metadata(
     """Enqueue an async metadata reindex job for a collection — CSP120 BE-4.
 
     Follows the rebuild_communities pattern (``routes_graph.py``):
-    validate -> create job QUEUED -> transition QUEUED -> RUNNING -> spawn task
+    validate -> create the job RUNNING in one write -> spawn task
     -> return 202 with the full JobResponse body, so the response reports RUNNING.
 
     Returns:
     - 202: JobResponse-shaped body, status RUNNING.
     - 404: Collection not found in config or meta record absent.
     - 409: A metadata reindex is already in progress for this collection.
+    - 500: The job could not be saved (sanitized ``{"detail": "internal error"}``).
     """
     config: SearchConfig = request.app.state.config
     search_store = request.app.state.search_store
@@ -1370,7 +1375,10 @@ async def reindex_metadata(
         raise HTTPException(status_code=404, detail=f"Collection {name!r} not found")
 
     # Guard 3: reject duplicate if an active reindex is already in progress.
-    # Lazy-stale-clear: if the referenced job is missing or terminal, clear and proceed.
+    # Lazy-stale-clear: if the referenced job is missing, terminal, or a legacy QUEUED/PENDING row (an
+    # older server created these jobs QUEUED first; nothing schedules them, so one never runs), clear and
+    # proceed. A legacy row is also marked FAILED (best-effort) so it does not stay non-terminal — never
+    # evicted, DELETE answering 500 — forever.
     if meta.metadata_reindex_job_id is not None:
         existing_job = job_store.get(meta.metadata_reindex_job_id)
         if existing_job is not None and existing_job.status in _REINDEX_METADATA_ACTIVE_STATUSES:
@@ -1378,23 +1386,21 @@ async def reindex_metadata(
                 {"detail": "metadata reindex already in progress for this collection"},
                 status_code=409,
             )
+        if existing_job is not None and existing_job.status in (JobStatus.QUEUED, JobStatus.PENDING):
+            _persist_job_status(
+                job_store, existing_job.job_id, JobStatus.FAILED, context="reindex_metadata", error=JOB_SUPERSEDED_DETAIL
+            )
         meta.metadata_reindex_job_id = None
 
     try:
-        job = job_store.create_metadata_reindex(collection=name, namespace=ns)
-    except OSError:
+        # Created RUNNING in one write: the route runs the task itself, so the response never
+        # reports QUEUED (mirrors rebuild_communities).
+        running_job = job_store.create_metadata_reindex(collection=name, namespace=ns)
+    except Exception:  # noqa: BLE001 — no job exists; any persist failure maps to one sanitized 500
+        logger.exception("reindex_metadata: failed to persist a metadata reindex job for %r", name)
         return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
 
-    # Transition to RUNNING before spawning the task so the response never
-    # reports QUEUED (mirrors rebuild_communities' pre-transition pattern).
-    running_job = job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
-    if running_job is None:
-        logger.error(
-            "reindex_metadata: failed to transition job %s to RUNNING", job.job_id
-        )
-        return JSONResponse({"detail": INTERNAL_ERROR_DETAIL}, status_code=500)
-
-    # Set metadata_reindex_job_id AFTER the QUEUED->RUNNING transition so the
+    # Set metadata_reindex_job_id AFTER creating the RUNNING job so the
     # guard above can detect and reject a duplicate submission while this one is active.
     # A dry-run is a read-only preview and must write NOTHING to the meta table:
     # the non-atomic delete-then-add in update_collection_meta would otherwise open a

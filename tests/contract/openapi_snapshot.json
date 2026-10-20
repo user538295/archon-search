@@ -4928,7 +4928,7 @@
     },
     "/collections/{name}/migrate": {
       "post": {
-        "description": "Apply pending migrations or report pending list (dry-run).\n\n**dry_run=true:** returns the same ``MigrationPendingResponse`` body as\n``GET /migrations/pending`` without applying anything.\n\n**In-place-only migrations:** applies synchronously, returns 200 with\n``{migrations_applied: [...]}``.  No ``MigrationJob`` is created.\n\n**Rewrite migrations:** requires ``backup_confirmed: true``; creates a\n``MigrationJob``, transitions it immediately to RUNNING, and returns 202\nwith ``{job_id, status: \"RUNNING\"}``.  The job is transitioned before the\ntask is spawned so the scheduler never sees it in QUEUED state.\n\n**export_rebuild migrations:** always returns 422 \u2014 D3 does not execute\nexport_rebuild; operators must re-ingest manually.\n\nReturns 404 if the collection is not found in the caller's namespace.\nReturns 409 if a ReindexJob is active for the same collection.\nReturns 422 if rewrite/export_rebuild migrations are pending without\n``backup_confirmed: true``, or if export_rebuild migrations are present.",
+        "description": "Apply pending migrations or report pending list (dry-run).\n\n**dry_run=true:** returns the same ``MigrationPendingResponse`` body as\n``GET /migrations/pending`` without applying anything.\n\n**In-place-only migrations:** applies synchronously, returns 200 with\n``{migrations_applied: [...]}``.  No ``MigrationJob`` is created.\n\n**Rewrite migrations:** requires ``backup_confirmed: true``; creates a\n``MigrationJob`` directly as RUNNING in one write, spawns its task, and\nreturns 202 with ``{job_id, status: \"RUNNING\"}``.  The job is never QUEUED,\nso the scheduler never runs it.\n\n**export_rebuild migrations:** always returns 422 \u2014 D3 does not execute\nexport_rebuild; operators must re-ingest manually.\n\nReturns 404 if the collection is not found in the caller's namespace.\nReturns 409 if a ReindexJob is active for the same collection.\nReturns 422 if rewrite/export_rebuild migrations are pending without\n``backup_confirmed: true``, or if export_rebuild migrations are present.\nReturns 500 (sanitized ``{\"detail\": \"internal error\"}``) if the rewrite's\njob could not be saved.",
         "operationId": "migrate_collection_collections__name__migrate_post",
         "parameters": [
           {
@@ -5194,7 +5194,7 @@
     },
     "/collections/{name}/reindex-metadata": {
       "post": {
-        "description": "Enqueue an async metadata reindex job for a collection \u2014 CSP120 BE-4.\n\nFollows the rebuild_communities pattern (``routes_graph.py``):\nvalidate -> create job QUEUED -> transition QUEUED -> RUNNING -> spawn task\n-> return 202 with the full JobResponse body, so the response reports RUNNING.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in config or meta record absent.\n- 409: A metadata reindex is already in progress for this collection.",
+        "description": "Enqueue an async metadata reindex job for a collection \u2014 CSP120 BE-4.\n\nFollows the rebuild_communities pattern (``routes_graph.py``):\nvalidate -> create the job RUNNING in one write -> spawn task\n-> return 202 with the full JobResponse body, so the response reports RUNNING.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in config or meta record absent.\n- 409: A metadata reindex is already in progress for this collection.\n- 500: The job could not be saved (sanitized ``{\"detail\": \"internal error\"}``).",
         "operationId": "reindex_metadata_collections__name__reindex_metadata_post",
         "parameters": [
           {
@@ -5267,6 +5267,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Creating the metadata reindex job failed (body {\"detail\": \"internal error\"})"
           }
         },
         "security": [
@@ -5600,7 +5610,7 @@
     },
     "/graph/{collection}/rebuild-communities": {
       "post": {
-        "description": "Enqueue an async Leiden community rebuild for a collection \u2014 BE-2.\n\nFollows the migrate route's pattern (``routes_collections.py``,\n``migrate_collection``): validate -> create job QUEUED -> transition\nQUEUED -> RUNNING -> spawn task -> return 202 with the full JobResponse\nbody (``job_to_dict(running_job)``), so the response reports RUNNING,\nnot PENDING (S1).\n\nAuth is handled solely by ``APIKeyMiddleware`` \u2014 this route does not\nimplement its own ``?token=`` fallback (unlike ``get_graph_view``, whose\nbranch exists only for HTML-iframe embedding). A token resolving to\n``INVALID_NAMESPACE_SENTINEL`` never reaches this handler; the middleware\nreturns a bare 500 first (S14).\n\nThe optional ``?namespace=`` query param lets the CLI explicitly confirm\nwhich namespace it intends to target. If provided, it must match the\nnamespace resolved from the Bearer token; a mismatch returns 422 so the\ncaller knows to use the correct API key for the intended namespace.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in the caller's namespace.\n- 409: A rebuild is already in progress for this collection (BE-5).\n- 422: graph.enabled=false, or ?namespace= does not match token namespace.",
+        "description": "Enqueue an async Leiden community rebuild for a collection \u2014 BE-2.\n\nFollows the migrate route's pattern (``routes_collections.py``,\n``migrate_collection``): validate -> create the job RUNNING in one write\n-> spawn task -> return 202 with the full JobResponse body\n(``job_to_dict(running_job)``), so the response reports RUNNING, not\nPENDING (S1).\n\nAuth is handled solely by ``APIKeyMiddleware`` \u2014 this route does not\nimplement its own ``?token=`` fallback (unlike ``get_graph_view``, whose\nbranch exists only for HTML-iframe embedding). A token resolving to\n``INVALID_NAMESPACE_SENTINEL`` never reaches this handler; the middleware\nreturns a bare 500 first (S14).\n\nThe optional ``?namespace=`` query param lets the CLI explicitly confirm\nwhich namespace it intends to target. If provided, it must match the\nnamespace resolved from the Bearer token; a mismatch returns 422 so the\ncaller knows to use the correct API key for the intended namespace.\n\nReturns:\n- 202: JobResponse-shaped body, status RUNNING.\n- 404: Collection not found in the caller's namespace.\n- 409: A rebuild is already in progress for this collection (BE-5).\n- 422: graph.enabled=false, or ?namespace= does not match token namespace.\n- 500: The job could not be saved (sanitized ``{\"detail\": \"internal error\"}``).",
         "operationId": "rebuild_communities_graph__collection__rebuild_communities_post",
         "parameters": [
           {
@@ -5673,6 +5683,16 @@
               }
             },
             "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Creating the community rebuild job failed (body {\"detail\": \"internal error\"})"
           }
         },
         "security": [
@@ -6075,6 +6095,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Persisting the cancel failed (body {\"detail\": \"internal error\"}), or the job is in a status DELETE does not handle, e.g. QUEUED (body {\"detail\": \"Unknown job status: <status>\"})"
           }
         },
         "security": [
@@ -6212,6 +6242,16 @@
               }
             },
             "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Persisting the resume failed (body {\"detail\": \"internal error\"})"
           }
         },
         "security": [

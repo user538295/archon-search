@@ -3260,79 +3260,25 @@ async def test_start_startup_sync_job_base_exception_does_not_escape_the_task(
 
 
 # --------------------------------------------------------------------------- #
-# fix-brief-C item 4 — when create_sync succeeds but the QUEUED -> RUNNING
-# transition is rejected (job-store race), _start_startup_sync_job used to
-# return None and leave the QUEUED row behind forever: QUEUED is non-terminal,
-# so JobStore._evict_old never reclaims it, and every such boot leaks another
-# row.
+# fix-brief-C item 4 — the startup-sync job used to be created QUEUED and then
+# claimed QUEUED -> RUNNING; a rejected or failed claim left a QUEUED row that
+# JobStore._evict_old never reclaims (QUEUED is non-terminal), leaking one row
+# per such boot. It is now created RUNNING in a single write: no QUEUED row and
+# no claim that can fail.
 # --------------------------------------------------------------------------- #
-@pytest.mark.asyncio
-async def test_start_startup_sync_job_transition_failure_does_not_orphan_queued_row(
-    tmp_path: Path, job_store: JobStore
-) -> None:
-    """A rejected QUEUED -> RUNNING transition must not leave the job QUEUED
-    forever. It must be moved to a terminal status (so eviction can reclaim
-    it), and the corpus sync must still run unmarked — mirroring the
-    job-store-write-failure case above.
-    """
-    from archon_search.server.app import _STARTUP_SYNC_ERROR_NEVER_STARTED  # noqa: PLC0415
-    from archon_search.server.app import create_app  # noqa: PLC0415
-    from archon_search.sync import SearchCollectionSync, SyncResult  # noqa: PLC0415
+def test_start_startup_sync_job_persists_running_in_one_write(job_store: JobStore) -> None:
+    from archon_search.server.app import _start_startup_sync_job  # noqa: PLC0415
+    from tests._job_store_faults import recording_job_writes  # noqa: PLC0415
 
-    sync_calls: list[list[str]] = []
+    with recording_job_writes() as writes:
+        job_id = _start_startup_sync_job(job_store)
 
-    async def recording_sync(self: SearchCollectionSync, collections: list[str], progress_cb=None) -> SyncResult:
-        sync_calls.append(list(collections))
-        return SyncResult()
-
-    def _rejecting_transition(self, job_id, from_statuses, to_status):
-        return None
-
-    cfg = SearchConfig()
-    cfg.db_path = str(tmp_path / "search")
-    cfg.collections = ["docs"]
-
-    with ExitStack() as stack:
-        _enter_startup_sync_lifespan_patches(stack, recording_sync)
-        stack.enter_context(patch.object(JobStore, "transition", new=_rejecting_transition))
-
-        app = create_app(cfg, job_store)
-        startup_done = asyncio.Event()
-        shutdown = asyncio.Event()
-
-        async def run_lifespan() -> None:
-            async with app.router.lifespan_context(app):
-                startup_done.set()
-                await shutdown.wait()
-
-        lifespan_task = asyncio.create_task(run_lifespan())
-        try:
-            await asyncio.wait_for(startup_done.wait(), timeout=30.0)
-            for _ in range(3000):
-                if sync_calls:
-                    break
-                await asyncio.sleep(0.01)
-        finally:
-            shutdown.set()
-            await lifespan_task
-
-    assert sync_calls == [["docs"]], (
-        "a rejected QUEUED -> RUNNING transition must not prevent the corpus "
-        f"sync from running unmarked; sync_calls={sync_calls!r}"
-    )
-    jobs = job_store.list()
-    assert len(jobs) == 1, f"expected exactly one job to be created; got {jobs!r}"
-    assert jobs[0].status != JobStatus.QUEUED, (
-        "the startup-sync job was left QUEUED after its RUNNING transition was "
-        "rejected — QUEUED is non-terminal, so JobStore._evict_old never "
-        f"reclaims it and every such boot leaks another row. Got {jobs[0]!r}"
-    )
-    assert jobs[0].status == JobStatus.FAILED, (
-        f"expected the orphaned job to be marked FAILED; got {jobs[0].status!r}"
-    )
-    assert jobs[0].error == _STARTUP_SYNC_ERROR_NEVER_STARTED, (
-        f"expected the sanitized orphan error; got {jobs[0].error!r}"
-    )
+    assert job_id is not None
+    assert writes.attempts == 1, f"expected one job-store write, got {writes.attempts}"
+    assert writes.statuses_of(job_id) == [JobStatus.RUNNING.value]
+    job = job_store.get(job_id)
+    assert job is not None
+    assert job.status == JobStatus.RUNNING
 
 
 # --------------------------------------------------------------------------- #

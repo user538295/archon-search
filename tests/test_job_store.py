@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -12,7 +13,8 @@ import pytest
 
 from archon_search.jobs.model import IngestJob, JobStatus, get_jobs_file
 from archon_search.jobs.store import JobStore
-from archon_search.types import MigrationKind
+from archon_search.types import MigrationKind, SyncJob
+from tests._job_store_faults import SIMULATED_WRITE_FAILURE, failing_job_writes, persisted_statuses, recording_job_writes
 
 
 UUID4_RE = re.compile(
@@ -365,11 +367,6 @@ def test_create_write_failure_leaves_no_ghost_job(tmp_path: Path, create_call) -
     [
         pytest.param(lambda s, job_id: s.update(job_id, status=JobStatus.DONE), {"status": JobStatus.DONE}, id="update"),
         pytest.param(
-            lambda s, job_id: s.transition(job_id, from_statuses={JobStatus.PENDING}, to_status=JobStatus.CANCELLED),
-            {"status": JobStatus.CANCELLED},
-            id="transition",
-        ),
-        pytest.param(
             lambda s, job_id: s.update_progress(job_id, 1, 2, "embed"),
             {"progress": {"processed": 1, "total": 2, "phase": "embed"}},
             id="update_progress",
@@ -397,6 +394,180 @@ def test_update_write_failure_keeps_update_and_next_write_persists_it(
     s.create()  # next successful write
 
     assert JobStore(path=tmp_path / "jobs.json").get(job.job_id) == in_memory
+
+
+def test_transition_write_failure_reraises_and_keeps_old_status(tmp_path: Path) -> None:
+    """transition() is a compare-and-set claim: when its persist fails the claim did not happen, so the
+    job must stay at the OLD status in memory AND on disk — even after a later successful write flushes
+    every in-memory job (otherwise the never-acknowledged status is persisted behind the caller's back)."""
+    jobs_path = tmp_path / "jobs.json"
+    s = JobStore(path=jobs_path)
+    job = s.create()
+
+    with failing_job_writes(), pytest.raises(OSError, match=SIMULATED_WRITE_FAILURE):
+        s.transition(job.job_id, from_statuses={JobStatus.PENDING}, to_status=JobStatus.RUNNING)
+
+    in_memory = s.get(job.job_id)
+    assert in_memory is not None
+    assert in_memory.status == JobStatus.PENDING
+    assert persisted_statuses(jobs_path)[job.job_id] == JobStatus.PENDING.value
+
+    s.create()  # next successful write serializes every in-memory job
+
+    assert persisted_statuses(jobs_path)[job.job_id] == JobStatus.PENDING.value
+
+
+def test_transition_raising_after_rename_rewrites_old_status(tmp_path: Path) -> None:
+    """``atomic_write_json`` can raise after its rename, leaving the new status on disk although the
+    transition raised. The corrective rewrite must put the old status back on disk, matching memory."""
+    jobs_path = tmp_path / "jobs.json"
+    s = JobStore(path=jobs_path)
+    job = s.create()
+
+    with failing_job_writes(count=1, fail_after_write=1) as writes, pytest.raises(OSError, match=SIMULATED_WRITE_FAILURE):
+        s.transition(job.job_id, from_statuses={JobStatus.PENDING}, to_status=JobStatus.RUNNING)
+
+    assert writes.statuses_of(job.job_id) == [JobStatus.RUNNING.value, JobStatus.PENDING.value]
+    in_memory = s.get(job.job_id)
+    assert in_memory is not None
+    assert in_memory.status == JobStatus.PENDING
+    assert persisted_statuses(jobs_path)[job.job_id] == JobStatus.PENDING.value
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_status"),
+    [
+        pytest.param(
+            lambda s, job_id: s.transition(job_id, from_statuses={JobStatus.PENDING}, to_status=JobStatus.RUNNING),
+            JobStatus.PENDING,
+            id="transition",
+        ),
+        pytest.param(lambda s, job_id: s.create(), JobStatus.PENDING, id="create_job"),
+    ],
+)
+def test_failed_corrective_rewrite_does_not_mask_the_original_persist_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, mutate, expected_status: JobStatus
+) -> None:
+    """When the corrective rewrite fails with a DIFFERENT exception, the caller still sees the ORIGINAL persist
+    error, memory is rolled back, and the rewrite failure is logged as one WARNING line without a traceback."""
+    s = JobStore(path=tmp_path / "jobs.json")
+    job = s.create()
+    caplog.set_level(logging.WARNING, logger="archon_search.jobs.store")
+
+    with (
+        failing_job_writes(count=2, exc=[OSError(SIMULATED_WRITE_FAILURE), RuntimeError("rewrite failed")]),
+        pytest.raises(OSError, match=SIMULATED_WRITE_FAILURE),
+    ):
+        mutate(s, job.job_id)
+
+    assert [j.job_id for j in s.list()] == [job.job_id]  # a failed create leaves no ghost job behind
+    assert s.get(job.job_id).status == expected_status  # type: ignore[union-attr]
+    (record,) = [r for r in caplog.records if r.name == "archon_search.jobs.store"]
+    assert record.levelno == logging.WARNING
+    assert "RuntimeError" in record.getMessage()
+    assert record.exc_info is None
+
+
+def test_transition_double_fail_residual_leaves_new_status_on_disk(tmp_path: Path) -> None:
+    """Documented residual: the transition's write raises AFTER its rename (new status on disk) and the
+    corrective rewrite fails too. Memory holds the old status; the raw file keeps the new one until the next
+    successful write (or, for RUNNING, until the next load closes it out as FAILED ``process_restart``)."""
+    jobs_path = tmp_path / "jobs.json"
+    s = JobStore(path=jobs_path)
+    job = s.create()
+
+    with failing_job_writes(fail_after_write=1), pytest.raises(OSError, match=SIMULATED_WRITE_FAILURE):
+        s.transition(job.job_id, from_statuses={JobStatus.PENDING}, to_status=JobStatus.RUNNING)
+
+    assert s.get(job.job_id).status == JobStatus.PENDING  # type: ignore[union-attr]
+    assert persisted_statuses(jobs_path)[job.job_id] == JobStatus.RUNNING.value
+
+
+def test_transition_cancelled_mid_write_keeps_old_status(tmp_path: Path) -> None:
+    """A BaseException out of the persist (asyncio.CancelledError) is no exception to the claim rule: the job
+    keeps its old status in memory, the corrective rewrite restores it on disk, and the cancellation still
+    propagates.
+
+    Only the original write raises (after reaching disk, so the file held RUNNING): the corrective rewrite
+    succeeds, so the raw-file assertion is not satisfied by an untouched file."""
+    import asyncio
+
+    jobs_path = tmp_path / "jobs.json"
+    s = JobStore(path=jobs_path)
+    job = s.create()
+
+    with (
+        failing_job_writes(count=1, exc=asyncio.CancelledError(), fail_after_write=1) as writes,
+        pytest.raises(asyncio.CancelledError),
+    ):
+        s.transition(job.job_id, from_statuses={JobStatus.PENDING}, to_status=JobStatus.RUNNING)
+
+    assert writes.attempts == 2  # the failed transition write, then the corrective rewrite
+    assert writes.statuses_of(job.job_id) == [JobStatus.RUNNING.value, JobStatus.PENDING.value]
+    in_memory = s.get(job.job_id)
+    assert in_memory is not None
+    assert in_memory.status == JobStatus.PENDING
+    assert persisted_statuses(jobs_path)[job.job_id] == JobStatus.PENDING.value
+
+
+# Every create a route (or the startup sync) runs itself, as that caller makes it: directly RUNNING.
+_RUNNING_CREATES = [
+    pytest.param(
+        lambda s: s.create_migration("c", MigrationKind.REWRITE, True, status=JobStatus.RUNNING), id="create_migration"
+    ),
+    pytest.param(lambda s: s.create_community_rebuild("c"), id="create_community_rebuild"),
+    pytest.param(lambda s: s.create_sync(status=JobStatus.RUNNING), id="create_sync"),
+    pytest.param(lambda s: s.create_metadata_reindex("c"), id="create_metadata_reindex"),
+]
+
+
+@pytest.mark.parametrize("create_call", _RUNNING_CREATES)
+def test_running_create_persists_running_in_one_write(tmp_path: Path, create_call) -> None:
+    """A job its caller runs itself is created RUNNING with a single persist — no QUEUED row ever exists."""
+    jobs_path = tmp_path / "jobs.json"
+    s = JobStore(path=jobs_path)
+
+    with recording_job_writes() as writes:
+        job = create_call(s)
+
+    assert writes.attempts == 1
+    assert job.status == JobStatus.RUNNING
+    assert persisted_statuses(jobs_path) == {job.job_id: JobStatus.RUNNING.value}
+
+
+@pytest.mark.parametrize("create_call", _RUNNING_CREATES)
+def test_running_create_raising_after_rename_rewrites_file_without_the_job(tmp_path: Path, create_call) -> None:
+    """``atomic_write_json`` can raise after its rename: the RUNNING row is on disk although the create raised.
+    The corrective rewrite must remove it again, so memory and file agree the job does not exist."""
+    jobs_path = tmp_path / "jobs.json"
+    s = JobStore(path=jobs_path)
+
+    with failing_job_writes(count=1, fail_after_write=1) as writes, pytest.raises(OSError, match=SIMULATED_WRITE_FAILURE):
+        create_call(s)
+
+    assert writes.attempts == 2
+    assert s.list() == []
+    assert persisted_statuses(jobs_path) == {}
+
+
+@pytest.mark.parametrize("create_call", _RUNNING_CREATES)
+def test_running_create_raising_after_rename_loads_as_failed_process_restart(tmp_path: Path, create_call) -> None:
+    """Residual: when the corrective rewrite fails too, the RUNNING row stays on disk although the create
+    raised. The next load must close it out as FAILED ``process_restart`` — never leave it for the scheduler.
+
+    Known residual for ``create_sync``: that leftover SyncJob row is an ingest-family crash marker, so the
+    reload also arms the crash-loop guard (``crashed_ingest_on_load``) although no sync ever ran."""
+    jobs_path = tmp_path / "jobs.json"
+    s = JobStore(path=jobs_path)
+
+    with failing_job_writes(fail_after_write=1), pytest.raises(OSError, match=SIMULATED_WRITE_FAILURE):
+        create_call(s)
+
+    assert s.list() == []
+    reloaded_store = JobStore(path=jobs_path)
+    (reloaded,) = reloaded_store.list()
+    assert (reloaded.status, reloaded.error) == (JobStatus.FAILED, "process_restart")
+    assert reloaded_store.crashed_ingest_on_load is isinstance(reloaded, SyncJob)
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +649,7 @@ def test_count_by_status_mixed(tmp_path: Path) -> None:
     store = JobStore(path=tmp_path / "jobs.json")
     # Create 2 PENDING jobs
     j1 = store.create()
-    j2 = store.create()
+    store.create()
     # Move 1 to RUNNING
     store.update(j1.job_id, status=JobStatus.RUNNING)
     # Create 1 DONE job

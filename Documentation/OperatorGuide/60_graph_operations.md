@@ -143,7 +143,7 @@ curl -X POST http://localhost:8765/graph/mydocs/rebuild-communities \
   -H "Authorization: Bearer $ARCHON_SEARCH_API_KEY"
 ```
 
-Returns `202` with a `JobResponse` body already in `RUNNING` state (the route transitions QUEUED→RUNNING before returning, so you never see QUEUED). Poll `GET /jobs/{id}` for the terminal status; on `DONE` the result carries `{"communities_built": N}`.
+Returns `202` with a `JobResponse` body already in `RUNNING` state (the route creates the job RUNNING, so you never see QUEUED). Poll `GET /jobs/{id}` for the terminal status; on `DONE` the result carries `{"communities_built": N}`.
 
 Route: `POST /graph/{collection}/rebuild-communities` (`server/routes_graph.py`). Status codes:
 
@@ -153,6 +153,7 @@ Route: `POST /graph/{collection}/rebuild-communities` (`server/routes_graph.py`)
 | `404` | Collection not found in the caller's namespace. |
 | `409` | A rebuild is already in progress for this collection (`community_rebuild_job_id` guard). |
 | `422` | `graph.enabled=false`, graph store unavailable, or a `?namespace=` mismatch. |
+| `500` | The job could not be saved (internal error); body `{"detail": "internal error"}`, no rebuild started. |
 
 Concurrent rebuilds on the same `(namespace, collection)` — including a `MaintenanceLoop` GC-triggered rebuild — serialize through a module-level lock in `community_builder.py`, so a rebuild never blocks ingest.
 

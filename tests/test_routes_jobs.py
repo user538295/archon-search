@@ -24,7 +24,7 @@ from archon_search.server.routes_jobs import (
     _default_ingest_task_with_lock,
     _run_pipeline,
 )
-from archon_search.types import IngestJob, ReindexJob
+from archon_search.types import IngestJob, MigrationKind, ReindexJob
 
 
 @pytest.fixture
@@ -573,6 +573,67 @@ def test_delete_job_transition_oserror_returns_500_envelope(
 
     assert response.status_code == 500
     assert response.json() == {"detail": "internal error"}
+
+
+def test_delete_job_transition_write_failure_keeps_job_running(
+    client: TestClient, tmp_store: JobStore, tmp_path: Path
+) -> None:
+    """A DELETE whose RUNNING->CANCELLING persist fails answers 500, so the cancel did not happen: the job must
+    stay RUNNING in memory (GET agrees) and on disk — not report CANCELLING after the client was told 500."""
+    from tests._job_store_faults import failing_job_writes, persisted_statuses
+
+    job = tmp_store.create()
+    tmp_store.update(job.job_id, status=JobStatus.RUNNING)
+
+    # The failing write reaches disk (CANCELLING in the file) before raising; the corrective rewrite restores
+    # RUNNING there — so the on-disk assertion below is not satisfied by an untouched file.
+    with failing_job_writes(count=1, fail_after_write=1) as writes:
+        response = client.delete(f"/jobs/{job.job_id}")
+
+    assert writes.statuses_of(job.job_id) == [JobStatus.CANCELLING.value, JobStatus.RUNNING.value]
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+    in_memory = tmp_store.get(job.job_id)
+    assert in_memory is not None
+    assert in_memory.status == JobStatus.RUNNING
+    assert client.get(f"/jobs/{job.job_id}").json()["status"] == JobStatus.RUNNING.value
+    # Raw file, not a reloaded JobStore: loading rewrites every RUNNING job to FAILED (crash recovery).
+    assert persisted_statuses(tmp_path / "jobs.json")[job.job_id] == JobStatus.RUNNING.value
+
+
+def test_delete_job_transition_non_oserror_returns_sanitized_500(
+    client: TestClient, tmp_store: JobStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Any persist failure (not only OSError, e.g. a serialization TypeError) answers the sanitized 500 envelope
+    — never an unhandled exception whose text could reach the client — logs the cause with its traceback, and
+    the cancel did not happen."""
+    import logging
+
+    from tests._job_store_faults import assert_error_logged_with_traceback, failing_job_writes
+
+    job = tmp_store.create()
+    tmp_store.update(job.job_id, status=JobStatus.RUNNING)
+    routes_jobs_logger = "archon_search.server.routes_jobs"
+    caplog.set_level(logging.ERROR, logger=routes_jobs_logger)
+
+    with failing_job_writes(exc=TypeError("simulated serialization failure /secret/path")):
+        response = client.delete(f"/jobs/{job.job_id}")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal error"}
+    assert_error_logged_with_traceback(caplog, routes_jobs_logger)
+    assert tmp_store.get(job.job_id).status == JobStatus.RUNNING  # type: ignore[union-attr]
+
+
+def test_delete_job_in_unhandled_status_names_the_status_value(client: TestClient, tmp_store: JobStore) -> None:
+    """DELETE on a QUEUED job (a status DELETE does not handle) answers 500 with the documented body
+    ``Unknown job status: <status>`` — the bare status value, not the enum repr ``JobStatus.QUEUED``."""
+    job = tmp_store.create_migration("col", MigrationKind.REWRITE, True)  # created QUEUED
+
+    response = client.delete(f"/jobs/{job.job_id}")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": f"Unknown job status: {JobStatus.QUEUED.value}"}
 
 
 def test_ingest_accepts_legitimate_absolute_path(client: TestClient) -> None:
