@@ -38,6 +38,8 @@ from archon_search.key_manager import (
     rotate_and_persist_default_key,
 )
 from archon_search.pipeline import (
+    METADATA_STORE_UNAVAILABLE_CODE,
+    METADATA_STORE_UNAVAILABLE_DETAIL,
     CollectionNotFoundError,
     ExplainMultiCollectionNoRerankError,
     ExplainStageError,
@@ -51,12 +53,14 @@ from archon_search.router import MultiCollectionRouter
 from archon_search.server.middleware_auth import APIKeyMiddleware
 from archon_search.server._validators import validate_scope_filter as _check_scope_filter
 from archon_search.server.routes_explain import (
+    EXPLAIN_FAILED_DETAIL,
     ExplainRequest,
     ExplainResponse,
     RoutingCandidate,
     RoutingExplain,
 )
 from archon_search.server.routes_search import _HYDE_EXPANSION_FAILED_WARNING
+from archon_search.server.schemas import GRAPH_COMMUNITIES_NOT_BUILT_CODE, INVALID_SCOPE_FILTER_CODE
 from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_CODE, RAG_FUSION_DEPENDENCY_DETAIL
 from archon_search.server._search_budget import (
     SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
@@ -151,8 +155,8 @@ _SEARCH_FAILED_CODE = "internal_error"
 # failure is echoed (mirrors explain's "invalid explain request").
 _INVALID_SEARCH_FILTERS_DETAIL = "invalid search filters"
 _INVALID_SEARCH_RESPONSE_DETAIL = "search response failed schema validation"
-# Wire-safe error pair for an unexpected explain failure (logged by logger.exception).
-_EXPLAIN_FAILED_DETAIL = "explain failed"
+# Wire-safe error code for an unexpected explain failure (logged by logger.exception); its
+# detail is /explain's EXPLAIN_FAILED_DETAIL.
 _EXPLAIN_FAILED_CODE = "internal_error"
 # explain's response-schema failure, for the same reason as search's above.
 _INVALID_EXPLAIN_RESPONSE_DETAIL = "explain response failed schema validation"
@@ -203,7 +207,7 @@ def _validate_scope_filter(scope_filter: str | None) -> "McpErrorResponse | None
     msg = _check_scope_filter(scope_filter)
     if msg is None:
         return None
-    return McpErrorResponse(error=msg, code="invalid_scope_filter")
+    return McpErrorResponse(error=msg, code=INVALID_SCOPE_FILTER_CODE)
 
 
 _ERR_INTERNAL = "internal_error"
@@ -590,7 +594,7 @@ def create_app(
             except (HyDEDependencyError, RAGFusionDependencyError) as exc:
                 return _dependency_error_response("search", exc)
             except GraphCommunitiesNotBuiltError as exc:
-                return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
+                return McpErrorResponse(error=str(exc), code=GRAPH_COMMUNITIES_NOT_BUILT_CODE)
             except CollectionNotFoundError:
                 return McpErrorResponse(error="collection not found", code="not_found")
             except (FanoutTimeoutError, SearchBudgetExceeded):
@@ -602,7 +606,8 @@ def create_app(
             except MetadataLookupError:
                 # Transient infrastructure error (store unavailable); mirror REST's
                 # 503 semantics with a clean message rather than leaking the cause.
-                return McpErrorResponse(error="service unavailable: metadata store could not be reached", code="metadata_store_error")
+                logger.exception("multi-collection search: metadata lookup failed")
+                return McpErrorResponse(error=METADATA_STORE_UNAVAILABLE_DETAIL, code=METADATA_STORE_UNAVAILABLE_CODE)
             except Exception:
                 _enqueue_internal_error(writer, "search", start)
                 logger.exception("multi-collection search failed")
@@ -754,7 +759,7 @@ def create_app(
         except (HyDEDependencyError, RAGFusionDependencyError) as exc:
             return _dependency_error_response("search", exc)
         except GraphCommunitiesNotBuiltError as exc:
-            return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
+            return McpErrorResponse(error=str(exc), code=GRAPH_COMMUNITIES_NOT_BUILT_CODE)
         except EmbedderNotReadyError as exc:
             # The model is still loading (or its load is wedged) — retryable.
             logger.warning("search: embedder not ready — %s", exc)
@@ -1047,7 +1052,7 @@ def create_app(
                 resolve_hyde_vector(query, hyde, hyde_generator, _explain_hyde_config),
                 writer=writer,
                 start=start,
-                failure=McpErrorResponse(error=_EXPLAIN_FAILED_DETAIL, code=_EXPLAIN_FAILED_CODE),
+                failure=McpErrorResponse(error=EXPLAIN_FAILED_DETAIL, code=_EXPLAIN_FAILED_CODE),
             )
             if isinstance(explain_hyde_resolution, dict):
                 return explain_hyde_resolution
@@ -1102,13 +1107,14 @@ def create_app(
             except (HyDEDependencyError, RAGFusionDependencyError) as exc:
                 return _dependency_error_response("explain", exc)
             except GraphCommunitiesNotBuiltError as exc:
-                return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
+                return McpErrorResponse(error=str(exc), code=GRAPH_COMMUNITIES_NOT_BUILT_CODE)
             except CollectionNotFoundError:
                 return McpErrorResponse(error="collection not found", code="not_found")
             except FanoutTimeoutError:
                 return McpErrorResponse(error="search timed out", code="timeout")
             except MetadataLookupError:
-                return McpErrorResponse(error="service unavailable: metadata store could not be reached", code="metadata_store_error")
+                logger.exception("multi-collection explain: metadata lookup failed")
+                return McpErrorResponse(error=METADATA_STORE_UNAVAILABLE_DETAIL, code=METADATA_STORE_UNAVAILABLE_CODE)
             except ExplainMultiCollectionNoRerankError as exc:
                 return McpErrorResponse(error=str(exc), code="validation_error")
             except ExplainStageError as exc:
@@ -1120,7 +1126,7 @@ def create_app(
             except Exception:
                 _enqueue_internal_error(writer, "explain", start)
                 logger.exception("multi-collection explain failed")
-                return McpErrorResponse(error=_EXPLAIN_FAILED_DETAIL, code=_EXPLAIN_FAILED_CODE)
+                return McpErrorResponse(error=EXPLAIN_FAILED_DETAIL, code=_EXPLAIN_FAILED_CODE)
             try:
                 response = ExplainResponse.from_pipeline_result(
                     rerank=rerank, collection="", routing=None, result=result, stage_timings_ms=None,
@@ -1271,7 +1277,7 @@ def create_app(
         except (HyDEDependencyError, RAGFusionDependencyError) as exc:
             return _dependency_error_response("explain", exc)
         except GraphCommunitiesNotBuiltError as exc:
-            return McpErrorResponse(error=str(exc), code="graph_communities_not_built")
+            return McpErrorResponse(error=str(exc), code=GRAPH_COMMUNITIES_NOT_BUILT_CODE)
         except ExplainStageError as exc:
             _enqueue_internal_error(writer, "explain", start)
             # Sanitize: the original message could echo the query (e.g. an FTS error).
@@ -1284,7 +1290,7 @@ def create_app(
         except Exception:
             _enqueue_internal_error(writer, "explain", start)
             logger.exception("explain failed")
-            return McpErrorResponse(error=_EXPLAIN_FAILED_DETAIL, code=_EXPLAIN_FAILED_CODE)
+            return McpErrorResponse(error=EXPLAIN_FAILED_DETAIL, code=_EXPLAIN_FAILED_CODE)
 
     @app.tool()
     async def ingest_file(

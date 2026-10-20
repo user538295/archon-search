@@ -1,4 +1,4 @@
-"""CI guard: no new ``str(exc)`` of a caught exception in ``archon_search/server/`` or ``jobs/``.
+"""CI guard: no new ``str(exc)`` of a caught exception in ``server/``, ``jobs/`` or a wire-feeding module.
 
 CLAUDE.md hard invariant: never put ``str(exc)`` in a wire-facing ``detail`` or job
 ``error`` field for a caught exception whose message embeds internals. Inside an
@@ -6,7 +6,17 @@ CLAUDE.md hard invariant: never put ``str(exc)`` in a wire-facing ``detail`` or 
 ``repr(<name>)`` and f-string interpolation of ``<name>`` that is not an argument of a
 ``logger.*`` call — wherever it goes: an ``McpErrorResponse``, an ``HTTPException`` /
 ``JSONResponse`` detail, a job ``error=``, or a local / helper that later reaches one.
-In these two packages the log is the only sanctioned destination for raw exception text.
+In every guarded module the log is the only sanctioned destination for raw exception text.
+
+:data:`_GUARDED_FILES` extends the scan to the modules outside ``server/`` and ``jobs/``
+whose text is copied verbatim onto the wire: ``sync.py`` (``SyncResult.errors`` -> ``POST /sync``
+job result; ``CollectionProgress.error`` -> ``GET /status`` / ``GET /indexing-state``),
+``pipeline.py`` and ``parser.py`` (``IngestResult.error``, built from ``ParseError.detail`` ->
+MCP ``ingest_file`` / ``ingest_directory``), ``model_validation.py`` (``provider_warnings`` ->
+``GET /status``), and ``defref_extractor.py``, ``graph_extractor.py`` and ``acl.py``
+(``GraphExtractionResult.warnings`` / ``fatal_error`` and ACL warnings -> ``IngestResult`` ->
+MCP / ingest job result). ``prose_extraction_backend.py`` is not listed: its exceptions reach
+the wire only through ``graph_extractor.py``'s sanitized handlers.
 
 A deliberately user-facing exception (its message is text archon-search built itself)
 is allowlisted in :data:`_ALLOWLIST` by (file, enclosing function, ``except`` clause
@@ -39,6 +49,15 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _GUARDED_DIRS = ("archon_search/server", "archon_search/jobs")
+_GUARDED_FILES = (
+    "archon_search/sync.py",
+    "archon_search/pipeline.py",
+    "archon_search/parser.py",
+    "archon_search/model_validation.py",
+    "archon_search/defref_extractor.py",
+    "archon_search/graph_extractor.py",
+    "archon_search/acl.py",
+)
 _LOGGER_NAMES = frozenset({"logger", "_logger", "log", "logging"})
 _GET_LOGGER = "getLogger"
 _STRINGIFIERS = frozenset({"str", "repr"})
@@ -144,11 +163,15 @@ def scan_source(source: str, file: str = "<snippet>") -> list[Finding]:
     return scanner.findings
 
 
-def _scan_guarded_dirs() -> list[Finding]:
+def _guarded_paths() -> list[Path]:
+    package_files = [path for directory in _GUARDED_DIRS for path in sorted((_REPO_ROOT / directory).rglob("*.py"))]
+    return package_files + [_REPO_ROOT / file for file in _GUARDED_FILES]
+
+
+def _scan_guarded() -> list[Finding]:
     return [
         finding
-        for directory in _GUARDED_DIRS
-        for path in sorted((_REPO_ROOT / directory).rglob("*.py"))
+        for path in _guarded_paths()
         for finding in scan_source(path.read_text(encoding="utf-8"), path.relative_to(_REPO_ROOT).as_posix())
     ]
 
@@ -196,6 +219,9 @@ _ALLOWLIST: frozenset[tuple[str, str, str, int]] = frozenset({
     # TelemetryReader.resolve_dates' date-range text, about the caller's since/until.
     (f"{_SERVER}/routes_telemetry.py", "get_telemetry_stats", "ValueError", 1),
     (f"{_SERVER}/routes_telemetry.py", "get_telemetry_entries", "ValueError", 1),
+    # The docling worker's failure payload crosses the process boundary as text. It only ever
+    # becomes ParseError's log-only cause; the wire gets ParseError.detail (PARSE_FAILED_DETAIL).
+    ("archon_search/parser.py", "_docling_to_markdown", "Exception", 1),
 })
 
 
@@ -205,7 +231,7 @@ _ALLOWLIST: frozenset[tuple[str, str, str, int]] = frozenset({
 
 
 def test_no_new_str_exc_of_a_caught_exception() -> None:
-    new = [f for f in _scan_guarded_dirs() if f.key not in _ALLOWLIST]
+    new = [f for f in _scan_guarded() if f.key not in _ALLOWLIST]
     assert not new, (
         "caught exception stringified outside a logging call — send a fixed DETAIL constant and log "
         "the exception, or allowlist a curated message in _ALLOWLIST:\n"
@@ -214,7 +240,7 @@ def test_no_new_str_exc_of_a_caught_exception() -> None:
 
 
 def test_every_allowlist_entry_still_matches() -> None:
-    stale = _ALLOWLIST - {f.key for f in _scan_guarded_dirs()}
+    stale = _ALLOWLIST - {f.key for f in _scan_guarded()}
     assert not stale, f"allowlist entries no longer match any site — remove them: {sorted(stale)}"
 
 

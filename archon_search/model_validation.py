@@ -13,7 +13,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from fastembed import TextEmbedding
@@ -36,13 +36,37 @@ logger = logging.getLogger(__name__)
 # embedder/reranker probe, since this is an unrelated side check.
 _LLAMA_CPP_PROBE_TIMEOUT_SECONDS: float = 3.0
 
-# Sanitized wire-facing messages (CLAUDE.md: never put `str(exc)` in a
-# wire-facing field) for validate_models_async's two `except BaseException`
-# branches — the raw exception is logged with a traceback instead.
-_VALIDATION_FAILED_MESSAGE: str = "model validation failed unexpectedly; see server logs for details"
-_RERANKER_SPLIT_VALIDATION_FAILED_MESSAGE: str = (
-    "reranker split-provider validation failed unexpectedly; see server logs for details"
+# Sanitized ``provider_warnings`` texts (CLAUDE.md: never put `str(exc)` in a wire-facing
+# field; they reach ``GET /status``). The caught exception can name model files under the
+# data dir, so it stays in the log. The "see the log" texts never say "server logs": the
+# install wizard runs the same probes with no server (install/installer.py).
+#
+# validate_models_async's two `except BaseException` branches (logged with a traceback).
+VALIDATION_FAILED_WARNING: Final[str] = "model validation failed unexpectedly; see the log for details"
+RERANKER_SPLIT_VALIDATION_FAILED_WARNING: Final[str] = (
+    "reranker split-provider validation failed unexpectedly; see the log for details"
 )
+# validate_models_async's timeout outcomes; ``seconds`` is the budget that ran out.
+VALIDATION_TIMED_OUT_TEMPLATE: Final[str] = "validation timed out after {seconds}s"
+RERANKER_SPLIT_TIMED_OUT_TEMPLATE: Final[str] = (
+    "reranker split-provider validation timed out after {seconds:.1f}s"
+)
+RERANKER_SPLIT_BUDGET_EXHAUSTED_WARNING: Final[str] = (
+    "reranker split-provider validation skipped: timeout budget exhausted"
+)
+# The lifespan's validation-task crash fallback (server/app.py, through failed_result).
+VALIDATION_TASK_FAILED_WARNING: Final[str] = "validation task failed unexpectedly; see the log for details"
+# graph_ner_status's probe failing, and failed_result's own graph_ner_status call failing.
+GRAPH_NER_UNDETERMINED_WARNING: Final[str] = (
+    "graph NER model presence could not be determined; see the log for details"
+)
+# validate_providers_shared's per-probe handlers. A failed probe is an expected outcome (e.g. a
+# CoreML/CUDA fallback), so it logs a WARNING with the exception message and keeps the
+# traceback at DEBUG: the wizard configures no logging, and Python's last-resort handler would
+# print a WARNING's traceback straight to the user.
+ONNX_PROVIDER_QUERY_FAILED_WARNING: Final[str] = "could not query ONNX providers; see the log for details"
+EMBEDDER_PROBE_FAILED_WARNING: Final[str] = "embedder probe failed; see the log for details"
+RERANKER_PROBE_FAILED_WARNING: Final[str] = "reranker probe failed; see the log for details"
 
 # BE-23 (2026-08-19-035 K3): fixed, trivial probe inputs for _probe_extraction_model — never
 # derived from real ingest content, so a large production prompt's own truncation behaviour can
@@ -57,13 +81,13 @@ _EXTRACTION_MODEL_PROBE_ENTITY_NAMES: tuple[str, ...] = ("Alpha", "Beta")
 # is therefore the primary "reasoning model" signal, distinct from any other failure (missing
 # package/API key, DNS/connection failure, wrong model name, a 400 rejection, ...), which is
 # plain misconfiguration, not a reasoning-model economics problem.
-_EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING: str = (
+EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING: Final[str] = (
     "graph enrichment: [graph].extraction_model did not return usable content within the "
     "extraction probe's time budget (the smaller of your configured extraction_timeout_seconds "
     "and this project's own fixed economic ceiling) — it may be a reasoning model that is not "
     "economically supportable for per-community summarisation; see OperatorGuide/60_graph_operations.md"
 )
-_EXTRACTION_MODEL_PROBE_ERROR_WARNING: str = (
+EXTRACTION_MODEL_PROBE_ERROR_WARNING: Final[str] = (
     "graph enrichment: [graph].extraction_model startup probe failed (not a timeout) — verify "
     "credentials, connectivity, and that the model accepts this provider's request parameters "
     "(some reasoning models reject standard parameters like max_tokens); see "
@@ -180,7 +204,8 @@ async def failed_result(reason: str, config: SearchConfig) -> ModelValidationRes
     try:
         graph_warnings = await asyncio.to_thread(graph_ner_status, config)
     except Exception:  # noqa: BLE001 — this fallback must never itself raise
-        graph_warnings = ["graph NER model presence could not be determined"]
+        logger.warning("graph NER status check failed", exc_info=True)
+        graph_warnings = [GRAPH_NER_UNDETERMINED_WARNING]
     return ModelValidationResult(
         embedder_ok=False,
         reranker_ok=False,
@@ -236,8 +261,8 @@ def graph_ner_status(config: SearchConfig) -> list[str]:
         if gliner_absent():
             return [f"graph prose entity extraction is disabled: {gliner_not_installed_message()}"]
     except Exception as exc:  # never raises — validate_models_async must not fail
-        logger.warning("graph NER model probe failed: %s", exc)
-        return ["graph NER model presence could not be determined"]
+        logger.warning("graph NER model probe failed: %s", exc, exc_info=True)
+        return [GRAPH_NER_UNDETERMINED_WARNING]
 
     return []
 
@@ -342,15 +367,16 @@ async def _probe_extraction_model(
                 graph_config.extraction_model,
                 probe_timeout,
             )
-            return [_EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING]
+            return [EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING]
         except Exception as exc:  # never raises — any other failure reads as misconfiguration
             logger.warning(
                 "extraction model probe failed for %s/%s: %s",
                 graph_config.provider,
                 graph_config.extraction_model,
                 exc,
+                exc_info=True,
             )
-            return [_EXTRACTION_MODEL_PROBE_ERROR_WARNING]
+            return [EXTRACTION_MODEL_PROBE_ERROR_WARNING]
         finally:
             # Only AnthropicEnrichmentClient defines aclose() (closes its persistent
             # AsyncAnthropic connection pool) — ollama/llama_cpp/openai open+close a fresh
@@ -368,8 +394,9 @@ async def _probe_extraction_model(
             graph_config.provider,
             graph_config.extraction_model,
             exc,
+            exc_info=True,
         )
-        return [_EXTRACTION_MODEL_PROBE_ERROR_WARNING]
+        return [EXTRACTION_MODEL_PROBE_ERROR_WARNING]
 
     return []
 
@@ -403,6 +430,9 @@ def validate_providers_shared(
     - If onnxruntime cannot be queried for its providers, neither model is probed:
       ``embedder_ok = False`` and ``reranker_ok = False`` (``True`` when the reranker
       is disabled) with a ``could not query ONNX providers`` warning.
+    - A failed probe or provider query is logged at WARNING with *providers* and the
+      exception message and at DEBUG with its traceback; its warning is fixed text, never the exception
+      message (it reaches ``GET /status``).
     - ``reranker_model == ""`` disables the reranker: ``reranker_ok = True`` with
       no probe attempted.
     - ``embedding_model == ""`` skips the embedder probe and reports
@@ -414,7 +444,9 @@ def validate_providers_shared(
     try:
         selection = select_onnx_providers(providers)
     except Exception as exc:  # never raises
-        warnings.append(f"could not query ONNX providers: {exc}")
+        logger.warning("could not query ONNX providers for %s: %s", providers, exc)
+        logger.debug("could not query ONNX providers for %s", providers, exc_info=True)
+        warnings.append(ONNX_PROVIDER_QUERY_FAILED_WARNING)
         return False, reranker_disabled, warnings
     if selection.unavailable:
         warnings.append(missing_providers_message(selection.unavailable))
@@ -438,8 +470,17 @@ def validate_providers_shared(
             )
             list(model.embed(["archon search validation probe"]))
         except Exception as exc:  # never raises
+            logger.warning(
+                "embedder probe failed for %s under providers %s: %s", embedding_model, providers, exc
+            )
+            logger.debug(
+                "embedder probe failed for %s under providers %s",
+                embedding_model,
+                providers,
+                exc_info=True,
+            )
             embedder_ok = False
-            warnings.append(f"embedder probe failed: {exc}")
+            warnings.append(EMBEDDER_PROBE_FAILED_WARNING)
 
     # Reranker probe.
     if reranker_disabled:
@@ -450,8 +491,17 @@ def validate_providers_shared(
             ce = _load_cross_encoder(reranker_model, load_providers)
             list(ce.rerank("archon search query", ["archon search document"]))
         except Exception as exc:  # never raises
+            logger.warning(
+                "reranker probe failed for %s under providers %s: %s", reranker_model, providers, exc
+            )
+            logger.debug(
+                "reranker probe failed for %s under providers %s",
+                reranker_model,
+                providers,
+                exc_info=True,
+            )
             reranker_ok = False
-            warnings.append(f"reranker probe failed: {exc}")
+            warnings.append(RERANKER_PROBE_FAILED_WARNING)
 
     return embedder_ok, reranker_ok, warnings
 
@@ -494,6 +544,10 @@ async def validate_models_async(
         config, llama_cpp_ok=llama_cpp_ok
     )
     embedding_model = "" if embedder_is_warm else config.embedding_model
+    split_reranker = config.reranker_providers is not None and bool(config.reranker_model)
+    # A split config never loads the reranker under `providers`, so the first pass skips it:
+    # its failure there would leave a warning (WARN on /ready) on a healthy split install.
+    first_pass_reranker = "" if split_reranker else config.reranker_model
     _start = time.monotonic()
 
     def _result(
@@ -517,23 +571,23 @@ async def validate_models_async(
                 validate_providers_shared,
                 config.providers,
                 embedding_model,
-                config.reranker_model,
+                first_pass_reranker,
             ),
             timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:
-        return _result(False, False, [f"validation timed out after {timeout_seconds}s"])
+        return _result(False, False, [VALIDATION_TIMED_OUT_TEMPLATE.format(seconds=timeout_seconds)])
     except BaseException as exc:  # includes CancelledError — never re-raise
         logger.warning("model validation failed unexpectedly: %s", exc, exc_info=True)
-        return _result(False, False, [_VALIDATION_FAILED_MESSAGE])
+        return _result(False, False, [VALIDATION_FAILED_WARNING])
 
-    # If split config, re-validate reranker under its actual providers.
+    # If split config, validate the reranker under its actual providers.
     # Use remaining budget so total wall time stays within timeout_seconds.
-    if config.reranker_providers is not None and config.reranker_model:
+    if split_reranker:
         _remaining = timeout_seconds - (time.monotonic() - _start)
         if _remaining <= 0:
             reranker_ok = False
-            warnings = warnings + ["reranker split-provider validation skipped: timeout budget exhausted"]
+            warnings = warnings + [RERANKER_SPLIT_BUDGET_EXHAUSTED_WARNING]
         else:
             try:
                 _, reranker_ok_actual, split_warns = await asyncio.wait_for(
@@ -550,13 +604,13 @@ async def validate_models_async(
                 warnings = list(dict.fromkeys(warnings + split_warns))
             except asyncio.TimeoutError:
                 reranker_ok = False
-                warnings = warnings + [f"reranker split-provider validation timed out after {_remaining:.1f}s"]
+                warnings = warnings + [RERANKER_SPLIT_TIMED_OUT_TEMPLATE.format(seconds=_remaining)]
             except BaseException as exc:  # includes CancelledError — never re-raise
                 logger.warning(
                     "reranker split-provider validation failed: %s", exc, exc_info=True
                 )
                 return _result(
-                    embedder_ok, False, warnings + [_RERANKER_SPLIT_VALIDATION_FAILED_MESSAGE]
+                    embedder_ok, False, warnings + [RERANKER_SPLIT_VALIDATION_FAILED_WARNING]
                 )
 
     result = _result(embedder_ok, reranker_ok, warnings)
@@ -637,6 +691,6 @@ async def validate_embedding_model(
         # map it to 422 rather than letting it escape as an unhandled 500. The
         # backend exception is logged (may embed cache paths, HF error bodies)
         # but never placed on the wire — see _MODEL_LOAD_FAILED_DETAIL above.
-        logger.warning("failed to load embedding model %r: %s", model_name, exc)
+        logger.warning("failed to load embedding model %r: %s", model_name, exc, exc_info=True)
         raise ModelValidationError(_MODEL_LOAD_FAILED_DETAIL) from exc
     return embedder.embedding_dim

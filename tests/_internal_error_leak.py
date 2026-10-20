@@ -8,13 +8,20 @@ never reaches the wire, while the cause is still logged with its traceback.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from archon_search.chunker import DocumentChunker
 from archon_search.collection_meta import CollectionMeta
-from archon_search.config import HyDEConfig, RAGFusionConfig
+from archon_search.config import GraphConfig, HyDEConfig, RAGFusionConfig
+from archon_search.defref_extractor import DefRefExtractor
+from archon_search.embedder import Embedder
 from archon_search.hyde import HyDEGenerator
+from archon_search.parser import DocumentParser
+from archon_search.pipeline import MetadataLookupError, SearchPipeline
 from archon_search.rag_fusion import RAGFusionGenerator
 
 # Internal-looking marker: an absolute path under the runtime data dir.
@@ -28,6 +35,12 @@ ONNX_MSG = (
     "[ONNXRuntimeError] : 6 : RUNTIME_EXCEPTION : Non-zero status code returned while running "
     f"Gather node. Model path: {LEAK_NEEDLE}/.archon-search/models/bge-small/model_optimized.onnx"
 )
+
+# What a tree-sitter failure inside the def/ref walk looks like.
+DEFREF_PARSE_MSG = f"tree_sitter: failed to load language from {LEAK_NEEDLE}/.archon-search/grammars/python.so"
+_DEFREF_SOURCE_NAME = "module.py"
+_DEFREF_SOURCE = "def caller():\n    return callee()\n\n\ndef callee():\n    return 1\n"
+_STUB_EMBEDDING_DIM = 4
 
 # Making the provider module unimportable is how a missing `hyde` / `rag_fusion`
 # extra reaches HyDEGenerator / RAGFusionGenerator __init__.
@@ -45,6 +58,18 @@ def assert_logged_with_traceback(caplog: pytest.LogCaptureFixture, message: str)
 def permission_error(name: str) -> PermissionError:
     """An OSError whose ``str()`` echoes a key/job file path under the data dir."""
     return PermissionError(13, "Permission denied", f"{LEAK_NEEDLE}/.archon-search/{name}")
+
+
+def metadata_lookup_error() -> MetadataLookupError:
+    """A store error wrapped the way the pipeline's fan-out raises it
+    (``raise MetadataLookupError(exc) from exc``), returned once caught, cause chained."""
+    try:
+        try:
+            raise RuntimeError(LANCE_MSG)
+        except RuntimeError as exc:
+            raise MetadataLookupError(exc) from exc
+    except MetadataLookupError as err:
+        return err
 
 
 def mock_pipeline() -> MagicMock:
@@ -82,3 +107,38 @@ def rag_fusion_generator_without_provider(config: RAGFusionConfig) -> RAGFusionG
     """A real RAGFusionGenerator built while the `rag_fusion` extra's provider module is absent."""
     with patch.dict(sys.modules, _NO_ANTHROPIC_PROVIDER):
         return RAGFusionGenerator(config)
+
+
+class _StubEmbedderBackend:
+    model_name: str = "mock-embedder"
+    is_warm: bool = False
+
+    def encode(self, texts: list[str]) -> list[list[float]]:
+        return [[0.1] * _STUB_EMBEDDING_DIM for _ in texts]
+
+
+def write_defref_source(directory: Path) -> Path:
+    """A Python file with a def and a call, so ingest runs the def/ref walk on it."""
+    source = directory / _DEFREF_SOURCE_NAME
+    source.write_text(_DEFREF_SOURCE, encoding="utf-8")
+    return source
+
+
+def defref_pipeline(store: Any) -> SearchPipeline:
+    """A real pipeline over a real store with a real DefRefExtractor (graph store stubbed)."""
+    graph_store = MagicMock()
+    graph_store.ensure_graph_tables = AsyncMock()
+    graph_store.delete_defref_graph_by_doc = AsyncMock()
+    graph_store.write_graph = AsyncMock()
+    return SearchPipeline(
+        store=store,
+        embedder=Embedder(_StubEmbedderBackend()),
+        reranker=None,
+        chunker=DocumentChunker(),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+        graph_store=graph_store,
+        graph_config=GraphConfig(enabled=True),
+        defref_extractor=DefRefExtractor(graph_store),
+    )

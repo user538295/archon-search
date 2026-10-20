@@ -12,11 +12,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Literal
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Final, Literal
 
 from archon_search._diagnostics import GraphProvenance, ScoredSearchCandidate, SearchScoreBreakdown, TraversalStep
 from archon_search._privacy import _query_fingerprint
-from archon_search._types import ChunkRecord, CollectionInfo, DocumentInfo, ExcludedCollection, FanoutTimings, IngestedBy, IngestError, IngestResult, SearchResult, _file_exceeds_limit, normalize_iso_utc
+from archon_search._types import FILE_TOO_LARGE_CODE, INVALID_DOCUMENT_CODE, PARSE_ERROR_CODE, ChunkRecord, CollectionInfo, DocumentInfo, ExcludedCollection, FanoutTimings, IngestedBy, IngestError, IngestResult, SearchResult, _file_exceeds_limit, normalize_iso_utc
 from archon_search.acl import apply_acl_filter, resolve_acl
 from archon_search.observability import record_stage
 from archon_search.filters import SearchFilters
@@ -36,7 +36,7 @@ from archon_search.embedder import Embedder, EmbedderBackend, EmbedderWarmupTime
 from archon_search.code_enricher import CODE_EXTENSIONS, CodeEnricher, missing_code_parser_extensions
 from archon_search.defref_extractor import DEFREF_SUPPORTED_EXTENSIONS
 from archon_search.enricher import MarkdownEnricher, is_docling_source, source_subtype_for
-from archon_search.parser import DocumentParser, ParseError
+from archon_search.parser import PARSE_FAILED_TEMPLATE, DocumentParser, ParseError
 from archon_search.reranker import (
     _WARMUP_TIMEOUT_SECONDS as _RERANKER_BUILD_TIMEOUT_SECONDS,
 )
@@ -105,6 +105,17 @@ class MetadataLookupError(Exception):
     def __init__(self, cause: Exception) -> None:
         self.cause = cause
         super().__init__(f"metadata lookup failed: {cause}")
+
+
+# Wire-facing body for a failed collection-metadata lookup: the REST 503 ``detail`` + ``code`` for
+# ``MetadataLookupError`` and for the ``POST /search`` / ``POST /explain`` routes' own meta lookups,
+# and the MCP ``error`` + ``code`` for ``MetadataLookupError`` only (an MCP tool's own meta lookup
+# failing answers ``internal_error``). The cause can embed store paths, so it is logged, never sent.
+METADATA_STORE_UNAVAILABLE_DETAIL: Final[str] = "service unavailable: metadata store could not be reached"
+METADATA_STORE_UNAVAILABLE_CODE: Final[str] = "metadata_store_error"
+# ``IngestResult.error`` of a file whose size could not be read for the ``max_file_mb`` guard;
+# ``path`` is the path ``ingest_file`` was given (the caller's own input), not a library message.
+FILE_SIZE_UNKNOWN_TEMPLATE: Final[str] = "Cannot determine file size for {path}"
 
 
 @dataclass
@@ -549,21 +560,25 @@ class SearchPipeline:
                 logger.warning("Cannot stat file for size guard: %s", path, exc_info=True)
                 return IngestResult(
                     doc_id=doc_id, chunks_created=0, status="error",
-                    error=f"Cannot determine file size for {path.name}",
+                    error=FILE_SIZE_UNKNOWN_TEMPLATE.format(path=path),
                 )
             if exceeds:
                 err = IngestError(
                     file_size_mb=math.ceil(_size_bytes / (1024 * 1024)),
                     limit_mb=self._max_file_mb,
                 )
-                return IngestResult(doc_id=doc_id, chunks_created=0, status="error", error=err.message, code="file_too_large")
+                return IngestResult(doc_id=doc_id, chunks_created=0, status="error", error=err.message, code=FILE_TOO_LARGE_CODE)
 
         # Parse
         try:
             with record_stage("parse"):
                 markdown = await self._parser.parse(path)
         except ParseError as e:
-            return IngestResult(doc_id=doc_id, chunks_created=0, status="error", error=str(e), code="parse_error")
+            logger.warning("Failed to parse %s", path, exc_info=True)
+            return IngestResult(
+                doc_id=doc_id, chunks_created=0, status="error",
+                error=PARSE_FAILED_TEMPLATE.format(path=path, reason=e.detail), code=PARSE_ERROR_CODE,
+            )
 
         return await self._ingest_text(
             markdown,
@@ -1241,14 +1256,14 @@ class SearchPipeline:
             text = document.get("text") or ""
             if not raw_source_path or not text:
                 # The HTTP boundary rejects these with 422/400, so this guards direct
-                # library callers only; the code is deliberately not "parse_error",
+                # library callers only; the code is deliberately not PARSE_ERROR_CODE,
                 # which belongs to a genuine ParseError on a real document.
                 results.append(IngestResult(
                     doc_id="",
                     chunks_created=0,
                     status="error",
                     error="document requires a non-empty 'text' and 'source_path'",
-                    code="invalid_document",
+                    code=INVALID_DOCUMENT_CODE,
                 ))
                 continue
             # Resolve once: _ingest_text stores ``str(path)`` as the chunk source_path,

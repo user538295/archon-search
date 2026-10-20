@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
+from archon_search.model_validation import EMBEDDER_PROBE_FAILED_WARNING
 from archon_search.paths import get_models_dir
 from archon_search.platform.types import GpuType
 
@@ -1189,7 +1190,7 @@ class TestValidateProviders:
         installer = _make_installer(tmp_path)
 
         with patch(f"{_MV}.validate_providers_shared",
-                   return_value=(False, False, ["embedder probe failed: boom"])) as mock_shared, \
+                   return_value=(False, False, [EMBEDDER_PROBE_FAILED_WARNING])) as mock_shared, \
              patch(_AVAILABLE_PROVIDERS,
                    return_value=["CUDAExecutionProvider", "CPUExecutionProvider"]):
             with caplog.at_level("WARNING"):
@@ -1198,7 +1199,7 @@ class TestValidateProviders:
         assert result is False
         mock_shared.assert_called_once()
         assert any(
-            r.levelname == "WARNING" and "embedder probe failed: boom" in r.message
+            r.levelname == "WARNING" and EMBEDDER_PROBE_FAILED_WARNING in r.message
             for r in caplog.records
         )
 

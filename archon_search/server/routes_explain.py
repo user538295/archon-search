@@ -17,7 +17,7 @@ import logging
 import time
 from contextlib import ExitStack
 from time import monotonic
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -28,6 +28,8 @@ from archon_search.config import resolve_active_model
 from archon_search.hyde import HyDEDependencyError, resolve_hyde_vector
 from archon_search.observability import bind_stage_recorder, correlation_id as _correlation_id
 from archon_search.pipeline import (
+    METADATA_STORE_UNAVAILABLE_CODE,
+    METADATA_STORE_UNAVAILABLE_DETAIL,
     CollectionNotFoundError,
     ExplainStageError,
     FanoutTimeoutError,
@@ -36,7 +38,15 @@ from archon_search.pipeline import (
 )
 from archon_search.router import MultiCollectionRouter
 from archon_search.server.routes_search import dependency_error_response
-from archon_search.server.schemas import AclGateSchema, ErrorDetail, ExcludedCollectionSchema
+from archon_search.server.schemas import (
+    GRAPH_COMMUNITIES_NOT_BUILT_CODE,
+    INVALID_SCOPE_FILTER_CODE,
+    AclGateSchema,
+    CodedErrorDetail,
+    ErrorDetail,
+    ExcludedCollectionSchema,
+    route_422_response,
+)
 from archon_search.server._validators import validate_scope_filter as _check_scope_filter
 from archon_search.telemetry.entry import TelemetryEntry
 
@@ -53,8 +63,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Catch-all ``500`` ``detail``: the caught exception's message may embed internals, so
-# it goes to the server log only. Same text as MCP ``explain``'s ``_EXPLAIN_FAILED_DETAIL``.
-EXPLAIN_FAILED_DETAIL = "explain failed"
+# it goes to the server log only. MCP ``explain`` sends the same constant.
+EXPLAIN_FAILED_DETAIL: Final[str] = "explain failed"
+# ``503`` body for a failed collectionless routing call (no ``collection`` pinned): the cause can
+# embed store paths or model internals, so it is logged, never sent.
+ROUTING_UNAVAILABLE_DETAIL: Final[str] = "service unavailable: routing could not be completed"
+ROUTING_UNAVAILABLE_CODE: Final[str] = "service_unavailable"
+# OpenAPI ``500`` description: only the failures this route catches answer the JSON ``detail``;
+# anything it does not catch is a plain-text ``500`` — e.g. an embedder load failure. The one
+# exception is ``EmbedderNotReadyError``: the app-wide handler (server/app.py) answers it as a JSON ``503``.
+_EXPLAIN_500_DESCRIPTION = (
+    "JSON `detail` for a pipeline-stage failure (`<stage> error: <ExceptionType>`) or a failed "
+    f"HyDE resolution or pipeline call (`{EXPLAIN_FAILED_DETAIL}`); see the server log for details. "
+    "Any other failure (e.g. loading the collection's embedder failing for a reason other than "
+    "the embedder not being ready yet) is a plain-text 500."
+)
 
 _VALID_ACL_SOURCES = frozenset({"frontmatter", "sidecar", "collection_default"})
 
@@ -392,7 +415,21 @@ class ExplainResponse(BaseModel):
         )
 
 
-@router.post("/explain", response_model=ExplainResponse, responses={503: {"model": ErrorDetail}})
+@router.post(
+    "/explain",
+    response_model=ExplainResponse,
+    responses={
+        400: {
+            "model": CodedErrorDetail,
+            "description": f"`scope_filter` is syntactically invalid (code `{INVALID_SCOPE_FILTER_CODE}`)",
+        },
+        404: {"model": ErrorDetail, "description": "Collection not found, or no collection to route to"},
+        422: route_422_response(),
+        500: {"model": ErrorDetail, "description": _EXPLAIN_500_DESCRIPTION},
+        503: {"model": ErrorDetail},
+        504: {"model": ErrorDetail, "description": "Multi-collection fan-out timed out"},
+    },
+)
 async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainResponse | JSONResponse:
     """Return the per-stage retrieval/reranking trace for a query, plus the
     routing decision when no collection is pinned.
@@ -466,7 +503,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
     scope_filter_err = _check_scope_filter(body.scope_filter)
     if scope_filter_err is not None:
         return JSONResponse(
-            {"detail": {"code": "invalid_scope_filter", "message": scope_filter_err}},
+            {"detail": {"code": INVALID_SCOPE_FILTER_CODE, "message": scope_filter_err}},
             status_code=400,
         )
 
@@ -550,14 +587,15 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 # the dual-handler pattern in routes_search.py and will become active
                 # when graph_mode is wired to the multi-collection path in a later ticket.
                 return JSONResponse(
-                    {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
+                    {"detail": {"code": GRAPH_COMMUNITIES_NOT_BUILT_CODE, "message": str(exc)}}, status_code=422
                 )
             except CollectionNotFoundError:
                 return JSONResponse({"detail": "collection not found"}, status_code=404)
             except MetadataLookupError:
+                logger.exception("multi-collection explain: metadata lookup failed")
                 _emit_err()
                 return JSONResponse(
-                    {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"},
+                    {"detail": METADATA_STORE_UNAVAILABLE_DETAIL, "code": METADATA_STORE_UNAVAILABLE_CODE},
                     status_code=503,
                 )
             except FanoutTimeoutError:
@@ -570,7 +608,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                     {"detail": f"{exc.stage} error: {type(exc.original).__name__}"}, status_code=500
                 )
             except Exception as exc:
-                logger.error("multi-collection explain failed: %s", exc, exc_info=True)
+                logger.exception("multi-collection explain failed: %s", exc)
                 _emit_err()
                 return JSONResponse({"detail": EXPLAIN_FAILED_DETAIL}, status_code=500)
 
@@ -617,10 +655,10 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             try:
                 meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
             except Exception as exc:
-                logger.error("explain: meta lookup failed for %r: %s", body.collection, type(exc).__name__)
+                logger.exception("explain: meta lookup failed for %r: %s", body.collection, type(exc).__name__)
                 _emit_err()
                 return JSONResponse(
-                    {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"},
+                    {"detail": METADATA_STORE_UNAVAILABLE_DETAIL, "code": METADATA_STORE_UNAVAILABLE_CODE},
                     status_code=503,
                 )
             if meta is None:
@@ -631,10 +669,10 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             try:
                 all_meta = await pipeline.get_all_collections_meta(namespace=ns)
             except Exception as exc:
-                logger.error("explain: meta lookup failed: %s", type(exc).__name__)
+                logger.exception("explain: meta lookup failed: %s", type(exc).__name__)
                 _emit_err()
                 return JSONResponse(
-                    {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"},
+                    {"detail": METADATA_STORE_UNAVAILABLE_DETAIL, "code": METADATA_STORE_UNAVAILABLE_CODE},
                     status_code=503,
                 )
             if not all_meta:
@@ -653,10 +691,10 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 )
                 ranked = col_router.rank_with_scores(routing_vector, all_meta)
             except Exception as exc:
-                logger.error("explain: routing failed: %s", type(exc).__name__)
+                logger.exception("explain: routing failed: %s", type(exc).__name__)
                 _emit_err()
                 return JSONResponse(
-                    {"detail": "service unavailable: routing could not be completed", "code": "service_unavailable"},
+                    {"detail": ROUTING_UNAVAILABLE_DETAIL, "code": ROUTING_UNAVAILABLE_CODE},
                     status_code=503,
                 )
             # rank_with_scores returns every supplied collection, so ranked is non-empty.
@@ -698,7 +736,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
             return dependency_error_response("explain", exc, log=logger)
         except GraphCommunitiesNotBuiltError as exc:
             return JSONResponse(
-                {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
+                {"detail": {"code": GRAPH_COMMUNITIES_NOT_BUILT_CODE, "message": str(exc)}}, status_code=422
             )
         except ExplainStageError as exc:
             # Full original is logged server-side; the response detail is sanitized to
@@ -710,7 +748,7 @@ async def explain_endpoint(body: ExplainRequest, request: Request) -> ExplainRes
                 {"detail": f"{exc.stage} error: {type(exc.original).__name__}"}, status_code=500
             )
         except Exception as exc:
-            logger.error("explain failed for %r: %s", chosen, exc, exc_info=True)
+            logger.exception("explain failed for %r: %s", chosen, exc)
             _emit_err()
             return JSONResponse({"detail": EXPLAIN_FAILED_DETAIL}, status_code=500)
 

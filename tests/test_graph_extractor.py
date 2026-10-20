@@ -33,7 +33,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from archon_search.graph_extractor import (
-    _BACKEND_UNAVAILABLE_DETAIL,
+    BACKEND_UNAVAILABLE_DETAIL,
     _LATCHED_LOAD_FAILURE_LOG_MESSAGE,
     _LOAD_FAILURE_LOG_MESSAGE,
     _LOAD_WAIT_TIMEOUT_DETAIL,
@@ -727,7 +727,7 @@ def _assert_degraded_with_unavailable_warning(docs, results) -> None:
     for doc, result in zip(docs, results, strict=True):
         assert result.fatal_error is None, f"{doc}: fatal_error set to {result.fatal_error!r}"
         assert result.degraded is True, f"{doc}: not degraded"
-        assert result.warnings.count(_BACKEND_UNAVAILABLE_DETAIL) == 1, (
+        assert result.warnings.count(BACKEND_UNAVAILABLE_DETAIL) == 1, (
             f"{doc}: expected exactly one per-document warning, got {result.warnings}"
         )
 
@@ -926,7 +926,7 @@ def test_load_wait_timeout_warns_per_document_and_never_silences_a_later_load_fa
 
     assert _LOAD_WAIT_TIMEOUT_DETAIL in timeout_1.warnings
     assert _LOAD_WAIT_TIMEOUT_DETAIL in timeout_2.warnings
-    assert _BACKEND_UNAVAILABLE_DETAIL in load_failure.warnings
+    assert BACKEND_UNAVAILABLE_DETAIL in load_failure.warnings
     assert len(_extractor_records(caplog, logging.WARNING, _LOAD_TIMEOUT_LOG_MESSAGE)) == 2
     assert len(_extractor_records(caplog, logging.WARNING, _LOAD_FAILURE_LOG_MESSAGE)) == 1
 

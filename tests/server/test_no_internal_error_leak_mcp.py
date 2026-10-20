@@ -1,9 +1,10 @@
 """MCP tools never echo an internal exception message on the wire.
 
-CLAUDE.md hard invariant: never put ``str(exc)`` in a wire-facing ``error`` field
-for a caught exception whose message embeds internals. Each test raises an
-exception carrying an internal-looking path at the real raise point the handler
-wraps (pipeline / store / embedder / response-schema construction) and asserts
+CLAUDE.md hard invariant: never put ``str(exc)`` in a wire-facing ``error`` (or
+``warnings``) field for a caught exception whose message embeds internals. Each test
+raises an exception carrying an internal-looking path at the real raise point the
+handler wraps (pipeline / store / embedder / parser / def/ref walk / response-schema
+construction) and asserts
 the path never reaches the MCP wire output, while a presence anchor (error code,
 and that the injected raise point was actually hit) keeps the absence check from
 passing vacuously.
@@ -19,6 +20,7 @@ import io
 import json
 import logging
 import tarfile
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -28,8 +30,9 @@ import pytest
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ValidationError
 
-from archon_search import key_manager
-from archon_search._types import SearchResult
+from archon_search import defref_extractor, key_manager
+from archon_search import parser as archon_parser
+from archon_search._types import PARSE_ERROR_CODE, SearchResult
 from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.hyde import HYDE_DEPENDENCY_DETAIL
@@ -40,15 +43,22 @@ from archon_search.key_manager import (
     ROTATE_WRITE_FAILED_DETAIL,
     KeyStore,
 )
+from archon_search.parser import (
+    PARSE_FAILED_DETAIL,
+    PARSE_FAILED_TEMPLATE,
+    DocumentParser,
+)
 from archon_search.pipeline import (
+    METADATA_STORE_UNAVAILABLE_CODE,
+    METADATA_STORE_UNAVAILABLE_DETAIL,
     ExplainPipelineResult,
     ExplainStageError,
+    SearchPipeline,
     SearchPipelineResult,
     SearchWithContextResult,
 )
 from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL
 from archon_search.server.mcp import (
-    _EXPLAIN_FAILED_DETAIL,
     _INVALID_EXPLAIN_RESPONSE_DETAIL,
     _INVALID_SEARCH_FILTERS_DETAIL,
     _INVALID_SEARCH_RESPONSE_DETAIL,
@@ -65,23 +75,28 @@ from archon_search.server.mcp_schemas import (
     IngestResultSchema,
     McpSearchResultSchema,
 )
-from archon_search.server.routes_explain import ExplainResponse
+from archon_search.server.routes_explain import EXPLAIN_FAILED_DETAIL, ExplainResponse
 from archon_search.store import StoreBusyError
+from tests._docling_stubs import reset_parser_worker_globals  # noqa: F401 — autouse fixture
 from tests._install_hint_leak import (
     assert_install_hint_logged_not_sent,
     patch_install_hint,
     rag_fusion_dependency_raiser,
 )
 from tests._internal_error_leak import (
+    DEFREF_PARSE_MSG,
     LANCE_MSG,
     LANCE_PATH,
     LEAK_NEEDLE,
     ONNX_MSG,
     assert_logged_with_traceback,
+    defref_pipeline,
     hyde_generator,
     hyde_generator_without_provider,
+    metadata_lookup_error,
     mock_pipeline,
     permission_error,
+    write_defref_source,
 )
 
 pytestmark = pytest.mark.xdist_group("mcp")
@@ -216,8 +231,8 @@ _CATCH_ALL_CASES: list[_CatchAllCase] = [
     _CatchAllCase("search_with_context", "search_with_context", {"query": "q", "collection": "col"},
                   "search_with_context", False, _SEARCH_FAILED_DETAIL),
     _CatchAllCase("explain-multi", "explain", {"query": "q", "collections": ["a", "b"]}, "explain", False,
-                  _EXPLAIN_FAILED_DETAIL),
-    _CatchAllCase("explain", "explain", {"query": "q", "collection": "col"}, "explain", False, _EXPLAIN_FAILED_DETAIL),
+                  EXPLAIN_FAILED_DETAIL),
+    _CatchAllCase("explain", "explain", {"query": "q", "collection": "col"}, "explain", False, EXPLAIN_FAILED_DETAIL),
     _CatchAllCase("ingest_file", "ingest_file", {"path": "/data/doc.md", "collection": "col"}, "ingest_file", False,
                   INTERNAL_ERROR_DETAIL),
     _CatchAllCase("ingest_directory", "ingest_directory", {"path": "/data", "collection": "col"}, "ingest_directory",
@@ -301,6 +316,27 @@ async def test_explain_stage_error_answers_stage_and_type_only(
     _assert_error_without_leak(result, wire, _INTERNAL_ERROR_CODE, "store error: RuntimeError")
     assert_logged_with_traceback(caplog, LANCE_MSG)
     _assert_internal_error_enqueued(writer, "explain")
+
+
+# ---------------------------------------------------------------------------
+# A3 — the fan-out's MetadataLookupError -> the fixed metadata_store_error answer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("tool", "pipeline_method"), [("search", "search_many"), ("explain", "explain")])
+async def test_multi_collection_metadata_lookup_error_does_not_echo_store_error(
+    tool: str, pipeline_method: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    pipeline = mock_pipeline()
+    raiser = AsyncMock(side_effect=metadata_lookup_error())
+    setattr(pipeline, pipeline_method, raiser)
+
+    with caplog.at_level(logging.ERROR):
+        result, wire = await _wire(_tools(pipeline), tool, query="q", collections=["a", "b"])
+
+    raiser.assert_awaited_once()
+    _assert_error_without_leak(result, wire, METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL)
+    assert_logged_with_traceback(caplog, LANCE_MSG)
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +514,7 @@ def _hyde_pipeline() -> MagicMock:
 _HYDE_TOOLS: list[tuple[str, str]] = [
     ("search", _SEARCH_FAILED_DETAIL),
     ("search_with_context", _SEARCH_FAILED_DETAIL),
-    ("explain", _EXPLAIN_FAILED_DETAIL),
+    ("explain", EXPLAIN_FAILED_DETAIL),
 ]
 
 
@@ -937,3 +973,142 @@ async def test_keep_store_busy_message_reaches_store_busy() -> None:
 
     assert isinstance(result, dict) and result.get("code") == "store_busy", wire
     assert result["error"] == str(StoreBusyError(_STORE_BUSY_TIMEOUT_S))
+
+
+# ---------------------------------------------------------------------------
+# ingest_file — IngestResult.error and IngestResult.warnings are copied verbatim onto
+# the wire (IngestResultSchema.from_result, server/mcp_schemas.py), so neither may carry
+# a parser library's message or a parse worker's failure payload.
+# ---------------------------------------------------------------------------
+
+# What a docling / RapidOCR failure looks like: it names a model file under the data dir.
+_PARSER_LIBRARY_MSG = (
+    "ConversionError: RapidOCR detection model failed to load from "
+    f"{LEAK_NEEDLE}/.archon-search/models/rapidocr/ch_PP-OCRv4_det_infer.onnx"
+)
+_PDF_NAME = "report.pdf"
+_PDF_BYTES = b"%PDF-1.7"
+
+
+def _real_parse_pipeline() -> SearchPipeline:
+    """A real SearchPipeline + DocumentParser: a parse failure returns before any store write.
+
+    ``ingest_directory`` reads the collection's default TTL first, so that read answers "no meta".
+    """
+    store = MagicMock()
+    store.get_collection_meta = AsyncMock(return_value=None)
+    return SearchPipeline(
+        store=store,
+        embedder=MagicMock(),
+        reranker=None,
+        chunker=MagicMock(),
+        parser=DocumentParser(),
+        top_k_retrieve=10,
+        top_k_return=5,
+    )
+
+
+def _write_pdf(directory: Path) -> Path:
+    document = directory / _PDF_NAME
+    document.write_bytes(_PDF_BYTES)
+    return document
+
+
+async def _ingest_pdf(tmp_path: Path) -> tuple[Any, str, Path]:
+    document = _write_pdf(tmp_path)
+    pipeline = mock_pipeline()
+    pipeline.ingest_file = _real_parse_pipeline().ingest_file
+    result, wire = await _wire(_tools(pipeline), "ingest_file", path=str(document), collection="col")
+    return result, wire, document
+
+
+def _assert_parse_error_without_leak(result: Any, wire: str, document: Path) -> None:
+    assert isinstance(result, dict), wire
+    assert (result.get("status"), result.get("code")) == ("error", PARSE_ERROR_CODE), wire
+    expected = PARSE_FAILED_TEMPLATE.format(path=document.resolve(), reason=PARSE_FAILED_DETAIL)
+    assert result.get("error") == expected, f"a parse failure must still say what failed: {wire!r}"
+    assert LEAK_NEEDLE not in wire, f"parser failure text leaked onto the MCP wire: {wire!r}"
+
+
+async def test_ingest_file_parse_error_does_not_echo_parser_library_message(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    converter = MagicMock(side_effect=RuntimeError(_PARSER_LIBRARY_MSG))
+
+    with patch.object(DocumentParser, "_parse_pdf", converter), caplog.at_level(logging.WARNING):
+        result, wire, document = await _ingest_pdf(tmp_path)
+
+    converter.assert_called_once()
+    _assert_parse_error_without_leak(result, wire, document)
+    assert_logged_with_traceback(caplog, _PARSER_LIBRARY_MSG)
+
+
+async def test_ingest_directory_parse_error_does_not_echo_parser_library_message(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``ingest_directory`` copies each file's ``IngestResult`` onto the wire the same way."""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    document = _write_pdf(corpus)
+    converter = MagicMock(side_effect=RuntimeError(_PARSER_LIBRARY_MSG))
+    pipeline = mock_pipeline()
+    pipeline.ingest_directory = _real_parse_pipeline().ingest_directory
+
+    with patch.object(DocumentParser, "_parse_pdf", converter), caplog.at_level(logging.WARNING):
+        result, wire = await _wire(_tools(pipeline), "ingest_directory", path=str(corpus), collection="col")
+
+    converter.assert_called_once()
+    assert isinstance(result, list) and len(result) == 1, wire
+    _assert_parse_error_without_leak(result[0], wire, document)
+    assert_logged_with_traceback(caplog, _PARSER_LIBRARY_MSG)
+
+
+def _run_inline(fn: Callable[..., Any], *args: Any) -> Future[Any]:
+    """``ProcessPoolExecutor.submit`` stand-in: runs the real worker entry point in-process."""
+    future: Future[Any] = Future()
+    future.set_result(fn(*args))
+    return future
+
+
+async def test_ingest_file_parse_error_does_not_echo_docling_worker_payload(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The real worker entry point ``_docling_to_markdown`` catches the docling failure and
+    returns ``(False, "<ExceptionType>: <message>")``; the real ``_parse_with_docling`` turns
+    that payload into a ParseError, which must not reach the wire."""
+    pool = MagicMock()
+    pool.submit.side_effect = _run_inline
+    converter = MagicMock()
+    converter.convert.side_effect = RuntimeError(_PARSER_LIBRARY_MSG)
+
+    with (
+        patch.object(DocumentParser, "_docling_pool", return_value=pool),
+        patch.object(archon_parser, "_build_docling_converter", return_value=converter),
+        caplog.at_level(logging.WARNING),
+    ):
+        result, wire, document = await _ingest_pdf(tmp_path)
+
+    assert pool.submit.call_args.args[0] is archon_parser._docling_to_markdown
+    converter.convert.assert_called_once()
+    _assert_parse_error_without_leak(result, wire, document)
+    assert_logged_with_traceback(caplog, f"RuntimeError: {_PARSER_LIBRARY_MSG}")
+
+
+async def test_ingest_file_defref_parse_failure_warning_does_not_echo_parser_exception(
+    tmp_path: Path, connected_store: Any, col_name: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``DefRefExtractor``'s tree-sitter failure reaches ``warnings``, the ingest still succeeds."""
+    source = write_defref_source(tmp_path)
+    walk = MagicMock(side_effect=RuntimeError(DEFREF_PARSE_MSG))
+
+    with patch.object(defref_extractor, "_parse_and_walk", walk), caplog.at_level(logging.WARNING):
+        result, wire = await _wire(
+            _tools(defref_pipeline(connected_store)), "ingest_file", path=str(source), collection=col_name
+        )
+
+    walk.assert_called_once()
+    assert isinstance(result, dict) and result.get("status") == "ok", wire
+    expected = defref_extractor.DEFREF_PARSE_FAILED_WARNING.format(file_path=str(source.resolve()))
+    assert expected in result.get("warnings", []), wire
+    assert LEAK_NEEDLE not in wire, f"def/ref parser exception leaked onto the MCP wire: {wire!r}"
+    assert_logged_with_traceback(caplog, DEFREF_PARSE_MSG)

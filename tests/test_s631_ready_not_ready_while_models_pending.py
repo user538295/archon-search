@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
-from archon_search.model_validation import ModelValidationResult
+from archon_search.model_validation import VALIDATION_TASK_FAILED_WARNING, ModelValidationResult
 from archon_search.server import app as app_module
 from archon_search.server.app import create_app
 from archon_search.server.schemas import WarmupResult
@@ -240,7 +240,7 @@ def test_lifespan_validation_stores_failure_when_is_warm_raises(tmp_path: Path) 
     assert app.state.warmup_result == WarmupResult.DONE
     assert app.state.model_validation.embedder_ok is False
     assert app.state.model_validation.reranker_ok is False
-    assert "validation task failed unexpectedly" in app.state.model_validation.provider_warnings
+    assert VALIDATION_TASK_FAILED_WARNING in app.state.model_validation.provider_warnings
     assert ready.json()["checks"]["models"] == "fail"
     assert ready.status_code == 200
     assert ready.json()["ready"] is True

@@ -17,10 +17,18 @@ from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder
 from archon_search.jobs.store import JobStore
-from archon_search.pipeline import CollectionNotFoundError, ExplainPipelineResult, ExplainStageError, SearchPipeline
+from archon_search.pipeline import (
+    METADATA_STORE_UNAVAILABLE_CODE,
+    METADATA_STORE_UNAVAILABLE_DETAIL,
+    CollectionNotFoundError,
+    ExplainPipelineResult,
+    ExplainStageError,
+    SearchPipeline,
+)
 from archon_search.reranker import Reranker
 from archon_search.router import MultiCollectionRouter
 from archon_search.server.app import create_app
+from archon_search.server.routes_explain import ROUTING_UNAVAILABLE_CODE, ROUTING_UNAVAILABLE_DETAIL
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
 from archon_search._types import ChunkRecord
 
@@ -310,8 +318,7 @@ def test_post_explain_pinned_meta_lookup_failure_returns_503(tmp_path: Path) -> 
     response = client.post("/explain", json={"query": "hello", "collection": "col"})
     assert response.status_code == 503
     body = response.json()
-    assert body["code"] == "metadata_store_error"
-    assert "metadata store" in body["detail"]
+    assert (body["code"], body["detail"]) == (METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL)
 
 
 def test_post_explain_collectionless_no_collections_returns_404(tmp_path: Path) -> None:
@@ -335,8 +342,7 @@ def test_post_explain_collectionless_meta_lookup_failure_returns_503(tmp_path: P
     response = client.post("/explain", json={"query": "hello"})
     assert response.status_code == 503
     body = response.json()
-    assert body["code"] == "metadata_store_error"
-    assert "metadata store" in body["detail"]
+    assert (body["code"], body["detail"]) == (METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL)
 
 
 def test_post_explain_collectionless_router_failure_returns_503(
@@ -361,8 +367,7 @@ def test_post_explain_collectionless_router_failure_returns_503(
     response = client.post("/explain", json={"query": "hello"})
     assert response.status_code == 503
     body = response.json()
-    assert body["code"] == "service_unavailable"
-    assert "routing" in body["detail"]
+    assert (body["code"], body["detail"]) == (ROUTING_UNAVAILABLE_CODE, ROUTING_UNAVAILABLE_DETAIL)
 
 
 def test_post_explain_store_failure_returns_500(tmp_path: Path) -> None:
@@ -2120,8 +2125,7 @@ def test_post_explain_multi_collection_metadata_lookup_failure_returns_503(tmp_p
 
     assert response.status_code == 503
     body = response.json()
-    assert body["code"] == "metadata_store_error"
-    assert "metadata store" in body["detail"]
+    assert (body["code"], body["detail"]) == (METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL)
 
 
 def test_post_explain_multi_collection_fanout_timeout_returns_504(tmp_path: Path) -> None:

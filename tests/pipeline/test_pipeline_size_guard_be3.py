@@ -24,7 +24,8 @@ from unittest.mock import patch
 
 import pytest
 
-from archon_search._types import IngestResult
+from archon_search._types import FILE_TOO_LARGE_CODE, IngestResult
+from archon_search.pipeline import FILE_SIZE_UNKNOWN_TEMPLATE
 
 
 @contextmanager
@@ -117,7 +118,7 @@ async def test_size_guard_over_limit_returns_error_result(connected_store, col_n
         result = await pipeline.ingest_file(oversized, col_name, embedder=pipeline._global_embedder)
 
     assert result.status == "error"
-    assert result.code == "file_too_large"
+    assert result.code == FILE_TOO_LARGE_CODE
     assert result.chunks_created == 0
     assert result.error is not None
     assert "2 MB" in result.error
@@ -162,7 +163,7 @@ async def test_size_guard_follows_symlinks(connected_store, col_name, tmp_path):
         result = await pipeline.ingest_file(symlink, col_name, embedder=pipeline._global_embedder)
 
     assert result.status == "error"
-    assert result.code == "file_too_large"
+    assert result.code == FILE_TOO_LARGE_CODE
     # Verify getsize was called with the symlink path (not pre-resolved to real_file)
     # so the OS-level symlink dereferencing happens naturally.
     mock_getsize.assert_called_with(symlink)
@@ -181,9 +182,9 @@ async def test_size_guard_oserror_returns_error_result(connected_store, col_name
 
     assert isinstance(result, IngestResult)
     assert result.status == "error"
-    assert result.code is None  # OSError path doesn't set code="file_too_large"
-    assert "Cannot determine file size for" in result.error
-    assert "deleted.md" in result.error
+    assert result.code is None  # OSError path doesn't set code=FILE_TOO_LARGE_CODE
+    assert result.error == FILE_SIZE_UNKNOWN_TEMPLATE.format(path=missing_file)
+    assert result.error == f"Cannot determine file size for {missing_file}"
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +246,7 @@ async def test_pipeline_guard_no_chunks_on_oversize(tmp_path, monkeypatch):
         result = await pipeline.ingest_file(oversized, "test-col", embedder=pipeline._global_embedder)
 
     assert result.status == "error"
-    assert result.code == "file_too_large"
+    assert result.code == FILE_TOO_LARGE_CODE
     assert result.chunks_created == 0
 
     count = await store.count_chunks("test-col", namespace="default")
@@ -287,7 +288,7 @@ async def test_pipeline_guard_directory_batch_continues(tmp_path, monkeypatch):
     small_doc_id = hashlib.sha256(str(small_file.resolve()).encode()).hexdigest()
 
     assert by_path[big_doc_id].status == "error"
-    assert by_path[big_doc_id].code == "file_too_large"
+    assert by_path[big_doc_id].code == FILE_TOO_LARGE_CODE
     assert by_path[small_doc_id].status == "ok"
 
 
@@ -309,4 +310,4 @@ async def test_pipeline_guard_watcher_path_continues(tmp_path, monkeypatch):
 
     assert isinstance(result, IngestResult)
     assert result.status == "error"
-    assert result.code == "file_too_large"
+    assert result.code == FILE_TOO_LARGE_CODE

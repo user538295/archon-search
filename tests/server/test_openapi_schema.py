@@ -631,6 +631,8 @@ def test_explain_result_graph_provenance_in_spec(app) -> None:
     ("path", "method"),
     [
         ("/search", "post"),
+        ("/explain", "post"),
+        ("/ingest", "post"),
         ("/keys", "post"),
         ("/keys/{key_id}", "delete"),
         ("/keys/rotate", "post"),

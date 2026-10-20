@@ -14,10 +14,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search._diagnostics import ScoredSearchCandidate, SearchScoreBreakdown
-from archon_search._types import ChunkRecord, IngestResult, SearchResult
+from archon_search._types import PARSE_ERROR_CODE, ChunkRecord, IngestResult
+from archon_search.parser import PARSE_FAILED_DETAIL
 from archon_search.store import ChunkIngestResult
 from archon_search.embedder import Embedder
-from archon_search.reranker import Reranker
 
 from .conftest import MockEmbedderBackend, MockRerankerBackend, make_embedder, make_reranker, make_pipeline
 
@@ -126,7 +126,40 @@ async def test_pipeline_ingest_file_parse_error(connected_store, col_name, tmp_p
     assert result.status == "error"
     assert result.chunks_created == 0
     assert result.error is not None
-    assert result.code == "parse_error"
+    assert result.code == PARSE_ERROR_CODE
+
+
+_RAW_PARSE_CAUSE = "library failure under /internal/models/x.onnx"
+_CURATED_PARSE_DETAIL = "the parser worker was lost; retry the ingest"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("detail_kwargs", "expected_detail"),
+    [
+        pytest.param({}, PARSE_FAILED_DETAIL, id="library-cause"),
+        pytest.param({"detail": _CURATED_PARSE_DETAIL}, _CURATED_PARSE_DETAIL, id="curated-detail"),
+    ],
+)
+async def test_pipeline_ingest_file_parse_error_keeps_curated_detail_only(
+    connected_store, col_name, tmp_path, detail_kwargs: dict[str, str], expected_detail: str
+):
+    """IngestResult.error names the submitted path and ParseError.detail, never the raw cause."""
+    from archon_search.parser import ParseError
+
+    pipeline = make_pipeline(connected_store)
+    md_file = tmp_path / "bad.md"
+    md_file.write_text("some content")
+
+    async def _fail(path: Path) -> str:
+        raise ParseError(path, RuntimeError(_RAW_PARSE_CAUSE), **detail_kwargs)
+
+    pipeline._parser.parse = _fail  # type: ignore[method-assign]
+    result = await pipeline.ingest_file(md_file, col_name, embedder=pipeline._global_embedder)
+
+    assert result.code == PARSE_ERROR_CODE
+    assert result.error == f"Failed to parse {md_file}: {expected_detail}"
+    assert _RAW_PARSE_CAUSE not in result.error
 
 
 @pytest.mark.asyncio
@@ -333,7 +366,6 @@ async def test_pipeline_ingest_directory_rebuilds_fts_once(connected_store, col_
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-    from archon_search.store import SearchStore
 
     rebuild_calls = 0
     original_rebuild = connected_store.rebuild_fts_index
@@ -1480,12 +1512,9 @@ async def test_p14_24_delete_document_sql_injection_rejected_by_doc_id_re(connec
 @pytest.mark.asyncio
 async def test_ingest_directory_namespace_param(tmp_path) -> None:
     """ingest_directory forwards namespace to store.get_collection_meta and CollectionMeta."""
-    from datetime import UTC, datetime
-    from unittest.mock import AsyncMock, MagicMock, call
+    from unittest.mock import AsyncMock, MagicMock
 
     from archon_search.chunker import DocumentChunker
-    from archon_search.collection_meta import CollectionMeta
-    from archon_search.constants import DEFAULT_NAMESPACE
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
@@ -1531,7 +1560,6 @@ async def test_ingest_directory_default_namespace(tmp_path) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
     from archon_search.chunker import DocumentChunker
-    from archon_search.collection_meta import CollectionMeta
     from archon_search.constants import DEFAULT_NAMESPACE
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
@@ -1577,7 +1605,6 @@ async def test_recompute_collection_meta_namespace_param(tmp_path) -> None:
 
     from archon_search.chunker import DocumentChunker
     from archon_search.collection_meta import CollectionMeta
-    from archon_search.constants import DEFAULT_NAMESPACE
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
 
@@ -1644,7 +1671,7 @@ def _make_pipeline_for_embedding_tests(store):  # type: ignore[no-untyped-def]
 @pytest.mark.asyncio
 async def test_ingest_calls_update_description_with_generated_desc(tmp_path) -> None:
     """ingest_directory calls update_description with the generated description."""
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     store = _make_stub_store_for_embedding_tests(existing_meta=None)
     pipeline = _make_pipeline_for_embedding_tests(store)
@@ -2704,9 +2731,6 @@ async def test_recompute_collection_meta_preserves_active_embedding_model() -> N
     store.count_documents = AsyncMock(return_value=1)
     store.update_collection_meta = AsyncMock()
 
-    global_embedder = make_embedder()
-    passed_global_embedder = make_embedder()
-
     class _Backend:
         model_name = "global-model"
         is_warm = False
@@ -3195,7 +3219,6 @@ async def test_ingest_file_uses_optimize_fts_under_plan_a(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_ingest_pdf_excises_markers_before_chunker(tmp_path) -> None:
     """For a PDF source, markers are removed from the text before it reaches the chunker."""
-    from unittest.mock import patch as _patch
 
     from archon_search.enricher import PAGE_BREAK_MARKER
 
@@ -3650,8 +3673,6 @@ async def test_pipeline_list_documents_cursor_passes_through(connected_store, co
     from archon_search.chunker import DocumentChunker
     from archon_search.parser import DocumentParser
     from archon_search.pipeline import SearchPipeline
-    from archon_search.embedder import Embedder
-    from archon_search.reranker import Reranker
     from .conftest import make_embedder, make_reranker
 
     doc = DocumentInfo(doc_id="a" * 64, source_path="/p.md", chunk_count=1, indexed_at="2026-01-01T00:00:00")

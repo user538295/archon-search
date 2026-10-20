@@ -173,7 +173,7 @@ async def test_missing_artifact_still_persists_chunks_and_code_symbols(
     it still succeeds, chunks persist, code-symbol nodes are written, the
     result is degraded, and exactly the pinned sanitized warning is returned.
     """
-    from archon_search.graph_extractor import _BACKEND_UNAVAILABLE_DETAIL
+    from archon_search.graph_extractor import BACKEND_UNAVAILABLE_DETAIL
 
     broken_backend = _FakeBackend(
         load_error=RuntimeError("model artifact not found on disk")
@@ -191,7 +191,7 @@ async def test_missing_artifact_still_persists_chunks_and_code_symbols(
 
         assert result.status == "ok", f"ingest must still succeed: {result.error}"
         assert result.chunks_created > 0, "chunks must persist despite the degrade"
-        assert result.warnings == [_BACKEND_UNAVAILABLE_DETAIL]
+        assert result.warnings == [BACKEND_UNAVAILABLE_DETAIL]
 
         nodes = await graph_store.get_all_nodes(collection, ns=_NAMESPACE)
         code_symbol_nodes = [n for n in nodes if n.entity_type == EntityType.code_symbol]
@@ -212,7 +212,7 @@ async def test_missing_artifact_still_persists_chunks_and_code_symbols(
         )
         second = await pipeline.ingest_file(doc_file, collection, embedder=pipeline._global_embedder)
         assert second.status == "ok"
-        assert second.warnings == [_BACKEND_UNAVAILABLE_DETAIL]
+        assert second.warnings == [BACKEND_UNAVAILABLE_DETAIL]
 
         edges_after = await graph_store.edge_count(collection, ns=_NAMESPACE)
         assert edges_after == 0, (

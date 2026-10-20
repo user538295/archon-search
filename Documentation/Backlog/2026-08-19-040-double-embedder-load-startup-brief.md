@@ -1,6 +1,6 @@
 # Bug Brief: Startup loads the embedding model twice concurrently (eager warmup + model validation) — ~4.6 GB each under CoreML, plus leaked CoreML contexts
 
-**ID:** 2026-08-19-040 · **Severity:** P1 · **Status:** Open — fix decided (Option B, 2026-08-19)
+**ID:** 2026-08-19-040 · **Severity:** P1 · **Status:** Open — fix decided (Option B, 2026-08-19) · **Partial:** item 4 (split-config probe skip) is implemented — `validate_models_async` passes `""` for the reranker in the first `validate_providers_shared` call when `reranker_providers` is set (`model_validation.py:547-550`); items 1–3 and 5 remain open
 **Found during:** [[2026-08-19-000-oom-crash-incident-report.md]]
 
 ## Problem

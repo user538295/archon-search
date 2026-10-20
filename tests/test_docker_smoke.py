@@ -580,7 +580,7 @@ def test_graph_enabled_image_degrades_to_code_symbols_only(
     ``notes.md`` yields only prose chunks — so the sanitized backend-load
     warning fires exactly once across the flattened per-file results.
     """
-    from archon_search.graph_extractor import _BACKEND_UNAVAILABLE_DETAIL  # noqa: PLC0415
+    from archon_search.graph_extractor import BACKEND_UNAVAILABLE_DETAIL  # noqa: PLC0415
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="archon-smoke-graph-"))
     container_id: str | None = None
@@ -635,7 +635,7 @@ def test_graph_enabled_image_degrades_to_code_symbols_only(
         # (graph_extractor.py:363), so exactly one occurrence proves notes.md really
         # did produce prose chunks and the prose path really was attempted and refused.
         warnings = job["result"]["warnings"]
-        assert warnings == [_BACKEND_UNAVAILABLE_DETAIL], (
+        assert warnings == [BACKEND_UNAVAILABLE_DETAIL], (
             "expected exactly one sanitized backend-unavailable notice and no "
             f"leaked exception text; got {warnings!r}"
         )

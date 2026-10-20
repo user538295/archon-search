@@ -6,8 +6,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Any, Final, Literal
 
+from fastapi.openapi.constants import REF_PREFIX
 from pydantic import (
     AliasChoices,
     AwareDatetime,
@@ -576,6 +577,45 @@ class DeleteResponse(BaseModel):
 class ErrorDetail(BaseModel):
     detail: str
     code: str | None = None
+
+
+class CodedErrorMessage(BaseModel):
+    """The `detail` object of a CodedErrorDetail body."""
+
+    code: str
+    message: str
+
+
+class CodedErrorDetail(BaseModel):
+    """Error body whose `detail` is a `{code, message}` object (e.g. the POST /ingest 413)."""
+
+    detail: CodedErrorMessage
+
+
+# ``CodedErrorDetail`` codes POST /search and POST /explain (and their MCP tools) answer with.
+INVALID_SCOPE_FILTER_CODE: Final[str] = "invalid_scope_filter"
+GRAPH_COMMUNITIES_NOT_BUILT_CODE: Final[str] = "graph_communities_not_built"
+
+
+def route_422_response() -> dict[str, Any]:
+    """OpenAPI ``responses`` entry for the 422 of a route that also rejects requests itself
+    (POST /search, POST /explain).
+
+    Declaring 422 replaces FastAPI's default request-validation entry, so its
+    HTTPValidationError reference is kept by hand; FastAPI appends the model's two members to it.
+    Built fresh per route: a FastAPI release that copies the entry only shallowly would append
+    into one shared ``anyOf`` list on every route and every schema build.
+    """
+    return {
+        "model": CodedErrorDetail | ErrorDetail,
+        "description": (
+            "Request validation failure (`HTTPValidationError`); a request the route rejects itself, "
+            "with a string `detail` (`ErrorDetail`, e.g. an unsupported option combination or a "
+            "missing HyDE / RAG Fusion package); or a `{code, message}` `detail` (`CodedErrorDetail`, "
+            f"code `{GRAPH_COMMUNITIES_NOT_BUILT_CODE}`)."
+        ),
+        "content": {"application/json": {"schema": {"anyOf": [{"$ref": f"{REF_PREFIX}HTTPValidationError"}]}}},
+    }
 
 
 class ExcludedCollectionSchema(BaseModel):

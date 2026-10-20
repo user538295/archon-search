@@ -200,6 +200,38 @@
         "title": "CodeParsersStatusDetail",
         "type": "object"
       },
+      "CodedErrorDetail": {
+        "description": "Error body whose `detail` is a `{code, message}` object (e.g. the POST /ingest 413).",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/CodedErrorMessage"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "CodedErrorDetail",
+        "type": "object"
+      },
+      "CodedErrorMessage": {
+        "description": "The `detail` object of a CodedErrorDetail body.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "CodedErrorMessage",
+        "type": "object"
+      },
       "CollectionBackupStatus": {
         "description": "Per-collection backup state surfaced under StatusResponse.backup (D2 Task 4.2).",
         "properties": {
@@ -5253,15 +5285,56 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorDetail"
+                }
+              }
+            },
+            "description": "`scope_filter` is syntactically invalid (code `invalid_scope_filter`)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Collection not found, or no collection to route to"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CodedErrorDetail"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ErrorDetail"
+                    }
+                  ],
+                  "title": "Response 422 Explain Endpoint Explain Post"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Request validation failure (`HTTPValidationError`); a request the route rejects itself, with a string `detail` (`ErrorDetail`, e.g. an unsupported option combination or a missing HyDE / RAG Fusion package); or a `{code, message}` `detail` (`CodedErrorDetail`, code `graph_communities_not_built`)."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "JSON `detail` for a pipeline-stage failure (`<stage> error: <ExceptionType>`) or a failed HyDE resolution or pipeline call (`explain failed`); see the server log for details. Any other failure (e.g. loading the collection's embedder failing for a reason other than the embedder not being ready yet) is a plain-text 500."
           },
           "503": {
             "content": {
@@ -5272,6 +5345,16 @@
               }
             },
             "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Multi-collection fan-out timed out"
           }
         },
         "security": [
@@ -5795,11 +5878,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorDetail"
+                  "$ref": "#/components/schemas/CodedErrorDetail"
                 }
               }
             },
-            "description": "File size exceeds configured max_file_mb limit"
+            "description": "A single-file path or an inline document exceeds the configured max_file_mb limit"
           },
           "422": {
             "content": {
@@ -5810,6 +5893,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "The job could not be recorded"
           },
           "503": {
             "description": "Store busy \u2014 reindex in progress"
@@ -6590,15 +6683,46 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedErrorDetail"
+                }
+              }
+            },
+            "description": "`scope_filter` is syntactically invalid (code `invalid_scope_filter`)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Collection not found"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CodedErrorDetail"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ErrorDetail"
+                    }
+                  ],
+                  "title": "Response 422 Search Search Post"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Request validation failure (`HTTPValidationError`); a request the route rejects itself, with a string `detail` (`ErrorDetail`, e.g. an unsupported option combination or a missing HyDE / RAG Fusion package); or a `{code, message}` `detail` (`CodedErrorDetail`, code `graph_communities_not_built`)."
           },
           "500": {
             "content": {
@@ -6619,6 +6743,16 @@
               }
             },
             "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              }
+            },
+            "description": "Search timed out"
           }
         },
         "security": [

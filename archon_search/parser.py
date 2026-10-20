@@ -99,25 +99,36 @@ def _in_parse_worker() -> bool:
     return _IS_PARSE_WORKER
 
 
-# Sanitized detail for a lost parse worker (never surface str(BrokenProcessPool) on the wire).
-# ParseError's message reaches IngestResult.error (pipeline.py `_ingest_one`), which is
-# MCP-visible via IngestResultSchema.from_result (server/mcp_schemas.py). The pre-existing
-# str(e) pass-through at that pipeline call site is a separate, already-tracked leak
-# (Documentation/Architecture/530_technical_debt_refactoring_roadmap.md) and is not fixed here;
-# this constant only keeps this fix's own new failure text off the wire.
-_PARSE_WORKER_LOST_DETAIL: Final[str] = (
+# Wire-facing ``ParseError.detail`` values. ``pipeline.ingest_file`` formats the detail into
+# ``IngestResult.error`` (:data:`PARSE_FAILED_TEMPLATE`, code ``_types.PARSE_ERROR_CODE``), which
+# is MCP-visible via ``IngestResultSchema.from_result`` (server/mcp_schemas.py). A library cause
+# (docling, RapidOCR, markitdown, trafilatura, OSError) may embed model or file paths, so its
+# text stays in the exception message and the server log; only codebase-built text goes here.
+PARSE_FAILED_DETAIL: Final[str] = "the document could not be parsed; see the server log for details"
+# ``Failed to parse <path>: <reason>``: ParseError's own log-only message (reason = the raw
+# cause) and the wire-facing ``IngestResult.error`` (reason = ``ParseError.detail``).
+PARSE_FAILED_TEMPLATE: Final[str] = "Failed to parse {path}: {reason}"
+# A lost parse worker (never surface str(BrokenProcessPool) on the wire).
+PARSE_WORKER_LOST_DETAIL: Final[str] = (
     "The document parser worker was lost while converting this file "
     "(it may have been killed by the OS, e.g. out of memory); retry the ingest."
 )
+# markitdown is a core dependency, so its absence means a broken install, not a missing extra.
+MARKITDOWN_MISSING_DETAIL: Final[str] = "markitdown is not installed; reinstall archon-search to restore it"
 
 
 class ParseError(Exception):
-    """Raised when a document cannot be parsed."""
+    """Raised when a document cannot be parsed.
 
-    def __init__(self, path: Path, cause: Exception) -> None:
-        super().__init__(f"Failed to parse {path}: {cause}")
+    ``str(exc)`` names *path* and the raw *cause* — log it, never send it. ``detail`` is the
+    wire-safe text: :data:`PARSE_FAILED_DETAIL` unless the raise site curated its own.
+    """
+
+    def __init__(self, path: Path, cause: Exception, *, detail: str = PARSE_FAILED_DETAIL) -> None:
+        super().__init__(PARSE_FAILED_TEMPLATE.format(path=path, reason=cause))
         self.path = path
         self.cause = cause
+        self.detail = detail
 
 
 _PLAIN_EXTENSIONS = {
@@ -335,7 +346,9 @@ class DocumentParser:
                 if self._pool is pool:
                     self._pool = None
             logger.warning("docling parse worker pool broken, dropping it: %s", exc)
-            raise ParseError(path, RuntimeError(_PARSE_WORKER_LOST_DETAIL)) from exc
+            raise ParseError(
+                path, RuntimeError(PARSE_WORKER_LOST_DETAIL), detail=PARSE_WORKER_LOST_DETAIL
+            ) from exc
         except Exception as exc:
             raise ParseError(path, exc) from exc
         if not ok:
@@ -354,7 +367,8 @@ class DocumentParser:
         except ImportError as exc:
             raise ParseError(
                 path,
-                ImportError("markitdown is not installed; run: pip install markitdown"),
+                ImportError(MARKITDOWN_MISSING_DETAIL),
+                detail=MARKITDOWN_MISSING_DETAIL,
             ) from exc
         try:
             return MarkItDown().convert(str(path)).text_content or ""

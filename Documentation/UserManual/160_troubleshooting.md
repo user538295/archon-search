@@ -1,7 +1,7 @@
 **Purpose**: Diagnose common runtime failures.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-10-17 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-10-20 / **Next review**: 2027-07-29
 
 # Troubleshooting
 
@@ -63,7 +63,7 @@ In order of likelihood:
 Symptoms: `archon-search collection list` shows no growth in `chunks=`, `GET /status` shows `IN_PROGRESS` indefinitely.
 
 1. `GET /jobs/{job_id}` — for a REST-triggered reindex, this shows current status and any error.
-2. `GET /indexing-state` — per-collection `processed_files`, `total_files`, `error_count`, and the last `error` message.
+2. `GET /indexing-state` — per-collection `processed_files`, `total_files`, `error_count`, and the last `error` message. A failed sync reads `sync of collection '<name>' failed; see the server log for details`; the cause is in the server log under `Sync of collection '<name>' failed`.
 3. A stale `IN_PROGRESS` on startup is treated as a crash on the next restart and will trigger a reindex. If you suspect a wedged run, restart the server.
 4. Last resort: `archon-search collection reindex <name>` clears the state and rebuilds from scratch. See [`50_ingestion_and_collections.md`](./50_ingestion_and_collections.md).
 
@@ -204,7 +204,7 @@ The server exits with a `ConfigError` naming `[hyde]` or `[rag_fusion]`, e.g. `[
 A background probe (`model_validation.py`) loads the embedder and reranker and records the result on `app.state.model_validation`. It never blocks startup and never raises. Surfaces:
 
 - `GET /ready` → `checks.models`: `fail` (a model could not load), `warn` (both loaded but a provider fallback warning was emitted), `ok`, or `pending`.
-- `GET /status` → `model_validation` sub-object: `embedder_ok`, `reranker_ok`, `llama_cpp_ok`, `provider_warnings` (e.g. `validation timed out after 60s`, `model validation failed unexpectedly; see server logs for details`, or `validation task failed unexpectedly` when the validation task itself crashed — both with `embedder_ok` and `reranker_ok` false; the server log has the cause), and `validated_at`. While validation is pending the object is still present, with the `*_ok` flags and `validated_at` `null` and `provider_warnings` empty.
+- `GET /status` → `model_validation` sub-object: `embedder_ok`, `reranker_ok`, `llama_cpp_ok`, `provider_warnings` (e.g. `validation timed out after 60s`, `model validation failed unexpectedly; see the log for details`, or `validation task failed unexpectedly; see the log for details` when the validation task itself crashed — both with `embedder_ok` and `reranker_ok` false; the server log has the cause), and `validated_at`. While validation is pending the object is still present, with the `*_ok` flags and `validated_at` `null` and `provider_warnings` empty.
 
 1. `fail` / `embedder_ok=false` — the embedding model failed to load: check the log for download errors, disk space, and that `[database].embedding_model` names a valid model.
 2. A timeout warning — raise `[database].validation_timeout_seconds` (default 60) if first-run downloads are slow.

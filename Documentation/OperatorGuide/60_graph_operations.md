@@ -111,7 +111,7 @@ the graph extras: pip install 'archon-search[graph]'
 ```
 
 ```
-graph NER model presence could not be determined
+graph NER model presence could not be determined; see the log for details
 ```
 
 The second means the probe itself failed unexpectedly — it never raises, so a surprise reads as "cannot determine" rather than failing startup.

@@ -45,7 +45,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.key_manager import KeyRecord, KeyStore, KeyStoreUnreadableError, load_or_generate_key
 from archon_search.paths import get_data_dir, get_fasttext_models_dir
 from archon_search.logging_setup import build_uvicorn_log_config, configure_logging
-from archon_search.model_validation import ModelValidationResult, validate_models_async
+from archon_search.model_validation import validate_models_async
 from archon_search.parser import DocumentParser
 from archon_search.pipeline import SearchPipeline
 from archon_search.progress import IndexingStateStore
@@ -618,13 +618,14 @@ def create_app(
                 logger.info("validation cancelled during shutdown")
                 raise
             except BaseException as exc:  # noqa: BLE001 — never let the task escape
-                logger.warning("model validation task failed unexpectedly: %s", exc)
+                logger.warning("model validation task failed unexpectedly: %s", exc, exc_info=True)
                 from archon_search.model_validation import (  # noqa: PLC0415
+                    VALIDATION_TASK_FAILED_WARNING,
                     failed_result,
                 )
 
                 app.state.model_validation = await failed_result(
-                    "validation task failed unexpectedly", config
+                    VALIDATION_TASK_FAILED_WARNING, config
                 )
 
         validation_task = asyncio.create_task(_run_model_validation())
@@ -1229,7 +1230,6 @@ def create_app(
     if config.openai_shim.enabled:
         from fastapi.exceptions import RequestValidationError  # noqa: PLC0415
         from fastapi.exception_handlers import request_validation_exception_handler  # noqa: PLC0415
-        from fastapi.requests import Request  # noqa: PLC0415
         from archon_search.server.routes_openai_shim import _openai_error, router as openai_shim_router  # noqa: PLC0415
 
         @app.exception_handler(RequestValidationError)

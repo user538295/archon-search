@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 from archon_search.config import SearchConfig
 from archon_search.jobs import JobStore
-from archon_search.model_validation import graph_ner_status, validate_models_async
+from archon_search.model_validation import GRAPH_NER_UNDETERMINED_WARNING, graph_ner_status, validate_models_async
 from archon_search.server.app import create_app
 
 
@@ -167,7 +167,7 @@ def test_graph_ner_status_never_raises_on_unexpected_failure(
     ):
         warnings = graph_ner_status(config)
 
-    assert warnings == ["graph NER model presence could not be determined"]
+    assert warnings == [GRAPH_NER_UNDETERMINED_WARNING]
 
 
 # ---------------------------------------------------------------------------

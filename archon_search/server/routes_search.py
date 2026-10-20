@@ -23,13 +23,23 @@ from archon_search.embedder_cache import (
 from archon_search.filters import SearchFilters
 from archon_search.hyde import HYDE_DEPENDENCY_DETAIL, HyDEDependencyError, resolve_hyde_vector
 from archon_search.pipeline import (
+    METADATA_STORE_UNAVAILABLE_CODE,
+    METADATA_STORE_UNAVAILABLE_DETAIL,
     CollectionNotFoundError,
     FanoutTimeoutError,
     GraphCommunitiesNotBuiltError,
     MetadataLookupError,
 )
 from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
-from archon_search.server.schemas import AclGateSchema, ErrorDetail, ExcludedCollectionSchema
+from archon_search.server.schemas import (
+    GRAPH_COMMUNITIES_NOT_BUILT_CODE,
+    INVALID_SCOPE_FILTER_CODE,
+    AclGateSchema,
+    CodedErrorDetail,
+    ErrorDetail,
+    ExcludedCollectionSchema,
+    route_422_response,
+)
 from archon_search.server._search_budget import (
     EMBEDDER_WARMUP_WAIT_SECONDS,
     SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
@@ -280,11 +290,18 @@ class SearchResponse(BaseModel):
     "/search",
     response_model=SearchResponse,
     responses={
+        400: {
+            "model": CodedErrorDetail,
+            "description": f"`scope_filter` is syntactically invalid (code `{INVALID_SCOPE_FILTER_CODE}`)",
+        },
+        404: {"model": ErrorDetail, "description": "Collection not found"},
+        422: route_422_response(),
         500: {
             "model": ErrorDetail,
             "description": "HyDE generation failure (JSON detail); a pipeline failure is a plain-text 500",
         },
         503: {"model": ErrorDetail},
+        504: {"model": ErrorDetail, "description": "Search timed out"},
     },
 )
 async def search(body: SearchRequest, request: Request) -> SearchResponse | JSONResponse:
@@ -311,7 +328,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     scope_filter_err = _check_scope_filter(body.scope_filter)
     if scope_filter_err is not None:
         return JSONResponse(
-            {"detail": {"code": "invalid_scope_filter", "message": scope_filter_err}},
+            {"detail": {"code": INVALID_SCOPE_FILTER_CODE, "message": scope_filter_err}},
             status_code=400,
         )
 
@@ -399,13 +416,14 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             return dependency_error_response("search", exc)
         except GraphCommunitiesNotBuiltError as exc:
             return JSONResponse(
-                {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
+                {"detail": {"code": GRAPH_COMMUNITIES_NOT_BUILT_CODE, "message": str(exc)}}, status_code=422
             )
         except CollectionNotFoundError:
             return JSONResponse({"detail": "collection not found"}, status_code=404)
         except MetadataLookupError:
+            logger.exception("multi-collection search: metadata lookup failed")
             return JSONResponse(
-                {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"},
+                {"detail": METADATA_STORE_UNAVAILABLE_DETAIL, "code": METADATA_STORE_UNAVAILABLE_CODE},
                 status_code=503,
             )
         except (FanoutTimeoutError, SearchBudgetExceeded):
@@ -464,9 +482,9 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     try:
         meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
     except Exception as exc:
-        logger.error("search: meta lookup failed for collection %r: %s", body.collection, exc, exc_info=True)
+        logger.exception("search: meta lookup failed for collection %r: %s", body.collection, exc)
         return JSONResponse(
-            {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"},
+            {"detail": METADATA_STORE_UNAVAILABLE_DETAIL, "code": METADATA_STORE_UNAVAILABLE_CODE},
             status_code=503,
         )
 
@@ -640,7 +658,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         except GraphCommunitiesNotBuiltError as exc:
             _emit_timings()
             return JSONResponse(
-                {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
+                {"detail": {"code": GRAPH_COMMUNITIES_NOT_BUILT_CODE, "message": str(exc)}}, status_code=422
             )
         except SearchBudgetExceeded:
             _emit_timings()

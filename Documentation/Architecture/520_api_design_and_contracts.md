@@ -1,8 +1,8 @@
 **Purpose**: State the API design principles that govern the REST and MCP surfaces of `archon-search`, the discipline around schemas, and how versioning and breaking changes are managed.
 **Audience**: Maintainers changing the API surface, integrators consuming it, and reviewers evaluating proposed contract changes.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
-**Next review**: 2026-08-20
+**Last reviewed**: 2026-10-20
+**Next review**: 2027-01-20
 
 # API Design and Contracts
 
@@ -27,7 +27,7 @@ The `version` field of the OpenAPI document is the package version resolved thro
 
 **Consequences:**
 
-- Adding an endpoint without a Pydantic response model means OpenAPI loses fidelity. Every new route should declare `response_model=` and an explicit `responses=` map for non-200 cases. This is a target convention, not the current norm: `POST /search` and `POST /route` declare only `response_model=` today, so their non-200 error contract in OpenAPI is whatever FastAPI emits by default.
+- Adding an endpoint without a Pydantic response model means OpenAPI loses fidelity. Every new route should declare `response_model=` and an explicit `responses=` map for non-200 cases. This is a target convention, not the current norm: `POST /route` declares only `response_model=` today, so its non-200 error contract in OpenAPI is whatever FastAPI emits by default.
 - Adding a new exempt path is a security decision, not a documentation one. Update `_EXEMPT_PATHS` in `middleware_auth.py` and document the exemption in `150_security_and_privacy_architecture.md`.
 
 ## Authentication
@@ -59,7 +59,7 @@ When a behaviour exists on both surfaces, divergence in shape between them is a 
 
 Request and response shapes that cross the API boundary are Pydantic `BaseModel` subclasses. Most live in two centralised files; two routers currently keep their schemas inline:
 
-- `archon_search/server/schemas.py` — control-plane and collection responses: `HealthResponse`, `StatusCollectionEntry`, `StatusResponse`, `IndexingStateCollectionEntry`, `IndexingStateResponse`, `CollectionSummary`, `CollectionDetail`, `JobResponse`, `DeleteResponse`, `ErrorDetail`.
+- `archon_search/server/schemas.py` — control-plane and collection responses: `HealthResponse`, `StatusCollectionEntry`, `StatusResponse`, `IndexingStateCollectionEntry`, `IndexingStateResponse`, `CollectionSummary`, `CollectionDetail`, `JobResponse`, `DeleteResponse`, `ErrorDetail`, `CodedErrorDetail`, `CodedErrorMessage`, plus `route_422_response()` (the OpenAPI `422` entry of `POST /search` / `POST /explain`).
 - `archon_search/server/schemas_telemetry.py` — telemetry-specific shapes: `StatsResponse`, `EntriesResponse`, `DisabledResponse`, plus the sub-models `LatencyPercentiles`, `EndpointStats`, `CollectionStats`, `ErrorBreakdown`.
 - Inline in `archon_search/server/routes_search.py`: `SearchRequest`, `SearchResultSchema`, `SearchResponse`.
 - `archon_search/filters.py`: `SearchFilters` — the shared filter model used by both REST (`SearchRequest.filters`) and MCP (`search` / `search_with_context` tool kwargs). It lives outside `schemas.py` and `_types.py` deliberately: `_types.py` is dataclass-only by convention (no Pydantic), and `SearchFilters` is reused across the REST and MCP surfaces without being a server schema itself.
@@ -71,7 +71,7 @@ Rules:
 
 - **No business logic in schemas.** `schemas.py` and `schemas_telemetry.py` both carry the docstring "Pure data models — no business logic." Validation derives from types; transformations happen in route handlers or services. The inline models in `routes_search.py` and `routes_route.py` follow the same convention.
 - **Routes declare `response_model=` explicitly.** This is what populates the OpenAPI schema with typed response bodies.
-- **Errors should use `ErrorDetail`.** The intended error envelope is `{"detail": str}`, declared via `responses={401: {"model": ErrorDetail}, ...}`. This is aspirational rather than enforced: `POST /search` and `POST /route` do not currently declare a `responses=` map at all, so their error envelopes come from FastAPI defaults. Do not invent new ad-hoc error shapes; prefer wiring `ErrorDetail` into new routes. **Two ingest-path responses are documented in their `responses=` maps:** `POST /collections/` and `POST /ingest` declare `400` (`ErrorDetail`, `"path is unsafe: <reason>"` when `validate_ingest_path` rejects the caller's path) and `503` (store busy — see below). The `503` response is the one deliberate exception to the `{"detail": str}` rule: it returns `{"error": "store_busy", "detail": ...}` with a `Retry-After: 30` header, mirroring the `store_busy` signal so callers can branch on the `error` key. Do not generalise that shape to other routes.
+- **Errors should use `ErrorDetail` or `CodedErrorDetail`.** The intended error envelope is `ErrorDetail` (`{"detail": str}`, plus an optional `code`), declared via `responses={401: {"model": ErrorDetail}, ...}`. This is aspirational rather than enforced: `POST /route` does not currently declare a `responses=` map at all, so its error envelope comes from FastAPI defaults. `POST /search` and `POST /explain` declare `500` and `503` with `ErrorDetail`; on `/search` the declared `500` covers only the HyDE failure — its pipeline-failure `500` is still undeclared plain text — and on `/explain` it covers the stage-failure and `explain failed` bodies, while a failure the route does not catch (e.g. loading the collection's embedder failing for a reason other than the embedder not being ready yet, which is a JSON `503`) is still a plain-text `500`. The one other declared shape is `CodedErrorDetail` (`{"detail": {"code": str, "message": str}}`, `detail` being a `CodedErrorMessage`), for an error a client branches on by code: `POST /ingest` `413` (`file_too_large`), `POST /search` / `POST /explain` `400` (`invalid_scope_filter`), and their `422` `graph_communities_not_built`. Those two routes also answer some `422`s themselves with a string `detail`, so they declare `422` as `route_422_response()` — `anyOf` FastAPI's `HTTPValidationError`, `CodedErrorDetail` and `ErrorDetail` — and their `404` / `504` as `ErrorDetail`. Do not invent new ad-hoc error shapes; prefer wiring `ErrorDetail` (or `CodedErrorDetail` when the client needs a code) into new routes, and declare every status a route sends. **Two ingest-path responses are documented in their `responses=` maps:** `POST /collections/` and `POST /ingest` declare `400` (`ErrorDetail`, `"path is unsafe: <reason>"` when `validate_ingest_path` rejects the caller's path) and `503` (store busy — see below). The `503` response is the one deliberate exception to the two declared shapes above: it returns `{"error": "store_busy", "detail": ...}` with a `Retry-After: 30` header, mirroring the `store_busy` signal so callers can branch on the `error` key. Do not generalise that shape to other routes. `POST /ingest` also declares its `413` (`CodedErrorDetail`) and its `500` (`ErrorDetail`, `{"detail": "internal error"}` when the job cannot be recorded).
 
 ### The structural privacy invariant
 

@@ -29,7 +29,7 @@ import itertools
 import logging
 import importlib.util
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from archon_search.graph_types import (
     ChunkInput,
@@ -61,10 +61,10 @@ _logger = logging.getLogger(__name__)
 # Wire-facing degradation notices for the prose extraction backend (BE-11,
 # tightened by BE-12 for S14/S17/S46). Sanitized (never carry exception text
 # or str(exc)), like the message from ``gliner_not_installed_message`` below, and per
-# parser.py's ``_PARSE_WORKER_LOST_DETAIL`` convention — a DETAIL-only
+# parser.py's ``PARSE_WORKER_LOST_DETAIL`` convention — a DETAIL-only
 # constant, since ``GraphExtractionResult.warnings`` is plain ``list[str]``
 # with no separate wire-facing "code" field (graph_types.py) to pair it with.
-_BACKEND_UNAVAILABLE_DETAIL: str = (
+BACKEND_UNAVAILABLE_DETAIL: Final[str] = (
     "graph prose extraction model is unavailable; prose entity extraction is "
     "disabled for this ingest (code-symbol extraction is unaffected)."
 )
@@ -289,7 +289,7 @@ class GraphExtractor:
                 _logger.warning(_LOAD_FAILURE_LOG_MESSAGE, exc_info=True)
             else:
                 _logger.debug(_LATCHED_LOAD_FAILURE_LOG_MESSAGE, exc_info=True)
-            return _BACKEND_UNAVAILABLE_DETAIL
+            return BACKEND_UNAVAILABLE_DETAIL
         return None
 
     def _code_symbol_name(self, chunk: ChunkInput) -> str:

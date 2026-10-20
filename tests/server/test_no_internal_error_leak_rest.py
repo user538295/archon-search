@@ -17,6 +17,8 @@ import asyncio
 import logging
 import os
 import sys
+from collections.abc import Callable
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -25,6 +27,8 @@ import networkx
 import pytest
 from fastapi.testclient import TestClient
 
+from archon_search import model_validation
+from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.graph_inspector import GRAPHML_DEPENDENCY_DETAIL, CollectionGraphView, CrossCollectionGraphView
 from archon_search.hyde import HYDE_DEPENDENCY_DETAIL
@@ -33,10 +37,20 @@ from archon_search.key_manager import (
     ROTATE_KEYS_JSON_FAILED_DETAIL,
     ROTATE_WRITE_FAILED_DETAIL,
 )
-from archon_search.pipeline import ExplainPipelineResult, ExplainStageError, SearchPipelineResult
+from archon_search.pipeline import (
+    METADATA_STORE_UNAVAILABLE_CODE,
+    METADATA_STORE_UNAVAILABLE_DETAIL,
+    ExplainPipelineResult,
+    ExplainStageError,
+    SearchPipelineResult,
+)
 from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL
 from archon_search.server.app import create_app
-from archon_search.server.routes_explain import EXPLAIN_FAILED_DETAIL
+from archon_search.server.routes_explain import (
+    EXPLAIN_FAILED_DETAIL,
+    ROUTING_UNAVAILABLE_CODE,
+    ROUTING_UNAVAILABLE_DETAIL,
+)
 from archon_search.server.routes_search import SEARCH_FAILED_DETAIL
 from tests._install_hint_leak import (
     assert_install_hint_logged_not_sent,
@@ -50,6 +64,7 @@ from tests._internal_error_leak import (
     assert_logged_with_traceback,
     hyde_generator,
     hyde_generator_without_provider,
+    metadata_lookup_error,
     mock_pipeline,
     permission_error,
 )
@@ -207,6 +222,122 @@ def test_explain_stage_failure_answers_stage_and_type_only_with_telemetry(
     _assert_one_explain_internal_error_entry(writer)
     assert LEAK_NEEDLE not in response.text, f"internal path leaked into the response: {response.text!r}"
     assert_logged_with_traceback(caplog, LANCE_MSG)
+
+
+# ``/explain``'s 503 bodies for a failed collection lookup / routing call (routes_explain.py).
+_METADATA_STORE_UNAVAILABLE = {"detail": METADATA_STORE_UNAVAILABLE_DETAIL, "code": METADATA_STORE_UNAVAILABLE_CODE}
+_ROUTING_UNAVAILABLE = {"detail": ROUTING_UNAVAILABLE_DETAIL, "code": ROUTING_UNAVAILABLE_CODE}
+
+
+def _fail_meta_lookup(pipeline: MagicMock) -> AsyncMock:
+    pipeline.get_collection_meta = AsyncMock(side_effect=RuntimeError(LANCE_MSG))
+    return pipeline.get_collection_meta
+
+
+def _fail_all_meta_lookup(pipeline: MagicMock) -> AsyncMock:
+    pipeline.get_all_collections_meta = AsyncMock(side_effect=RuntimeError(LANCE_MSG))
+    return pipeline.get_all_collections_meta
+
+
+def _fail_routing_embed(pipeline: MagicMock) -> AsyncMock:
+    pipeline.get_all_collections_meta = AsyncMock(
+        return_value=[CollectionMeta(name="col", namespace="default", centroid=[1.0, 0.0])]
+    )
+    pipeline._global_embedder.embed_one = AsyncMock(side_effect=RuntimeError(LANCE_MSG))
+    return pipeline._global_embedder.embed_one
+
+
+@pytest.mark.parametrize(
+    ("target", "break_pipeline", "expected"),
+    [
+        pytest.param({"collection": "col"}, _fail_meta_lookup, _METADATA_STORE_UNAVAILABLE, id="meta-lookup"),
+        pytest.param({}, _fail_all_meta_lookup, _METADATA_STORE_UNAVAILABLE, id="all-meta-lookup"),
+        pytest.param({}, _fail_routing_embed, _ROUTING_UNAVAILABLE, id="routing"),
+    ],
+)
+def test_explain_lookup_or_routing_failure_answers_503_and_logs_traceback(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    target: dict[str, Any],
+    break_pipeline: Callable[[MagicMock], AsyncMock],
+    expected: dict[str, str],
+) -> None:
+    """The 503 handlers log only the exception type in the message, so the traceback is the
+    only place the cause survives — it must be attached (``exc_info``)."""
+    app, client = _wire_app(tmp_path)
+    raiser = break_pipeline(app.state.pipeline)
+
+    with caplog.at_level(logging.ERROR):
+        response = client.post("/explain", json={**target, "query": "q"})
+
+    raiser.assert_awaited_once()
+    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE, response.text
+    assert response.json() == expected
+    assert LEAK_NEEDLE not in response.text, f"internal path leaked into the response: {response.text!r}"
+    assert_logged_with_traceback(caplog, LANCE_MSG)
+
+
+@pytest.mark.parametrize(("route", "pipeline_method"), [("/search", "search_many"), ("/explain", "explain")])
+def test_multi_collection_metadata_lookup_error_answers_503_and_logs_traceback(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, route: str, pipeline_method: str
+) -> None:
+    """The fan-out's ``MetadataLookupError`` answers the fixed 503 body; its message embeds the
+    store error, so the handler must log it with its traceback rather than drop the cause."""
+    app, client = _wire_app(tmp_path)
+    raiser = AsyncMock(side_effect=metadata_lookup_error())
+    setattr(app.state.pipeline, pipeline_method, raiser)
+
+    with caplog.at_level(logging.ERROR):
+        response = client.post(route, json={"collections": ["a", "b"], "query": "q"})
+
+    raiser.assert_awaited_once()
+    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE, response.text
+    assert response.json() == _METADATA_STORE_UNAVAILABLE
+    assert LEAK_NEEDLE not in response.text, f"internal path leaked into the response: {response.text!r}"
+    assert_logged_with_traceback(caplog, LANCE_MSG)
+
+
+def test_explain_failure_outside_its_handlers_is_a_plain_text_500_without_telemetry(tmp_path: Path) -> None:
+    """``/explain`` loads the collection's embedder outside its try blocks: a failure there is
+    Starlette's plain-text 500 and records no telemetry entry (140_error_handling_strategy.md)."""
+    app, client = _wire_app(tmp_path)
+    get_or_load = AsyncMock(side_effect=RuntimeError(LANCE_MSG))
+    app.state.embedder_cache.get_or_load = get_or_load
+    writer = MagicMock()
+    app.state.telemetry_writer = writer
+
+    response = client.post("/explain", json={"collection": "col", "query": "q"})
+
+    get_or_load.assert_awaited_once()
+    assert response.status_code == _HTTP_INTERNAL_ERROR, response.text
+    assert response.text == _STARLETTE_UNHANDLED_BODY
+    writer.enqueue.assert_not_called()
+
+
+def test_add_collection_model_load_failure_answers_422_and_logs_traceback(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``POST /collections`` validates ``embedding_model`` first; a backend load failure answers
+    the fixed ``_MODEL_LOAD_FAILED_DETAIL`` and keeps the cause in the log with its traceback."""
+    _, client = _make_app(tmp_path)
+    embedder = MagicMock()
+    embedder.embed = AsyncMock(side_effect=RuntimeError(ONNX_MSG))
+
+    # The suite's fastembed stub has no ``list_supported_models``, so the registry fast path
+    # falls through to instantiating the model, as it does for a name outside the registry.
+    with (
+        patch.object(model_validation, "make_embedder", return_value=embedder),
+        caplog.at_level(logging.WARNING),
+    ):
+        response = client.post(
+            "/collections/", json={"path": str(tmp_path), "embedding_model": "unknown/model"}
+        )
+
+    embedder.embed.assert_awaited_once()
+    assert response.status_code == _HTTP_UNPROCESSABLE, response.text
+    assert response.json() == {"detail": model_validation._MODEL_LOAD_FAILED_DETAIL}
+    assert LEAK_NEEDLE not in response.text, f"internal path leaked into the response: {response.text!r}"
+    assert_logged_with_traceback(caplog, ONNX_MSG)
 
 
 def test_search_hyde_runtime_error_with_failing_telemetry_still_answers_json_500(

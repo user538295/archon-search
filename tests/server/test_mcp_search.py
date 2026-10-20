@@ -35,7 +35,7 @@ if "fastmcp" not in sys.modules:
         sys.modules["fastmcp"] = _fastmcp
 
 from archon_search._types import SearchResult
-from archon_search.pipeline import SearchPipelineResult
+from archon_search.pipeline import METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL, SearchPipelineResult
 
 
 class _FakeApp:
@@ -538,8 +538,7 @@ async def test_mcp_search_meta_lookup_failure_returns_metadata_store_error() -> 
     _pipeline, result = await _call_mcp_search_multi(
         collections=["a"], search_many_raises=MetadataLookupError(RuntimeError("x"))
     )
-    assert result["code"] == "metadata_store_error"
-    assert "metadata store" in result["error"]
+    assert (result["code"], result["error"]) == (METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL)
 
 
 @pytest.mark.asyncio

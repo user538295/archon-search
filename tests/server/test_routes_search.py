@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from archon_search._types import SearchResult
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
-from archon_search.pipeline import SearchPipeline, SearchPipelineResult
+from archon_search.pipeline import METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL, SearchPipeline, SearchPipelineResult
 from archon_search.server.app import create_app
 
 
@@ -436,8 +436,7 @@ def test_search_store_exception_returns_503(tmp_path: Path, caplog: pytest.LogCa
 
     assert response.status_code == 503
     body = response.json()
-    assert body["code"] == "metadata_store_error"
-    assert "metadata store" in body["detail"]
+    assert (body["code"], body["detail"]) == (METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL)
     app.state.pipeline.search.assert_not_called()
     assert any("service unavailable" in record.message.lower() or "lancedb" in record.message.lower() or "col" in record.message for record in caplog.records)
     # 503 meta-lookup path must not enqueue telemetry.
@@ -1059,8 +1058,7 @@ def test_search_handler_meta_lookup_failure_returns_503(tmp_path: Path) -> None:
 
     assert response.status_code == 503
     body = response.json()
-    assert body["code"] == "metadata_store_error"
-    assert "metadata store" in body["detail"]
+    assert (body["code"], body["detail"]) == (METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL)
 
 
 def test_search_response_includes_excluded_collections(tmp_path: Path) -> None:

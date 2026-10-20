@@ -6,7 +6,7 @@ import logging
 import math
 import os
 from pathlib import Path
-from typing import Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable, Final
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -22,7 +22,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.server._ingest_lock import acquire_collection_lock_or_503
 from archon_search.server._job_warmup import await_models_warm
 from archon_search.server._ingested_by import parse_ingested_by_header
-from archon_search.server.schemas import ErrorDetail, JobListResponse, JobResponse
+from archon_search.server.schemas import CodedErrorDetail, ErrorDetail, JobListResponse, JobResponse
 from archon_search.types import DeleteJob, ExportJob, ImportJob, MigrationJob, ReindexJob, SyncJob
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,10 @@ _STARTUP_SYNC_JOB_NOT_CANCELLABLE_DETAIL = "the startup sync cannot be cancelled
 # log only.
 INGEST_FAILED_DETAIL = "ingest failed; see the server log for details"
 REINDEX_FAILED_DETAIL = "reindex failed; see the server log for details"
+# ``500`` ``detail`` when a job-store write (POST /ingest job creation, DELETE /jobs/{id}
+# cancel transition) raises OSError: its message names the job file path, so the cause is
+# logged with its traceback, never sent.
+JOB_STORE_WRITE_FAILED_DETAIL: Final[str] = "internal error"
 # Prefix of the not-found job ``error``; the full text is ``f"{prefix}: {path}"``.
 INGEST_PATH_NOT_FOUND_PREFIX = "path does not exist or is not a file/directory"
 
@@ -572,15 +576,19 @@ _ERROR_400_401 = {
     400: {"model": ErrorDetail, "description": "Ingest path failed safety validation"},
     401: {"model": ErrorDetail},
 }
-_ERROR_400_401_503: dict[int | str, dict[str, Any]] = {
+_INGEST_ERRORS: dict[int | str, dict[str, Any]] = {
     400: {"model": ErrorDetail, "description": "Ingest path failed safety validation"},
     401: {"model": ErrorDetail},
-    413: {"model": ErrorDetail, "description": "File size exceeds configured max_file_mb limit"},
+    413: {
+        "model": CodedErrorDetail,
+        "description": "A single-file path or an inline document exceeds the configured max_file_mb limit",
+    },
+    500: {"model": ErrorDetail, "description": "The job could not be recorded"},
     503: {"description": "Store busy — reindex in progress"},
 }
 
 
-@router.post("/ingest", status_code=202, response_model=JobResponse, responses=_ERROR_400_401_503)
+@router.post("/ingest", status_code=202, response_model=JobResponse, responses=_INGEST_ERRORS)
 async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONResponse:
     store: JobStore = request.app.state.job_store
     pipeline_fn: Callable[..., Awaitable[None]] | None = getattr(
@@ -606,8 +614,8 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
                 )
     ns = request.state.namespace
 
-    # Synchronous 413 pre-check — only for single-file paths, before job creation.
-    # Skipped for directory paths and `documents` payloads (no filesystem path).
+    # Synchronous 413 pre-check for a single-file path, before job creation. A directory
+    # path is not checked here; inline `documents` get their own per-document check below.
     if body.path is not None:
         p = Path(body.path)
         if p.is_file():
@@ -648,7 +656,8 @@ async def ingest(body: IngestRequest, request: Request) -> JobResponse | JSONRes
     try:
         job = store.create(namespace=ns, collection=body.collection, path=body.path or "")
     except OSError:
-        return JSONResponse({"detail": "internal error"}, status_code=500)
+        logger.exception("POST /ingest: job store create failed")
+        return JSONResponse({"detail": JOB_STORE_WRITE_FAILED_DETAIL}, status_code=500)
 
     # Pre-acquire the per-collection lock to return 503 synchronously on contention.
     search_store = getattr(request.app.state, "search_store", None)
@@ -849,7 +858,8 @@ async def delete_job(job_id: str, request: Request, response: Response) -> JobRe
         try:
             updated = store.transition(job.job_id, _ACTIVE_STATUSES, JobStatus.CANCELLING)
         except OSError:
-            return JSONResponse({"detail": "internal error"}, status_code=500)
+            logger.exception("DELETE /jobs/%s: job store transition failed", job_id)
+            return JSONResponse({"detail": JOB_STORE_WRITE_FAILED_DETAIL}, status_code=500)
         if updated is None:
             # Race: job became terminal between get() and transition() — idempotent 200
             job = store.get(job_id)

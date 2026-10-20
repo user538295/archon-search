@@ -20,6 +20,7 @@ from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from archon_search.embedder_cache import EmbedderNotReadyError
 from archon_search.server.routes_jobs import (
+    JOB_STORE_WRITE_FAILED_DETAIL,
     REINDEX_FAILED_DETAIL,
     IngestRequest,
     _default_ingest_task,
@@ -28,7 +29,7 @@ from archon_search.server.routes_jobs import (
     _run_pipeline,
 )
 from archon_search.types import IngestJob, ReindexJob
-from tests._internal_error_leak import assert_logged_with_traceback
+from tests._internal_error_leak import LEAK_NEEDLE, assert_logged_with_traceback, permission_error
 
 
 @pytest.fixture
@@ -597,23 +598,29 @@ def _make_client_with_store(tmp_path: Path, store: object, auth_headers: dict[st
 
 
 def test_job_create_oserror_returns_500_envelope(
-    tmp_path: Path, auth_headers: dict[str, str]
+    tmp_path: Path, auth_headers: dict[str, str], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """POST /ingest returns the 500 envelope when store.create raises OSError."""
+    """POST /ingest answers the sanitized 500 when store.create raises OSError, and logs the
+    cause with its traceback."""
     store = MagicMock()
-    store.create.side_effect = OSError("disk full")
+    error = permission_error("jobs.json")
+    store.create.side_effect = error
     client = _make_client_with_store(tmp_path, store, auth_headers)
 
-    response = client.post("/ingest", json={"collection": "docs"})
+    with caplog.at_level(logging.ERROR, logger="archon_search.server.routes_jobs"):
+        response = client.post("/ingest", json={"collection": "docs"})
 
     assert response.status_code == 500
-    assert response.json() == {"detail": "internal error"}
+    assert response.json() == {"detail": JOB_STORE_WRITE_FAILED_DETAIL}
+    assert LEAK_NEEDLE not in response.text
+    assert_logged_with_traceback(caplog, str(error))
 
 
 def test_delete_job_transition_oserror_returns_500_envelope(
-    tmp_path: Path, auth_headers: dict[str, str]
+    tmp_path: Path, auth_headers: dict[str, str], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """DELETE /jobs/{id} returns the 500 envelope when store.transition raises OSError."""
+    """DELETE /jobs/{id} answers the sanitized 500 when store.transition raises OSError, and logs
+    the cause with its traceback."""
     active_job = IngestJob(
         job_id="job-1",
         status=JobStatus.RUNNING,
@@ -623,13 +630,17 @@ def test_delete_job_transition_oserror_returns_500_envelope(
     )
     store = MagicMock()
     store.get.return_value = active_job
-    store.transition.side_effect = OSError("disk full")
+    error = permission_error("jobs.json")
+    store.transition.side_effect = error
     client = _make_client_with_store(tmp_path, store, auth_headers)
 
-    response = client.delete(f"/jobs/{active_job.job_id}")
+    with caplog.at_level(logging.ERROR, logger="archon_search.server.routes_jobs"):
+        response = client.delete(f"/jobs/{active_job.job_id}")
 
     assert response.status_code == 500
-    assert response.json() == {"detail": "internal error"}
+    assert response.json() == {"detail": JOB_STORE_WRITE_FAILED_DETAIL}
+    assert LEAK_NEEDLE not in response.text
+    assert_logged_with_traceback(caplog, str(error))
 
 
 def test_background_ingest_oserror_does_not_500_client(

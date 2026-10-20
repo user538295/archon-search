@@ -9,7 +9,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 
 from archon_search._types import CollectionInfo
-from archon_search.sync import path_to_collection_name
+from archon_search.sync import collection_sync_failed_detail, path_to_collection_name
 
 
 class TestPathToCollectionName:
@@ -237,11 +237,6 @@ class TestSearchCollectionSync:
         # Easiest real test: use identical paths for both entries — but that would deduplicate.
         # Let's use a mock approach instead.
 
-        # We create two paths that have the same basename AND same immediate parent name
-        dir_a = tmp_path / "history" / "sessions"
-        dir_b = tmp_path / "history" / "sessions"
-        # These resolve to the same path — let's cheat and use a different approach
-
         # We'll directly call _build_desired to verify hash fallback behavior
         # by mocking path_to_collection_name to always return "sessions"
         dir_a2 = tmp_path / "aa" / "sessions"
@@ -279,7 +274,7 @@ class TestSearchCollectionSync:
         result = await syncer.sync([str(dir_a), str(dir_b)])
 
         assert len(result.errors) == 1
-        assert "disk full" in result.errors[0]
+        assert result.errors == [collection_sync_failed_detail("project_a")]
         assert len(result.added) == 1  # second one succeeded
 
     @pytest.mark.asyncio
@@ -388,7 +383,7 @@ class TestSearchCollectionSync:
 
         syncer = SearchCollectionSync(pipeline)
         with caplog.at_level(logging.WARNING, logger="archon"):
-            result = await syncer.sync([])  # should not crash
+            await syncer.sync([])  # should not crash
 
         # No exception raised, warning logged
         assert any("rename_table" in msg or "unmanaged" in msg for msg in caplog.messages)
@@ -896,7 +891,6 @@ class TestSyncLocking:
     @pytest.mark.asyncio
     async def test_sync_acquires_lock_per_collection(self, tmp_path):
         """Lock is acquired during sync for the collection being ingested."""
-        import asyncio
         from archon_search.sync import SearchCollectionSync
 
         new_dir = tmp_path / "myproject"
@@ -928,7 +922,6 @@ class TestSyncLocking:
         pipeline = make_mock_pipeline(tmp_path, existing_collections=[])
 
         execution_log: list[str] = []
-        start_event = asyncio.Event()
 
         call_count = 0
 
@@ -1145,7 +1138,6 @@ class TestSyncProgress:
     @pytest.mark.asyncio
     async def test_sync_writes_in_progress_during_ingest(self, tmp_path):
         """During ingest, state should be IN_PROGRESS."""
-        import asyncio
         from archon_search._types import IngestResult
         from archon_search.progress import IndexingStateStore, IndexingStatus
         from archon_search.sync import SearchCollectionSync
@@ -1250,13 +1242,12 @@ class TestSyncProgress:
         assert "myproject" in state.collections
         cp = state.collections["myproject"]
         assert cp.status == IndexingStatus.FAILED
-        assert "disk full" in cp.error
+        assert cp.error == collection_sync_failed_detail("myproject")
 
     @pytest.mark.asyncio
     async def test_sync_error_count_from_ingest_results(self, tmp_path):
         """error_count should reflect number of non-ok results."""
         from archon_search._types import IngestResult
-        from archon_search.progress import IndexingStatus
 
         new_dir = tmp_path / "myproject"
         new_dir.mkdir()
@@ -1735,7 +1726,7 @@ class TestSyncProgress:
         cp = state.collections["myproject"]
         assert cp.status == IndexingStatus.FAILED
         assert cp.total_files == 100  # from enumeration
-        assert "crash mid-ingest" in cp.error
+        assert cp.error == collection_sync_failed_detail("myproject")
         assert len(cp.processed_paths) == 2  # partial progress retained
 
     @pytest.mark.asyncio
@@ -1878,7 +1869,7 @@ class TestSyncProgress:
         pipeline.ingest_directory = AsyncMock(side_effect=fake_ingest)
 
         syncer = SearchCollectionSync(pipeline, state_store=state_store)
-        result = await syncer.sync([str(dir_a), str(dir_b)])
+        await syncer.sync([str(dir_a), str(dir_b)])
 
         state = state_store.read()
         assert state is not None
@@ -1890,7 +1881,7 @@ class TestSyncProgress:
         # project_b should be FAILED
         assert "project_b" in state.collections
         assert state.collections["project_b"].status == IndexingStatus.FAILED
-        assert "project_b failed" in state.collections["project_b"].error
+        assert state.collections["project_b"].error == collection_sync_failed_detail("project_b")
 
 
 # ---------------------------------------------------------------------------
@@ -2379,7 +2370,7 @@ class TestSyncResumable:
     async def test_sync_batched_path_flush_every_50_files(self, tmp_path):
         """100 files: state write at file 50 with 50 paths; final write with 100."""
         from archon_search._types import IngestResult
-        from archon_search.progress import IndexingStateStore, IndexingStatus
+        from archon_search.progress import IndexingStateStore
         from archon_search.sync import SearchCollectionSync
 
         new_dir = tmp_path / "myproject"
@@ -2459,7 +2450,6 @@ class TestSyncResumable:
     @pytest.mark.asyncio
     async def test_sync_failed_state_contains_paths_processed_before_failure(self, tmp_path):
         """On FAILED, paths from before failure are retained."""
-        from archon_search._types import IngestResult
         from archon_search.progress import IndexingStateStore, IndexingStatus
         from archon_search.sync import SearchCollectionSync
 
@@ -2550,7 +2540,7 @@ class TestSyncResumable:
     async def test_sync_errored_file_not_in_processed_paths(self, tmp_path):
         """ingest_file error → that file NOT in processed_paths (retried next sync)."""
         from archon_search._types import IngestResult
-        from archon_search.progress import IndexingStateStore, IndexingStatus
+        from archon_search.progress import IndexingStateStore
         from archon_search.sync import SearchCollectionSync
 
         new_dir = tmp_path / "myproject"
@@ -3210,7 +3200,7 @@ class TestTask45:
 
     def test_load_file_mtimes_collection_absent(self, tmp_path):
         """State exists but collection name is not in it — returns {}."""
-        from archon_search.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
+        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
         from archon_search.sync import SearchCollectionSync
 
         pipeline = make_mock_pipeline(tmp_path)
@@ -3260,7 +3250,6 @@ class TestTask45:
 
     def test_check_collection_changes_no_changes(self, tmp_path):
         """File on disk with matching mtime → ([], [], [])."""
-        from archon_search.sync import SearchCollectionSync
 
         source = tmp_path / "src"
         source.mkdir()
@@ -3279,7 +3268,6 @@ class TestTask45:
 
     def test_check_collection_changes_new_file(self, tmp_path):
         """File on disk NOT in mtimes dict → in new_files."""
-        from archon_search.sync import SearchCollectionSync
 
         source = tmp_path / "src"
         source.mkdir()
@@ -3297,7 +3285,6 @@ class TestTask45:
 
     def test_check_collection_changes_changed_mtime(self, tmp_path):
         """File in mtimes but mtime differs → in changed_files."""
-        from archon_search.sync import SearchCollectionSync
 
         source = tmp_path / "src"
         source.mkdir()
@@ -3316,7 +3303,6 @@ class TestTask45:
 
     def test_check_collection_changes_deleted_file(self, tmp_path):
         """Path in mtimes but not on disk → in deleted_paths."""
-        from archon_search.sync import SearchCollectionSync
 
         source = tmp_path / "src"
         source.mkdir()
@@ -3332,7 +3318,6 @@ class TestTask45:
 
     def test_check_collection_changes_embedding_model_changed(self, tmp_path):
         """Embedding model changed → force_full_reindex: all eligible files in changed_files."""
-        from archon_search.sync import SearchCollectionSync
 
         source = tmp_path / "src"
         source.mkdir()
@@ -3838,7 +3823,6 @@ class TestTask46:
     async def test_sync_stores_indexed_model_and_chunk_size(self, tmp_path):
         """DONE state after apply contains indexed_embedding_model from CollectionMeta and correct indexed_chunk_size."""
         from archon_search.collection_meta import CollectionMeta
-        from archon_search.progress import IndexingStatus
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -3912,7 +3896,6 @@ class TestTask46:
             tmp_path, existing_collections=["myproject"], manifest=manifest
         )
         # B5: recompute fires when signal raised (needs_recompute=True)
-        from archon_search.collection_meta import CollectionMeta
         from archon_search.config import SearchConfig
         meta = CollectionMeta(name="myproject", needs_recompute=True)
         pipeline.store.get_collection_meta = AsyncMock(return_value=meta)
@@ -4014,12 +3997,12 @@ class TestTask46:
         result = await syncer.sync([str(col_dir)])
 
         assert len(result.errors) == 1
-        assert "disk full" in result.errors[0]
+        assert result.errors == [collection_sync_failed_detail("myproject")]
 
         state = state_store.read()
         cp = state.collections["myproject"]
         assert cp.status == IndexingStatus.FAILED
-        assert "disk full" in cp.error
+        assert cp.error == collection_sync_failed_detail("myproject")
 
         doc1_key = str(doc1.resolve())
         doc2_key = str(doc2.resolve())
@@ -4426,7 +4409,7 @@ class TestTask46:
         state = state_store.read()
         cp = state.collections["myproject"]
         assert cp.status == IndexingStatus.FAILED
-        assert cp.error == "hard ingest failure"
+        assert cp.error == collection_sync_failed_detail("myproject")
         assert real_key in cp.file_mtimes
         assert cp.file_mtimes[real_key] == old_mtime
         assert real_key in cp.processed_paths
@@ -4438,7 +4421,6 @@ class TestTask46:
     @pytest.mark.asyncio
     async def test_ingest_collection_failed_state_has_partial_file_mtimes(self, tmp_path):
         """_ingest_collection exception mid-ingest: FAILED state has file_mtimes for successfully ingested files."""
-        from archon_search._types import IngestResult
         from archon_search.progress import IndexingStateStore, IndexingStatus
         from archon_search.sync import SearchCollectionSync
 
@@ -4691,7 +4673,6 @@ class TestTask46:
     @pytest.mark.asyncio
     async def test_sync_apply_changes_error_file_retried_on_next_sync(self, tmp_path):
         """Error file on first sync is retried (and succeeds) on second sync."""
-        from archon_search.progress import IndexingStatus
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "myproject"
@@ -4992,7 +4973,8 @@ class TestSyncCollectionMethod:
 
     @pytest.mark.asyncio
     async def test_sync_collection_apply_returns_error_logs_warning(self, tmp_path, caplog):
-        """When _apply_collection_changes returns a non-None string, a warning is logged."""
+        """When _apply_collection_changes returns a non-None string, a warning naming the
+        collection is logged — not the returned wire text, whose cause was already logged."""
         import logging
 
         from archon_search.progress import CollectionProgress, IndexingState, IndexingStateStore, IndexingStatus
@@ -5015,7 +4997,9 @@ class TestSyncCollectionMethod:
             await syncer.sync_collection("myproject", col_dir)
 
         mock_apply.assert_called_once()
-        assert any("partial failure" in r.message for r in caplog.records if r.levelno == logging.WARNING)
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("Watch-triggered sync of collection 'myproject' failed" in m for m in warnings), warnings
+        assert not any("partial failure" in m for m in warnings), warnings
 
     @pytest.mark.asyncio
     async def test_sync_collection_with_changed_file(self, tmp_path):
@@ -5089,7 +5073,6 @@ def _make_pipeline_for_sync_centroid(tmp_path, meta=None, threshold=10_000):
     cfg.centroid_recompute_threshold = threshold
     pipeline.store._config = cfg
 
-    from archon_search.store import ChunkIngestResult
     pipeline.ingest_file = AsyncMock(
         return_value=MagicMock(status="ok", needs_recompute=False)
     )
@@ -5338,7 +5321,6 @@ class TestTask92WritePerCollectionModel:
         """sync() for an existing DONE collection with file changes writes
         meta.active_embedding_model (not a stale global model) to the state store."""
         from archon_search.collection_meta import CollectionMeta
-        from archon_search.progress import IndexingStateStore, IndexingStatus
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "mycol"
@@ -5492,7 +5474,7 @@ class TestTask93PerCollectionEmbedderAtIngestSites:
         """make_embedder result is passed to ingest_directory/ingest_file when
         active_embedding_model is set on CollectionMeta."""
         from archon_search.collection_meta import CollectionMeta
-        from archon_search.progress import CollectionProgress, IndexingStateStore, IndexingStatus
+        from archon_search.progress import IndexingStateStore
         from archon_search.sync import SearchCollectionSync
 
         col_dir = tmp_path / "testcol"
@@ -5727,7 +5709,6 @@ class TestTask93PerCollectionEmbedderAtIngestSites:
 
         with patch("archon_search.sync.make_embedder") as mock_make_embedder:
             syncer = SearchCollectionSync(pipeline, state_store=state_store, chunk_size=256)
-            from archon_search.progress import CollectionProgress, IndexingStatus
             await syncer._ingest_collection(
                 "testcol", col_dir, None, CollectionProgress, IndexingStatus,
                 meta=None,

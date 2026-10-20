@@ -28,7 +28,7 @@ from archon_search.collection_meta import CollectionMeta
 from archon_search.config import SearchConfig
 from archon_search.embedder import Embedder
 from archon_search.jobs.store import JobStore
-from archon_search.pipeline import SearchPipeline
+from archon_search.pipeline import METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL, SearchPipeline
 from archon_search.reranker import Reranker
 from archon_search.server.app import create_app as create_rest_app
 
@@ -383,5 +383,4 @@ async def test_mcp_explain_metadata_lookup_error_returns_metadata_store_error() 
 
     result = await app.tools["explain"](query="q", collections=["a", "b"])
 
-    assert result["code"] == "metadata_store_error"
-    assert "metadata store" in result["error"]
+    assert (result["code"], result["error"]) == (METADATA_STORE_UNAVAILABLE_CODE, METADATA_STORE_UNAVAILABLE_DETAIL)

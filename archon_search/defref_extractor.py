@@ -84,7 +84,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from archon_search.code_enricher import _get_grammar
 from archon_search.graph_types import (
@@ -102,6 +102,12 @@ if TYPE_CHECKING:
     from archon_search.graph_store_protocol import GraphStoreProtocol
 
 logger = logging.getLogger(__name__)
+
+# Wire-facing warning for a tree-sitter parse failure: ``GraphExtractionResult.warnings``
+# reaches ``IngestResult.warnings`` (MCP ``ingest_file`` / ``ingest_directory``, ingest job
+# ``result["warnings"]``). The caught exception may embed internals, so it goes to the
+# server log only; the file path is the caller's own ingest input.
+DEFREF_PARSE_FAILED_WARNING: Final[str] = "def/ref extraction failed to parse {file_path!r}; see the server log for details"
 
 _EXTRACTION_METHOD = "extracted"
 _INFERRED_EXTRACTION_METHOD = "inferred"
@@ -209,9 +215,9 @@ class DefRefExtractor:
             defs, calls, imports, inherits = await asyncio.to_thread(
                 _parse_and_walk, file_text, file_path, ext, lang, module_name
             )
-        except Exception as exc:  # pragma: no cover - defensive, see module docstring
-            warning = f"def/ref extraction failed to parse {file_path!r}: {exc}"
-            logger.warning(warning)
+        except Exception:  # defensive, see module docstring
+            logger.warning("def/ref extraction failed to parse %r", file_path, exc_info=True)
+            warning = DEFREF_PARSE_FAILED_WARNING.format(file_path=file_path)
             return GraphExtractionResult(nodes=[], edges=[], mentions=[], warnings=[warning])
 
         return await self._build_result(

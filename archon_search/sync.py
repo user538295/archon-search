@@ -27,6 +27,18 @@ _LEGACY_COLLECTION = "archon-history"
 _DEFAULT_SESSIONS_NAME = "sessions"
 
 
+def collection_sync_failed_detail(name: str) -> str:
+    """Wire-facing error for a collection whose sync raised.
+
+    It is both ``SyncResult.errors`` (``POST /sync`` job ``result["errors"]``) and
+    ``CollectionProgress.error`` (``GET /status`` ``collections[].error`` and
+    ``GET /indexing-state`` ``collections.<name>.error``). The caught
+    exception's message may embed internals (LanceDB / ONNX / OSError paths), so it goes
+    to the server log only; the collection name is already public on ``GET /collections``.
+    """
+    return f"sync of collection {name!r} failed; see the server log for details"
+
+
 def path_to_collection_name(path: str) -> str:
     """Derive a deterministic, sanitized LanceDB collection name from a filesystem path.
 
@@ -359,7 +371,8 @@ class SearchCollectionSync:
             )
             if result is not None:
                 logger.warning(
-                    "Watch-triggered sync error for collection %r: %s", collection_name, result
+                    "Watch-triggered sync of collection %r failed (traceback logged above)",
+                    collection_name,
                 )
         else:
             logger.debug("No changes detected for %r (watcher)", collection_name)
@@ -655,7 +668,9 @@ class SearchCollectionSync:
                         indexed_chunk_size=self._chunk_size,
                     ))
                 return None
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
+                logger.exception("Sync of collection %r failed during ingest", name)
+                error = collection_sync_failed_detail(name)
                 # Compute partial file_mtimes for files processed before the exception
                 all_ingested_paths = resume_paths + new_paths
                 partial_mtimes: dict[str, float] = {}
@@ -671,13 +686,13 @@ class SearchCollectionSync:
                     processed_files=resume_offset + len(new_paths),
                     started_at=started_at,
                     completed_at=datetime.now(UTC).isoformat(),
-                    error=str(exc),
+                    error=error,
                     processed_paths=resume_paths + new_paths,
                     file_mtimes=partial_mtimes,
                     indexed_embedding_model=_active_model,
                     indexed_chunk_size=self._chunk_size,
                 ))
-                return str(exc)
+                return error
 
     async def _apply_collection_changes(
         self,
@@ -859,18 +874,20 @@ class SearchCollectionSync:
                 ))
                 return None
 
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
+                logger.exception("Sync of collection %r failed while applying file changes", name)
+                error = collection_sync_failed_detail(name)
                 self._safe_state_update(name, CollectionProgress(
                     status=IndexingStatus.FAILED,
                     total_files=len(file_mtimes),
                     processed_files=len(file_mtimes),
-                    error=str(exc),
+                    error=error,
                     processed_paths=processed_paths,
                     file_mtimes=dict(file_mtimes),
                     indexed_embedding_model=_active_model,
                     indexed_chunk_size=self._chunk_size,
                 ))
-                return str(exc)
+                return error
 
     # ------------------------------------------------------------------
     # Lock helpers
