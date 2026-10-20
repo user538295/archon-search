@@ -373,6 +373,27 @@ def test_wizard_refused_interpreter_path_emits_clean_message_exits_1(
     assert "Traceback" not in result.output
 
 
+def test_wizard_refused_empty_systemd_interpreter_emits_clean_message_exits_1(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """wizard (Linux): run() refuses an undetermined interpreter up front with one clean line, writing no unit."""
+    from archon_search.platform.linux import SystemdSearchService
+
+    monkeypatch.setattr(sys, "executable", "")
+    # Safety net only: --dry-run never writes the unit, so the redirect keeps a regression off the real one.
+    unit = tmp_path / "systemd" / "user" / "archon-search.service"
+    with (
+        patch("archon_search.install.installer.get_search_service", return_value=SystemdSearchService()),
+        patch.object(SystemdSearchService, "_unit_path", property(lambda self: unit)),
+    ):
+        result = runner.invoke(main, ["wizard", "--non-interactive", "--dry-run"], catch_exceptions=False)
+    assert result.exit_code == 1
+    error_lines = [line for line in result.output.splitlines() if "Error during install:" in line]
+    assert error_lines == ["Error during install: systemd cannot exec an empty interpreter path: ''"], result.output
+    assert "Traceback" not in result.output
+    assert not unit.exists()
+
+
 def test_wizard_refused_launchd_interpreter_path_emits_clean_message_exits_1(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -442,6 +463,51 @@ def test_install_refused_launchd_config_path_emits_clean_message_exits_1(
     assert "Traceback" not in result.output
     run.assert_not_called()
     assert not plist.exists()
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["real", "dry-run"])
+@pytest.mark.parametrize(
+    ("config_dir", "config_name", "refusal"),
+    [
+        ("conf", "archon-search.toml ", "archon-search would strip a config path with leading or trailing whitespace"),
+        ("bad\x01conf", "archon-search.toml", "systemd unit cannot hold a config path containing control characters"),
+    ],
+    ids=["whitespace", "control-char"],
+)
+def test_install_refused_systemd_config_path_emits_clean_message_exits_1(
+    runner: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    dry_run: bool,
+    config_dir: str,
+    config_name: str,
+    refusal: str,
+) -> None:
+    """install (Linux): the real systemd service refuses an existing config at a path it cannot carry, in one line.
+
+    The refusal comes before the running service is stopped, so systemctl is never run and no unit is written.
+    """
+    from archon_search.platform.linux import SystemdSearchService
+
+    monkeypatch.delenv("ARCHON_SEARCH_CONTAINER", raising=False)
+    config = tmp_path / config_dir / config_name
+    config.parent.mkdir()
+    config.write_text("[database]\n")
+    svc = SystemdSearchService()
+    unit = tmp_path / "systemd" / "user" / "archon-search.service"
+    args = ["install", "--config", str(config), *(["--dry-run"] if dry_run else [])]
+    with (
+        patch("archon_search.install.installer.get_search_service", return_value=svc),
+        patch.object(SystemdSearchService, "_unit_path", property(lambda self: unit)),
+        patch.object(svc, "_run") as run,
+    ):
+        result = runner.invoke(main, args, catch_exceptions=False)
+    assert result.exit_code == 1
+    error_lines = [line for line in result.output.splitlines() if "Error during install:" in line]
+    assert error_lines == [f"Error during install: {refusal}: {str(config)!r}"], result.output
+    assert "Traceback" not in result.output
+    run.assert_not_called()
+    assert not unit.exists()
 
 
 def test_uninstall_container_env_emits_clean_message_exits_1(

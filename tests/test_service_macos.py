@@ -950,19 +950,6 @@ def test_validate_registration_refuses_data_dir_with_trailing_whitespace(
         LaunchdSearchService().validate_registration(config_path=_CONFIG_PATH)
 
 
-def test_server_strips_the_env_values_the_whitespace_refusal_guards(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Contract behind the whitespace refusal: the server strips ARCHON_SEARCH_CONFIG and ARCHON_SEARCH_DATA_DIR.
-
-    If either stopped stripping, the refusal would reject paths the server could use as written.
-    """
-    from archon_search.config import get_default_config_path
-    from archon_search.paths import get_data_dir
-    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", " /x/a.toml ")
-    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", " /x/data ")
-    assert get_default_config_path() == Path("/x/a.toml")
-    assert get_data_dir() == Path("/x/data")
-
-
 @pytest.mark.parametrize(
     ("python", "cause"),
     [

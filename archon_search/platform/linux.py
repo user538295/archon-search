@@ -15,6 +15,8 @@ from archon_search.platform.service import (
     _STOP_WAIT_TIMEOUT_S,
     SearchServiceLifecycle,
     ServiceStatus,
+    check_interpreter_determined,
+    check_survives_server_strip,
     get_secrets_env_file,
     write_errors_naming,
 )
@@ -74,8 +76,8 @@ _UNIT_ENCODING = "utf-8"
 class _UnitField:
     """One path-valued unit field: what systemd reads back, and how the directive escapes it.
 
-    ``quoted`` fields sit inside a double-quoted word; the others are written unquoted.
-    Both get ``%`` doubled.
+    ``label`` carries its article, as error messages print it. ``quoted`` fields sit inside a
+    double-quoted word; the others are written unquoted. Both get ``%`` doubled.
     """
 
     label: str
@@ -114,44 +116,52 @@ def _unit_fields(config_path: str) -> dict[str, _UnitField]:
     """
     data_dir = get_data_dir()
     return {
-        _EXECUTABLE_PLACEHOLDER: _UnitField("interpreter path", sys.executable, quoted=True),
-        "cwd": _UnitField("working directory", _unquoted_path(data_dir), quoted=False),
-        "config_path": _UnitField("config path", config_path, quoted=True),
-        "data_dir": _UnitField("data directory", str(data_dir), quoted=True),
-        "secrets_file": _UnitField("secrets file path", _unquoted_path(get_secrets_env_file()), quoted=False),
+        # An undetermined sys.executable is refused by check_interpreter_determined.
+        _EXECUTABLE_PLACEHOLDER: _UnitField("an interpreter path", sys.executable or "", quoted=True),
+        "cwd": _UnitField("a working directory", _unquoted_path(data_dir), quoted=False),
+        "config_path": _UnitField("a config path", config_path, quoted=True),
+        "data_dir": _UnitField("a data directory", str(data_dir), quoted=True),
+        "secrets_file": _UnitField("a secrets file path", _unquoted_path(get_secrets_env_file()), quoted=False),
     }
 
 
+def _check_unit_field(field: _UnitField) -> None:
+    """Raise ``RuntimeError`` when the unit cannot carry ``field`` intact."""
+    if _CONTROL_CHARS.search(field.value):
+        raise RuntimeError(f"systemd unit cannot hold {field.label} containing control characters: {field.value!r}")
+    try:
+        field.value.encode(_UNIT_ENCODING)
+    except UnicodeEncodeError:
+        raise RuntimeError(f"systemd unit cannot hold {field.label} that is not valid UTF-8: {field.value!r}") from None
+    if field.quoted:
+        return
+    if _ends_in_line_continuation(field.value):
+        raise RuntimeError(
+            f"systemd would join the next unit line onto {field.label} ending in a backslash: {field.value!r}"
+        )
+    if field.value != field.value.strip(_SYSTEMD_WHITESPACE):
+        raise RuntimeError(f"systemd would strip {field.label} with leading or trailing whitespace: {field.value!r}")
+    # _unquoted_path() resolves any .., but a symlink loop is resolved only as far as
+    # resolve() gets; refuse rather than rely on how far that is.
+    if _PARENT_DIR in Path(field.value).parts:
+        raise RuntimeError(f"systemd would ignore {field.label} that is not normalized (contains ..): {field.value!r}")
+
+
 def _validated_unit_fields(config_path: str) -> dict[str, _UnitField]:
-    """Return ``_unit_fields(config_path)``, raising ``RuntimeError`` for one the unit cannot carry intact."""
+    """Return ``_unit_fields(config_path)``, raising ``RuntimeError`` for one the unit cannot carry intact.
+
+    The platform-independent refusals run first, so a data directory the server would strip is named as such
+    (the reason macOS gives too) rather than as the WorkingDirectory= value systemd would strip:
+    paths.get_data_dir strips the raw env value, yet ARCHON_SEARCH_DATA_DIR='/x/data /' still yields
+    '/x/data ' once Path drops the slash.
+    """
+    # The raw sys.executable, so the message shows None rather than ''.
+    check_interpreter_determined("systemd", sys.executable)
     fields = _unit_fields(config_path)
+    check_survives_server_strip(fields["data_dir"].label, fields["data_dir"].value)
+    check_survives_server_strip(fields["config_path"].label, fields["config_path"].value)
     for field in fields.values():
-        if _CONTROL_CHARS.search(field.value):
-            raise RuntimeError(
-                f"systemd unit cannot hold a {field.label} containing control characters: {field.value!r}"
-            )
-        try:
-            field.value.encode(_UNIT_ENCODING)
-        except UnicodeEncodeError:
-            raise RuntimeError(
-                f"systemd unit cannot hold a {field.label} that is not valid UTF-8: {field.value!r}"
-            ) from None
-        if field.quoted:
-            continue
-        if _ends_in_line_continuation(field.value):
-            raise RuntimeError(
-                f"systemd would join the next unit line onto a {field.label} ending in a backslash: {field.value!r}"
-            )
-        if field.value != field.value.strip(_SYSTEMD_WHITESPACE):
-            raise RuntimeError(
-                f"systemd would strip a {field.label} with leading or trailing whitespace: {field.value!r}"
-            )
-        # _unquoted_path() resolves any .., but a symlink loop is resolved only as far as
-        # resolve() gets; refuse rather than rely on how far that is.
-        if _PARENT_DIR in Path(field.value).parts:
-            raise RuntimeError(
-                f"systemd would ignore a {field.label} that is not normalized (contains ..): {field.value!r}"
-            )
+        _check_unit_field(field)
     python = fields[_EXECUTABLE_PLACEHOLDER].value
     if _UNSUPPORTED_EXECUTABLE_CHARS.intersection(python):
         raise RuntimeError(

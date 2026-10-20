@@ -5,8 +5,8 @@ archon_search/install/service_ops.py:39:98a9e23568af432bb4fd69741dca5811eb6fba15
 # config.py/warn_if_legacy_config_ignored: probes the pre-data-dir default config location (~/.archon-search/) to warn on upgrade — by definition not under get_data_dir()
 archon_search/config.py:429:002bc6d0189b280745e0d3f59657d357277ee3e5cf02e25ce5c385e889c5e4df
 # linux.py/_unit_path: OS-owned systemd user service path (~/.config/systemd/user/), not the archon-search data tree
-archon_search/platform/linux.py:168:e0848f2f11974468389b5ca93b1a311f959a01090ee2d593bef523eba91ba474
+archon_search/platform/linux.py:178:e0848f2f11974468389b5ca93b1a311f959a01090ee2d593bef523eba91ba474
 # macos.py/_plist_path: OS-owned LaunchAgents path (~/Library/LaunchAgents/), not the archon-search data tree
-archon_search/platform/macos.py:187:eb847f85130a2554254bd71b2e86d19045792ac1386208328a40becb8873118c
+archon_search/platform/macos.py:186:eb847f85130a2554254bd71b2e86d19045792ac1386208328a40becb8873118c
 # wizard.py/_gguf_cache_roots: llama.cpp- and huggingface_hub-owned GGUF download dirs, not the archon-search data tree
 archon_search/install/wizard.py:331:752b1a297cd222193f45833544f1634ba707221ce8f131c4bb91ed89e6cc383a

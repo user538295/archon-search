@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,8 @@ import pytest
 from archon_search.platform.service import (
     SearchServiceLifecycle,
     ServiceStatus,
+    check_interpreter_determined,
+    check_survives_server_strip,
     get_secrets_env_file,
     write_errors_naming,
 )
@@ -205,3 +208,57 @@ def test_write_errors_naming_passes_non_oserror_through_unchanged() -> None:
         raise failure
 
     assert excinfo.value is failure
+
+
+# ── registration checks launchd and systemd share ─────────────────────────────
+
+_LAUNCHER = "systemd"
+_LABEL = "a config path"
+_CLEAN_PATH = "/x/a.toml"
+
+
+@pytest.mark.parametrize("python", ["", None], ids=["empty", "none"])
+def test_check_interpreter_determined_refuses_undetermined_interpreter(python: str | None) -> None:
+    """sys.executable is '' or None when Python cannot determine it; the launcher would then exec nothing."""
+    expected = re.escape(f"{_LAUNCHER} cannot exec an empty interpreter path: {python!r}")
+    with pytest.raises(RuntimeError, match=f"^{expected}$"):
+        check_interpreter_determined(_LAUNCHER, python)
+
+
+def test_check_interpreter_determined_accepts_an_interpreter_path() -> None:
+    check_interpreter_determined(_LAUNCHER, "/usr/bin/python3")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        f" {_CLEAN_PATH}",
+        f"{_CLEAN_PATH} ",
+        f"\t{_CLEAN_PATH}",
+        f"{_CLEAN_PATH}\t",
+        f"\n{_CLEAN_PATH}",
+        f"{_CLEAN_PATH}\n",
+    ],
+    ids=["leading-space", "trailing-space", "leading-tab", "trailing-tab", "leading-newline", "trailing-newline"],
+)
+def test_check_survives_server_strip_refuses_outer_whitespace(bad: str) -> None:
+    expected = re.escape(f"archon-search would strip {_LABEL} with leading or trailing whitespace: {bad!r}")
+    with pytest.raises(RuntimeError, match=f"^{expected}$"):
+        check_survives_server_strip(_LABEL, bad)
+
+
+def test_check_survives_server_strip_accepts_inner_whitespace() -> None:
+    check_survives_server_strip(_LABEL, "/x/my data/a.toml")
+
+
+def test_server_strips_the_env_values_the_whitespace_refusal_guards(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Contract behind the whitespace refusal: the server strips ARCHON_SEARCH_CONFIG and ARCHON_SEARCH_DATA_DIR.
+
+    If either stopped stripping, the refusal would reject paths the server could use as written.
+    """
+    from archon_search.config import get_default_config_path
+    from archon_search.paths import get_data_dir
+    monkeypatch.setenv("ARCHON_SEARCH_CONFIG", " /x/a.toml ")
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", " /x/data ")
+    assert get_default_config_path() == Path("/x/a.toml")
+    assert get_data_dir() == Path("/x/data")

@@ -33,6 +33,26 @@ def get_secrets_env_file() -> Path:
     return paths.get_data_dir() / _SECRETS_ENV_FILENAME
 
 
+def check_interpreter_determined(launcher: str, python: str | None) -> None:
+    """Raise ``RuntimeError`` when ``python`` is empty, so ``launcher`` would exec nothing.
+
+    ``sys.executable`` is ``''`` or ``None`` when Python cannot determine its interpreter.
+    """
+    if not python:
+        raise RuntimeError(f"{launcher} cannot exec an empty interpreter path: {python!r}")
+
+
+def check_survives_server_strip(label: str, value: str) -> None:
+    """Raise ``RuntimeError`` when the server would strip outer whitespace from ``value``.
+
+    ``label`` carries its article. The server strips ARCHON_SEARCH_CONFIG (``config._config_env_override``)
+    and ARCHON_SEARCH_DATA_DIR (``paths.get_data_dir``) with ``str.strip()``, so it would use a different
+    path than the service names.
+    """
+    if value != value.strip():
+        raise RuntimeError(f"archon-search would strip {label} with leading or trailing whitespace: {value!r}")
+
+
 @contextmanager
 def write_errors_naming(target: str) -> Iterator[None]:
     """Turn an ``OSError`` raised while writing ``target`` into a ``RuntimeError`` that names it."""

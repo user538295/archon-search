@@ -16,6 +16,8 @@ from archon_search.platform.service import (
     _STOP_WAIT_TIMEOUT_S,
     SearchServiceLifecycle,
     ServiceStatus,
+    check_interpreter_determined,
+    check_survives_server_strip,
     get_secrets_env_file,
     write_errors_naming,
 )
@@ -109,9 +111,7 @@ def _check_plist_value(label: str, value: str) -> None:
     """
     if not _plist_round_trips(value):
         raise RuntimeError(f"launchd plist cannot hold {label} {_plist_refusal_cause(value)}: {value!r}")
-    # The server strips ARCHON_SEARCH_CONFIG and ARCHON_SEARCH_DATA_DIR before using them.
-    if value != value.strip():
-        raise RuntimeError(f"archon-search would strip {label} with leading or trailing whitespace: {value!r}")
+    check_survives_server_strip(label, value)
 
 
 def _check_wrapper_value(label: str, value: str) -> None:
@@ -143,8 +143,7 @@ def _validated_service_paths(config_path: str) -> _ServicePaths:
     paths = _service_paths(config_path)
     _check_plist_value("a data directory", str(paths.data_dir))
     _check_plist_value("a config path", paths.config_path)
-    if not paths.python:
-        raise RuntimeError(f"wrapper script cannot exec an empty interpreter path: {sys.executable!r}")
+    check_interpreter_determined("wrapper script", sys.executable)
     _check_wrapper_value("an interpreter path", paths.python)
     _check_wrapper_value("a secrets file path", str(paths.secrets_file))
     return paths

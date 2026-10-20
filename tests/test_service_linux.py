@@ -1027,3 +1027,187 @@ def test_register_wraps_unit_write_os_error(tmp_path: Path) -> None:
     ):
         svc.register(config_path=_CONFIG_PATH)
     assert excinfo.value.__cause__ is read_only
+
+
+# ── validation parity with macOS: undeterminable interpreter, paths the server would strip ──
+
+_UNDETERMINABLE_INTERPRETERS = ["", None]
+_UNDETERMINABLE_INTERPRETER_IDS = ["empty", "none"]
+# A representative set: check_survives_server_strip is exhaustively unit-tested in test_service_lifecycle.py.
+# The strip check runs before the control-character one, so an outer tab or newline gets the strip reason.
+_WHITESPACE_WRAPPED_CONFIG_PATHS = [f"{_CONFIG_PATH} ", f"\t{_CONFIG_PATH}", f"{_CONFIG_PATH}\n"]
+_WHITESPACE_WRAPPED_IDS = ["trailing-space", "leading-tab", "trailing-newline"]
+_VALID_INTERPRETER = "/usr/bin/python3"
+
+
+def _interpreter_refusal(python: str | None) -> str:
+    """The regex pytest.raises(match=) needs for refusing an undetermined interpreter."""
+    return f"^{re.escape(f'systemd cannot exec an empty interpreter path: {python!r}')}$"
+
+
+def _strip_refusal(label: str, value: str) -> str:
+    """The regex pytest.raises(match=) needs for refusing ``value`` as ``label`` the server would strip."""
+    return f"^{re.escape(f'archon-search would strip {label} with leading or trailing whitespace: {value!r}')}$"
+
+
+def _whitespace_wrapped_data_dir(tmp_path: Path) -> tuple[str, str]:
+    """Return (ARCHON_SEARCH_DATA_DIR value, data dir it yields): ``<dir> /`` yields ``<dir> ``.
+
+    get_data_dir() strips the env value before Path drops the trailing slash, so the space survives.
+    """
+    data_dir = f"{tmp_path / 'data'} "
+    return f"{data_dir}/", data_dir
+
+
+def _assert_register_refused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_path: str,
+    dry_run: bool,
+    refusal: str,
+    data_dir_env: str | None = None,
+) -> None:
+    """Run register() expecting ``refusal``; assert it wrote no unit and ran no systemctl.
+
+    ``data_dir_env`` is set as ARCHON_SEARCH_DATA_DIR verbatim (a Path would drop a trailing ``/``).
+    """
+    with _isolated_service(tmp_path, monkeypatch, tmp_path / "data") as (svc, unit, run):
+        if data_dir_env is not None:
+            monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", data_dir_env)
+        with pytest.raises(RuntimeError, match=refusal):
+            svc.register(dry_run=dry_run, config_path=config_path)
+        assert not unit.exists()
+        run.assert_not_called()
+
+
+@pytest.mark.parametrize("python", _UNDETERMINABLE_INTERPRETERS, ids=_UNDETERMINABLE_INTERPRETER_IDS)
+def test_validate_registration_refuses_undeterminable_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python: str | None
+) -> None:
+    """An empty or missing interpreter is refused with a RuntimeError, not passed (``''``) or a TypeError (None)."""
+    from archon_search.platform.linux import SystemdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(sys, "executable", python)
+    with pytest.raises(RuntimeError, match=_interpreter_refusal(python)):
+        SystemdSearchService().validate_registration(config_path=_CONFIG_PATH)
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["real", "dry-run"])
+@pytest.mark.parametrize("python", _UNDETERMINABLE_INTERPRETERS, ids=_UNDETERMINABLE_INTERPRETER_IDS)
+def test_register_refuses_undeterminable_interpreter_and_writes_no_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python: str | None, dry_run: bool
+) -> None:
+    """register() refuses itself, ``--dry-run`` too, instead of writing ``ExecStart="" -m archon_search.server``."""
+    monkeypatch.setattr(sys, "executable", python)
+    _assert_register_refused(tmp_path, monkeypatch, _CONFIG_PATH, dry_run, _interpreter_refusal(python))
+
+
+@pytest.mark.parametrize("bad", _WHITESPACE_WRAPPED_CONFIG_PATHS, ids=_WHITESPACE_WRAPPED_IDS)
+def test_validate_registration_refuses_config_path_with_surrounding_whitespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    """The quoted config path keeps its whitespace in the unit, but the server strips it and loads another file."""
+    from archon_search.platform.linux import SystemdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    with pytest.raises(RuntimeError, match=_strip_refusal("a config path", bad)):
+        SystemdSearchService().validate_registration(config_path=bad)
+
+
+@pytest.mark.parametrize("whitespace", [" ", "\t", "\n"], ids=["space", "tab", "newline"])
+def test_validate_registration_refuses_data_dir_with_trailing_whitespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, whitespace: str
+) -> None:
+    """get_data_dir() strips the env var before Path drops its trailing slash, so ``<dir><ws>/`` ends in whitespace.
+
+    The server strips ARCHON_SEARCH_DATA_DIR again, so it would run on a different data dir than the unit names;
+    the refusal names the data directory, not the WorkingDirectory= value systemd would also strip.
+    """
+    from archon_search.platform.linux import SystemdSearchService
+    bad = f"{tmp_path / 'data'}{whitespace}"
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", f"{bad}/")
+    with pytest.raises(RuntimeError, match=_strip_refusal("a data directory", bad)):
+        SystemdSearchService().validate_registration(config_path=_CONFIG_PATH)
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["real", "dry-run"])
+@pytest.mark.parametrize("bad", _WHITESPACE_WRAPPED_CONFIG_PATHS, ids=_WHITESPACE_WRAPPED_IDS)
+def test_register_refuses_config_path_with_surrounding_whitespace_and_writes_no_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str, dry_run: bool
+) -> None:
+    """register() refuses the same config paths itself, ``--dry-run`` too, before writing anything."""
+    _assert_register_refused(tmp_path, monkeypatch, bad, dry_run, _strip_refusal("a config path", bad))
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["real", "dry-run"])
+def test_register_refuses_data_dir_with_trailing_whitespace_and_writes_no_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dry_run: bool
+) -> None:
+    """register() refuses a data dir the server would strip, ``--dry-run`` too, before writing anything."""
+    env_value, data_dir = _whitespace_wrapped_data_dir(tmp_path)
+    _assert_register_refused(
+        tmp_path, monkeypatch, _CONFIG_PATH, dry_run, _strip_refusal("a data directory", data_dir), env_value
+    )
+
+
+@pytest.mark.parametrize("python", _UNDETERMINABLE_INTERPRETERS, ids=_UNDETERMINABLE_INTERPRETER_IDS)
+def test_validate_registration_refuses_interpreter_before_config_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python: str | None
+) -> None:
+    """With both an undetermined interpreter and a whitespace-wrapped config path, the interpreter reason wins."""
+    from archon_search.platform.linux import SystemdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(sys, "executable", python)
+    with pytest.raises(RuntimeError, match=_interpreter_refusal(python)):
+        SystemdSearchService().validate_registration(config_path=f"{_CONFIG_PATH} ")
+
+
+def test_validate_registration_refuses_data_dir_before_config_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With both the data dir and config path whitespace-wrapped, the data-dir reason wins, matching macOS order."""
+    from archon_search.platform.linux import SystemdSearchService
+    env_value, data_dir = _whitespace_wrapped_data_dir(tmp_path)
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", env_value)
+    with pytest.raises(RuntimeError, match=_strip_refusal("a data directory", data_dir)):
+        SystemdSearchService().validate_registration(config_path=f"{_CONFIG_PATH} ")
+
+
+def _assert_replace_refused(svc: SystemdSearchService, config_path: str, refusal: str) -> None:
+    """Run replace_registration() expecting ``refusal`` before stop() touches the running service or register() runs."""
+    with (
+        patch.object(svc, "stop") as stop,
+        patch.object(svc, "register") as register,
+        pytest.raises(RuntimeError, match=refusal),
+    ):
+        svc.replace_registration(config_path=config_path)
+    stop.assert_not_called()
+    register.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("python", "config_path", "refusal"),
+    [
+        *[(python, _CONFIG_PATH, _interpreter_refusal(python)) for python in _UNDETERMINABLE_INTERPRETERS],
+        *[(_VALID_INTERPRETER, bad, _strip_refusal("a config path", bad)) for bad in _WHITESPACE_WRAPPED_CONFIG_PATHS],
+    ],
+    ids=[f"interpreter-{i}" for i in _UNDETERMINABLE_INTERPRETER_IDS]
+    + [f"config-{i}" for i in _WHITESPACE_WRAPPED_IDS],
+)
+def test_replace_registration_refuses_before_stopping_running_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, python: str | None, config_path: str, refusal: str
+) -> None:
+    """A refused interpreter or config path raises before the running service is stopped."""
+    from archon_search.platform.linux import SystemdSearchService
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(sys, "executable", python)
+    _assert_replace_refused(SystemdSearchService(), config_path, refusal)
+
+
+def test_replace_registration_refuses_data_dir_with_trailing_whitespace_before_stopping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A data dir the server would strip raises before the running service is stopped."""
+    from archon_search.platform.linux import SystemdSearchService
+    env_value, data_dir = _whitespace_wrapped_data_dir(tmp_path)
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", env_value)
+    _assert_replace_refused(SystemdSearchService(), _CONFIG_PATH, _strip_refusal("a data directory", data_dir))
