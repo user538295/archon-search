@@ -52,3 +52,7 @@
 - **[2026-10-13] guards (compacted from ×21 entry)**: doc-gate regex `warm.?up` does not match the phrase "warms up" — write the gate pattern against the real wording.
 - **[2026-10-13] guards (compacted)**: doc gate also needs a red test for the new rule before the doc change lands.
 - **[2026-10-13] smoke/container (compacted)**: the Docker lane once died on a pip ReadTimeout (fixed via ENV above); images must mkdir+chown volume mount targets or they come up root-owned.
+
+- **[2026-10-12] (×1) untrusted JSON parse**: `json.loads` raises `RecursionError` (a RuntimeError) on deep nesting and a plain `ValueError` on >4300-digit ints — catch `(ValueError, RecursionError)`; reject non-dict lines explicitly. _(evicted from learnings.md 2026-10-21 — lowest N)_
+
+- **[2026-10-14] (×1) release.sh runs**: `tee` masks the exit code (log `RELEASE_SH_EXIT`); a full disk kills runs silently. Stub `docker` in release.sh tests (wedged daemon hangs `docker info`); probe it with `gtimeout -k 2 8`, not perl alarm. _(evicted from learnings.md 2026-10-21 — lowest N)_
