@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,12 +22,18 @@ from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
 from archon_search.server.routes_jobs import (
     INGEST_FAILED_DETAIL,
+    REINDEX_FAILED_DETAIL,
     IngestRequest,
     _default_ingest_task,
     _default_ingest_task_with_lock,
     _run_pipeline,
 )
 from archon_search.types import IngestJob, MigrationKind, ReindexJob
+
+
+def _running_ingest_job(job_id: str) -> IngestJob:
+    """The job a successful PENDING -> RUNNING claim returns, for ``MagicMock(spec=JobStore).transition``."""
+    return IngestJob(job_id=job_id, status=JobStatus.RUNNING, created_at="", updated_at="", namespace=DEFAULT_NAMESPACE)
 
 
 @pytest.fixture
@@ -671,25 +680,15 @@ def test_ingest_openapi_lists_503_response(client: TestClient) -> None:
 async def test_background_ingest_oserror_logs_and_marks_failed(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A primary OSError in the background task is logged and the job is marked FAILED."""
+    """A primary OSError in the background task (persisting the RUNNING claim) is logged and the job is marked FAILED."""
     real_store = JobStore(path=tmp_path / "jobs.json")
     job = real_store.create()
-
-    calls = {"n": 0}
-    real_update = real_store.update
     primary_error = OSError("disk full")
 
-    def flaky_update(job_id: str, **kwargs: object):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            # First update (status=RUNNING) raises OSError
-            raise primary_error
-        return real_update(job_id, **kwargs)
-
     store = MagicMock()
-    store.update.side_effect = flaky_update
+    store.update.side_effect = real_store.update
     store.get.side_effect = real_store.get
-    store.transition.side_effect = real_store.transition
+    store.transition.side_effect = primary_error
 
     body = IngestRequest(collection="docs")
     with caplog.at_level("ERROR"):
@@ -709,14 +708,15 @@ async def test_background_ingest_oserror_logs_and_marks_failed(
 async def test_background_ingest_double_oserror_suppressed(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """If EVERY store.update raises OSError, no exception escapes _default_ingest_task."""
+    """If EVERY status write (the RUNNING claim and store.update) raises OSError, no exception escapes
+    _default_ingest_task."""
     real_store = JobStore(path=tmp_path / "jobs.json")
     job = real_store.create()
 
     store = MagicMock()
     store.update.side_effect = OSError("disk full")
     store.get.side_effect = real_store.get
-    store.transition.side_effect = real_store.transition
+    store.transition.side_effect = OSError("disk full")
 
     body = IngestRequest(collection="docs")
     with caplog.at_level("ERROR"):
@@ -737,11 +737,11 @@ async def test_background_ingest_cancelled_oserror_suppressed_and_reraises_cance
     is logged and suppressed, and CancelledError is still re-raised (not OSError)."""
 
     def update_side_effect(job_id: str, **kwargs: object) -> None:
-        # RUNNING update (before cancel) is benign; CANCELLED update fails durably.
         if kwargs.get("status") == JobStatus.CANCELLED:
             raise OSError("disk full")
 
     store = MagicMock(spec=JobStore)
+    store.transition.return_value = _running_ingest_job("job-1")
     store.update.side_effect = update_side_effect
     store.get.return_value = MagicMock()
 
@@ -781,7 +781,7 @@ async def test_background_ingest_cancelled_oserror_suppressed_and_reraises_cance
 @pytest.mark.parametrize(
     "persist_error",
     [OSError("disk full"), KeyError("job-1"), TypeError("Object of type set is not JSON serializable")],
-    ids=["persist-oserror", "job-missing", "persist-typeerror"],
+    ids=["persist-oserror", "persist-keyerror", "persist-typeerror"],
 )
 async def test_background_ingest_failed_status_persist_error_suppressed(
     first_error: Exception, expected_error: str, persist_error: Exception, with_lock: bool,
@@ -795,10 +795,10 @@ async def test_background_ingest_failed_status_persist_error_suppressed(
 
     def update_side_effect(job_id: str, **kwargs: object) -> None:
         status_writes.append(kwargs)
-        if kwargs["status"] != JobStatus.RUNNING:
-            raise persist_error
+        raise persist_error
 
     store = MagicMock(spec=JobStore)
+    store.transition.return_value = _running_ingest_job("job-1")
     store.update.side_effect = update_side_effect
 
     async def pipeline_fn(*args: object, **kwargs: object) -> None:
@@ -814,7 +814,8 @@ async def test_background_ingest_failed_status_persist_error_suppressed(
         else:
             await _default_ingest_task("job-1", store, body, pipeline_fn=pipeline_fn)
 
-    assert status_writes == [{"status": JobStatus.RUNNING}, {"status": JobStatus.FAILED, "error": expected_error}]
+    store.transition.assert_called_once_with("job-1", {JobStatus.PENDING}, JobStatus.RUNNING)
+    assert status_writes == [{"status": JobStatus.FAILED, "error": expected_error}]
     [record] = [r for r in caplog.records if "could not persist FAILED status" in r.message]
     assert record.exc_info is not None and record.exc_info[1] is persist_error
 
@@ -890,6 +891,7 @@ async def test_background_ingest_with_lock_never_releases_a_lock_another_holder_
     """The task releases its pre-acquired lock early, before dispatch; when another holder (e.g. a DELETE)
     acquires that lock meanwhile, the task's ``finally`` must not release the other holder's acquisition."""
     store = MagicMock(spec=JobStore)
+    store.transition.return_value = _running_ingest_job("job-1")
     store.get.return_value = None
     held_lock = asyncio.Lock()
     await held_lock.acquire()
@@ -1172,6 +1174,7 @@ def _make_mocks(
     """Return (job_store, search_store, embedder_cache, pipeline) mocks."""
     job_store = MagicMock(spec=JobStore)
     job_store.get.return_value = job
+    job_store.transition.return_value = replace(job, status=JobStatus.RUNNING)
     job_store.update.return_value = None
 
     search_store = MagicMock()
@@ -1645,15 +1648,18 @@ def _reindex_scenario(scenario: str) -> tuple:
         job_store.get.return_value = IngestJob(
             job_id=job.job_id, status=JobStatus.PENDING, created_at="", updated_at="", namespace=DEFAULT_NAMESPACE
         )
+    elif scenario == "already-cancelling":
+        job_store.get.return_value = _make_reindex_job(target_embedding_model="model-B", status=JobStatus.CANCELLING)
     elif scenario == "cancelling-after-ingest":
         cancelling = _make_reindex_job(target_embedding_model="model-B", status=JobStatus.CANCELLING)
-        job_store.get.side_effect = [job, cancelling]
+        job_store.get.side_effect = itertools.chain([job], itertools.repeat(cancelling))
     return job_store, search_store, embedder_cache, pipeline
 
 
 # scenario -> the terminal status _reindex_task writes last on that path
 _REINDEX_FINAL_STATUS = {
     "not-a-reindex-job": JobStatus.FAILED,
+    "already-cancelling": JobStatus.CANCELLED,
     "embedder-not-ready": JobStatus.FAILED,
     "embedder-failure": JobStatus.FAILED,
     "ingest-failure": JobStatus.FAILED,
@@ -1704,6 +1710,8 @@ async def test_reindex_task_never_raises_when_job_update_fails(
         pipeline.ingest_directory.assert_not_awaited()
     written_meta: CollectionMeta = search_store.update_collection_meta.call_args[0][0]
     assert written_meta.reindex_job_id is None
+    # Only a completed reindex promotes the target model.
+    assert written_meta.active_embedding_model == ("model-B" if scenario == "success" else "model-A")
     assert any(r.exc_info is not None and r.exc_info[1] is persist_error for r in caplog.records)
 
 
@@ -1734,8 +1742,6 @@ async def test_reindex_task_never_raises_when_clearing_reindex_job_id_fails(
         job_store.get.return_value = None
     elif scenario == "already-cancelled":
         job_store.get.return_value = _make_reindex_job(status=JobStatus.CANCELLED)
-    elif scenario == "already-cancelling":
-        job_store.get.return_value = _make_reindex_job(status=JobStatus.CANCELLING)
     meta_error = RuntimeError("meta write failed")
     search_store.update_collection_meta.side_effect = meta_error
 
@@ -1753,10 +1759,11 @@ async def test_reindex_task_never_raises_when_clearing_reindex_job_id_fails(
         )
 
     search_store.update_collection_meta.assert_awaited_once()
+    assert search_store.update_collection_meta.call_args[0][0].active_embedding_model == "model-A"
     assert any(r.exc_info is not None and r.exc_info[1] is meta_error for r in caplog.records)
     if scenario in _REINDEX_FINAL_STATUS:
         assert job_store.update.call_args.kwargs["status"] == _REINDEX_FINAL_STATUS[scenario]
-    else:  # job-missing / already-cancelled / already-cancelling: the guard exits without a status write
+    else:  # job-missing / already-cancelled: the guard exits without a status write
         job_store.update.assert_not_called()
 
 
@@ -1943,3 +1950,623 @@ async def test_default_ingest_task_dir_path_calls_ingest_directory(
     assert call_kwargs[0][0] == corpus_dir
     assert call_kwargs[1]["embedder"] is fake_embedder
     pipeline.ingest_file.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Bug 4: a cancel requested before the task marks RUNNING must not be overwritten
+# ---------------------------------------------------------------------------
+
+
+def _cancel_job(job_store: JobStore, job_id: str) -> None:
+    """Simulate DELETE /jobs/{id} on an active job: PENDING/RUNNING -> CANCELLING."""
+    cancelled = job_store.transition(job_id, {JobStatus.PENDING, JobStatus.RUNNING}, JobStatus.CANCELLING)
+    assert cancelled is not None, "precondition: the simulated DELETE must move the job to CANCELLING"
+
+
+def _cancel_during_embedder_load(
+    job_store: JobStore, job_id: str, then: Callable[[], None] | None = None
+) -> MagicMock:
+    """An ``embedder_cache`` whose ``get_or_load`` simulates a DELETE /jobs/{id} landing mid-load, then runs *then*."""
+
+    async def _load(_model: str) -> MagicMock:
+        _cancel_job(job_store, job_id)
+        if then is not None:
+            then()
+        return MagicMock()
+
+    embedder_cache = MagicMock()
+    embedder_cache.get_or_load = AsyncMock(side_effect=_load)
+    return embedder_cache
+
+
+def _reindex_cancel_fixture(tmp_path: Path, target_model: str | None) -> tuple:
+    """A real JobStore holding a PENDING ReindexJob plus a stateful collection meta pointing at it."""
+    job_store = JobStore(path=tmp_path / "jobs.json")
+    job = job_store.create_reindex(target_embedding_model=target_model)
+    meta = _make_collection_meta(
+        active_embedding_model="model-A",
+        pending_embedding_model=target_model,
+        needs_reindex=target_model is not None,
+        reindex_job_id=job.job_id,
+    )
+    search_store = MagicMock()
+    search_store.get_collection_meta = AsyncMock(return_value=meta)
+    search_store.update_collection_meta = AsyncMock(return_value=None)
+    pipeline = MagicMock()
+    pipeline.ingest_directory = AsyncMock(return_value=[])
+    return job_store, job, meta, search_store, pipeline
+
+
+async def _run_reindex(
+    job_store: JobStore,
+    job_id: str,
+    search_store: MagicMock,
+    embedder_cache: MagicMock,
+    pipeline: MagicMock,
+    collection_path: Path,
+    config: SearchConfig | None = None,
+) -> None:
+    """Run _reindex_task on collection "col" in the default namespace."""
+    from archon_search.server.routes_jobs import _reindex_task
+
+    await _reindex_task(
+        job_id=job_id,
+        store=search_store,
+        job_store=job_store,
+        embedder_cache=embedder_cache,
+        pipeline=pipeline,
+        collection="col",
+        namespace=DEFAULT_NAMESPACE,
+        collection_path=collection_path,
+        config=config if config is not None else SearchConfig(),
+    )
+
+
+async def _run_ingest_task(store: JobStore, job_id: str, pipeline_fn: AsyncMock, *, with_lock: bool) -> None:
+    """Run _default_ingest_task, or _default_ingest_task_with_lock with a pre-acquired lock it must release."""
+    body = IngestRequest(collection="docs")
+    if with_lock:
+        held_lock = asyncio.Lock()
+        await held_lock.acquire()
+        await _default_ingest_task_with_lock(job_id, store, body, pipeline_fn=pipeline_fn, held_lock=held_lock)
+        assert not held_lock.locked()
+    else:
+        await _default_ingest_task(job_id, store, body, pipeline_fn=pipeline_fn)
+
+
+def _fail_running_persist(job_store: JobStore, job_id: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every persist of *job_id* as RUNNING raise OSError, as a full disk would; other writes succeed."""
+    real_write = job_store._write_atomic
+
+    def _write() -> None:
+        current = job_store.get(job_id)
+        if current is not None and current.status == JobStatus.RUNNING:
+            raise OSError("disk full")
+        real_write()
+
+    monkeypatch.setattr(job_store, "_write_atomic", _write)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("target_model", ["model-B", None], ids=["model-change", "data-only"])
+async def test_reindex_task_cancel_during_embedder_load_skips_ingest_and_promotion(
+    tmp_path: Path, target_model: str | None
+) -> None:
+    """A cancel requested during the embedder load must be honoured before any work: the job ends CANCELLED (not
+    overwritten to RUNNING and completed DONE), with no directory re-ingest, no promotion of the target model, and
+    the collection's reindex_job_id cleared."""
+    job_store, job, meta, search_store, pipeline = _reindex_cancel_fixture(tmp_path, target_model)
+    embedder_cache = _cancel_during_embedder_load(job_store, job.job_id)
+
+    await _run_reindex(job_store, job.job_id, search_store, embedder_cache, pipeline, tmp_path)
+
+    embedder_cache.get_or_load.assert_awaited_once()
+    pipeline.ingest_directory.assert_not_awaited()
+    assert meta.active_embedding_model == "model-A"
+    assert meta.pending_embedding_model == target_model
+    assert meta.needs_reindex is (target_model is not None)
+    assert meta.reindex_job_id is None
+    search_store.update_collection_meta.assert_awaited()
+    final = job_store.get(job.job_id)
+    assert final is not None
+    assert final.status == JobStatus.CANCELLED
+
+
+@dataclass
+class _ReindexExit:
+    """A _reindex_task run on a real JobStore, steered into one terminal path by a ``_REINDEX_EXITS`` setup."""
+
+    job_store: JobStore
+    job_id: str
+    meta: CollectionMeta
+    search_store: MagicMock
+    embedder_cache: MagicMock
+    pipeline: MagicMock
+    monkeypatch: pytest.MonkeyPatch
+    # When set, a newer reindex points the collection's reindex_job_id at this id as the path is triggered.
+    newer_reindex_job_id: str | None = None
+
+    def trigger(self) -> None:
+        """Called by each setup at the moment its exit path is triggered."""
+        if self.newer_reindex_job_id is not None:
+            self.meta.reindex_job_id = self.newer_reindex_job_id
+
+
+def _exit_at_task_start(run: _ReindexExit) -> None:
+    """A DELETE lands before the task starts."""
+    _cancel_job(run.job_store, run.job_id)
+    run.trigger()
+
+
+def _exit_at_embedder_load(run: _ReindexExit) -> None:
+    """A DELETE lands during the embedder load, which then succeeds."""
+    run.embedder_cache = _cancel_during_embedder_load(run.job_store, run.job_id, then=run.trigger)
+
+
+def _exit_at_claim_persist_failure(run: _ReindexExit) -> None:
+    """Persisting the PENDING -> RUNNING claim fails."""
+    _fail_running_persist(run.job_store, run.job_id, run.monkeypatch)
+    run.trigger()
+
+
+def _exit_not_a_reindex_job(*, cancelled: bool) -> Callable[[_ReindexExit], None]:
+    """The task is handed a plain IngestJob, which the collection's reindex_job_id names — already CANCELLING when
+    *cancelled*."""
+
+    def _setup(run: _ReindexExit) -> None:
+        run.job_id = run.job_store.create(collection="col").job_id
+        run.meta.reindex_job_id = run.job_id
+        if cancelled:
+            _cancel_job(run.job_store, run.job_id)
+        run.trigger()
+
+    return _setup
+
+
+def _exit_on_embedder_error(error: type[Exception], *, cancel_first: bool) -> Callable[[_ReindexExit], None]:
+    """The embedder load raises *error* — after a DELETE lands during it when *cancel_first*."""
+
+    def _setup(run: _ReindexExit) -> None:
+        async def _load(_model: str) -> MagicMock:
+            if cancel_first:
+                _cancel_job(run.job_store, run.job_id)
+            run.trigger()
+            raise error("model load failed")
+
+        run.embedder_cache.get_or_load = AsyncMock(side_effect=_load)
+
+    return _setup
+
+
+def _exit_during_ingest(
+    *, cancel: bool = False, error: type[BaseException] | None = None
+) -> Callable[[_ReindexExit], None]:
+    """The directory re-ingest returns, or raises *error* — after a DELETE lands during it when *cancel*."""
+
+    def _setup(run: _ReindexExit) -> None:
+        async def _ingest(*_args: object, **_kwargs: object) -> list:
+            if cancel:
+                _cancel_job(run.job_store, run.job_id)
+            run.trigger()
+            if error is not None:
+                raise error("ingest stopped")
+            return []
+
+        run.pipeline.ingest_directory = AsyncMock(side_effect=_ingest)
+
+    return _setup
+
+
+# terminal path -> (its setup, the job's final status, the job's final error)
+_REINDEX_EXITS: dict[str, tuple[Callable[[_ReindexExit], None], JobStatus, str | None]] = {
+    "task-start": (_exit_at_task_start, JobStatus.CANCELLED, None),
+    "not-a-reindex-job": (_exit_not_a_reindex_job(cancelled=False), JobStatus.FAILED, "not a ReindexJob"),
+    "not-a-reindex-job-cancelled": (_exit_not_a_reindex_job(cancelled=True), JobStatus.CANCELLED, None),
+    "embedder-load": (_exit_at_embedder_load, JobStatus.CANCELLED, None),
+    "claim-persist-failure": (_exit_at_claim_persist_failure, JobStatus.FAILED, REINDEX_FAILED_DETAIL),
+    "embedder-not-ready": (
+        _exit_on_embedder_error(EmbedderNotReadyError, cancel_first=False), JobStatus.FAILED, EMBEDDER_NOT_READY_DETAIL
+    ),
+    "embedder-failure": (_exit_on_embedder_error(RuntimeError, cancel_first=False), JobStatus.FAILED, REINDEX_FAILED_DETAIL),
+    "embedder-not-ready-after-cancel": (
+        _exit_on_embedder_error(EmbedderNotReadyError, cancel_first=True), JobStatus.CANCELLED, None
+    ),
+    "embedder-failure-after-cancel": (_exit_on_embedder_error(RuntimeError, cancel_first=True), JobStatus.CANCELLED, None),
+    "after-ingest": (_exit_during_ingest(cancel=True), JobStatus.CANCELLED, None),
+    "ingest-failure": (_exit_during_ingest(error=RuntimeError), JobStatus.FAILED, REINDEX_FAILED_DETAIL),
+    "ingest-failure-after-cancel": (
+        _exit_during_ingest(cancel=True, error=RuntimeError), JobStatus.FAILED, REINDEX_FAILED_DETAIL
+    ),
+    "ingest-cancelled": (_exit_during_ingest(error=asyncio.CancelledError), JobStatus.CANCELLED, None),
+}
+# terminal paths reached after the directory re-ingest ran
+_EXITS_AFTER_INGEST = {"after-ingest", "ingest-failure", "ingest-failure-after-cancel", "ingest-cancelled"}
+
+
+def _reindex_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_at: str, newer_reindex_job_id: str | None = None
+) -> _ReindexExit:
+    """A ``_reindex_cancel_fixture`` run (target model-B) set up to end through the terminal path *exit_at*."""
+    job_store, job, meta, search_store, pipeline = _reindex_cancel_fixture(tmp_path, "model-B")
+    embedder_cache = MagicMock()
+    embedder_cache.get_or_load = AsyncMock(return_value=MagicMock())
+    run = _ReindexExit(
+        job_store, job.job_id, meta, search_store, embedder_cache, pipeline, monkeypatch, newer_reindex_job_id
+    )
+    setup, _, _ = _REINDEX_EXITS[exit_at]
+    setup(run)
+    return run
+
+
+async def _run_reindex_exit(run: _ReindexExit, tmp_path: Path) -> None:
+    await _run_reindex(run.job_store, run.job_id, run.search_store, run.embedder_cache, run.pipeline, tmp_path)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "exit_at",
+    [
+        "task-start",
+        "embedder-load",
+        "claim-persist-failure",
+        "embedder-failure",
+        "after-ingest",
+        "ingest-failure",
+        "ingest-cancelled",
+    ],
+)
+async def test_reindex_task_exit_keeps_a_newer_reindex_pointer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_at: str
+) -> None:
+    """Once reindex A is CANCELLING (or, after a failed claim persist, about to end FAILED), the reindex route's 409
+    guard may no longer block a new reindex, so reindex B may start and point the collection's reindex_job_id at
+    itself. Whatever path A ends through, its exit must not clear (or rewrite) B's pointer; A still ends terminal."""
+    run = _reindex_exit(tmp_path, monkeypatch, exit_at, newer_reindex_job_id="job-newer")
+
+    await _run_reindex_exit(run, tmp_path)
+
+    _, expected_status, _ = _REINDEX_EXITS[exit_at]
+    assert run.meta.reindex_job_id == "job-newer"
+    run.search_store.update_collection_meta.assert_not_awaited()
+    assert run.meta.active_embedding_model == "model-A"
+    final = run.job_store.get(run.job_id)
+    assert final is not None and final.status == expected_status
+    assert run.pipeline.ingest_directory.await_count == (1 if exit_at in _EXITS_AFTER_INGEST else 0)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("exit_at", list(_REINDEX_EXITS))
+async def test_reindex_task_clears_pointer_before_terminal_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_at: str
+) -> None:
+    """On every non-success exit the collection's reindex_job_id is cleared BEFORE the terminal status is written:
+    the clear rewrites the whole meta row, so a client that waits for the terminal status and then starts a new
+    reindex (or PATCHes the collection) must not have its row clobbered by this task's stale write. A DELETE that
+    lands before a failing exit (embedder load, "not a ReindexJob") ends the job CANCELLED, not FAILED; a failed
+    ingest ends FAILED even after a DELETE."""
+    run = _reindex_exit(tmp_path, monkeypatch, exit_at)
+    status_at_clear: list[JobStatus] = []
+
+    async def _record_clear(_meta: CollectionMeta) -> None:
+        status_at_clear.append(run.job_store.get(run.job_id).status)  # type: ignore[union-attr]
+
+    run.search_store.update_collection_meta = AsyncMock(side_effect=_record_clear)
+
+    await _run_reindex_exit(run, tmp_path)
+
+    _, expected_status, expected_error = _REINDEX_EXITS[exit_at]
+    final = run.job_store.get(run.job_id)
+    assert final is not None
+    assert (final.status, final.error) == (expected_status, expected_error)
+    assert len(status_at_clear) == 1
+    assert status_at_clear[0] not in (JobStatus.CANCELLED, JobStatus.FAILED)
+    assert run.meta.reindex_job_id is None
+    assert run.meta.active_embedding_model == "model-A"
+
+
+@pytest.mark.anyio
+async def test_reindex_task_cancel_via_delete_route_during_embedder_load_ends_cancelled(
+    tmp_path: Path, auth_headers: dict[str, str]
+) -> None:
+    """HTTP-level: a real DELETE /jobs/{id} issued while _reindex_task awaits the embedder load answers 202
+    CANCELLING, and the job must then end CANCELLED (GET /jobs/{id} agrees), not DONE."""
+    import httpx
+
+    job_store, job, _, search_store, pipeline = _reindex_cancel_fixture(tmp_path, "model-B")
+    config = SearchConfig()
+    config.db_path = str(tmp_path / "search")
+    app = create_app(config, job_store)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers=auth_headers
+    ) as client:
+        delete_responses: list[httpx.Response] = []
+
+        async def _load(_model: str) -> MagicMock:
+            delete_responses.append(await client.delete(f"/jobs/{job.job_id}"))
+            return MagicMock()
+
+        embedder_cache = MagicMock()
+        embedder_cache.get_or_load = AsyncMock(side_effect=_load)
+
+        await _run_reindex(job_store, job.job_id, search_store, embedder_cache, pipeline, tmp_path, config)
+
+        assert [r.status_code for r in delete_responses] == [202]
+        assert delete_responses[0].json()["status"] == JobStatus.CANCELLING.value
+        got = await client.get(f"/jobs/{job.job_id}")
+
+    assert got.status_code == 200
+    assert got.json()["status"] == JobStatus.CANCELLED.value
+    pipeline.ingest_directory.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_reindex_task_running_claim_persist_failure_marks_failed_without_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When persisting the reindex job's PENDING -> RUNNING claim fails, nothing is re-ingested or promoted, the
+    collection's reindex_job_id is cleared and the job ends FAILED — a job left PENDING would never run and
+    would keep POST /collections/{name}/reindex answering 409."""
+    from archon_search.server.routes_jobs import REINDEX_FAILED_DETAIL
+
+    job_store, job, meta, search_store, pipeline = _reindex_cancel_fixture(tmp_path, "model-B")
+    _fail_running_persist(job_store, job.job_id, monkeypatch)
+    embedder_cache = MagicMock()
+    embedder_cache.get_or_load = AsyncMock(return_value=MagicMock())
+
+    await _run_reindex(job_store, job.job_id, search_store, embedder_cache, pipeline, tmp_path)
+
+    final = job_store.get(job.job_id)
+    assert final is not None
+    assert final.status == JobStatus.FAILED
+    assert final.error == REINDEX_FAILED_DETAIL
+    pipeline.ingest_directory.assert_not_awaited()
+    assert meta.active_embedding_model == "model-A"
+    assert meta.reindex_job_id is None
+
+
+@pytest.mark.anyio
+async def test_reindex_task_running_claim_persist_failure_honours_cancel_landing_during_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a failed persist of the RUNNING claim the job is PENDING again; a DELETE landing while the task clears
+    reindex_job_id moves it to CANCELLING, and the task must then end it CANCELLED, not overwrite it FAILED."""
+    job_store, job, meta, search_store, pipeline = _reindex_cancel_fixture(tmp_path, "model-B")
+    _fail_running_persist(job_store, job.job_id, monkeypatch)
+    embedder_cache = MagicMock()
+    embedder_cache.get_or_load = AsyncMock(return_value=MagicMock())
+
+    async def _clear_while_a_delete_lands(_meta: CollectionMeta) -> None:
+        _cancel_job(job_store, job.job_id)
+
+    search_store.update_collection_meta = AsyncMock(side_effect=_clear_while_a_delete_lands)
+
+    await _run_reindex(job_store, job.job_id, search_store, embedder_cache, pipeline, tmp_path)
+
+    final = job_store.get(job.job_id)
+    assert final is not None
+    assert final.status == JobStatus.CANCELLED
+    assert meta.reindex_job_id is None
+    pipeline.ingest_directory.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_reindex_task_refused_claim_on_running_job_is_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A RUNNING claim refused because the job is already RUNNING (e.g. a second task for the same job) runs
+    nothing, leaves the job's status alone, keeps the collection's reindex_job_id (it names a live job: clearing it
+    would disable the reindex/PATCH 409 guards) and logs a WARNING naming the job and its status."""
+    job_store, job, meta, search_store, pipeline = _reindex_cancel_fixture(tmp_path, "model-B")
+    embedder_cache = MagicMock()
+
+    async def _load(_model: str) -> MagicMock:
+        job_store.update(job.job_id, status=JobStatus.RUNNING)
+        return MagicMock()
+
+    embedder_cache.get_or_load = AsyncMock(side_effect=_load)
+
+    with caplog.at_level("WARNING", logger="archon_search.server.routes_jobs"):
+        await _run_reindex(job_store, job.job_id, search_store, embedder_cache, pipeline, tmp_path)
+
+    final = job_store.get(job.job_id)
+    assert final is not None and final.status == JobStatus.RUNNING
+    pipeline.ingest_directory.assert_not_awaited()
+    assert meta.active_embedding_model == "model-A"
+    assert meta.reindex_job_id == job.job_id
+    search_store.update_collection_meta.assert_not_awaited()
+    [record] = [r for r in caplog.records if "not claimed as RUNNING" in r.getMessage()]
+    assert record.levelname == "WARNING"
+    assert job.job_id in record.getMessage() and JobStatus.RUNNING.value in record.getMessage()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("state", ["missing", "failed"])
+async def test_reindex_task_refused_claim_on_missing_or_terminal_job_clears_pointer(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, state: str
+) -> None:
+    """A RUNNING claim refused because the job vanished from the JobStore or went terminal during the embedder load
+    runs nothing and writes no status, but clears the collection's reindex_job_id (no live job owns it any more, so
+    it must not keep the reindex/PATCH 409 guards answering 409) and logs a WARNING naming the job and its status."""
+    job_store, job, meta, search_store, pipeline = _reindex_cancel_fixture(tmp_path, "model-B")
+
+    async def _load(_model: str) -> MagicMock:
+        if state == "missing":
+            del job_store._jobs[job.job_id]
+        else:
+            job_store.update(job.job_id, status=JobStatus.FAILED)
+        return MagicMock()
+
+    embedder_cache = MagicMock()
+    embedder_cache.get_or_load = AsyncMock(side_effect=_load)
+
+    with caplog.at_level("WARNING", logger="archon_search.server.routes_jobs"):
+        await _run_reindex(job_store, job.job_id, search_store, embedder_cache, pipeline, tmp_path)
+
+    final = job_store.get(job.job_id)
+    expected_status = None if state == "missing" else JobStatus.FAILED
+    assert (final.status if final is not None else None) == expected_status
+    pipeline.ingest_directory.assert_not_awaited()
+    assert meta.active_embedding_model == "model-A"
+    assert meta.reindex_job_id is None
+    search_store.update_collection_meta.assert_awaited_once()
+    [record] = [r for r in caplog.records if "not claimed as RUNNING" in r.getMessage()]
+    assert record.levelname == "WARNING"
+    status_text = "missing" if expected_status is None else expected_status.value
+    assert job.job_id in record.getMessage() and f"status {status_text}" in record.getMessage()
+
+
+@pytest.mark.anyio
+async def test_reindex_task_cancel_during_model_promotion_ends_cancelled_with_model_promoted(tmp_path: Path) -> None:
+    """A DELETE landing while step 5 writes the promoted model (job RUNNING -> CANCELLING) must not be overwritten
+    by DONE: the job ends CANCELLED. The model stays promoted — the vectors were already re-embedded with it."""
+    job_store, job, meta, search_store, pipeline = _reindex_cancel_fixture(tmp_path, "model-B")
+    embedder_cache = MagicMock()
+    embedder_cache.get_or_load = AsyncMock(return_value=MagicMock())
+
+    async def _promote_while_a_delete_lands(_meta: CollectionMeta) -> None:
+        _cancel_job(job_store, job.job_id)
+
+    search_store.update_collection_meta = AsyncMock(side_effect=_promote_while_a_delete_lands)
+
+    await _run_reindex(job_store, job.job_id, search_store, embedder_cache, pipeline, tmp_path)
+
+    final = job_store.get(job.job_id)
+    assert final is not None
+    assert final.status == JobStatus.CANCELLED
+    pipeline.ingest_directory.assert_awaited_once()
+    search_store.update_collection_meta.assert_awaited_once()
+    assert meta.active_embedding_model == "model-B"
+    assert meta.reindex_job_id is None
+
+
+@pytest.mark.anyio
+async def test_reindex_task_success_keeps_a_newer_reindex_pointer(tmp_path: Path) -> None:
+    """When the collection's reindex_job_id names another job by the time step 5 promotes the model, the success
+    write must leave that pointer alone (see _clear_reindex_job_id); the job still ends DONE."""
+    job_store, job, meta, search_store, pipeline = _reindex_cancel_fixture(tmp_path, "model-B")
+    meta.reindex_job_id = "job-newer"
+    embedder_cache = MagicMock()
+    embedder_cache.get_or_load = AsyncMock(return_value=MagicMock())
+
+    await _run_reindex(job_store, job.job_id, search_store, embedder_cache, pipeline, tmp_path)
+
+    final = job_store.get(job.job_id)
+    assert final is not None and final.status == JobStatus.DONE
+    search_store.update_collection_meta.assert_awaited_once()
+    assert meta.reindex_job_id == "job-newer"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("with_lock", [False, True], ids=["no-lock", "with-lock"])
+async def test_ingest_task_cancel_before_task_start_ends_cancelled(tmp_path: Path, with_lock: bool) -> None:
+    """A DELETE between job creation (PENDING) and the ingest task's first step moves the job to CANCELLING;
+    the task must honour it (job ends CANCELLED, no ingest), not overwrite it with RUNNING and finish DONE."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create(collection="docs")
+    # Simulates DELETE /jobs/{id} landing after create_task() but before the task first runs.
+    _cancel_job(store, job.job_id)
+    pipeline_fn = AsyncMock(return_value=None)
+
+    await _run_ingest_task(store, job.job_id, pipeline_fn, with_lock=with_lock)
+
+    final = store.get(job.job_id)
+    assert final is not None
+    assert final.status == JobStatus.CANCELLED
+    pipeline_fn.assert_not_awaited()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("with_lock", [False, True], ids=["no-lock", "with-lock"])
+async def test_ingest_task_cancel_before_task_start_cancelled_write_failure_is_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, with_lock: bool
+) -> None:
+    """When the CANCELLED write after a refused claim fails, the failure is logged with its traceback, never
+    raised, and nothing is ingested."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create(collection="docs")
+    _cancel_job(store, job.job_id)
+    real_write = store._write_atomic
+
+    def _write() -> None:
+        current = store.get(job.job_id)
+        if current is not None and current.status == JobStatus.CANCELLED:
+            raise OSError("disk full")
+        real_write()
+
+    monkeypatch.setattr(store, "_write_atomic", _write)
+    pipeline_fn = AsyncMock(return_value=None)
+
+    with caplog.at_level("ERROR", logger="archon_search.server.routes_jobs"):
+        await _run_ingest_task(store, job.job_id, pipeline_fn, with_lock=with_lock)
+
+    pipeline_fn.assert_not_awaited()
+    [record] = [r for r in caplog.records if "could not persist CANCELLED status" in r.getMessage()]
+    assert record.exc_info is not None and isinstance(record.exc_info[1], OSError)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("with_lock", [False, True], ids=["no-lock", "with-lock"])
+@pytest.mark.parametrize(
+    ("state", "expected_level"),
+    [("missing", "WARNING"), ("running", "WARNING"), ("cancelled", "DEBUG")],
+)
+async def test_ingest_task_refused_claim_is_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, with_lock: bool, state: str, expected_level: str
+) -> None:
+    """A RUNNING claim refused for a reason other than a requested cancel runs nothing and leaves the job alone:
+    a missing or RUNNING job (e.g. a second task for the same job) is logged as a WARNING naming the job and its
+    status; an already-CANCELLED job is where a cancel would leave it anyway, so it is logged at DEBUG only."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create(collection="docs")
+    job_id = "no-such-job" if state == "missing" else job.job_id
+    if state == "running":
+        store.update(job_id, status=JobStatus.RUNNING)
+    elif state == "cancelled":
+        _cancel_job(store, job_id)
+        store.update(job_id, status=JobStatus.CANCELLED)
+    status_before = None if state == "missing" else store.get(job_id).status  # type: ignore[union-attr]
+    pipeline_fn = AsyncMock(return_value=None)
+
+    with caplog.at_level("DEBUG", logger="archon_search.server.routes_jobs"):
+        await _run_ingest_task(store, job_id, pipeline_fn, with_lock=with_lock)
+
+    pipeline_fn.assert_not_awaited()
+    final = store.get(job_id)
+    assert (final.status if final is not None else None) == status_before
+    [record] = [r for r in caplog.records if "not claimed as RUNNING" in r.getMessage()]
+    assert record.levelname == expected_level
+    expected_status = "missing" if status_before is None else status_before.value
+    assert job_id in record.getMessage() and f"status {expected_status}" in record.getMessage()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("with_lock", [False, True], ids=["no-lock", "with-lock"])
+async def test_ingest_task_running_claim_persist_failure_marks_failed_without_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_lock: bool
+) -> None:
+    """When persisting the PENDING -> RUNNING claim fails, the claim did not happen: the job is back to PENDING
+    (never left RUNNING) when the task, having run nothing, marks it FAILED instead of leaving a PENDING job
+    nothing will run."""
+    store = JobStore(path=tmp_path / "jobs.json")
+    job = store.create(collection="docs")
+    _fail_running_persist(store, job.job_id, monkeypatch)
+    # (status before, status written) for every JobStore.update of the job — transition() writes through it too.
+    status_writes: list[tuple[JobStatus, object]] = []
+    real_update = store.update
+
+    def _recording_update(job_id: str, **kwargs: object) -> object:
+        status_writes.append((store.get(job_id).status, kwargs.get("status")))  # type: ignore[union-attr]
+        return real_update(job_id, **kwargs)
+
+    monkeypatch.setattr(store, "update", _recording_update)
+    pipeline_fn = AsyncMock(return_value=None)
+
+    await _run_ingest_task(store, job.job_id, pipeline_fn, with_lock=with_lock)
+
+    final = store.get(job.job_id)
+    assert final is not None
+    assert final.status == JobStatus.FAILED
+    assert final.error == INGEST_FAILED_DETAIL
+    assert [before for before, written in status_writes if written == JobStatus.FAILED] == [JobStatus.PENDING]
+    pipeline_fn.assert_not_awaited()

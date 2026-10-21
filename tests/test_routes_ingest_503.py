@@ -111,7 +111,13 @@ def test_post_ingest_releases_lock_after_background_task(tmp_path: Path) -> None
 
 
 def test_post_ingest_releases_lock_on_task_cancellation(tmp_path: Path) -> None:
-    """Lock is released even when the background task is cancelled via DELETE /jobs/{id}."""
+    """Lock is released, and the job ends CANCELLED, when the background ingest task is cancelled mid-pipeline.
+
+    The cancellation comes from event-loop teardown, not from DELETE /jobs/{id}: used outside a ``with`` block,
+    Starlette's TestClient runs each request in its own event loop (a fresh ``anyio`` blocking portal), and closing
+    that loop (``asyncio.Runner.close``) cancels every task still pending on it — here the ingest task. The DELETE
+    that follows only observes the already-terminal job.
+    """
     app, client, mock_store, jobs = _make_app_and_client(tmp_path)
 
     # Inject a pipeline function that blocks until cancelled so we can test cancellation.
@@ -130,12 +136,14 @@ def test_post_ingest_releases_lock_on_task_cancellation(tmp_path: Path) -> None:
     assert r1.status_code == 202
     job_id = r1.json()["job_id"]
 
-    # Cancel the job.
-    r_del = client.delete(f"/jobs/{job_id}")
-    assert r_del.status_code in (200, 202)
+    # The POST's event-loop teardown already cancelled the task inside the blocking pipeline (this relies on the
+    # TestClient per-request event loop described in the docstring).
+    assert cancelled_event.is_set(), "the ingest task must have been cancelled inside the pipeline"
 
-    # The TestClient portal has already driven the cancellation to completion
-    # before returning; no additional settling is needed.
+    # The job is already CANCELLED, so the DELETE answers 200 (idempotent on a terminal job) and changes nothing.
+    r_del = client.delete(f"/jobs/{job_id}")
+    assert r_del.status_code == 200
+    assert r_del.json()["status"] == JobStatus.CANCELLED.value
 
     # Lock must be free regardless of task cancellation.
     lock = mock_store.lock_for("cancel-col")

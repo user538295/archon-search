@@ -8,6 +8,25 @@
 
 ## Changelog
 
+### [next release] — an ingest or reindex job cancelled before it starts ends `CANCELLED` instead of running (2026-10-21)
+
+**Surface**: `GET /jobs/{id}` `status` / `error` of an ingest job (`POST /ingest`, `POST /collections/`) or reindex job (`POST /collections/{name}/reindex`) after `DELETE /jobs/{id}`; the collection's embedding model after such a reindex.
+
+**Behaviour-only change — no schema field was added, removed or retyped.**
+
+**What changed** (the change marked *On a failed write* happens only when the job store cannot write its file — disk full, read-only data dir):
+
+- **Cancelled while `PENDING`**: `DELETE /jobs/{id}` answered `202` `CANCELLING`, but the job's task then overwrote `CANCELLING` with `RUNNING` and ran the work to `DONE` — an ingest wrote its chunks, and a reindex cancelled while its embedding model loaded re-embedded the collection and promoted its target model. The task now claims `RUNNING` only from `PENDING`, so such a job ends `CANCELLED` with nothing written; a reindex leaves the collection's embedding model unchanged (`pending_embedding_model` and `needs_reindex` kept) — also when the embedding-model load the cancel landed during then fails (`CANCELLED`, not `FAILED`). Every reindex end clears `reindex_job_id` (while it still names this job) before it writes `CANCELLED` or `FAILED`, so a client that sees `CANCELLED` can start a new reindex. Unchanged: a `PENDING` job that no task runs — an ingest `MaintenanceLoop` re-enqueued after a failure (`source: "maintenance"`), or any job left `PENDING` across a restart — stays `CANCELLING` after a cancel until the next restart rewrites it `FAILED` `"process_restart"`.
+- **Reindex cancelled while its target model is promoted**: a `DELETE /jobs/{id}` that landed after a `RUNNING` reindex's ingest finished, while the reindex promoted its target model, was overwritten with `DONE`; the job now ends `CANCELLED`, with the model already promoted (the vectors were re-embedded with it). The rest of a `RUNNING` cancel is unchanged: the job is not interrupted and ends `CANCELLED` (or `FAILED`) once its work finishes, and a reindex cancelled during its ingest ends `CANCELLED` without promoting its target model (`FAILED` if the ingest fails).
+- **Reindex already `CANCELLING` when its task starts**: the job stayed `CANCELLING` — never evicted — until a restart rewrote it `FAILED` `"process_restart"`; it now ends `CANCELLED`.
+- **Reindex claim**: *On a failed write*: a failed write of the reindex job's `RUNNING` status was logged and the reindex ran anyway; now nothing runs: `reindex_job_id` is cleared while it still names this job, then the job is marked `FAILED` with `error` `"reindex failed; see the server log for details"` — or `CANCELLED` when a `DELETE /jobs/{id}` landed meanwhile.
+
+**Migration:** clients that cancel a job they just submitted must expect `CANCELLED` (the CLI's `--wait` exits `1`) where they used to see `DONE`, and resubmit to get the work done. After a reindex cancelled this way, wait until `GET /jobs/{id}` reports `CANCELLED`, then re-run `POST /collections/{name}/reindex` (`archon-search collection reindex`) to apply a pending embedding-model change. The reindex `409` guard already accepts a new reindex while the cancelled one is `CANCELLING`, but a reindex cancelled while `RUNNING` keeps ingesting until its work finishes, so the two would run side by side. Clients that cancel a `RUNNING` reindex must not read `CANCELLED` as "model unchanged": read `active_embedding_model` from `GET /collections/{name}` to see whether the target model was promoted.
+
+**Announced in**: this release.
+
+---
+
 ### [next release] — `DELETE /collections/{name}` also returns `503 store_busy` while another namespace's ingest job writes to the collection; the ingest check runs after the lock wait (2026-10-21)
 
 **Surface**: `DELETE /collections/{name}` status, body and timing.
