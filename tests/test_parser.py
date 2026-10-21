@@ -5,7 +5,6 @@ import asyncio
 import concurrent.futures
 import multiprocessing
 import pickle
-from collections.abc import Iterator
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from types import SimpleNamespace
@@ -652,7 +651,9 @@ async def test_parser_recovers_after_broken_process_pool(tmp_path: Path) -> None
             assert isinstance(exc_info.value.cause, RuntimeError) and not isinstance(
                 exc_info.value.cause, BrokenProcessPool
             ), f"expected a sanitized RuntimeError cause, got {type(exc_info.value.cause).__name__}"
-            assert str(exc_info.value.cause) == archon_parser._PARSE_WORKER_LOST_DETAIL
+            assert str(exc_info.value.cause) == archon_parser.PARSE_WORKER_LOST_DETAIL
+            # ParseError.detail is what reaches IngestResult.error: the curated retry hint.
+            assert exc_info.value.detail == archon_parser.PARSE_WORKER_LOST_DETAIL
             assert isinstance(exc_info.value.__cause__, BrokenProcessPool), (
                 "the original BrokenProcessPool must still be chained onto __cause__ for logs"
             )
@@ -854,6 +855,10 @@ async def test_parser_office_import_error_surfaces_message(tmp_path: Path) -> No
             await parser.parse(f)
 
     assert "markitdown" in str(exc_info.value.cause).lower()
+    # ParseError.detail reaches IngestResult.error: the curated hint, with no install command
+    # (markitdown is a core dependency, so a pip command would be wrong for uv installs).
+    assert exc_info.value.detail == archon_parser.MARKITDOWN_MISSING_DETAIL
+    assert "pip install" not in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -875,6 +880,8 @@ async def test_parser_office_malformed_file_raises_parse_error(tmp_path: Path) -
 
     assert exc_info.value.path == f
     assert isinstance(exc_info.value.cause, RuntimeError)
+    assert exc_info.value.detail == archon_parser.PARSE_FAILED_DETAIL
+    assert "conversion failed" not in exc_info.value.detail
 
 
 @pytest.mark.asyncio

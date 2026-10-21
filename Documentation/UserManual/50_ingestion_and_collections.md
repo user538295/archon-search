@@ -1,7 +1,7 @@
 **Purpose**: Ingest documents and manage collections.
 **Audience**: End users / operators
 **Status**: Stable
-**Last reviewed**: 2026-07-29 / **Next review**: 2027-07-29
+**Last reviewed**: 2026-10-17 / **Next review**: 2027-07-29
 
 # Ingestion and collections
 
@@ -96,7 +96,7 @@ archon-search ingest --path /Users/me/docs --collection docs --wait
 
 Output (no `--wait`): `Ingest job submitted: <job_id>. Collection: '<name>'` plus a tracking hint. See [`100_jobs_and_async_operations.md`](./100_jobs_and_async_operations.md) for polling patterns.
 
-- If the path does not exist, the server still accepts the request (**202**) and the background ingest job transitions to **FAILED** with `"path does not exist or is not a file/directory"`. The collection remains registered (with `docs=0`); use `collection remove` to clean it up.
+- If the path does not exist, the server still accepts the request (**202**) and the background ingest job transitions to **FAILED** with `"path does not exist or is not a file/directory: <path>"`, `<path>` being the request's `path` as the server received it (the server's own `~` expansion and symlink resolution are not applied to the message) (other ingest failures report `"ingest failed; see the server log for details"`). The collection remains registered (with `docs=0`); use `collection remove` to clean it up.
 
 ### `archon-search sync`
 
@@ -125,7 +125,7 @@ archon-search collection add /Users/me/docs --wait
 
 - `--wait` — poll `GET /jobs/{id}` until terminal; prints `Collection '<name>' ingested successfully.` on DONE, exits `1` on FAILED. Ctrl-C during `--wait` cancels the local poll only; the server job keeps running.
 - If the path/name is already registered the server returns **409** and the CLI exits `1`.
-- If the path does not exist, the server still accepts the request (**202**) and creates a collection entry, but the background ingest job transitions to **FAILED** with `"path does not exist or is not a file/directory"`. The collection remains registered (with `docs=0`); use `collection remove` to clean it up.
+- If the path does not exist, the server still accepts the request (**202**) and creates a collection entry, but the background ingest job transitions to **FAILED** with `"path does not exist or is not a file/directory: <path>"`, `<path>` being the request's `path` as the server received it (the server's own `~` expansion and symlink resolution are not applied to the message) (other ingest failures report `"ingest failed; see the server log for details"`). The collection remains registered (with `docs=0`); use `collection remove` to clean it up.
 - There is no "pin" flag — add pinned collections to `pinned_collections` in TOML manually. The request body accepts only `path` and optional `embedding_model` (name is always server-derived).
 
 ### `archon-search collection remove <name>`

@@ -1,7 +1,7 @@
 **Purpose**: Document how `archon-search` authenticates clients, where keys live, and what the current model does not yet do.
 **Audience**: Security engineers, IT admins operating the service.
 **Status**: Draft
-**Last reviewed**: 2026-05-20
+**Last reviewed**: 2026-10-18
 **Next review**: 2027-05-20
 
 # Authentication and Keys
@@ -24,7 +24,7 @@ The middleware lives at `archon_search/server/middleware_auth.py`. Three key sou
 
 1. **Managed keys (`KeyStore.active_keys()`).** `active_keys()` re-reads `keys.json` from disk on every call (no in-memory cache; ~<1 ms I/O for the typical small file). The token hash is computed once per request (`sha256(token).hexdigest()`), then compared with `hmac.compare_digest` against each managed key's `token_hash`. The loop exits on first match. Expired keys (`expires_at <= now`) and revoked keys (`status="revoked"`) are excluded by `active_keys()`.
 2. **TOML `[namespaces]` map.** Every entry in `config.namespaces` (`<key_hex> = <namespace>`) is compared against the incoming token. The loop iterates all entries without an early `break` — deliberate, to preserve the timing-safe design from before D7.
-3. **Default key fallback.** The token is compared against the single default key returned by `load_or_generate_key()`. **Rotation-revocation guard**: before accepting via this path, the middleware checks whether the token hash matches a revoked or expired managed key record in `keys.json`; if found, `401` is returned even if the raw token matches `_api_key`. A match on all other paths stamps the namespace as `DEFAULT_NAMESPACE` (`archon_search/constants.py`).
+3. **Default key fallback.** The token is compared against the single current default key, read per request from the REST app's `app.state.api_key` (set from `load_or_generate_key()` at startup and replaced by each rotation); the mounted `/mcp` app reads the same attribute (`api_key_state=app.state`). **Rotation-revocation guard**: before accepting via this path, the middleware checks whether the token hash matches a revoked or expired managed key record in `keys.json`; if found, `401` is returned even if the raw token matches the current default key. A match on all other paths stamps the namespace as `DEFAULT_NAMESPACE` (`archon_search/constants.py`).
 
 A failure on all paths returns `401` with `WWW-Authenticate: Bearer` and an empty body. A success stamps `request.state.namespace`, which the rest of the app uses to scope reads, writes, and ACL filtering.
 
@@ -78,7 +78,7 @@ Several features remain out of scope:
 - **No CIDR / origin restrictions inside the middleware.** Bind address and reverse proxy are the only network controls — see `05_network_exposure_and_tls.md`.
 - **No per-key ACL scoping.** All managed keys have equal power (no admin vs. client role distinction). Deferred to v2.
 - **TOML `[namespaces]` changes require restart.** Managed keys hot-load from disk; TOML namespace tokens are read once at startup.
-- **MCP `api_key` not hot-reloaded on rotation.** `POST /keys/rotate` updates `.search.env` and `keys.json`; the MCP server's `APIKeyMiddleware.api_key` is not reloaded until restart (documented limitation S24).
+- **Rotation serialization is per process.** `KeyStore.rotation_lock` serializes rotations through REST and the mounted `/mcp` app, which share one current default key (`app.state.api_key`), so a rotation through either transport retires the old default key on both at once. The lock does not span processes. (The former limitation S24 — `/mcp` kept accepting the old default key until restart — never held for `POST /keys/rotate`, because the REST auth middleware also guards the `/mcp` mount. The real gap was MCP `rotate_key`, which did not update `app.state.api_key`, so an old default key with no revoked or expired `keys.json` record kept authenticating REST and `/mcp` until restart; it now publishes the new key.)
 - **`POST /keys/rotate` blocked when `ARCHON_SEARCH_API_KEY` env var is set** — returns `409` (the env var always wins).
 
 Previously tracked as `SEC-1` ("no rotation, expiry, or revocation primitive") in [`../Architecture/530_technical_debt_refactoring_roadmap.md`](../Architecture/530_technical_debt_refactoring_roadmap.md): **resolved by D7**.

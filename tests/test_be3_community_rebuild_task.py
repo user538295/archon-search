@@ -5,24 +5,31 @@ Mirrors ``_migration_task`` (``routes_collections.py``): constructs a fresh
 to the job:
 
 - success -> DONE with result={"communities_built": N}
-- ValueError / ImportError / RuntimeError -> FAILED with the error string
+- NoGraphNodesError -> FAILED with the builder's curated message
+- CommunityDependencyError -> FAILED with COMMUNITY_DEPENDENCY_DETAIL (its message embeds the install command)
+- any other ValueError / ImportError / RuntimeError -> FAILED with COMMUNITY_REBUILD_FAILED_DETAIL
 
 Covers:
 - #unit_test test_rebuild_task_success_sets_done_with_count
 - #unit_test test_rebuild_task_zero_nodes_sets_failed
-- #unit_test test_rebuild_task_missing_leidenalg_sets_failed
+- #unit_test test_rebuild_task_missing_leidenalg_sets_failed_with_fixed_detail
 - #integration_test test_rebuild_job_reaches_done_visible_in_jobs
 """
 from __future__ import annotations
 
+import json
+import logging
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from archon_search.community_builder import COMMUNITY_DEPENDENCY_DETAIL, NoGraphNodesError, _run_leiden_partition_sync
 from archon_search.jobs.model import job_to_dict
 from archon_search.jobs.store import JobStore
 from archon_search.types import JobStatus
+from tests._install_hint_leak import assert_install_hint_logged_not_sent, patch_install_hint
 
 pytestmark = pytest.mark.asyncio
 
@@ -63,14 +70,12 @@ async def test_rebuild_task_success_sets_done_with_count(tmp_path: Path) -> None
         assert updated.result == {"communities_built": n}
 
 
-@pytest.mark.parametrize(
-    ("exc_cls", "exc_msg"),
-    [
-        (ValueError, "No entity graph nodes found for collection 'col-a'."),
-    ],
-)
-async def test_rebuild_task_zero_nodes_sets_failed(tmp_path: Path, exc_cls, exc_msg) -> None:
-    """A zero-node collection (ValueError) -> FAILED with the builder's message (S8)."""
+async def test_rebuild_task_zero_nodes_sets_failed(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A zero-node collection (NoGraphNodesError) -> FAILED with the builder's message (S8).
+
+    The curated, expected failure is logged as a warning, without a traceback.
+    """
+    exc_msg = "No entity graph nodes found for collection 'col-a'."
     from archon_search.server.routes_graph import _community_rebuild_task
 
     jobs_path = tmp_path / "jobs.json"
@@ -78,8 +83,9 @@ async def test_rebuild_task_zero_nodes_sets_failed(tmp_path: Path, exc_cls, exc_
     job = job_store.create_community_rebuild(collection="col-a", namespace="ns1")
     job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
 
-    with patch("archon_search.server.routes_graph.CommunityBuilder") as mock_builder_cls:
-        mock_builder_cls.return_value.build = AsyncMock(side_effect=exc_cls(exc_msg))
+    with patch("archon_search.server.routes_graph.CommunityBuilder") as mock_builder_cls, \
+            caplog.at_level(logging.WARNING, logger="archon_search.server.routes_graph"):
+        mock_builder_cls.return_value.build = AsyncMock(side_effect=NoGraphNodesError(exc_msg))
 
         await _community_rebuild_task(
             job=job_store.get(job.job_id),
@@ -93,22 +99,35 @@ async def test_rebuild_task_zero_nodes_sets_failed(tmp_path: Path, exc_cls, exc_
     assert updated is not None
     assert updated.status == JobStatus.FAILED
     assert updated.error == exc_msg
+    failure_logs = [r for r in caplog.records if exc_msg in r.getMessage()]
+    assert [r.levelno for r in failure_logs] == [logging.WARNING], caplog.text
+    assert failure_logs[0].exc_info is None
+    assert "Traceback" not in caplog.text
 
 
-async def test_rebuild_task_import_error_sets_failed_with_its_message(tmp_path: Path) -> None:
-    """An ImportError from the builder (e.g. missing leidenalg) -> FAILED carrying its message, no crash (Q6, S8)."""
-    import_error_message = "optional dependency missing"
+async def test_rebuild_task_missing_leidenalg_sets_failed_with_fixed_detail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A CommunityDependencyError (missing leidenalg) -> FAILED with COMMUNITY_DEPENDENCY_DETAIL, no crash (Q6, S8).
+
+    The exception's own message embeds the receipt-derived install command (possibly index
+    credentials), so it is logged as a warning and never reaches the job record.
+    """
     from archon_search.server.routes_graph import _community_rebuild_task
 
+    patch_install_hint(monkeypatch, "archon_search.community_builder")
     jobs_path = tmp_path / "jobs.json"
     job_store = JobStore(path=jobs_path)
     job = job_store.create_community_rebuild(collection="col-a", namespace="ns1")
     job_store.transition(job.job_id, {JobStatus.QUEUED}, JobStatus.RUNNING)
 
-    with patch("archon_search.server.routes_graph.CommunityBuilder") as mock_builder_cls:
-        mock_builder_cls.return_value.build = AsyncMock(
-            side_effect=ImportError(import_error_message)
-        )
+    def _partition_without_leidenalg(*args: object, **kwargs: object) -> None:
+        with patch.dict(sys.modules, {"igraph": None, "leidenalg": None}):
+            _run_leiden_partition_sync([], [], resolution=1.0)
+
+    with patch("archon_search.server.routes_graph.CommunityBuilder") as mock_builder_cls, \
+            caplog.at_level(logging.WARNING):
+        mock_builder_cls.return_value.build = AsyncMock(side_effect=_partition_without_leidenalg)
 
         await _community_rebuild_task(
             job=job_store.get(job.job_id),
@@ -118,15 +137,17 @@ async def test_rebuild_task_import_error_sets_failed_with_its_message(tmp_path: 
             search_store=object(),
         )
 
+    mock_builder_cls.return_value.build.assert_awaited_once()
     updated = job_store.get(job.job_id)
     assert updated is not None
     assert updated.status == JobStatus.FAILED
-    assert updated.error == import_error_message
+    assert updated.error == COMMUNITY_DEPENDENCY_DETAIL
+    assert_install_hint_logged_not_sent(caplog, json.dumps(job_to_dict(updated), default=str))
 
 
 async def test_rebuild_task_runtime_error_sets_failed(tmp_path: Path) -> None:
-    """A RuntimeError from the builder (e.g. GraphStore I/O) -> FAILED with the error string (C4)."""
-    from archon_search.server.routes_graph import _community_rebuild_task
+    """A RuntimeError from the builder (e.g. GraphStore I/O) -> FAILED with the sanitized text, never its message (C4)."""
+    from archon_search.server.routes_graph import COMMUNITY_REBUILD_FAILED_DETAIL, _community_rebuild_task
 
     jobs_path = tmp_path / "jobs.json"
     job_store = JobStore(path=jobs_path)
@@ -147,7 +168,7 @@ async def test_rebuild_task_runtime_error_sets_failed(tmp_path: Path) -> None:
     updated = job_store.get(job.job_id)
     assert updated is not None
     assert updated.status == JobStatus.FAILED
-    assert updated.error == "graph store I/O failed"
+    assert updated.error == COMMUNITY_REBUILD_FAILED_DETAIL
 
 
 # ---------------------------------------------------------------------------

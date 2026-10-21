@@ -2,20 +2,32 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from archon_search.config import SearchConfig
+from archon_search.config import GraphConfig, SearchConfig
 from archon_search.model_validation import (
+    EMBEDDER_PROBE_FAILED_WARNING,
+    EXTRACTION_MODEL_PROBE_ERROR_WARNING,
+    GRAPH_NER_UNDETERMINED_WARNING,
+    ONNX_PROVIDER_QUERY_FAILED_WARNING,
+    RERANKER_PROBE_FAILED_WARNING,
+    RERANKER_SPLIT_BUDGET_EXHAUSTED_WARNING,
+    RERANKER_SPLIT_TIMED_OUT_TEMPLATE,
+    VALIDATION_TIMED_OUT_TEMPLATE,
     ModelValidationError,
     ModelValidationResult,
+    _probe_extraction_model,
+    graph_ner_status,
     validate_embedding_model,
     validate_models_async,
     validate_providers_shared,
 )
+from tests._internal_error_leak import ONNX_MSG, assert_logged_with_traceback
 
 _AVAILABLE_PROVIDERS = "archon_search.onnx_providers._available_providers"
 
@@ -192,7 +204,7 @@ def test_validate_providers_shared_provider_unavailable_probe_failure_still_repo
     assert rer_ok is True
     assert warnings == [
         "configured ONNX providers not available: CUDAExecutionProvider",
-        "embedder probe failed: emb-boom",
+        EMBEDDER_PROBE_FAILED_WARNING,
     ], "the unavailable-provider warning must precede the probe failure"
 
 
@@ -363,7 +375,7 @@ async def test_validate_models_async_timeout():
         result = await validate_models_async(_cfg(), timeout_seconds=0.1)
     assert result.embedder_ok is False
     assert result.reranker_ok is False
-    assert "validation timed out after 0.1s" in result.provider_warnings
+    assert result.provider_warnings == [VALIDATION_TIMED_OUT_TEMPLATE.format(seconds=0.1)]
 
 
 @pytest.mark.asyncio
@@ -548,7 +560,7 @@ async def test_stale_coreml_warning_no_fire_when_cpu_fallback_reranker_fails(
             result = await validate_models_async(_coreml_cfg(), timeout_seconds=5)
 
     assert result.reranker_ok is False
-    assert any("rer-boom" in w for w in result.provider_warnings)
+    assert RERANKER_PROBE_FAILED_WARNING in result.provider_warnings
     assert "split configuration" not in caplog.text
 
 
@@ -587,6 +599,124 @@ async def test_reranker_only_provider_missing_loads_reranker_with_warning() -> N
     assert ce.call_args.args[1] == ["CPUExecutionProvider"]
 
 
+@pytest.mark.asyncio
+async def test_split_config_reranker_passing_under_reranker_providers_publishes_no_warning() -> None:
+    """A healthy split install (reranker fails under ``providers`` but loads under
+    ``reranker_providers``) must leave ``provider_warnings`` empty, or ``/ready`` grades
+    ``checks.models`` WARN forever on a host that is working as configured."""
+    te, ce, _ = _patch_probes()
+
+    def _load(model_name: str, providers: list[str] | None) -> MagicMock:
+        if providers and "CoreMLExecutionProvider" in providers:
+            raise RuntimeError(ONNX_MSG)
+        instance = MagicMock()
+        instance.rerank.return_value = iter([0.0])
+        return instance
+
+    ce.side_effect = _load
+    cfg = _coreml_cfg(reranker_providers=["CPUExecutionProvider"])
+    with patch("archon_search.model_validation.TextEmbedding", te), \
+         patch("archon_search.model_validation._load_cross_encoder", ce), \
+         patch(_AVAILABLE_PROVIDERS, return_value=["CoreMLExecutionProvider", "CPUExecutionProvider"]):
+        result = await validate_models_async(cfg, timeout_seconds=5)
+
+    assert (result.embedder_ok, result.reranker_ok) == (True, True)
+    assert result.provider_warnings == []
+    assert [c.args[1] for c in ce.call_args_list] == [["CPUExecutionProvider"]], (
+        "the reranker must be probed only under reranker_providers"
+    )
+
+
+@pytest.mark.asyncio
+async def test_split_config_provider_query_failing_both_passes_publishes_one_warning_and_logs_each_list(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """onnxruntime cannot be queried in either pass: the fixed warning is published once,
+    while the log keeps one WARNING per pass, each naming the provider list it queried."""
+    # Both lists name an accelerator: a CPU-only list never queries onnxruntime.
+    cfg = _coreml_cfg(
+        providers=["CoreMLExecutionProvider"],
+        reranker_providers=["CoreMLExecutionProvider", "CPUExecutionProvider"],
+    )
+    with patch(_AVAILABLE_PROVIDERS, side_effect=RuntimeError(ONNX_MSG)), \
+         caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+        result = await validate_models_async(cfg, timeout_seconds=5)
+
+    assert (result.embedder_ok, result.reranker_ok) == (False, False)
+    assert result.provider_warnings == [ONNX_PROVIDER_QUERY_FAILED_WARNING]
+    per_pass = [
+        r.getMessage() for r in caplog.records
+        if r.name == "archon_search.model_validation" and r.levelno == logging.WARNING
+    ]
+    assert per_pass == [
+        f"could not query ONNX providers for ['CoreMLExecutionProvider']: {ONNX_MSG}",
+        f"could not query ONNX providers for ['CoreMLExecutionProvider', 'CPUExecutionProvider']: {ONNX_MSG}",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_split_config_reranker_failing_under_reranker_providers_logs_that_list(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The reranker fails under ``reranker_providers``: one fixed warning, and the WARNING
+    names the list the reranker was actually probed under — not the first pass's ``providers``."""
+    te, ce, _ = _patch_probes(reranker_exc=RuntimeError(ONNX_MSG))
+    cfg = _coreml_cfg(providers=["CPUExecutionProvider"], reranker_providers=[])
+    with patch("archon_search.model_validation.TextEmbedding", te), \
+         patch("archon_search.model_validation._load_cross_encoder", ce), \
+         patch(_AVAILABLE_PROVIDERS, return_value=["CPUExecutionProvider"]), \
+         caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+        result = await validate_models_async(cfg, timeout_seconds=5)
+
+    assert te.call_count == 1, "the first pass still probes the embedder"
+    assert ce.call_count == 1, "a split config probes the reranker only under reranker_providers"
+    assert result.embedder_ok is True
+    assert result.reranker_ok is False
+    assert result.provider_warnings == [RERANKER_PROBE_FAILED_WARNING]
+    logged = [
+        r.getMessage() for r in caplog.records
+        if r.name == "archon_search.model_validation" and r.levelno == logging.WARNING
+    ]
+    assert logged == [f"reranker probe failed for rer-model under providers []: {ONNX_MSG}"]
+
+
+# validate_providers_shared's three probe handlers: the patched raise point and its WARNING prefix.
+_PROBE_FAILURES = [
+    pytest.param("archon_search.model_validation.select_onnx_providers",
+                 "could not query ONNX providers for ['CPUExecutionProvider']: ", id="onnx-provider-query"),
+    pytest.param("archon_search.model_validation.TextEmbedding",
+                 "embedder probe failed for emb-model under providers ['CPUExecutionProvider']: ", id="embedder-probe"),
+    pytest.param("archon_search.model_validation._load_cross_encoder",
+                 "reranker probe failed for rer-model under providers ['CPUExecutionProvider']: ", id="reranker-probe"),
+]
+
+
+@pytest.mark.parametrize(("target", "warning_prefix"), _PROBE_FAILURES)
+def test_probe_failure_logs_message_at_warning_and_traceback_only_at_debug(
+    caplog: pytest.LogCaptureFixture, target: str, warning_prefix: str
+) -> None:
+    """An expected probe failure (e.g. a CoreML/CUDA fallback) must not log its traceback at
+    WARNING: the install wizard configures no logging, so Python's last-resort handler would
+    print it to the user. The cause stays in the WARNING text, the traceback at DEBUG; both
+    name the provider list, so the two passes of a split config are distinguishable."""
+    te, ce, _ = _patch_probes()
+    with patch("archon_search.model_validation.TextEmbedding", te), \
+         patch("archon_search.model_validation._load_cross_encoder", ce), \
+         patch(_AVAILABLE_PROVIDERS, return_value=["CPUExecutionProvider"]), \
+         patch(target, side_effect=RuntimeError(ONNX_MSG)) as failing, \
+         caplog.at_level(logging.DEBUG, logger="archon_search.model_validation"):
+        validate_providers_shared(["CPUExecutionProvider"], "emb-model", "rer-model")
+
+    failing.assert_called()
+    own = [r for r in caplog.records if r.name == "archon_search.model_validation"]
+    warnings = [r for r in own if r.levelno == logging.WARNING]
+    assert [r.getMessage() for r in warnings] == [f"{warning_prefix}{ONNX_MSG}"]
+    assert warnings[0].exc_info is None, "the WARNING must not carry the traceback"
+    tracebacks = [r for r in own if r.levelno == logging.DEBUG and r.exc_info is not None]
+    assert [str(r.exc_info[1]) for r in tracebacks] == [ONNX_MSG], [r.getMessage() for r in own]
+    assert [r.getMessage() for r in tracebacks] == [warning_prefix.removesuffix(": ")]
+
+
 def test_validate_providers_shared_query_failure_with_reranker_disabled() -> None:
     """onnxruntime query fails, reranker disabled → embedder unvalidated, reranker ok."""
     te, ce, _ = _patch_probes()
@@ -598,7 +728,7 @@ def test_validate_providers_shared_query_failure_with_reranker_disabled() -> Non
         )
 
     assert (emb_ok, rer_ok) == (False, True)
-    assert warnings == ["could not query ONNX providers: onnx exploded"]
+    assert warnings == [ONNX_PROVIDER_QUERY_FAILED_WARNING]
     te.assert_not_called()
     ce.assert_not_called()
 
@@ -629,15 +759,12 @@ async def test_stale_coreml_warning_no_fire_when_split_config(
 
 @pytest.mark.asyncio
 async def test_split_config_reranker_validated_under_reranker_providers() -> None:
-    """When reranker_providers is set, reranker is re-validated under reranker_providers."""
+    """A split config probes the embedder alone under ``providers`` (the reranker skipped), then
+    the reranker alone under ``reranker_providers``."""
     calls: list[tuple] = []
 
     def _shared(providers, embedding_model, reranker_model):
         calls.append((providers, embedding_model, reranker_model))
-        # First call (combined): reranker fails under CoreML
-        if providers == ["CoreMLExecutionProvider"]:
-            return (True, False, ["reranker probe failed"])
-        # Second call (split reranker): reranker passes under []
         return (True, True, [])
 
     cfg = _coreml_cfg(reranker_providers=[])
@@ -645,24 +772,31 @@ async def test_split_config_reranker_validated_under_reranker_providers() -> Non
     with patch("archon_search.model_validation.validate_providers_shared", side_effect=_shared):
         result = await validate_models_async(cfg, timeout_seconds=5)
 
-    assert result.embedder_ok is True
-    assert result.reranker_ok is True  # split re-validation overrides initial False
-    # Second call used reranker_providers (empty list), skipped embedder
-    assert calls[1] == ([], "", "rer-model")
+    assert calls == [(["CoreMLExecutionProvider"], "emb-model", ""), ([], "", "rer-model")]
+    assert (result.embedder_ok, result.reranker_ok) == (True, True)
+    assert result.provider_warnings == []
 
 
 @pytest.mark.asyncio
 async def test_split_config_reranker_failure_propagates() -> None:
-    """When split reranker validation also fails, reranker_ok stays False."""
+    """A reranker failing under ``reranker_providers`` sets reranker_ok False with its warning;
+    the embedder, probed in the first pass, stays ok."""
+    calls: list[tuple] = []
+
     def _shared(providers, embedding_model, reranker_model):
-        return (True, False, ["probe failed"])
+        calls.append((providers, embedding_model, reranker_model))
+        if reranker_model:
+            return (True, False, [RERANKER_PROBE_FAILED_WARNING])
+        return (True, True, [])
 
     cfg = _coreml_cfg(reranker_providers=["CPUExecutionProvider"])
 
     with patch("archon_search.model_validation.validate_providers_shared", side_effect=_shared):
         result = await validate_models_async(cfg, timeout_seconds=5)
 
-    assert result.reranker_ok is False
+    assert calls[0] == (["CoreMLExecutionProvider"], "emb-model", "")
+    assert (result.embedder_ok, result.reranker_ok) == (True, False)
+    assert result.provider_warnings == [RERANKER_PROBE_FAILED_WARNING]
 
 
 @pytest.mark.asyncio
@@ -716,7 +850,7 @@ async def test_split_validation_skips_when_budget_exhausted() -> None:
 
     assert call_count == 1, "second validation must be skipped when budget exhausted"
     assert result.reranker_ok is False
-    assert any("exhausted" in w for w in result.provider_warnings)
+    assert result.provider_warnings == [RERANKER_SPLIT_BUDGET_EXHAUSTED_WARNING]
 
 
 @pytest.mark.asyncio
@@ -740,7 +874,7 @@ async def test_split_validation_skips_at_exact_zero_boundary() -> None:
 
     assert call_count == 1, "second validation must be skipped at exactly zero remaining"
     assert result.reranker_ok is False
-    assert any("exhausted" in w for w in result.provider_warnings)
+    assert result.provider_warnings == [RERANKER_SPLIT_BUDGET_EXHAUSTED_WARNING]
 
 
 @pytest.mark.asyncio
@@ -758,7 +892,7 @@ async def test_split_second_probe_timeout_sets_reranker_ok_false() -> None:
         return await real_wait_for(coro, timeout=timeout)
 
     cfg = _coreml_cfg(reranker_providers=[])
-    monotonic_calls = iter([0.0, 4.95])  # _remaining = 5 - 4.95 > 0 → enters else branch
+    monotonic_calls = iter([0.0, 4.5])  # _remaining = 5 - 4.5 > 0 → enters else branch
 
     with patch("archon_search.model_validation.validate_providers_shared", return_value=(True, True, [])), \
          patch("archon_search.model_validation.time") as mock_time, \
@@ -767,7 +901,7 @@ async def test_split_second_probe_timeout_sets_reranker_ok_false() -> None:
         result = await validate_models_async(cfg, timeout_seconds=5)
 
     assert result.reranker_ok is False
-    assert any("timed out" in w for w in result.provider_warnings)
+    assert result.provider_warnings == [RERANKER_SPLIT_TIMED_OUT_TEMPLATE.format(seconds=0.5)]
 
 
 # ---------------------------------------------------------------------------
@@ -909,3 +1043,60 @@ def test_validate_providers_shared_probes_the_archon_models_cache(
         "embedder": expected,
         "reranker": expected,
     }
+
+
+# ---------------------------------------------------------------------------
+# Startup-probe handlers publish fixed warnings, so the traceback is where the cause survives.
+# ---------------------------------------------------------------------------
+
+_EXTRACTION_FACTORY_BUILD = "archon_search.enrichment.factory.EnrichmentClientFactory.build"
+
+
+def _extraction_probe_config() -> SearchConfig:
+    return SearchConfig(graph=GraphConfig(enabled=True, provider="ollama", extraction_model="m"))
+
+
+def test_graph_ner_status_failure_is_logged_with_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    config = SearchConfig(graph=GraphConfig(enabled=True))
+
+    with patch("importlib.util.find_spec", side_effect=RuntimeError(ONNX_MSG)) as find_spec, \
+         caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+        warnings = graph_ner_status(config)
+
+    find_spec.assert_called()
+    assert warnings == [GRAPH_NER_UNDETERMINED_WARNING]
+    assert_logged_with_traceback(caplog, ONNX_MSG)
+
+
+@pytest.mark.asyncio
+async def test_extraction_probe_call_failure_is_logged_with_traceback(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = AsyncMock()
+    client.summarize_community.side_effect = RuntimeError(ONNX_MSG)
+    monkeypatch.setattr(_EXTRACTION_FACTORY_BUILD, lambda _config: client)
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+        warnings = await _probe_extraction_model(_extraction_probe_config())
+
+    client.summarize_community.assert_awaited_once()
+    assert warnings == [EXTRACTION_MODEL_PROBE_ERROR_WARNING]
+    assert_logged_with_traceback(caplog, ONNX_MSG)
+
+
+@pytest.mark.asyncio
+async def test_extraction_probe_client_build_failure_is_logged_with_traceback(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    build = MagicMock(side_effect=RuntimeError(ONNX_MSG))
+    monkeypatch.setattr(_EXTRACTION_FACTORY_BUILD, build)
+
+    with caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+        warnings = await _probe_extraction_model(_extraction_probe_config())
+
+    build.assert_called_once()
+    assert warnings == [EXTRACTION_MODEL_PROBE_ERROR_WARNING]
+    assert_logged_with_traceback(caplog, ONNX_MSG)

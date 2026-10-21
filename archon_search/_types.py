@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 
 from archon_search.constants import DEFAULT_NAMESPACE
 
@@ -28,7 +28,6 @@ def normalize_iso_utc(dt: datetime | str) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 IngestedBy = Literal["cli", "http", "watcher", "reindex"]
-IngestErrorCode = Literal["file_too_large", "parse_error", "invalid_document"]
 """Canonical call-site identity for ingest writes.
 
 Four members only. The pre-A1 sentinel ``"archon-search-cli"`` is
@@ -36,6 +35,17 @@ normalized to ``"cli"`` at boundaries (header parser, read path) and is
 intentionally *not* a member of this Literal — see
 ``archon_search.constants.LEGACY_INGESTED_BY``.
 """
+IngestErrorCode = Literal["file_too_large", "parse_error", "invalid_document"]
+"""``IngestResult.code`` of a failed ingest; ``None`` on success."""
+
+# ``IngestResult.code`` (and the REST ``413`` ``detail.code``) of a file rejected by the
+# ``[ingest].max_file_mb`` pre-check. Narrower than ``IngestErrorCode`` because
+# ``IngestError.code`` is typed as exactly this member.
+FILE_TOO_LARGE_CODE: Final[Literal["file_too_large"]] = "file_too_large"
+# ``IngestResult.code`` of a file whose parse raised ``parser.ParseError``.
+PARSE_ERROR_CODE: Final[IngestErrorCode] = "parse_error"
+# ``IngestResult.code`` of an ``ingest_documents`` item missing ``text`` or ``source_path``.
+INVALID_DOCUMENT_CODE: Final[IngestErrorCode] = "invalid_document"
 
 
 @dataclass
@@ -188,7 +198,7 @@ class IngestError(Exception):
     (See also ``IngestResult.code`` for other non-null codes, e.g. ``"parse_error"``.)
     """
 
-    code: Literal["file_too_large"] = "file_too_large"
+    code: Literal["file_too_large"] = FILE_TOO_LARGE_CODE
 
     def __init__(self, *, file_size_mb: int, limit_mb: int) -> None:
         self.message = (

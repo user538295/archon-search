@@ -9,6 +9,7 @@ archon_search/jobs/maintenance_loop.py.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 from datetime import datetime, timezone
@@ -20,8 +21,29 @@ import pytest
 
 from archon_search._types import CollectionInfo
 from archon_search.config import MaintenanceConfig
-from archon_search.jobs.maintenance_loop import MaintenanceLoop, RebuildState
+from archon_search.jobs.maintenance_loop import (
+    EXPIRED_CHUNK_PRUNING_FAILED_DETAIL,
+    FTS_OPTIMIZE_FAILED_DETAIL,
+    GRAPH_GC_FAILED_DETAIL,
+    ORPHAN_CLEANUP_FAILED_DETAIL,
+    MaintenanceLoop,
+    RebuildState,
+)
 from archon_search.store import FTSIndexNotFoundError
+
+
+@pytest.mark.parametrize(
+    ("detail", "wire_text"),
+    [
+        (FTS_OPTIMIZE_FAILED_DETAIL, "fts_optimize failed; see the server log for details"),
+        (ORPHAN_CLEANUP_FAILED_DETAIL, "orphan_cleanup failed; see the server log for details"),
+        (EXPIRED_CHUNK_PRUNING_FAILED_DETAIL, "expired_chunk_pruning failed; see the server log for details"),
+        (GRAPH_GC_FAILED_DETAIL, "graph_gc failed; see the server log for details"),
+    ],
+)
+def test_policy_failed_detail_wire_text_is_pinned(detail: str, wire_text: str) -> None:
+    """GET /status ``last_error`` texts are a wire contract: pinned literally, not via the constants."""
+    assert detail == wire_text
 
 
 # ---------------------------------------------------------------------------
@@ -392,10 +414,10 @@ async def test_run_one_pass_continues_after_per_collection_exception(tmp_path: P
     state_file = tmp_path / ".maintenance-state.json"
     loaded = json.loads(state_file.read_text(encoding="utf-8"))
     health = loaded["collection_health"]
-    # col-a should have last_error set
+    # col-a should have last_error set — the sanitized per-policy text, never the exception message
     col_a_health = health.get("default/col-a", {})
-    assert col_a_health.get("last_error") is not None
-    assert "boom from col-a" in col_a_health["last_error"]
+    assert col_a_health.get("last_error") == FTS_OPTIMIZE_FAILED_DETAIL
+    assert "boom from col-a" not in col_a_health["last_error"]
     # col-b should have been processed (fts_optimize succeeded)
     assert "default/col-b" in processed
 
@@ -423,8 +445,70 @@ async def test_run_one_pass_policy_exception_does_not_abort_other_policies(tmp_p
 
     await loop._run_one_pass()  # must not raise
 
-    orphan_mock.assert_called_once()
+    fts_mock.assert_awaited_once_with("docs", "default")
+    orphan_mock.assert_awaited_once_with("docs", "default")
+    prune_mock.assert_awaited_once_with("docs", "default")
     retry_mock.assert_called_once()
+
+
+def _single_collection_loop(tmp_path: Path) -> MaintenanceLoop:
+    ss = AsyncMock()
+    ss.list_collections = AsyncMock(return_value=[_make_collection_info("docs", namespace="default")])
+    ss.get_collection_meta = AsyncMock(return_value=None)
+    loop = _make_loop(tmp_path, search_store=ss)
+    loop._run_failed_ingest_retry = AsyncMock()  # type: ignore[method-assign]
+    return loop
+
+
+def _docs_health(tmp_path: Path) -> dict[str, Any]:
+    loaded = json.loads((tmp_path / ".maintenance-state.json").read_text(encoding="utf-8"))
+    return loaded["collection_health"]["default/docs"]
+
+
+@pytest.mark.asyncio
+async def test_run_one_pass_last_failing_policy_sets_last_error(tmp_path: Path) -> None:
+    """Several policies fail: every one still runs, and the last failure in pass order wins ``last_error``."""
+    loop = _single_collection_loop(tmp_path)
+    fts_mock = AsyncMock(side_effect=RuntimeError("fts failed"))
+    orphan_mock = AsyncMock()
+    prune_mock = AsyncMock(side_effect=RuntimeError("prune failed"))
+    loop._run_fts_optimize = fts_mock  # type: ignore[method-assign]
+    loop._run_orphan_cleanup = orphan_mock  # type: ignore[method-assign]
+    loop._run_expired_chunk_pruning = prune_mock  # type: ignore[method-assign]
+
+    await loop._run_one_pass()
+
+    fts_mock.assert_awaited_once()
+    orphan_mock.assert_awaited_once()
+    prune_mock.assert_awaited_once()
+    assert _docs_health(tmp_path)["last_error"] == EXPIRED_CHUNK_PRUNING_FAILED_DETAIL
+
+
+@pytest.mark.asyncio
+async def test_run_one_pass_failing_policy_without_name_still_records_last_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """C2-I-6: the failure log uses a fixed label, so a policy callable lacking ``__name__`` cannot abort the pass."""
+
+    async def _fail(col: str, ns: str) -> None:
+        raise RuntimeError("fts failed")
+
+    nameless = functools.partial(_fail)
+    assert not hasattr(nameless, "__name__")
+    loop = _single_collection_loop(tmp_path)
+    orphan_mock = AsyncMock()
+    prune_mock = AsyncMock()
+    loop._run_fts_optimize = nameless  # type: ignore[method-assign]
+    loop._run_orphan_cleanup = orphan_mock  # type: ignore[method-assign]
+    loop._run_expired_chunk_pruning = prune_mock  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.ERROR):
+        await loop._run_one_pass()
+
+    orphan_mock.assert_awaited_once()
+    prune_mock.assert_awaited_once()
+    assert _docs_health(tmp_path)["last_error"] == FTS_OPTIMIZE_FAILED_DETAIL
+    assert "MaintenanceLoop: fts_optimize failed for default/docs" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -723,7 +807,7 @@ async def test_run_graph_gc_fetches_live_chunk_ids_with_correct_namespace(
     loop._graph_store = gs
 
     # This will fail if _run_graph_gc is not implemented yet, which is expected in TDD phase
-    result = await loop._run_graph_gc("docs", "tenant_x")
+    await loop._run_graph_gc("docs", "tenant_x")
 
     # Verify the namespace was passed through to list_chunks_raw
     # (This test will only pass once _run_graph_gc is implemented)
@@ -759,7 +843,7 @@ async def test_run_graph_gc_calls_prune_then_delete_orphans(tmp_path: Path) -> N
     loop = MaintenanceLoop(job_store=MagicMock(), search_store=ss, config=cfg, data_dir=tmp_path)
     loop._graph_store = gs
 
-    result = await loop._run_graph_gc("docs", "default")
+    await loop._run_graph_gc("docs", "default")
 
     assert call_order == ["count_stale_mentions", "prune_stale_mentions", "delete_orphan_nodes_and_edges"]
 
@@ -1032,9 +1116,11 @@ async def test_run_one_pass_clears_communities_invalidated_when_no_orphans_and_n
 
 
 @pytest.mark.asyncio
-async def test_run_one_pass_records_graph_gc_error_without_affecting_other_policies(tmp_path: Path) -> None:
-    """GC active and the graph store raises → the pass completes, last_error carries the message, and other
-    policies' results are kept."""
+async def test_run_one_pass_records_graph_gc_error_without_affecting_other_policies(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """GC active and the graph store raises → the pass completes, last_error carries the sanitized graph-GC
+    text (never the exception message), and other policies' results are kept."""
     gs = _make_active_gc_graph_store()
     gs.count_stale_mentions = AsyncMock(side_effect=RuntimeError("graph store unavailable"))
     loop = _make_gc_bookkeeping_pass_loop(tmp_path, graph_store=gs, graph_gc=True)
@@ -1045,12 +1131,16 @@ async def test_run_one_pass_records_graph_gc_error_without_affecting_other_polic
 
     loop._run_orphan_cleanup = _orphan_cleanup  # type: ignore[method-assign]
 
-    await loop._run_one_pass()
+    with caplog.at_level(logging.ERROR):
+        await loop._run_one_pass()
 
     loaded = _load_state_file(tmp_path)
     health = loaded["collection_health"]["default/docs"]
     assert loaded["last_run_at"] != _PREVIOUS_RUN_AT, "the pass must have run and saved state"
-    assert "graph store unavailable" in health["last_error"]
+    assert health["last_error"] == GRAPH_GC_FAILED_DETAIL
+    # Same policy-name label as the other three policies' failure logs.
+    assert "MaintenanceLoop: graph_gc failed for default/docs" in caplog.text
+    assert "graph store unavailable" not in health["last_error"]
     assert health["orphans_removed_last_run"] == orphans_removed
     loop._run_fts_optimize.assert_awaited_once_with("docs", "default")
     loop._run_expired_chunk_pruning.assert_awaited_once_with("docs", "default")
@@ -1089,7 +1179,7 @@ async def test_run_graph_gc_aborts_when_list_chunks_raises_exception(
     loop._graph_store = gs
 
     with caplog.at_level(logging.WARNING, logger="archon_search.jobs.maintenance_loop"):
-        result = await loop._run_graph_gc("docs", "default")
+        await loop._run_graph_gc("docs", "default")
 
     # Should not call prune_stale_mentions
     gs.prune_stale_mentions.assert_not_called()
@@ -1120,7 +1210,7 @@ async def test_run_graph_gc_prunes_when_collection_genuinely_empty(tmp_path: Pat
     # Prevent fire-and-forget rebuild task leak; this test asserts the result flag, not the rebuild side effect.
     loop._spawn_rebuild_task = MagicMock()
 
-    result = await loop._run_graph_gc("docs", "default")
+    await loop._run_graph_gc("docs", "default")
 
     # Should call prune_stale_mentions with empty frozenset
     gs.prune_stale_mentions.assert_called_once()

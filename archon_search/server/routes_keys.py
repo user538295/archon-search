@@ -1,17 +1,28 @@
 """Key management REST endpoints — POST /keys, GET /keys, DELETE /keys/{id}, POST /keys/rotate (D7 BE-4, BE-6, BE-8)."""
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-import secrets
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from archon_search.constants import _validate_namespace
-from archon_search.key_manager import ENV_VAR, KeyRecord, KeyStore, get_key_file
-from archon_search._durable_io import atomic_write_bytes
+from archon_search.key_manager import (
+    ENV_VAR,
+    KEY_STORE_UNREADABLE_DETAIL,
+    ROTATE_KEYS_JSON_FAILED_DETAIL,
+    ROTATE_WRITE_FAILED_DETAIL,
+    BlankCurrentKeyError,
+    KeyFileWriteError,
+    KeyRecord,
+    KeyRotationInputError,
+    KeyStore,
+    KeyStoreUnreadableError,
+    RotationIncompleteError,
+    resolve_rotation_key_file,
+    rotate_and_persist_default_key,
+)
 from archon_search.server.schemas import (
     ErrorDetail,
     KeyCreateRequest,
@@ -27,11 +38,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["keys"])
 
-# Module-level lock that serialises the full rotate sequence:
-# read app.state.api_key → write .search.env → call rotate_default_key → update app.state.api_key.
-# Prevents concurrent POST /keys/rotate calls from creating orphaned active keys.
-_rotate_lock = asyncio.Lock()
-
 _ERROR_401_422 = {
     401: {"model": ErrorDetail},
     422: {"model": ErrorDetail},
@@ -40,6 +46,10 @@ _ERROR_401_422 = {
 _ERROR_401_404 = {
     401: {"model": ErrorDetail},
     404: {"model": ErrorDetail},
+}
+
+_ERROR_500_KEY_STORE_UNREADABLE = {
+    500: {"model": ErrorDetail, "description": "keys.json could not be read; no key changes were made"},
 }
 
 # Detail message returned when the literal string "null" is passed as a key ID.
@@ -66,7 +76,7 @@ def _key_record_to_response(record: KeyRecord) -> KeyResponse:
     "/keys",
     status_code=201,
     response_model=KeyCreateResponse,
-    responses=_ERROR_401_422,
+    responses={**_ERROR_401_422, **_ERROR_500_KEY_STORE_UNREADABLE},
 )
 async def create_key(body: KeyCreateRequest, request: Request) -> KeyCreateResponse:
     """Issue a new managed API key.
@@ -81,11 +91,14 @@ async def create_key(body: KeyCreateRequest, request: Request) -> KeyCreateRespo
         raise HTTPException(status_code=422, detail=str(exc))
 
     key_store: KeyStore = request.app.state.key_store
-    result = await key_store.create(
-        ns=body.namespace,
-        label=body.label,
-        expires_at=body.expires_at,
-    )
+    try:
+        result = await key_store.create(
+            ns=body.namespace,
+            label=body.label,
+            expires_at=body.expires_at,
+        )
+    except KeyStoreUnreadableError:
+        raise HTTPException(status_code=500, detail=KEY_STORE_UNREADABLE_DETAIL)
 
     return KeyCreateResponse(
         id=result["id"],  # type: ignore[arg-type]  # str narrowed from str|datetime
@@ -155,7 +168,7 @@ async def list_keys(
 @router.delete(
     "/keys/{key_id}",
     response_model=KeyRevokeResponse,
-    responses=_ERROR_401_404,
+    responses={**_ERROR_401_404, **_ERROR_500_KEY_STORE_UNREADABLE},
 )
 async def revoke_key(key_id: str, request: Request) -> KeyRevokeResponse:
     """Revoke a managed API key.
@@ -178,20 +191,23 @@ async def revoke_key(key_id: str, request: Request) -> KeyRevokeResponse:
         await key_store.revoke(key_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Key not found: {key_id!r}")
+    except KeyStoreUnreadableError:
+        raise HTTPException(status_code=500, detail=KEY_STORE_UNREADABLE_DETAIL)
 
     return KeyRevokeResponse(id=key_id, status="revoked")
 
 
-_ERROR_401_409 = {
+_ERROR_401_409_500 = {
     401: {"model": ErrorDetail},
     409: {"model": ErrorDetail},
+    500: {"model": ErrorDetail, "description": "Rotation failed or incomplete; see the server log for details"},
 }
 
 
 @router.post(
     "/keys/rotate",
     response_model=KeyRotateResponse,
-    responses=_ERROR_401_409,
+    responses=_ERROR_401_409_500,
 )
 async def rotate_key(body: KeyRotateRequest, request: Request) -> KeyRotateResponse:
     """Rotate the default API key.
@@ -226,64 +242,41 @@ async def rotate_key(body: KeyRotateRequest, request: Request) -> KeyRotateRespo
     else:
         grace_seconds = config.auth.rotate_grace_seconds
 
-    # Serialise the full rotate sequence (read → write .search.env → mutate keys.json →
-    # update app.state.api_key) so concurrent POST /keys/rotate calls cannot interleave
-    # and create orphaned active keys.
-    async with _rotate_lock:
-        # Read the current default key from app.state so the dynamic middleware
-        # path and this handler always agree on the active token.
-        current_token: str = request.app.state.api_key
+    async def read_current_token() -> str:
+        # app.state.api_key is the token the dynamic middleware path accepts as the default key.
+        return request.app.state.api_key
 
-        # Generate the new raw token here so we can write .search.env FIRST.
-        # Safe write order:
-        #   (a) If .search.env write fails (OSError), keys.json is never mutated
-        #       and the old key remains active — the caller gets 500 and can retry.
-        #   (b) If .search.env write succeeds but keys.json write fails (unlikely),
-        #       .search.env has the new token but keys.json still has the old record.
-        #       app.state.api_key is NOT updated (line 276 never reached).  On
-        #       restart, the server reads the new token from .search.env and uses
-        #       it via the legacy fallback — the operator should re-rotate to
-        #       create the corresponding keys.json record.
-        new_raw_token = secrets.token_hex(32)  # 64 hex chars
+    def publish_new_token(new_token: str) -> None:
+        # Runs inside the rotation lock, so the next rotation reads this token.
+        request.app.state.api_key = new_token
 
-        # Write new token to .search.env BEFORE mutating keys.json.
-        # Wrapped in asyncio.to_thread so the fsync chain (os.write → os.fsync →
-        # os.replace → os.fsync(parent_dir)) does not block the event loop.
-        key_file = get_key_file()
-        key_file.parent.mkdir(parents=True, exist_ok=True)
-        payload = f"{ENV_VAR}={new_raw_token}\n".encode()
-        try:
-            await asyncio.to_thread(atomic_write_bytes, key_file, payload, mode=0o600)
-        except OSError as exc:
-            logger.error(
-                "rotate: failed to write %s — keys.json NOT modified; "
-                "rotation aborted: %s",
-                key_file,
-                exc,
-            )
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to write .search.env — rotation aborted; keys.json unchanged.",
-            )
-
-        # Mutate keys.json with the pre-generated token (safe: .search.env already written).
-        result = await key_store.rotate_default_key(
-            current_token=current_token,
+    # The body's grace_seconds is already bounded by KeyRotateRequest (standard 422), so a
+    # rejected input here comes from server state (a blank app.state.api_key, or an
+    # unvalidated config grace): a server fault, answered 500 with its curated text.
+    # If keys.json fails after .search.env was written, app.state.api_key is NOT updated, so
+    # the old key stays current: recover by rotating again (REST or MCP) authenticated with
+    # the old key, BEFORE any restart — a restart would make the orphaned .search.env token
+    # the default key.
+    try:
+        result = await rotate_and_persist_default_key(
+            key_store,
+            key_file=resolve_rotation_key_file(),
+            read_current_token=read_current_token,
             grace_seconds=grace_seconds,
-            new_token=new_raw_token,
+            publish_new_token=publish_new_token,
         )
+    except (BlankCurrentKeyError, KeyRotationInputError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except KeyStoreUnreadableError:
+        raise HTTPException(status_code=500, detail=KEY_STORE_UNREADABLE_DETAIL)
+    except KeyFileWriteError:
+        raise HTTPException(status_code=500, detail=ROTATE_WRITE_FAILED_DETAIL)
+    except RotationIncompleteError:
+        raise HTTPException(status_code=500, detail=ROTATE_KEYS_JSON_FAILED_DETAIL)
 
-        new_key_id: str = result["new_key_id"]  # type: ignore[assignment]
-        old_record = result["old_record"]
-        # Defensive: rotate_default_key must echo back the token we passed in.
-        # If this ever diverges, .search.env and keys.json would be out of sync.
-        if result["new_token"] != new_raw_token:
-            raise RuntimeError("rotate_default_key returned unexpected token — BUG")
-
-        # Update app.state.api_key so subsequent calls to POST /keys/rotate read the
-        # correct current_token, and so the middleware's dynamic api_key lookup
-        # (request.app.state.api_key) uses the new key immediately.
-        request.app.state.api_key = new_raw_token
+    new_raw_token: str = result["new_token"]  # type: ignore[assignment]
+    new_key_id: str = result["new_key_id"]  # type: ignore[assignment]
+    old_record = result["old_record"]
 
     # Log rotation event for audit trail.
     old_key_id_str = old_record.id if old_record is not None else None

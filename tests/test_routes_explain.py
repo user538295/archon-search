@@ -652,7 +652,7 @@ def test_explain_rag_fusion_sub_queries_mapped_to_schema(tmp_path: Path) -> None
 
 def test_explain_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> None:
     """Pipeline raises RAGFusionDependencyError (package not installed): response is 422."""
-    from archon_search.rag_fusion import RAGFusionDependencyError
+    from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
 
     pipeline = MagicMock()
     meta = CollectionMeta(name="col", namespace="default", active_embedding_model="")
@@ -665,7 +665,7 @@ def test_explain_rag_fusion_package_not_installed_returns_422(tmp_path: Path) ->
 
     response = client.post("/explain", json={"collection": "col", "query": "test", "rag_fusion": True})
     assert response.status_code == 422
-    assert response.json() == {"detail": "Install archon-search[rag_fusion] to use RAG Fusion"}
+    assert response.json() == {"detail": RAG_FUSION_DEPENDENCY_DETAIL}
 
 
 def test_explain_rag_fusion_false_hyde_still_works(tmp_path: Path) -> None:
@@ -715,7 +715,7 @@ def test_explain_multi_collection_rag_fusion_passes_to_pipeline(tmp_path: Path) 
 
 def test_explain_multi_collection_rag_fusion_package_not_installed_returns_422(tmp_path: Path) -> None:
     """Multi-collection path: RAGFusionDependencyError from pipeline returns 422."""
-    from archon_search.rag_fusion import RAGFusionDependencyError
+    from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
 
     app, client = _make_app(tmp_path)
     pipeline = MagicMock()
@@ -727,7 +727,7 @@ def test_explain_multi_collection_rag_fusion_package_not_installed_returns_422(t
         json={"collections": ["col1", "col2"], "query": "test", "rag_fusion": True},
     )
     assert response.status_code == 422
-    assert response.json() == {"detail": "Install archon-search[rag_fusion] to use RAG Fusion"}
+    assert response.json() == {"detail": RAG_FUSION_DEPENDENCY_DETAIL}
 
 
 _LEAKY_RAG_FUSION_HINT = "uv tool install /opt/private/wheelhouse 'archon-search[rag_fusion]'"

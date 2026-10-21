@@ -13,12 +13,10 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import stat
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -474,6 +472,19 @@ class TestAuthConfig:
         )
         config = load_config(path=toml_file)
         assert config.auth.rotate_grace_seconds == 30
+
+    def test_load_config_auth_section_above_max_raises(self, tmp_path: Path) -> None:
+        """[auth].rotate_grace_seconds above MAX_ROTATE_GRACE_SECONDS raises ConfigError; the max loads."""
+        from archon_search.config import ConfigError
+        from archon_search.constants import MAX_ROTATE_GRACE_SECONDS
+
+        toml_file = tmp_path / "config.toml"
+        toml_file.write_text(f"[auth]\nrotate_grace_seconds = {MAX_ROTATE_GRACE_SECONDS}\n", encoding="utf-8")
+        assert load_config(path=toml_file).auth.rotate_grace_seconds == MAX_ROTATE_GRACE_SECONDS
+
+        toml_file.write_text(f"[auth]\nrotate_grace_seconds = {MAX_ROTATE_GRACE_SECONDS + 1}\n", encoding="utf-8")
+        with pytest.raises(ConfigError, match="rotate_grace_seconds must be <="):
+            load_config(path=toml_file)
 
     def test_load_config_auth_section_negative_raises(self, tmp_path: Path) -> None:
         """[auth].rotate_grace_seconds must be >= 0; negative values raise ConfigError."""

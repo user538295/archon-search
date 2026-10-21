@@ -14,6 +14,7 @@ C2-B-2).
 """
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,10 +22,28 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from archon_search.config import SearchConfig
+from archon_search.config import ConfigError, SearchConfig
+from archon_search.graph_extractor import ensure_graph_engine_importable, gliner_not_installed_message
 from archon_search.jobs import JobStore
-from archon_search.model_validation import graph_ner_status, validate_models_async
+from archon_search.model_validation import (
+    GLINER_NOT_INSTALLED_WARNING,
+    GRAPH_NER_UNDETERMINED_WARNING,
+    graph_ner_status,
+    validate_models_async,
+)
 from archon_search.server.app import create_app
+from tests._install_hint_leak import (
+    INSTALL_HINT_PATH,
+    INSTALL_HINT_SECRET,
+    assert_install_hint_logged_not_sent,
+    patch_install_hint,
+)
+
+# A uv tool receipt whose replayed install options carry index credentials and a local path.
+_CREDENTIAL_RECEIPT = (
+    '[tool]\nrequirements = [{ name = "archon-search" }]\n'
+    f'[tool.options]\nindex-url = "{INSTALL_HINT_SECRET}"\nfind-links = ["{INSTALL_HINT_PATH}"]\n'
+)
 
 
 def _config_with_graph(tmp_path: Path, *, enabled: bool, multilingual: bool) -> SearchConfig:
@@ -38,10 +57,8 @@ def _config_with_graph(tmp_path: Path, *, enabled: bool, multilingual: bool) -> 
 def _gliner_absent() -> "patch.dict[str, object | None]":
     """Bind ``sys.modules['gliner']`` to ``None`` — the suite's absent-module
     idiom (mirrors ``tests/test_graph_deps_construction_guard.py``'s
-    ``_gliner_absent`` helper; `find_spec` raises `ValueError` on a bare
-    `None` sentinel entry only when nothing binds `__spec__`, and both
-    ``ensure_graph_engine_importable`` and ``graph_ner_status`` treat that
-    as "found", never "absent" — see graph_extractor.py). Scoped to a `with`
+    ``_gliner_absent`` helper; `find_spec` returns `None` for a `None` entry,
+    so ``gliner_absent`` reports gliner absent). Scoped to a `with`
     block, not the whole test: `create_app` also runs the SAME
     construction-time guard, so leaving gliner "absent" for the rest of the
     test would fail app creation, not just the probe under test."""
@@ -69,9 +86,7 @@ def test_gliner_absent_warns_at_startup(
     with _gliner_absent():
         warnings = graph_ner_status(config)
 
-    assert len(warnings) == 1, warnings
-    assert "gliner" in warnings[0]
-    assert "pip install" in warnings[0], "the warning must name the fix, not just the symptom"
+    assert warnings == [GLINER_NOT_INSTALLED_WARNING]
 
 
 def test_gliner_present_is_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -85,16 +100,20 @@ def test_gliner_present_is_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_status_surfaces_missing_gliner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_status_missing_gliner_warning_never_carries_install_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uv_tool_prefix: Path
 ) -> None:
-    """The ``/status`` serialiser surfaces the warning.
+    """``GET /status`` surfaces the fixed gliner warning, never the install command: in a
+    uv tool env that command replays the local install receipt (index URLs with
+    credentials, local source paths).
 
     ``app.state.model_validation`` is assigned directly rather than driven
     through the lifespan: this pins the serialiser contract, not the wiring
     (the lifespan's own spawn is covered by the app tests).
     """
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    (uv_tool_prefix / "uv-receipt.toml").write_text(_CREDENTIAL_RECEIPT)
+    assert INSTALL_HINT_SECRET in gliner_not_installed_message(), "precondition: the receipt must leak"
     config = _config_with_graph(tmp_path, enabled=True, multilingual=False)
 
     with _gliner_absent(), patch(
@@ -123,27 +142,71 @@ async def test_status_surfaces_missing_gliner(
 
     assert response.status_code == 200
     warnings = response.json()["model_validation"]["provider_warnings"]
-    assert any("gliner" in w for w in warnings), (
-        f"the missing graph engine must surface on /status; got {warnings}"
-    )
+    assert GLINER_NOT_INSTALLED_WARNING in warnings, f"the missing graph engine must surface on /status; got {warnings}"
+    assert INSTALL_HINT_SECRET not in response.text, f"install receipt leaked onto /status: {warnings}"
+    assert INSTALL_HINT_PATH not in response.text, f"install receipt leaked onto /status: {warnings}"
 
 
-def test_gliner_absent_message_names_the_extra(
+# The /status warning and the startup ConfigError deliberately differ. They used to be
+# identical (T6), but the install command replays the uv tool receipt (index credentials,
+# local paths), so the wire gets GLINER_NOT_INSTALLED_WARNING while the operator-local
+# guard and the server log keep the exact command.
+def test_gliner_absent_config_error_keeps_the_install_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uv_tool_prefix: Path
 ) -> None:
-    """T6: the extractor's own "[graph] extra missing" wording is reused
-    verbatim so the two surfaces (construction-time guard, startup probe)
-    agree — including the install-method-aware remedy."""
-    from archon_search.graph_extractor import gliner_not_installed_message
+    """Deliberate contrast with ``/status``: the construction-time ``ConfigError`` reaches
+    only the operator or calling code, so it keeps the credential-bearing receipt command."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    (uv_tool_prefix / "uv-receipt.toml").write_text(_CREDENTIAL_RECEIPT)
+    config = _config_with_graph(tmp_path, enabled=True, multilingual=False)
 
+    with _gliner_absent(), pytest.raises(ConfigError) as excinfo:
+        ensure_graph_engine_importable(config.graph)
+
+    assert str(excinfo.value).endswith(gliner_not_installed_message())
+    assert INSTALL_HINT_SECRET in str(excinfo.value)
+    assert INSTALL_HINT_PATH in str(excinfo.value)
+
+
+def test_missing_gliner_install_command_is_logged_not_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The operator still gets the exact install command — in the server log, not on the wire."""
+    monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
+    patch_install_hint(monkeypatch, "archon_search.graph_extractor")
+    config = _config_with_graph(tmp_path, enabled=True, multilingual=False)
+
+    with _gliner_absent(), caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
+        warnings = graph_ner_status(config)
+
+    assert_install_hint_logged_not_sent(caplog, "\n".join(warnings))
+    expected = f"graph prose entity extraction is disabled: {gliner_not_installed_message()}"
+    assert [r.getMessage() for r in caplog.records if r.name == "archon_search.model_validation"] == [expected]
+
+
+def test_failing_install_hint_still_reports_gliner_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A raising install hint only affects the log line: gliner is known missing, so the
+    wire still says so instead of degrading to "could not be determined"."""
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     config = _config_with_graph(tmp_path, enabled=True, multilingual=False)
 
-    with _gliner_absent():
+    def _raise(extra: str) -> str:
+        raise RuntimeError("receipt unreadable")
+
+    monkeypatch.setattr("archon_search.graph_extractor.extra_install_hint", _raise)
+    with _gliner_absent(), caplog.at_level(logging.WARNING, logger="archon_search.model_validation"):
         warnings = graph_ner_status(config)
 
-    assert warnings == [f"graph prose entity extraction is disabled: {gliner_not_installed_message()}"]
-    assert warnings[0].endswith("uv tool install 'archon-search[graph]'")
+    assert warnings == [GLINER_NOT_INSTALLED_WARNING]
+    assert any(
+        r.name == "archon_search.model_validation"
+        and r.levelno == logging.WARNING
+        and r.getMessage() == "could not build the gliner install command; install the archon-search[graph] extra"
+        and r.exc_info is not None
+        for r in caplog.records
+    ), [r.getMessage() for r in caplog.records]
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +230,7 @@ def test_graph_ner_status_never_raises_on_unexpected_failure(
     ):
         warnings = graph_ner_status(config)
 
-    assert warnings == ["graph NER model presence could not be determined"]
+    assert warnings == [GRAPH_NER_UNDETERMINED_WARNING]
 
 
 # ---------------------------------------------------------------------------
@@ -290,5 +353,5 @@ async def test_failed_result_path_returns_warnings_only(
         result = await failed_result("validation crashed", config)
 
     assert len(result.provider_warnings) == 2, result.provider_warnings
-    assert "gliner" in result.provider_warnings[0]
+    assert result.provider_warnings[0] == GLINER_NOT_INSTALLED_WARNING
     assert result.provider_warnings[1] == "validation crashed"

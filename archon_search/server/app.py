@@ -43,7 +43,7 @@ from archon_search.jobs.backup_loop import BackupLoop
 from archon_search.jobs.maintenance_loop import MaintenanceLoop
 from archon_search.jobs.scheduler import JobScheduler
 from archon_search.jobs.store import JobStore
-from archon_search.key_manager import KeyRecord, KeyStore, load_or_generate_key
+from archon_search.key_manager import KeyRecord, KeyStore, KeyStoreUnreadableError, load_or_generate_key
 from archon_search.paths import get_data_dir, get_fasttext_models_dir
 from archon_search.logging_setup import build_uvicorn_log_config, configure_logging
 from archon_search.model_validation import validate_models_async
@@ -514,7 +514,12 @@ def create_app(
         # Startup: persist TOML synthetic KeyRecord objects into keys.json so that
         # GET /keys (BE-6) can surface them and active_keys() includes them.
         # This replaces synthetic records from previous runs with the current TOML state.
-        await app.state.key_store.load_synthetic_records(_synthetic_records)
+        # An unreadable keys.json is left untouched (S17): the server still starts, and TOML
+        # tokens stay accepted through the middleware's namespaces fallback.
+        try:
+            await app.state.key_store.load_synthetic_records(_synthetic_records)
+        except KeyStoreUnreadableError:
+            logger.error("keys.json is unreadable — TOML namespace keys not persisted; keys.json left unchanged")
 
         # Startup: connect search store
         await app.state.search_store.connect()
@@ -614,13 +619,14 @@ def create_app(
                 logger.info("validation cancelled during shutdown")
                 raise
             except BaseException as exc:  # noqa: BLE001 — never let the task escape
-                logger.warning("model validation task failed unexpectedly: %s", exc)
+                logger.warning("model validation task failed unexpectedly: %s", exc, exc_info=True)
                 from archon_search.model_validation import (  # noqa: PLC0415
+                    VALIDATION_TASK_FAILED_WARNING,
                     failed_result,
                 )
 
                 app.state.model_validation = await failed_result(
-                    "validation task failed unexpectedly", config
+                    VALIDATION_TASK_FAILED_WARNING, config
                 )
 
         validation_task = asyncio.create_task(_run_model_validation())
@@ -813,6 +819,9 @@ def create_app(
                             key_store=app.state.key_store,
                             doc_id_hasher=app.state.doc_id_hasher,
                             graph_store=app.state.graph_store,
+                            # One current default key for both transports: MCP auth and
+                            # rotate_key read app.state.api_key; rotate_key publishes to it.
+                            api_key_state=app.state,
                         )
                         await _mcp_stack.enter_async_context(
                             mcp_starlette.router.lifespan_context(app)
@@ -970,8 +979,9 @@ def create_app(
                 await app.state.graph_store.disconnect()
 
     # Instantiate the key store pointing to keys.json under the data directory.
-    # Each app (HTTP and MCP) creates its own KeyStore instance; cross-process
-    # visibility is achieved because active_keys() re-reads from disk on every call.
+    # The mounted MCP app receives this same instance (app.state.key_store), so REST and
+    # MCP rotations share its rotation_lock; cross-process visibility is achieved because
+    # active_keys() re-reads from disk on every call.
     key_store = KeyStore(get_data_dir() / "keys.json")
 
     # Build synthetic KeyRecord objects from the TOML [namespaces] map once at
@@ -1017,9 +1027,9 @@ def create_app(
     )
     logger.info("API key authentication enabled (source: %s)", key_source)
     app.state.key_store = key_store
-    # Store the raw api_key token so POST /keys/rotate can read the current
-    # default key without re-reading .search.env.  The route handler updates
-    # this in-process value after a successful rotation.
+    # The server's current default key: POST /keys/rotate and the mounted MCP rotate_key
+    # read the key to retire from it and publish the new key to it after a successful
+    # rotation; both auth middlewares accept it on the legacy path.
     app.state.api_key = api_key
     # Stored for the graph-view route handler's validate_token_and_get_namespace call (BE-2).
     app.state.namespaces = config.namespaces

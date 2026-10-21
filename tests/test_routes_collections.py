@@ -5,6 +5,7 @@ import asyncio
 import os
 from contextlib import nullcontext
 from pathlib import Path
+from typing import Any
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2165,11 +2166,15 @@ def test_add_collection_uses_validator_returned_path(
     mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
     app.state.search_store = mock_store
 
-    # Patch the validator in the route module namespace to return a sentinel path.
-    monkeypatch.setattr(
-        "archon_search.server.routes_collections.validate_ingest_path",
-        lambda raw: Path("/sentinel/value"),
-    )
+    # Patch the validator only in the route module: the ingest body must carry its
+    # result, never re-validate (a second call could raise after the lock is held).
+    validated: list[str] = []
+
+    def _sentinel_validator(raw: str) -> Path:
+        validated.append(raw)
+        return Path("/sentinel/value")
+
+    monkeypatch.setattr("archon_search.server.routes_collections.validate_ingest_path", _sentinel_validator)
 
     # Capture the IngestRequest passed to either ingest task variant.
     # The handler branches to _default_ingest_task_with_lock when lock_result is not None.
@@ -2199,6 +2204,68 @@ def test_add_collection_uses_validator_returned_path(
 
     assert response.status_code == 202
     assert captured == [str(Path("/sentinel/value"))]
+    assert validated == ["/some/legitimate/path"]
+
+
+def _tilde_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, Path]:
+    """A ``~`` path and the server-side path it resolves to."""
+    home = tmp_path / "server-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    return "~/missing/s284", (home / "missing" / "s284").resolve()
+
+
+def _symlink_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, Path]:
+    """A path through a symlink and the link target's path it resolves to."""
+    target = tmp_path / "server-internal-target"
+    target.mkdir()
+    link = tmp_path / "caller-link"
+    link.symlink_to(target, target_is_directory=True)
+    return str(link / "missing" / "s284"), (target / "missing" / "s284").resolve()
+
+
+@pytest.mark.parametrize("submitted_path", [_tilde_path, _symlink_path], ids=["tilde", "symlink"])
+def test_add_collection_ingest_body_keeps_the_submitted_path(
+    tmp_path: Path, tmp_store: JobStore, monkeypatch: pytest.MonkeyPatch, submitted_path: Any
+) -> None:
+    """The ingest job's not-found text must echo the caller's raw path, not the server's resolution of it."""
+    import asyncio as _asyncio
+
+    from archon_search.server.routes_jobs import INGEST_PATH_NOT_FOUND_PREFIX, IngestPathNotFoundError
+
+    submitted, resolved = submitted_path(tmp_path, monkeypatch)
+    cfg = SearchConfig()
+    cfg.db_path = str(tmp_path / "search")
+    app = create_app(cfg, tmp_store)
+    mock_store = MagicMock()
+    mock_store.get_all_collections_meta = AsyncMock(return_value=[])
+    mock_store.update_collection_meta = AsyncMock()
+    mock_store.migrate_namespace = AsyncMock()
+    mock_store.connect = AsyncMock()
+    mock_store.disconnect = AsyncMock()
+    mock_store.lock_for = MagicMock(return_value=_asyncio.Lock())
+    app.state.search_store = mock_store
+    captured: list[object] = []
+
+    async def _capturing_ingest_task(job_id, store, body, **kwargs):  # type: ignore[no-untyped-def]
+        captured.append(body)
+
+    monkeypatch.setattr("archon_search.server.routes_collections._default_ingest_task", _capturing_ingest_task)
+    monkeypatch.setattr(
+        "archon_search.server.routes_collections._default_ingest_task_with_lock", _capturing_ingest_task
+    )
+    key = os.environ.get("ARCHON_SEARCH_API_KEY", "")
+    c = TestClient(app, headers={"Authorization": f"Bearer {key}"})
+
+    response = c.post("/collections/", json={"path": submitted})
+
+    assert response.status_code == 202, response.text
+    [body] = captured
+    # Presence anchor: the ingest itself runs on the server's resolved path.
+    assert body.path == str(resolved)
+    assert body.path != submitted
+    assert body.submitted_path == submitted
+    assert str(IngestPathNotFoundError(body.submitted_path)) == f"{INGEST_PATH_NOT_FOUND_PREFIX}: {submitted}"
 
 
 def test_add_collection_rejects_relative_path(
@@ -3672,7 +3739,6 @@ def test_reindex_endpoint_sets_reindex_job_id(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST reindex sets meta.reindex_job_id before spawning the task."""
-    from archon_search.collection_meta import CollectionMeta
 
     c, name, meta, mock_store = _make_reindex_app(tmp_path, tmp_store)
 
@@ -3838,7 +3904,6 @@ def test_reindex_endpoint_creates_reindex_job_not_ingest_job(
 ) -> None:
     """POST /collections/{name}/reindex stores a ReindexJob (not a plain IngestJob)."""
     from archon_search.types import ReindexJob
-    from archon_search.jobs.model import IngestJob
 
     c, name, meta, mock_store = _make_reindex_app(tmp_path, tmp_store)
 
@@ -4009,7 +4074,6 @@ def test_get_migrations_pending_unauthenticated_returns_401(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """GET /collections/{name}/migrations/pending returns 401 for unauthenticated request."""
-    import os
     from archon_search.sync import path_to_collection_name as _ptn
 
     src = tmp_path / "docs"
@@ -4368,7 +4432,6 @@ def test_post_migrate_unauthenticated_returns_401(
     tmp_path: Path, tmp_store: JobStore
 ) -> None:
     """POST /collections/{name}/migrate returns 401 for unauthenticated request."""
-    import os
     from archon_search.sync import path_to_collection_name as _ptn
 
     src = tmp_path / "docs"
@@ -4787,7 +4850,7 @@ async def test_migration_task_marks_failed_on_apply_rewrite_exception(tmp_path: 
     """
     from archon_search.jobs.store import JobStore
     from archon_search.types import MigrationKind, MigrationSpec, JobStatus
-    from archon_search.server.routes_collections import _migration_task
+    from archon_search.server.routes_collections import MIGRATION_FAILED_DETAIL, _migration_task
     from unittest.mock import AsyncMock, MagicMock
 
     job_store = JobStore(path=tmp_path / "jobs.json")
@@ -4806,7 +4869,9 @@ async def test_migration_task_marks_failed_on_apply_rewrite_exception(tmp_path: 
     final_job = job_store.get(queued_job.job_id)
     assert final_job is not None
     assert final_job.status == JobStatus.FAILED
-    assert "lancedb crashed" in (final_job.error or "")
+    # The store exception stays in the server log; the job carries the sanitized text.
+    assert final_job.error == MIGRATION_FAILED_DETAIL
+    assert "lancedb crashed" not in (final_job.error or "")
 
 
 @pytest.mark.asyncio
@@ -4842,12 +4907,16 @@ async def test_migration_task_spec_none_fetches_pending_and_uses_first_rewrite(t
 
 
 @pytest.mark.asyncio
-async def test_migration_task_spec_none_no_rewrite_pending_marks_failed(tmp_path: Path) -> None:
+async def test_migration_task_spec_none_no_rewrite_pending_marks_failed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """_migration_task with spec=None marks job FAILED when no pending REWRITE migration exists.
 
     This exercises the scheduler resume path where the REWRITE spec has already been
-    applied (or never existed) by the time the scheduler picks up the job.
+    applied (or never existed) by the time the scheduler picks up the job. The curated,
+    expected failure is logged as a warning, without a traceback.
     """
+    import logging
     from archon_search.jobs.store import JobStore
     from archon_search.types import MigrationKind, JobStatus
     from archon_search.server.routes_collections import _migration_task
@@ -4862,12 +4931,17 @@ async def test_migration_task_spec_none_no_rewrite_pending_marks_failed(tmp_path
     mock_search_store = MagicMock()
     mock_search_store.pending_migrations = AsyncMock(return_value=[])
 
-    await _migration_task(job=running_job, job_store=job_store, search_store=mock_search_store, spec=None)
+    with caplog.at_level(logging.WARNING, logger="archon_search.server.routes_collections"):
+        await _migration_task(job=running_job, job_store=job_store, search_store=mock_search_store, spec=None)
 
     final_job = job_store.get(queued_job.job_id)
     assert final_job is not None
     assert final_job.status == JobStatus.FAILED
     assert "no pending REWRITE" in (final_job.error or "")
+    failure_logs = [r for r in caplog.records if "no pending REWRITE" in r.getMessage()]
+    assert [r.levelno for r in failure_logs] == [logging.WARNING], caplog.text
+    assert failure_logs[0].exc_info is None
+    assert "Traceback" not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -5216,8 +5290,11 @@ def test_reindex_metadata_task_failed_path(
     # Poll until terminal (expect FAILED).
     terminal_job = _poll_reindex_job_until_terminal(tmp_store, job_id)
     assert terminal_job.status == JobStatus.FAILED
-    assert terminal_job.error is not None
-    assert "table dropped" in terminal_job.error
+    # The store exception stays in the server log; the job carries the sanitized text.
+    from archon_search.server.routes_collections import METADATA_REINDEX_FAILED_DETAIL
+
+    assert terminal_job.error == METADATA_REINDEX_FAILED_DETAIL
+    assert "table dropped" not in terminal_job.error
 
     # T4: after failure, the finally block should have cleared metadata_reindex_job_id,
     # so a second POST must return 202 (not 409).
@@ -5388,12 +5465,18 @@ def test_get_collection_info_ttl_null_when_not_set(
 
 @pytest.mark.asyncio
 async def test_dispatch_ingest_raises_for_nonexistent_path() -> None:
-    """_dispatch_ingest raises FileNotFoundError when the path does not exist (S284).
+    """_dispatch_ingest raises IngestPathNotFoundError when the path does not exist (S284).
 
-    This proves the wire-truth: a nonexistent path → FAILED job, because the
-    except-Exception handler in _default_ingest_task catches this and sets FAILED.
+    This proves the wire-truth: a nonexistent path → FAILED job whose error is this
+    curated message, because both ingest tasks record IngestPathNotFoundError's text
+    verbatim (tests/test_no_internal_error_leak_jobs.py drives that end to end).
     """
-    from archon_search.server.routes_jobs import IngestRequest, _dispatch_ingest
+    from archon_search.server.routes_jobs import (
+        INGEST_PATH_NOT_FOUND_PREFIX,
+        IngestPathNotFoundError,
+        IngestRequest,
+        _dispatch_ingest,
+    )
 
     body = IngestRequest(
         collection="test-col",
@@ -5406,7 +5489,7 @@ async def test_dispatch_ingest_raises_for_nonexistent_path() -> None:
     mock_config = MagicMock()
     mock_config.embedding_model = "test-model"
 
-    with pytest.raises(FileNotFoundError, match="does not exist"):
+    with pytest.raises(IngestPathNotFoundError) as excinfo:
         await _dispatch_ingest(
             body,
             namespace="default",
@@ -5415,6 +5498,8 @@ async def test_dispatch_ingest_raises_for_nonexistent_path() -> None:
             pipeline=MagicMock(),
             config=mock_config,
         )
+    assert isinstance(excinfo.value, FileNotFoundError)
+    assert str(excinfo.value) == f"{INGEST_PATH_NOT_FOUND_PREFIX}: /nonexistent/archon/s284/path"
 
 
 def test_nonexistent_path_behavior_documented() -> None:

@@ -259,6 +259,8 @@ async def test_mcp_search_with_context_hyde_dependency_absent_returns_error() ->
     the behavior of HyDEGenerator when the anthropic package is absent).
     The MCP tool catches it and returns the fixed message with code='validation_error'.
     """
+    from archon_search.hyde import HYDE_DEPENDENCY_DETAIL
+
     pipeline = MagicMock()
     pipeline.context_window_max = DEFAULT_CONTEXT_WINDOW_MAX
     embedder = MagicMock()
@@ -302,8 +304,7 @@ async def test_mcp_search_with_context_hyde_dependency_absent_returns_error() ->
     assert result.get("code") == "validation_error", (
         f"expected validation_error for missing HyDE dependency, got: {result}"
     )
-    # The fixed dependency message: the exception's install command stays in the log.
-    assert result["error"] == "Install archon-search[hyde] to use HyDE"
+    assert result["error"] == HYDE_DEPENDENCY_DETAIL
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +319,7 @@ async def test_mcp_search_rag_fusion_dependency_absent_returns_error() -> None:
     raised when the anthropic package is absent for RAG fusion). Asserts the
     MCP tool catches it and returns code='validation_error'.
     """
-    from archon_search.rag_fusion import RAGFusionDependencyError
+    from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
 
     pipeline = MagicMock()
     embedder = MagicMock()
@@ -346,9 +347,4 @@ async def test_mcp_search_rag_fusion_dependency_absent_returns_error() -> None:
     assert result.get("code") == "validation_error", (
         f"expected validation_error for missing RAG Fusion dependency, got: {result}"
     )
-    assert "error" in result
-    error_msg = result["error"]
-    assert any(
-        kw in error_msg.lower()
-        for kw in ("install", "rag", "fusion", "dependency", "archon-search")
-    ), f"expected dependency hint in error, got: {error_msg!r}"
+    assert result["error"] == RAG_FUSION_DEPENDENCY_DETAIL

@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 
 _SCHEDULER_TICK_SECONDS: int = 5
 
+# Job ``error`` when ``dispatch_fn`` raises: the exception's message may embed
+# internals, so it goes to the server log only. Keeps the ``dispatch_failed`` prefix.
+DISPATCH_FAILED_DETAIL = "dispatch_failed; see the server log for details"
+
 
 class JobScheduler:
     """5-second tick scheduler for bulk (export/import) jobs.
@@ -81,18 +85,10 @@ class JobScheduler:
                 continue
             try:
                 self.dispatch_fn(promoted)
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "JobScheduler: dispatch_fn raised for job %s — marking FAILED: %s",
-                    job.job_id,
-                    exc,
-                )
+            except Exception:  # noqa: BLE001
+                logger.exception("JobScheduler: dispatch_fn raised for job %s — marking FAILED", job.job_id)
                 try:
-                    self._store.update(
-                        job.job_id,
-                        status=JobStatus.FAILED,
-                        error=f"dispatch_failed: {exc}",
-                    )
+                    self._store.update(job.job_id, status=JobStatus.FAILED, error=DISPATCH_FAILED_DETAIL)
                 except Exception:  # noqa: BLE001
                     logger.exception(
                         "JobScheduler: failed to mark job %s as FAILED after dispatch error",

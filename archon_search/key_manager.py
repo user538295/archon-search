@@ -11,6 +11,7 @@ bootstrap where the env is set after the package is loaded.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -20,13 +21,15 @@ import secrets
 import sys
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from archon_search._durable_io import atomic_write_bytes
+from archon_search._durable_io import DurabilityUnconfirmedError, atomic_write_bytes
+from archon_search.constants import MAX_ROTATE_GRACE_SECONDS
 from archon_search.paths import get_data_dir
 
 logger = logging.getLogger(__name__)
@@ -56,6 +59,71 @@ class KeyRecord(BaseModel):
     status: Literal["active", "revoked"] = "active"
 
 
+class KeyRotationInputError(ValueError):
+    """Invalid rotation argument (``grace_seconds``); its message is codebase-built and safe to surface.
+
+    Any other ``ValueError`` from rotation (e.g. a pydantic ``ValidationError`` while
+    loading ``keys.json``) may embed stored data and must not reach the caller.
+    """
+
+
+class BlankCurrentKeyError(ValueError):
+    """The current default key handed to a rotation is blank; its message is codebase-built.
+
+    A transport reads that key from server state, so this is a server fault rather than
+    the caller's input error (MCP answers ``internal_error``, not ``validation_error``).
+    A sibling of ``KeyRotationInputError``, not a subclass, so neither handler catches the other.
+    """
+
+
+# Sanitized wire text for a key mutation refused because keys.json exists but cannot be
+# read or parsed; the underlying exception (path, stored data) goes to the server log only.
+KEY_STORE_UNREADABLE_DETAIL = "keys.json could not be read; no key changes were made; see the server log for details"
+
+
+class KeyStoreUnreadableError(Exception):
+    """``keys.json`` exists but cannot be read or parsed; a mutation refused rather than overwrite it.
+
+    Wire text: ``KEY_STORE_UNREADABLE_DETAIL``. Auth reads (``load`` / ``active_keys``)
+    still degrade to an empty key list (S17); only mutations fail closed, because writing
+    back the records they loaded would permanently delete every managed key.
+    """
+
+
+# Sanitized rotation-failure wire texts, shared by REST ``POST /keys/rotate`` and MCP
+# ``rotate_key``: the underlying exception embeds the key-file / keys.json path or stored
+# data, so it goes to the server log only.
+ROTATE_WRITE_FAILED_DETAIL = "Failed to write .search.env — rotation aborted; keys.json unchanged."
+
+
+class KeyFileWriteError(Exception):
+    """``.search.env`` could not be written; ``keys.json`` is unchanged. Wire text: ``ROTATE_WRITE_FAILED_DETAIL``."""
+
+
+ROTATE_KEYS_JSON_FAILED_DETAIL = (
+    "Rotation incomplete: .search.env holds the new key but keys.json was not updated; "
+    "see the server log for details"
+)
+
+
+class RotationIncompleteError(Exception):
+    """``.search.env`` holds the new key but ``keys.json`` was not updated. Wire text: ``ROTATE_KEYS_JSON_FAILED_DETAIL``."""
+
+
+def validate_rotation_grace(grace_seconds: int) -> None:
+    """Raise ``KeyRotationInputError`` for a ``grace_seconds`` outside ``[0, MAX_ROTATE_GRACE_SECONDS]``."""
+    if grace_seconds < 0:
+        raise KeyRotationInputError(f"grace_seconds must be >= 0, got {grace_seconds!r}")
+    if grace_seconds > MAX_ROTATE_GRACE_SECONDS:
+        raise KeyRotationInputError(f"grace_seconds must be <= {MAX_ROTATE_GRACE_SECONDS}, got {grace_seconds!r}")
+
+
+def validate_current_token(current_token: str) -> None:
+    """Raise ``BlankCurrentKeyError`` for a blank ``current_token``."""
+    if not current_token or not current_token.strip():
+        raise BlankCurrentKeyError("current_token must not be empty")
+
+
 # ---------------------------------------------------------------------------
 # KeyStore use-case class (C2)
 # ---------------------------------------------------------------------------
@@ -66,12 +134,20 @@ class KeyStore:
 
     Design:
     - No in-memory key list is maintained. ``active_keys()`` and ``load()``
-      always re-read from disk (disk-read-on-demand). This eliminates
-      cross-process staleness between the HTTP and MCP servers that each
-      create their own ``KeyStore`` pointing to the same file.
+      always re-read from disk (disk-read-on-demand), so a change written by
+      another process or ``KeyStore`` instance on the same file is seen on the
+      next call. The REST server creates one instance (``app.state.key_store``)
+      and shares it with the mounted MCP app.
     - An internal ``asyncio.Lock`` serialises every read-modify-write cycle
       (``create``; extended in later tasks). ``active_keys()`` / ``load()``
       do NOT need the lock (each call gets a fresh snapshot from disk).
+    - ``rotation_lock`` serialises the whole default-key rotation
+      (:func:`rotate_and_persist_default_key`) across every transport sharing this
+      instance (REST and the mounted MCP app share ``app.state.key_store``). It is
+      separate from ``_lock`` because the rotation's ``keys.json`` step takes ``_lock``.
+      Both locks bind to an event loop only when first contended (Python >= 3.10).
+    - Mutations fail closed: if ``keys.json`` exists but cannot be read or parsed they
+      raise ``KeyStoreUnreadableError`` instead of overwriting it with only new records.
     - ``_logged_expired_ids`` suppresses repeated INFO logs for the same
       expired key across calls within one process lifetime.
     """
@@ -79,6 +155,7 @@ class KeyStore:
     def __init__(self, path: Path) -> None:
         self._path = path
         self._lock = asyncio.Lock()
+        self.rotation_lock = asyncio.Lock()
         self._logged_expired_ids: set[str] = set()
 
     # ------------------------------------------------------------------
@@ -90,43 +167,51 @@ class KeyStore:
 
         Returns an empty list (and logs ERROR) if the file is missing,
         unreadable, non-array JSON, or contains any invalid record —
-        implementing the all-or-nothing corruption policy (S17).
+        implementing the all-or-nothing corruption policy (S17) for reads.
+        Mutations use :meth:`_load_for_update`, which fails closed instead.
+        """
+        try:
+            return self._load_for_update()
+        except KeyStoreUnreadableError:
+            return []
+
+    def _load_for_update(self) -> list[KeyRecord]:
+        """Return all records; raise ``KeyStoreUnreadableError`` (logged ERROR) if the file exists but is unusable.
+
+        A missing file is an empty store.
         """
         try:
             raw = self._path.read_bytes()
         except FileNotFoundError:
             return []
         except OSError as exc:
-            logger.error("keys.json read error: %s", exc)
-            return []
+            raise _unreadable("keys.json read error: %s", exc) from exc
 
         # Tighten permissions on files that may have been created with a
         # permissive umask (e.g. by a different tool or manual creation).
         _chmod_600(self._path)
 
         if not raw:
-            logger.error("keys.json is empty — treating as corrupted key store")
-            return []
+            raise _unreadable("keys.json is empty — treating as corrupted key store")
 
         try:
             data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            logger.error("keys.json is not valid JSON — treating as corrupted key store: %s", exc)
-            return []
+        # ValueError covers JSONDecodeError, UnicodeDecodeError and an over-long integer literal;
+        # RecursionError covers excessive nesting.
+        except (ValueError, RecursionError) as exc:
+            raise _unreadable("keys.json is not valid JSON — treating as corrupted key store: %s", exc) from exc
 
         if not isinstance(data, list):
-            logger.error(
-                "keys.json does not contain a JSON array — treating as corrupted key store"
-            )
-            return []
+            raise _unreadable("keys.json does not contain a JSON array — treating as corrupted key store")
 
         try:
             return [KeyRecord.model_validate(item) for item in data]
         except Exception as exc:
-            logger.error(
-                "keys.json contains invalid records — treating as corrupted key store: %s", exc
-            )
-            return []
+            raise _unreadable("keys.json contains invalid records — treating as corrupted key store: %s", exc) from exc
+
+    async def verify_readable(self) -> None:
+        """Raise ``KeyStoreUnreadableError`` if ``keys.json`` exists but cannot be read or parsed."""
+        self._load_for_update()
 
     async def active_keys(self) -> list[KeyRecord]:
         """Return all non-expired active records.
@@ -179,7 +264,7 @@ class KeyStore:
             raise KeyError(f"Key not found: {key_id!r}")
 
         async with self._lock:
-            records = await self.load()
+            records = self._load_for_update()
             found = False
             for record in records:
                 if record.id == key_id:
@@ -229,84 +314,46 @@ class KeyStore:
         )
 
         async with self._lock:
-            records = await self.load()
+            records = self._load_for_update()
             records.append(record)
             self._write(records)
 
         return {"id": key_id, "token": raw_token, "created_at": created_at}
 
-    async def rotate_default_key(
+    async def record_rotation(
         self,
         current_token: str,
         grace_seconds: int,
-        new_token: str | None = None,
+        new_token: str,
     ) -> dict[str, str | KeyRecord | None]:
-        """Rotate the default API key.
+        """Record an already-validated default-key rotation in ``keys.json``.
 
-        Generates a new managed ``KeyRecord`` for the default key and, if
-        ``current_token`` matches an existing managed key record in
-        ``keys.json``, marks that old record revoked (``grace_seconds=0``) or
-        grace-expired (``grace_seconds > 0``).
+        Adds a managed ``KeyRecord`` for *new_token* and, if *current_token* matches an
+        active managed record, marks it revoked (``grace_seconds == 0``) or sets its
+        ``expires_at = now + grace_seconds`` (it stays ``status="active"`` during the grace
+        window). An unmanaged current key (e.g. an auto-generated key living only in
+        ``.search.env``) gets a synthesized grace record from its hash when
+        ``grace_seconds > 0``; with ``grace_seconds == 0`` only the new record is created.
 
-        If no matching record exists (the current default was never in
-        ``keys.json`` — e.g. an auto-generated key living only in
-        ``.search.env``), a grace record for the old key is synthesized from its
-        hash when ``grace_seconds > 0`` so it stays accepted during the grace
-        window; when ``grace_seconds == 0`` only the new record is created.
-
-        **File I/O responsibility:** this method only mutates ``keys.json``.
-        Writing ``.search.env`` with the new raw token is the caller's
-        responsibility (i.e. the ``POST /keys/rotate`` route handler in BE-8).
-
-        **Safe write order (DA hardening):** callers that need crash-safe
-        atomicity should generate the new token themselves, write it to
-        ``.search.env`` first, then call this method with ``new_token=`` so
-        that if ``.search.env`` write fails, ``keys.json`` is never mutated.
-        Pass ``new_token`` only when the caller has already written the token
-        to disk (or a safe temporary location).
-
-        Args:
-            current_token: The raw bearer token of the current default key.
-                The caller (route handler) reads this from
-                ``APIKeyMiddleware._api_key`` or re-reads ``.search.env``.
-            grace_seconds: Seconds the old key remains valid after rotation.
-                Must be >= 0. If 0, the old key is immediately revoked.
-                If > 0, the old key gets ``expires_at = now + grace_seconds``
-                (and remains ``status="active"`` so it is accepted during the
-                grace window). Negative values raise ``ValueError``.
-            new_token: Optional pre-generated raw bearer token for the new key.
-                When provided, this token is used (and its hash stored) rather
-                than generating a fresh one internally.  The caller is
-                responsible for having written this token to ``.search.env``
-                before calling this method.  When ``None`` (the default), a
-                new 64-hex-char token is generated internally.
+        This only mutates ``keys.json``. Its caller, :func:`rotate_and_persist_default_key`,
+        validates the inputs (:func:`validate_rotation_grace`, :func:`validate_current_token`)
+        and writes *new_token* to ``.search.env`` first, so a failed key-file write never
+        mutates ``keys.json``.
 
         Returns:
-            dict with keys:
-            - ``new_key_id`` (str): UUID of the newly created key.
-            - ``new_token`` (str): Raw bearer token for the new key (printed
-              once; never stored on disk).
-            - ``old_record`` (KeyRecord | None): The old key record **after**
-              mutation (status/expires_at already updated), the freshly
-              synthesized grace record when the old key was unmanaged and
-              ``grace_seconds > 0``, or ``None`` when no matching managed record
-              was found and ``grace_seconds == 0``.
+            dict with ``new_key_id`` (str), ``new_token`` (str, the raw token; never stored)
+            and ``old_record`` (KeyRecord | None): the old record **after** mutation, the
+            synthesized grace record, or ``None`` when no active managed record matched and
+            ``grace_seconds == 0``.
 
         Raises:
-            ValueError: If ``grace_seconds`` is negative.
+            KeyStoreUnreadableError: ``keys.json`` exists but cannot be read or parsed.
         """
-        if grace_seconds < 0:
-            raise ValueError(f"grace_seconds must be >= 0, got {grace_seconds!r}")
-        if not current_token or not current_token.strip():
-            raise ValueError("current_token must not be empty")
-        if new_token is not None and (not new_token or not new_token.strip()):
-            raise ValueError("new_token must not be empty when provided")
-
         current_hash = hashlib.sha256(current_token.encode()).hexdigest()
 
         async with self._lock:
             now = datetime.now(UTC)
-            records = await self.load()
+            records = self._load_for_update()
 
             # Locate the active old managed key by token_hash.
             # Filtering status=="active" makes double-rotation safe: a retry
@@ -351,10 +398,8 @@ class KeyStore:
                 )
                 records.append(old_record)
 
-            # Create the new key record, using the caller-supplied token if provided.
             new_key_id = str(uuid.uuid4())
-            new_raw_token = new_token if new_token is not None else secrets.token_hex(32)
-            new_token_hash = hashlib.sha256(new_raw_token.encode()).hexdigest()
+            new_token_hash = hashlib.sha256(new_token.encode()).hexdigest()
             new_record = KeyRecord(
                 id=new_key_id,
                 token_hash=new_token_hash,
@@ -369,7 +414,7 @@ class KeyStore:
 
         return {
             "new_key_id": new_key_id,
-            "new_token": new_raw_token,
+            "new_token": new_token,
             # model_copy() returns a snapshot — prevents post-write mutation
             # by the caller from diverging from the on-disk state.
             "old_record": old_record.model_copy() if old_record is not None else None,
@@ -393,20 +438,197 @@ class KeyStore:
         concurrent ``create()`` / ``revoke()`` calls.
         """
         async with self._lock:
-            existing = await self.load()
+            existing = self._load_for_update()
             managed = [r for r in existing if r.id is not None]
             merged = managed + synthetic
             self._write(merged)
 
     def _write(self, records: list[KeyRecord]) -> None:
-        """Atomically write records to ``keys.json`` with mode 0o600."""
+        """Atomically write records to ``keys.json`` with mode 0o600.
+
+        Runs on the calling thread (the event loop, for every async mutation). A failed
+        directory fsync after the rename means the records were written, so it is logged
+        and the mutation succeeds rather than reporting a write that did happen as failed.
+        """
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(
             [r.model_dump(mode="json") for r in records],
         ).encode()
-        atomic_write_bytes(self._path, payload, mode=0o600)
+        try:
+            atomic_write_bytes(self._path, payload, mode=0o600)
+        except DurabilityUnconfirmedError:
+            logger.warning("keys.json written but its rename durability is unconfirmed", exc_info=True)
+
+
+def _unreadable(message: str, *args: object) -> KeyStoreUnreadableError:
+    """Log *message* at ERROR and return the ``KeyStoreUnreadableError`` to raise."""
+    logger.error(message, *args)
+    return KeyStoreUnreadableError(KEY_STORE_UNREADABLE_DETAIL)
+
 
 ENV_VAR: str = "ARCHON_SEARCH_API_KEY"
+
+
+def resolve_rotation_key_file() -> Path:
+    """Return ``get_key_file()`` for a rotation; an unusable ``ARCHON_SEARCH_KEY_FILE`` is a write failure.
+
+    Raises:
+        KeyFileWriteError: ``get_key_file()`` rejected the env value (logged with its text).
+    """
+    try:
+        return get_key_file()
+    except ValueError as exc:
+        logger.exception("rotate: cannot resolve the key file — rotation aborted; keys.json unchanged")
+        raise KeyFileWriteError(ROTATE_WRITE_FAILED_DETAIL) from exc
+
+
+async def rotate_and_persist_default_key(
+    key_store: KeyStore,
+    *,
+    key_file: Path,
+    read_current_token: Callable[[], Awaitable[str]],
+    grace_seconds: int,
+    publish_new_token: Callable[[str], None] | None = None,
+) -> dict[str, str | KeyRecord | None]:
+    """Rotate the default key: write the new token to *key_file*, then record it in ``keys.json``.
+
+    The rotate use case shared by REST ``POST /keys/rotate`` and MCP ``rotate_key``; each
+    transport supplies how it reads the current default key (and, optionally, publishes the
+    new one) and maps the exceptions below to its error envelope. Crash-safe write order: if
+    the *key_file* write fails, ``keys.json`` is never mutated and the old key stays active.
+
+    The whole sequence — read current key, write *key_file*, record in ``keys.json``,
+    publish — runs under ``key_store.rotation_lock``. That serialises rotations only among
+    callers in this process that share the same *key_store* object (REST and the mounted MCP
+    app share ``app.state.key_store``); it does not span processes. It also does not by itself
+    make two transports agree on the current key: each rotation retires the key the previous
+    one issued only when every transport reads and publishes the same current key (both use
+    ``app.state.api_key`` when MCP is mounted on the REST server).
+
+    Once the *key_file* write starts, the rest of the sequence runs to completion even if the
+    caller is cancelled: it runs in a shielded task, the lock is held until that task ends,
+    the outcome is logged (``rotate: cancelled mid-rotation, ...``), and only then does the
+    ``CancelledError`` propagate. So cancelling the caller alone never leaves *key_file* ahead of
+    ``keys.json``; only a rotation that itself fails (or whose own task is cancelled) can.
+
+    *grace_seconds* is validated before the current key is read; the current key once,
+    after it is read. *publish_new_token* runs inside the lock, only after both writes.
+
+    Returns ``KeyStore.record_rotation``'s dict (``new_key_id``, ``new_token``, ``old_record``).
+
+    Raises:
+        KeyRotationInputError: *grace_seconds* is out of range, raised before the current key
+            is read and before anything is written; its text is curated.
+        BlankCurrentKeyError: the current key is blank (a server fault), raised before
+            anything is written; its text is curated.
+        KeyStoreUnreadableError: ``keys.json`` exists but cannot be read; no rotation was written
+            (an MCP *read_current_token* without ``api_key_state`` may already have created
+            *key_file* via ``load_or_generate_key``).
+        KeyFileWriteError: *key_file* (or its directory) could not be written.
+        RotationIncompleteError: *key_file* holds the new key but ``keys.json`` was not updated.
+    """
+    try:
+        validate_rotation_grace(grace_seconds)
+    except KeyRotationInputError as exc:
+        # WARNING, whatever the source: an MCP caller's argument (validation_error), or on REST an
+        # out-of-range ``auth.rotate_grace_seconds`` config (the body is schema-bounded), which
+        # routes_keys answers 500. A blank current key below is always a server fault: ERROR.
+        logger.warning("rotate: rejected before writing .search.env: %s", exc)
+        raise
+
+    async with key_store.rotation_lock:
+        current_token = await read_current_token()
+        try:
+            validate_current_token(current_token)
+        except BlankCurrentKeyError as exc:
+            logger.error("rotate: rejected before writing .search.env: %s", exc)
+            raise
+        await key_store.verify_readable()
+
+        commit = asyncio.create_task(
+            _commit_rotation(key_store, key_file, current_token, grace_seconds, publish_new_token)
+        )
+        try:
+            return await asyncio.shield(commit)
+        except asyncio.CancelledError:
+            await _finish_cancelled_rotation(commit, key_file)
+            raise
+
+
+async def _commit_rotation(
+    key_store: KeyStore,
+    key_file: Path,
+    current_token: str,
+    grace_seconds: int,
+    publish_new_token: Callable[[str], None] | None,
+) -> dict[str, str | KeyRecord | None]:
+    """Write *key_file*, record the rotation in ``keys.json``, then publish; the post-read half of the use case."""
+    new_token = secrets.token_hex(32)  # 64 hex chars
+    await _write_key_file(key_file, new_token)
+
+    try:
+        result = await key_store.record_rotation(
+            current_token=current_token,
+            grace_seconds=grace_seconds,
+            new_token=new_token,
+        )
+    except Exception as exc:
+        logger.exception("rotate: keys.json update failed after %s was written", key_file)
+        raise RotationIncompleteError(ROTATE_KEYS_JSON_FAILED_DETAIL) from exc
+
+    # Defensive: record_rotation must echo back the token we passed in.
+    # If this ever diverges, .search.env and keys.json would be out of sync.
+    if result["new_token"] != new_token:
+        logger.error("rotate: keys.json recorded an unexpected token after %s was written — BUG", key_file)
+        raise RotationIncompleteError(ROTATE_KEYS_JSON_FAILED_DETAIL)
+
+    if publish_new_token is not None:
+        publish_new_token(new_token)
+    return result
+
+
+async def _finish_cancelled_rotation(commit: asyncio.Task[dict[str, str | KeyRecord | None]], key_file: Path) -> None:
+    """Wait (ignoring further cancels) for a rotation whose caller was cancelled, then log its outcome.
+
+    The ``.search.env`` write runs in a thread a cancel cannot stop, so abandoning *commit*
+    could leave the new key there with ``keys.json`` never updated. The caller re-raises
+    its ``CancelledError`` after this returns, still holding the rotation lock until then.
+    """
+    while not commit.done():
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait({commit})
+    if commit.cancelled():
+        logger.error(
+            "rotate: cancelled mid-rotation and the rotation task was cancelled too; check %s and keys.json", key_file
+        )
+    elif (failure := commit.exception()) is not None:
+        logger.error("rotate: cancelled mid-rotation, and the rotation failed", exc_info=failure)
+    else:
+        logger.warning(
+            "rotate: cancelled mid-rotation, but it completed: %s holds the new key (new_key_id=%s); "
+            "the caller did not receive its token",
+            key_file,
+            commit.result()["new_key_id"],
+        )
+
+
+async def _write_key_file(key_file: Path, new_token: str) -> None:
+    """Write *new_token* to *key_file* off the event loop; raise ``KeyFileWriteError`` if it did not land.
+
+    asyncio.to_thread keeps this fsync chain (write → fsync → replace → fsync dir) off the
+    event loop; the later ``keys.json`` write (``KeyStore._write``) runs on the loop.
+    """
+    payload = f"{ENV_VAR}={new_token}\n".encode()
+    try:
+        await asyncio.to_thread(key_file.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(atomic_write_bytes, key_file, payload, mode=0o600)
+    except DurabilityUnconfirmedError:
+        # os.replace already published the new key: treat it as written.
+        logger.warning("rotate: %s written but its rename durability is unconfirmed", key_file, exc_info=True)
+    except OSError as exc:
+        logger.exception("rotate: failed to write %s — keys.json NOT modified; rotation aborted", key_file)
+        raise KeyFileWriteError(ROTATE_WRITE_FAILED_DETAIL) from exc
+
 
 _HEX_RE = re.compile(r"^[0-9a-f]+$")
 

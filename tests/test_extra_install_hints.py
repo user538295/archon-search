@@ -15,15 +15,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from archon_search.community_builder import _run_leiden_partition_sync
+from archon_search.community_builder import CommunityDependencyError, _run_leiden_partition_sync
 from archon_search.config import HyDEConfig, RAGFusionConfig
-# Module, not names: tests/test_hyde.py reloads archon_search.hyde, rebinding
-# HyDEDependencyError (same reason as rag_fusion below).
-import archon_search.hyde as hyde_mod
-# Module, not names: tests/test_rag_fusion.py reloads archon_search.rag_fusion, which
-# rebinds RAGFusionDependencyError — a name imported here at collection time would then
-# no longer match the class the generator raises when both run on one xdist worker.
-import archon_search.rag_fusion as rag_fusion_mod
+from archon_search.graph_inspector import CollectionGraphView, GraphMLDependencyError, to_graphml
+from archon_search.hyde import HYDE_DEPENDENCY_DETAIL, HyDEDependencyError
+from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
+from tests._internal_error_leak import hyde_generator_without_provider, rag_fusion_generator_without_provider
 
 _INSTALL_METHODS = pytest.mark.parametrize(
     ("prefix_fixture", "command"),
@@ -36,11 +33,24 @@ def test_missing_leiden_names_the_install_command(
     request: pytest.FixtureRequest, prefix_fixture: str, command: str
 ) -> None:
     request.getfixturevalue(prefix_fixture)
-    with patch.dict(sys.modules, {"igraph": None, "leidenalg": None}), pytest.raises(ImportError) as excinfo:
+    with patch.dict(sys.modules, {"igraph": None, "leidenalg": None}), \
+            pytest.raises(CommunityDependencyError) as excinfo:
         _run_leiden_partition_sync([], [], resolution=1.0)
     assert str(excinfo.value) == (
         f"leidenalg is required for community detection. Install it with: {command} 'archon-search[graph]'"
     )
+
+
+@_INSTALL_METHODS
+def test_missing_networkx_names_the_install_command(
+    request: pytest.FixtureRequest, prefix_fixture: str, command: str
+) -> None:
+    request.getfixturevalue(prefix_fixture)
+    view = CollectionGraphView(nodes=[], edges=[], node_count=0, edge_count=0, truncated=False)
+    with patch.dict(sys.modules, {"networkx": None}), pytest.raises(GraphMLDependencyError) as excinfo:
+        to_graphml(view)
+    assert str(excinfo.value) == f"GraphML export requires networkx. Install it with: {command} 'archon-search[graph]'"
+    assert isinstance(excinfo.value.__cause__, ImportError)
 
 
 @_INSTALL_METHODS
@@ -57,23 +67,17 @@ def test_missing_fasttext_names_the_install_command(
     assert str(excinfo.value) == f"fasttext-wheel not installed; run: {command} 'archon-search[multilingual]'"
 
 
-# Constructing a generator without the provider module is how a missing
-# provider extra reaches the generators (hyde.py / rag_fusion.py __init__).
-_NO_ANTHROPIC_PROVIDER = {"archon_search.providers.anthropic_provider": None}
-
-
 @_INSTALL_METHODS
 async def test_missing_hyde_provider_names_the_install_command(
     request: pytest.FixtureRequest, prefix_fixture: str, command: str
 ) -> None:
     request.getfixturevalue(prefix_fixture)
-    with patch.dict(sys.modules, _NO_ANTHROPIC_PROVIDER):
-        generator = hyde_mod.HyDEGenerator(HyDEConfig(enabled=True))
-    with pytest.raises(hyde_mod.HyDEDependencyError) as excinfo:
+    generator = hyde_generator_without_provider(HyDEConfig(enabled=True))
+    with pytest.raises(HyDEDependencyError) as excinfo:
         await generator.generate("query", embedder=MagicMock())
     assert str(excinfo.value) == f"Install archon-search[hyde] to use HyDE ({command} 'archon-search[hyde]')"
     # The wire-safe half is the message minus the install command (C2-T-1).
-    assert str(excinfo.value).startswith(f"{hyde_mod.HYDE_DEPENDENCY_DETAIL} (")
+    assert str(excinfo.value).startswith(f"{HYDE_DEPENDENCY_DETAIL} (")
 
 
 @_INSTALL_METHODS
@@ -81,12 +85,11 @@ async def test_missing_rag_fusion_provider_names_the_install_command(
     request: pytest.FixtureRequest, prefix_fixture: str, command: str
 ) -> None:
     request.getfixturevalue(prefix_fixture)
-    with patch.dict(sys.modules, _NO_ANTHROPIC_PROVIDER):
-        generator = rag_fusion_mod.RAGFusionGenerator(RAGFusionConfig(enabled=True))
-    with pytest.raises(rag_fusion_mod.RAGFusionDependencyError) as excinfo:
+    generator = rag_fusion_generator_without_provider(RAGFusionConfig(enabled=True))
+    with pytest.raises(RAGFusionDependencyError) as excinfo:
         await generator.generate_variants("query")
     assert str(excinfo.value) == (
         f"Install archon-search[rag_fusion] to use RAG Fusion ({command} 'archon-search[rag_fusion]')"
     )
     # The wire-safe half is the message minus the install command (G2).
-    assert str(excinfo.value).startswith(f"{rag_fusion_mod.RAG_FUSION_DEPENDENCY_DETAIL} (")
+    assert str(excinfo.value).startswith(f"{RAG_FUSION_DEPENDENCY_DETAIL} (")

@@ -19,6 +19,7 @@ from archon_search.constants import (
     DEFAULT_FAST_MODEL,
     DEFAULT_ROUTING_DESCRIPTION_WEIGHT,
     LOG_FILE_DISABLED_WARNING,
+    MAX_ROTATE_GRACE_SECONDS,
     _validate_namespace,
 )
 from archon_search.paths import DEFAULT_DATA_DIR_NAME, get_data_dir
@@ -980,6 +981,8 @@ def _apply_toml(config: SearchConfig, doc: tomlkit.TOMLDocument) -> None:
         grace = _coerce_int(auth_cfg["rotate_grace_seconds"], "[auth].rotate_grace_seconds")
         if grace < 0:
             raise ConfigError(f"[auth].rotate_grace_seconds must be >= 0, got {grace}")
+        if grace > MAX_ROTATE_GRACE_SECONDS:
+            raise ConfigError(f"[auth].rotate_grace_seconds must be <= {MAX_ROTATE_GRACE_SECONDS}, got {grace}")
         auth.rotate_grace_seconds = grace
     config.auth = auth
 

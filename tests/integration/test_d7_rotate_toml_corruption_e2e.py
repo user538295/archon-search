@@ -228,7 +228,7 @@ def test_e2e_rotate_grace_first_rotation_of_default_key(tmp_path, monkeypatch):
     """S133: one ``rotate --grace`` of the initial auto-generated key honors grace.
 
     The initial default key lives only in ``.search.env`` (never a managed record
-    in ``keys.json``), so ``rotate_default_key`` found ``old_record=None`` and
+    in ``keys.json``), so the rotation found ``old_record=None`` and
     created NO grace record — the old key was rejected (401) immediately, ignoring
     grace.  A grace record for the old key must be synthesized so it stays accepted
     during the window; only its SHA-256 hash may be persisted, never the raw token.

@@ -253,7 +253,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest) -> Res
             )
             return _openai_error(504, "Request timeout.", "server_error")
         except MetadataLookupError as exc:
-            logger.error("chat_completions: metadata lookup failed during search: %s", exc)
+            logger.error("chat_completions: metadata lookup failed during search: %s", exc, exc_info=True)
             # Intentionally uses OpenAI error envelope — not ErrorDetail/metadata_store_error (different contract).
             return _openai_error(503, "Service temporarily unavailable.", "server_error")
 

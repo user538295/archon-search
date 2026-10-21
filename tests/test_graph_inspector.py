@@ -11,6 +11,7 @@ from archon_search.graph_inspector import (
     CrossCollectionGraphView,
     CollectionGraphView,
     GraphEdgeInspection,
+    GraphMLDependencyError,
     GraphNodeInspection,
     _MENTIONS_SCAN_CEILING,
     _truncate_graph,
@@ -923,7 +924,7 @@ def test_to_graphml_includes_truncated_attribute():
 
 
 def test_graphml_networkx_import_error_yields_clear_message():
-    """to_graphml() raises ImportError with actionable message when networkx missing."""
+    """to_graphml() raises GraphMLDependencyError with actionable message when networkx missing."""
     import sys
     from unittest.mock import patch
 
@@ -935,7 +936,7 @@ def test_graphml_networkx_import_error_yields_clear_message():
 
     # Mock the networkx import to fail
     with patch.dict(sys.modules, {"networkx": None}):
-        with pytest.raises(ImportError) as exc_info:
+        with pytest.raises(GraphMLDependencyError) as exc_info:
             to_graphml(view)
         assert "GraphML export requires networkx" in str(exc_info.value)
         assert "archon-search[graph]" in str(exc_info.value)

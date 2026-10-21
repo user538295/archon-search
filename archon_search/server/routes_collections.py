@@ -37,6 +37,15 @@ router = APIRouter(prefix="/collections")
 CONFIG_PERSIST_FAILED_DETAIL = "could not save the collection change to the config file; see the server log for details"
 CONFIG_PERSIST_FAILED_CODE = "config_persist_failed"
 
+# Job ``error`` text for background-task failures: the caught exception's message
+# may embed internals (LanceDB paths), so it goes to the server log only.
+MIGRATION_FAILED_DETAIL = "migration failed; see the server log for details"
+METADATA_REINDEX_FAILED_DETAIL = "metadata reindex failed; see the server log for details"
+
+
+class NoPendingRewriteMigrationError(RuntimeError):
+    """No pending REWRITE migration for a resumed MigrationJob (codebase-built, safe to surface)."""
+
 
 # ---------------------------------------------------------------------------
 # Request / response helpers
@@ -325,9 +334,10 @@ async def add_collection(body: AddCollectionRequest, request: Request) -> JobRes
         if isinstance(lock_result, asyncio.Lock) and lock_result.locked():
             lock_result.release()
         return JSONResponse({"detail": "internal error"}, status_code=500)
+    # Ingest the path registered above; the raw one is kept for the job's not-found text.
     ingest_body = IngestRequest(
-        collection=collection_name, path=resolved, ingested_by=ingested_by
-    )
+        collection=collection_name, path=body.path, ingested_by=ingested_by
+    ).with_resolved_path(resolved)
 
     pipeline = getattr(request.app.state, "pipeline", None)
     embedder_cache = getattr(request.app.state, "embedder_cache", None)
@@ -912,7 +922,8 @@ async def _migration_task(
          (scheduler resume path).
       2. call ``apply_rewrite_migration`` with ``progress_cb``
       3. Transition to DONE with ``result.migrated_chunks`` on success.
-      4. Transition to FAILED with error message on any exception.
+      4. Transition to FAILED on any exception: the ``NoPendingRewriteMigrationError``
+         message, else ``MIGRATION_FAILED_DETAIL``.
 
     When ``spec`` is ``None`` (scheduler resume path), the pending migrations
     list is fetched from the store and the first REWRITE spec is used.
@@ -925,12 +936,18 @@ async def _migration_task(
         except (KeyError, OSError):
             logger.warning("_migration_task: could not update progress for job %s", job_id)
 
+    def _mark_failed(error: str) -> None:
+        try:
+            job_store.update(job_id, status=JobStatus.FAILED, error=error)
+        except (KeyError, OSError):
+            logger.error("_migration_task: could not persist FAILED status for job %s", job_id)
+
     try:
         if spec is None:
             pending = await search_store.pending_migrations(job.collection, job.namespace)  # type: ignore[attr-defined]
             rewrite_pending = [s for s in pending if s.kind == MigrationKind.REWRITE]
             if not rewrite_pending:
-                raise RuntimeError(
+                raise NoPendingRewriteMigrationError(
                     f"MigrationJob {job_id}: no pending REWRITE migration found for "
                     f"collection {job.collection!r}"
                 )
@@ -948,12 +965,13 @@ async def _migration_task(
             result={"migrated_chunks": migrated},
             migrations_applied=[spec.name],
         )
-    except Exception as exc:  # noqa: BLE001
+    except NoPendingRewriteMigrationError as exc:
+        # Curated, expected outcome: no traceback.
+        logger.warning("_migration_task: job %s failed: %s", job_id, exc)
+        _mark_failed(str(exc))
+    except Exception:  # noqa: BLE001
         logger.exception("_migration_task: job %s failed", job_id)
-        try:
-            job_store.update(job_id, status=JobStatus.FAILED, error=str(exc))
-        except (KeyError, OSError):
-            logger.error("_migration_task: could not persist FAILED status for job %s", job_id)
+        _mark_failed(MIGRATION_FAILED_DETAIL)
 
 
 @router.get("/{name}/migrations/pending", response_model=MigrationPendingResponse, responses=_ERROR_401_404)
@@ -1193,7 +1211,7 @@ async def _reindex_metadata_task(
     Lifecycle (caller sets RUNNING -> this task drives to terminal):
       1. Call ``search_store.reindex_metadata(collection, dry_run=..., normalize_timestamps=...)``.
       2. Transition to DONE with all 5 ReindexResult fields on success.
-      3. Transition to FAILED with the error string on any exception.
+      3. Transition to FAILED with ``METADATA_REINDEX_FAILED_DETAIL`` on any exception.
       4. In finally: clear ``CollectionMeta.metadata_reindex_job_id``.
 
     Note: does NOT pre-acquire the per-collection lock — ``reindex_metadata``
@@ -1218,10 +1236,10 @@ async def _reindex_metadata_task(
                 "warnings": result.warnings,
             },
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("_reindex_metadata_task: job %s failed", job_id)
         try:
-            job_store.update(job_id, status=JobStatus.FAILED, error=str(exc))
+            job_store.update(job_id, status=JobStatus.FAILED, error=METADATA_REINDEX_FAILED_DETAIL)
         except (KeyError, OSError):
             logger.error(
                 "_reindex_metadata_task: could not persist FAILED status for job %s", job_id

@@ -26,8 +26,8 @@ import pytest
 from archon_search.config import GraphConfig, SearchConfig
 from archon_search.model_validation import (
     _EXTRACTION_MODEL_PROBE_ECONOMIC_CEILING_SECONDS,
-    _EXTRACTION_MODEL_PROBE_ERROR_WARNING,
-    _EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING,
+    EXTRACTION_MODEL_PROBE_ERROR_WARNING,
+    EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING,
     ModelValidationResult,
     _probe_extraction_model,
     failed_result,
@@ -132,7 +132,7 @@ async def test_probe_times_out_on_reasoning_model_within_budget(
     # that this test stays fast.
     cfg.graph.extraction_timeout_seconds = _FAST_TEST_TIMEOUT_SECONDS
     warnings = await _probe_extraction_model(cfg)
-    assert warnings == [_EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING]
+    assert warnings == [EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING]
 
 
 async def test_probe_read_timeout_produces_reasoning_model_warning(
@@ -145,7 +145,7 @@ async def test_probe_read_timeout_produces_reasoning_model_warning(
     fake_client.summarize_community.side_effect = httpx.ReadTimeout("read timed out")
     _patch_factory(monkeypatch, fake_client)
     warnings = await _probe_extraction_model(cfg)
-    assert warnings == [_EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING]
+    assert warnings == [EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING]
 
 
 async def test_probe_connect_timeout_produces_generic_error_warning_not_reasoning_model(
@@ -159,7 +159,7 @@ async def test_probe_connect_timeout_produces_generic_error_warning_not_reasonin
     fake_client.summarize_community.side_effect = httpx.ConnectTimeout("connect timed out")
     _patch_factory(monkeypatch, fake_client)
     warnings = await _probe_extraction_model(cfg)
-    assert warnings == [_EXTRACTION_MODEL_PROBE_ERROR_WARNING]
+    assert warnings == [EXTRACTION_MODEL_PROBE_ERROR_WARNING]
 
 
 async def test_probe_no_warning_when_model_responds_within_budget(
@@ -247,7 +247,7 @@ async def test_probe_operator_raised_timeout_does_not_defeat_economic_ceiling(
     _patch_factory(monkeypatch, fake_client)
 
     warnings = await _probe_extraction_model(cfg)
-    assert warnings == [_EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING]
+    assert warnings == [EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING]
 
 
 async def test_probe_warns_distinctly_on_transport_failure_never_raises(
@@ -264,8 +264,8 @@ async def test_probe_warns_distinctly_on_transport_failure_never_raises(
     fake_client.summarize_community.side_effect = ConnectionError("connection refused")
     _patch_factory(monkeypatch, fake_client)
     warnings = await _probe_extraction_model(cfg)
-    assert warnings == [_EXTRACTION_MODEL_PROBE_ERROR_WARNING]
-    assert warnings != [_EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING]
+    assert warnings == [EXTRACTION_MODEL_PROBE_ERROR_WARNING]
+    assert warnings != [EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING]
 
 
 async def test_probe_warning_does_not_leak_exception_internals(
@@ -280,7 +280,7 @@ async def test_probe_warning_does_not_leak_exception_internals(
     )
     _patch_factory(monkeypatch, fake_client)
     warnings = await _probe_extraction_model(cfg)
-    assert warnings == [_EXTRACTION_MODEL_PROBE_ERROR_WARNING]
+    assert warnings == [EXTRACTION_MODEL_PROBE_ERROR_WARNING]
     assert "secret-internal-detail" not in warnings[0]
     assert "sk-verysecretapikey123" not in warnings[0]
 
@@ -379,7 +379,7 @@ async def test_probe_survives_factory_build_raising(monkeypatch: pytest.MonkeyPa
         "archon_search.enrichment.factory.EnrichmentClientFactory.build", _raising_build
     )
     warnings = await _probe_extraction_model(cfg)
-    assert warnings == [_EXTRACTION_MODEL_PROBE_ERROR_WARNING]
+    assert warnings == [EXTRACTION_MODEL_PROBE_ERROR_WARNING]
     assert "secret-internal-detail" not in warnings[0]
 
 
@@ -399,7 +399,7 @@ async def test_validate_models_async_survives_factory_build_raising(
     )
     result = await validate_models_async(cfg, timeout_seconds=5, embedder_is_warm=True)
     assert isinstance(result, ModelValidationResult)
-    assert _EXTRACTION_MODEL_PROBE_ERROR_WARNING in result.provider_warnings
+    assert EXTRACTION_MODEL_PROBE_ERROR_WARNING in result.provider_warnings
     assert result.embedder_ok is True  # embedder_is_warm=True — validation still ran normally
 
 
@@ -421,7 +421,7 @@ async def test_validate_models_async_surfaces_extraction_probe_warning(
 
     result = await validate_models_async(cfg, timeout_seconds=5, embedder_is_warm=True)
     assert isinstance(result, ModelValidationResult)
-    assert _EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING in result.provider_warnings
+    assert EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING in result.provider_warnings
 
 
 async def test_failed_result_skips_extraction_probe_rather_than_reprobing_blind(
@@ -440,6 +440,6 @@ async def test_failed_result_skips_extraction_probe_rather_than_reprobing_blind(
     result = await failed_result("model validation task crashed", cfg)
 
     fake_client.summarize_community.assert_not_called()
-    assert _EXTRACTION_MODEL_PROBE_ERROR_WARNING not in result.provider_warnings
-    assert _EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING not in result.provider_warnings
+    assert EXTRACTION_MODEL_PROBE_ERROR_WARNING not in result.provider_warnings
+    assert EXTRACTION_MODEL_PROBE_TIMEOUT_WARNING not in result.provider_warnings
     assert "model validation task crashed" in result.provider_warnings

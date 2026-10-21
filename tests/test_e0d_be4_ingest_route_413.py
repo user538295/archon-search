@@ -15,9 +15,12 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from archon_search._types import FILE_TOO_LARGE_CODE
 from archon_search.config import SearchConfig
 from archon_search.jobs.store import JobStore
 from archon_search.server.app import create_app
+from archon_search.server.routes_jobs import JOB_STORE_WRITE_FAILED_DETAIL
+from archon_search.server.schemas import CodedErrorDetail, ErrorDetail
 
 TEST_KEY = os.environ.get("ARCHON_SEARCH_API_KEY", "0" * 64)
 AUTH = {"Authorization": f"Bearer {TEST_KEY}"}
@@ -76,7 +79,50 @@ def test_single_file_413_body_carries_file_too_large_code(tmp_path: Path) -> Non
     assert response.status_code == 413
     detail = response.json()["detail"]
     assert isinstance(detail, dict), f"413 detail must be a structured object, got {detail!r}"
-    assert detail["code"] == "file_too_large"
+    assert detail["code"] == FILE_TOO_LARGE_CODE
+
+
+def test_single_file_413_body_matches_the_openapi_declared_schema(tmp_path: Path) -> None:
+    """``GET /openapi.json`` is the authoritative contract: the ``413`` it declares must be
+    the ``{"detail": {"code", "message"}}`` body the route really sends, not ``ErrorDetail``."""
+    oversized = tmp_path / "big.pdf"
+    oversized.write_bytes(b"x")  # real file so is_file() passes
+    client, _ = _make_client(tmp_path, max_file_mb=1)
+
+    with patch("os.path.getsize", return_value=2 * ONE_MB):
+        response = client.post("/ingest", json={"collection": "docs", "path": str(oversized)})
+    declared = client.get("/openapi.json").json()["paths"]["/ingest"]["post"]["responses"]["413"]
+
+    assert response.status_code == 413
+    assert declared["content"]["application/json"]["schema"]["$ref"].endswith(f"/{CodedErrorDetail.__name__}")
+    assert CodedErrorDetail.model_validate(response.json()).detail.code == FILE_TOO_LARGE_CODE
+
+
+def test_inline_document_413_body_matches_the_openapi_declared_schema(tmp_path: Path) -> None:
+    """S293's inline-``documents`` cap answers the same ``CodedErrorDetail`` ``413`` as the
+    single-file check, and the declared ``413`` description names both."""
+    client, _ = _make_client(tmp_path, max_file_mb=1)
+    document = {"source_path": str(tmp_path / "big.md"), "text": "x" * (ONE_MB + 1)}
+
+    response = client.post("/ingest", json={"collection": "docs", "documents": [document]})
+    declared = client.get("/openapi.json").json()["paths"]["/ingest"]["post"]["responses"]["413"]
+
+    assert response.status_code == 413
+    assert CodedErrorDetail.model_validate(response.json()).detail.code == FILE_TOO_LARGE_CODE
+    assert "inline document" in declared["description"], declared["description"]
+
+
+def test_ingest_job_creation_failure_body_matches_the_openapi_declared_schema(tmp_path: Path) -> None:
+    """A job-store write failure answers the declared ``500`` ``ErrorDetail`` body."""
+    client, job_store = _make_client(tmp_path)
+
+    with patch.object(job_store, "create", side_effect=OSError("disk full: /secret/jobs.json")):
+        response = client.post("/ingest", json={"collection": "docs", "path": str(tmp_path)})
+    declared = client.get("/openapi.json").json()["paths"]["/ingest"]["post"]["responses"]["500"]
+
+    assert response.status_code == 500
+    assert declared["content"]["application/json"]["schema"]["$ref"].endswith(f"/{ErrorDetail.__name__}")
+    assert ErrorDetail.model_validate(response.json()).detail == JOB_STORE_WRITE_FAILED_DETAIL
 
 
 def test_ingest_route_413_no_job_in_store(tmp_path: Path) -> None:

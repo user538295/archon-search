@@ -3,9 +3,9 @@
 Exercises the full HTTP layer for:
 - HyDE kill-switch (config.enabled=False) suppresses HyDE even when requested
 - Multi-collection standard fan-out with rag_fusion=True in body but disabled in config
-- HyDE dependency absent returns 4xx with clear message
-- RAG Fusion dependency absent returns 4xx with clear message (single-collection path)
-- RAG Fusion dependency absent returns 4xx with clear message (multi-collection path)
+- HyDE dependency absent returns 4xx with the fixed dependency detail
+- RAG Fusion dependency absent returns 4xx with the fixed dependency detail (single-collection path)
+- RAG Fusion dependency absent returns 4xx with the fixed dependency detail (multi-collection path)
 - BE-1 refactor: HyDE behaviour unchanged after AnthropicQueryExpansionProvider extraction
 
 Run with:
@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from archon_search.hyde import HYDE_DEPENDENCY_DETAIL
+from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL
 from tests.integration.conftest import ingest_file_via_path, make_real_app
 
 pytestmark = pytest.mark.integration
@@ -154,8 +156,7 @@ def test_hyde_dependency_absent_returns_clear_error(
 ) -> None:
     """HyDEGenerator._anthropic_available=False simulates missing dependency.
 
-    POST /search with hyde=True must return 422 with an error message that
-    references the missing dependency. The route handler converts the RuntimeError
+    POST /search with hyde=True must return 422 with the fixed HYDE_DEPENDENCY_DETAIL. The route handler converts the HyDEDependencyError
     from HyDEGenerator.generate() into a 422 JSONResponse.
 
     Note: config.hyde.enabled must be True so RequestHyDE.resolve actually
@@ -181,16 +182,13 @@ def test_hyde_dependency_absent_returns_clear_error(
             json={"collection": col, "query": "dependency test", "hyde": True},
             headers=_auth(api_key),
         )
-        # The route catches RuntimeError from generate() and returns 422.
+        # The route catches HyDEDependencyError from generate() and returns 422.
         assert resp.status_code == 422, (
             f"expected 422 when anthropic is absent for HyDE, "
             f"got {resp.status_code}: {resp.text}"
         )
-        detail = resp.json().get("detail", "")
-        # The error message must reference the missing dependency.
-        assert "archon-search[hyde]" in detail or "hyde" in detail.lower(), (
-            f"expected error message referencing HyDE dependency, got: {detail!r}"
-        )
+        # The fixed detail names the extra; the install command goes to the server log only.
+        assert resp.json() == {"detail": HYDE_DEPENDENCY_DETAIL}
 
 
 # ---------------------------------------------------------------------------
@@ -236,11 +234,8 @@ def test_rag_fusion_dependency_absent_returns_error(
             f"expected 422 when anthropic is absent for RAG Fusion, "
             f"got {resp.status_code}: {resp.text}"
         )
-        detail = resp.json().get("detail", "")
-        # The error message must reference the missing dependency.
-        assert "rag_fusion" in detail.lower() or "archon-search[rag" in detail, (
-            f"expected error message referencing RAG Fusion dependency, got: {detail!r}"
-        )
+        # The fixed detail names the extra; the install command goes to the server log only.
+        assert resp.json() == {"detail": RAG_FUSION_DEPENDENCY_DETAIL}
 
 
 # ---------------------------------------------------------------------------
@@ -295,11 +290,8 @@ def test_rag_fusion_dependency_absent_returns_error_multi_collection(
             f"expected 422 when anthropic is absent for RAG Fusion (multi-collection), "
             f"got {resp.status_code}: {resp.text}"
         )
-        detail = resp.json().get("detail", "")
-        # The error message must reference the missing dependency.
-        assert "rag_fusion" in detail.lower() or "archon-search[rag" in detail, (
-            f"expected error message referencing RAG Fusion dependency, got: {detail!r}"
-        )
+        # The fixed detail names the extra; the install command goes to the server log only.
+        assert resp.json() == {"detail": RAG_FUSION_DEPENDENCY_DETAIL}
 
 
 # ---------------------------------------------------------------------------

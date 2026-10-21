@@ -18,7 +18,8 @@ construct their ONNX model on *first call*, inside ``asyncio.to_thread`` — i.e
 inside that 30 s budget.  Nothing warms the cross-encoder at startup: the
 lifespan only preloads *embedders* (``app.py:341-357``, ``eager_load_embedders``),
 and ``validate_models_async`` probes a throw-away ``TextCrossEncoder`` in its own
-thread (``model_validation.py:207-217``) rather than the pipeline's instance.
+thread (``validate_providers_shared``'s reranker probe via ``_load_cross_encoder``,
+``model_validation.py:458-469``) rather than the pipeline's instance.
 
 So the first ``/search`` after startup spends its entire timeout budget on model
 download/initialisation and 504s — which is exactly what the e2e probe in the

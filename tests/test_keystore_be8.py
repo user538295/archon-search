@@ -5,12 +5,11 @@ Covers:
 - S15: POST /keys/rotate with grace_seconds → old key gets expires_at set
 - S17: Corrupted keys.json → graceful degradation (server starts, default key still works)
 - S23: POST /keys/rotate returns 409 when ARCHON_SEARCH_API_KEY env var is set
-- S24: MCP api_key not hot-reloaded on rotation (documented limitation)
 - KeyRotateRequest/KeyRotateResponse schema tests
 """
 from __future__ import annotations
 
-import os
+import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 
@@ -24,7 +23,14 @@ ENV_VAR = "ARCHON_SEARCH_API_KEY"
 # ---------------------------------------------------------------------------
 
 
-def _make_app(tmp_path, monkeypatch, *, api_key: str | None = None, grace_seconds: int | None = None):
+def _make_app(
+    tmp_path,
+    monkeypatch,
+    *,
+    api_key: str | None = None,
+    grace_seconds: int | None = None,
+    namespaces: dict[str, str] | None = None,
+):
     """Build a minimal FastAPI TestClient using the real create_app."""
     from archon_search.config import SearchConfig, AuthConfig
     from archon_search.jobs.scheduler import JobScheduler
@@ -41,6 +47,8 @@ def _make_app(tmp_path, monkeypatch, *, api_key: str | None = None, grace_second
     cfg.db_path = str(tmp_path / "db")
     if grace_seconds is not None:
         cfg.auth = AuthConfig(rotate_grace_seconds=grace_seconds)
+    if namespaces is not None:
+        cfg.namespaces = namespaces
 
     job_store = JobStore(path=tmp_path / "jobs.json")
     scheduler = JobScheduler(
@@ -140,6 +148,41 @@ def test_post_keys_rotate_negative_grace_returns_422(tmp_path, monkeypatch):
     assert resp.status_code == 422
 
 
+def test_rotate_request_grace_above_max_raises():
+    """KeyRotateRequest grace_seconds > MAX_ROTATE_GRACE_SECONDS is invalid (le constraint)."""
+    from archon_search.constants import MAX_ROTATE_GRACE_SECONDS
+    from archon_search.server.schemas import KeyRotateRequest
+
+    assert KeyRotateRequest(grace_seconds=MAX_ROTATE_GRACE_SECONDS).grace_seconds == MAX_ROTATE_GRACE_SECONDS
+    with pytest.raises(ValidationError):
+        KeyRotateRequest(grace_seconds=MAX_ROTATE_GRACE_SECONDS + 1)
+
+
+def test_post_keys_rotate_grace_above_max_returns_standard_422_without_writing(tmp_path, monkeypatch):
+    """POST /keys/rotate with an overflowing grace_seconds -> standard 422; .search.env untouched."""
+    from fastapi.testclient import TestClient
+
+    from archon_search.constants import MAX_ROTATE_GRACE_SECONDS
+
+    api_key = secrets.token_hex(32)
+    app, _ = _make_app(tmp_path, monkeypatch, api_key=api_key)
+    monkeypatch.delenv(ENV_VAR)
+    key_file = tmp_path / ".search.env"
+    before = key_file.read_text()
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/keys/rotate",
+            json={"grace_seconds": MAX_ROTATE_GRACE_SECONDS + 1},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert isinstance(detail, list) and detail[0]["loc"] == ["body", "grace_seconds"]
+    assert detail[0]["type"] == "less_than_equal"
+    assert key_file.read_text() == before
+
+
 # ---------------------------------------------------------------------------
 # Unit test: S23 — 409 when ARCHON_SEARCH_API_KEY env var is set
 # ---------------------------------------------------------------------------
@@ -178,8 +221,9 @@ def test_post_keys_rotate(tmp_path, monkeypatch):
 
     The rotation test uses a managed key (issued via POST /keys) as the initial
     default, so the revocation guard in APIKeyMiddleware can block it via keys.json.
-    Auto-generated keys (never in keys.json) cannot be blocked by keys.json revocation —
-    that is a documented limitation (S24 class: MCP api_key not hot-reloaded on rotation).
+    Auto-generated keys (never in keys.json) cannot be blocked by keys.json revocation;
+    they stop working because rotation replaces app.state.api_key, which both the REST and
+    the mounted MCP auth middleware read.
     """
     from fastapi.testclient import TestClient
     from archon_search.key_manager import get_key_file, ENV_VAR as _ENV_VAR
@@ -441,6 +485,44 @@ def test_corruption_graceful_degradation(tmp_path, monkeypatch):
         body = resp.json()
         # TOML synthetic keys may be present; default key has no managed entry
         assert isinstance(body["keys"], list)
+
+
+@pytest.mark.integration
+def test_unreadable_keys_json_fails_key_mutations_closed(tmp_path, monkeypatch, caplog):
+    """A corrupt keys.json is never overwritten: startup keeps it, every key mutation answers a fixed 500."""
+    from fastapi.testclient import TestClient
+
+    from archon_search.key_manager import KEY_STORE_UNREADABLE_DETAIL
+
+    corrupt = b'[{"id": "k1", "token_hash": "abc", "namespace": "default", "created_at": "garbled"'
+    (tmp_path / "keys.json").write_bytes(corrupt)
+    toml_token = secrets.token_hex(32)
+    app, api_key = _make_app(tmp_path, monkeypatch, namespaces={toml_token: "toml-ns"})
+    key_file = tmp_path / ".search.env"
+
+    with (
+        caplog.at_level(logging.ERROR),
+        TestClient(app, raise_server_exceptions=False, headers={"Authorization": f"Bearer {api_key}"}) as client,
+    ):
+        assert "keys.json is unreadable — TOML namespace keys not persisted; keys.json left unchanged" in caplog.text
+        toml_auth = client.get("/collections", headers={"Authorization": f"Bearer {toml_token}"})
+        assert toml_auth.status_code == 200, f"TOML token must stay accepted via the namespaces fallback: {toml_auth.text}"
+        key_file_before = key_file.read_bytes()
+        monkeypatch.delenv(ENV_VAR)  # rotation answers 409 while the env var is set
+        responses = {
+            "create": client.post("/keys", json={"namespace": "default"}),
+            "revoke": client.delete("/keys/k1"),
+            "rotate": client.post("/keys/rotate", json={}),
+        }
+        listed = client.get("/keys")
+
+    for name, response in responses.items():
+        assert response.status_code == 500, f"{name}: {response.text}"
+        assert response.json() == {"detail": KEY_STORE_UNREADABLE_DETAIL}, name
+    assert listed.status_code == 200 and listed.json()["keys"] == [], "reads keep degrading to an empty list"
+    assert (tmp_path / "keys.json").read_bytes() == corrupt, "startup and mutations must leave keys.json alone"
+    assert key_file.read_bytes() == key_file_before, "a rotation that fails closed writes nothing"
+    assert app.state.api_key == api_key
 
 
 # ---------------------------------------------------------------------------
@@ -772,7 +854,7 @@ def test_post_keys_rotate_search_env_write_fails_500(tmp_path, monkeypatch):
     from archon_search.jobs.scheduler import JobScheduler
     from archon_search.jobs.store import JobStore
     from archon_search.server.app import create_app
-    import archon_search.server.routes_keys as rk_mod
+    import archon_search.key_manager as km_mod
 
     monkeypatch.setenv("ARCHON_SEARCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv(_ENV_VAR, raising=False)
@@ -799,9 +881,10 @@ def test_post_keys_rotate_search_env_write_fails_500(tmp_path, monkeypatch):
         )
         assert before_resp.status_code == 200
         keys_before = before_resp.json()["keys"]
+        keys_json_before = keys_json_path.read_bytes() if keys_json_path.exists() else None
 
         # Make atomic_write_bytes raise OSError to simulate .search.env write failure.
-        with patch.object(rk_mod, "atomic_write_bytes", side_effect=OSError("disk full")):
+        with patch.object(km_mod, "atomic_write_bytes", side_effect=OSError("disk full")):
             resp = client.post(
                 "/keys/rotate",
                 json={},
@@ -823,3 +906,4 @@ def test_post_keys_rotate_search_env_write_fails_500(tmp_path, monkeypatch):
         keys_after = after_resp.json()["keys"]
         # No new managed keys were added by the failed rotation.
         assert len(keys_after) == len(keys_before)
+        assert (keys_json_path.read_bytes() if keys_json_path.exists() else None) == keys_json_before

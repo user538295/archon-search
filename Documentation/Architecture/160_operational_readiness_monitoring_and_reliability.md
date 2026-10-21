@@ -1,7 +1,7 @@
 **Purpose**: Describe the operational surface of `archon-search` — what an operator can observe, how the service is installed and lifecycled, and the runbooks for the failure modes that actually occur.
 **Audience**: Operators running `archon-search` on a workstation or single server, and maintainers extending its observability surface.
 **Status**: Draft
-**Last reviewed**: 2026-06-24
+**Last reviewed**: 2026-10-17
 **Next review**: 2026-09-24
 
 # Operational Readiness, Monitoring, and Reliability
@@ -221,7 +221,7 @@ The key is auto-generated on first start at `~/.archon-search/.search.env` with 
 
 - **Live rotation (D7 — no restart required)**: `archon-search key rotate` (or `POST /keys/rotate`) generates a new default key, writes it atomically to `.search.env`, and revokes the old key in `keys.json`. The old key is rejected on the next request (or grace-expires if `[auth].rotate_grace_seconds > 0`). Returns `409` when `ARCHON_SEARCH_API_KEY` env var is set — unset it first.
 
-  **MCP hot-reload limitation (D9)**: live rotation fully cuts over the REST control plane immediately, but **not** the MCP sub-app. `APIKeyMiddleware` does re-read the legacy default key dynamically — it reads `request.app.state.api_key` on every request and only falls back to its construction-time `self._api_key` when state carries no `api_key`. The catch is that `request.app` on `/mcp` is the **mounted Starlette sub-app**, whose `app.state.api_key` is never set; `POST /keys/rotate` updates only the **parent** FastAPI app's `app.state.api_key` (and `.search.env`). So MCP requests always hit the fallback and keep using the construction-time default key. Additionally, when the old default key was the auto-generated bootstrap key (never present in `keys.json`), `rotate_default_key` writes no revocation record, so the rotation-revocation guard cannot catch it on MCP either. Net effect: after `POST /keys/rotate`, the new rotated key works on MCP immediately (it resolves via `KeyStore.active_keys()`, which re-reads `keys.json` on every call), but the **old** bootstrap default key keeps authenticating MCP via the legacy fallback until the process restarts. To fully revoke the old key on MCP, **restart `archon-search` after `key rotate`**. REST is unaffected — the old key is cut over on REST because the parent app's `app.state.api_key` is updated in place. (A future fix would set `api_key` on the mounted sub-app's state, or have the MCP middleware consult the parent app state / `KeyStore` directly.)
+  **REST and MCP share one current default key**: the mounted MCP sub-app's `APIKeyMiddleware` and `rotate_key` tool are built with `api_key_state=app.state` (`create_mcp_http_app` in `server/mcp.py`, called from the `create_app` lifespan in `server/app.py`), so `/mcp` reads the same `app.state.api_key` as REST on every request. A rotation through either transport (`POST /keys/rotate`, `archon-search key rotate`, MCP `rotate_key`) retires that key and publishes the new one there only after `.search.env` and `keys.json` are both written, so the old default key stops working on both transports at once (or when its grace window ends) — no restart. Rotations are serialized by `KeyStore.rotation_lock`, shared by both transports within the one server process. Recovery from a failed or cancelled rotation: [OperatorGuide 70](../OperatorGuide/70_key_management_and_rotation.md#recovering-from-an-incomplete-rotation).
 - **Overwrite the file**: edit `~/.archon-search/.search.env` (preserve `0600`) and restart the service.
 - **Override at runtime**: set `ARCHON_SEARCH_API_KEY=<new-key>` in the environment; this takes precedence over the file and over managed keys.
 - **Relocate the file**: set `ARCHON_SEARCH_KEY_FILE=<path>` and restart. The new path is read with the same `0600` expectation.
@@ -322,7 +322,7 @@ The `maintenance.collection_health` block in `GET /status` is namespace-scoped t
 | `collection_health[n].fts_optimized_at` | Last time FTS was optimized for this collection; `null` if never or index absent |
 | `collection_health[n].orphans_removed_last_run` | Number of orphaned source paths removed in the last pass |
 | `collection_health[n].last_retry_at` | Last time a failed-ingest retry was enqueued for this collection |
-| `collection_health[n].last_error` | Most recent per-collection error string; `null` when last pass was clean |
+| `collection_health[n].last_error` | Most recent per-collection policy failure, as fixed text naming the policy (e.g. `fts_optimize failed; see the server log for details` — `*_FAILED_DETAIL` in `jobs/maintenance_loop.py`), never the exception text; `null` when last pass was clean |
 | `collection_health[n].meta_chunk_count` | Chunk count from the O(1) metadata row (written at ingest time) |
 | `collection_health[n].mutations_since_recompute` | Mutations since last centroid recompute (from metadata row) |
 | `collection_health[n].centroid_recompute_threshold` | Current configured threshold for triggering a centroid recompute |
@@ -335,7 +335,7 @@ The `maintenance.collection_health` block in `GET /status` is namespace-scoped t
 
 **`last_run_at` is always null**: either no pass has been triggered (`interval_hours = 0` and no `POST /maintenance/trigger` called), or `app.state.maintenance_loop` is not set (inspect with `GET /status`).
 
-**`last_error` is non-null for a collection**: a per-collection exception was logged at ERROR level. Check `~/.archon-search/logs/archon-search.log` around the `last_run_at` timestamp for the full traceback.
+**`last_error` is non-null for a collection**: a per-collection exception was logged at ERROR level with its traceback; `last_error` names only the failing policy. Check `~/.archon-search/logs/archon-search.log` around the `last_run_at` timestamp for the full traceback.
 
 **Orphan cleanup takes > 60 s**: a WARNING is logged with the elapsed time. Increase `interval_hours` or reduce collection size. The pass still completes — the warning is advisory.
 

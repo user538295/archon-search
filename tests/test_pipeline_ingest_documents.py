@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from archon_search._types import INVALID_DOCUMENT_CODE, PARSE_ERROR_CODE
 from archon_search.constants import (
     DEFAULT_NAMESPACE,
     INLINE_CHUNK_METADATA_KEY,
@@ -73,9 +74,9 @@ async def test_ingest_documents_reports_malformed_items_as_errors(connected_stor
     )
 
     assert [r.status for r in results] == ["error", "error", "ok"]
-    # "parse_error" is reserved for a genuine ParseError; a malformed request item
+    # PARSE_ERROR_CODE is reserved for a genuine ParseError; a malformed request item
     # must be distinguishable from an unparseable document.
-    assert all(r.code == "invalid_document" for r in results[:2])
+    assert all(r.code == INVALID_DOCUMENT_CODE != PARSE_ERROR_CODE for r in results[:2])
     assert {row["source_path"] for row in await _read_chunks(connected_store, col_name)} == {
         _SOURCE_PATH
     }

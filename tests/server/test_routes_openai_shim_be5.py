@@ -2,11 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+from tests._internal_error_leak import (
+    LANCE_MSG,
+    LEAK_NEEDLE,
+    assert_logged_with_traceback,
+    metadata_lookup_error,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group("openai_shim")]
 
@@ -600,16 +608,13 @@ class TestFanoutTimeoutReturnsOpenAI504:
 
 
 class TestMetadataLookupErrorReturnsOpenAI503:
-    def test_metadata_lookup_error_returns_openai_503(self, tmp_path, monkeypatch):
-        """search_many raises MetadataLookupError → 503 OpenAI error shape."""
-        from archon_search.pipeline import MetadataLookupError
-
+    def test_metadata_lookup_error_returns_openai_503(self, tmp_path, monkeypatch, caplog):
+        """search_many raises MetadataLookupError → 503 OpenAI error shape; the store error it
+        wraps embeds an internal path, so it is logged with its traceback, never sent."""
         app = _make_stub_app(tmp_path, monkeypatch, openai_shim_enabled=True, collections=["col"])
-        app.state.pipeline.search_many = AsyncMock(
-            side_effect=MetadataLookupError(RuntimeError("db unavailable"))
-        )
+        app.state.pipeline.search_many = AsyncMock(side_effect=metadata_lookup_error())
 
-        with TestClient(app, raise_server_exceptions=False) as client:
+        with TestClient(app, raise_server_exceptions=False) as client, caplog.at_level(logging.ERROR):
             resp = client.post(
                 "/v1/chat/completions",
                 json=_chat_body("archon-search", "query"),
@@ -621,6 +626,8 @@ class TestMetadataLookupErrorReturnsOpenAI503:
         assert "error" in body
         assert body["error"]["type"] == "server_error"
         assert "code" not in body  # shim uses OpenAI envelope, not ErrorDetail
+        assert LEAK_NEEDLE not in resp.text, f"internal path leaked into the response: {resp.text!r}"
+        assert_logged_with_traceback(caplog, LANCE_MSG)
 
 
 class TestDirectSearchStoreErrorReturnsOpenAI503:

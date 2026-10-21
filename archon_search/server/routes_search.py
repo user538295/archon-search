@@ -22,13 +22,23 @@ from archon_search.embedder_cache import (
 from archon_search.filters import SearchFilters
 from archon_search.hyde import HYDE_DEPENDENCY_DETAIL, HyDEDependencyError
 from archon_search.pipeline import (
+    METADATA_STORE_UNAVAILABLE_CODE,
+    METADATA_STORE_UNAVAILABLE_DETAIL,
     CollectionNotFoundError,
     FanoutTimeoutError,
     GraphCommunitiesNotBuiltError,
     MetadataLookupError,
 )
 from archon_search.rag_fusion import RAG_FUSION_DEPENDENCY_DETAIL, RAGFusionDependencyError
-from archon_search.server.schemas import AclGateSchema, ErrorDetail, ExcludedCollectionSchema
+from archon_search.server.schemas import (
+    GRAPH_COMMUNITIES_NOT_BUILT_CODE,
+    INVALID_SCOPE_FILTER_CODE,
+    AclGateSchema,
+    CodedErrorDetail,
+    ErrorDetail,
+    ExcludedCollectionSchema,
+    route_422_response,
+)
 from archon_search.server._search_budget import (
     EMBEDDER_WARMUP_WAIT_SECONDS,
     SEARCH_TIMEOUT_SECONDS as _SEARCH_TIMEOUT_SECONDS,
@@ -62,6 +72,11 @@ if TYPE_CHECKING:
 # to prevent). The load itself is shielded, so it keeps running and populates the
 # cache for later requests.
 _EMBEDDER_LOAD_WAIT_TIMEOUT_SECONDS = EMBEDDER_WARMUP_WAIT_SECONDS
+
+# ``500`` ``detail`` for a HyDE failure other than ``HyDEDependencyError``: the caught
+# exception's message may embed internals (model paths), so it goes to the server log
+# only. Same text as MCP ``search``'s ``_SEARCH_FAILED_DETAIL``.
+SEARCH_FAILED_DETAIL = "search failed"
 
 _VALID_ACL_SOURCES = frozenset({"frontmatter", "sidecar", "collection_default"})
 
@@ -121,6 +136,14 @@ def _report_pipeline_failure(writer: TelemetryWriter | None, start: float, exc: 
         extra={"event_type": "search_pipeline_failure"},
         exc_info=exc,
     )
+
+
+def _hyde_failure_response(writer: TelemetryWriter | None, start: float, exc: Exception) -> JSONResponse:
+    """Answer a HyDE failure other than ``HyDEDependencyError``: reported like a pipeline
+    failure, answered like ``/explain``'s HyDE catch-all — JSON ``SEARCH_FAILED_DETAIL``,
+    never the exception text."""
+    _report_pipeline_failure(writer, start, exc)
+    return JSONResponse({"detail": SEARCH_FAILED_DETAIL}, status_code=500)
 
 
 def dependency_error_response(
@@ -267,7 +290,24 @@ class SearchResponse(BaseModel):
     ppr_entities_matched: int | None = None
 
 
-@router.post("/search", response_model=SearchResponse, responses={503: {"model": ErrorDetail}})
+@router.post(
+    "/search",
+    response_model=SearchResponse,
+    responses={
+        400: {
+            "model": CodedErrorDetail,
+            "description": f"`scope_filter` is syntactically invalid (code `{INVALID_SCOPE_FILTER_CODE}`)",
+        },
+        404: {"model": ErrorDetail, "description": "Collection not found"},
+        422: route_422_response(),
+        500: {
+            "model": ErrorDetail,
+            "description": "HyDE generation failure (JSON detail); a pipeline failure is a plain-text 500",
+        },
+        503: {"model": ErrorDetail},
+        504: {"model": ErrorDetail, "description": "Search timed out"},
+    },
+)
 async def search(body: SearchRequest, request: Request) -> SearchResponse | JSONResponse:
     pipeline = request.app.state.pipeline
     ns = request.state.namespace
@@ -292,7 +332,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     scope_filter_err = _check_scope_filter(body.scope_filter)
     if scope_filter_err is not None:
         return JSONResponse(
-            {"detail": {"code": "invalid_scope_filter", "message": scope_filter_err}},
+            {"detail": {"code": INVALID_SCOPE_FILTER_CODE, "message": scope_filter_err}},
             status_code=400,
         )
 
@@ -340,6 +380,13 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             # search_many embeds with the global embedder and excludes every collection
             # pinned to another model (embedding_model_mismatch), so HyDE embeds with it too.
             hyde_outcome = await request_hyde.resolve(pipeline.global_embedder, embedder_warm=not warmup.fts_only)
+        except HyDEDependencyError as exc:
+            return dependency_error_response("search", exc)
+        except EmbedderNotReadyError:
+            raise  # retryable 503 (app-level handler), as for the fan-out itself
+        except Exception as exc:
+            return _hyde_failure_response(writer, start, exc)
+        try:
             # search_many's own _fanout_timeout_seconds bounds the per-collection leg
             # gathers only; the meta lookup, embed_one, graph-store calls and the
             # global rerank pass sit outside it, so the whole call gets the same
@@ -361,17 +408,18 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
                 ),
                 timeout=_SEARCH_TIMEOUT_SECONDS,
             )
-        except (HyDEDependencyError, RAGFusionDependencyError) as exc:
+        except RAGFusionDependencyError as exc:
             return dependency_error_response("search", exc)
         except GraphCommunitiesNotBuiltError as exc:
             return JSONResponse(
-                {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
+                {"detail": {"code": GRAPH_COMMUNITIES_NOT_BUILT_CODE, "message": str(exc)}}, status_code=422
             )
         except CollectionNotFoundError:
             return JSONResponse({"detail": "collection not found"}, status_code=404)
         except MetadataLookupError:
+            logger.exception("multi-collection search: metadata lookup failed")
             return JSONResponse(
-                {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"},
+                {"detail": METADATA_STORE_UNAVAILABLE_DETAIL, "code": METADATA_STORE_UNAVAILABLE_CODE},
                 status_code=503,
             )
         except (FanoutTimeoutError, SearchBudgetExceeded):
@@ -436,9 +484,9 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
     try:
         meta = await pipeline.get_collection_meta(body.collection, namespace=ns)
     except Exception as exc:
-        logger.error("search: meta lookup failed for collection %r: %s", body.collection, exc, exc_info=True)
+        logger.exception("search: meta lookup failed for collection %r: %s", body.collection, exc)
         return JSONResponse(
-            {"detail": "service unavailable: metadata store could not be reached", "code": "metadata_store_error"},
+            {"detail": METADATA_STORE_UNAVAILABLE_DETAIL, "code": METADATA_STORE_UNAVAILABLE_CODE},
             status_code=503,
         )
 
@@ -533,6 +581,11 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
             except HyDEDependencyError as exc:
                 _emit_timings()
                 return dependency_error_response("search", exc)
+            except EmbedderNotReadyError:
+                raise  # retryable 503, answered below
+            except Exception as exc:
+                _emit_timings()
+                return _hyde_failure_response(writer, start, exc)
             # run_within_budget, not a bare asyncio.wait_for: since 3.11
             # asyncio.TimeoutError *is* the builtin TimeoutError (an OSError), so a
             # socket ETIMEDOUT raised inside the store would otherwise be caught by
@@ -621,7 +674,7 @@ async def search(body: SearchRequest, request: Request) -> SearchResponse | JSON
         except GraphCommunitiesNotBuiltError as exc:
             _emit_timings()
             return JSONResponse(
-                {"detail": {"code": "graph_communities_not_built", "message": str(exc)}}, status_code=422
+                {"detail": {"code": GRAPH_COMMUNITIES_NOT_BUILT_CODE, "message": str(exc)}}, status_code=422
             )
         except SearchBudgetExceeded:
             _emit_timings()
